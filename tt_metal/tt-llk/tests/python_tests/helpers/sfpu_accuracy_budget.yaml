@@ -16,9 +16,9 @@
 # `approx` and `dest` are quoted on purpose: YAML 1.1 reads a bare No/Yes as a boolean.
 # The loader accepts both spellings, but quote them so the file says what it means.
 #
-# The trailing comment on a generated row is the measurement the budget came from. A
-# budget may only be *raised* by re-measuring and updating that comment in the same
-# change -- the whole point of the table is that no number here is a guess.
+# The trailing comment on a row is the measurement the budget came from, taken on the
+# arch it names. A budget may only be *raised* by re-measuring and updating that comment
+# in the same change -- the whole point of the table is that no number here is a guess.
 
 Floor:
   - {max_ulp: 0}  # 0 ULP, 156 variants each, all four output formats x both dest_acc, 2026-09-16

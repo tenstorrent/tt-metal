@@ -51,7 +51,7 @@ import yaml
 from .chip_architecture import ChipArchitecture
 from .format_config import DataFormat
 from .llk_params import ApproximationMode, DestAccumulation, MathOperation
-from .ulp import has_ulp_gate
+from .ulp import MANTISSA_BITS_FOR_ULP, MAX_MEANINGFUL_ULP, has_ulp_gate, ulp_dtype
 
 #: The architecture every measured budget in this table came from. An op resolves to the
 #: tolerance metric anywhere else until the sweep has been re-run there.
@@ -474,6 +474,26 @@ def resolve_contract(
             "specific; the table's order must not decide a budget."
         )
     return winners[0][1]
+
+
+def usable_budget_ceiling(output_format: DataFormat) -> float:
+    """The largest budget that is still *stronger* than the gate it replaces.
+
+    ``MAX_MEANINGFUL_ULP`` is the wrong bound: ``2**mantissa_bits`` is roughly 100%
+    relative error, so it admits budgets that gate nothing -- and since ``passed_test``
+    returns on the ULP verdict and skips both ``isclose`` and PCC, such a budget *is* the
+    whole gate. Measured, approximate tanh on an fp32 output reached 2,949,120 steps,
+    about 35% relative error, on an op bounded in (-1, 1).
+
+    The real bound is the ``rtol`` half of the ``isclose`` this replaces, itself a step
+    budget at large magnitude: about 419,430 steps for fp32, 51 for fp16, 6 for bf16.
+    ``passed_test`` warns on the same line at runtime; no row here may cross it.
+    """
+    from .utils import tolerances
+
+    dtype = ulp_dtype(output_format)
+    by_rtol = tolerances[output_format].rtol * (1 << MANTISSA_BITS_FOR_ULP[dtype])
+    return min(by_rtol, float(MAX_MEANINGFUL_ULP[dtype]))
 
 
 def enrolled_ops() -> Tuple[MathOperation, ...]:

@@ -18,7 +18,6 @@ import textwrap
 
 import pytest
 import torch
-from accuracy.emit_budget import usable_budget_ceiling
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
@@ -41,6 +40,7 @@ from helpers.sfpu_accuracy_budget import (
     accuracy_contract,
     enrolled_ops,
     resolve_contract,
+    usable_budget_ceiling,
     validate_registry,
 )
 from helpers.sfpu_domains import for_op
@@ -1038,7 +1038,7 @@ def test_no_budget_exceeds_its_formats_usable_ceiling():
     applied to the table rather than to one call.
 
     ``min(rtol * 2**mantissa_bits, MAX_MEANINGFUL_ULP)``, the same bound
-    ``emit_budget.usable_budget_ceiling`` refuses to emit past — not
+    ``usable_budget_ceiling`` refuses to declare past — not
     ``MAX_MEANINGFUL_ULP`` alone, which is roughly 100% relative error and about 20x
     looser: 128 for bf16 against 6. Because the ULP arm of ``passed_test`` returns before
     both ``isclose`` and PCC, a budget past this line *is* the whole gate, and
