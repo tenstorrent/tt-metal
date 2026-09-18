@@ -5,6 +5,7 @@
 
 import ttnn
 from models.demos.gemma4_d_p.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
 from models.demos.gemma4_d_p.tt.mlp import MLP
 from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
 from models.demos.gemma4_d_p.utils.substate import substate
@@ -109,25 +110,41 @@ class Gemma4DecoderLayer:
             packed_sliding_rope=packed_sliding_rope,
         )
 
-        attn_output = self.post_attention_layernorm.forward(attn_output)
-        hidden_states = ttnn.add(residual, attn_output)
+        # The normed sublayer output is written by the norm and read by the very next
+        # add, touching no matmul, CCL or SDPA in between -- the one shape of chain L1
+        # pays for. The add itself must land in DRAM: its result is the next residual,
+        # and it feeds a norm whose output goes straight into the qkv projection.
+        act_mc = prefill_short_lived_memcfg()
+        attn_output = self.post_attention_layernorm.forward(attn_output, memory_config=act_mc)
+        hidden_states = ttnn.add(residual, attn_output, memory_config=act_mc)
         residual.deallocate(True)
         attn_output.deallocate(True)
 
         # 2. Dense MLP block
         residual = hidden_states
-        normed = self.pre_feedforward_layernorm.forward(hidden_states)
+        # This norm reads the L1 residual but must write DRAM: its output is the in0 of
+        # the gate and up projections, and a matmul handed an L1-interleaved in0 runs
+        # 4.3x slower. Binary and norm ops default their output to the first input's
+        # memory config, so DRAM has to be said explicitly here and on the final add.
+        normed = self.pre_feedforward_layernorm.forward(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         mlp_output = self.mlp(normed)
         normed.deallocate(True)
 
         hidden_states = mlp_output
 
-        # post_feedforward_layernorm -> residual add
-        normed = self.post_feedforward_layernorm.forward(hidden_states)
-        hidden_states = ttnn.add(residual, normed)
+        # post_feedforward_layernorm -> residual add, scaled by the learned layer scalar.
+        # The scalar rides on the add as an output activation: on its own it is a full
+        # read and write of the 1024x5376 hidden state for one SFPU multiply per tile.
+        normed = self.post_feedforward_layernorm.forward(hidden_states, memory_config=act_mc)
+        hidden_states = ttnn.add(
+            residual,
+            normed,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.layer_scalar)],
+            # Next layer's residual: it stays live across that layer's attention,
+            # including SDPA, which is already L1-tight. Keep it in DRAM.
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         residual.deallocate(True)
         normed.deallocate(True)
-
-        hidden_states = ttnn.mul(hidden_states, self.layer_scalar)
 
         return hidden_states
