@@ -143,6 +143,21 @@ TEST(SocketHotSwapTest, HostMeshSocketDropIn) {
     HostMeshSocket socket(device, socket_config, transport);
 
     const bool is_sender = context->rank() == kSenderRank;
+
+    // Parity with MeshSocket: a receiver hands out a real fifo_size buffer, a
+    // sender raises. A caller branching between the two socket types compiles
+    // and behaves the same either way.
+    EXPECT_TRUE(socket.is_rank_scoped_socket());
+    if (is_sender) {
+        EXPECT_ANY_THROW(socket.get_data_buffer());
+    } else {
+        auto data_buffer = socket.get_data_buffer();
+        ASSERT_NE(data_buffer, nullptr);
+        // One fifo_size shard per data core, as D2D allocates it.
+        EXPECT_GE(data_buffer->device_local_size(), kFifoSize);
+        EXPECT_EQ(data_buffer->device_local_size() % kFifoSize, 0u);
+    }
+
     const uint32_t config_addr = static_cast<uint32_t>(socket.get_config_buffer_address());
     run_case(
         device,
