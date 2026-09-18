@@ -79,6 +79,9 @@ class Transformer(LightweightModule):
         use_paged_kv_cache=False,
         attention_class=None,
         rope_setup_class=None,
+        block_class=None,
+        lm_head_cls=None,
+        final_norm_builder=None,
         prefetcher=None,
     ):
         super().__init__()
@@ -188,8 +191,24 @@ class Transformer(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+        # Model-family dispatch (Command-R / cohere): swap the decoder block, final
+        # norm and LM head. Lazy imports keep the experimental cohere module out of the default path.
+        ActualBlockClass = block_class
+        ActualLMHeadCls = lm_head_cls
+        final_norm_builder_resolved = final_norm_builder
+        if str(getattr(self.args, "model_type", None) or "").lower() == "cohere":
+            from models.experimental.cohere.tt.cohere_decoder import CohereDecoderLayer
+            from models.experimental.cohere.tt.cohere_lm_head import CohereLMHead
+            from models.experimental.cohere.tt.cohere_norm import build_cohere_final_norm
+
+            ActualBlockClass = ActualBlockClass or CohereDecoderLayer
+            ActualLMHeadCls = ActualLMHeadCls or CohereLMHead
+            final_norm_builder_resolved = final_norm_builder_resolved or build_cohere_final_norm
+        ActualBlockClass = ActualBlockClass or TransformerBlock
+        ActualLMHeadCls = ActualLMHeadCls or LMHead
+
         self.layers = [
-            TransformerBlock(
+            ActualBlockClass(
                 args=args,
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
@@ -205,7 +224,17 @@ class Transformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
-        self.norm = DistributedNorm(
+        self.norm = (
+            final_norm_builder_resolved(
+                args=args,
+                mesh_device=mesh_device,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                dtype=dtype,
+                tt_ccl=self.tt_ccl,
+            )
+            if final_norm_builder_resolved is not None
+            else DistributedNorm(
             RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
@@ -225,8 +254,9 @@ class Transformer(LightweightModule):
             prefetcher=prefetcher,
             TG=args.is_galaxy,
         )
+        )  # close the final_norm_builder_resolved conditional-expression paren
 
-        self.lm_head = LMHead(
+        self.lm_head = ActualLMHeadCls(
             args=args,
             mesh_device=mesh_device,
             tt_ccl=self.tt_ccl,
