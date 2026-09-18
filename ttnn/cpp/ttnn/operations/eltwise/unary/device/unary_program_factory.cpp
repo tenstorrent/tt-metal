@@ -8,6 +8,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include <algorithm>
+#include <bit>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -409,9 +410,122 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     const bool logit_clamp_enabled =
         CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
 
-    const std::string compute_path = fmt::format(
+    std::string compute_path = fmt::format(
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}",
         get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
+
+    // One canonical evaluator per program; all other contracts keep stock dispatch.
+    bool tt_poly_selected = false;
+    bool tt_poly_batch_dataflow = false;
+    bool tt_poly_fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
+    if (ops_chain.size() == 1 && input.dtype() == DataType::BFLOAT16 && output.dtype() == DataType::BFLOAT16 &&
+        input.layout() == Layout::TILE && output.layout() == Layout::TILE && !has_sharding &&
+        input.tensor_spec().tile().get_height() == 32 && input.tensor_spec().tile().get_width() == 32 &&
+        output.tensor_spec().tile().get_height() == 32 && output.tensor_spec().tile().get_width() == 32 &&
+        !input.tensor_spec().tile().get_transpose_within_face() &&
+        !input.tensor_spec().tile().get_transpose_of_faces() &&
+        !output.tensor_spec().tile().get_transpose_within_face() &&
+        !output.tensor_spec().tile().get_transpose_of_faces()) {
+        if (input.device()->arch() == tt::ARCH::BLACKHOLE && ops_chain[0].type() == UnaryOpType::ABS &&
+            ops_chain[0].get_params_if<float>().size() == 0 && ops_chain[0].empty()) {
+            tt_poly_selected = true;
+            unary_defines.clear();
+            unary_defines["SFPU_OP_CHAIN_0"] = "ttpoly_compiled_tile();";
+            unary_defines["SFPU_OP_PROGRAM_INIT_0"] = "ttpoly_compiled_program_init();";
+            unary_defines["TT_POLY_SELECTED_CONFIG_HEADER"] =
+                "\"deployment/generic_lut_activation/kernels/compute/adhoc/tt_poly_abs_bh.cpp\"";
+            unary_defines["USE_BF16"] = "1";
+            unary_defines["USE_DUAL_EVAL"] = "1";
+            tt_poly_fp32_dest_acc_en = false;
+            tt_poly_batch_dataflow = true;
+            std::fill(unpack_to_dest_mode.begin(), unpack_to_dest_mode.end(), tt::tt_metal::UnpackToDestMode::Default);
+        } else if (
+            input.device()->arch() == tt::ARCH::BLACKHOLE && ops_chain[0].type() == UnaryOpType::RELU &&
+            ops_chain[0].get_params_if<float>().size() == 0 && ops_chain[0].empty()) {
+            tt_poly_selected = true;
+            unary_defines.clear();
+            unary_defines["PACK_RELU_MODE"] = "1";
+            unary_defines["PACK_RELU_THRESHOLD"] = "0";
+            unary_defines["SFPU_OP_CHAIN_0"] = "ttpoly_compiled_tile();";
+            unary_defines["SFPU_OP_PROGRAM_FINISH_0"] = "ttpoly_compiled_program_finish();";
+            unary_defines["SFPU_OP_PROGRAM_INIT_0"] = "ttpoly_compiled_program_init();";
+            unary_defines["TT_POLY_SELECTED_CONFIG_HEADER"] =
+                "\"deployment/generic_lut_activation/kernels/compute/adhoc/tt_poly_relu_bh.cpp\"";
+            unary_defines["USE_BF16"] = "1";
+            unary_defines["USE_DUAL_EVAL"] = "1";
+            tt_poly_fp32_dest_acc_en = false;
+            std::fill(unpack_to_dest_mode.begin(), unpack_to_dest_mode.end(), tt::tt_metal::UnpackToDestMode::Default);
+        } else if (
+            input.device()->arch() == tt::ARCH::BLACKHOLE && ops_chain[0].type() == UnaryOpType::THRESHOLD &&
+            ops_chain[0].get_params_if<float>().size() == 2 &&
+            std::bit_cast<uint32_t>(*ops_chain[0].get_param_if<float>(0)) == 0u &&
+            std::bit_cast<uint32_t>(*ops_chain[0].get_param_if<float>(1)) == 0u) {
+            tt_poly_selected = true;
+            unary_defines.clear();
+            unary_defines["PACK_RELU_MODE"] = "1";
+            unary_defines["PACK_RELU_THRESHOLD"] = "0";
+            unary_defines["SFPU_OP_CHAIN_0"] = "ttpoly_compiled_tile();";
+            unary_defines["SFPU_OP_PROGRAM_FINISH_0"] = "ttpoly_compiled_program_finish();";
+            unary_defines["SFPU_OP_PROGRAM_INIT_0"] = "ttpoly_compiled_program_init();";
+            unary_defines["TT_POLY_SELECTED_CONFIG_HEADER"] =
+                "\"deployment/generic_lut_activation/kernels/compute/adhoc/tt_poly_threshold_bh.cpp\"";
+            unary_defines["USE_BF16"] = "1";
+            unary_defines["USE_DUAL_EVAL"] = "1";
+            tt_poly_fp32_dest_acc_en = false;
+            std::fill(unpack_to_dest_mode.begin(), unpack_to_dest_mode.end(), tt::tt_metal::UnpackToDestMode::Default);
+        } else if (
+            input.device()->arch() == tt::ARCH::WORMHOLE_B0 && ops_chain[0].type() == UnaryOpType::ABS &&
+            ops_chain[0].get_params_if<float>().size() == 0 && ops_chain[0].empty()) {
+            tt_poly_selected = true;
+            unary_defines.clear();
+            unary_defines["SFPU_OP_CHAIN_0"] = "ttpoly_compiled_tile();";
+            unary_defines["SFPU_OP_PROGRAM_INIT_0"] = "ttpoly_compiled_program_init();";
+            unary_defines["TT_POLY_SELECTED_CONFIG_HEADER"] =
+                "\"deployment/generic_lut_activation/kernels/compute/adhoc/tt_poly_abs_wh.cpp\"";
+            unary_defines["USE_BF16"] = "1";
+            unary_defines["USE_DUAL_EVAL"] = "1";
+            tt_poly_fp32_dest_acc_en = false;
+            tt_poly_batch_dataflow = true;
+            std::fill(unpack_to_dest_mode.begin(), unpack_to_dest_mode.end(), tt::tt_metal::UnpackToDestMode::Default);
+        } else if (
+            input.device()->arch() == tt::ARCH::WORMHOLE_B0 && ops_chain[0].type() == UnaryOpType::RELU &&
+            ops_chain[0].get_params_if<float>().size() == 0 && ops_chain[0].empty()) {
+            tt_poly_selected = true;
+            unary_defines.clear();
+            unary_defines["PACK_RELU_MODE"] = "1";
+            unary_defines["PACK_RELU_THRESHOLD"] = "0";
+            unary_defines["SFPU_OP_CHAIN_0"] = "ttpoly_compiled_tile();";
+            unary_defines["SFPU_OP_PROGRAM_FINISH_0"] = "ttpoly_compiled_program_finish();";
+            unary_defines["SFPU_OP_PROGRAM_INIT_0"] = "ttpoly_compiled_program_init();";
+            unary_defines["TT_POLY_SELECTED_CONFIG_HEADER"] =
+                "\"deployment/generic_lut_activation/kernels/compute/adhoc/tt_poly_relu_wh.cpp\"";
+            unary_defines["USE_BF16"] = "1";
+            unary_defines["USE_DUAL_EVAL"] = "1";
+            tt_poly_fp32_dest_acc_en = false;
+            std::fill(unpack_to_dest_mode.begin(), unpack_to_dest_mode.end(), tt::tt_metal::UnpackToDestMode::Default);
+        } else if (
+            input.device()->arch() == tt::ARCH::WORMHOLE_B0 && ops_chain[0].type() == UnaryOpType::THRESHOLD &&
+            ops_chain[0].get_params_if<float>().size() == 2 &&
+            std::bit_cast<uint32_t>(*ops_chain[0].get_param_if<float>(0)) == 0u &&
+            std::bit_cast<uint32_t>(*ops_chain[0].get_param_if<float>(1)) == 0u) {
+            tt_poly_selected = true;
+            unary_defines.clear();
+            unary_defines["PACK_RELU_MODE"] = "1";
+            unary_defines["PACK_RELU_THRESHOLD"] = "0";
+            unary_defines["SFPU_OP_CHAIN_0"] = "ttpoly_compiled_tile();";
+            unary_defines["SFPU_OP_PROGRAM_FINISH_0"] = "ttpoly_compiled_program_finish();";
+            unary_defines["SFPU_OP_PROGRAM_INIT_0"] = "ttpoly_compiled_program_init();";
+            unary_defines["TT_POLY_SELECTED_CONFIG_HEADER"] =
+                "\"deployment/generic_lut_activation/kernels/compute/adhoc/tt_poly_threshold_wh.cpp\"";
+            unary_defines["USE_BF16"] = "1";
+            unary_defines["USE_DUAL_EVAL"] = "1";
+            tt_poly_fp32_dest_acc_en = false;
+            std::fill(unpack_to_dest_mode.begin(), unpack_to_dest_mode.end(), tt::tt_metal::UnpackToDestMode::Default);
+        }
+    }
+    if (tt_poly_selected) {
+        compute_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp";
+    }
 
     DataFormat cb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;
@@ -470,6 +584,10 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     reader_desc.defines = {reader_defines.begin(), reader_defines.end()};
     reader_desc.config = ReaderConfigDescriptor{};
     reader_desc.common_runtime_args = reader_common_runtime_args;
+    if (tt_poly_batch_dataflow) {
+        reader_desc.kernel_source = "deployment/generic_lut_activation/kernels/dataflow/reader.cpp";
+        reader_desc.defines = {{"TT_ACT_DATAFLOW_PAGE_BATCH", "2"}, {"TT_ACT_RUNTIME_TENSOR_SHAPE", "1"}};
+    }
 
     // --- Writer Kernel ---
     std::map<std::string, std::string> writer_defines;
@@ -489,25 +607,30 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     writer_desc.defines = {writer_defines.begin(), writer_defines.end()};
     writer_desc.config = WriterConfigDescriptor{};
     writer_desc.common_runtime_args = writer_common_runtime_args;
+    if (tt_poly_batch_dataflow) {
+        writer_desc.kernel_source = "deployment/generic_lut_activation/kernels/dataflow/writer.cpp";
+        writer_desc.defines = {
+            {"TT_ACT_DATAFLOW_PAGE_BATCH", "2"}, {"TT_ACT_OUTPUT_CB", "2"}, {"TT_ACT_RUNTIME_TENSOR_SHAPE", "1"}};
+    }
 
     // --- Compute Kernel ---
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = compute_path;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_device_cores;
-    if (ops_chain[0].type() == UnaryOpType::HARDSWISH) {
+    if (!tt_poly_selected && ops_chain[0].type() == UnaryOpType::HARDSWISH) {
         compute_desc.compile_time_args = {
             static_cast<uint32_t>(unary_defines.contains("INP_FLOAT32")),
             static_cast<uint32_t>(unary_defines.contains("INP_INT32") || unary_defines.contains("INP_UINT32")),
         };
-    } else if (ops_chain[0].type() == UnaryOpType::LOGIT) {
+    } else if (!tt_poly_selected && ops_chain[0].type() == UnaryOpType::LOGIT) {
         compute_desc.compile_time_args = {static_cast<uint32_t>(logit_clamp_enabled)};
     }
     compute_desc.compile_time_args.push_back(static_cast<uint32_t>(cb_data_format));
     compute_desc.defines = {unary_defines.begin(), unary_defines.end()};
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-        .fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en,
+        .fp32_dest_acc_en = tt_poly_fp32_dest_acc_en,
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
         .bfp8_pack_precise = operation_attributes.bfp8_pack_precise,
         .math_approx_mode = math_approx_mode,
