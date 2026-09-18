@@ -54,11 +54,24 @@ void kernel_main() {
     constexpr uint32_t A_tiles_per_batch = M_tiles * K_tiles;
     constexpr uint32_t B_tiles_per_batch = K_tiles * N_tiles;
 
-    const auto A = TensorAccessor(tensor::A);
-    const auto B = TensorAccessor(tensor::B);
     Noc noc;
     DataflowBuffer A_slice(dfb::A_slice);
     DataflowBuffer B_slice(dfb::B_slice);
+
+    // A borrowed operand's ring IS its resident L1 shard: hand the whole ring to the compute once and never
+    // read it. (A: the single K chunk covers all of K; B: the compute consumes it one K chunk at a time.)
+#ifdef A_BORROWED
+    A_slice.reserve_back(A_slice_tiles);
+    A_slice.push_back(A_slice_tiles);
+#else
+    const auto A = TensorAccessor(tensor::A);
+#endif
+#ifdef B_BORROWED
+    B_slice.reserve_back(K_tiles * MN_chunk_N_tiles);
+    B_slice.push_back(K_tiles * MN_chunk_N_tiles);
+#else
+    const auto B = TensorAccessor(tensor::B);
+#endif
 
     const uint32_t A_tile_bytes = get_tile_size(dfb::A_slice);
     const uint32_t B_tile_bytes = get_tile_size(dfb::B_slice);
@@ -83,6 +96,7 @@ void kernel_main() {
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
                 const uint32_t first_K_tile = K_chunk * K_chunk_tiles;
 
+#ifndef A_BORROWED
                 // A slice: rows MN_chunk_M_tile.., columns first_K_tile.. (invalid rows trail, so they are
                 // simply not written).
                 A_slice.reserve_back(A_slice_tiles);
@@ -96,6 +110,8 @@ void kernel_main() {
                     }
                 }
 
+#endif
+#ifndef B_BORROWED
                 // B slice: rows first_K_tile.., columns MN_chunk_N_tile.. (invalid columns keep their slot).
                 B_slice.reserve_back(B_slice_tiles);
                 uint32_t B_slot_offset = 0;
@@ -110,8 +126,10 @@ void kernel_main() {
                     }
                 }
 
+#endif
                 noc.async_read_barrier();
 
+#ifndef A_BORROWED
                 if constexpr (A_last_K_tile_valid_columns > 0) {
                     // Zero the padding columns of the last K tile in every valid row (reads have landed).
                     if (K_chunk == num_K_chunks - 1) {
@@ -125,6 +143,7 @@ void kernel_main() {
                     }
                 }
 
+#endif
                 A_slice.push_back(A_slice_tiles);
                 B_slice.push_back(B_slice_tiles);
             }

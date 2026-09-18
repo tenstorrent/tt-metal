@@ -55,6 +55,18 @@ struct UnifiedMatmulPlan {
     std::vector<uint32_t> num_MN_chunks;
     uint32_t max_MN_chunks_per_core = 0;
 
+    // Borrowing: an L1-sharded operand whose shard on every active core is exactly what that core's rings
+    // would hold is bound as the ring itself (DFB borrowed_from), so nothing is copied. A: the shard is the
+    // chunk's rows for all of K (one K chunk, chunks span N). B: the shard is the chunk's columns for all of
+    // K (chunks span M; K chunks are contiguous runs of it). C: the finished chunk is packed straight into
+    // the shard, which needs subblock-major pack order to equal the shard's row-major tile order, i.e.
+    // subblock_N_tiles == MN_chunk_N_tiles; the writer then only waits. All three need one chunk per core
+    // and batch 1, and a shard grid that lists the active cores in assignment order. Borrowed rings cost
+    // no extra L1.
+    bool borrow_A = false;
+    bool borrow_B = false;
+    bool borrow_C = false;
+
     // Dataflow-buffer rings. A slot holds one tile; slot sizes are in bytes.
     bool packer_l1_acc_en = false;
     tt::DataFormat A_format{};

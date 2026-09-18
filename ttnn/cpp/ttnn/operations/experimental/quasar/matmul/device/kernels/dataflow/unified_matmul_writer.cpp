@@ -40,9 +40,16 @@ void kernel_main() {
     constexpr uint32_t C_tiles_per_batch = M_tiles * N_tiles;
     constexpr uint32_t subblock_tiles = subblock_M_tiles * subblock_N_tiles;  // what the compute packs at once
 
+    DataflowBuffer MN_chunk(dfb::MN_chunk);
+#ifdef C_BORROWED
+    // The MN_chunk ring IS this core's C shard: the compute packs the finished tiles in place, so there is
+    // nothing to move. Wait for the whole chunk so the ring's credits balance. (Borrowing needs one chunk
+    // per core and batch 1, so this is the entire output.)
+    MN_chunk.wait_front(MN_chunk_M_tiles * MN_chunk_N_tiles);
+    return;
+#else
     const auto C = TensorAccessor(tensor::C);
     Noc noc;
-    DataflowBuffer MN_chunk(dfb::MN_chunk);
     const uint32_t C_tile_bytes = MN_chunk.get_entry_size();
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
@@ -85,4 +92,5 @@ void kernel_main() {
             }
         }
     }
+#endif
 }
