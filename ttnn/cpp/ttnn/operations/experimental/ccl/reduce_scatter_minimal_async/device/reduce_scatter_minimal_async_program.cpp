@@ -216,7 +216,8 @@ std::vector<uint32_t> get_line_reader_compile_args(
     const uint32_t slice_Wt,
     const bool fuse_op,
     const uint32_t sync_with_other_direction,
-    const uint32_t normalized_dim) {
+    const uint32_t normalized_dim,
+    const bool sp_slice_schedule) {
     if (normalized_dim == 0) {
         return {
             ring_index,                // my_chip_id
@@ -254,6 +255,7 @@ std::vector<uint32_t> get_line_reader_compile_args(
         fuse_op,                    //         fuse_op
         sync_with_other_direction,  // sync_with_other_direction
         normalized_dim,             // dim
+        sp_slice_schedule,          // sp_slice_schedule (per-(batch, slice) matmul waits; requires fuse_op)
     };
 }
 
@@ -336,6 +338,60 @@ using namespace ccl;
 using ttnn::experimental::ccl::append_fabric_mux_connection_ct_args;
 using ttnn::experimental::ccl::append_fabric_mux_connection_rt_args;
 
+// Forward declarations carrying the defaults for the trailing SP-schedule parameter, so the existing 23-argument
+// callers in this file (the standalone mesh workload factories) keep compiling unchanged.
+ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<std::vector<uint32_t>>& sp_slice_ordinals = std::nullopt);
+
+ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_artifacts(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const Tensor& intermediate_tensor,
+    const std::optional<Tensor>& penult_intermediate_tensor,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
+    Tensor& output_tensor,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
+    ccl::Topology topology,
+    const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
+    CoreCoord core_grid_offset,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<std::vector<uint32_t>>& sp_slice_ordinals = std::nullopt);
+
 ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_artifacts(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
@@ -359,7 +415,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<std::vector<uint32_t>>& sp_slice_ordinals /* = std::nullopt */) {
     auto* mesh_device = input_tensor.device();
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
@@ -488,6 +545,14 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     TT_FATAL(
         !(fuse_op && normalized_dim == 0),
         "reduce_scatter_minimal_async ring implementation can't be fused with matmul when scattering on dim 0");
+    // SP slice schedule (fused sequence-parallel matmul): one matmul-iteration ordinal per (batch, slice).
+    const bool sp_slice_schedule = sp_slice_ordinals.has_value();
+    TT_FATAL(!sp_slice_schedule || fuse_op, "sp_slice_ordinals require a fused-op signaler");
+    TT_FATAL(
+        !sp_slice_schedule || sp_slice_ordinals->size() == input_tensor_B * ring_size,
+        "sp_slice_ordinals must have input_tensor_B*ring_size = {} entries, got {}",
+        input_tensor_B * ring_size,
+        sp_slice_ordinals->size());
 
     const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
@@ -633,6 +698,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         // compile, so it is passed unconditionally.
         reader_named_compile_args["contiguous_interm"] = use_contiguous_interm ? 1 : 0;
         reader_named_compile_args["chunks_per_channel"] = staging.chunks_per_channel;
+        // Per-(batch, slice) matmul waits (fused SP matmul). Always present so the kernel compiles; 0 = off.
+        reader_named_compile_args["sp_slice_schedule"] = sp_slice_schedule ? 1 : 0;
     }
 
     // Positional args: TensorAccessorArgs
@@ -835,6 +902,11 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 }
                 if (fuse_op) {
                     fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
+                    if (sp_slice_schedule) {
+                        // ordinal[b*ring_size + s] right after the fused-op semaphore id (see the reader kernel)
+                        reader_rt_args.insert(
+                            reader_rt_args.end(), sp_slice_ordinals->begin(), sp_slice_ordinals->end());
+                    }
                 }
 
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
@@ -1043,7 +1115,8 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<std::vector<uint32_t>>& sp_slice_ordinals /* = std::nullopt */) {
     /**
      * Line Reduce Scatter
      *
@@ -1248,6 +1321,14 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     TT_FATAL(
         !(fuse_op && normalized_dim == 0),
         "reduce_scatter_minimal_async line implementation can't be fused with matmul when scattering on dim 0");
+    // SP slice schedule (fused sequence-parallel matmul): one matmul-iteration ordinal per (batch, slice).
+    const bool sp_slice_schedule = sp_slice_ordinals.has_value();
+    TT_FATAL(!sp_slice_schedule || fuse_op, "sp_slice_ordinals require a fused-op signaler");
+    TT_FATAL(
+        !sp_slice_schedule || sp_slice_ordinals->size() == input_tensor_B * ring_size,
+        "sp_slice_ordinals must have input_tensor_B*ring_size = {} entries, got {}",
+        input_tensor_B * ring_size,
+        sp_slice_ordinals->size());
 
     const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t output_tensor_num_pages = input_tensor_num_pages / ring_size;
@@ -1334,7 +1415,8 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
             slice_Wt,
             fuse_op,
             sync_with_other_direction,
-            normalized_dim);
+            normalized_dim,
+            sp_slice_schedule);
 
     if (input_is_sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -1557,6 +1639,11 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 }
                 if (fuse_op) {
                     fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
+                    if (sp_slice_schedule) {
+                        // ordinal[b*ring_size + s] right after the fused-op semaphore id (see the reader kernel)
+                        reader_rt_args.insert(
+                            reader_rt_args.end(), sp_slice_ordinals->begin(), sp_slice_ordinals->end());
+                    }
                 }
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
@@ -1703,7 +1790,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<std::vector<uint32_t>>& sp_slice_ordinals) {
     return ::ttnn::build_ring_reduce_scatter_minimal_async_program_artifacts(
         program,
         input_tensor,
@@ -1727,7 +1815,8 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         num_workers_per_direction_opt,
         num_buffers_per_channel,
         core_grid_offset,
-        compute_kernel_config);
+        compute_kernel_config,
+        sp_slice_ordinals);
 }
 
 ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_artifacts(
@@ -1753,7 +1842,8 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<std::vector<uint32_t>>& sp_slice_ordinals) {
     return ::ttnn::build_line_reduce_scatter_minimal_async_program_artifacts(
         program,
         input_tensor,
@@ -1777,7 +1867,8 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
         num_workers_per_direction_opt,
         num_buffers_per_channel,
         core_grid_offset,
-        compute_kernel_config);
+        compute_kernel_config,
+        sp_slice_ordinals);
 }
 
 void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
@@ -1921,7 +2012,8 @@ RingReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
         CoreCoord(0, 0),
-        operation_attributes.compute_kernel_config);
+        operation_attributes.compute_kernel_config,
+        /*sp_slice_ordinals=*/std::nullopt);
 
     return {std::move(program), std::move(shared_vars)};
 }
@@ -2023,7 +2115,8 @@ LineReduceScatterMeshWorkloadFactory::create_at(
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,
         CoreCoord(0, 0),
-        operation_attributes.compute_kernel_config);
+        operation_attributes.compute_kernel_config,
+        /*sp_slice_ordinals=*/std::nullopt);
 
     return {std::move(program), std::move(shared_vars)};
 }

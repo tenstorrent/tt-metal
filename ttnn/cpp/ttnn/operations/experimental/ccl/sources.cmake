@@ -54,6 +54,9 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp
     matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp
     matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp
+    matmul_reduce_scatter_sp_async/matmul_reduce_scatter_sp_async.cpp
+    matmul_reduce_scatter_sp_async/device/matmul_reduce_scatter_sp_async_device_operation.cpp
+    matmul_reduce_scatter_sp_async/device/matmul_reduce_scatter_sp_async_program_factory.cpp
     reduce_scatter_minimal_async/reduce_scatter_minimal_async.cpp
     reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation.cpp
     reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_program.cpp
@@ -136,6 +139,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
     reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_factory.hpp
     reduce_scatter_minimal_direct/reduce_scatter_minimal_direct.hpp
     sp_matmul_fusion_common/sp_matmul_fusion_common.hpp
+    matmul_reduce_scatter_sp_async/matmul_reduce_scatter_sp_async.hpp
 )
 
 # Registered on the shared `ttnn` Python module target from
@@ -166,6 +170,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async_nanobind.cpp
     all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp
     matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp
+    matmul_reduce_scatter_sp_async/matmul_reduce_scatter_sp_async_nanobind.cpp
     ring_attention_all_gather_async/ring_attention_all_gather_async_nanobind.cpp
     send_recv_async/send_async/send_async_nanobind.cpp
     send_recv_async/recv_async/recv_async_nanobind.cpp

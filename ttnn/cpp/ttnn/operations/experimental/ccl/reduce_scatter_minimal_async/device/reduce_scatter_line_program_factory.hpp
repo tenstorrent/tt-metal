@@ -66,7 +66,12 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    // Fused sequence-parallel matmul only (requires fused_op_signaler): input_tensor_B*ring_size words,
+    // ordinal[b*ring_size + s] = position of matmul sub-batch (batch b, slice s) in the matmul's iteration order.
+    // The reader then waits per (batch, slice) instead of once per batch. nullopt = legacy per-batch wait.
+    // Callers that select the ring/line builders through a function pointer must pass it explicitly.
+    const std::optional<std::vector<uint32_t>>& sp_slice_ordinals = std::nullopt);
 
 // Override runtime arguments helper for line topology
 void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(

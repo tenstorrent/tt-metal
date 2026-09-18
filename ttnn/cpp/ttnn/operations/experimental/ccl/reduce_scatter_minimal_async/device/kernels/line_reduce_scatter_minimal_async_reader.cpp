@@ -40,6 +40,12 @@ constexpr uint32_t slice_Wt = get_compile_time_arg_val(16);
 constexpr uint32_t fuse_op = get_compile_time_arg_val(17);
 constexpr bool sync_with_other_direction = get_compile_time_arg_val(18);
 constexpr uint32_t dim = get_compile_time_arg_val(19);
+// Sequence-parallel fused matmul (fuse_op only): the matmul produces the input one (batch b, slice s) "sub-batch" at
+// a time and signals once per sub-batch, in ITS iteration order. Instead of waiting once per batch, wait before every
+// read of local slice s of batch b for `ordinal[b*ring_size + s] + 1` signals, where ordinal[] (rt args after the
+// fused-op semaphore id, input_tensor_B*ring_size words) is the position of sub-batch (b, s) in the matmul schedule.
+constexpr bool sp_slice_schedule = get_compile_time_arg_val(20) != 0;
+static_assert(!sp_slice_schedule || fuse_op, "sp_slice_schedule requires fuse_op");
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -63,7 +69,7 @@ void kernel_main() {
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 20;
+    constexpr uint32_t ct_idx = 21;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset_one = 7;
@@ -144,6 +150,16 @@ void kernel_main() {
     if constexpr (fuse_op) {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
     }
+    // SP schedule: ordinal table follows the fused-op semaphore id (input_tensor_B * ring_size words).
+    uint32_t sp_ordinal_arg_base = 0;
+    if constexpr (sp_slice_schedule) {
+        sp_ordinal_arg_base = arg_idx;
+        arg_idx += input_tensor_B * ring_size;
+    }
+    [[maybe_unused]] auto sp_wait_for_sub_batch = [&](uint32_t b, uint32_t slice) {
+        const uint32_t ordinal = get_arg_val<uint32_t>(sp_ordinal_arg_base + b * ring_size + slice);
+        Semaphore<>(matmul_receiver.signal_op_semaphore_id).wait_min(ordinal + 1);
+    };
 
     Noc noc_obj;
     CircularBuffer cb_input(cb_input_id);
@@ -161,7 +177,7 @@ void kernel_main() {
     uint32_t sem_target = 0;
 
     for (uint32_t b = 0; b < input_tensor_B; b++) {
-        if (fuse_op) {
+        if constexpr (fuse_op && !sp_slice_schedule) {
             matmul_receiver.wait_for_matmul_batch(b);
         }
         int slice_idx = is_forward ? ring_size - 1 : 0;
@@ -176,6 +192,12 @@ void kernel_main() {
         // and then signal the BWD reader to do its final reduction.
         for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
             chunk_count = 0;
+
+            // Both branches below read local input slice `slice_idx` of batch b: under the SP schedule wait for
+            // the matmul sub-batch (b, slice_idx) first.
+            if constexpr (sp_slice_schedule) {
+                sp_wait_for_sub_batch(b, static_cast<uint32_t>(slice_idx));
+            }
 
             uint32_t input_tile_id_start;
             if constexpr (dim == 3) {
@@ -300,6 +322,12 @@ void kernel_main() {
         // Do the final reduction. Synchronize with other direction.
         if (do_final_reduction) {
             chunk_count = 0;
+
+            // The final reduction reads local input slice my_chip_id (or, on the BWD core of a middle device, the
+            // output the FWD core already reduced into it; the wait is then redundant but harmless).
+            if constexpr (sp_slice_schedule) {
+                sp_wait_for_sub_batch(b, my_chip_id);
+            }
 
             uint32_t input_tile_id_start;
             if constexpr (dim == 3) {

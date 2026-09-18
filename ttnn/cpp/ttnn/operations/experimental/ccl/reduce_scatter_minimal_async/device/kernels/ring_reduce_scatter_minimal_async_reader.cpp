@@ -47,6 +47,12 @@ constexpr uint32_t dim = get_named_compile_time_arg_val("dim");
 constexpr bool contiguous_interm = get_named_compile_time_arg_val("contiguous_interm") != 0;
 // Chunk-paged layout only: chunks per (slice, channel) in the staging buffers.
 constexpr uint32_t chunks_per_channel = get_named_compile_time_arg_val("chunks_per_channel");
+// Sequence-parallel fused matmul (fuse_op only): the matmul produces the input one (batch b, slice s) "sub-batch" at
+// a time and signals once per sub-batch, in ITS iteration order. Instead of waiting once per batch, wait before every
+// read of local slice s of batch b for `ordinal[b*ring_size + s] + 1` signals, where ordinal[] (rt args after the
+// fused-op semaphore id, input_tensor_B*ring_size words) is the position of sub-batch (b, s) in the matmul schedule.
+constexpr bool sp_slice_schedule = get_named_compile_time_arg_val("sp_slice_schedule") != 0;
+static_assert(!sp_slice_schedule || fuse_op, "sp_slice_schedule requires fuse_op");
 
 // Tile id of the first tile of `slice_idx` in a tensor laid out like the input tensor.
 FORCE_INLINE uint32_t slice_base_tile_id(uint32_t slice_idx) {
@@ -297,6 +303,16 @@ void kernel_main() {
     if constexpr (fuse_op) {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
     }
+    // SP schedule: ordinal table follows the fused-op semaphore id (input_tensor_B * ring_size words).
+    uint32_t sp_ordinal_arg_base = 0;
+    if constexpr (sp_slice_schedule) {
+        sp_ordinal_arg_base = arg_idx;
+        arg_idx += input_tensor_B * ring_size;
+    }
+    [[maybe_unused]] auto sp_wait_for_sub_batch = [&](uint32_t b, uint32_t slice) {
+        const uint32_t ordinal = get_arg_val<uint32_t>(sp_ordinal_arg_base + b * ring_size + slice);
+        Semaphore<>(matmul_receiver.signal_op_semaphore_id).wait_min(ordinal + 1);
+    };
 
     Noc noc_obj;
     CircularBuffer cb_input(cb_input_id);
@@ -308,7 +324,7 @@ void kernel_main() {
     uint32_t sem2_target = 0;
 
     for (uint32_t b = 0; b < input_tensor_B; ++b) {
-        if constexpr (fuse_op) {
+        if constexpr (fuse_op && !sp_slice_schedule) {
             matmul_receiver.wait_for_matmul_batch(b);
         }
         uint32_t batch_offset = input_batch_num_pages * b;
@@ -359,6 +375,12 @@ void kernel_main() {
                 slice_idx += ring_size;
             } else if (slice_idx >= (int)ring_size) {
                 slice_idx = (uint32_t)slice_idx - ring_size;
+            }
+
+            // The local input slice is read in every iteration (forwarded in the 1st, reduced in the others), so
+            // under the SP schedule wait here for the matmul sub-batch (b, slice_idx) before touching it.
+            if constexpr (sp_slice_schedule) {
+                sp_wait_for_sub_batch(b, static_cast<uint32_t>(slice_idx));
             }
 
             // address incrementer for input_tensor; the staged partial sums are addressed by
