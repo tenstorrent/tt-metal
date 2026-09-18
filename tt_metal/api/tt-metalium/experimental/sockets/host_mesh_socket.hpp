@@ -68,11 +68,15 @@ public:
     /// Same on every endpoint core, so a multi-core kernel takes one value.
     DeviceAddr get_config_buffer_address() const;
     std::shared_ptr<MeshBuffer> get_config_buffer() const;
-    /// Always throws: the FIFO is a pinned host ring, not a device buffer. The
-    /// receiver kernel pulls into a landing buffer the caller allocates.
+    /// Receiver-side landing buffer, allocated exactly as D2D allocates its data
+    /// buffer. Not the FIFO -- that is the pinned host ring -- but the same size
+    /// and shape, so a receiver kernel pulls into it where a D2D kernel would
+    /// find its pages. Raises on a sender, as D2D does.
     std::shared_ptr<MeshBuffer> get_data_buffer() const;
     const SocketConfig& get_config() const;
     SocketEndpoint get_socket_endpoint_type() const;
+    /// Always true: the two endpoints are on different ranks by construction.
+    bool is_rank_scoped_socket() const { return true; }
     std::vector<MeshCoreCoord> get_active_cores() const;
     MeshDevice* get_mesh_device() const;
 

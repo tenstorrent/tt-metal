@@ -60,6 +60,7 @@ struct HostMeshSocket::Impl {
     SocketEndpoint endpoint = SocketEndpoint::SENDER;
     MeshDevice* mesh_device = nullptr;
     std::shared_ptr<MeshBuffer> config_buffer;
+    std::shared_ptr<MeshBuffer> data_buffer;  // receiver endpoints only
     DeviceAddr config_buffer_address = 0;
     RingGeometry geometry;
     std::vector<Connection> connections;
@@ -138,6 +139,12 @@ HostMeshSocket::HostMeshSocket(
     // and a multi-core kernel needs only one.
     impl_->config_buffer = create_socket_config_buffer(device, config, impl_->endpoint);
     impl_->config_buffer_address = impl_->config_buffer->address();
+
+    // Same allocation D2D makes, so a receiver kernel has a socket-owned landing
+    // buffer to pull into and get_data_buffer() means the same thing on both.
+    if (impl_->endpoint == SocketEndpoint::RECEIVER) {
+        impl_->data_buffer = create_socket_data_buffer(device, config);
+    }
 
     const bool is_sender = impl_->endpoint == SocketEndpoint::SENDER;
     const auto exchange_tag = reserve_exchange_tags(config.socket_connection_config.size());
@@ -223,9 +230,11 @@ DeviceAddr HostMeshSocket::get_config_buffer_address() const { return impl_->con
 std::shared_ptr<MeshBuffer> HostMeshSocket::get_config_buffer() const { return impl_->config_buffer; }
 
 std::shared_ptr<MeshBuffer> HostMeshSocket::get_data_buffer() const {
-    TT_THROW(
-        "HostMeshSocket has no device-side data buffer: the receiver's FIFO lives in pinned host memory and the "
-        "kernel pulls from it into a destination of the caller's choosing. Allocate that landing buffer directly.");
+    // Unlike D2D this is not the FIFO -- that is the pinned host ring the NIC
+    // reaches -- but it is the same size and shape, so a receiver kernel pulls
+    // into it exactly where a D2D kernel would find its pages.
+    TT_FATAL(impl_->data_buffer, "Cannot access the data buffer for a sender socket.");
+    return impl_->data_buffer;
 }
 
 const SocketConfig& HostMeshSocket::get_config() const { return impl_->config; }
