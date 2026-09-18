@@ -1,5 +1,6 @@
 name: "Build tt-metal artifacts"
 permissions:
+  actions: read
   contents: read
   packages: write
 on:
