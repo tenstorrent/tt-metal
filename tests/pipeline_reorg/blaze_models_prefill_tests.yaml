@@ -1347,15 +1347,8 @@
   sp_config: sc4
 
 
-# 4-galaxy (SC4) DFlash drafter KV accuracy. A separate launcher from the two entries above rather than a
-# flag on them: the drafter path is not trace-captured and prefill_runner asserts on the pair, so this leg
-# runs PREFILL_USE_TRACE=0 while both verifier legs run with trace on -- so its 250k timing is a no-trace
-# number and is not comparable to theirs; it tracks the drafter path against itself. PCC stops at 55k
-# because that is where the drafter golden stops.
-# What only the 4-rank shape covers: the drafter is built on the LAST pipeline rank while rank 0 serializes
-# the table, so every drafter address in it is a remote host's DRAM reached via the all-gathered stage
-# layout, and the device-less producer reads those back over UMD from a third process. The verifier KVPE is
-# PCC'd alongside on every rank, so a drafter regression stays separable from a verifier one.
+# Separate launcher from the verifier legs above: the drafter path is not trace-captured, so this one runs
+# PREFILL_USE_TRACE=0 and its 250k timing is not comparable to theirs. PCC stops at 55k, where the golden does.
 - name: "(Kimi-K2.7-1T) DFlash drafter KV accuracy 55k@5k + perf 250k@5k, SC4"
   cmd: |
     set -euo pipefail
@@ -1370,15 +1363,10 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # 13 min in CI on a reserved quad, most of it 4-rank weight load; 50 untraced chunks add under a
-      # minute on top and the producer's 96-config drafter read is bounded by the 55k it reads. The margin
-      # is for CI, where four ranks pull the same TTNN cache over one NFS mount concurrently and the
-      # per-layer load rate is the dominant unknown.
+      # 13 min in CI on a reserved quad; the margin is for four ranks pulling one NFS-mounted TTNN cache.
       timeout: 45
       tier: 1
-      # Not a release gate yet: the drafter V minimum clears its threshold by 0.003 and has been measured
-      # on two topologies, neither on a die known to be marginal.
-      release_ready: false
+      release_ready: true
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
   budget_type: demo
@@ -1428,11 +1416,6 @@
   sp_config: sc1
 
 
-# Single-galaxy (SC1) DFlash drafter KV accuracy, same launcher under a different config key. It takes the
-# same STAGED code path as SC4 -- PREFILL_MOCK_MIGRATION all-gathers the stage layouts at any rank count --
-# so what it drops is the remote HOST, not the branch: one rank builds the table over its own DRAM and the
-# producer reads it back over local PCIe. That is what makes it worth running alongside SC4: a failure here
-# is in the drafter or the table, a failure only in SC4 is in the cross-host path.
 - name: "(Kimi-K2.7-1T) DFlash drafter KV accuracy 55k@5k + perf 250k@5k, SC1"
   cmd: |
     set -euo pipefail
@@ -1447,9 +1430,6 @@
   test_group: disagg_prefill
   skus:
     bh_sc1:
-      # 26 min in CI, nearly all of it the serial 67-layer weight load one galaxy does on its own; the 50
-      # untraced chunks run single-rank here, so they cost more than on the quad but still minutes, not
-      # tens. The margin is for CI's cold NFS load rate, the only term that moves run to run.
       timeout: 45
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: shield
