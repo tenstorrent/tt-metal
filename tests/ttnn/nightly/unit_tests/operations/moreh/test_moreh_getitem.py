@@ -34,7 +34,7 @@ def test_moreh_getitem_golden_uses_paired_negative_indices():
     actual = golden_function(input_tensor, [first_index, second_index], [1, 2])
     expected = input_tensor[:, first_index, second_index]
 
-    torch.testing.assert_close(actual, expected)
+    assert torch.equal(actual, expected)
 
 
 @skip_for_blackhole("Mismatching on Blackhole, see #12349")
