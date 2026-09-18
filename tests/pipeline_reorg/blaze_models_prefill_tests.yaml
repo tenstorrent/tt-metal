@@ -37,8 +37,8 @@
 #              OR-ed with test_type / test_group. Two vocabularies in one list: the model a
 #              leg covers (kimi_k2_7, kimi_k3, glm_5_2, dsv4_flash, minimax_m3)
 #              and the unit under test (moe, gate, mla, hca, swa, sdpa, ccl, block, transformer,
-#              kv_cache, dflash, runner, determinism). So `moe` runs every MoE leg and `kimi_k3` every K3
-#              leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
+#              kv_cache, dflash, mtp, runner, determinism). So `moe` runs every MoE leg and `kimi_k3`
+#              every K3 leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
 #              leg plus every K3 leg, not the K3 MoE legs.
 #   skus: A mapping of SKU names to their configuration:
 #     timeout: Job timeout in minutes.
@@ -945,6 +945,30 @@
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(GLM-5.2-744B) MTP module + predictor accuracy 5k"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8/
+    test -f "$GLM52_HF_MODEL/config.json" || { echo "::error title=MTP leg::GLM52_HF_MODEL=$GLM52_HF_MODEL has no config.json"; exit 1; }
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py -k "torus-xy-8x4 and not levels7 and (fused or pretrained)" -vvv --tb=short
+    '
+  test_type: glm_mtp
+  test_tags: [glm_5_2, mtp]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 25
+      tier: 2
+      release_ready: false
+  owner_id: U09L76N1MAT  # Nenad Babin
   team: models
   budget_type: demo
   sp_config: sc1
