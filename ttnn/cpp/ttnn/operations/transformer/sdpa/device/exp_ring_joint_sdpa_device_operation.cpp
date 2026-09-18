@@ -241,7 +241,10 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         DH,
         tt::constants::TILE_WIDTH);
 
-    TT_FATAL(args.num_links == 2, "Exp ring joint SDPA requires exactly 2 links. Got {}.", args.num_links);
+    TT_FATAL(
+        args.num_links == 2 || args.num_links == 4,
+        "Exp ring joint SDPA supports 2 or 4 links (one fabric-MUX client column per link). Got {}.",
+        args.num_links);
     TT_FATAL(args.topology == ttnn::ccl::Topology::Ring, "Exp ring joint SDPA requires Ring topology.");
 
     const auto device_grid = input_tensor_q.device()->compute_with_storage_grid_size();
@@ -284,6 +287,21 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const uint32_t sdpa_grid_x = mux_on_bottom_row ? user_grid.x : user_grid.x - 1;
     const uint32_t sdpa_grid_y = mux_on_bottom_row ? user_grid.y - 2 : user_grid.y;
     const uint32_t num_sdpa_cores = sdpa_grid_x * sdpa_grid_y;
+    // The last num_links SDPA columns are the fabric-MUX clients (one per link) and the reserved
+    // column hosts 2 MUX kernels per link (backward + forward). Mirrors the factory's checks.
+    TT_FATAL(
+        sdpa_grid_x >= args.num_links + 1,
+        "SDPA grid needs at least num_links + 1 = {} columns (1+ pure SDPA + one MUX client column per link); "
+        "got {} SDPA columns from program config grid ({}x{}).",
+        args.num_links + 1,
+        sdpa_grid_x,
+        user_grid.x,
+        user_grid.y);
+    TT_FATAL(
+        mux_on_bottom_row || user_grid.y >= 2 * args.num_links,
+        "Reserved MUX column has {} rows but {} links need 2 MUX kernels per link.",
+        user_grid.y,
+        args.num_links);
 
     // Joint sequence must divide evenly (or be zero); last local Q chunk may be padded.
     TT_FATAL(
@@ -298,7 +316,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const uint32_t total_q_chunks = B * NQH * num_q_chunks;
 
     // Every head-segment must fill its row exactly: fewer chunks than columns would idle the
-    // trailing columns, and the last two SDPA columns are the fabric MUX clients that drive the
+    // trailing columns, and the last num_links SDPA columns are the fabric MUX clients that drive the
     // K/V all-gather — an idle MUX column means that link never forwards its shard.
     TT_FATAL(
         num_q_chunks % sdpa_grid_x == 0,
@@ -334,7 +352,9 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Segments per row: each core row hosts up to kMaxPasses head-segments, walked as serial
     // passes. Keep in lockstep with kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
     // (L1-bound).
-    constexpr uint32_t kMaxPasses = 3;
+    // 4 admits the Wormhole H3 shard at q=256 (14 heads x segs 2 over 8 rows); the CB budget check
+    // below is what actually bounds the pass count.
+    constexpr uint32_t kMaxPasses = 4;
     const uint32_t num_passes = (total_segments + sdpa_grid_y - 1) / sdpa_grid_y;
     TT_FATAL(
         num_passes <= kMaxPasses,

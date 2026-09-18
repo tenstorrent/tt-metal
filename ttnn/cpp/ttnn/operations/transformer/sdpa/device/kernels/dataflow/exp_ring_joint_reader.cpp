@@ -76,7 +76,10 @@ void kernel_main() {
     // Per-link semaphore addresses for chunk-level sync.
     // Kept as raw L1 pointers (not Semaphore<>) because they're passed as L1 addresses via RT args.
     const uint32_t num_links = get_arg_val<uint32_t>(argidx++);
-    volatile tt_l1_ptr uint32_t* per_link_sem_ptrs[2] = {nullptr, nullptr};
+    // One per-chunk-arrival semaphore per link; the op supports 2 or 4 links (one MUX client column each).
+    constexpr uint32_t kMaxLinks = 4;
+    volatile tt_l1_ptr uint32_t* per_link_sem_ptrs[kMaxLinks] = {nullptr, nullptr, nullptr, nullptr};
+    ASSERT(num_links <= kMaxLinks);
     for (uint32_t lnk = 0; lnk < num_links; ++lnk) {
         per_link_sem_ptrs[lnk] =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(argidx++));

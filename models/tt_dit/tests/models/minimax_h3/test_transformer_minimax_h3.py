@@ -24,7 +24,6 @@ from safetensors import safe_open
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 
 from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, prepare_rope_tables
 from ....models.transformers.minimax_h3.token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
@@ -1054,11 +1053,9 @@ def test_minimax_h3_transformer_block_perf(
     reset_seeds,
 ) -> None:
     skip_if_unsupported_num_links(mesh_device, num_links)
-    # SP simulation emulates the Blackhole 4x32 quad's per-device shard by shrinking the sequence so a
-    # 4x8 device carries what a 4x32 device would. There is no Wormhole quad, so sp_sim rows measure
-    # nothing there; the WH rows are only meaningful at sp_sim1.
-    if sp_simulate > 1 and not is_blackhole():
-        pytest.skip("SP simulation targets the Blackhole 4x32 quad; there is no Wormhole equivalent")
+    # SP simulation emulates the 4x32 quad's per-device shard on a 4x8 mesh by shrinking the sequence.
+    # On Blackhole that is the production exp-ring shape; on Wormhole it is the one shard the exp op
+    # can hold in L1, so the sp_sim4 rows are the exp-vs-normal SDPA A/B on both parts.
     SIM = sp_simulate
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]

@@ -469,11 +469,71 @@ consistent with `is_causal=False`. Observed: `(6,24)` 1,602,880 B; `(8,20)` 1,63
 | 5 | Re-profile the block with landed configs | blocked | **TODO** — needs the pinned `diffusers` fork; not installed here |
 | 6 | Pipeline re-run: warm total, denoise, ms/fwd, CLIP | **done** | Same-host A/B: **-69.9 ms/fwd, -0.58%**, exactly the isolated-sweep prediction. CLIP **35.88** (min 34.69, bar 33.0) on the later run |
 | 11 | Numerics of the landed blockings (the sweep never checked) | **done** | ff2 (8,7,10) pcc 1.0000000 vs torch, identical to (8,8,8) to one bf16 ulp; ff1 (8,7,10) pcc 0.9999843 on the real SwiGLU ring, = (8,3,14) to 6 dp. Both PASS |
-| 7 | `use_exp_ring_sdpa` on Wormhole | not started | **TODO** — gated on `is_blackhole() and sp_factor == 32`, but `exp_ring_joint_sdpa_program_factory.cpp` has no arch gate and the sp check is described in-tree as "a proxy for the 4x32 shape". On WH the other conditions already hold (`tp_factor == 4`, `exp_ring_num_passes = ceil(14/9) = 2 <= 3`). A different kernel on the op that is 70% of the block, so the largest single lever available — but it needs PCC and CLIP validation, not a timing check |
+| 7 | `use_exp_ring_sdpa` on Wormhole | **done** | Brought up (header-pool and reader fixes, even-row grid, 2 or 4 links); PCC 0.99975. Fits only the SP=32-equivalent shard (3424 rows/device): there the normal op is **~9% faster** (14.76 vs 16.09 ms in-block); 4 links = 2 links. The 15 s shard does not fit its L1 model. See *Exp ring joint SDPA on Wormhole* below |
 | 8 | FSDP layout conversions | not started | **TODO** — tilize/untilize go 0.13 -> 3.13 ms under FSDP, a 23x blowup and a quarter of the whole FSDP cost spent on format round-trips rather than communication. Cheapest apparent win in the breakdown |
-| 9 | Ring SDPA kernel utilization | not started | **TODO** — 48.8% FPU / 35.6% math at the shipped chunk size, shown to be inherent to the kernel at this shape rather than a chunk-size miss. Work is in the kernel |
+| 9 | Ring SDPA kernel utilization | not started | **TODO** — 48% at the shipped chunk size, inherent to the kernel at this shape rather than a chunk-size miss. Note `PM FPU UTIL (%)` is the perf-model ideal divided by measured time (`tools/tracy/process_ops_logs.py`), not a hardware counter; the exp kernel shares the same inner loop, so the work remains in `compute_streaming.hpp` |
 | 10 | `dit_fsdp: True` in `_PRESETS_WH` | not started | **TODO** — decision, not a measurement; costs 5.7% of the block, buys the headroom a 12 GB part needs |
 | 13 | TP/SP axes and factors at 15 s / 16:9 (`test_parallel_sweep_minimax_h3.py`) | **done** | Only three configurations exist on this mesh and the shipped TP4/SP8 is the fastest: TP8/SP4 is **+4.1%** ms/fwd (untuned blockings), TP1/SP32 **hangs deterministically** in its first forward. See the section below |
+
+## Exp ring joint SDPA on Wormhole — brought up and measured (2026-09-18)
+
+`exp_ring_joint_scaled_dot_product_attention` is the fused ring-attention kernel that measured 21% faster
+than `RingJointSDPADeviceOperation` on Blackhole at the H3 shard `[1, 14, 3424, 128]`, ring 8 (`42986a68fe0`).
+This section records what it took to run it on this galaxy and what it measures against the normal op. All
+numbers are max over the 32 devices, `DEVICE KERNEL DURATION`, from Tracy CSVs under
+`generated/profiler/reports/2026_09_18_01_4*`–`02_0*`.
+
+### What blocked it, and the fixes
+
+| blocker | where | fix |
+|---|---|---|
+| model gate `is_blackhole() and sp == 32` | `attention_minimax_h3.py` | `MINIMAX_H3_EXP_RING_SDPA=1/0` forces it on/off; unset keeps the Blackhole rule |
+| SDPA rows must be even (backward/forward MUX-client halves) | `exp_ring_joint_sdpa_program_factory.cpp` "SDPA grid rows must be even" | program grid `(8, 8)`: **7x8 = 56 SDPA cores** (the normal op has 63); `num_workers_per_link = 4` |
+| `num_links == 2` `TT_FATAL`; one MUX-client column per link | `exp_ring_joint_sdpa_device_operation.cpp` | the model passes 2 for this op (`MINIMAX_H3_EXP_RING_NUM_LINKS`); the factory now also lays out 4 client columns / 8 MUX kernels for `num_links=4` |
+| **fabric packet-header pool**: the AG writer allocates 8 scatter + 2 unicast + 1 atomic-inc headers per RISC; Wormhole's pool is `NUM_PACKET_HEADERS / 2 = 8` per RISC (Blackhole 12), and `PacketHeaderPool::allocate_header` spins forever on exhaustion | `exp_ring_joint_writer.cpp`; `tt_metal/hw/inc/internal/tt-1xx/wormhole/dev_mem_map.h:149` | rotation sized from the budget: 4 scatter headers on Wormhole, 8 on Blackhole. This was the first hang: every fabric writer on all 32 chips parked in `allocate_header` |
+| reader's per-link semaphore array was `[2]` | `exp_ring_joint_reader.cpp` | `[4]` with an assert; with 4 links the overflow corrupted the reader's stack and every reader exited without work (second hang) |
+| 8 KB fabric payload illegal on WH (cap 7616 B) | `fabric_context.cpp` | the H3 WH mesh already runs 4 KB; the op derives packet size from the fabric |
+| `kMaxPasses = 3` | factory + device op | raised to 4 (the CB budget check is what bounds passes) |
+
+### L1 decides the shape, not the gates
+
+The op keeps every pass's Q chunk and flash state resident for the whole op, so per-core L1 scales with
+`rows_per_device x heads_per_device / SDPA cores`. Using the model's own `_exp_sdpa_l1_bytes`: **no
+(cols, segs, q, k) fits 5 s, 10 s or 15 s on the 7x8 grid** (minimum 2.45 MB at 15 s against a 1.31 MB
+budget, even with Q streamed and the pass cap lifted). The only H3 shard that fits is the SP=32-equivalent
+`3424 rows/device` — the `sp_sim4` shard — at q512/k128 (2 passes, streamed Q) or q256/k256 (4 passes,
+streamed Q). Everything below is measured there; **the real 15 s pipeline shard cannot run the exp op as
+designed**. Making it fit means sequential passes (pass-outer, ring-inner) with passes ≥ 1 reading the
+gathered K/V from DRAM instead of the fabric — kernel work across reader, writer, compute and factory.
+
+### Single op, `[1, 14, 3424, 128]`, ring 8, HiFi2 bf16, PCC 0.99975 on every exp point
+
+| op | config | cores | per call |
+|---|---|---|---|
+| normal `RingJointSDPA` (sweep best of 7, `create_perf_table[minimax_h3_15s_768p_sim32]`) | q256 / k512 | 63 | **15.74 ms** |
+| normal | q160 / k256 | 63 | 16.11 ms |
+| exp, 2 links | q256 / k256, 4 passes | 56 | 16.65 ms |
+| exp, 2 links | q512 / k128, 2 passes | 56 | 20.26 ms |
+| exp, 4 links | q512 / k128, 2 passes | 56 | 20.33 ms (no change vs 2 links: the K/V gather is not on the critical path) |
+
+### In the block (`test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim4-15s_768p-…_is_fsdp1]`)
+
+| SDPA variant | SDPA row | block device-only |
+|---|---|---|
+| normal ring op (model fallback q256 / k512) | **14.76 ms** | **44.39 ms** |
+| exp, q256 / k256, 4 passes (`MINIMAX_H3_EXP_RING_MAX_PASSES=4`) | 16.09 ms | 45.12 ms |
+| exp, q512 / k128, 2 passes | 19.88 ms | 49.13 ms |
+
+The normal op is **~9% faster on the SDPA row** at the one shard the exp op can hold, and the exp op runs
+on 56 cores where the normal op has 63. The Blackhole 21% did not transfer: there the exp op fits Q and
+state resident on 110 cores at q160/k512, here L1 forces streamed Q and k=128–256 chunks whose per-chunk
+overhead costs more than the removed DRAM save/restore saves. Both ops share the same inner loop
+(`sdpa_inner_loop_step`), so the Wormhole utilization gap (48% vs Blackhole's ~70% on the same kernel) is
+untouched by either.
+
+Reproduce: unit test `test_exp_ring_joint_attention.py::…[wormhole_b0-4x8_wh_h3_sim32{,_p4,_nl4}-ring]`
+(PCC + timing under `--profile`), normal-op table `test_ring_joint_sdpa.py::…create_perf_table[minimax_h3_15s_768p_sim32]`,
+block A/B with `MINIMAX_H3_EXP_RING_SDPA={1,0}` and `MINIMAX_H3_EXP_RING_MAX_PASSES={3,4}`.
 
 ## TP/SP parallel-configuration sweep — 15 s / 16:9
 
