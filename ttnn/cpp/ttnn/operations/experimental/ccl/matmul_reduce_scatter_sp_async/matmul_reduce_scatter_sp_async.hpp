@@ -16,6 +16,11 @@
 
 namespace ttnn::experimental {
 
+// Rows of the core grid reserved for the reduce-scatter workers (bottom rows; the matmul takes the rest). Measured on
+// the 1x4 Blackhole galaxy (Llama-8B TP4 shapes, 2 links): two rows fit 5 (Ring) / 4 (Linear) workers per link, and
+// the sub-batched matmul still uses 8 rows (per_core_M unchanged); three rows slow the matmul (per_core_M = 3).
+inline constexpr uint32_t kDefaultMatmulReduceScatterSpCclCoreRows = 2;
+
 // Fused sequence-parallel "multiply-then-scatter" (dim 2):
 //   input [B,1,S,K] (this rank's K shard), weight [1,1,K,N] (or [1,1,N,K] with transpose_b)
 //   -> reduce_scatter(input @ weight, dim=2, cluster_axis) : [B,1,S/T,N], T = mesh extent along cluster_axis.
@@ -31,7 +36,7 @@ Tensor matmul_reduce_scatter_sp_async(
     bool transpose_b = false,
     std::optional<uint32_t> num_links = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    uint32_t ccl_core_rows = 2,
+    uint32_t ccl_core_rows = kDefaultMatmulReduceScatterSpCclCoreRows,
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<const DataType> dtype = std::nullopt,

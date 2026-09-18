@@ -50,7 +50,7 @@ ttnn::Tensor ring_shift(
 
 // Which implementation backs the sequence-parallel linears (ops/distributed/sp_linear_ops.hpp), process-wide.
 //   Composed: today's unfused sequence -- the collective, then the matmul (or the reverse) -- op for op.
-//   Fused:    the fused ttnn ops of issue #52944. Not landed yet: selecting it makes the two functions below throw.
+//   Fused:    the fused ttnn ops of issue #52944 (all_gather_matmul_sp_async / matmul_reduce_scatter_sp_async).
 enum class SPLinearImpl { Composed, Fused };
 void set_sp_linear_impl(SPLinearImpl impl);
 SPLinearImpl get_sp_linear_impl();

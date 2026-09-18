@@ -5,9 +5,10 @@
 """Megatron sequence parallelism (``TPStrategy.TENSOR_SEQUENCE``) on Llama.
 The oracle is classic tensor parallelism on the same weights.
 
-The second half checks the sequence-parallel linears the modules are built from
-(``sp_column_parallel_linear`` / ``sp_row_parallel_linear``) against the collective + linear
-sequence they replace, and the switch between their composed and fused implementations.
+The oracle tests run under both implementations of the sequence-parallel linears (composed
+collective + matmul, and the fused ttnn ops). The second half checks those linears
+(``sp_column_parallel_linear`` / ``sp_row_parallel_linear``) directly: Composed against the
+collective + linear sequence it replaces (bitwise), Fused against Composed (ULP), and the switch.
 """
 
 from __future__ import annotations
@@ -20,8 +21,20 @@ import ttml
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig
 from ttml.modules import LoraConfig, LoraModel
-from ttml.parallel import SEQUENCE_DIM, TPStrategy, is_sequence_parallel
+from ttml.parallel import TPStrategy, is_sequence_parallel
 from bf16_ulp import assert_within_bf16_ulp
+from sp_linear_testlib import (
+    SPLinearImpl,
+    assert_bitwise_equal,
+    assert_within_ulp,
+    column_linear_reference,
+    column_operands,
+    forward_backward,
+    per_rank,
+    row_linear_reference,
+    row_operands,
+    sp_linear_impl,
+)
 
 TP_AXIS_SIZE = 2  # the 'tp' extent of conftest's tp_mesh fixture
 
@@ -81,18 +94,6 @@ def causal_mask(seq_len: int):
     return ttml.autograd.Tensor.from_numpy(mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16)
 
 
-def per_rank(tensor) -> np.ndarray:
-    """Every tp rank's copy of ``tensor`` stacked along dim 1, which is 1 on every tensor here, so SP
-    and TP tensors compare rank by rank whatever their placement. The layout is imposed by a composer
-    rather than read off the tensor: activation and gradient topologies are stale after collectives."""
-    mesh = ttml.mesh()
-    dims = [0] * len(mesh.shape)
-    dims[mesh.axis_index("tp")] = 1
-    device = ttml.autograd.AutoContext.get_instance().get_device()
-    composer = ttnn.create_mesh_composer(device, ttnn.MeshComposerConfig(dims))
-    return tensor.to_numpy(ttnn.DataType.FLOAT32, composer=composer).astype(np.float64)
-
-
 def backward(model, ids, mask) -> None:
     model.train()
     model(ids, mask).backward(retain_graph=False)
@@ -120,8 +121,15 @@ def reset_graph():
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
+@pytest.fixture(params=["composed", "fused"])
+def linear_impl(request):
+    """Runs the requesting test under each implementation of the sequence-parallel linears."""
+    with sp_linear_impl(request.param):
+        yield request.param
+
+
 @pytest.mark.requires_device
-@pytest.mark.usefixtures("tp_mesh")
+@pytest.mark.usefixtures("tp_mesh", "linear_impl")
 class TestMatchesTensorParallel:
     @pytest.mark.parametrize("placement", PLACEMENTS, ids=lambda p: p.name)
     @pytest.mark.parametrize("batch", [1, 2])
@@ -245,68 +253,7 @@ class TestTPStrategy:
 # The sequence-parallel linears against the collective + linear sequence they replace
 # ---------------------------------------------------------------------------
 
-SPLinearImpl = ttml.ops.distributed.SPLinearImpl
-# Milestone 2 of issue #52944: flip once ttnn.experimental.{all_gather_matmul_sp_async,
-# matmul_reduce_scatter_sp_async} land, and replace test_fused_is_not_landed with a Fused-vs-Composed
-# comparison in ULP (the fused ops overlap the collective with the matmul, so they need not be bitwise).
-FUSED_LANDED = False
 IN_FEATURES, OUT_FEATURES = 128, 192  # tile-aligned after sharding across tp
-
-
-def normal(rng: np.random.Generator, shape: tuple[int, ...]) -> np.ndarray:
-    return (rng.standard_normal(shape) * 0.1).astype(np.float32)
-
-
-def mesh_tensor(data: np.ndarray, shard_dim: int | None, requires_grad: bool = False):
-    """``data`` on the tp mesh, sharded along ``shard_dim`` across tp (replicated when None)."""
-    kwargs = {} if shard_dim is None else {"mapper": ttml.mesh().axis_mapper("tp", shard_dim)}
-    tensor = ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, **kwargs)
-    tensor.set_requires_grad(requires_grad)
-    return tensor
-
-
-def column_linear_reference(x, weight, bias, cluster_axis):
-    """What ColumnParallelLinear(sequence_parallel=True) issued before the ops existed."""
-    gathered = ttml.ops.distributed.all_gather(
-        x, SEQUENCE_DIM, cluster_axis, ttml.ops.distributed.GradOutputType.SHARDED
-    )
-    return ttml.ops.linear.linear(gathered, weight, bias)
-
-
-def row_linear_reference(x, weight, cluster_axis):
-    """What RowParallelLinear(sequence_parallel=True) issued before the ops existed (bias excluded)."""
-    return ttml.ops.distributed.reduce_scatter(ttml.ops.linear.linear(x, weight, None), SEQUENCE_DIM, cluster_axis)
-
-
-def forward_backward(op, operands: dict, grad_out: tuple, cluster_axis: int) -> dict[str, np.ndarray]:
-    """Forward and backward of ``op`` from ``grad_out``; each operand is ``(data, shard_dim)`` (``None``
-    data for an absent bias) and gets a fresh device copy, so two runs never share a tensor.
-    Returns the per-rank output and the per-rank gradient of every operand."""
-    tensors = {
-        name: None if data is None else mesh_tensor(data, shard_dim, requires_grad=True)
-        for name, (data, shard_dim) in operands.items()
-    }
-    out = op(**tensors, cluster_axis=cluster_axis)
-    out.set_grad(mesh_tensor(*grad_out).get_value())
-    out.backward(False)
-    result = {"out": per_rank(out)}
-    result.update({name: per_rank(t.get_grad_tensor()) for name, t in tensors.items() if t is not None})
-    ttml.autograd.AutoContext.get_instance().reset_graph()
-    return result
-
-
-def assert_bitwise_equal(got: dict[str, np.ndarray], expected: dict[str, np.ndarray], label: str) -> None:
-    assert got.keys() == expected.keys()
-    for name, reference in expected.items():
-        assert np.isfinite(reference).all(), f"{label}: {name} reference is not finite"
-        assert reference.std() > 0, f"{label}: {name} reference is constant; agreement would prove nothing"
-        assert got[name].shape == reference.shape, f"{label}: {name} shape {got[name].shape} != {reference.shape}"
-        if not np.array_equal(got[name], reference):
-            differing = int((got[name] != reference).sum())
-            raise AssertionError(
-                f"{label}: {name} differs in {differing}/{reference.size} elements, "
-                f"max |diff| = {np.abs(got[name] - reference).max():.3g}"
-            )
 
 
 @pytest.fixture
@@ -316,52 +263,54 @@ def composed_afterwards():
 
 
 @pytest.mark.requires_device
-@pytest.mark.usefixtures("tp_mesh")
+@pytest.mark.usefixtures("tp_mesh", "composed_afterwards")
 class TestSPLinearOps:
-    """Under the Composed implementation the ops issue exactly the ttnn ops of the sequence they replace,
-    so the output and every gradient must agree bit for bit, not just within ULP."""
+    """Composed issues exactly the ttnn ops of the sequence it replaces, so it must agree bit for bit; Fused is
+    the same math with the collective overlapping the matmul (its own matmul blocking), so it is held to the
+    oracle's ULP limit against Composed."""
 
     @pytest.mark.parametrize("has_bias", [True, False], ids=["bias", "no_bias"])
     @pytest.mark.parametrize("batch", [1, 2])
     def test_column_parallel(self, batch, has_bias):
         axis = ttml.mesh().axis_index("tp")
         rng = np.random.default_rng(10 * batch + has_bias)
-        operands = {
-            "x": (normal(rng, (batch, 1, SEQ_LEN, IN_FEATURES)), SEQUENCE_DIM),  # per rank [B,1,S/T,K]
-            "weight": (normal(rng, (1, 1, OUT_FEATURES, IN_FEATURES)), 2),  # per rank [1,1,N/T,K]
-            "bias": (normal(rng, (1, 1, 1, OUT_FEATURES)) if has_bias else None, 3),
-        }
-        grad_out = (normal(rng, (batch, 1, SEQ_LEN, OUT_FEATURES)), 3)  # per rank [B,1,S,N/T]
+        operands, grad_out = column_operands(rng, batch, has_bias, SEQ_LEN, IN_FEATURES, OUT_FEATURES)
+        label = f"column batch={batch} bias={has_bias}"
 
-        got = forward_backward(ttml.ops.distributed.sp_column_parallel_linear, operands, grad_out, axis)
         expected = forward_backward(column_linear_reference, operands, grad_out, axis)
+        with sp_linear_impl("composed"):
+            composed = forward_backward(ttml.ops.distributed.sp_column_parallel_linear, operands, grad_out, axis)
+        with sp_linear_impl("fused"):
+            fused = forward_backward(ttml.ops.distributed.sp_column_parallel_linear, operands, grad_out, axis)
 
-        assert got["out"].shape == (batch, TP_AXIS_SIZE, SEQ_LEN, OUT_FEATURES // TP_AXIS_SIZE)
-        assert set(got) == {"out", "x", "weight"} | ({"bias"} if has_bias else set())
-        assert_bitwise_equal(got, expected, f"column batch={batch} bias={has_bias}")
+        assert composed["out"].shape == (batch, TP_AXIS_SIZE, SEQ_LEN, OUT_FEATURES // TP_AXIS_SIZE)
+        assert set(composed) == {"out", "x", "weight"} | ({"bias"} if has_bias else set())
+        assert_bitwise_equal(composed, expected, f"{label} composed")
+        assert_within_ulp(fused, composed, f"{label} fused", MAX_ULP)
 
     @pytest.mark.parametrize("batch", [1, 2])
     def test_row_parallel(self, batch):
         axis = ttml.mesh().axis_index("tp")
         rng = np.random.default_rng(20 + batch)
-        operands = {
-            "x": (normal(rng, (batch, 1, SEQ_LEN, IN_FEATURES)), 3),  # per rank [B,1,S,K/T]
-            "weight": (normal(rng, (1, 1, OUT_FEATURES, IN_FEATURES)), 3),  # per rank [1,1,N,K/T]
-        }
-        grad_out = (normal(rng, (batch, 1, SEQ_LEN, OUT_FEATURES)), SEQUENCE_DIM)  # per rank [B,1,S/T,N]
+        operands, grad_out = row_operands(rng, batch, SEQ_LEN, IN_FEATURES, OUT_FEATURES)
+        label = f"row batch={batch}"
 
-        got = forward_backward(ttml.ops.distributed.sp_row_parallel_linear, operands, grad_out, axis)
         expected = forward_backward(row_linear_reference, operands, grad_out, axis)
+        with sp_linear_impl("composed"):
+            composed = forward_backward(ttml.ops.distributed.sp_row_parallel_linear, operands, grad_out, axis)
+        with sp_linear_impl("fused"):
+            fused = forward_backward(ttml.ops.distributed.sp_row_parallel_linear, operands, grad_out, axis)
 
-        assert got["out"].shape == (batch, TP_AXIS_SIZE, SEQ_LEN // TP_AXIS_SIZE, OUT_FEATURES)
-        assert_bitwise_equal(got, expected, f"row batch={batch}")
+        assert composed["out"].shape == (batch, TP_AXIS_SIZE, SEQ_LEN // TP_AXIS_SIZE, OUT_FEATURES)
+        assert_bitwise_equal(composed, expected, f"{label} composed")
+        assert_within_ulp(fused, composed, f"{label} fused", MAX_ULP)
 
 
 @pytest.mark.usefixtures("composed_afterwards")
 class TestSPLinearImpl:
     def test_switch_round_trips(self):
         set_impl, get_impl = ttml.ops.distributed.set_sp_linear_impl, ttml.ops.distributed.get_sp_linear_impl
-        assert get_impl() == SPLinearImpl.COMPOSED, "composed is the default until the fused ops land"
+        assert get_impl() == SPLinearImpl.COMPOSED, "composed is the default until the fused ops are the default"
         set_impl("fused")
         assert get_impl() == SPLinearImpl.FUSED
         set_impl(SPLinearImpl.COMPOSED)
@@ -383,26 +332,6 @@ class TestSPLinearImpl:
         assert DeviceConfig({"device_config": {"sp_linear_impl": "fused"}}).sp_linear_impl == "fused"
         with expect_error(ValueError, "'composed' or 'fused'"):
             DeviceConfig({"device_config": {"sp_linear_impl": "eager"}})
-
-
-@pytest.mark.requires_device
-@pytest.mark.usefixtures("tp_mesh", "composed_afterwards")
-class TestSPLinearFusedImpl:
-    @pytest.mark.skipif(FUSED_LANDED, reason="the fused ops landed: compare Fused with Composed in ULP instead")
-    def test_fused_is_not_landed(self, expect_error):
-        """Selecting the fused ops before they exist fails at the first SP linear instead of silently composing."""
-        ttml.ops.distributed.set_sp_linear_impl("fused")
-        axis = ttml.mesh().axis_index("tp")
-        rng = np.random.default_rng(0)
-        x = mesh_tensor(normal(rng, (1, 1, SEQ_LEN, IN_FEATURES)), SEQUENCE_DIM)
-        weight = mesh_tensor(normal(rng, (1, 1, OUT_FEATURES, IN_FEATURES)), 2)
-        with expect_error(RuntimeError, "not landed"):
-            ttml.ops.distributed.sp_column_parallel_linear(x, weight, None, cluster_axis=axis)
-
-        x = mesh_tensor(normal(rng, (1, 1, SEQ_LEN, IN_FEATURES)), 3)
-        weight = mesh_tensor(normal(rng, (1, 1, OUT_FEATURES, IN_FEATURES)), 3)
-        with expect_error(RuntimeError, "not landed"):
-            ttml.ops.distributed.sp_row_parallel_linear(x, weight, axis)
 
 
 if __name__ == "__main__":

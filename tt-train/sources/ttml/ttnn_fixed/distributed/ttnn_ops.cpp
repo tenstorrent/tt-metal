@@ -19,7 +19,9 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_matmul_sp_async/all_gather_matmul_sp_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
+#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_sp_async/matmul_reduce_scatter_sp_async.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -320,28 +322,61 @@ ttnn::Tensor matmul_reduce_scatter_composed(
         unfused_matmul(x, w, transpose_b, std::nullopt), /* dim */ 2, cluster_axis);
 }
 
-// Milestone 2 of issue #52944: the two bodies below become calls to ttnn::experimental::all_gather_matmul_sp_async
-// and ttnn::experimental::matmul_reduce_scatter_sp_async (semaphores from CCLResources, get_num_links,
-// get_topology(cluster_axis), core::ComputeKernelConfig::matmul()); nothing else in tt-train changes.
-[[noreturn]] void throw_fused_not_landed(const char* ttnn_op) {
-    TT_THROW(
-        "SPLinearImpl::Fused: ttnn::experimental::{} has not landed yet; select SPLinearImpl::Composed "
-        "(device_config sp_linear_impl: composed)",
-        ttnn_op);
-}
-
+// The fused ttnn ops of issue #52944: the collective overlaps the matmul, one (batch, sequence slice) at a
+// time. Semaphores, links and topology as the standalone all_gather / reduce_scatter above; the matmul with
+// linear_op's compute config (HiFi4, fp32 accumulation), which the ops would otherwise lower to HiFi2.
+// `ccl_core_rows` is passed as the ops' own default constant only because C++ positional arguments leave no other
+// way to reach `compute_kernel_config`; `num_workers_per_link` is derived by the ops (nullopt).
 std::pair<ttnn::Tensor, ttnn::Tensor> all_gather_matmul_fused(
-    const ttnn::Tensor& /* x */,
-    const ttnn::Tensor& /* w */,
-    uint32_t /* cluster_axis */,
-    bool /* transpose_b */,
-    const std::optional<ttnn::Tensor>& /* bias */) {
-    throw_fused_not_landed("all_gather_matmul_sp_async");
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& w,
+    uint32_t cluster_axis,
+    bool transpose_b,
+    const std::optional<ttnn::Tensor>& bias) {
+    auto& ctx = ttml::autograd::ctx();
+    auto& ccl_resources = ctx.get_ccl_resources();
+    const uint32_t num_links = ttnn::operations::ccl::common::get_num_links(ctx.get_device(), cluster_axis);
+    auto outputs = ttnn::experimental::all_gather_matmul_sp_async(
+        x,
+        w,
+        cluster_axis,
+        ccl_resources.get_all_gather_semaphore(),
+        ccl_resources.get_barrier_semaphore(),
+        transpose_b,
+        bias,
+        num_links,
+        get_topology(cluster_axis),
+        ttnn::experimental::kDefaultAllGatherMatmulSpCclCoreRows,
+        /* num_workers_per_link */ std::nullopt,
+        /* memory_config */ std::nullopt,
+        /* dtype */ std::nullopt,
+        /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
+    TT_FATAL(
+        outputs.size() == 2,
+        "all_gather_matmul_sp_async returned {} tensors, expected {{gathered, mm}}",
+        outputs.size());
+    return {std::move(outputs[0]), std::move(outputs[1])};
 }
 
 ttnn::Tensor matmul_reduce_scatter_fused(
-    const ttnn::Tensor& /* x */, const ttnn::Tensor& /* w */, uint32_t /* cluster_axis */, bool /* transpose_b */) {
-    throw_fused_not_landed("matmul_reduce_scatter_sp_async");
+    const ttnn::Tensor& x, const ttnn::Tensor& w, uint32_t cluster_axis, bool transpose_b) {
+    auto& ctx = ttml::autograd::ctx();
+    auto& ccl_resources = ctx.get_ccl_resources();
+    const uint32_t num_links = ttnn::operations::ccl::common::get_num_links(ctx.get_device(), cluster_axis);
+    return ttnn::experimental::matmul_reduce_scatter_sp_async(
+        x,
+        w,
+        cluster_axis,
+        ccl_resources.get_reduce_scatter_semaphores(),
+        ccl_resources.get_barrier_semaphore(),
+        transpose_b,
+        num_links,
+        get_topology(cluster_axis),
+        ttnn::experimental::kDefaultMatmulReduceScatterSpCclCoreRows,
+        /* num_workers_per_link */ std::nullopt,
+        /* memory_config */ std::nullopt,
+        /* dtype */ std::nullopt,
+        /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
 }
 
 }  // namespace

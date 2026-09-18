@@ -214,7 +214,7 @@ auto weight_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
 - `ttml.ops.distributed.sp_column_parallel_linear(x, weight, bias, cluster_axis=...)` — all-gather of the sequence-sharded `x`, then `x @ W^T + b` (`ColumnParallelLinear(sequence_parallel=True)`). Its backward reduce-scatters `grad @ W` back onto the sequence shards and keeps the gathered `x` for the weight gradient.
 - `ttml.ops.distributed.sp_row_parallel_linear(x, weight, cluster_axis)` — `x @ W^T`, then a reduce-scatter of the partial products across TP, split on the sequence (`RowParallelLinear(sequence_parallel=True)`; the bias is added after). Its backward all-gathers the gradient before the dgrad matmul.
 
-`device_config.sp_linear_impl` selects how each pair runs: `composed` (default) issues the collective and the matmul as two separate ttnn ops, exactly as before; `fused` uses the fused ttnn ops that overlap the collective with the matmul (`ttnn.experimental.all_gather_matmul_sp_async` / `matmul_reduce_scatter_sp_async`, not landed yet). The same switch is available as `ttml.ops.distributed.set_sp_linear_impl("composed" | "fused")`.
+`device_config.sp_linear_impl` selects how each pair runs: `composed` (default) issues the collective and the matmul as two separate ttnn ops; `fused` uses the fused ttnn ops `ttnn.experimental.all_gather_matmul_sp_async` / `matmul_reduce_scatter_sp_async`, which overlap the collective with the matmul one (batch, sequence slice) at a time on both ring and line meshes. Both give the same result to within bf16 rounding (the fused matmul uses its own blocking). The same switch is available as `ttml.ops.distributed.set_sp_linear_impl("composed" | "fused")`.
 
 ---
 
