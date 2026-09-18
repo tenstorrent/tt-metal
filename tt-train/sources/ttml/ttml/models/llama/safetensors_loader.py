@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from contextlib import ExitStack
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator, Sequence
@@ -256,20 +257,27 @@ def _biases(parameter_names: set[str]) -> set[str]:
 
 
 def _check_coverage(parameter_names: set[str], rules: Sequence[_Rule], checkpoint_names: frozenset[str]) -> None:
-    """Every parameter must be fed by a rule or be a bias the checkpoint does not carry, and every
-    rule must land. A renamed or newly fused module shows up here instead of as a quietly untrained
-    weight; so does a checkpoint that ships the biases the model was built with.
+    """Every parameter must be fed by exactly one rule or be a bias the checkpoint does not carry,
+    and every rule must land. A renamed or newly fused module shows up here instead of as a quietly
+    untrained weight; so does a checkpoint that ships the biases the model was built with, and a
+    rule table that would assign one parameter twice.
     """
-    targets = {rule.param for rule in rules}
+    feeders = Counter(rule.param for rule in rules)
+    targets = set(feeders)
     checkpoint_has_biases = any(name.endswith(".bias") for name in checkpoint_names)
     exempt = set() if checkpoint_has_biases else _biases(parameter_names)
     uncovered = sorted(parameter_names - targets - exempt)
     unknown = sorted(targets - parameter_names)
-    if not uncovered and not unknown:
+    contested = sorted(name for name, count in feeders.items() if count > 1)
+    if not uncovered and not unknown and not contested:
         return
 
-    detail = "".join(f"\n  no rule feeds       {name}" for name in uncovered)
-    detail += "".join(f"\n  no such parameter   {name}" for name in unknown)
+    def line(label: str, name: str) -> str:
+        return f"\n  {label:<20}{name}"
+
+    detail = "".join(line("no rule feeds", name) for name in uncovered)
+    detail += "".join(line("no such parameter", name) for name in unknown)
+    detail += "".join(line(f"fed by {feeders[name]} rules", name) for name in contested)
     raise RuntimeError(
         f"the loader and this Llama disagree about its parameters:{detail}\n"
         f"Update _rules() in {Path(__file__).name} to match the model; a weight_tying or attention_bias "

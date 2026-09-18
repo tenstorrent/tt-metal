@@ -343,6 +343,14 @@ class TestCoverage:
         with expect_error(RuntimeError, "no rule feeds       Llama/blocks/0/attention/qkv_linear/bias"):
             _check_coverage(names, list(_rules(config, names)), frozenset({"layers.0.self_attn.q_proj.bias"}))
 
+    def test_rejects_two_rules_for_one_parameter(self, expect_error):
+        """A set of targets would hide the duplicate, and the load loop would assign the parameter twice."""
+        config, names = coverage_config(), param_names(_PER_LAYER_FUSED)
+        rules = list(_rules(config, names))
+        twice = next(rule for rule in rules if rule.param == "Llama/ln_fc/gamma")
+        with expect_error(RuntimeError, r"fed by 2 rules\s+Llama/ln_fc/gamma"):
+            _check_coverage(names, rules + [twice], frozenset())
+
     @pytest.mark.parametrize("survivor", ["Llama/fc/weight", "Llama/tok_emb/weight"])
     def test_tying_feeds_whichever_name_survived(self, survivor):
         """Which of the two names survives dedup is a module-traversal detail, not a contract."""
