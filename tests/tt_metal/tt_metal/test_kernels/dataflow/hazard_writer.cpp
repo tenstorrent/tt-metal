@@ -18,6 +18,17 @@
 #include "c_tensix_core.h"
 
 void kernel_main() {
+    // THROWAWAY (query-side POC): hand-emit one .tt.BUF_RW record -- (binding slot 0 == tensor::dst,
+    // kind WRITE=2) -- to prove the host-side ELF parse + kernel lookup (Kernel::query_buf_rw) end to
+    // end. SHT_NOTE, non-alloc: pure data, zero instructions, not loaded to device. This will be replaced
+    // by inline-asm annotations on the NoC read/write APIs so the record is emitted from the actual
+    // access, not by hand.
+    __asm__ volatile(
+        ".pushsection .tt.BUF_RW,\"\",@note\n\t"  // empty flags => non-alloc; SHT_NOTE. This GAS needs the
+        ".4byte 0\n\t"                            // flags string before @type (bare ",@note" won't parse).
+        ".4byte 2\n\t"                            // slot 0 == tensor::dst, kind WRITE
+        ".popsection");
+
     const uint32_t pattern = get_arg(args::pattern);
     const uint32_t stall_cycles = get_arg(args::stall);
 
