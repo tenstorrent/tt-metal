@@ -271,15 +271,20 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const uint32_t sdpa_grid_y = mux_on_bottom_row ? user_grid.y - 2 : user_grid.y;
     const uint32_t num_sdpa_cores = sdpa_grid_x * sdpa_grid_y;
 
-    // Joint sequence must divide evenly (or be zero); last local Q chunk may be padded.
+    // Joint sequence: the Q chunks must cover exactly the TILE-padded joint length (the joint output
+    // tensor is padded to that height; joint keys beyond L are masked by the factory's
+    // joint_has_padding path), so a partial last joint Q chunk is allowed when it lands on the padded
+    // height. Relaxed from `L % q_chunk_size == 0` for SD3.5 (L = 154 -> padded 160, q_chunk 160).
+    const uint32_t L_padded = tt::round_up(L, tt::constants::TILE_HEIGHT);
     TT_FATAL(
-        L == 0 || L % q_chunk_size == 0,
-        "Joint sequence length ({}) must be 0 or divisible by q_chunk_size ({}).",
+        L == 0 || L_padded % q_chunk_size == 0,
+        "Tile-padded joint sequence length ({}, logical {}) must be 0 or divisible by q_chunk_size ({}).",
+        L_padded,
         L,
         q_chunk_size);
 
     const uint32_t num_local_q_chunks = (N_local + q_chunk_size - 1) / q_chunk_size;
-    const uint32_t num_joint_q_chunks = (L == 0) ? 0 : (L / q_chunk_size);
+    const uint32_t num_joint_q_chunks = (L == 0) ? 0 : (L_padded / q_chunk_size);
     const uint32_t num_q_chunks = num_local_q_chunks + num_joint_q_chunks;
     const uint32_t total_q_chunks = B * NQH * num_q_chunks;
 
@@ -320,7 +325,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Segments per row: each core row hosts up to kMaxPasses head-segments, walked as serial
     // passes. Keep in lockstep with kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
     // (L1-bound).
-    constexpr uint32_t kMaxPasses = 3;
+    constexpr uint32_t kMaxPasses = 10;  // raised from 3 with the factory's cap (SD3.5: 76 head instances / 10 rows)
     const uint32_t num_passes = (total_segments + sdpa_grid_y - 1) / sdpa_grid_y;
     TT_FATAL(
         num_passes <= kMaxPasses,

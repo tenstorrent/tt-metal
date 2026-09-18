@@ -54,15 +54,17 @@ class _SingleCombiner:
             raise ValueError(msg)
 
         prediction = predictions[0]
-        n = prediction.shape[0]
+        # DiT tensors are [1, batch, N, C]; the CFG pair (uncond, cond) is stacked on the
+        # batch dim (dim1), so split there. (dim0 stays 1 for the fused distributed norm.)
+        n = prediction.shape[1]
 
         if n % 2 != 0:
             msg = "batch dimension must be even when using single-device CFGCombiner"
             raise ValueError(msg)
 
         split_pos = n // 2
-        uncond = prediction[0:split_pos]
-        cond = prediction[split_pos:]
+        uncond = prediction[:, 0:split_pos]
+        cond = prediction[:, split_pos:]
         combined = ttnn.lerp(uncond, cond, cfg_scale)
 
         return (combined,)
@@ -189,6 +191,11 @@ def distribute_cfg(
     """Return one tensor per submesh from a conditioning batch."""
     match devices:
         case [device]:
+            # Single submesh: the whole conditioning batch (e.g. CFG uncond+cond) stays on one
+            # mesh. The DiT convention is [1, batch, ...] (batch at dim1), so move the leading
+            # conditioning-batch dim to dim1. No-op when dim0 == 1 (no CFG).
+            if x.shape[0] > 1:
+                x = x.transpose(0, 1).contiguous()
             return (tensor.from_torch(x, device=device, on_host=on_host),)
         case [device1, device2]:
             half = x.shape[0] // 2

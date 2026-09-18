@@ -6,6 +6,7 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <bit>
+#include <cstdlib>
 #include <climits>
 #include <cmath>
 #include <map>
@@ -209,6 +210,25 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
+
+    // ---- Streaming compute (sdpa_standard_v2, same pipeline as the plain SDPA kernel) ----
+    // The concatenated K = [N spatial | L joint]. Streaming treats it as one sequence whose valid
+    // tile count is padded_Nkt + valid_Lt, so the spatial part must be k_chunk aligned (no interior
+    // padding); only the joint tail may be partial. It is masked by the lightweight palette
+    // [neginf, partial-col] exactly like a padded plain SDPA.
+    const bool streaming_env_disabled = std::getenv("TT_JOINT_SDPA_NO_STREAMING") != nullptr;
+    const bool use_streaming_compute = !fp32_dest_acc_en && !streaming_env_disabled && (padded_Nk == N);
+    const uint32_t valid_Skt = padded_Nkt + valid_Lt;
+    const uint32_t k_partial_col = use_streaming_compute ? (L % TILE_HEIGHT) : 0;
+    const bool use_streaming_padded_mask =
+        use_streaming_compute && ((valid_Skt % Sk_chunk_t != 0) || (k_partial_col != 0));
+    log_debug(
+        tt::LogOp,
+        "joint sdpa use_streaming_compute: {} valid_Skt: {} k_partial_col: {} padded_mask: {}",
+        use_streaming_compute,
+        valid_Skt,
+        k_partial_col,
+        use_streaming_padded_mask);
     const uint32_t qk_in0_block_w = DHt;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
@@ -220,7 +240,22 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size);
+    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(
+        Sq_chunk_t, DHt, dst_size, /*max_subblock_h=*/use_streaming_compute ? 2 : UINT32_MAX);
+    // Writer must drain cb_out with the same row-group cadence compute pushes.
+    const uint32_t writer_out_row_group_h =
+        use_streaming_compute
+            ? ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t)
+            : out_out_subblock_h;
+    if (use_streaming_compute) {
+        // Streaming: cb_out shrinks to a 2-slot row-group ping-pong.
+        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, DHt);
+        TT_FATAL(
+            Sq_chunk_t % out_out_subblock_h == 0,
+            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
+            Sq_chunk_t,
+            out_out_subblock_h);
+    }
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
@@ -287,6 +322,21 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     TensorAccessorArgs(joint_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(joint_tensor_v.buffer()).append_to(reader_compile_time_args);
 
+    // ---- KV store-and-forward chain (unicast) ----
+    // Cores sharing one (batch, head) re-read the same K/V chunks from DRAM once per Q chunk; at
+    // long N this op is DRAM-bandwidth bound. Like the plain SDPA reader, chain those cores so the
+    // injector reads from DRAM and each core forwards the chunk to the next over the NoC. Only when
+    // every core owns exactly one (batch, head) so the chain applies to all of the core's work.
+    const bool kv_chain_env_disabled = std::getenv("TT_JOINT_SDPA_NO_KV_CHAIN") != nullptr;
+    const bool kv_chain_enabled = !kv_chain_env_disabled && batch_per_core == 1 && nh_per_core == 1;
+    const uint32_t sender_semaphore_id = 0;
+    const uint32_t receiver_semaphore_id = 1;
+    const uint32_t valid_semaphore_id = 2;
+    reader_compile_time_args.push_back(static_cast<uint32_t>(kv_chain_enabled));
+    reader_compile_time_args.push_back(sender_semaphore_id);
+    reader_compile_time_args.push_back(receiver_semaphore_id);
+    reader_compile_time_args.push_back(valid_semaphore_id);
+
     // Calculate which K chunks contain the mask boundaries
     // If a tensor does not require masking, set to MAX_UINT32. This avoids a
     // bug in the mask generation code, which would mask a full, valid chunk
@@ -317,6 +367,9 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         static_cast<uint32_t>(use_joint_mask),
         mask_chunk_0,
         mask_chunk_1,
+        static_cast<uint32_t>(use_streaming_compute),  // arg 20: row-grouped cb_out drain + lightweight mask
+        writer_out_row_group_h,                        // arg 21: drain group height
+        k_partial_col,                                 // arg 22: joint K partial-tile col (0 = none)
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -345,6 +398,12 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         mask_chunk_0,
         mask_chunk_1,
         scale_packed,
+        static_cast<uint32_t>(use_streaming_compute),      // arg 23
+        valid_Skt,                                         // arg 24: valid concatenated K tiles
+        k_partial_col,                                     // arg 25
+        static_cast<uint32_t>(tt::CBIndex::c_8),           // arg 26: recip scratch CB
+        q_num_chunks,                                      // arg 27
+        static_cast<uint32_t>(use_streaming_padded_mask),  // arg 28
     };
 
     std::map<std::string, std::string> defines_map;
@@ -364,7 +423,8 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
-    tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
+    // Streaming reads the lightweight palette as Float16_b (no block-float decode); legacy uses Bfp4_b.
+    tt::DataFormat mask_df = use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -423,11 +483,13 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         }}},
     });
 
-    // Only create mask buffer if it's going to be used
-    if (use_joint_mask) {
+    // Only create mask buffer if it's going to be used. Streaming always gets the lightweight
+    // palette CB ([neginf, partial-col?]); legacy gets the full Sq x Sk generated mask.
+    if (use_streaming_compute || use_joint_mask) {
+        const uint32_t mask_cb_tiles = use_streaming_compute ? (1 + (k_partial_col > 0 ? 1 : 0)) : mask_tiles;
         // attn_mask input
         desc.cbs.push_back(CBDescriptor{
-            .total_size = mask_tiles * mask_tile_size,
+            .total_size = mask_cb_tiles * mask_tile_size,
             .core_ranges = core_grid,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
@@ -437,6 +499,18 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         });
     }
 
+    // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
+    if (use_streaming_compute) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = im_tile_size,
+            .core_ranges = core_grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_8),
+                .data_format = im_df,
+                .page_size = im_tile_size,
+            }}},
+        });
+    }
     // identity scalar input
     desc.cbs.push_back(CBDescriptor{
         .total_size = scale_tiles * scalar_tile_size,
@@ -598,6 +672,76 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     auto* const out_buf = output_tensor.buffer();
     auto* const joint_out_buf = joint_output_tensor.buffer();
 
+    // Per-core chain metadata. Core i owns (batch, head) group g = i / q_parallel_factor and the
+    // q range [(i % q_parallel_factor) * q_per_core, ...). The chain for group g is its cores with
+    // non-empty q ranges in index order: the first is the injector (reads DRAM), the last the sink.
+    // q counts are non-increasing along the chain, so a sender forwards only for the receiver's
+    // iteration count (next_core_q_chunks) and never over-produces.
+    struct JointChainInfo {
+        bool participates = false;
+        bool is_injector = false;
+        bool is_sink = false;
+        CoreCoord prev_physical{0, 0};
+        CoreCoord next_physical{0, 0};
+        uint32_t next_core_q_chunks = 0;
+    };
+    std::vector<JointChainInfo> chain_info(num_cores);
+    auto core_q_count = [&](uint32_t i) -> uint32_t {
+        const uint32_t qs = std::min((i % q_parallel_factor) * q_per_core, q_num_chunks);
+        const uint32_t qe = std::min(qs + q_per_core, q_num_chunks);
+        const uint32_t bs = std::min((i / (nh_parallel_factor * q_parallel_factor)) * batch_per_core, B);
+        const uint32_t ns = std::min(((i / q_parallel_factor) % nh_parallel_factor) * nh_per_core, NH);
+        return (bs < B && ns < NH) ? (qe - qs) : 0u;
+    };
+    if (kv_chain_enabled) {
+        const uint32_t num_groups = num_cores / q_parallel_factor;
+        for (uint32_t g = 0; g < num_groups; ++g) {
+            std::vector<uint32_t> members;
+            for (uint32_t j = 0; j < q_parallel_factor; ++j) {
+                const uint32_t i = g * q_parallel_factor + j;
+                if (i < num_cores && core_q_count(i) > 0) {
+                    members.push_back(i);
+                }
+            }
+            if (members.size() < 2) {
+                continue;
+            }
+            for (std::size_t pos = 0; pos < members.size(); ++pos) {
+                auto& ci = chain_info[members[pos]];
+                ci.participates = true;
+                ci.is_injector = (pos == 0);
+                ci.is_sink = (pos + 1 == members.size());
+                if (pos > 0) {
+                    const uint32_t p = members[pos - 1];
+                    ci.prev_physical = device->worker_core_from_logical_core({p % grid_size.x, p / grid_size.x});
+                }
+                if (pos + 1 < members.size()) {
+                    const uint32_t n = members[pos + 1];
+                    ci.next_physical = device->worker_core_from_logical_core({n % grid_size.x, n / grid_size.x});
+                    ci.next_core_q_chunks = core_q_count(n);
+                }
+            }
+        }
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = sender_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = core_grid,
+            .initial_value = INVALID,
+        });
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = receiver_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = core_grid,
+            .initial_value = INVALID,
+        });
+        desc.semaphores.push_back(SemaphoreDescriptor{
+            .id = valid_semaphore_id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges = core_grid,
+            .initial_value = VALID,
+        });
+    }
+
     // Set reader rt args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
@@ -640,7 +784,15 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
              local_nh_start,
              local_nh_end,
              local_q_start,
-             local_q_end});
+             local_q_end,
+             static_cast<uint32_t>(chain_info[i].participates),
+             static_cast<uint32_t>(chain_info[i].is_injector),
+             static_cast<uint32_t>(chain_info[i].is_sink),
+             static_cast<uint32_t>(chain_info[i].prev_physical.x),
+             static_cast<uint32_t>(chain_info[i].prev_physical.y),
+             static_cast<uint32_t>(chain_info[i].next_physical.x),
+             static_cast<uint32_t>(chain_info[i].next_physical.y),
+             chain_info[i].next_core_q_chunks});
 
         // Writer args
         writer_desc.emplace_runtime_args(

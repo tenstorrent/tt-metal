@@ -145,6 +145,25 @@ grid_13_9_configs = {
 }
 
 grid_12_10_configs = {
+    # SD3.5-Large @1024px on 4 Blackhole chips (tp4), plain matmuls swept 2026-09-17 (bh_4x8_sp1_tp0,
+    # "plain", 12x10). M = 8192 is the CFG pair flattened (fused Ring-TP path); M = 4096 is one CFG
+    # branch (legacy path, batch 2 on dim 1). The default 8x8x8 blocking ran these at ~30% util.
+    (8192, 2432, 2432): (11, 4, 4, (1, 4)),  # ff1 on gathered input: 438.9 us (default 8x8x8 ~1046 us)
+    # SD3.5 VAE mid-block attention (spatial-parallel decoder, 16384 tokens x 512 ch), swept 2026-09-17
+    (16384, 512, 1536): (16, 4, 5, (4, 1)),  # fused QKV: 290.5 us
+    (16384, 512, 512): (16, 8, 4, (2, 2)),  # out projection: 129.3 us
+    (8192, 2432, 1920): (11, 4, 10, (1, 2)),  # to_qkv on gathered input: 355.6 us (default ~483 us)
+    (8192, 2560, 608): (12, 8, 2, (2, 2)),  # to_out on gathered input: 171.0 us
+    (4096, 2432, 2432): (11, 4, 4, (1, 4)),  # ff1 / ff2 matmul per CFG branch: 225.0 us
+    (4096, 2432, 1920): (14, 4, 3, (1, 3)),  # to_qkv per CFG branch: 194.3 us
+    (4096, 2560, 608): (11, 4, 2, (1, 2)),  # to_out per CFG branch: 98.2 us
+    (4096, 2432, 64): (14, 4, 2, (2, 2)),  # proj_out per CFG branch: 88.3 us
+    # SD3.5-Large sp4 tp1 (full weights per chip, 1024 tokens per chip per CFG branch), swept 2026-09-17.
+    (1024, 2432, 7296): (8, 4, 10, (2, 2)),  # to_qkv: 203.8 us
+    (1024, 2432, 2432): (6, 4, 8, (2, 2)),  # to_out: 87.7 us
+    (1024, 2432, 9728): (6, 4, 14, (2, 2)),  # ff1: 260.3 us
+    (1024, 9728, 2432): (6, 4, 12, (2, 2)),  # ff2: 279.2 us
+    (1024, 2432, 64): (3, 4, 2, (3, 1)),  # proj_out: 31.3 us
     (9472, 5120, 1280): (16, 8, 4, (2, 2)),
     (128, 5120, 1280): (1, 16, 8, (1, 2)),
     (9472, 5120, 3456): (16, 8, 4, (1, 2)),
@@ -222,6 +241,10 @@ grid_11_10_configs = {
 }
 
 grid_12_9_configs = {
+    # SD3.5-Large @1024px, 4-chip BH column tp4: ff1 (GELU tanh fused) as all_gather_minimal_matmul_async,
+    # M = 8192 (CFG pair flattened), K_per_device = 19 tiles (prime -> K_block 19), N = 9728/4.
+    # Swept 2026-09-17 (bh_4x8_sp1_tp0, "ff1_gelu"): 914.8 us; runner-up M=6/K=19/N=6 (2,2) 1079 us.
+    (8192, 2432, 2432): (4, 19, 9, (4, 1)),  # 914.8 us — ff1 spatial tp4 (sweep rank-1, 2026-09-17)
     # flux2 dual-grid sweep rank-1 — 12×9 grid (2026-05-27, flux2_dual_grid_mm_sweep.md)
     (1024, 128, 768): (8, 2, 8, (2, 1)),  # dual-grid sweep 12x9, 9.7 μs, 7.0% FLOP util
     (512, 15360, 768): (2, 16, 4, (2, 2)),  # dual-grid sweep 12x9, 120.2 μs, 33.7% FLOP util
@@ -565,7 +588,8 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None, use_heuristic
     grid_x = getattr(core_grid, "x", None)
     grid_y = getattr(core_grid, "y", None)
     grid_dict = _grid_config_lookup.get((grid_x, grid_y))
-    if grid_dict is not None:
+    # SD35_MM_DEFAULT_BLOCKING=1 ignores the swept tables (before/after comparisons).
+    if grid_dict is not None and os.environ.get("SD35_MM_DEFAULT_BLOCKING", "0") != "1":
         config_tuple = grid_dict.get((M, K, N))
 
     # Unpack: 3-tuple (M_block_size, K_block_size, N_block_size) or
@@ -893,6 +917,14 @@ fused_mmrs_configs = {
         # x_c_merged: concat([spatial, prompt_sp_sharded]) → M=4096+128=4224; same K/N/grid as (4096,…). This is an unconfirmed estimate.
         (4224, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 3, 8, 2, 2, None, 1),
         (4224, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 3, 8, 1, 2, None, 1),
+        # SD3.5-Large @1024px, 4-chip BH column tp4: ff2 (K = 9728/4 per device, N = 2432 scattered
+        # to 608). M = 8192 is the CFG pair flattened. The matmul grid is 11 columns wide ON PURPOSE:
+        # N = 76 tiles over 12 columns pads to 7 tiles/core, and the fused op's reduce-scatter then
+        # expects div_up(76, 7) = 11 matmul columns while the matmul runs 12 (the 12th holds only
+        # ghost tiles) -> device deadlock (confirmed 2026-09-17; N = 80 tiles on 12 columns runs).
+        # 11 columns -> 7/core -> div_up(76, 7) = 11, consistent. Swept 2026-09-17 (windowed, 11x8
+        # rank-1; 11x9 best was 938.9 us): Mt/core = 32, M_block 6 leaves 6 blocks for the window.
+        (8192, 2432, 2432): FusedMMRSConfig(ttnn.CoreCoord(11, 8), 6, 2, 8, 2, 2, None, 1, 2),  # 715.4 us
     },
 }
 
@@ -1060,6 +1092,23 @@ fabric_agmm_configs: dict[ttnn.CoreCoord, dict[tuple, FabricAGMMConfig]] = {
         (1024, 6144, 4608, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 4, 8, 12, 1, 4, 3, 8),  # 336.4 us
         # single-stream proj_mlp (48 layers): M = 1024 image + 128 context.
         (1152, 6144, 4608, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 5, 4, 12, 1, 4, 3, 8),  # 382.9 us
+        # -----------------------------------------------------------------------------------------
+        # SD3.5-Large @1024px, 4-chip Blackhole column, tp4 (ring of 4, 2 links). M = 8192 is the
+        # CFG pair (2 x 4096 tokens) flattened to a unit batch; D = 2432 gives K_per_device = 19
+        # tiles (prime), so K_block is 19 or 1. M > N everywhere, so the factory transposes: M runs
+        # across grid.x = 12 (22 tiles/core), N across grid.y = 8. Swept 2026-09-17 with
+        # sweep_mm_block_sizes.py (op_kind "sagmm", device config bh_4x8_sp1_tp0); durations are the
+        # best device_kernel_duration.
+        # attn to_qkv: N = 3 * 640 (40 padded heads / tp4 * 64). Nt/core = 8 = N_block (1 N block).
+        (8192, 2432, 1920, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 11, 1, 8, 1, 4, 3, 8),  # 652.7 us
+        # attn to_out with the fused gate/residual epilogue (fused_ternary_input_a/b), K = 2560 padded
+        # inner dim (Kt/device = 20). Nt/core = 3; N_block 10 covers it in one block.
+        (8192, 2560, 608, 1): FabricAGMMConfig(
+            ttnn.CoreCoord(12, 8), (0, 8), 8, 4, 10, 2, 2, 3, 8
+        ),  # 463.5 us (with ternary)
+        # proj_out against its REPLICATED [2432, 64] weight (64 columns are too narrow to fracture, so
+        # every device computes the full replicated output). Nt/core = 1; the top five are within 2%.
+        (8192, 2432, 64, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 1, 2, 2, 2, 3, 8),  # 437.3 us
     },
 }
 

@@ -31,8 +31,11 @@ void kernel_main() {
     constexpr bool use_joint_mask = get_compile_time_arg_val(17) == 1;
     constexpr uint32_t mask_chunk_0 = get_compile_time_arg_val(18);
     constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(19);
+    constexpr bool use_streaming_compute = get_compile_time_arg_val(20) == 1;
+    constexpr uint32_t out_row_group_h = get_compile_time_arg_val(21);
+    constexpr uint32_t k_partial_col = get_compile_time_arg_val(22);
 
-    constexpr auto out_args = TensorAccessorArgs<20>();
+    constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
@@ -67,9 +70,32 @@ void kernel_main() {
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
+    if constexpr (use_streaming_compute) {
+        // Streaming: one lightweight palette [neginf, joint partial-col?] fronted for the whole kernel;
+        // compute masks only the last (joint tail) K chunk with it.
+        generate_lightweight_mask_tiles<k_partial_col, /*joint_l*/ 0u, cb_mask_in, false, 0>(noc);
+    }
+
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
         for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
             for (uint32_t q_chunk = local_q_start; q_chunk < local_q_end; ++q_chunk) {
+                if constexpr (use_streaming_compute) {
+                    // Drain cb_out per row group (2-slot ping-pong) through the concatenated
+                    // generator; rows in the pad gap / tail produce no writes.
+                    const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
+                    const auto dst_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, DHt);
+                    write_block_row_grouped_trid<false>(
+                        noc,
+                        cat_out_generator,
+                        dst_slice,
+                        out_row_start_tile + Sq_chunk_t,
+                        cb_out,
+                        tile_bytes,
+                        out_row_group_h,
+                        /*flush_trid=*/0);
+                    noc.async_write_barrier();
+                    continue;
+                }
                 generate_mask<false, 0, use_joint_mask, cb_mask_in>(
                     noc,
                     Sq_chunk_t,
