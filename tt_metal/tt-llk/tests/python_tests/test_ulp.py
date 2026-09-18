@@ -600,7 +600,7 @@ def test_bfp8_b_is_measured_in_bf16_space():
     _, baseline = float_to_bfp8_block(block)
     encoded = []
     for steps in range(3):
-        block[0] = float(_step_up(1.0, torch.bfloat16, steps)[0])
+        block[0] = float(_step_up(1.0, torch.bfloat16, steps=steps)[0])
         _, mantissas = float_to_bfp8_block(block)
         encoded.append(mantissas[0])
     assert encoded[0] == encoded[1] == baseline[0]
@@ -1024,7 +1024,7 @@ def test_within_ulp_accepts_bfp8_b_in_its_proxy_space():
     """``Bfp8_b`` is gated in bfloat16 step space, so unlike the coarser block floats it
     is a format ``within_ulp`` may legitimately label a verdict with."""
     values = torch.ones(4, dtype=torch.bfloat16)
-    ok, message = within_ulp(values, values.clone(), 0, fmt=DataFormat.Bfp8_b)
+    ok, message = within_ulp(values, values.clone(), max_ulp=0, fmt=DataFormat.Bfp8_b)
     assert ok and "Bfp8_b" in message
 
 
@@ -1056,9 +1056,9 @@ def test_elementwise_valid_marks_only_the_out_of_budget_lanes(dtype):
     result = torch.stack(
         [
             _t([1.0], dtype)[0],
-            _step_up(1.0, dtype, 1)[0],
-            _step_up(1.0, dtype, 2)[0],
-            _step_down(1.0, dtype, 3)[0],
+            _step_up(1.0, dtype, steps=1)[0],
+            _step_up(1.0, dtype, steps=2)[0],
+            _step_down(1.0, dtype, steps=3)[0],
         ]
     )
     is_valid, distance, _rescued = ulp_elementwise_valid(golden, result, 1)
@@ -1207,8 +1207,10 @@ def test_within_ulp_reproduces_every_gate_verdict_including_the_floor():
     result = golden.clone()
     result[-1] = 2e-8
 
-    assert not within_ulp(golden, result, 2, fmt=DataFormat.Float32)[0]
-    ok, _ = within_ulp(golden, result, 2, fmt=DataFormat.Float32, near_zero_atol=1e-7)
+    assert not within_ulp(golden, result, max_ulp=2, fmt=DataFormat.Float32)[0]
+    ok, _ = within_ulp(
+        golden, result, max_ulp=2, fmt=DataFormat.Float32, near_zero_atol=1e-7
+    )
     assert ok
     # Same verdict the gate reaches, for the same reason.
     is_valid, _, rescued = ulp_elementwise_valid(golden, result, 2, near_zero_atol=1e-7)
@@ -1281,7 +1283,7 @@ def test_within_ulp_and_the_gate_describe_a_verdict_the_same_way():
     failure differently."""
     golden = torch.tensor([1.0, float("nan")], dtype=torch.float32)
     result = torch.tensor([1.0, 1.0], dtype=torch.float32)
-    _, from_within_ulp = within_ulp(golden, result, 0, fmt=DataFormat.Float32)
+    _, from_within_ulp = within_ulp(golden, result, max_ulp=0, fmt=DataFormat.Float32)
     from_builder = ulp_verdict_message(
         golden,
         result,
@@ -1299,7 +1301,7 @@ def test_a_failure_at_the_top_of_the_range_reports_a_usable_step():
     largest = float(torch.finfo(torch.bfloat16).max)
     golden = torch.tensor([largest], dtype=torch.bfloat16)
     result = torch.tensor([float("inf")], dtype=torch.bfloat16)
-    ok, message = within_ulp(golden, result, 4, fmt=DataFormat.Float16_b)
+    ok, message = within_ulp(golden, result, max_ulp=4, fmt=DataFormat.Float16_b)
     assert not ok
     assert message.startswith("non-finite disagreement")
     assert "1 ULP = inf" not in message
@@ -1370,7 +1372,7 @@ def test_the_near_zero_band_is_scoped_to_the_lanes_under_judgement():
     mask = torch.tensor([False, True])
 
     assert int(ulp_distance(golden, result)[1]) > 100000
-    ok, _ = within_ulp(golden, result, 0, near_zero_atol=0.05, mask=mask)
+    ok, _ = within_ulp(golden, result, max_ulp=0, near_zero_atol=0.05, mask=mask)
     assert not ok, "the excluded lane must not widen the band for the judged one"
 
     # Unmasked, the same tensors legitimately reach the wide band -- so the fix is the
@@ -1402,11 +1404,14 @@ def test_the_near_zero_cuts_are_compared_in_float32_not_the_tensor_dtype(dtype):
     edge = (cut + rounded) / 2.0
     golden = torch.tensor([dynamic_range, edge], dtype=dtype)
     result = golden.clone()
-    result[1] = float(_step_up(float(golden[1]), dtype, 4)[0])
+    result[1] = float(_step_up(float(golden[1]), dtype, steps=4)[0])
 
-    narrow = within_ulp(golden, result, 0, near_zero_atol=1.0)[0]
+    narrow = within_ulp(golden, result, max_ulp=0, near_zero_atol=1.0)[0]
     wide = within_ulp(
-        golden.to(torch.float32), result.to(torch.float32), 0, near_zero_atol=1.0
+        golden.to(torch.float32),
+        result.to(torch.float32),
+        max_ulp=0,
+        near_zero_atol=1.0,
     )[0]
     assert narrow == wide, (
         f"{dtype} disagreed with float32 for a lane on the rounded band edge "
