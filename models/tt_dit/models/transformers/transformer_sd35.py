@@ -308,10 +308,9 @@ class SD35TransformerBlock(Module):
         spatial_normed_1BND = self.norm2(spatial_1BND, dynamic_weight=spatial_scale_ff, dynamic_bias=spatial_shift_ff)
 
         if self.fused_tp:
-            # ff1: all_gather_minimal_matmul_async is SLOWER here than an explicit gather followed by
-            # the swept plain matmul (1338 us vs ~400 + 439 us on the tp4 column: K/tp = 19 tiles is
-            # prime, so the fused kernel is stuck with a 1- or 19-tile K block). Gather + matmul is the
-            # default; SD35_FF1_AGMM=1 selects the fused kernel for A/B.
+            # ff1 on the strided all-gather-matmul with a 4-tile K block straddling the 19-tile device
+            # slices: 813 us vs 856 us for gather + swept plain matmul (the Ring plain AGMM, whose
+            # half-block scheme needs K | 19, was 1049 us). SD35_FF1_AGMM=0 restores gather + matmul.
             normed_flat = flatten_batch(spatial_normed_1BND)
             if os.environ.get("SD35_FF1_AGMM", "0") == "1":
                 ff1_flat = self.ff.ff1(

@@ -448,6 +448,16 @@ SHAPES = [
     (8192, 2432, 1920, 12, 8, True, "plain", "sagmm"),  # attn to_qkv (3 * 640 per device)
     (8192, 2560, 608, 12, 8, True, "to_out_exact", "sagmm"),  # attn to_out + fused gate/residual
     (8192, 2432, 64, 12, 8, True, "plain", "sagmm"),  # proj_out (patch 2x2 * 16 channels)
+    (
+        8192,
+        2432,
+        2432,
+        12,
+        8,
+        True,
+        "ff1_gelu",
+        "sagmm",
+    ),  # ff1 on the strided op (K blocks may straddle the 19-tile slices)
     # ff1 is compute-bound (N = 2432 > N*): all_gather_minimal_matmul_async with fused tanh-GELU on
     # the model's default 12x9 worker grid (one row reserved for the AG workers).
     (8192, 2432, 2432, 12, 9, True, "ff1_gelu"),  # ff1 (GELU tanh), 9728 / tp4 = 2432 per device
@@ -812,6 +822,10 @@ def generate_kn_combos(K_per_device, N_per_core, m_block=1, use_case="plain", op
     are skipped pre-sweep to avoid hard asserts that would abort the program.
     """
     k_candidates = get_k_block_candidates(K_per_device)
+    if op_kind == "sagmm":
+        # The strided (fabric-bound) op tracks per-k-block device dependencies, so blocks may straddle
+        # device slices; the divisor rule only applies to the Ring plain AGMM. Offer small blocks too.
+        k_candidates = sorted(set(k_candidates) | {k for k in (1, 2, 3, 4, 5, 6, 8) if k <= K_per_device})
     n_candidates = get_mn_block_candidates(N_per_core)
     require_even_n = USE_CASE_CONFIGS.get(use_case, {}).get("fuse_swiglu", False)
     combos = []

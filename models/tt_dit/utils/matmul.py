@@ -1100,9 +1100,15 @@ fabric_agmm_configs: dict[ttnn.CoreCoord, dict[tuple, FabricAGMMConfig]] = {
         # sweep_mm_block_sizes.py (op_kind "sagmm", device config bh_4x8_sp1_tp0); durations are the
         # best device_kernel_duration.
         # attn to_qkv: N = 3 * 640 (40 padded heads / tp4 * 64). Nt/core = 8 = N_block (1 N block).
-        (8192, 2432, 1920, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 11, 1, 8, 1, 4, 3, 8),  # 652.7 us
+        # K block 4 straddles the 19-tile device slices: the strided op tracks per-block slice
+        # dependencies (fused_receiver_utils.hpp), so K need not divide the per-device shard. The
+        # earlier sweep only offered divisors of 19 (1 or 19); K=1: 727 us, K=4: 656 us (bench_k20).
+        (8192, 2432, 1920, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 11, 4, 8, 1, 4, 3, 8),  # 656 us
         # same shape emitted as three chunks (q, k, v) for the fused per-head QK norm
-        (8192, 2432, 1920, 3): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 11, 1, 8, 1, 4, 3, 8),
+        (8192, 2432, 1920, 3): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 11, 4, 8, 1, 4, 3, 8),
+        # ff1 (GELU fused) on the strided op: 813 us vs 856 us for gather + swept plain matmul, and
+        # vs 1049 us for the Ring plain AGMM whose half-block scheme needs K | 19 (K block 19).
+        (8192, 2432, 2432, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 8, 4, 8, 2, 4, 3, 8),  # 813 us
         # attn to_out with the fused gate/residual epilogue (fused_ternary_input_a/b), K = 2560 padded
         # inner dim (Kt/device = 20). Nt/core = 3; N_block 10 covers it in one block.
         (8192, 2560, 608, 1): FabricAGMMConfig(
@@ -1110,7 +1116,9 @@ fabric_agmm_configs: dict[ttnn.CoreCoord, dict[tuple, FabricAGMMConfig]] = {
         ),  # 463.5 us (with ternary)
         # proj_out against its REPLICATED [2432, 64] weight (64 columns are too narrow to fracture, so
         # every device computes the full replicated output). Nt/core = 1; the top five are within 2%.
-        (8192, 2432, 64, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 16, 1, 2, 2, 2, 3, 8),  # 437.3 us
+        (8192, 2432, 64, 1): FabricAGMMConfig(
+            ttnn.CoreCoord(12, 8), (0, 8), 16, 4, 2, 2, 2, 3, 8
+        ),  # K=1 555 -> K=4 494 us
     },
 }
 
