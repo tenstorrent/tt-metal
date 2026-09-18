@@ -5,10 +5,8 @@
 #pragma once
 
 #include <tt-metalium/constants.hpp>
-#include <functional>
 
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/debug/dprint_pages.h"
 
 using fn_compute_5 = void(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
 using fn_compute_6 = void(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t);
@@ -44,12 +42,6 @@ struct LLK_Node {
     // 0xDDDD: read only, no pop
     // else: use a fixed index for DFB_B
     uint32_t fixed_DFB_B_index;
-    // Note: These values were chosen for readability, and can be changed if wanted
-    // If we do not want a fixed index 0xFFFF is the default value
-    uint32_t fixed_dest_reg;
-    // Debug mode: 0 false
-    // Debug mode: 1 print all data in and out
-    uint32_t debug_mode;
 };
 template <typename cur_llk_type>
 uint32_t dfb_b_index_policy(uint32_t j, uint32_t wt) {
@@ -93,27 +85,11 @@ void unroll_llk() {
     pack_reconfig_data_format(cur_llk.DFB_OUT);
     cur_llk.llk_init(cur_llk.DFB_A, cur_llk.DFB_B, __builtin_LINE());
     for (uint32_t i = 0; i < dfb_iterations; i++) {
-        if constexpr (cur_llk.debug_mode == 1) {
-            // DPRINT_UNPACK("=============START NODE=============\n");
-        }
         unroll_inner_loop<num_dst_regs, cur_llk_type>(i);
-
-        if constexpr (cur_llk.debug_mode == 1) {
-            // DPRINT_UNPACK("=============END NODE=============\n");
-        }
     }
     unroll_inner_loop<dfb_leftovers, cur_llk_type>(dfb_iterations);
 }
 
-template <typename cur_llk_type>
-void print_input_DFBs(uint32_t j, uint32_t wt) {
-    constexpr auto cur_llk = cur_llk_type::node;
-    // Commented out so code will compile on non debug print moded. Uncomment out for debug purposes
-    // DPRINT_UNPACK("=============DFB_A=============\n");
-    // UNPACK(tt::compute::common::print_full_tile(cur_llk.DFB_A, j, true));
-    // DPRINT_UNPACK("=============DFB_B=============\n");
-    // UNPACK(tt::compute::common::print_full_tile(cur_llk.DFB_B, dfb_b_index_policy<cur_llk_type>(j, wt), true));
-}
 template <uint32_t num_dst_regs, typename cur_llk_type>
 void unroll_inner_loop(uint32_t register_loops) {
     constexpr auto cur_llk = cur_llk_type::node;
@@ -131,15 +107,7 @@ void unroll_inner_loop(uint32_t register_loops) {
         dfb_b.wait_front(cur_llk.fixed_DFB_B_index + 1);
     }
     for (uint32_t j = 0; j < num_dst_regs; j++) {
-        if constexpr (cur_llk.debug_mode == 1) {
-            print_input_DFBs<cur_llk_type>(j, wt);
-        }
         cur_llk.llk(cur_llk.DFB_A, cur_llk.DFB_B, j, dfb_b_index_policy<cur_llk_type>(j, wt), j);
-        if constexpr (cur_llk.debug_mode == 1) {
-            // Commented out so code will compile on non debug print moded. Uncomment out for debug purposes
-            //  DPRINT_MATH("=============DEST_OUT=============\n");
-            //  dprint_tensix_dest_reg(j);
-        }
     }
     dfb_a.pop_front(num_dst_regs);
     if constexpr (cur_llk.fixed_DFB_B_index == 0xFFFF) {

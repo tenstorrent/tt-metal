@@ -33,6 +33,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_in1(dfb::inb);
 #endif
+#ifdef COMPACT_FP32_PRE_ADD
+    DataflowBuffer dfb_in0_fp32(dfb::in_fp32);
+    DataflowBuffer dfb_in1_fp32(dfb::inb_fp32);
+#endif
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma(dfb::gamma);
 #endif
@@ -130,6 +134,14 @@ void kernel_main() {
             }
             noc.async_read_barrier();
             dfb_in1.push_back(block.full_block_size());
+#ifdef COMPACT_FP32_PRE_ADD
+            // The aliases share input SRAM but maintain independent FIFO state. Publish the same
+            // tiles so compute can unpack both operands directly to FP32 DEST for the pre-add.
+            dfb_in0_fp32.reserve_back(block.full_block_size());
+            dfb_in0_fp32.push_back(block.full_block_size());
+            dfb_in1_fp32.reserve_back(block.full_block_size());
+            dfb_in1_fp32.push_back(block.full_block_size());
+#endif
 #else
             // Non-fused welford-fp32 alias: dfb_x_welford shares dfb_in0's memory but has its own
             // read/write pointers. After the data lands in dfb_in0, push dfb_x_welford by the same

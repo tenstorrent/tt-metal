@@ -15,17 +15,17 @@
 namespace ttnn::prim {
 
 uint32_t GroupNormPadCorrection::scaler_bits(uint32_t reduce_factor_w) const {
-    const float sc = 1.0f / std::sqrt(
-                                static_cast<float>(reduce_factor_w) * static_cast<float>(logical_hw) /
-                                static_cast<float>(padded_hw));
+    const float sc =
+        1.0f /
+        std::sqrt(static_cast<float>(reduce_factor_w) * static_cast<float>(logical_hw) / static_cast<float>(padded_hw));
     return std::bit_cast<uint32_t>(sc);
 }
 
 GroupNormPadCorrection make_group_norm_pad_correction(
     uint32_t logical_hw, uint32_t padded_hw, bool use_welford, uint32_t tile_height) {
-    // Welford cannot express this: its kernels transpose H*W into the tile columns and track the
-    // sample count in tile units, so the padding rows cannot be excluded. ttnn::group_norm routes
-    // non-tile-aligned Welford requests to the two-pass path instead.
+    // The SFPU two-pass path cannot express this: its kernels transpose H*W into the tile columns
+    // and track the sample count in tile units, so the padding rows cannot be excluded.
+    // ttnn::group_norm routes non-tile-aligned use_welford requests to the tile-reduction path.
     GroupNormPadCorrection pad;
     pad.active = !use_welford && (logical_hw != padded_hw);
     pad.logical_hw = logical_hw;
@@ -40,6 +40,94 @@ bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfi
     return std::any_of(reconfig_formats.begin(), reconfig_formats.end(), [](tt::DataFormat format) {
         return format != tt::DataFormat::Float16_b;
     });
+}
+
+GroupNormInterleavedGeometry derive_groupnorm_interleaved_geometry(
+    uint32_t height,
+    uint32_t width,
+    uint32_t num_batches,
+    uint32_t num_groups,
+    tt::tt_metal::CoreCoord grid,
+    uint32_t tile_height,
+    uint32_t tile_width) {
+    GroupNormInterleavedGeometry geometry;
+    if (height == 0 || width == 0 || num_batches == 0 || num_groups == 0 || grid.x == 0 || grid.y == 0 ||
+        tile_height == 0 || tile_width == 0 || height % tile_height != 0 || width % tile_width != 0 ||
+        width % num_groups != 0) {
+        return geometry;
+    }
+
+    geometry.height_tiles = height / tile_height;
+    geometry.width_tiles = width / tile_width;
+    geometry.num_virtual_cols = std::min<uint32_t>(grid.x, num_groups);
+    while (geometry.num_virtual_cols > 0 &&
+           ((width / geometry.num_virtual_cols) % tile_width != 0 || num_groups % geometry.num_virtual_cols != 0)) {
+        --geometry.num_virtual_cols;
+    }
+    if (geometry.num_virtual_cols == 0) {
+        return geometry;
+    }
+
+    geometry.num_actual_cols = (grid.x / geometry.num_virtual_cols) * geometry.num_virtual_cols;
+    geometry.num_actual_rows = grid.y;
+    geometry.num_virtual_rows = (grid.x / geometry.num_virtual_cols) * geometry.num_actual_rows;
+    geometry.num_cores = geometry.num_actual_cols * geometry.num_actual_rows;
+    if (geometry.height_tiles < geometry.num_virtual_rows || geometry.height_tiles % geometry.num_virtual_rows != 0) {
+        return geometry;
+    }
+
+    geometry.per_core_height_tiles_group_1 = geometry.height_tiles / geometry.num_virtual_rows;
+    geometry.per_core_height_group_1 = geometry.per_core_height_tiles_group_1 * tile_height;
+    geometry.per_core_width = width / geometry.num_virtual_cols;
+    geometry.per_core_width_tiles = (geometry.per_core_width + tile_width - 1) / tile_width;
+    geometry.channels_per_group = width / num_groups;
+    geometry.channels_per_group_mod_tile_width =
+        geometry.channels_per_group % tile_width == 0 ? tile_width : geometry.channels_per_group % tile_width;
+    geometry.num_row_shards = height / geometry.per_core_height_group_1;
+    geometry.num_col_shards = width / geometry.per_core_width;
+    if (geometry.num_row_shards == 0 || geometry.num_col_shards == 0) {
+        return geometry;
+    }
+    geometry.num_cores_per_batch = num_batches > geometry.num_row_shards ? 1 : geometry.num_row_shards / num_batches;
+    geometry.num_cores_per_group = num_groups > geometry.num_col_shards ? 1 : geometry.num_col_shards / num_groups;
+    geometry.batches_per_core_group_1 =
+        num_batches > geometry.num_row_shards ? num_batches / geometry.num_row_shards : 1;
+    geometry.batches_per_core_group_2 = geometry.batches_per_core_group_1;
+    geometry.groups_per_core = num_groups > geometry.num_col_shards ? num_groups / geometry.num_col_shards : 1;
+    geometry.rows_per_batch_per_core_group_1 = geometry.per_core_height_group_1 / geometry.batches_per_core_group_1;
+    const auto [block_width_tiles, num_groups_per_reset] =
+        find_max_tile_span(geometry.per_core_width, geometry.channels_per_group, tile_width);
+    geometry.block_width_tiles = block_width_tiles;
+    geometry.num_groups_per_reset = num_groups_per_reset;
+    geometry.block_height_tiles_group_1 = geometry.per_core_height_tiles_group_1 / geometry.batches_per_core_group_1;
+    geometry.last_block_width_tiles =
+        (geometry.per_core_width_tiles + geometry.groups_per_core - 1) / geometry.groups_per_core;
+
+    if (num_batches >= geometry.num_row_shards) {
+        geometry.last_row_with_extra_batch = num_batches % geometry.num_row_shards;
+        geometry.equal_batches_per_core = geometry.last_row_with_extra_batch == 0;
+        if (!geometry.equal_batches_per_core) {
+            --geometry.last_row_with_extra_batch;
+            geometry.batches_per_core_group_2 = num_batches / geometry.num_row_shards;
+            geometry.batches_per_core_group_1 = geometry.batches_per_core_group_2 + 1;
+
+            if (geometry.height_tiles % num_batches != 0) {
+                return geometry;
+            }
+            const uint32_t per_batch_tiles = geometry.height_tiles / num_batches;
+            geometry.per_core_height_tiles_group_1 = geometry.batches_per_core_group_1 * per_batch_tiles;
+            geometry.per_core_height_tiles_group_2 = geometry.batches_per_core_group_2 * per_batch_tiles;
+            geometry.per_core_height_group_1 = geometry.per_core_height_tiles_group_1 * tile_height;
+            geometry.per_core_height_group_2 = geometry.per_core_height_tiles_group_2 * tile_height;
+            geometry.rows_per_batch_per_core_group_1 = per_batch_tiles * tile_height;
+            geometry.rows_per_batch_per_core_group_2 = per_batch_tiles * tile_height;
+            geometry.block_height_tiles_group_1 = per_batch_tiles;
+            geometry.block_height_tiles_group_2 = per_batch_tiles;
+        }
+    }
+
+    geometry.valid = true;
+    return geometry;
 }
 
 uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_blocks, uint32_t block_wt) {
@@ -148,6 +236,11 @@ bool groupnorm_legacy_rm_prefer_composite_for_perf(
     const bool imbalanced =
         num_virtual_rows != 0 && num_batches >= num_virtual_rows && (num_batches % num_virtual_rows) != 0;
     return num_cores <= kGroupnormLegacyRmMinCoresForOnChip || imbalanced;
+}
+
+bool groupnorm_use_sfpu_local_combine(bool use_welford, tt::ARCH arch, bool fp32_dest_acc_en, uint32_t tile_width) {
+    const bool supported_arch = arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
+    return use_welford && supported_arch && fp32_dest_acc_en && tile_width == tt::constants::TILE_WIDTH;
 }
 
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
