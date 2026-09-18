@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/buf_rw_note.h"
 #include "internal/debug/noc_zero_guard.h"
 #include "noc_address_backend.h"
 template <typename DSpecT>
@@ -193,6 +194,8 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         const NocOptVals& noc_opts = {}) const {
+        // Op-to-op R/W inference: this reads the source endpoint; note it if it is a bound tensor.
+        tt_buf_rw::note_if_bound<tt_buf_rw::READ, Src>();
         if constexpr (has_flag(opts, NocOptions::TXN_ID)) {
             DEBUG_SANITIZE_NOC_TXN_ID(noc_id_, noc_opts.trid);
             noc_async_read_set_trid(noc_opts.trid, noc_id_);
@@ -349,6 +352,8 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         const NocOptVals& noc_opts = {}) const {
+        // Op-to-op R/W inference: this writes the destination endpoint; note it if it is a bound tensor.
+        tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, Dst>();
         NOC_ASSERT_NOT_ZERO_MODE();  // no NoC write between async_write_zeros and write_zeros_l1_barrier
         constexpr bool posted = has_flag(opts, NocOptions::POSTED);
 

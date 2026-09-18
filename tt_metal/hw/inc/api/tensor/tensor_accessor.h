@@ -400,7 +400,8 @@ template <
     typename TensorShapeWrapper,
     typename ShardShapeWrapper,
     typename BankCoordsWrapper,
-    bool IsDram>
+    bool IsDram,
+    uint32_t BindingId>
 struct TensorAccessor<tensor_accessor::DistributionSpec<
     RankCT,
     NumBanksCT,
@@ -408,7 +409,9 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     ShardShapeWrapper,
     BankCoordsWrapper,
     /* IsInterleaved */ true,
-    IsDram>> : public InterleavedAddrGen<IsDram> {
+    IsDram,
+    /* IsShardContiguous */ false,
+    BindingId>> : public InterleavedAddrGen<IsDram> {
     using DSpec = tensor_accessor::DistributionSpec<
         RankCT,
         NumBanksCT,
@@ -416,7 +419,9 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         ShardShapeWrapper,
         BankCoordsWrapper,
         /* IsInterleaved */ true,
-        IsDram>;
+        IsDram,
+        /* IsShardContiguous */ false,
+        BindingId>;
 
     template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
     TensorAccessor(
@@ -581,7 +586,10 @@ TensorAccessor(tensor_accessor::TensorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>
         /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_sharded,
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_dram,
         /* IsShardContiguous */
-        TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_shard_contiguous>>;
+        TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_shard_contiguous,
+        /* BindingId (op-to-op R/W inference): the token's CTA offset identifies this binding, threaded
+           into the type so it survives to the NoC call site (see api/dataflow/buf_rw_note.h). */
+        CTA_OFFSET>>;
 
 TensorAccessor(const tensor_accessor::NullTensorBindingToken&) -> TensorAccessor<tensor_accessor::NullDSpec>;
 

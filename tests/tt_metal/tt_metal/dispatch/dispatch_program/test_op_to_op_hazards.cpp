@@ -244,10 +244,11 @@ bool skip_if_not_gen1(IDevice* device) {
 
 // Confirm a kernel's ELF buffer-R/W info (op-to-op R/W inference). This reads what the loader harvested
 // from the compiled .tt.BUF_RW section (see Kernel::query_buf_rw), keyed off the KernelSpec name, so it
-// must run after the kernels are compiled (i.e. after warmup_and_replay). The expected R/W set is a
-// property of each kernel source + its tensor-binding order, so it is encoded once here per kernel:
-//   writer     -> WRITES tensor::dst (slot 0)
-//   reader     -> READS tensor::src (slot 0), WRITES tensor::dst (slot 1)
+// must run after the kernels are compiled (i.e. after warmup_and_replay). The records are now emitted
+// automatically by the Noc read/write APIs, so the slot values are per-binding CTA offsets (codegen
+// internal) -- we assert the R/W *structure* of each kernel, which is what the detector consumes:
+//   writer     -> writes exactly one bound object, reads none        (WRITE tensor::dst)
+//   reader     -> reads one and writes one, distinct objects         (READ tensor::src, WRITE tensor::dst)
 //   raw_writer -> OPAQUE (raw NoC, no binding -> a detector must keep the barrier)
 void expect_buf_rw(
     distributed::MeshWorkload& wl,
@@ -258,17 +259,20 @@ void expect_buf_rw(
     ASSERT_NE(kernel, nullptr) << "no kernel '" << kernel_name << "' in workload";
     const ll_api::BufRwInfo rw = kernel->query_buf_rw(*md.get_devices()[0]);
     if (kernel_name == "writer") {
-        EXPECT_TRUE(rw.reads.empty()) << "writer reads";
-        EXPECT_EQ(rw.writes, (std::set<uint32_t>{0})) << "writer writes tensor::dst";
         EXPECT_FALSE(rw.opaque) << "writer is analyzable";
+        EXPECT_TRUE(rw.reads.empty()) << "writer reads nothing";
+        EXPECT_EQ(rw.writes.size(), 1u) << "writer writes exactly one bound object (tensor::dst)";
     } else if (kernel_name == "reader") {
-        EXPECT_EQ(rw.reads, (std::set<uint32_t>{0})) << "reader reads tensor::src";
-        EXPECT_EQ(rw.writes, (std::set<uint32_t>{1})) << "reader writes tensor::dst";
         EXPECT_FALSE(rw.opaque) << "reader is analyzable";
+        EXPECT_EQ(rw.reads.size(), 1u) << "reader reads one bound object (tensor::src)";
+        EXPECT_EQ(rw.writes.size(), 1u) << "reader writes one bound object (tensor::dst)";
+        if (!rw.reads.empty() && !rw.writes.empty()) {
+            EXPECT_NE(*rw.reads.begin(), *rw.writes.begin()) << "reader's src and dst are distinct objects";
+        }
     } else if (kernel_name == "raw_writer") {
+        EXPECT_TRUE(rw.opaque) << "raw_writer is un-analyzable (bail)";
         EXPECT_TRUE(rw.reads.empty()) << "raw_writer reads";
         EXPECT_TRUE(rw.writes.empty()) << "raw_writer writes";
-        EXPECT_TRUE(rw.opaque) << "raw_writer is un-analyzable (bail)";
     } else {
         FAIL() << "unexpected kernel name '" << kernel_name << "'";
     }
