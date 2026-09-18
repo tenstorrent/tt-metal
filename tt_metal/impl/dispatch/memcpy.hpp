@@ -13,7 +13,6 @@
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <emmintrin.h>
-#endif
 
 #define LOAD_STREAM_32()                                                               \
     do {                                                                               \
@@ -44,6 +43,8 @@
         src8 += sizeof(int32_t);                  \
         dst8 += sizeof(int32_t);                  \
     } while (0)
+
+#endif  // x86
 
 namespace tt::tt_metal {
 
@@ -148,9 +149,84 @@ void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n
         tt_driver_atomics::sfence();
     }
 }
+
+#elif __has_builtin(__builtin_nontemporal_store)
+
+// Generic non-temporal store path for compilers that support the builtin (Clang; GCC does not).
+// __builtin_nontemporal_store generates the best non-temporal store the target supports
+// (e.g. STNP on AArch64) without requiring arch-specific headers.
+// 32-byte vector chunks: on AArch64 the compiler pairs two Q-registers → STNP Q0, Q1, [addr].
+typedef uint8_t __attribute__((vector_size(32), aligned(1))) nt_v256;
+typedef uint8_t __attribute__((vector_size(16), aligned(1))) nt_v128;
+
+template <bool debug_sync = false>
+void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n) {
+    const auto* src8 = static_cast<const uint8_t*>(src);
+    auto* dst8 = static_cast<uint8_t*>(dst);
+
+    constexpr uint32_t inner_loop = 8;
+    constexpr uint32_t inner_blk_size = inner_loop * 32;  // 256 bytes
+
+    // 2 KB: hides DRAM latency per thread; dense cadence (per 32 B) keeps each thread's pipeline independent.
+    constexpr uint32_t prefetch_distance = 2048;
+
+    size_t num_lines = n / inner_blk_size;
+    for (size_t i = 0; i < num_lines; ++i) {
+        for (size_t j = 0; j < inner_loop; ++j) {
+            __builtin_prefetch(src8 + prefetch_distance, 0, 0);
+            nt_v256 chunk;
+            __builtin_memcpy(&chunk, src8, 32);
+            __builtin_nontemporal_store(chunk, (nt_v256*)dst8);
+            src8 += 32;
+            dst8 += 32;
+        }
+        n -= inner_blk_size;
+    }
+
+    num_lines = n / 32;
+    for (size_t i = 0; i < num_lines; ++i) {
+        __builtin_prefetch(src8 + prefetch_distance, 0, 0);
+        nt_v256 chunk;
+        __builtin_memcpy(&chunk, src8, 32);
+        __builtin_nontemporal_store(chunk, (nt_v256*)dst8);
+        src8 += 32;
+        dst8 += 32;
+    }
+    n -= num_lines * 32;
+
+    num_lines = n / 16;
+    for (size_t i = 0; i < num_lines; ++i) {
+        nt_v128 chunk;
+        __builtin_memcpy(&chunk, src8, 16);
+        __builtin_nontemporal_store(chunk, (nt_v128*)dst8);
+        src8 += 16;
+        dst8 += 16;
+    }
+    n -= num_lines * 16;
+
+    num_lines = n / 4;
+    for (size_t i = 0; i < num_lines; ++i) {
+        uint32_t chunk;
+        __builtin_memcpy(&chunk, src8, 4);
+        __builtin_nontemporal_store(chunk, (uint32_t*)dst8);
+        src8 += 4;
+        dst8 += 4;
+    }
+    n -= num_lines * 4;
+
+    if (n > 0) {
+        uint32_t val = 0;
+        __builtin_memcpy(&val, src8, n);
+        __builtin_nontemporal_store(val, (uint32_t*)dst8);
+    }
+
+    if constexpr (debug_sync) {
+        tt_driver_atomics::sfence();
+    }
+}
+
 #else
-// Fallback implementation for non-x86 architectures
-// Uses standard memcpy since SIMD optimizations aren't available
+// Fallback for other architectures
 template <bool debug_sync = false>
 __attribute((nonnull(1, 2))) static inline void memcpy_to_device(
     void* __restrict dst, const void* __restrict src, size_t n) {
@@ -163,7 +239,9 @@ __attribute((nonnull(1, 2))) static inline void memcpy_to_device(
 
 }  // namespace tt::tt_metal
 
+#if defined(__x86_64__) || defined(__i386__)
 #undef LOAD_STREAM_32
 #undef LOAD_STREAM_16
 #undef LOAD_STREAM_4
 #undef LOAD_STREAM_4_UNALIGNED
+#endif
