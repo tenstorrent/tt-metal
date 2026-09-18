@@ -2,10 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-//
-// Auto-generated file, do not modify!
-//
-
 #pragma once
 
 #define TTI_INSN(ENCODING)    __asm__ __volatile__(".ttinsn %0" : : "n"((ENCODING)))
