@@ -170,6 +170,15 @@ def generate_bfloat16_binary_grid(dtype=torch.bfloat16, include_spl_values=False
     return torch.tensor(bits, dtype=torch.uint16).view(torch.bfloat16).to(dtype)
 
 
+def pairwise_inputs(include_spl_values=False, include_zero=False, dtype=torch.bfloat16):
+    """Outer product of the 2048-value binary grid: A[i, j] = v[i], B[i, j] = v[j]."""
+    values = generate_bfloat16_binary_grid(
+        dtype=dtype, include_spl_values=include_spl_values, include_zero=include_zero
+    )
+    a, b = torch.meshgrid(values, values, indexing="ij")
+    return a.contiguous(), b.contiguous()
+
+
 def to_tt_tensor(
     input_tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
 ):
