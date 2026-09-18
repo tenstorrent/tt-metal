@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <functional>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "impl/context/context_types.hpp"
 #include "mesh_device_impl.hpp"
@@ -42,8 +44,10 @@ struct DispatchContext::StashedQueues {
     std::vector<std::unique_ptr<distributed::MeshCommandQueueBase>> queues;
 };
 
+namespace {
+
 // One resident L1 allocation whose data sits on a dispatch core inside the fast-dispatch firmware footprint.
-struct DispatchContext::FdL1Conflict {
+struct FdL1Conflict {
     ChipId chip;
     CoreCoord core;
     const char* role;    // "prefetch" / "dispatch": which firmware role runs on this core
@@ -54,8 +58,6 @@ struct DispatchContext::FdL1Conflict {
     DeviceAddr bytes_per_core;
     uint32_t num_cores;  // how many cores the allocation spans (0 when unknown)
 };
-
-namespace {
 
 std::optional<DeviceAddr> lowest_arena_address(const AllocatorImpl& allocator, const CoreCoord& core) {
     std::optional<DeviceAddr> lowest;
@@ -107,7 +109,7 @@ void collect_conflicts(
     const CoreCoord& core,
     const char* role,
     DeviceAddr window_end,
-    std::vector<DispatchContext::FdL1Conflict>& conflicts) {
+    std::vector<FdL1Conflict>& conflicts) {
     if (!allocator.has_bank(BufferType::L1, core)) {
         return;
     }
@@ -190,11 +192,15 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     initialize_fast_dispatch(mesh_device, FastDispatchSetupOptions{});
 }
 
-std::vector<DispatchContext::FdL1Conflict> DispatchContext::find_fd_l1_conflicts(
+namespace {
+
+// Preflight helpers. Free functions rather than members: they read no DispatchContext state, and
+// keeping them file-local keeps FdL1Conflict out of the public header.
+std::vector<FdL1Conflict> find_fd_l1_conflicts(
     MetalContext& context,
     distributed::MeshDevice* mesh_device,
     const std::vector<::tt::tt_metal::Device*>& devices,
-    bool write_only) const {
+    bool write_only) {
     const DispatchMemMap& mem_map = context.dispatch_mem_map();
     auto& dispatch_core_manager = context.get_dispatch_core_manager();
 
@@ -219,7 +225,9 @@ std::vector<DispatchContext::FdL1Conflict> DispatchContext::find_fd_l1_conflicts
     collect_views(root);
 
     std::vector<FdL1Conflict> conflicts;
-    for (::tt::tt_metal::Device* device : devices) {
+    // Walk through the IDevice interface: everything this preflight needs (id, num_hw_cqs,
+    // allocator_impl) is public there, while Device keeps allocator_impl private.
+    for (IDevice* device : devices) {
         const uint16_t channel = context.get_cluster().get_assigned_channel_for_device(device->id());
 
         std::vector<distributed::MeshDevice*> views_over_device;
@@ -284,7 +292,7 @@ std::vector<DispatchContext::FdL1Conflict> DispatchContext::find_fd_l1_conflicts
     return conflicts;
 }
 
-std::string DispatchContext::format_fd_l1_conflicts(const std::vector<FdL1Conflict>& conflicts) const {
+std::string format_fd_l1_conflicts(const std::vector<FdL1Conflict>& conflicts) {
     std::string report;
     for (const auto& conflict : conflicts) {
         report += fmt::format(
@@ -303,6 +311,8 @@ std::string DispatchContext::format_fd_l1_conflicts(const std::vector<FdL1Confli
     }
     return report;
 }
+
+}  // namespace
 
 void DispatchContext::unwind_failed_fd_setup(
     MetalContext& context, const std::vector<::tt::tt_metal::Device*>& devices) {

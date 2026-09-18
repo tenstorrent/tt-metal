@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <vector>
 
 namespace tt::tt_metal {
@@ -57,10 +56,6 @@ public:
 
     void reset();
 
-    // One resident L1 allocation inside the fast-dispatch firmware footprint. Defined in the .cpp;
-    // declared here (public) only so the file-local helpers that build the list can name the type.
-    struct FdL1Conflict;
-
 private:
     DispatchContext() = default;
     ~DispatchContext();
@@ -71,12 +66,8 @@ private:
     };
     friend struct Deleter;
 
-    std::vector<FdL1Conflict> find_fd_l1_conflicts(
-        MetalContext& context,
-        distributed::MeshDevice* mesh_device,
-        const std::vector<::tt::tt_metal::Device*>& devices,
-        bool write_only) const;
-    std::string format_fd_l1_conflicts(const std::vector<FdL1Conflict>& conflicts) const;
+    // Drops the host-side fast-dispatch state created before the L1 preflight refused, so the
+    // mesh is back in Slow Dispatch. Touches Device internals, hence a member.
     void unwind_failed_fd_setup(MetalContext& context, const std::vector<::tt::tt_metal::Device*>& devices);
 
     bool fast_dispatch_enabled_ = false;
