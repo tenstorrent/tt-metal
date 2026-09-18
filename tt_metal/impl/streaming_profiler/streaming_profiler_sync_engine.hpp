@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -297,12 +298,9 @@ public:
     uint64_t generation() const { return gen_; }
     // Samples ignored: an unknown kind, a core on no link, or a role that end does not stamp.
     uint64_t dropped() const { return dropped_; }
-    // How many solved links share link li's chip pair.
-    size_t pair_size(size_t li) const;
-    // The tree over the pair solutions: every chip reachable from `root` onto its refclk. `used` marks the links
-    // whose pair the tree took and that are that pair's only member: a loop through such a link closes to zero by
-    // construction.
-    std::map<uint32_t, RootXf> root_transforms(uint32_t root, std::vector<bool>* used) const;
+    // Every chip the root reaches over solved links, onto the root's refclk, from all the links at once (see the
+    // definition). `weights`, per link, gets the robust weight each ended with: 1 on the mesh, 0 left out.
+    std::map<uint32_t, RootXf> root_transforms(uint32_t root, std::vector<double>* weights) const;
 
     // A round in the refclk domain: each end's midpoint; the sender's round trip, the receiver's turnaround and the
     // one-way delay inside the stamps, in ns.
@@ -333,10 +331,6 @@ private:
     void try_solve_links(bool final);
     // Whether the solution was accepted into `out`.
     bool solve_link(const CaptureContext::Link& L, std::vector<RoundPoint> pts, LinkSolution& out) const;
-    // One solution per chip pair: a pair's solved links combined by precision-weighted means of their rates and of
-    // their offsets at a common midpoint, so parallel links average their path asymmetries. `members` gets the
-    // links behind each.
-    std::vector<LinkSolution> pair_solutions(std::vector<std::vector<size_t>>* members) const;
 
     const CaptureContext* ctx_ = nullptr;
     std::vector<LinkRounds> rounds_;  // per ctx_->links index

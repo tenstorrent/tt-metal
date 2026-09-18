@@ -498,118 +498,160 @@ double LinkSolver::path_median(const std::vector<Round>& rounds, size_t begin, s
     return v[v.size() / 2];
 }
 
-// Compose each device's refclk onto the root's along the solved-link tree, so a chip with no DIRECT link to the
-// root still lands on the fleet timeline through its neighbours. A link solves receiver = sender*(1+rate) +
-// (offset - rate*mid), an affine in the sender's refclk, and an affine's inverse and composition are affine, so
-// each reachable device carries one { scale, shift } with root_refclk = scale * dev_refclk + shift. A breadth
-// relaxation over the links (few devices, so O(links^2) is nothing) fills them from the root outward; a device
-// no path reaches keeps its own anchor and the local term alone. `used`, when given, marks the links the tree
-// took; the others close loops and their disagreement with the tree is path asymmetry (see log_summary).
-std::vector<LinkSolver::LinkSolution> LinkSolver::pair_solutions(std::vector<std::vector<size_t>>* members) const {
-    std::vector<LinkSolution> out;
-    std::vector<std::vector<size_t>> groups;
-    for (size_t li = 0; li < solved_.size(); li++) {
-        if (!solved_[li].ok) {
-            continue;
-        }
-        size_t g = 0;
-        while (g < groups.size() && (solved_[groups[g][0]].dev_snd != solved_[li].dev_snd ||
-                                     solved_[groups[g][0]].dev_rcv != solved_[li].dev_rcv)) {
-            g++;
-        }
-        if (g == groups.size()) {
-            groups.emplace_back();
-        }
-        groups[g].push_back(li);
-    }
-    for (const std::vector<size_t>& g : groups) {
-        LinkSolution c = solved_[g[0]];
-        if (g.size() > 1) {
-            const auto weight = [&](size_t li) {
-                const double p = std::max(solved_[li].precision_ns, 1e-3);
-                return 1.0 / (p * p);
-            };
-            double wsum = 0, mid = 0;
-            for (size_t li : g) {
-                wsum += weight(li);
-                mid += weight(li) * solved_[li].mid_refclk;
+namespace {
+
+// Gaussian elimination with partial pivoting on a dense system; n is the number of chips off the root, a few dozen
+// at most. False when the system is singular (a chip with no weight left on any of its links).
+bool solve_dense(std::vector<double> m, std::vector<double> rhs, std::vector<double>& x) {
+    const size_t n = rhs.size();
+    for (size_t k = 0; k < n; k++) {
+        size_t piv = k;
+        for (size_t i = k + 1; i < n; i++) {
+            if (std::abs(m[i * n + k]) > std::abs(m[piv * n + k])) {
+                piv = i;
             }
-            mid /= wsum;
-            double rate = 0, offset = 0, rr = 0;
-            c.rounds = c.kept = c.path_dropped = 0;
-            c.solved_at_refclk = 0.0;
-            for (size_t li : g) {
-                const LinkSolution& s = solved_[li];
-                const double w = weight(li) / wsum;
-                rate += w * s.rate;
-                offset += w * (s.offset_refclk + s.rate * (mid - s.mid_refclk));
-                rr += w * s.residual_rms_ns * s.residual_rms_ns;
-                c.rounds += s.rounds;
-                c.kept += s.kept;
-                c.path_dropped += s.path_dropped;
-                c.solved_at_refclk = std::max(c.solved_at_refclk, s.solved_at_refclk);
-            }
-            c.mid_refclk = mid;
-            c.rate = rate;
-            c.offset_refclk = offset;
-            c.residual_rms_ns = std::sqrt(rr);
-            c.precision_ns = 1.0 / std::sqrt(wsum);
         }
-        out.push_back(c);
+        if (!(std::abs(m[piv * n + k]) > 1e-12)) {
+            return false;
+        }
+        if (piv != k) {
+            for (size_t j = 0; j < n; j++) {
+                std::swap(m[k * n + j], m[piv * n + j]);
+            }
+            std::swap(rhs[k], rhs[piv]);
+        }
+        for (size_t i = k + 1; i < n; i++) {
+            const double f = m[i * n + k] / m[k * n + k];
+            for (size_t j = k; j < n; j++) {
+                m[i * n + j] -= f * m[k * n + j];
+            }
+            rhs[i] -= f * rhs[k];
+        }
     }
-    if (members != nullptr) {
-        *members = std::move(groups);
+    x.assign(n, 0.0);
+    for (size_t k = n; k-- > 0;) {
+        double acc = rhs[k];
+        for (size_t j = k + 1; j < n; j++) {
+            acc -= m[k * n + j] * x[j];
+        }
+        x[k] = acc / m[k * n + k];
     }
-    return out;
+    return true;
 }
 
-size_t LinkSolver::pair_size(size_t li) const {
-    size_t n = 0;
-    for (const LinkSolution& s : solved_) {
-        n += s.ok && s.dev_snd == solved_[li].dev_snd && s.dev_rcv == solved_[li].dev_rcv;
+// Weighted least squares for a potential on a graph: each edge says node_a - node_b = value with weight w; the root
+// is fixed at zero. `idx` maps a device to its unknown, -1 for the root.
+bool solve_potential(
+    const std::vector<std::array<int, 2>>& ends,
+    const std::vector<double>& value,
+    const std::vector<double>& w,
+    size_t n,
+    std::vector<double>& x) {
+    std::vector<double> m(n * n, 0.0), rhs(n, 0.0);
+    for (size_t i = 0; i < ends.size(); i++) {
+        const int a = ends[i][0], b = ends[i][1];
+        if (a >= 0) {
+            m[a * n + a] += w[i];
+            rhs[a] += w[i] * value[i];
+        }
+        if (b >= 0) {
+            m[b * n + b] += w[i];
+            rhs[b] -= w[i] * value[i];
+        }
+        if (a >= 0 && b >= 0) {
+            m[a * n + b] -= w[i];
+            m[b * n + a] -= w[i];
+        }
     }
-    return n;
+    return solve_dense(std::move(m), std::move(rhs), x);
 }
 
-std::map<uint32_t, RootXf> LinkSolver::root_transforms(uint32_t root, std::vector<bool>* used) const {
+}  // namespace
+
+// The mesh solve: every chip's refclk onto the root's from all solved links at once, a link's two ends being the
+// same instant. The log of a chip's rate against the root is a potential on the graph whose edges are the links'
+// log rates, so rates compose exactly. A chip's offset is the potential whose edges equate the two placements of a
+// link's midpoint through the solved rates: anchored there, a link's constraint holds exactly at its own midpoint
+// whatever the mesh's rates differ from its own by (a ppb over the refclk count is a microsecond; over the distance
+// from the midpoint, nothing). The offsets are reweighted by residual against half a stamp tick (Tukey's biweight):
+// the cables' path asymmetries leave a link within 4 ns of the mesh, while a stamp reference that moved at one end
+// (a hardware latency quantum, one launch in four, never under 9 ns and up to a tick) puts its link a good part of
+// a tick off, and such a link loses its weight instead of averaging into its pair; the report names it (weights,
+// per link, in `weights`).
+std::map<uint32_t, RootXf> LinkSolver::root_transforms(uint32_t root, std::vector<double>* weights) const {
     std::map<uint32_t, RootXf> to_root;
     to_root[root] = RootXf{1.0, 0.0, true};
-    if (used != nullptr) {
-        used->assign(solved_.size(), false);
+    if (weights != nullptr) {
+        weights->assign(solved_.size(), 0.0);
     }
-    std::vector<std::vector<size_t>> members;
-    const std::vector<LinkSolution> pairs = pair_solutions(&members);
-    std::vector<bool> taken(pairs.size(), false);
-    for (bool progress = true; progress;) {
-        progress = false;
-        for (size_t pi = 0; pi < pairs.size(); pi++) {
-            const LinkSolution& s = pairs[pi];
-            if (taken[pi]) {
+    // The chips the root reaches over solved links, each an unknown; the root is fixed.
+    std::map<uint32_t, int> idx;
+    idx[root] = -1;
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (const LinkSolution& s : solved_) {
+            if (!s.ok) {
                 continue;
             }
-            const double m = 1.0 + s.rate;  // receiver = m * sender + o
-            const double o = s.offset_refclk - s.rate * s.mid_refclk;
-            const auto rs = to_root.find(s.dev_rcv);
-            const auto ss = to_root.find(s.dev_snd);
-            const bool r_ok = rs != to_root.end() && rs->second.ok;
-            const bool s_ok = ss != to_root.end() && ss->second.ok;
-            if (s_ok && !r_ok) {
-                // root = A_s * sender + B_s, and sender = (receiver - o) / m.
-                const RootXf& S = ss->second;
-                to_root[s.dev_rcv] = RootXf{S.scale / m, S.shift - S.scale * o / m, true};
-                progress = true;
-            } else if (r_ok && !s_ok) {
-                // root = A_r * receiver + B_r, and receiver = m * sender + o.
-                const RootXf& R = rs->second;
-                to_root[s.dev_snd] = RootXf{R.scale * m, R.scale * o + R.shift, true};
-                progress = true;
-            } else {
-                continue;
+            const bool have_s = idx.count(s.dev_snd) != 0, have_r = idx.count(s.dev_rcv) != 0;
+            if (have_s != have_r) {
+                idx[have_s ? s.dev_rcv : s.dev_snd] = static_cast<int>(idx.size()) - 1;
+                grew = true;
             }
-            taken[pi] = true;
-            if (used != nullptr && members[pi].size() == 1) {
-                (*used)[members[pi][0]] = true;
-            }
+        }
+    }
+    const size_t n = idx.size() - 1;
+    if (n == 0) {
+        return to_root;
+    }
+    std::vector<size_t> li_of;
+    std::vector<std::array<int, 2>> ends;
+    std::vector<double> log_rate, mid, offset, w0;
+    for (size_t li = 0; li < solved_.size(); li++) {
+        const LinkSolution& s = solved_[li];
+        if (!s.ok || idx.count(s.dev_snd) == 0 || idx.count(s.dev_rcv) == 0) {
+            continue;
+        }
+        li_of.push_back(li);
+        ends.push_back({idx[s.dev_snd], idx[s.dev_rcv]});
+        log_rate.push_back(std::log1p(s.rate));  // A_snd = A_rcv * (1 + rate)
+        mid.push_back(s.mid_refclk);
+        offset.push_back(s.offset_refclk);
+        const double p = std::max(s.precision_ns, 0.01);
+        w0.push_back(1.0 / (p * p));
+    }
+    std::vector<double> x;
+    if (!solve_potential(ends, log_rate, std::vector<double>(ends.size(), 1.0), n, x)) {
+        return to_root;
+    }
+    const auto A_of = [&](int i) { return i < 0 ? 1.0 : std::exp(x[i]); };
+    // Offsets: at the link's midpoint the sender reads mid and the receiver mid + offset, one instant on the root:
+    // A_snd * mid + B_snd = A_rcv * (mid + offset) + B_rcv. Four passes of reweighting on the residuals' robust scale.
+    std::vector<double> value(ends.size()), w = w0, B, resid(ends.size(), 0.0);
+    for (size_t i = 0; i < ends.size(); i++) {
+        value[i] = A_of(ends[i][1]) * (mid[i] + offset[i]) - A_of(ends[i][0]) * mid[i];
+    }
+    std::vector<double> robust(ends.size(), 1.0);
+    for (int pass = 0; pass < 4; pass++) {
+        if (!solve_potential(ends, value, w, n, B)) {
+            return to_root;
+        }
+        const auto B_of = [&](int i) { return i < 0 ? 0.0 : B[i]; };
+        for (size_t i = 0; i < ends.size(); i++) {
+            resid[i] = (B_of(ends[i][0]) - B_of(ends[i][1]) - value[i]) * kNsPerRefclk;
+            const double u = resid[i] / (kNsPerRefclk / 2.0);
+            robust[i] = std::abs(u) < 1.0 ? (1.0 - u * u) * (1.0 - u * u) : 0.0;
+            w[i] = w0[i] * std::max(robust[i], 1e-6);
+        }
+    }
+    for (const auto& [dev, i] : idx) {
+        if (i >= 0) {
+            to_root[dev] = RootXf{A_of(i), B[i], true};
+        }
+    }
+    if (weights != nullptr) {
+        for (size_t i = 0; i < ends.size(); i++) {
+            (*weights)[li_of[i]] = robust[i];
         }
     }
     return to_root;
@@ -995,20 +1037,19 @@ void SyncEngine::log_link_solutions() const {
     }
 }
 
-// Loop closure. The tree composes every chip onto the root through some of the links; a solved link the tree did not
-// take predicts the same receiver refclk a second way, and the two ways can differ only by path asymmetry (true clock
-// offsets cancel around a loop) plus the solutions' own precision. This is the only handle on asymmetry without an
-// external reference.
+// Each link against the mesh solve: the difference between its own solution and the two chips' placements on the
+// root. With every link on one consistent mesh the residuals are the cables' path asymmetries, a nanosecond or two;
+// a link the reweighting dropped carries a stamp bias, and its rounds still place through the mesh.
 void SyncEngine::log_loop_closures() const {
     if (local_.empty()) {
         return;
     }
     const std::vector<LinkSolver::LinkSolution>& solved = links_.solutions();
-    std::vector<bool> used;
-    const std::map<uint32_t, RootXf> to_root = links_.root_transforms(root_dev(), &used);
+    std::vector<double> weights;
+    const std::map<uint32_t, RootXf> to_root = links_.root_transforms(root_dev(), &weights);
     for (size_t li = 0; li < solved.size() && li < ctx_.links.size(); li++) {
         const LinkSolver::LinkSolution& s = solved[li];
-        if (!s.ok || used[li]) {
+        if (!s.ok) {
             continue;
         }
         const auto S = to_root.find(s.dev_snd);
@@ -1017,25 +1058,34 @@ void SyncEngine::log_loop_closures() const {
             continue;
         }
         const double direct = (1.0 + s.rate) * s.mid_refclk + (s.offset_refclk - s.rate * s.mid_refclk);
-        const double via_tree = (S->second.scale * s.mid_refclk + S->second.shift - R->second.shift) / R->second.scale;
-        if (links_.pair_size(li) > 1) {
-            log_info(
+        const double via_mesh = (S->second.scale * s.mid_refclk + S->second.shift - R->second.shift) / R->second.scale;
+        const double off_ns = (via_mesh - direct) * kNsPerRefclk;
+        if (weights[li] < 0.5) {
+            log_warning(
                 tt::LogMetal,
-                "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {}: {:+.1f} ns off its pair's mean "
-                "(the parallel links' path-asymmetry difference, shared out)",
+                "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {} eth({},{}): its stamps sit {:+.1f} "
+                "ns "
+                "off the mesh (weight {:.2f}); a stamp reference at one end moved this launch, the link is left out "
+                "of the placement",
                 ctx_.links[li].chip_a,
                 ctx_.links[li].eth_a.x,
                 ctx_.links[li].eth_a.y,
                 ctx_.links[li].chip_b,
-                (via_tree - direct) * kNsPerRefclk);
+                ctx_.links[li].eth_b.x,
+                ctx_.links[li].eth_b.y,
+                off_ns,
+                weights[li]);
         } else {
             log_info(
                 tt::LogMetal,
-                "[streaming profiler] d2d sync loop through link chip {} -> chip {}: closes to {:+.1f} ns (path "
-                "asymmetry around the loop, solutions good to ~{:.1f} ns each)",
+                "[streaming profiler] d2d sync link chip {} eth({},{}) -> chip {}: {:+.1f} ns off the mesh (path "
+                "asymmetry; weight {:.2f}, solution good to ~{:.1f} ns)",
                 ctx_.links[li].chip_a,
+                ctx_.links[li].eth_a.x,
+                ctx_.links[li].eth_a.y,
                 ctx_.links[li].chip_b,
-                (via_tree - direct) * kNsPerRefclk,
+                off_ns,
+                weights[li],
                 s.precision_ns);
         }
     }
