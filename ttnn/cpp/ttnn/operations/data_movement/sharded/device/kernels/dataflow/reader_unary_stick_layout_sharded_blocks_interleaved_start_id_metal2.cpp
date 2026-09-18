@@ -1,11 +1,22 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
-// reader_unary_stick_layout_sharded_blocks_interleaved_start_id_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
-// the consumers still on the legacy API. Until the last of them migrates and
-// this file is retired, changes here likely belong in the fork too.
+// Metal 2.0 fork of reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp. Gathers a
+// row-major shard stick-by-stick out of an interleaved input tensor, staging through a local scratch
+// buffer when the source columns are not alignment-friendly. Only the plumbing changes: the two
+// buffer-index compile-time args become dfb::in and dfb::scratch, the accessor-args / base-address pair
+// becomes the tensor::src binding, the positional runtime args become named ones, and the scratch page
+// size is read off the DataflowBuffer object instead of the raw CB interface. The TRID-tagged transfer
+// pipeline and its slot state machine are untouched.
+// Forked rather than converted in place because the legacy file is still bound by factories on the
+// legacy positional-arg API.
+//
+// The binding names below (dfb::in, dfb::scratch, tensor::src) and the named argument set are this
+// fork's interface: every later consumer inherits them, so they are taken from the kernel's own
+// vocabulary rather than any one op's locals, and are not renamed once a consumer exists. dfb::scratch
+// is a self-loop endpoint — the binding kernel is both its producer and its consumer — so a factory
+// binding this source must declare both roles for it.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -13,40 +24,35 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
+    const uint32_t block_height = get_arg(args::block_height);
+    const uint32_t block_width_bytes = get_arg(args::block_width_bytes);
+    const uint32_t padded_block_width_bytes = get_arg(args::padded_block_width_bytes);
+    const bool aligned = static_cast<bool>(get_arg(args::aligned));
+    const uint32_t aligned_input_width_offset_bytes = get_arg(args::aligned_input_width_offset_bytes);
+    const uint32_t aligned_block_width_bytes = get_arg(args::aligned_block_width_bytes);
+    const uint32_t aligned_offset = get_arg(args::aligned_offset);
+    const uint32_t start_id = get_arg(args::start_id);
 
-    const uint32_t src_addr                 = get_arg_val<uint32_t>(0);
-    const uint32_t block_height             = get_arg_val<uint32_t>(2);
-    const uint32_t block_width_bytes        = get_arg_val<uint32_t>(3);
-    const uint32_t padded_block_width_bytes = get_arg_val<uint32_t>(4);
-    const bool aligned                      = static_cast<bool>(get_arg_val<uint32_t>(5));
-    const uint32_t aligned_input_width_offset_bytes = get_arg_val<uint32_t>(6);
-    const uint32_t aligned_block_width_bytes = get_arg_val<uint32_t>(7);
-    const uint32_t aligned_offset           = get_arg_val<uint32_t>(8);
-    const uint32_t start_id                 = get_arg_val<uint32_t>(9);
-
-    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
-    constexpr uint32_t num_trids = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr auto num_trids = get_arg(args::num_trids);
 
     Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
-    DataflowBuffer dfb_in1(cb_id_in1);
+    // dfb::in — this core's row-major shard.
+    // dfb::scratch — the alignment staging area.
+    DataflowBuffer dfb_in(dfb::in);
+    DataflowBuffer dfb_scratch(dfb::scratch);
 
-    // The accessor base must stay the unshifted buffer base: Metal 2.0 supplies it from the tensor
-    // binding and offers no seam for a pre-offset base. The per-core column shift rides each read
-    // as a source `offset_bytes` instead, which resolves to the same NoC address.
-    const auto s0 = TensorAccessor(src_args, src_addr);
+    const auto s0 = TensorAccessor(tensor::src);
     uint32_t stick_id = start_id;
-    dfb_in0.reserve_back(block_height);
+    dfb_in.reserve_back(block_height);
     if (aligned) {
         uint32_t dest_off = 0;
         for (uint32_t h = 0; h < block_height; ++h) {
             noc.async_read(
                 s0,
-                dfb_in0,
+                dfb_in,
                 block_width_bytes,
                 {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
                 {.offset_bytes = dest_off});
@@ -55,17 +61,12 @@ void kernel_main() {
         }
         noc.async_read_barrier();
     } else {
-        enum SlotState : uint8_t {
-            IDLE = 0,
-            SRC_PENDING = 1,
-            SCRATCH_READY = 2,
-            SCRATCH_PENDING = 3
-        };
+        enum SlotState : uint8_t { IDLE = 0, SRC_PENDING = 1, SCRATCH_READY = 2, SCRATCH_PENDING = 3 };
 
         constexpr uint32_t trid_base = 1;
 
-        dfb_in1.reserve_back(num_trids);
-        uint32_t scratch_cb_page_size = get_local_cb_interface(cb_id_in1).fifo_page_size;
+        dfb_scratch.reserve_back(num_trids);
+        uint32_t scratch_page_size = dfb_scratch.get_entry_size();
         SlotState slot_states[num_trids];
         uint32_t dest_offsets[num_trids];
         uint32_t scratch_offsets[num_trids];
@@ -73,19 +74,19 @@ void kernel_main() {
         // Initialize slots
         for (uint32_t i = 0; i < num_trids; i++) {
             slot_states[i] = SlotState::IDLE;
-            scratch_offsets[i] = i * scratch_cb_page_size;
+            scratch_offsets[i] = i * scratch_page_size;
         }
 
         // Local NoC coordinates for the scratch->dest reads.
         UnicastEndpoint self_ep;
         const uint32_t my_noc_x = my_x[noc.get_noc_id()];
         const uint32_t my_noc_y = my_y[noc.get_noc_id()];
-        // Base L1 address of the scratch CB
-        const uint32_t scratch_l1_base = dfb_in1.get_write_ptr();
+        // Base L1 address of the scratch buffer
+        const uint32_t scratch_l1_base = dfb_scratch.get_write_ptr();
 
-        uint32_t dest_off = 0;         // running offset into dfb_in0
-        uint32_t rows_issued = 0;      // Number of src->scratch transfers started
-        uint32_t rows_completed = 0;   // Number of scratch->dest transfers completed
+        uint32_t dest_off = 0;        // running offset into dfb_in
+        uint32_t rows_issued = 0;     // Number of src->scratch transfers started
+        uint32_t rows_completed = 0;  // Number of scratch->dest transfers completed
 
         while (rows_completed < block_height) {
             for (uint32_t slot = 0; slot < num_trids; slot++) {
@@ -95,7 +96,7 @@ void kernel_main() {
                     // Start new src->scratch transfer (TRID-tagged).
                     noc.async_read<NocOptions::TXN_ID>(
                         s0,
-                        dfb_in1,
+                        dfb_scratch,
                         aligned_block_width_bytes,
                         {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
                         {.offset_bytes = scratch_offsets[slot]},
@@ -117,7 +118,7 @@ void kernel_main() {
                     // Start scratch->dest transfer: local L1 loopback read tagged with the same trid.
                     noc.async_read<NocOptions::TXN_ID>(
                         self_ep,
-                        dfb_in0,
+                        dfb_in,
                         block_width_bytes,
                         {.noc_x = my_noc_x,
                          .noc_y = my_noc_y,
@@ -137,18 +138,16 @@ void kernel_main() {
             }
         }
 
-        // dfb_in1 is reserved once as an alignment scratchpad (no downstream consumer);
-        // commit the reservation so the CB is left balanced.
-        dfb_in1.push_back(num_trids);
+        // dfb_scratch is reserved once as an alignment scratchpad (no downstream consumer);
+        // commit the reservation so the buffer is left balanced.
+        dfb_scratch.push_back(num_trids);
     }
     // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads
     UnicastEndpoint self_ep;
     noc.set_async_read_state<NocOptions::TXN_ID>(
         self_ep,
         /*size_bytes=*/0,
-        {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-         .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-         .addr = 0},
+        {.noc_x = (uint32_t)my_x[noc.get_noc_id()], .noc_y = (uint32_t)my_y[noc.get_noc_id()], .addr = 0},
         NocOptVals{.trid = 0});
-    dfb_in0.push_back(block_height);
+    dfb_in.push_back(block_height);
 }
