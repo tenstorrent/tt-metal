@@ -142,8 +142,8 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 .num_entries = entries,
                 .data_format_metadata = format};
         };
-    const uint32_t split_head_tiles = summary && in.actual_start.has_value() ? Vt : 1;
-    const uint32_t tail_state_tiles = !summary && in.actual_start.has_value() ? kv : 1;
+    const uint32_t split_head_tiles = summary ? Vt : 1;
+    const uint32_t tail_state_tiles = !summary ? kv : 1;
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
         make_dfb(state_dfb_name, kv, fp32),
         make_dfb(t_inv_dfb_name, 2 * cc, input_format(in.t_inv)),
@@ -214,8 +214,8 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{intra_tensor_name, "intra"});
         reader.tensor_bindings.push_back(
             tt::tt_metal::experimental::TensorBinding{initial_state_tensor_name, "initial_state"});
-        reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{
-            in.tail_state.has_value() ? tail_state_tensor_name : initial_state_tensor_name, "tail_state"});
+        reader.tensor_bindings.push_back(
+            tt::tt_metal::experimental::TensorBinding{tail_state_tensor_name, "tail_state"});
     } else {
         // The discarded recurrence branch is still parsed; aliases provide its binding names without extra parameters.
         reader.tensor_bindings.push_back(tt::tt_metal::experimental::TensorBinding{v_beta_tensor_name, "q_decay"});
@@ -378,7 +378,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
             .unique_id = intra_tensor_name, .spec = intra_tensor.tensor_spec()});
         tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
             .unique_id = initial_state_tensor_name, .spec = in.initial_state->mesh_tensor().tensor_spec()});
-        if (in.tail_state.has_value()) {
+        {
             tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
                 .unique_id = tail_state_tensor_name, .spec = in.tail_state->mesh_tensor().tensor_spec()});
         }
@@ -408,7 +408,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         run_args.tensor_args.emplace(q_decay_tensor_name, q_decay_tensor);
         run_args.tensor_args.emplace(intra_tensor_name, intra_tensor);
         run_args.tensor_args.emplace(initial_state_tensor_name, in.initial_state->mesh_tensor());
-        if (in.tail_state.has_value()) {
+        {
             run_args.tensor_args.emplace(tail_state_tensor_name, in.tail_state->mesh_tensor());
         }
     }
@@ -417,7 +417,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         run_args.tensor_args.emplace(tail_output_tensor_name, outputs[2].mesh_tensor());
         run_args.tensor_args.emplace(tail_final_state_tensor_name, outputs[3].mesh_tensor());
     }
-    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, in.v_beta, reader, compute);
+    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, reader, compute);
     const tt::tt_metal::experimental::DFBSpecName writer_chronology{"chronology_writer"};
     spec.dataflow_buffers.push_back({
         .unique_id = writer_chronology,
@@ -427,7 +427,6 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     });
     reader.dfb_bindings.push_back(tt::tt_metal::experimental::ProducerOf(writer_chronology, "chronology_writer"));
     writer.dfb_bindings.push_back(tt::tt_metal::experimental::ConsumerOf(writer_chronology, "chronology_writer"));
-    writer.compile_time_args.insert({"dynamic_chronology", uint32_t(in.actual_start.has_value())});
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)},

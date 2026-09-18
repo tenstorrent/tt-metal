@@ -24,7 +24,7 @@ struct ReduceAffineTransformsParams {
 struct ReduceAffineTransformsInputs {
     Tensor a;
     Tensor b;
-    std::optional<Tensor> actual_start;
+    Tensor actual_start;
 };
 
 }  // namespace ttnn::experimental::prim

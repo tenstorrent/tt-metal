@@ -170,7 +170,7 @@ FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) 
     out.push_back(tiles);
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t G, uint32_t dynamic_chronology>
+template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
     constexpr uint32_t affine_a_tiles = Kt * Kt;
     constexpr uint32_t affine_b_tiles = Kt * Vt;
@@ -188,14 +188,14 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer reset_b(dfb::reset_b);
 
     kda_chronology::Topology topology{};
-    if constexpr (dynamic_chronology) {
+    {
         DataflowBuffer chronology(dfb::chronology_compute);
         topology = kda_chronology::receive(chronology);
     }
-    const uint32_t reset_group = dynamic_chronology ? topology.reset_group(G) : G;
+    const uint32_t reset_group = topology.reset_group(G);
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
     initial_a.wait_front(affine_a_tiles);
-    const bool reset_worker = dynamic_chronology && group == reset_group;
+    const bool reset_worker = group == reset_group;
     if (!reset_worker) {
         initial_b.wait_front(affine_b_tiles);
     }

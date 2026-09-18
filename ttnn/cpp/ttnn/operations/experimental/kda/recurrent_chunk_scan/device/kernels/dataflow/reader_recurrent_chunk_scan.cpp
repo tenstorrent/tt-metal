@@ -102,7 +102,6 @@ template <
     uint32_t Vt_full,
     uint32_t summary,
     uint32_t groups_per_head,
-    uint32_t dynamic_chronology,
     uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows>
@@ -127,7 +126,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
 
     uint32_t reset_chunk = 0;
     kda_chronology::Topology topology{};
-    if constexpr (dynamic_chronology) {
+    {
         DataflowBuffer chronology(dfb::chronology_compute);
         chronology.reserve_back(1);
         const auto actual_start = TensorAccessor(tensor::actual_start);
@@ -138,7 +137,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
         kda_chronology::store(words, topology);
         chronology.push_back(1);
     }
-    if constexpr (dynamic_chronology) {
+    {
         reset_chunk = topology.reset_chunk(head % groups_per_head, groups_per_head);
         DataflowBuffer writer_chronology(dfb::chronology_writer);
         writer_chronology.reserve_back(1);
@@ -168,7 +167,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
         // end of chunk 0, so hoisting this deadlocks; pushing it here reuses the
         // same capacity as a queue and costs no extra L1. reset_chunk is >= 1
         // whenever it is non-zero, so chunk 0 has always been consumed by now.
-        if constexpr (summary && dynamic_chronology) {
+        if constexpr (summary) {
             if (reset_chunk != 0 && chunk == reset_chunk) {
                 seed_zero<key_value_tiles>(state, noc);
                 seed_identity<Kt, Vt>(summary_seed, noc, value_block);

@@ -246,7 +246,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
         {output_b_tensor_name, output_b},
     };
 
-    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, in.a, dataflow, compute);
+    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, dataflow, compute);
     spec.kernels = {std::move(dataflow), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{

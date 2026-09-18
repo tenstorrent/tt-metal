@@ -117,7 +117,7 @@ void copy(DataflowBuffer& in, DataflowBuffer& out, DataflowBuffer& send, uint32_
     send.push_back(tiles);
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t G, uint32_t dynamic_chronology>
+template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
@@ -132,11 +132,11 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer scratch(dfb::scratch);
 
     kda_chronology::Topology topology{};
-    if constexpr (dynamic_chronology) {
+    {
         DataflowBuffer chronology(dfb::chronology_compute);
         topology = kda_chronology::receive(chronology);
     }
-    if constexpr (dynamic_chronology) {
+    {
         if (group >= topology.head_groups(G)) {
             return;
         }

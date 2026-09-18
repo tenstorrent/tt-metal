@@ -34,13 +34,7 @@ FORCE_INLINE void load_weight_block(
     weights.push_back(4 * block_ct);
 }
 
-template <
-    uint32_t block_ct,
-    uint32_t num_blocks,
-    uint32_t dynamic_chronology,
-    uint32_t sp_rank,
-    uint32_t sp_size,
-    uint32_t local_rows>
+template <uint32_t block_ct, uint32_t num_blocks, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
@@ -54,7 +48,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
 
     uint32_t local_split_row = 0;
     bool initial_from_predecessor = false;
-    if constexpr (dynamic_chronology) {
+    {
         const auto actual_start = TensorAccessor(tensor::actual_start);
         noc.async_read(
             actual_start, CoreLocalMem<uint32_t>(activation.get_write_ptr()), sizeof(uint32_t), {.page_id = 0}, {});

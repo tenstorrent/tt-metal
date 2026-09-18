@@ -81,14 +81,7 @@ FORCE_INLINE void synchronize_head_stage(
     release.wait_min(completed_stages);
 }
 
-template <
-    uint32_t Kt,
-    uint32_t Vt,
-    uint32_t G,
-    uint32_t dynamic_chronology,
-    uint32_t sp_rank,
-    uint32_t sp_size,
-    uint32_t local_rows>
+template <uint32_t Kt, uint32_t Vt, uint32_t G, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
 TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
@@ -109,7 +102,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     Semaphore release(sem::release);
 
     kda_chronology::Topology topology{};
-    if constexpr (dynamic_chronology) {
+    {
         DataflowBuffer chronology(dfb::chronology_compute);
         chronology.reserve_back(1);
         const auto actual_start = TensorAccessor(tensor::actual_start);
@@ -120,7 +113,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         kda_chronology::store(words, topology);
         chronology.push_back(1);
     }
-    const uint32_t active = dynamic_chronology ? topology.head_groups(G) : G;
+    const uint32_t active = topology.head_groups(G);
     if (group < active) {
         initial_a.reserve_back(a_tiles);
         initial_b.reserve_back(b_tiles);

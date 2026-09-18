@@ -118,6 +118,7 @@ def run_recurrent(
     protocol: Sequence[ttnn.Tensor],
     state: ttnn.Tensor,
     *,
+    actual_start: ttnn.Tensor,
     groups_per_head: int = 1,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
@@ -126,6 +127,8 @@ def run_recurrent(
         return ttnn.experimental.kda.recurrent_chunk_scan(
             *protocol,
             state,
+            tail_state=state,
+            actual_start=actual_start,
             groups_per_head=groups_per_head,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
@@ -135,6 +138,7 @@ def run_recurrent(
 def run_summary(
     protocol: Sequence[ttnn.Tensor],
     *,
+    actual_start: ttnn.Tensor,
     groups_per_head: int = 1,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
@@ -142,6 +146,7 @@ def run_summary(
     with ttnn.manage_config("throw_exception_on_fallback", True):
         outputs = ttnn.experimental.kda.summarize_chunk_recurrence(
             *protocol,
+            actual_start=actual_start,
             groups_per_head=groups_per_head,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,

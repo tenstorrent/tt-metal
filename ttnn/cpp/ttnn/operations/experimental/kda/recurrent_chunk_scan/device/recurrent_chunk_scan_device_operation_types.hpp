@@ -41,7 +41,7 @@ struct RecurrentChunkScanInputs {
     // Seed for the post-wrap loop on the first rank: the prefix's final carry,
     // already replicated across SP. Required for SP recurrence.
     std::optional<Tensor> tail_state;
-    std::optional<Tensor> actual_start;
+    Tensor actual_start;
 };
 
 }  // namespace ttnn::experimental::prim

@@ -28,11 +28,11 @@ struct AffineExclusiveScanInputs {
     Tensor a;
     Tensor b;
     Tensor initial_state;
-    std::optional<Tensor> tail_a;
-    std::optional<Tensor> tail_b;
-    std::optional<Tensor> tail_state;
+    Tensor tail_a;
+    Tensor tail_b;
+    Tensor tail_state;
 
-    std::optional<Tensor> actual_start;
+    Tensor actual_start;
 };
 
 }  // namespace ttnn::experimental::prim

@@ -12,14 +12,14 @@ ttnn::Tensor affine_exclusive_scan(
     const ttnn::Tensor& b,
     const ttnn::Tensor& initial_state,
     uint32_t groups_per_head,
-    const std::optional<ttnn::Tensor>& tail_a,
-    const std::optional<ttnn::Tensor>& tail_b,
-    const std::optional<ttnn::Tensor>& tail_state,
+    const ttnn::Tensor& actual_start,
+    uint32_t local_rows,
+    const ttnn::Tensor& tail_a,
+    const ttnn::Tensor& tail_b,
+    const ttnn::Tensor& tail_state,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const std::optional<ttnn::Tensor>& actual_start,
-    uint32_t sequence_parallel_axis,
-    uint32_t local_rows) {
+    uint32_t sequence_parallel_axis) {
     TT_FATAL(
         a.storage_type() == StorageType::DEVICE && a.buffer() != nullptr,
         "affine_exclusive_scan: a must be an allocated device tensor");

@@ -46,9 +46,7 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     using namespace kda_factory_detail;
     const std::string_view operation_name =
         attrs.mode == RecurrentChunkScanMode::RECURRENT ? "recurrent_chunk_scan" : "summarize_chunk_recurrence";
-    if (in.actual_start) {
-        kda_factory_detail::check_actual_start(in.t_inv, *in.actual_start, operation_name);
-    }
+    kda_factory_detail::check_actual_start(in.t_inv, in.actual_start, operation_name);
     check_protocol_tensor(in.v_beta, "v_beta", true, operation_name);
     check_protocol_tensor(in.kd, "kd", true, operation_name);
     check_protocol_tensor(in.q_decay, "q_decay", true, operation_name);
@@ -111,10 +109,7 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
             check_same_device(in.v_beta, *in.tail_state, operation_name, "tail_state");
             check_shape(*in.tail_state, Shape({BH / attrs.groups_per_head, K, V}), "tail_state", operation_name);
         }
-        TT_FATAL(
-            in.actual_start.has_value() == in.tail_state.has_value(),
-            "{}: actual_start and tail_state must be provided together",
-            operation_name);
+        TT_FATAL(in.tail_state.has_value(), "{}: tail_state is required", operation_name);
     } else {
         TT_FATAL(!in.initial_state.has_value(), "{}: initial_state is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
@@ -173,7 +168,7 @@ RecurrentChunkScanOperation::create_op_performance_model(
         // The runtime scalar is not read back by the host. Bound the extra
         // head transform by one split group per head. Restart seeds are
         // assignments; only extracting the additional A = (A + B) - B adds work.
-        const double possible_split_heads = in.actual_start.has_value() ? batch_heads / attrs.groups_per_head : 0.0;
+        const double possible_split_heads = batch_heads / attrs.groups_per_head;
         work = {
             .fpu_matrix_flops = instances * (8.0 * chunk * key_dim * value_dim + 4.0 * chunk * chunk * value_dim),
             .fpu_multiply_ops = instances * 2.0 * key_dim * value_dim,
@@ -190,12 +185,7 @@ RecurrentChunkScanOperation::create_op_performance_model(
         inputs.push_back(&*in.tail_state);
     }
 
-    // Ordinary summaries allocate the same four-tensor result as dynamic
-    // summaries, but only the head pair is written.
-    const auto written_outputs = attrs.mode == RecurrentChunkScanMode::SUMMARY && !in.actual_start.has_value()
-                                     ? std::vector<Tensor>{outputs[0], outputs[1]}
-                                     : outputs;
-    return make_profiler_model(work, inputs, written_outputs, attrs.compute_kernel_config.math_fidelity);
+    return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
 std::vector<Tensor> recurrent_chunk_scan(
@@ -212,7 +202,7 @@ std::vector<Tensor> recurrent_chunk_scan(
     uint32_t groups_per_head,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<Tensor>& actual_start,
+    const Tensor& actual_start,
     uint32_t sequence_parallel_axis) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();

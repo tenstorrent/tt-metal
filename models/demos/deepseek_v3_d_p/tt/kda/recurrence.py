@@ -9,7 +9,6 @@ perform the bespoke kernels exposed by ``ttnn.experimental.kda``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
@@ -182,6 +181,8 @@ def _reshape_chunks_for_groups(
 def _summarize_chunk_groups(
     grouped: _PreparedChunks,
     *,
+    actual_start: ttnn.Tensor,
+    sequence_parallel_axis: int,
     groups_per_head: int,
     summary_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
@@ -192,6 +193,8 @@ def _summarize_chunk_groups(
         groups_per_head=groups_per_head,
         memory_config=summary_memory_config,
         compute_kernel_config=compute_config.preparation,
+        actual_start=actual_start,
+        sequence_parallel_axis=sequence_parallel_axis,
     )
     ttnn.deallocate(tail_a)
     ttnn.deallocate(tail_b)
@@ -228,7 +231,10 @@ def _effective_summary_group_chunks(
 def _scan_chunks(
     prepared: _PreparedChunks,
     initial_states: ttnn.Tensor,
+    tail_state: ttnn.Tensor,
     *,
+    actual_start: ttnn.Tensor,
+    sequence_parallel_axis: int,
     compute_config: ttnn.DeviceComputeKernelConfig,
     groups_per_head: int = 1,
 ) -> RecurrenceResult:
@@ -238,6 +244,9 @@ def _scan_chunks(
         groups_per_head=groups_per_head,
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         compute_kernel_config=compute_config,
+        actual_start=actual_start,
+        tail_state=tail_state,
+        sequence_parallel_axis=sequence_parallel_axis,
     )
     return RecurrenceResult(output=output, final_state=final_states)
 
@@ -363,6 +372,8 @@ def _ordinary_group_scan(
     summary: _AffineTransform,
     initial_state: ttnn.Tensor,
     *,
+    actual_start: ttnn.Tensor,
+    sequence_parallel_axis: int,
     groups_per_head: int,
     prefix_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
@@ -374,8 +385,22 @@ def _ordinary_group_scan(
         groups_per_head,
         memory_config=prefix_memory_config,
         compute_kernel_config=compute_config.affine_prefix,
+        actual_start=actual_start,
+        tail_a=summary.a,
+        tail_b=summary.b,
+        tail_state=initial_state,
+        local_rows=grouped.v_beta.shape[1] * grouped.v_beta.shape[2] * groups_per_head,
+        sequence_parallel_axis=sequence_parallel_axis,
     )
-    return _scan_chunks(grouped, entries, groups_per_head=groups_per_head, compute_config=compute_config.scan)
+    return _scan_chunks(
+        grouped,
+        entries,
+        initial_state,
+        groups_per_head=groups_per_head,
+        compute_config=compute_config.scan,
+        actual_start=actual_start,
+        sequence_parallel_axis=sequence_parallel_axis,
+    )
 
 
 def _scan_local_grouped_chunks(
@@ -383,12 +408,19 @@ def _scan_local_grouped_chunks(
     initial_state: ttnn.Tensor,
     geometry: _RecurrenceGeometry,
     *,
+    actual_start: ttnn.Tensor,
+    sequence_parallel_axis: int,
     summary_group_chunks: int,
     compute_config: _RecurrenceComputeConfig,
 ) -> RecurrenceResult:
     grouped, groups, memory = _prepare_grouped_chunks(prepared, geometry, summary_group_chunks=summary_group_chunks)
     summary = _summarize_chunk_groups(
-        grouped, groups_per_head=groups, summary_memory_config=memory, compute_config=compute_config
+        grouped,
+        groups_per_head=groups,
+        summary_memory_config=memory,
+        compute_config=compute_config,
+        actual_start=actual_start,
+        sequence_parallel_axis=sequence_parallel_axis,
     )
     scan = _ordinary_group_scan(
         grouped,
@@ -397,6 +429,8 @@ def _scan_local_grouped_chunks(
         groups_per_head=groups,
         prefix_memory_config=KDA_LOCAL_PREFIX_MEMORY_CONFIG,
         compute_config=compute_config,
+        actual_start=actual_start,
+        sequence_parallel_axis=sequence_parallel_axis,
     )
     output = ttnn.reshape(
         scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
@@ -509,7 +543,7 @@ class KDARecurrence:
         device: ttnn.Device | ttnn.MeshDevice,
         program_config: KDARecurrenceProgramConfig,
         *,
-        sequence_parallel_axis: int | None,
+        sequence_parallel_axis: int,
     ) -> None:
         preparation = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -537,7 +571,9 @@ class KDARecurrence:
         )
         self._summary_group_chunks = program_config.summary_group_chunks
         self._sequence_parallel_axis = sequence_parallel_axis
-        self._use_grouped_scan = sequence_parallel_axis is not None or program_config.local_scan_strategy == "grouped"
+        self._use_grouped_scan = (
+            isinstance(device, ttnn.MeshDevice) and tuple(device.shape)[sequence_parallel_axis] > 1
+        ) or program_config.local_scan_strategy == "grouped"
 
     def _prepare(
         self,
@@ -577,6 +613,7 @@ class KDARecurrence:
     def __call__(
         self,
         *,
+        actual_start: ttnn.Tensor,
         q: ttnn.Tensor,
         k: ttnn.Tensor,
         v: ttnn.Tensor,
@@ -593,9 +630,18 @@ class KDARecurrence:
                 geometry,
                 summary_group_chunks=self._summary_group_chunks,
                 compute_config=self._compute_config,
+                actual_start=actual_start,
+                sequence_parallel_axis=self._sequence_parallel_axis,
             )
             if self._use_grouped_scan
-            else _scan_chunks(prepared, state, compute_config=self._compute_config.scan)
+            else _scan_chunks(
+                prepared,
+                state,
+                state,
+                compute_config=self._compute_config.scan,
+                actual_start=actual_start,
+                sequence_parallel_axis=self._sequence_parallel_axis,
+            )
         )
         return self._finish(scan, geometry)
 
@@ -618,7 +664,7 @@ class KDARecurrence:
             state,
             geometry,
             summary_group_chunks=self._summary_group_chunks,
-            sequence_parallel_axis=cast(int, self._sequence_parallel_axis),
+            sequence_parallel_axis=self._sequence_parallel_axis,
             selections=selections,
             actual_start=actual_start,
             compute_config=self._compute_config,

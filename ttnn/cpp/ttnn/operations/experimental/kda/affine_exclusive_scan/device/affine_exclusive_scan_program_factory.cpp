@@ -29,9 +29,9 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     const auto& a = in.a.mesh_tensor();
     const auto& b = in.b.mesh_tensor();
     const auto& initial_state = in.initial_state.mesh_tensor();
-    const auto& tail_a = in.tail_a.has_value() ? in.tail_a->mesh_tensor() : a;
-    const auto& tail_b = in.tail_b.has_value() ? in.tail_b->mesh_tensor() : b;
-    const auto& tail_state = in.tail_state.has_value() ? in.tail_state->mesh_tensor() : initial_state;
+    const auto& tail_a = in.tail_a.mesh_tensor();
+    const auto& tail_b = in.tail_b.mesh_tensor();
+    const auto& tail_state = in.tail_state.mesh_tensor();
     const auto& output = outputs[0].mesh_tensor();
     const auto& device = a.device();
     const auto arch = device.arch();
@@ -84,8 +84,8 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         };
     };
     const auto summary_format = tt::tt_metal::datatype_to_dataformat_converter(in.a.dtype());
-    const uint32_t segmented_affine_tiles = in.actual_start.has_value() ? key_matrix_tiles + state_matrix_tiles : 1;
-    const uint32_t segmented_state_tiles = in.actual_start.has_value() ? state_matrix_tiles : 1;
+    const uint32_t segmented_affine_tiles = key_matrix_tiles + state_matrix_tiles;
+    const uint32_t segmented_state_tiles = state_matrix_tiles;
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dataflow_buffers = {
         make_dfb(initial_a_dfb_name, key_matrix_tiles, summary_format),
         make_dfb(initial_b_dfb_name, state_matrix_tiles, summary_format),
@@ -287,7 +287,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         {tail_state_tensor_name, tail_state},
     };
 
-    kda_factory_detail::bind_chronology(program_spec, program_run_args, in.actual_start, in.a, dataflow, compute);
+    kda_factory_detail::bind_chronology(program_spec, program_run_args, in.actual_start, dataflow, compute);
     program_spec.kernels = {std::move(dataflow), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{

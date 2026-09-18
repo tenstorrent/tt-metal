@@ -21,13 +21,11 @@ ReduceAffineTransformsOperation::program_factory_t ReduceAffineTransformsOperati
 void ReduceAffineTransformsOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     constexpr std::string_view operation_name = "reduce_affine_transforms";
-    if (in.actual_start) {
-        TT_FATAL(
-            attrs.local_rows > 0 && attrs.local_rows % 32 == 0 && (attrs.local_rows / 32) % attrs.groups_per_head == 0,
-            "{}: local_rows must contain a positive whole number of 32-token chunks per group",
-            operation_name);
-        kda_factory_detail::check_actual_start(in.a, *in.actual_start, operation_name);
-    }
+    TT_FATAL(
+        attrs.local_rows > 0 && attrs.local_rows % 32 == 0 && (attrs.local_rows / 32) % attrs.groups_per_head == 0,
+        "{}: local_rows must contain a positive whole number of 32-token chunks per group",
+        operation_name);
+    kda_factory_detail::check_actual_start(in.a, in.actual_start, operation_name);
     constexpr std::array accepted_summary_dtypes = {tt::tt_metal::DataType::FLOAT32, tt::tt_metal::DataType::BFLOAT16};
     kda_factory_detail::check_allocated_device_tensor(in.a, operation_name, "a");
     kda_factory_detail::check_layout(in.a, tt::tt_metal::Layout::TILE, operation_name, "a");
@@ -122,7 +120,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
     uint32_t groups,
     const tt::tt_metal::MemoryConfig& mem,
     const ttnn::DeviceComputeKernelConfig& cfg,
-    const std::optional<Tensor>& actual_start,
+    const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows) {
     // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the

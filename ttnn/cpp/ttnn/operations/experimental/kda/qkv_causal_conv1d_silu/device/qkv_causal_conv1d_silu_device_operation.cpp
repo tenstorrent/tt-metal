@@ -24,19 +24,10 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace kda_factory_detail;
     constexpr std::string_view operation_name = "qkv_causal_conv1d_silu";
-    if (in.actual_start) {
-        kda_factory_detail::check_actual_start(in.input, *in.actual_start, operation_name);
-    }
-    TT_FATAL(
-        in.actual_start.has_value() == in.predecessor_carry.has_value(),
-        "qkv convolution: actual_start and predecessor_carry must be provided together");
-    if (in.actual_start.has_value()) {
-        TT_FATAL(in.predecessor_carry.has_value(), "qkv convolution: actual_start requires predecessor_carry");
-        kda_factory_detail::check_allocated_device_tensor(*in.predecessor_carry, operation_name, "predecessor_carry");
-        kda_factory_detail::check_same_device(in.input, *in.predecessor_carry, operation_name, "predecessor_carry");
-        TT_FATAL(
-            in.predecessor_carry->tensor_spec() == in.history.tensor_spec(), "qkv convolution: carries must match");
-    }
+    kda_factory_detail::check_actual_start(in.input, in.actual_start, operation_name);
+    kda_factory_detail::check_allocated_device_tensor(in.predecessor_carry, operation_name, "predecessor_carry");
+    kda_factory_detail::check_same_device(in.input, in.predecessor_carry, operation_name, "predecessor_carry");
+    TT_FATAL(in.predecessor_carry.tensor_spec() == in.history.tensor_spec(), "qkv convolution: carries must match");
 
     check_allocated_device_tensor(in.input, operation_name, "input");
     check_layout(in.input, Layout::ROW_MAJOR, operation_name, "input");
@@ -165,9 +156,9 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     uint32_t channel_chunk_size,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::optional<Tensor>& actual_start,
+    const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
-    const std::optional<Tensor>& predecessor_carry) {
+    const Tensor& predecessor_carry) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V]");
     return ttnn::device_operation::launch<QkvCausalConv1dSiluOperation>(

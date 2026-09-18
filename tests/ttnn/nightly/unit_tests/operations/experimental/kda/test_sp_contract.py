@@ -300,14 +300,18 @@ def test_sp_payload_contracts(mesh_device, expect_error):
     seed = to_device(initial_state(2, 32, 32), mesh_device)
     actual_start = make_actual_start(mesh_device, 32)
     for kwargs in ({"actual_start": actual_start}, {"tail_state": seed}):
-        with expect_error(RuntimeError, "actual_start and tail_state must be provided together"):
+        with expect_error(TypeError, "incompatible function arguments"):
             ttnn.experimental.kda.recurrent_chunk_scan(*inputs, seed, **kwargs)
-    a, b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(*inputs)
+    a, b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=actual_start)
     assert all(t.dtype == ttnn.bfloat16 for t in (a, b, tail_a, tail_b))
+    with expect_error(TypeError, "incompatible function arguments"):
+        ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=None)
+    with expect_error(TypeError, "incompatible function arguments"):
+        ttnn.experimental.kda.reduce_affine_transforms(a, b, 1, actual_start=None, local_rows=128)
     for missing in ("actual_start", "tail_a", "tail_b", "tail_state"):
         kwargs = dict(actual_start=actual_start, tail_a=a, tail_b=b, tail_state=seed)
         del kwargs[missing]
-        with expect_error(RuntimeError, "must be provided together"):
+        with expect_error(TypeError, "incompatible function arguments"):
             ttnn.experimental.kda.affine_exclusive_scan(a, b, seed, 1, local_rows=128, **kwargs)
     for local_rows in (0, 31, 32):
         with expect_error(RuntimeError, "local_rows"):
@@ -324,7 +328,7 @@ def test_sp_payload_contracts(mesh_device, expect_error):
             )
     _, (input_tt, history, taps) = qkv_device_inputs(mesh_device, widths=(32, 32, 32), sequence=64, history_rows=3)
     for kwargs in ({"actual_start": actual_start}, {"predecessor_carry": history}):
-        with expect_error(RuntimeError, "must be provided together"):
+        with expect_error(TypeError, "incompatible function arguments"):
             ttnn.experimental.kda.qkv_causal_conv1d_silu(
                 input_tt,
                 history,
@@ -345,6 +349,8 @@ def test_sp_payload_contracts(mesh_device, expect_error):
             32,
             32,
             program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=96),
+            actual_start=actual_start,
+            predecessor_carry=wrong_history,
         )
 
 
