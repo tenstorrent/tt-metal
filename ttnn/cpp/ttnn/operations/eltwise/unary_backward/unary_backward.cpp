@@ -266,17 +266,36 @@ std::vector<std::optional<Tensor>> pow_bw(
         return grad_tensor;
     }
 
-    Tensor power_input = ttnn::pow(input, std::fabs(exponent - 1.0f), output_mem_config);
+    // d/dx x^n = n * x^(n-1). ttnn::pow evaluates exp(y * log(x)), which is NaN
+    // for x < 0 even when the true power is well defined, so compute the
+    // magnitude on |x| and carry the sign explicitly: for an integral exponent,
+    // x^(n-1) = |x|^(n-1-odd) * x^odd (the |x| power is even, hence exact), and
+    // for a non-integral exponent the gradient at x < 0 is NaN (as in torch),
+    // never +inf. x = 0 needs no special case: |0|^(n-1) already gives the
+    // correct 0 / 1 / inf for n > 1 / n == 1 / n < 1.
+    const float exp_m1 = exponent - 1.0f;
+    const bool integral_exponent = std::nearbyint(exponent) == exponent;
+    const bool odd_power = integral_exponent && std::fmod(std::fabs(exp_m1), 2.0f) == 1.0f;
+    Tensor abs_input = ttnn::abs(input, output_mem_config);
+    Tensor power_input =
+        ttnn::pow(abs_input, odd_power ? std::fabs(exp_m1) - 1.0f : std::fabs(exp_m1), output_mem_config);
+    abs_input.deallocate();
+    if (odd_power) {
+        power_input = ttnn::multiply(power_input, input, std::nullopt, output_mem_config);
+    }
     if (exponent < 1.0f) {
         power_input = ttnn::reciprocal(power_input, output_mem_config);
     }
 
     Tensor result = ttnn::multiply(power_input, exponent, std::nullopt, output_mem_config);
     power_input.deallocate();
-    Tensor final_result = ttnn::multiply(result, grad, std::nullopt, output_mem_config);
+    if (integral_exponent) {
+        ttnn::multiply(result, grad, std::nullopt, output_mem_config, input_grad);
+    } else {
+        Tensor final_result = ttnn::multiply(result, grad, std::nullopt, output_mem_config);
+        where(ttnn::ltz(input), std::nanf(""), final_result, output_mem_config, input_grad);
+    }
     result.deallocate();
-    // Handle negative inputs by returning infinity
-    where(ttnn::lez(input), std::numeric_limits<float>::infinity(), final_result, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
