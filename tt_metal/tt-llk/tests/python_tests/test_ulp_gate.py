@@ -530,30 +530,15 @@ def test_the_displaced_figure_is_not_rounded_to_read_as_equal(captured_logs):
     assert "~26 steps" not in logged
 
 
-TORCH_INT_DTYPES = (
-    torch.int8,
-    torch.uint8,
-    torch.int16,
-    torch.int32,
-    torch.int64,
-    torch.bool,
-)
+# ── Integers are not ULP territory ──────────────────────────────────────────
 
 
 @pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)
 def test_a_budget_on_an_integer_format_raises(fmt):
-    """ULP is not a weaker gate for an integer format, it is a meaningless one: the values
-    are exact and the only sensible verdict is bit equality. The gate must refuse rather
-    than count steps over something that has none."""
+    """ULP is not a weaker gate for an integer format, it is a meaningless one: the
+    values are exact and the only sensible verdict is bit equality."""
     golden = torch.ones(TILE_SIZE, dtype=format_dict[fmt])
-    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
-        ValueError, match="no per-element ULP"
-    ):
+    with _refuses("no per-element ULP"):
         passed_test(golden, golden.clone(), fmt, max_ulp=0)
-
-
-@pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)
-def test_an_integer_format_still_works_on_the_default_gate(fmt):
-    """Refusing the budget must not have broken the ordinary path for these formats."""
-    golden = torch.ones(TILE_SIZE, dtype=format_dict[fmt])
+    # ...and refusing the budget must not have broken the ordinary path.
     assert passed_test(golden, golden.clone(), fmt)
