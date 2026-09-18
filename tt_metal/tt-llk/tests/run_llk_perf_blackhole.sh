@@ -55,7 +55,7 @@ PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
 #
 # PERF_RESET=1 issues `tt-smi -r 0` between suites: the per-slice chip reset that
 # #46478 added and #51157 removed.
-PERF_RESET="${PERF_RESET:-0}"
+PERF_RESET="${PERF_RESET:-1}"
 
 maybe_reset() {
     [ "$PERF_RESET" = "1" ] || return 0
