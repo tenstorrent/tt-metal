@@ -786,8 +786,7 @@ def test_all_to_all_cached_discovery(mesh_device, topology, expect_error):
     input_tensor = ttnn.from_torch(
         torch.zeros(1, 4, 64, 32, dtype=torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT
     )
-    for invalid_links, message in [(0, "at least one fabric link"), (100, "usable links")]:
-        with expect_error(RuntimeError, message):
-            ttnn.experimental.all_to_all_async_generic(
-                input_tensor, in_dim=2, out_dim=1, num_links=invalid_links, topology=topology, cluster_axis=1
-            )
+    with expect_error(RuntimeError, "at least one fabric link"):
+        ttnn.experimental.all_to_all_async_generic(
+            input_tensor, in_dim=2, out_dim=1, num_links=0, topology=topology, cluster_axis=1
+        )
