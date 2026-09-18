@@ -515,8 +515,7 @@
 // Device-side mailbox pointer (hart view). Use MEM_L1_UNCACHED_BASE so boot-hart .data and
 // subordinate_sync are coherent across harts. Host HAL uses the 0-based MEM_CCE_MAILBOX_BASE.
 #define MEM_DRISC_MAILBOX_BASE (MEM_CCE_SRAM_LOCAL_BASE + MEM_L1_UNCACHED_BASE + MEM_CCE_MAILBOX_BASE)
-// CCE RESET_VECTOR[n] in the SMC/CCE config map, reached through the SMC core rather than the CCE.
-// 8-byte entries; Metal boot hart is 0. The value is a local CPU address, so it is the same on
+// Metal boot hart is 0. The value is a local CPU address, so it is the same on
 // every CCE. CCE_RESET_VECTOR_BASE itself names CCE0; UMD offsets it per CCE.
 #define CCE_RESET_VECTOR_BASE 0x02000000
 #define CCE_BOOT_HART_RESET_VECTOR CCE_RESET_VECTOR_BASE
