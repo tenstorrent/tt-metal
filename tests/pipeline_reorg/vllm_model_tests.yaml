@@ -232,6 +232,33 @@
   team: models
   budget_type: vllm
 
+# Same T3K leg for 12B. Mesh, arch, trace region, serving args and both timeouts
+# mirror the 31B wh_llmbox entry above, including --async-scheduling staying off
+# for the reason recorded in that comment block (which measured the async decode
+# breakage on 12B specifically).
+#
+# 31B's --num-prompts 16 override is deliberately NOT copied. It exists because
+# 31B sustains ~17 tok/s on this mesh and 32 serialized prompts overran the 5 min
+# benchmark budget; 12B measures ~26.5 tok/s at batch 1 on the same T3K, so the
+# shared default of 32 prompts fits and the leg gets the fuller coverage.
+- name: "Gemma4-12B"
+  model: google/gemma-4-12B-it
+  coherence-test: true
+  server-timeout: 45
+  benchmark-timeout: 5
+  mesh-device: T3K
+  arch: arch-wormhole_b0
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 80000000}'
+  additional-server-args: "--max_model_len 16384 --max_num_seqs 1 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048"
+  multimodal: false
+  skus:
+    wh_llmbox:
+      timeout: 60
+      tier: 2
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+  budget_type: vllm
+
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
   coherence-test: true
