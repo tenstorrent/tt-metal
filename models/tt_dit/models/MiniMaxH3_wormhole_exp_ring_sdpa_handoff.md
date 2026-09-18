@@ -7,7 +7,8 @@ Written 2026-09-18 on `UF-EV-B12-GWH02`, updated the same day. Branch **`jamesle
 |---|---|
 | `7274624d524` | brings `exp_ring_joint_scaled_dot_product_attention` up on Wormhole: two hang fixes, 2-or-4-link MUX layout, model/test knobs, first A/B |
 | `3559b70d163` | sequential passes (`TT_EXP_SDPA_Q_GROUPS`) so the 15 s shard fits L1; measured against the normal op |
-| (this commit) | bottom-row MUX placement on Wormhole: 8x8 = 64 SDPA cores; chunk-size sweep at 15 s |
+| `f9aa767a918` | bottom-row MUX placement on Wormhole: 8x8 = 64 SDPA cores; chunk-size sweep at 15 s |
+| (this commit) | inner loop: blocked pack at width 4 on Wormhole (exp 193.7 / normal 191.6 ms), phase-zone diagnostic, dst_full_sync and exp-approx A/Bs, profiler tools |
 
 Measurements and the reasoning behind each step are in `MiniMaxH3_wormhole_perf.md`, sections
 *Exp ring joint SDPA on Wormhole*, *Sequential passes* and *Bottom-row MUX placement*. This document is
@@ -20,8 +21,10 @@ Target: 15 s / 768p / 16:9, TP=4 / SP=8, 13664 rows/device, 14 heads/device, HiF
 
 | op | shard | layout | per call (max over 32 devices) |
 |---|---|---|---|
-| normal ring op | 14336 rows (15 s padded) | q256 / k512, 63 cores | **192.9 ms** |
-| exp, sequential, bottom-row MUX | 14336 rows | q256 / k512, segs=7, G=1, 4 links, **64 cores** | **196.2 ms** |
+| normal ring op, pack-4 | 14336 rows (15 s padded) | q256 / k512, 63 cores | **191.6 ms** |
+| exp, sequential, bottom-row MUX, pack-4 | 14336 rows | q256 / k512, segs=7, G=1, 4 links, **64 cores** | **193.7 ms** (192.7 with approx exp) |
+| normal ring op | 14336 rows (15 s padded) | q256 / k512, 63 cores | 192.9 ms |
+| exp, sequential, bottom-row MUX | 14336 rows | q256 / k512, segs=7, G=1, 4 links, 64 cores | 196.2 ms |
 | exp, sequential, bottom-row MUX | 14336 rows | same, 2 links | 199.6 ms |
 | exp, sequential, bottom-row MUX | 14336 rows | q448 / k256, segs=4, G=1, 4 links, 64 cores | 200.9 ms |
 | exp, sequential | 14336 rows | q256 / k512, segs=4, G=2, 4 links, 56 cores (reserved-column MUX) | 206.7 ms |
@@ -36,7 +39,8 @@ Numerics: PCC 0.99975 against torch on every exp point that has a feasible refer
 schedules, both MUX placements) and 0.99972 on the 64-core grid at a 4096-row shard with 4 links. The
 14336-row runs are timing-only; the torch reference at 114688 tokens does not fit host memory.
 
-**Reading.** The exp op runs the 15 s shard on Wormhole at 196.2 ms, 1.7% behind the normal op. The
+**Reading.** The exp op runs the 15 s shard on Wormhole at 193.7 ms against the normal op's 191.6
+(both with the shared pack-4 inner-loop change), 1.1% behind. Before that change: 196.2 vs 192.9. The
 64-core layout (`TT_EXP_SDPA_MUX_BOTTOM_ROW=1`) recovered most of the 7% gap the reserved MUX column
 cost: with 8 columns the 56 chunks split as 8 x 7 segments, 98 segments on 8 rows -> 13 passes on rows
 0-1 and 12 on the rest (ideal 12.25), so per-core work drops 14 -> 13 chunk-passes. Every pass forwards
@@ -201,18 +205,24 @@ the `test_exp_ring_joint_sdpa.py` perf gate (65.3% / 65.6%) on a Blackhole galax
 
 ### 4.6 The inner loop (shared with the normal op; the only route past ~50% FPU)
 
-Independent of which op wins, the Wormhole inner loop is at 48% FPU while Blackhole runs the same code
-at ~70%. Untested, cheap diagnostics first:
+Measured (perf doc, *Inner loop*): a 66 µs step is 33 µs of FPU matmul (50%) plus softmax and
+handshakes; nothing waits on DRAM or fabric after the first chunk. `TT_EXP_SDPA_PROFILE_INNER=1` +
+`--profile` gives the per-thread phase table (`tools/sdpa_phase_zones.py`). Done: blocked pack width
+4 (kept, -1.3% / -0.7%), full-sync DST (rejected, +36%), approx exp (-0.5%, knob left off). Tracy's
+hardware-counter capture deadlocks on this box (see §5). Remaining levers, all kernel work in
+`compute_streaming.hpp`, all shared by both ring ops:
 
-* Hardware perf counters: `python -m tracy -r --profiler-capture-perf-counters=fpu,pack,unpack -m
-  "pytest …"` gives real FPU/SFPU util, packer efficiency and unpacker stalls (the `PM FPU UTIL` column
-  in the ops CSV is a perf-model ratio, not a counter).
-* `MIN_BLOCKED_PACK_TILES` is 8 on Wormhole vs 4 on Blackhole (`compute_streaming.hpp:170-177`); with
-  width-4 subblocks every pack takes the per-tile path. One-line experiment.
-* `dst_full_sync_en` is not forwarded to the ring kernels (`ComputeConfigDescriptor` in the factories);
-  16-tile DST would allow (4,4) or (2,8) subblocks.
-* The PV matmul accumulates over 4 L1-accumulate passes (`compute_streaming.hpp:1580-1638`); the
-  latent-V path shows the single-pass DST-accumulated alternative.
+* Row sums: `sub_exp_block_bcast_cols` packs every probability tile twice (in place, then with
+  packer L1-accumulate into the row-sum tile): 14 µs/step on the pack thread. Computing the sum on the
+  FPU (a `reduce_c` like the max) moves it to the math thread, which has ~11 µs of handshake slack.
+* Fused `exp(x - m)`: the broadcast subtract is 10 µs/step on math (`sub_tiles_bcast_cols_custom`,
+  fidelity parameter unused). An SFPU kernel that subtracts the row max while exponentiating removes
+  the FPU pass and its DST round trip.
+* Exp scheduling: approx mode barely moved the 14 µs EXP zone, so the cost is the pack thread's
+  serialization (exp then pack then next matmul pack), not SFPU throughput. Interleaving the exp of
+  column-subblock k with the pack of k-1 is the structural fix.
+* `dst_full_sync_en` is now forwarded by the exp factory so the host's subblock search and the kernel
+  agree; the normal ring factory should forward it too before anyone sets it there.
 
 ## 5. Gotchas that cost time
 
@@ -223,6 +233,13 @@ at ~70%. Untested, cheap diagnostics first:
   once; it over-popped without failing PCC. The fixed version is committed; keep the regression case
   (`4x8_wh_h3_sim32`) in any future kernel change.
 * Do not grep a monitor for `L1`: the JIT kernel compile lines contain it and look like errors.
+* Do not edit `scripts/run_safe_pytest.sh` while an instance is running: bash reads the script by byte
+  offset, so the running instance resumes mid-line after the child exits (one run lost its result line).
+* `SAFE_PYTEST_TRACY_OPTS="--profiler-capture-perf-counters=..."` deadlocks: Tracy's multi-pass
+  capture spawns an inner `python -m tracy` that waits on a UMD chip lock held by its parent. Kill the
+  parent PID; the wrapper then releases the device lock.
+* Full-sync DST (`dst_full_sync_en=True`) is a 36% loss on this kernel; do not retry it as a "free"
+  bigger-subblock knob.
 * `q_chunk < 256` is not a lever in sequential mode: time follows passes x K chunks (inner-loop
   steps), so q=192 lost 12% and q=128 lost 71% despite fewer tile-rows per core.
 * Pre-commit's `black` targets a newer Python than `python_env`'s; it reformats
