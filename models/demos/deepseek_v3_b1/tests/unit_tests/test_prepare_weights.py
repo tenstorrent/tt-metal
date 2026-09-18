@@ -784,7 +784,6 @@ def test_create_gate_indices_tensor_sram_validation_4x2(bh_2d_mesh_device, expec
 @pytest.mark.requires_num_devices(NUM_DEVICES)
 def test_prepare_moe_layer_weights_with_sram_expert_ids_4x2(bh_2d_mesh_device):
     """sram_expert_ids populates sram_*_proj per slot; DRAM expert list stays at num_routed_experts."""
-    
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _layer_state_dict(0, is_moe=True, seed=43)
 
