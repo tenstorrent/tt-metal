@@ -68,6 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     false);
             }
         }
+        _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, params.num_faces);
     }
 }
 
@@ -91,7 +92,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-// copy srca to dest
+    // copy srca to dest
     _llk_math_eltwise_unary_datacopy_init_wrapper_<
         DataCopyType::A2D,
         is_fp32_dest_acc_en,
