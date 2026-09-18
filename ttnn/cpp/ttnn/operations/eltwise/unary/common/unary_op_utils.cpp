@@ -377,6 +377,9 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("sigmoid_tile<{}, {}u>({});", vec_mode_sym, param1, idst)};
         }
         case UnaryOpType::ERF:
+            if (input_dtype == DataType::BFLOAT16 && params.size() == 1 && param0 == 0.0f) {
+                return {"erf_tt_poly_bf16_tile_init<false>();", fmt::format("erf_tt_poly_bf16_tile<false>({});", idst)};
+            }
             return {
                 fmt::format("erf_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("erf_tile<{1}u>({0});", idst, (uint32_t)param0)};
@@ -806,7 +809,11 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::I1: return {"i1_tile_init();", fmt::format("i1_tile({});", idst)};
         case UnaryOpType::EXP: return {"exp_tile_init();", fmt::format("exp_tile({});", idst)};
         case UnaryOpType::SIGMOID: return {"sigmoid_tile_init();", fmt::format("sigmoid_tile({});", idst)};
-        case UnaryOpType::ERF: return {"erf_tile_init();", fmt::format("erf_tile({0});", idst)};
+        case UnaryOpType::ERF:
+            if (input_dtype == DataType::BFLOAT16) {
+                return {"erf_tt_poly_bf16_tile_init();", fmt::format("erf_tt_poly_bf16_tile({});", idst)};
+            }
+            return {"erf_tile_init();", fmt::format("erf_tile({0});", idst)};
         case UnaryOpType::ERFC: return {"erfc_tile_init();", fmt::format("erfc_tile({});", idst)};
         case UnaryOpType::ERFINV: return {"erfinv_tile_init();", fmt::format("erfinv_tile({});", idst)};
         case UnaryOpType::LOG10:

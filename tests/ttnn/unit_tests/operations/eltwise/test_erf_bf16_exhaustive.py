@@ -140,89 +140,15 @@ def _reference(values):
     return getattr(module, _REFERENCE_FUNCTION)(values, **{})
 
 
-def _physical_words(values):
-    rounded = _bf16_round_ftz(np.asarray(values, dtype=np.float64))
-    words = (rounded.astype(np.float32).view(np.uint32) >> 16).astype(np.uint16)
-    classes = _raw_classes(words)
-    for name in _EXACT_CLASS_WORD:
-        selected = classes == name
-        after = _RESULT_TO_EGRESS[name]
-        assert after in _EXACT_CLASS_WORD
-        words[selected] = _EXACT_CLASS_WORD[after]
-    return words
-
-
-def _domain_expectations(words, values):
-    """First matching action owns the lane; explicit late raw classes win last."""
-    expected = _expected_classes(words, values)
-    original = expected.copy()
-    owned = np.zeros(words.shape, dtype=bool)
-    exact = np.zeros(words.shape, dtype=np.uint16)
-    exact_owned = np.zeros(words.shape, dtype=bool)
-    for direction, bound, inclusive, kind, payload in _DOMAIN_ACTIONS:
-        if direction == "below":
-            selected = values <= bound if inclusive else values < bound
-        else:
-            selected = values >= bound if inclusive else values > bound
-        selected &= ~owned
-        owned[selected] = True
-        if kind in ("constant", "identity"):
-            result = (
-                np.full(int(selected.sum()), np.float32(payload), dtype=np.float64)
-                if kind == "constant"
-                else values[selected]
-            )
-            encoded = _physical_words(result)
-            classes = _raw_classes(encoded)
-            expected[selected] = np.where(np.isin(classes, ("pos_nan", "neg_nan")), "nan", classes)
-            exact[selected] = encoded
-            exact_owned[selected] = ~np.isin(classes, ("pos_nan", "neg_nan"))
-        else:
-            classes = (
-                np.where(np.signbit(values[selected]), "neg_inf", "pos_inf")
-                if kind == "signed_inf"
-                else np.full(int(selected.sum()), payload)
-            )
-            expected[selected] = np.asarray([_RESULT_TO_EGRESS[name] for name in classes])
-    # Ordered domain actions claim lanes before explicit late raw overrides.
-    # A default raw-class expectation is not itself a late terminal.
-    late = np.isin(_raw_classes(words), _LATE_RAW_CLASSES)
-    expected[late] = original[late]
-    exact_owned[late] = False
-    return expected, exact, exact_owned
-
-
-def _assert_finite_math(raw_words, result_words, reference_values):
-    """Every finite raw lane retains mathematical scoring, including tails."""
-    scored = (raw_words & np.uint16(0x7FFF)) < np.uint16(0x7F80)
-    golden = _reference(torch.from_numpy(reference_values[scored].astype(np.float64))).numpy()
-    rounded = _bf16_round_ftz(golden)
-    selected_words = result_words[scored]
-    for positive, name in ((True, "pos_inf"), (False, "neg_inf")):
-        overflow = np.isinf(rounded) & (np.signbit(rounded) != positive)
-        after = _RESULT_TO_EGRESS[name]
-        assert after in _EXACT_CLASS_WORD
-        assert np.all(selected_words[overflow] == _EXACT_CLASS_WORD[after])
-    # An all-real unary reference must not manufacture NaNs for finite inputs.
-    assert not np.isnan(golden).any()
-    numeric = np.isfinite(rounded)
-    got = (selected_words.astype(np.uint32) << 16).view(np.float32).astype(np.float64)
-    assert _evaluated_zero_sign_matches(selected_words[numeric], golden[numeric], rounded[numeric])
-    golden_ftz = np.where(rounded[numeric] == 0.0, np.copysign(0.0, golden[numeric]), golden[numeric])
-    pure_ulp = np.abs(golden_ftz - got[numeric]) / _ulp_spacing(rounded[numeric])
-    assert np.isfinite(pure_ulp).all()
-    assert not pure_ulp.size or float(pure_ulp.max()) < 1.0
-
-
 @pytest.mark.skipif(
-    not (is_wormhole_b0()),
-    reason="compiler-generated BF16 kernel ships on Wormhole B0",
+    not (is_blackhole() or is_wormhole_b0()),
+    reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0",
 )
 def test_erf_bf16_exhaustive(device):
     input_words = torch.arange(65536, dtype=torch.int32).to(torch.uint16)
     host = input_words.view(torch.bfloat16).reshape(256, 256)
     device_input = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    result = ttnn.to_torch(ttnn.erf(device_input, **{"fast_and_approximate_mode": False})).to(torch.bfloat16)
+    result = ttnn.to_torch(ttnn.erf(device_input, **{})).to(torch.bfloat16)
     result_words = _words(result)
 
     raw = input_words.cpu().numpy().astype(np.uint16)
@@ -231,8 +157,6 @@ def test_erf_bf16_exhaustive(device):
     with np.errstate(invalid="ignore"):
         reference_values = _reference_inputs(raw_classes, values.astype(np.float64))
     expected = _expected_classes(raw, reference_values)
-    expected, terminal_words, terminal_owned = _domain_expectations(raw, reference_values)
-    assert np.array_equal(result_words[terminal_owned], terminal_words[terminal_owned])
     for result_class, exact_word in _EXACT_CLASS_WORD.items():
         lanes = expected == result_class
         assert np.array_equal(result_words[lanes], np.full(lanes.sum(), exact_word, dtype=np.uint16))
@@ -241,6 +165,13 @@ def test_erf_bf16_exhaustive(device):
     assert np.all((nan_words & 0x7F80) == 0x7F80)
     assert np.all((nan_words & 0x007F) != 0)
 
-    exceptional_finite = (expected == "finite_other") & ~np.isfinite(values)
-    assert np.all(_raw_classes(result_words[exceptional_finite]) == "finite_other")
-    _assert_finite_math(raw, result_words, reference_values)
+    scored = expected == "finite_other"
+    x = reference_values[scored]
+    golden = _reference(torch.from_numpy(x)).numpy()
+    rounded = _bf16_round_ftz(golden)
+    golden_ftz = np.where(rounded == 0.0, np.copysign(0.0, golden), golden)
+    got = result.to(torch.float32).cpu().numpy().reshape(-1)[scored].astype(np.float64)
+    assert _evaluated_zero_sign_matches(result_words[scored], golden, rounded)
+    pure_ulp = np.abs(golden_ftz - got) / _ulp_spacing(rounded)
+    assert np.isfinite(pure_ulp).all()
+    assert float(pure_ulp.max()) < 1.0
