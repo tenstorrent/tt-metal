@@ -41,11 +41,6 @@ from ...utils import walltime
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.fuse_loras import LoraSpec, fuse_loras_into
 from ...utils.host_affinity import pin_one_thread_per_core
-
-# First pass at import (before the mesh is opened): narrows the Python/torch side and every pool thread that
-# still carries the full mask; tt-metal's per-device threads are pinned by tt-metal itself to single CPUs of
-# its choosing and are left alone (re-pinning them measured 7.5 s vs 6.2 s under a launch-time taskset).
-pin_one_thread_per_core("LTX pipeline (import)")
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
@@ -280,9 +275,10 @@ class LTXPipeline:
         audio_only: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
     ):
-        # Second pass, after the mesh is open: helpers born before the import-time pass can still have
-        # spawned full-mask threads at device open; tt-metal's own single-CPU placements are left alone.
-        pin_one_thread_per_core("LTX pipeline (post device open)")
+        # Host affinity, explicit (not an import side effect): in a process re-execed by
+        # ``reexec_pinned_before_torch`` this only caps torch's pool to the narrowed mask; otherwise it narrows
+        # the threads still carrying the full mask. tt-metal's own single-CPU placements are left alone.
+        pin_one_thread_per_core("LTX pipeline")
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager

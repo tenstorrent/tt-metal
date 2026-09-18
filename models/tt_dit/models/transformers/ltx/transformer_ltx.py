@@ -793,6 +793,9 @@ class LTXTransformerModel(Module):
         separate gate tensor disappears, so the cached tensorbins have different shapes and a
         different count than the Linear-topology layout. Both used to land under ``transformer/``
         under an identical key, and the second topology to run died loading the first one's cache.
+
+        A ``transformer/`` cache written by a Ring run before this split is stale (nothing reads it any
+        more) and can be deleted; Ring now writes ``transformer_fusedgate/``.
         """
         fused = any(getattr(block.attn1, "fuse_gate", False) for block in self.transformer_blocks)
         return "transformer_fusedgate" if fused else "transformer"
