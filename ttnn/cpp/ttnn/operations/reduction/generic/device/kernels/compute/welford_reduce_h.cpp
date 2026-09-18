@@ -18,7 +18,7 @@
 
 // SFPU multiply-by-scalar (mul_unary_tile) applied to the reduced output. See issue #45222.
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
+#include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_compute_common.hpp"
 
 void kernel_main() {
     // Runtime arg: number of independent column-reductions this core must perform.
