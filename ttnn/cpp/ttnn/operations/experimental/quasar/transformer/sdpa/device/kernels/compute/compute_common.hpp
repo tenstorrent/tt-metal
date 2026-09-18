@@ -2275,6 +2275,18 @@ void sdpa_inner_loop(
          * Shape of attention_sink: [Sq_chunk_t, 1] tiles
          * Each head has one sink logit value that is broadcast to all query positions in the chunk.
          * The reader kernel replicates the per-head value across all Sq_chunk_t positions.
+         *
+         * NOTE (Quasar bring-up): the attention-sink path below is NOT brought up on Quasar and is
+         * currently unverified there. Llama (the model driving this fork's bring-up) has no attention
+         * sinks, so nothing exercises this path today; it is a GPT-OSS-class feature. Two known gaps
+         * remain, to be resolved when a sink-using model is ported to this op:
+         *   1. Code size: with USE_ATTENTION_SINK=1 the compute kernel overflows the Quasar TRISC
+         *      instruction-memory region at -O3 (~32KB kernel vs ~24KB limit), so it does not even
+         *      load. Needs an Os/code-size fix for the sink path before it can run on craq-sim.
+         *   2. Packer retargeting: the bare-pack helpers in this block (e.g. the sub_exp_block below)
+         *      lack a preceding pack_reconfig_out to point the Quasar packer at their output DFB, the
+         *      same class of bug fixed in the flash loop. This is correct-by-audit but unverifiable
+         *      on craq-sim until gap (1) is resolved (and adding the reconfigs worsens the overflow).
          */
         if constexpr (use_attention_sink) {
             // Treat attention_sink as scores (already scaled)
