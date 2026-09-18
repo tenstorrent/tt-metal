@@ -380,9 +380,6 @@ from ttnn.core import (
 
 tile_size = ttnn._ttnn.tensor.tile_size
 element_size = ttnn._ttnn.tensor.element_size
-experimental_create_sharded_tensor_view = ttnn._ttnn.tensor.experimental_create_sharded_tensor_view
-prepare_generic_op = ttnn._ttnn.operations.generic.prepare_generic_op
-
 import ttnn.reflection
 
 from ttnn.decorators import (
@@ -442,6 +439,10 @@ if "ttnn.experimental" in sys.modules:
                 full_external_name = f"ttnn.experimental.{subname}"
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
+
+experimental.create_sharded_tensor_view = ttnn._ttnn.operations.experimental.create_sharded_tensor_view
+experimental.prepare_generic_op = ttnn._ttnn.operations.experimental.prepare_generic_op
+experimental.GenericOpPreparationResult = ttnn._ttnn.operations.experimental.GenericOpPreparationResult
 
 from ttnn.operations.unary import SigmoidMode, GeluVariant
 

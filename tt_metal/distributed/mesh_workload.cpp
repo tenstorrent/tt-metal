@@ -4,6 +4,7 @@
 
 #include <mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
+#include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt_stl/fmt.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
@@ -476,16 +477,6 @@ const std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_progra
     return pimpl_->get_programs();
 }
 
-MeshWorkloadProgramCapacity MeshWorkload::prepare(MeshDevice* mesh_device) {
-    pimpl_->compile(mesh_device);
-    MeshWorkloadProgramCapacity result;
-    for (uint32_t config_size : pimpl_->get_program_config_sizes()) {
-        result.max_program_config_size_bytes = std::max(result.max_program_config_size_bytes, config_size);
-    }
-    result.max_kernel_binary_size_bytes = pimpl_->get_max_program_kernels_sizeB();
-    return result;
-}
-
 // For testing purposes only
 void MeshWorkload::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) {
     pimpl_->set_last_used_command_queue_for_testing(mesh_cq);
@@ -514,3 +505,17 @@ uint32_t MeshWorkload::get_cb_size(
 }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental::program_preparation {
+
+ProgramCapacity prepare(distributed::MeshWorkload& workload, distributed::MeshDevice* mesh_device) {
+    workload.pimpl_->compile(mesh_device);
+    ProgramCapacity result;
+    for (uint32_t config_size : workload.pimpl_->get_program_config_sizes()) {
+        result.max_program_config_size_bytes = std::max(result.max_program_config_size_bytes, config_size);
+    }
+    result.max_kernel_binary_size_bytes = workload.pimpl_->get_max_program_kernels_sizeB();
+    return result;
+}
+
+}  // namespace tt::tt_metal::experimental::program_preparation

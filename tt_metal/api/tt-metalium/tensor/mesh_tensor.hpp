@@ -23,11 +23,13 @@ class MeshBuffer;
 }  // namespace distributed
 
 /**
- * MeshTensor is a device memory object. It owns or retains device-allocated memory.
+ * MeshTensor is a device memory object. The user’s mental model of MeshTensor is an owning handle to
+ * device-allocated memory.
  *
  * Invariants of MeshTensor:
- * - MeshTensor retains the underlying device memory for its lifetime.
- * - An instance of MeshTensor maps to a single device-memory allocation or a bounded view of one.
+ * - MeshTensor is the sole owner of the underlying device memory.
+ * - MeshTensor object lifetime is the same as the underlying device memory lifetime. An instance of MeshTensor maps to
+ * a single allocated device memory.
  * - The underlying device memory is always allocated, large enough to hold the tensor, and laid out in a way
  *   that conforms to the TensorSpec (page size, buffer type, memory layout).
  *
@@ -96,14 +98,6 @@ public:
      * Return the underlying device storage MeshBuffer.
      */
     const distributed::MeshBuffer& mesh_buffer() const;
-
-    /**
-     * Return a shared handle to the underlying MeshBuffer.
-     *
-     * The handle permits owner-retaining views to share the allocation. Explicit
-     * deallocation through any handle invalidates all views.
-     */
-    const std::shared_ptr<distributed::MeshBuffer>& shared_buffer() const;
 
     /**
      * Get the device the allocated device memory is on.

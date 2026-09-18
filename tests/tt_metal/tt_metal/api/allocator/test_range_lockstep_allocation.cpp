@@ -21,6 +21,7 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
+#include <tt-metalium/experimental/retained_buffer_view.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/api/allocator/hybrid_allocator_fixture.hpp"
 #include "impl/context/metal_context.hpp"
@@ -240,12 +241,12 @@ TEST_F(HybridAllocatorTest, MeshBufferViewPreservesRangeLockstepMode) {
     const distributed::ReplicatedBufferConfig view_config{.size = view_pages * HYBRID_TEST_PAGE_SIZE};
 
     auto view =
-        distributed::MeshBuffer::create_sharded_view(owner, view_config, view_local_config, HYBRID_TEST_PAGE_SIZE);
+        experimental::retained_buffer_view::create(owner, view_config, view_local_config, HYBRID_TEST_PAGE_SIZE);
     EXPECT_TRUE(range_lockstep::is_range_lockstep_allocation(*view->get_reference_buffer()));
 
     range_lockstep::set_range_lockstep_allocation(view_local_config.sharding_args, false);
     EXPECT_ANY_THROW(
-        distributed::MeshBuffer::create_sharded_view(owner, view_config, view_local_config, HYBRID_TEST_PAGE_SIZE));
+        experimental::retained_buffer_view::create(owner, view_config, view_local_config, HYBRID_TEST_PAGE_SIZE));
 }
 
 // Only the L1 branch of allocate_buffer reads the flag, so anywhere else it would be a no-op that

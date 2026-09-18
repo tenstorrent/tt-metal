@@ -4,22 +4,21 @@
 
 #pragma once
 
-#include <cstdint>
-
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
 namespace tt::tt_metal::distributed {
-
-/// Program-memory use established by non-dispatch workload preparation.
-struct MeshWorkloadProgramCapacity {
-    uint32_t max_program_config_size_bytes = 0;
-    uint32_t max_kernel_binary_size_bytes = 0;
-};
-
 class MeshWorkload;
 class MeshWorkloadImpl;
+}  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental::program_preparation {
+struct ProgramCapacity;
+ProgramCapacity prepare(distributed::MeshWorkload& workload, distributed::MeshDevice* mesh_device);
+}  // namespace tt::tt_metal::experimental::program_preparation
+
+namespace tt::tt_metal::distributed {
 
 class MeshCommandQueue;
 class FDMeshCommandQueue;
@@ -44,9 +43,6 @@ public:
     std::unordered_map<MeshCoordinateRange, Program>& get_programs();
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const;
 
-    /// Compiles kernels, finalizes program offsets, and validates capacity without dispatching.
-    MeshWorkloadProgramCapacity prepare(MeshDevice* mesh_device);
-
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);
     MeshCommandQueue* get_last_used_command_queue() const;
@@ -61,5 +57,7 @@ private:
 
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
     friend FDMeshCommandQueue;
+    friend experimental::program_preparation::ProgramCapacity experimental::program_preparation::prepare(
+        tt::tt_metal::distributed::MeshWorkload&, tt::tt_metal::distributed::MeshDevice*);
 };
 }  // namespace tt::tt_metal::distributed

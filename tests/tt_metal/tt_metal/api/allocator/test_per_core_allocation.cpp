@@ -24,6 +24,7 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/retained_buffer_view.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
@@ -223,7 +224,7 @@ TEST_F(PerCoreAllocationTest, MeshBufferViewRetainsPerCoreAddresses) {
         .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = view_sharding, .bottom_up = false};
 
     std::weak_ptr<distributed::MeshBuffer> owner_reference = owner;
-    auto view = distributed::MeshBuffer::create_sharded_view(
+    auto view = experimental::retained_buffer_view::create(
         owner,
         distributed::ReplicatedBufferConfig{.size = num_cores * view_pages_per_core * PAGE_SIZE},
         view_local_config,
@@ -279,7 +280,7 @@ TEST_F(PerCoreAllocationTest, MeshBufferViewRetainsPerCoreAddresses) {
     per_core::set_per_core_allocation(subset_sharding, true);
     const distributed::DeviceLocalBufferConfig subset_local_config{
         .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = subset_sharding, .bottom_up = false};
-    auto subset_view = distributed::MeshBuffer::create_sharded_view(
+    auto subset_view = experimental::retained_buffer_view::create(
         owner,
         distributed::ReplicatedBufferConfig{.size = view_pages_per_core * PAGE_SIZE},
         subset_local_config,
@@ -293,7 +294,7 @@ TEST_F(PerCoreAllocationTest, MeshBufferViewRetainsPerCoreAddresses) {
     auto lockstep_sharding = view_sharding;
     per_core::set_per_core_allocation(lockstep_sharding, false);
     lockstep_view_config.sharding_args = lockstep_sharding;
-    EXPECT_ANY_THROW(distributed::MeshBuffer::create_sharded_view(
+    EXPECT_ANY_THROW(experimental::retained_buffer_view::create(
         owner,
         distributed::ReplicatedBufferConfig{.size = num_cores * view_pages_per_core * PAGE_SIZE},
         lockstep_view_config,
@@ -333,7 +334,7 @@ TEST_F(PerCoreAllocationTest, MeshBufferDeallocationFreesPerCoreSpace) {
         original_addresses.emplace_back(core, per_core::get_per_core_address(*owner, device_coordinate, core));
     }
 
-    auto view = distributed::MeshBuffer::create_sharded_view(owner, mesh_config, local_config, 0);
+    auto view = experimental::retained_buffer_view::create(owner, mesh_config, local_config, 0);
     owner->deallocate();
     EXPECT_FALSE(owner->is_allocated());
     EXPECT_FALSE(view->is_allocated());

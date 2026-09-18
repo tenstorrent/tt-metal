@@ -27,7 +27,7 @@ Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::Pro
     return generic_op(io_tensors, mesh_program_descriptor);
 }
 
-GenericOpPreparationResult prepare_generic_op(
+experimental::GenericOpPreparationResult experimental::prepare_generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
     auto result = ttnn::prim::prepare_generic_op(io_tensors, mesh_program_descriptor);
@@ -37,7 +37,7 @@ GenericOpPreparationResult prepare_generic_op(
     };
 }
 
-GenericOpPreparationResult prepare_generic_op(
+experimental::GenericOpPreparationResult experimental::prepare_generic_op(
     const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
     TT_FATAL(!io_tensors.empty(), "io_tensors must not be empty");
     auto* mesh_device = io_tensors.front().device();

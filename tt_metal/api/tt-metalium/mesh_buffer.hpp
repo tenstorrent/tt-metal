@@ -85,6 +85,14 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
     const tt::tt_metal::distributed::MeshCoordinate& coord);
 }  // namespace tt::tt_metal::experimental::per_core_allocation
 
+namespace tt::tt_metal::experimental::retained_buffer_view {
+std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create(
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> owner,
+    const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
+    const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
+    tt::tt_metal::DeviceAddr shard_offset);
+}  // namespace tt::tt_metal::experimental::retained_buffer_view
+
 namespace tt::tt_metal::distributed {
 
 // MeshBuffer allocates a buffer across a mesh of devices according to the specified configuration: either full
@@ -97,19 +105,10 @@ public:
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
 
-    /// Creates a non-owning SRAM buffer whose local addresses are `shard_offset` bytes into each owner shard.
-    /// Both buffers must be sharded, use the same allocation mode and sub-device, and the view shard grid must be a
-    /// subset of the owner's grid. Every aligned view interval must fit within its owner shard. The returned buffer
-    /// retains `owner`; explicitly deallocating `owner` invalidates the view.
-    static std::shared_ptr<MeshBuffer> create_sharded_view(
-        std::shared_ptr<MeshBuffer> owner,
-        const MeshBufferConfig& mesh_buffer_config,
-        const DeviceLocalBufferConfig& device_local_config,
-        DeviceAddr shard_offset);
-
     ~MeshBuffer();
 
-    // Owning MeshBuffers manage device memory. Copying would create multiple allocation owners.
+    // MeshBuffer manages device memory and owns the backing allocation. Copying would create
+    // multiple owners of the same device memory, leading to double-free on destruction.
     MeshBuffer(const MeshBuffer&) = delete;
     MeshBuffer& operator=(const MeshBuffer&) = delete;
     MeshBuffer(MeshBuffer&& other) noexcept;
@@ -201,6 +200,12 @@ private:
         buffers_(MeshShape(mesh_device->shape())),
         state_(RetainedViewState{std::move(owner), shard_offset}) {}
 
+    static std::shared_ptr<MeshBuffer> create_retained_sharded_view(
+        std::shared_ptr<MeshBuffer> owner,
+        const MeshBufferConfig& mesh_buffer_config,
+        const DeviceLocalBufferConfig& device_local_config,
+        DeviceAddr shard_offset);
+
     void initialize_device_buffers();
     MeshBufferConfig config_;
     DeviceLocalBufferConfig device_local_config_;
@@ -230,6 +235,11 @@ private:
         const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
         tt::tt_metal::distributed::MeshDevice*,
         const tt::tt_metal::distributed::MeshCoordinate&);
+    friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::retained_buffer_view::create(
+        std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>,
+        const tt::tt_metal::distributed::MeshBufferConfig&,
+        const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
+        tt::tt_metal::DeviceAddr);
 };
 
 class AnyBuffer {
