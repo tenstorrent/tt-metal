@@ -68,8 +68,12 @@ void kernel_main() {
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
         for (uint32_t r = 0; r < rem; r++) {
+            // TensorAccessor derives from InterleavedAddrGen<IsDram>, so the free get_noc_addr(id, addrgen)
+            // function resolves to the deprecated InterleavedAddrGen overload instead of the generic
+            // <typename AddrGen> template (a non-template function is preferred on an equal match).
+            // Call the member method directly, matching the convention used elsewhere in the codebase.
             uint64_t src_noc_addr =
-                get_noc_addr(i + r + tile_offset, src_a);  // not contiguous for sequential r, can be banked
+                src_a.get_noc_addr(i + r + tile_offset);  // not contiguous for sequential r, can be banked
             auto addr = l1_write_addr + (r * tile_bytes);
             noc_async_read(src_noc_addr, addr, tile_bytes);  // TODO(AP): data type size
         }
