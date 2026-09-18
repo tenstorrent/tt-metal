@@ -542,3 +542,82 @@ def test_a_budget_on_an_integer_format_raises(fmt):
         passed_test(golden, golden.clone(), fmt, max_ulp=0)
     # ...and refusing the budget must not have broken the ordinary path.
     assert passed_test(golden, golden.clone(), fmt)
+
+
+# ── --ulp-report ────────────────────────────────────────────────────────────
+
+
+@contextmanager
+def _ulp_report_enabled():
+    """``--ulp-report`` as the plugin sets it, restored afterwards."""
+    from helpers import utils
+
+    previous = utils._ULP_REPORT
+    utils._ULP_REPORT = True
+    try:
+        yield
+    finally:
+        utils._ULP_REPORT = previous
+
+
+def test_the_report_measures_an_op_that_carries_no_budget():
+    """Where the flag earns its keep: an op still on the tolerance metric has no number
+    watching its drift, so the report is the only signal before someone picks one."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    result = _step(golden, 6)  # inside atol=0.05, invisible to the default gate
+
+    quiet = _logs_for(lambda: passed_test(golden, result, fmt))
+    assert not any("ULP" in record for record in quiet)
+
+    with _ulp_report_enabled():
+        logged = "\n".join(_logs_for(lambda: passed_test(golden, result, fmt)))
+    assert "ULP report" in logged
+    # Max *and* the distribution behind it: a p99 is what separates one unlucky lane
+    # from a drift across the tile, and it is the number the report exists to trend.
+    assert "max 6 ULP" in logged
+    assert "p99" in logged
+
+
+def test_the_report_raises_an_enrolled_pass_out_of_debug():
+    """With a budget the summary already existed, at a level CI drops. The flag is the
+    ask for it, so it comes back at INFO -- still on the pass path."""
+    fmt = DataFormat.Float16_b
+    golden = _tile(1.0, fmt)
+    with _ulp_report_enabled():
+        records = _logs_for(
+            lambda: passed_test(golden, _step(golden, 1), fmt, max_ulp=2), "INFO"
+        )
+    assert any(
+        "ULP within budget" in record and "max 1 ULP" in record for record in records
+    )
+
+
+@pytest.mark.parametrize("fmt", FLOAT_FORMATS, ids=lambda f: f.name)
+def test_the_report_cannot_change_a_verdict(fmt):
+    """Reporting only. It runs after the verdict and is never read back into one, so
+    every pass and every failure has to land the same way with the flag on."""
+    golden = _tile(1.0, fmt)
+    cases = [
+        (golden.clone(), {}, True),
+        (_step(golden, 6), {}, True),  # inside the tolerance, outside a 1-step budget
+        (golden + 10.0, {"print_errors": False}, False),
+        (_step(golden, 1), {"max_ulp": 0, "print_errors": False}, False),
+        (_step(golden, 1), {"max_ulp": 1}, True),
+    ]
+    # `bool(...)`: the tolerance arm returns a 0-d tensor rather than a Python bool.
+    for result, kwargs, expected in cases:
+        assert bool(passed_test(golden, result, fmt, **kwargs)) is expected
+        with _ulp_report_enabled():
+            assert bool(passed_test(golden, result, fmt, **kwargs)) is expected
+
+
+def test_the_report_stays_off_a_format_with_no_per_element_ulp():
+    """Nothing to measure: a Bfp4_b verdict has no per-element step count, and asking
+    for one would raise inside a path that must not be able to fail a test."""
+    golden = torch.ones(TILE_SIZE, dtype=torch.bfloat16)
+    with _ulp_report_enabled():
+        logged = "\n".join(
+            _logs_for(lambda: passed_test(golden, golden.clone(), DataFormat.Bfp4_b))
+        )
+    assert "ULP report" not in logged

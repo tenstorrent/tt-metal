@@ -496,7 +496,48 @@ _EXPECTED_BUDGET = {
         DataFormat.Float16_b: None,
         DataFormat.Float16: None,
     },
+    MathOperation.SfpuElwpow: {
+        DataFormat.Float32: None,
+        DataFormat.Float16_b: None,
+        DataFormat.Float16: None,
+    },
+    MathOperation.SfpuXlogy: {
+        DataFormat.Float32: None,
+        DataFormat.Float16_b: None,
+        DataFormat.Float16: None,
+    },
 }
+
+#: The declared *tolerance* of every op that carries one, as ``(atol, rtol)``. The table
+#: above says only "not a step budget", so without this a widened atol -- the same drift
+#: a widened ``max_ulp`` would be -- passes every test in the file.
+_EXPECTED_TOLERANCE = {
+    MathOperation.SigmoidAppx: {fmt: (0.13, 0.05) for fmt in ULP_FORMATS},
+    MathOperation.GeluAppx: {fmt: (0.13, 0.05) for fmt in ULP_FORMATS},
+    MathOperation.SfpuElwpow: {fmt: (None, 0.15) for fmt in ULP_FORMATS},
+    MathOperation.SfpuXlogy: {
+        DataFormat.Float32: (0.14, None),
+        DataFormat.Float16_b: (0.6, None),
+        DataFormat.Float16: (0.12, None),
+    },
+}
+
+
+def test_every_declared_tolerance_is_the_number_that_was_measured():
+    """A tolerance contract is as widenable as a budget, and nothing else pins these:
+    ``_EXPECTED_BUDGET`` only records that they are not step budgets."""
+    assert set(_EXPECTED_TOLERANCE) == ONLY_EVER_TOLERANCE
+    for op, per_format in sorted(
+        _EXPECTED_TOLERANCE.items(), key=lambda kv: kv[0].name
+    ):
+        for fmt, (atol, rtol) in per_format.items():
+            contract = accuracy_contract(op, output_format=fmt, arch=MEASURED_ARCH)
+            assert contract.metric is Metric.TOLERANCE, f"{op.name} on {fmt.name}"
+            assert (contract.atol, contract.rtol) == (
+                atol,
+                rtol,
+            ), f"{op.name} {fmt.name}"
+
 
 #: Every distinct budget each of the 19 sweep-derived transcendentals resolves to, per
 #: output format, over the whole keyed variant space (input format x approximation mode x
@@ -924,10 +965,18 @@ def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_float32():
             assert contract.max_ulp == expected, op.name
 
 
-#: The enrolled ops that can never reach the ULP branch, because their entire contract
-#: set is ``_COARSE_LUT_TOLERANCE`` -- the coarse 3-segment LUT pair, which keeps the
-#: tolerance metric until there is a measured step budget to replace it with.
-ONLY_EVER_TOLERANCE = frozenset({MathOperation.SigmoidAppx, MathOperation.GeluAppx})
+#: The enrolled ops that can never reach the ULP branch: every row they declare is a
+#: tolerance. The coarse 3-segment LUT pair, and the two binary ops whose numbers moved
+#: out of ``BINARY_CUSTOM_TOLERANCES`` -- all four keep the tolerance metric until there
+#: is a measured step budget to replace it with.
+ONLY_EVER_TOLERANCE = frozenset(
+    {
+        MathOperation.SigmoidAppx,
+        MathOperation.GeluAppx,
+        MathOperation.SfpuElwpow,
+        MathOperation.SfpuXlogy,
+    }
+)
 
 
 def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():

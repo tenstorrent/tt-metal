@@ -340,3 +340,33 @@ Tanh:
   - {in: Float16, out: Float32, approx: "Yes", metric: tolerance}  # max 2418176 ULP, p99.9 2406400.0, 10% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 3008000, past the 419430-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
   - {in: Float16, out: Float16_b, approx: "No", max_ulp: 2}  # max 1 ULP, p99.9 1.0, 88% exact, ~7 mantissa bits, 4096 pts, 2026-09-17
   - {in: Float16, out: Float16_b, approx: "Yes", metric: tolerance}  # max 37 ULP, p99.9 37.0, 32% exact, ~2 mantissa bits, 4096 pts, 2026-09-17; budget would be 47, past the 6-step point where a budget stops being tighter than the tolerance it replaces, so tolerance
+
+# ── Binary SFPU, still on the tolerance metric ──────────────────────────────
+#
+# These were BINARY_CUSTOM_TOLERANCES in test_eltwise_binary_sfpu. Only two binary ops
+# need an override: their error is a property of the op's own composition rather than of
+# the stimuli, so it grows with the operands however the domain is drawn. Both numbers
+# were measured over the domains registered in sfpu_domains -- re-measure before
+# widening either. Both are keyed per output format, and both deliberately omit Bfp8_b:
+# its default rtol is 0.2, so an override of 0.15 would *tighten* it, and an unlisted
+# format falls through to the per-format default rather than to the widest measured
+# value.
+#
+# No step budget yet -- enrolling one means measuring the binary sweep the way the
+# unary ops were measured. The numbers now sit next to the op instead of in a dict in
+# a test file, which is the point of the table.
+
+# pow's error is relative and roughly flat, and does not scale with the output format's
+# precision, so one rtol suits every float column.
+SfpuElwpow:
+  - {out: Float32, metric: tolerance, rtol: 0.15}
+  - {out: Float16_b, metric: tolerance, rtol: 0.15}
+  - {out: Float16, metric: tolerance, rtol: 0.15}
+
+# xlogy's error is absolute and linear in x. It splits by nearly 5x between formats, so
+# applying Float16_b's atol to Float32 would accept five times what that format
+# produces.
+SfpuXlogy:
+  - {out: Float32, metric: tolerance, atol: 0.14}    # 0.116 measured, ~20% margin
+  - {out: Float16_b, metric: tolerance, atol: 0.6}
+  - {out: Float16, metric: tolerance, atol: 0.12}    # 0.0989 measured

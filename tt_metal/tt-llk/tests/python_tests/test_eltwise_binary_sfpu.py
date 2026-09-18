@@ -10,7 +10,7 @@ from typing import Dict
 import pytest
 import torch
 from conftest import skip_for_quasar
-from helpers.chip_architecture import ChipArchitecture
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -28,6 +28,7 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
+from helpers.sfpu_accuracy_budget import accuracy_contract
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     _SFPU_BINARY_OPS,
@@ -101,47 +102,6 @@ def _skip_sfpu_lcm_dest_acc_bh(mathop, dest_acc):
 # (a 32x32 tile is 4 faces of 16x16, and input_dimensions=[64, 32] is 8 faces).
 _FACES_PER_TILE = 4
 _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
-
-
-# Per-op (atol, rtol) overrides. The unary side's CUSTOM_TOLERANCES is gone: those numbers
-# moved next to their ops in helpers/sfpu_accuracy_budget.py, which the unary driver reads
-# through accuracy_contract(). This table is the binary equivalent, not yet migrated.
-# `None` keeps the format default. Only two ops belong here: their error is a property of the
-# op's own composition rather than of the stimuli, so it grows with the operands however the
-# domain is drawn. pow's error is relative and roughly flat; xlogy's is absolute and linear in
-# x. Both are measured over the registered domains -- re-measure before widening either.
-BINARY_CUSTOM_TOLERANCES = {
-    # Listed per output format only to keep Bfp8_b out of it: its default rtol is 0.2, so an
-    # override of 0.15 would tighten rather than loosen it. pow's error does not scale with the
-    # output format's precision, so the same rtol suits every float column.
-    MathOperation.SfpuElwpow: {
-        DataFormat.Float32: (None, 0.15),
-        DataFormat.Float16_b: (None, 0.15),
-        DataFormat.Float16: (None, 0.15),
-    },
-    # Keyed by output format, because the measured error splits by nearly 5x between them:
-    # applying Float16_b's atol to Float32 would accept five times what that format produces.
-    MathOperation.SfpuXlogy: {
-        DataFormat.Float32: (0.14, None),  # 0.116 measured, same ~20% margin as bf16
-        DataFormat.Float16_b: (0.6, None),
-        DataFormat.Float16: (0.12, None),  # 0.0989 measured
-    },
-}
-
-# Fallback for an output format the per-format table does not list: no override at all, so the
-# per-format tolerance in helpers/utils.py applies. Deliberately not the widest measured value,
-# which would loosen an unlisted format well past anything the measurement covered.
-_UNLISTED_FORMAT_TOLERANCE = (None, None)
-
-
-def _custom_tolerances(mathop, output_format):
-    """The (atol, rtol) override for *mathop*, per output format where it has one."""
-    entry = BINARY_CUSTOM_TOLERANCES.get(mathop)
-    if entry is None:
-        return (None, None)
-    if isinstance(entry, dict):
-        return entry.get(output_format, _UNLISTED_FORMAT_TOLERANCE)
-    return entry
 
 
 def _build_paired_tile_override(pairs, dtype):
@@ -610,11 +570,6 @@ def sfpu_binary(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
 
-    # Per-op tolerances, for the two ops whose error is a property of the op's own
-    # composition rather than of the stimuli, and per output format where the error splits by
-    # format. See BINARY_CUSTOM_TOLERANCES.
-    custom_atol, custom_rtol = _custom_tolerances(mathop, formats.output_format)
-
     if unspecified_nonfinite_sign and generated_nan_chunks:
         # Clear the sign only on lanes that held a generated NaN and where both sides are
         # non-finite, so this excuses one bit on the lanes the ISA declines to pin and nothing
@@ -627,12 +582,22 @@ def sfpu_binary(
         golden_tensor = torch.where(unspecified, golden_tensor.abs(), golden_tensor)
         res_tensor = torch.where(unspecified, res_tensor.abs(), res_tensor)
 
+    # The op's declared accuracy contract for this exact variant, the same lookup the
+    # unary driver makes. BINARY_CUSTOM_TOLERANCES used to sit at the top of this file;
+    # the numbers now live beside the op in the registry, and an unenrolled op resolves
+    # to today's per-format tolerance unchanged.
+    contract = accuracy_contract(
+        mathop,
+        output_format=formats.output_format,
+        input_format=formats.input_format,
+        dest_acc=dest_acc,
+        arch=get_chip_architecture(),
+    )
     assert passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        custom_atol=custom_atol,
-        custom_rtol=custom_rtol,
+        **contract.passed_test_kwargs(),
     ), "Assert against golden failed"
 
 

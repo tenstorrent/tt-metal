@@ -24,6 +24,8 @@ from .tile_constants import (
 from .tile_shape import construct_tile_shape
 from .ulp import (
     MANTISSA_BITS_FOR_ULP,
+    has_ulp_gate,
+    ulp_distance,
     ulp_dtype,
     ulp_elementwise_valid,
     ulp_verdict_message,
@@ -512,6 +514,18 @@ def _mxint_block_aware_compare(
 
 _RECORD_TEST_ORDER: bool = False
 
+#: Set by ``--ulp-report``. Measures and logs the step count for every comparison on a
+#: ULP-capable format, including the ops with no budget yet -- which is where the signal
+#: is most useful, since a drift shows up in the report long before anyone picks a number
+#: to gate it with. Never a verdict: it is computed after the verdict and never read back
+#: into one, so the flag cannot change whether a test passes.
+#:
+#: Trend p99, not max. An op with no declared ``near_zero_atol`` has no floor to excuse
+#: its near-zero lanes, and one lane whose golden is zero or subnormal carries a step
+#: count that says nothing about the kernel -- xlogy on Float16_b reports max 15073 ULP
+#: against a p99 of 1.
+_ULP_REPORT: bool = False
+
 # Per-format params for _mxfp_block_aware_compare:
 # (mantissa_bits, max_steps, max_normal, min_subnormal).
 #   mantissa_bits of the SxEyMz element -> local step = 2^(floor(log2|v|) - mantissa_bits).
@@ -882,7 +896,10 @@ def passed_test(
                 rescued=None if near_zero_atol is None else ulp_rescued,
             )
 
-        if is_within_tolerance:
+        if is_within_tolerance and _ULP_REPORT:
+            # --ulp-report asked for it, so it is not a debug aside any more.
+            logger.info("ULP within budget — {}", _ulp_summary())
+        elif is_within_tolerance:
             logger.opt(lazy=True).debug("ULP within budget — {}", _ulp_summary)
         elif print_errors and not _RECORD_TEST_ORDER:
             logger.error("ULP budget exceeded — {}", _ulp_summary())
@@ -890,6 +907,21 @@ def passed_test(
             # A caller that asked for silence still gets the line, but not at a level that
             # appends to the persistent test_errors.log that CI uploads.
             logger.opt(lazy=True).debug("ULP budget exceeded — {}", _ulp_summary)
+
+    if _ULP_REPORT and ulp_distances is None and has_ulp_gate(output_data_format):
+        # The op has no step budget, so nothing above measured one -- and this is exactly
+        # where the report earns its keep: it is the ops still on the tolerance metric
+        # whose drift no number is watching. Measured after the verdict and never read
+        # back into it.
+        logger.info(
+            "ULP report — {}",
+            ulp_verdict_message(
+                golden_tensor,
+                res_tensor,
+                ulp_distance(golden_tensor, res_tensor),
+                output_data_format,
+            ),
+        )
 
     if output_data_format.is_mx_format():
         # Every MX low-bit format is judged by its lattice-aware compare
