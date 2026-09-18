@@ -68,6 +68,8 @@ class MiniMaxH3AudioDecoder(Module):
         ccl_manager: CCLManager | None = None,
         split_mode: str = "full",
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
+        pack_bands: dict[int, int] | None = None,
+        resampler_split_mode: str | None = None,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
@@ -86,6 +88,9 @@ class MiniMaxH3AudioDecoder(Module):
         # (see compute_depthwise_conv1d.cpp).
         self.split_mode = split_mode
         self.max_c_in_block = max_c_in_block
+        self.pack_bands = dict(pack_bands or {})
+        self.resampler_split_mode = resampler_split_mode
+        self._pad_masks: dict = {}
 
         # H3's audio channel schedule differs from LTX's at both ends, so every conv misses
         # _FP32_BLOCKINGS. Seed stubs before any conv is built; see that module for why stubs.
@@ -122,6 +127,8 @@ class MiniMaxH3AudioDecoder(Module):
             ccl_manager=ccl_manager,
             # H3-only opt-in: LTX's vocoder keeps its default single-conv weights.
             split_mode=split_mode,
+            pack_bands=pack_bands,
+            resampler_split_mode=resampler_split_mode,
         )
 
     def _project_latents_device(self, latents_BCT: torch.Tensor) -> torch.Tensor:
@@ -156,8 +163,31 @@ class MiniMaxH3AudioDecoder(Module):
         """
         _, channels, _ = latents_BCT.shape
         assert channels == self.latent_channels, f"expected {self.latent_channels} latent channels, got {channels}"
-        projected = self._project_latents_device(latents_BCT)
-        return self.decoder.forward_BCT_traced(projected) if traced else self.decoder.forward_BCT(projected)
+        # dec_in_proj is a k=1 conv, so it runs on the vocoder's own T padding and hands its output to the
+        # vocoder on device: no readback + re-upload of the (B, T, 2048) projection between the two.
+        x = latents_BCT.transpose(1, 2).float().contiguous()  # (B, T, C)
+        t_pad = self.decoder.t_pad_for(x.shape[1])
+        if t_pad:
+            x = torch.nn.functional.pad(x, (0, 0, 0, t_pad))
+        x_dev = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
+        projected_dev = self.dec_in_proj(x_dev)
+        if t_pad:
+            # k=1 with a bias: the zero pad rows project to the bias, but the vocoder expects zero pad rows
+            # (conv_pre reads them). One multiply by a cached (1, T + t_pad, 1) validity mask restores that.
+            projected_dev = ttnn.multiply(projected_dev, self._pad_row_mask(x.shape[1], t_pad))
+        return self.decoder.forward_device_BTC(
+            projected_dev, t_pad=t_pad, traced=traced, trace_key=tuple(latents_BCT.shape)
+        )
+
+    def _pad_row_mask(self, t_total: int, t_pad: int) -> ttnn.Tensor:
+        key = (t_total, t_pad)
+        mask = self._pad_masks.get(key)
+        if mask is None:
+            m = torch.ones(1, t_total, 1, dtype=torch.float32)
+            m[:, t_total - t_pad :, :] = 0.0
+            mask = ttnn.from_torch(m, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
+            self._pad_masks[key] = mask
+        return mask
 
     def _t_padding(self, num_frames: int) -> int:
         """T padding needed for tile-aligned per-chip shards; zero when unsharded."""
