@@ -117,31 +117,6 @@ FORCE_INLINE void sort_fused_chunk(
 }
 
 template <uint32_t K>
-FORCE_INLINE void reduce_classic_row(CircularBuffer& input, uint32_t num_chunks, uint32_t tail_elements) {
-    constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
-    constexpr uint32_t survivor_slot = 0;
-    constexpr uint32_t incoming_slot = 2 * tiles_per_sequence;
-
-    topk_xl_separate_indices_row_major_init_static<0, 0>();
-    sort_classic_chunk<K>(input, survivor_slot, num_chunks == 1 ? tail_elements : K, false);
-
-    if (num_chunks == 1) {
-        topk_xl_init<K, false>();
-        topk_xl_rebuild<K, false>(survivor_slot, false);
-        return;
-    }
-
-    for (uint32_t chunk = 1; chunk < num_chunks; ++chunk) {
-        const uint32_t active_elements = chunk + 1 == num_chunks ? tail_elements : K;
-        sort_classic_chunk<K>(input, incoming_slot, active_elements, true);
-
-        topk_xl_init<K, false>();
-        topk_xl_merge<K, false>(survivor_slot);
-        topk_xl_rebuild<K, false>(survivor_slot, false);
-    }
-}
-
-template <uint32_t K>
 FORCE_INLINE void reduce_fused_row(CircularBuffer& input, uint32_t num_chunks, uint32_t tail_elements) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     constexpr uint32_t survivor_slot = 0;
@@ -253,8 +228,7 @@ void kernel_main() {
 
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
     static_assert(
-        body_mode == ComputeBodyMode::Classic || body_mode == ComputeBodyMode::FusedEndToEnd ||
-            body_mode == ComputeBodyMode::FusedSegmented,
+        body_mode == ComputeBodyMode::FusedEndToEnd || body_mode == ComputeBodyMode::FusedSegmented,
         "invalid TopK compute body mode");
 
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
@@ -285,10 +259,8 @@ void kernel_main() {
 
         if constexpr (body_mode == ComputeBodyMode::FusedSegmented) {
             reduce_segmented_row<K>(input, num_chunks, tail_elements);
-        } else if constexpr (body_mode == ComputeBodyMode::FusedEndToEnd) {
-            reduce_fused_row<K>(input, num_chunks, tail_elements);
         } else {
-            reduce_classic_row<K>(input, num_chunks, tail_elements);
+            reduce_fused_row<K>(input, num_chunks, tail_elements);
         }
 
         mark_neginf_indices<K>(final_survivor);
