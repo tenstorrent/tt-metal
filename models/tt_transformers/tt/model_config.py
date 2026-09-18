@@ -323,6 +323,18 @@ class ModelOptimizations:
                 "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
                 "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
             }
+            if base_model_name == "Llama-3.1-8B":
+                # Decode-only LoFi for the remaining BFP8 projections. Isolated
+                # DRAM-sharded sweeps on Blackhole (per-device decode shapes, real
+                # geometry) put LoFi well ahead of HiFi2 at identical weight dtype:
+                #   QKV  32x4096x1536  31.7 -> 27.5 us
+                #   WO   32x1024x4096  19.6 -> 16.9 us
+                #   FF2  32x3584x4096  56.0 -> 49.9 us
+                # Prefill fidelity is untouched; see
+                # bringup/artifacts/tt_transformers/optimized_decode/work_log.md.
+                settings["OpFidelity"][OpGroup.LI_QKV_DECODE] = MathFidelitySetting.LOFI
+                settings["OpFidelity"][OpGroup.LI_O_DECODE] = MathFidelitySetting.LOFI
+                settings["OpFidelity"][OpGroup.LI_FF2] = MathFidelitySetting.LOFI
             if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                 logger.info(
                     f"Model {model_name} is running out of L1 memory under standard high-performance settings, using FP16 accumulate in attention prefill QKV Matmul"
@@ -482,9 +494,16 @@ def parse_optimizations(string):
     return apply_settings
 
 
-def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.performance):
+def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.performance, model_name="model"):
     """
     Reads a JSON file and returns a DecodersPrecision instance.
+
+    ``model_name`` is the name handed to ``default_optimization`` for every decoder the
+    JSON does not fully specify. It must be the real checkpoint name: the per-model
+    branches inside ``ModelOptimizations.performance`` / ``.accuracy`` key off it, so the
+    old hard-coded ``"model"`` placeholder silently dropped them for every checkpoint
+    whose JSON leaves decoders (or fidelity_cfg) to the default. Defaults to the old
+    placeholder so external callers that pass only a path keep their behaviour.
     """
     if not json_file_path:
         return None
@@ -501,11 +520,10 @@ def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.p
             raise ValueError("Invalid JSON format: Missing 'decoders' key")
 
         num_decoders = max(int(decoder_id) for decoder_id in config_data["decoders"].keys()) + 1
-        placeholder_model_name = "model"
-        decoder_conf = default_optimization(placeholder_model_name)
+        decoder_conf = default_optimization(model_name)
         default_tensor_dtype_settings = decoder_conf.tensor_dtype_settings
         default_op_fidelity_settings = decoder_conf.op_fidelity_settings
-        decoders_precision = DecodersPrecision(num_decoders, placeholder_model_name, decoder_conf)
+        decoders_precision = DecodersPrecision(num_decoders, model_name, decoder_conf)
 
         for decoder_id, settings in config_data["decoders"].items():
             decoder_id = int(decoder_id)
@@ -3755,24 +3773,31 @@ class ModelArgs:
         return 1  # Fallback to 1 if no divisor found
 
     # Blackhole DRAM-bank reader counts per decode projection role, by validated SKU.
-    # Measured on this P150x4 (4x Blackhole, 8 DRAM banks/device) with the traced batch-1
-    # decode ruler; see bringup/artifacts/tt_transformers/optimized_decode/work_log.md.
+    # A second reader per bank is not a free win: it splits each bank row more finely and
+    # widens the in0 multicast fan-out, so it has to be measured per role. Isolated traced
+    # sweeps at the real per-device decode shapes (LoFi, BFP8/BFP4 weights, production
+    # geometry) on this P150x4 gave, in microseconds per call, 1 reader vs 2 readers:
+    #   QKV  32x4096x1536  22.5 / 25.1   -> 1
+    #   WO   32x1024x4096  16.8 / 16.5   -> 2
+    #   FF13 32x4096x3584  31.5 / 29.2   -> 2
+    #   FF2  32x3584x4096  49.9 / 55.8   -> 1
+    # P150 keeps the previously validated single-chip setting for every role.
+    # See bringup/artifacts/tt_transformers/optimized_decode/work_log.md.
     _DRAM_SHARDED_DECODE_READERS = {
-        "P150": 2,
-        "P150x4": 2,
+        "P150": {TensorGroup.FF1_FF3: 2, TensorGroup.FF2: 2, TensorGroup.WQKV: 2, TensorGroup.WO: 2},
+        "P150x4": {TensorGroup.FF1_FF3: 2, TensorGroup.WO: 2},
     }
 
     def get_dram_sharded_matmul_num_workers(self, tensor_group: TensorGroup, n: int) -> int:
         """Return the validated Blackhole reader count for a Llama 3.1 8B decode projection."""
         if self.base_model_name != "Llama-3.1-8B":
             return 1
-        num_workers = self._DRAM_SHARDED_DECODE_READERS.get(self.device_name, 1)
+        num_workers = self._DRAM_SHARDED_DECODE_READERS.get(self.device_name, {}).get(tensor_group, 1)
         if num_workers == 1:
             return 1
 
-        if tensor_group not in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO):
-            return 1
-
+        # Each reader takes a disjoint slice of the same DRAM bank shard, so the per-bank
+        # width in tiles has to divide by the reader count.
         shard_width_tiles = math.ceil(n / (ttnn.TILE_SIZE * self.dram_grid_size.x))
         return num_workers if shard_width_tiles % num_workers == 0 else 1
 
@@ -5041,7 +5066,9 @@ class DecodersPrecision:
         decoder_config_path = model_params_dir / "model_params" / model_name / decoder_config_filename
         inst = None
         if decoder_config_path.exists():
-            inst = parse_decoder_json(decoder_config_path, default_optimization=optimization_level)
+            inst = parse_decoder_json(
+                decoder_config_path, default_optimization=optimization_level, model_name=model_name
+            )
             logger.info(
                 f"Model {model_name} requires specific TensorPrecision and OpFidelity configuration, using {decoder_config_path}"
             )
