@@ -1009,6 +1009,13 @@ class TestConfig:
                 # FormatConfig (doesn't); fall back to None for the latter.
                 register_format_hint=getattr(formats, "register_format_hint", None),
             )
+            # ttnn's unary program factory tags the kernel build with the input dtype
+            # (add_input_dtype_defines, unary_op_utils.cpp): FLOAT32 sets INP_FLOAT32, and
+            # ckernel_sfpu_{erf,i1,digamma,softplus}.h select their float32 algorithm on it.
+            # Without the tag those kernels compile their #else branch, so a Float32 test here
+            # would measure the bf16 algorithm in an fp32 dest -- not the code ttnn runs.
+            self.inp_float32 = self.formats_config[0].input_format == DataFormat.Float32
+
             self.pack_size = TILE_SIZES.get(self.formats_config[0].output_format, 128)
             self.unpack_size_a = TILE_SIZES.get(
                 self.formats_config[0].input_format, 128
@@ -1018,6 +1025,7 @@ class TestConfig:
             )
         else:
             self.formats_config = None
+            self.inp_float32 = False
             self.pack_size, self.unpack_size_a, self.unpack_size_b = 128, 128, 128
 
         # SrcS MX slice geometry follows unpack_S_dst width (same as _is_srcs_32bit_mode_), not dest_acc.
@@ -1363,6 +1371,15 @@ class TestConfig:
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
+
+        # Mirrors ttnn's add_input_dtype_defines. ``inp_float32`` is an instance field on
+        # purpose: formats are runtime arguments unless ``compile_time_formats`` is set, so
+        # ``generate_variant_hash`` drops ``formats_config`` and two variants differing only
+        # in input format would otherwise share a variant id -- and ``prepare`` does not
+        # rebuild in CONSUME mode, so the Float32 run would silently reuse the ELF built
+        # without the tag.
+        if self.inp_float32:
+            OPTIONS_COMPILE += "-DINP_FLOAT32=1 "
 
         return (OPTIONS_COMPILE, MEMORY_LAYOUT_LD_SCRIPT, NON_COVERAGE_OPTIONS_COMPILE)
 
