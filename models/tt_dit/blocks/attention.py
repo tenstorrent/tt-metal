@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 
-from ..layers.linear import ColParallelLinear
+from ..layers.linear import ColParallelLinear, LoRAColParallelLinear
 from ..layers.module import Module, Parameter, UnregisteredModule
 from ..layers.normalization import RMSNorm
 from ..utils.padding import PaddingConfig, pad_weight_tensor
@@ -45,6 +45,7 @@ class Attention(Module):
         k_chunk_size: int = 512,
         q_chunk_size: int = 128,
         is_fsdp: bool = False,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -67,6 +68,12 @@ class Attention(Module):
 
         common_args = dict(mesh_device=mesh_device, ccl_manager=ccl_manager, fsdp_mesh_axis=fsdp_mesh_axis)
 
+        # LoRA-aware Linear substitution (fuse mode). Default off keeps every
+        # non-LoRA caller on the identical base path. The q/k/v and out
+        # projections are the standard LoRA targets; adapters are registered and
+        # bound by the FLUX adapter loader (experimental/lora/flux_adapter_loader.py).
+        ColCls = LoRAColParallelLinear if lora_enabled else ColParallelLinear
+
         self.sdpa_worker_grid = (
             self.mesh_device.compute_with_storage_grid_size().x,
             self.mesh_device.compute_with_storage_grid_size().y - 1,
@@ -84,16 +91,12 @@ class Attention(Module):
             fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
         )
 
-        self.to_qkv = ColParallelLinear(query_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args)
+        self.to_qkv = ColCls(query_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args)
 
         self.norm_q = RMSNorm(embedding_dim=head_dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
         self.norm_k = RMSNorm(embedding_dim=head_dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
 
-        self.to_out = (
-            ColParallelLinear(padded_inner_dim, out_dim, mesh_axis=tp_axis, **common_args)
-            if not self.pre_only
-            else None
-        )
+        self.to_out = ColCls(padded_inner_dim, out_dim, mesh_axis=tp_axis, **common_args) if not self.pre_only else None
 
         if use_spatial_weights_for_prompt:
             self.add_qkv_proj = UnregisteredModule(self.to_qkv)
@@ -101,17 +104,13 @@ class Attention(Module):
             self.norm_added_k = UnregisteredModule(self.norm_k)
             self.to_add_out = UnregisteredModule(self.to_out) if self.to_out is not None else None
         elif added_kv_proj_dim > 0:
-            self.add_qkv_proj = ColParallelLinear(
-                added_kv_proj_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args
-            )
+            self.add_qkv_proj = ColCls(added_kv_proj_dim, 3 * padded_inner_dim, mesh_axis=tp_axis, **common_args)
 
             self.norm_added_q = RMSNorm(embedding_dim=head_dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
             self.norm_added_k = RMSNorm(embedding_dim=head_dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
 
             self.to_add_out = (
-                ColParallelLinear(padded_inner_dim, out_dim, mesh_axis=tp_axis, **common_args)
-                if not context_pre_only
-                else None
+                ColCls(padded_inner_dim, out_dim, mesh_axis=tp_axis, **common_args) if not context_pre_only else None
             )
         else:
             self.add_qkv_proj = None
