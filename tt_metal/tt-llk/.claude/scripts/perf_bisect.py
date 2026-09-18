@@ -92,7 +92,7 @@ def save_state(path, state):
 # --- dispatching ------------------------------------------------------------
 
 
-def dispatch_inputs(sha, arch="blackhole"):
+def dispatch_inputs(sha, arch="blackhole", sol=False):
     """The dispatch inputs this commit's workflow actually declares.
 
     The form has grown over time — `upload-to-warehouse` and `pipeline` are
@@ -107,7 +107,7 @@ def dispatch_inputs(sha, arch="blackhole"):
 
     wanted = {
         "architecture": arch,
-        "speed-of-light": "false",
+        "speed-of-light": "true" if sol else "false",
         "upload-to-warehouse": "false",
         "pipeline": "",
     }
@@ -375,7 +375,12 @@ def patch_runner(
 
 
 def force_non_sol(
-    sha, maxschedchunk=None, apply_ref=None, runner_opts=None, run_count=None
+    sha,
+    maxschedchunk=None,
+    apply_ref=None,
+    runner_opts=None,
+    run_count=None,
+    sol=False,
 ):
     """A commit on top of `sha` whose perf runners measure with SoL off.
 
@@ -436,7 +441,12 @@ def force_non_sol(
             how[path + ":runner"] = ", ".join(
                 f"{k}={v}" for k, v in runner_opts.items() if v is not None
             )
-        if "SPEED_OF_LIGHT:-true" in body:
+        if sol:
+            # Wanted ON: leave the runner's own setting alone and let the
+            # dispatch input drive it. assert_sol() checks the data agrees.
+            patched = body
+            how[path] = "sol-kept"
+        elif "SPEED_OF_LIGHT:-true" in body:
             patched = body.replace("SPEED_OF_LIGHT:-true", "SPEED_OF_LIGHT:-false")
             how[path] = "env-default"
         elif "--speed-of-light" in body:
@@ -448,7 +458,7 @@ def force_non_sol(
         else:
             how[path] = "already-off"
             continue
-        if "--speed-of-light" in patched.replace(
+        if not sol and "--speed-of-light" in patched.replace(
             "SPEED_OF_LIGHT_ARGS=(--speed-of-light)", ""
         ):
             raise RuntimeError(f"{path}: a --speed-of-light survived the patch")
@@ -518,6 +528,8 @@ def variant_key(sha, args):
     tag = getattr(args, "tag", None)
     if tag:
         key += f"+{tag}"
+    if getattr(args, "sol", False):
+        key += "+sol"
     arch = getattr(args, "arch", None)
     if arch and arch != "blackhole":
         key += f"+{arch[:2]}"
@@ -545,6 +557,7 @@ def push_branch(
     runner_opts=None,
     arch=None,
     tag=None,
+    sol=False,
 ):
     """One branch per run, because the workflow cancels its own concurrency group.
 
@@ -554,6 +567,8 @@ def push_branch(
     different group, and the two runs proceed in parallel.
     """
     suffix = "" if maxschedchunk is None else f"-c{maxschedchunk}"
+    if sol:
+        suffix += "-sol"
     if arch and arch != "blackhole":
         suffix = f"-{arch[:2]}{suffix}"
     if tag:
@@ -573,7 +588,7 @@ def push_branch(
             if runner_opts.get(key) is not None:
                 suffix += f"-{tag}{runner_opts[key]}"
     branch = f"{BRANCH_PREFIX}{short(sha)}{suffix}-r{index}"
-    head, _ = force_non_sol(sha, maxschedchunk, apply_ref, runner_opts)
+    head, _ = force_non_sol(sha, maxschedchunk, apply_ref, runner_opts, sol=sol)
     git("push", "--force", f"git@github.com:{REPO}.git", f"{head}:refs/heads/{branch}")
     return branch
 
@@ -599,7 +614,10 @@ def runs_on(branch):
 
 def start_runs(sha, count, args_ns=None):
     """Dispatch one run per branch and return their ids."""
-    inputs = dispatch_inputs(sha, getattr(args_ns, "arch", None) or "blackhole")
+    sol = bool(getattr(args_ns, "sol", False))
+    inputs = dispatch_inputs(
+        sha, getattr(args_ns, "arch", None) or "blackhole", sol=sol
+    )
     print(f"  dispatch inputs: {inputs}")
     ids = []
     for i in range(1, count + 1):
@@ -611,6 +629,7 @@ def start_runs(sha, count, args_ns=None):
             runner_opts_of(args_ns) if args_ns else None,
             getattr(args_ns, "arch", None) if args_ns else None,
             getattr(args_ns, "tag", None) if args_ns else None,
+            sol,
         )
         before = {r["databaseId"] for r in runs_on(branch)}
         args = ["gh", "workflow", "run", WORKFLOW, "--repo", REPO, "--ref", branch]
@@ -729,7 +748,7 @@ def fetch_perf_data(run_id, dest):
     return csvs
 
 
-def assert_non_sol(*roots):
+def assert_non_sol(*roots, sol=False):
     """Refuse to draw a verdict on runs that measured speed of light.
 
     The setting is recorded per row, so the data itself says what was measured.
@@ -747,12 +766,13 @@ def assert_non_sol(*roots):
             if "speed_of_light" not in df.columns:
                 raise RuntimeError(f"{f}: no speed_of_light column to check")
             seen.update(df["speed_of_light"].astype(str).unique())
-    if seen != {"False"}:
+    want = "True" if sol else "False"
+    if seen != {want}:
         raise RuntimeError(
-            f"runs measured speed_of_light={sorted(seen)}, expected False only. "
-            "The non-SoL patch did not take at this commit."
+            f"runs measured speed_of_light={sorted(seen)}, expected {want} only. "
+            "The requested speed-of-light mode did not take at this commit."
         )
-    print("  speed_of_light: False in every row")
+    print(f"  speed_of_light: {want} in every row")
 
 
 # --- the verdict ------------------------------------------------------------
@@ -855,7 +875,7 @@ def measure(sha, args, state):
         fetch_perf_data(rid, side)
         sides.append(side)
 
-    assert_non_sol(*sides)
+    assert_non_sol(*sides, sol=bool(getattr(args, "sol", False)))
     module = compare_module(args.compare_ref, args.work_dir)
     result = compare(module, sides[0], sides[1], work / "compare")
     result.update(
@@ -863,7 +883,9 @@ def measure(sha, args, state):
         subject=subject,
         run_ids=run_ids,
         dispatch_inputs=dispatch_inputs(
-            sha, getattr(args, "arch", None) or "blackhole"
+            sha,
+            getattr(args, "arch", None) or "blackhole",
+            sol=bool(getattr(args, "sol", False)),
         ),
     )
 
@@ -1012,6 +1034,13 @@ def main(argv=None):
         help="label this measurement, so the same configuration can be run "
         "more than once. It joins the cache key and the branch name, which is "
         "how repeats get their own result instead of a cache hit",
+    )
+    ap.add_argument(
+        "--sol",
+        action="store_true",
+        help="measure WITH speed of light. The default forces it off, which is "
+        "what a bisect needs; this is for asking whether a finding holds in the "
+        "mode CI actually publishes",
     )
     ap.add_argument(
         "--stable-groups",
