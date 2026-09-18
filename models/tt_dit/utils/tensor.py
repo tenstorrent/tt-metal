@@ -759,6 +759,35 @@ def upsample(
     return x
 
 
+def prepare_depth_to_space_channels(t: torch.Tensor, stride: tuple[int, int, int]) -> torch.Tensor:
+    """Reorder a weight's output-channel dim (dim 0) from ``(C, p1, p2, p3)`` grouping to ``(p1, p2, p3, C)``,
+    the packing :func:`depth_to_space_channels_last` unpacks. Out channels must be divisible by ``p1*p2*p3``.
+
+    Channels innermost is not cosmetic: with a stride factor of 2 innermost, ROW_MAJOR rounds
+    that extent up to a full 32-element face and the tensor occupies 16x its own size.
+    """
+    p1, p2, p3 = stride
+    out = t.shape[0]
+    assert out % (p1 * p2 * p3) == 0, f"out_channels {out} not divisible by {p1 * p2 * p3}"
+    rest = t.shape[1:]
+    t = t.reshape(out // (p1 * p2 * p3), p1, p2, p3, *rest)
+    t = t.permute(1, 2, 3, 0, *range(4, t.ndim))
+    return t.reshape(out, *rest)
+
+
+def depth_to_space_channels_last(x: ttnn.Tensor, stride: tuple[int, int, int]) -> ttnn.Tensor:
+    """``(B, T, H, W, p1*p2*p3*C)`` with channels packed ``(p1, p2, p3, C)`` to ``(B, T*p1, H*p2, W*p3, C)``.
+
+    ROW_MAJOR in and out; the packing is what :func:`prepare_depth_to_space_channels` produces.
+    """
+    b, t, h, w, packed = tuple(x.shape)
+    p1, p2, p3 = stride
+    c = packed // (p1 * p2 * p3)
+    x = ttnn.reshape(x, (b, t, h, w, p1, p2, p3, c))
+    x = ttnn.permute(x, (0, 1, 4, 2, 5, 3, 6, 7))
+    return ttnn.reshape(x, (b, t * p1, h * p2, w * p3, c))
+
+
 def unflatten(x: ttnn.Tensor, dim: int, sizes: Sequence[int]) -> ttnn.Tensor:
     """Expands a dimension of the input tensor over multiple dimensions.
 

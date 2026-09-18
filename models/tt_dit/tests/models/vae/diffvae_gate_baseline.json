@@ -1,0 +1,22 @@
+{
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_context_matches_upstream (call)": 0.9994528586592427,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_decode_matches_upstream (call)": 0.9988174385547648,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_decode_stage5_bricked_matches_replicated[blackhole-w_local16-t_at_window-sp_cols-4x8-ring] (call)": 0.9999459330216719,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_decode_stage5_bricked_matches_replicated[blackhole-w_local16-t_clear_of_window-sp_cols-4x8-ring] (call)": 0.9999522441475454,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_decode_stage5_bricked_matches_replicated[blackhole-w_local8-t_at_window-sp_cols-4x8-ring] (call)": 0.9999577937742633,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_decode_stage5_bricked_matches_replicated[blackhole-w_local8-t_clear_of_window-sp_cols-4x8-ring] (call)": 0.9999480210663086,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_det_stages_match_upstream (call)": 0.9995428482473154,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_na_block_matches_upstream[0-fused_rope] (call)": 0.9998345173108667,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_na_block_matches_upstream[0-halves] (call)": 0.9998348086566535,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_na_block_matches_upstream[1-fused_rope] (call)": 0.9998821414431981,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_na_block_matches_upstream[1-halves] (call)": 0.9998801825123848,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx_stage5.py::test_rope_matches_upstream[blackhole-1x1] (call)": 0.9999999871648884,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx_stage5.py::test_stage5_bricked_matches_upstream_at_production_width[blackhole-bricked-w480_h272-pcc999-sp_cols-4x8-ring] (call)": 0.999935802959093,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx_stage5.py::test_stage5_bricked_matches_upstream_at_production_width[blackhole-bricked-w480_h64-pcc999-sp_cols-4x8-ring] (call)": 0.9999358197135818,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx_stage5.py::test_stage5_parity[blackhole-pcc999-bf16-1x1] (call)": 0.9999344774729101,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx_stage5.py::test_stage5_parity_sharded[blackhole-pcc999-2x4-4x8-device_params0] (call)": 0.9999344774729101,
+  "models/tt_dit/tests/models/vae/test_diffvae_ltx_stage5.py::test_stage5_parity_w_sharded_bricked[blackhole-pcc999-sp_cols-4x8-ring] (call)": 0.9999357110871627,
+  "models/tt_dit/tests/models/vae/test_diffvae_rope.py::test_bricked_table_matches_the_rotation[blackhole-replicated-1x1] (call)": 0.9999999861522547,
+  "models/tt_dit/tests/models/vae/test_diffvae_rope.py::test_bricked_table_matches_the_rotation[blackhole-w_sharded-4x8] (call)": 0.9999999861522471,
+  "models/tt_dit/tests/models/vae/test_diffvae_rope.py::test_halves_and_pair_swap_rotations_agree[blackhole-1x1] (call)": 0.9999999893127628
+}

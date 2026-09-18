@@ -180,9 +180,10 @@ FORCE_INLINE uint32_t read_chunk(
                     read_output ? output_tensor_Wt : input_tensor_Wt,
                     input_tensor_Ht);
                 if (tile_id >= 0) {
-                    // Device 2.0 migration: legacy primitive retained, precomposed uint64_t address
+                    // Device 2.0 migration: call the accessor directly; the free get_noc_addr(id, addrgen) only
+                    // resolves to the deprecated InterleavedAddrGen overload for this TensorAccessor.
                     uint64_t noc_read_addr =
-                        get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
+                        (read_output ? output_tensor_addrgen : input_tensor_addrgen).get_noc_addr(tile_id);
                     noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
 
                     l1_write_addr += input_tensor_page_size;
