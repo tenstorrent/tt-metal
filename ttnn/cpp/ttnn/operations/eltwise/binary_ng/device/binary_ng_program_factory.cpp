@@ -909,9 +909,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                             tt::tt_metal::is_floating_point(a_dtype);
     auto compute_kernel_defines = op_config.as_defines(a_dtype);
     if (use_scalar_float_floor_div) {
+        compute_kernel_defines["BINARY_SFPU_INIT"] = "floor_div_binary_tile_init();";
         compute_kernel_defines["BINARY_SFPU_OP"] = "floor_div_binary_scalar_tile";
         compute_kernel_defines["SCALAR_RHS_ONCE"] = "1";
     } else if (use_fused_float_floor_div) {
+        compute_kernel_defines["BINARY_SFPU_INIT"] = "floor_div_binary_tile_init();";
         compute_kernel_defines["BINARY_SFPU_OP"] = "floor_div_binary_tile";
     }
 

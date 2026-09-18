@@ -7,6 +7,7 @@ import torch
 import pytest
 import ttnn
 
+from models.common.utility_functions import is_quasar
 from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 
 pytestmark = pytest.mark.use_module_device
@@ -70,7 +71,7 @@ def _make_mixed_binary_tensors(device, dtype_a, dtype_b, shape=TENSOR_SHAPE):
         pytest.param(ttnn.add, ttnn.uint8, id="arithmetic_fpu_add_uint8"),
         pytest.param(ttnn.mul, ttnn.uint8, id="arithmetic_fpu_mul_uint8"),
         pytest.param(ttnn.subtract, ttnn.uint8, id="arithmetic_fpu_subtract_uint8"),
-        # int32_only (GCD, LCM, DIV_FLOOR, DIV_TRUNC)
+        # int32_only (GCD, LCM, DIV_TRUNC)
         pytest.param(ttnn.gcd, ttnn.uint8, id="int32_only_gcd_uint8"),
         pytest.param(ttnn.gcd, ttnn.uint16, id="int32_only_gcd_uint16"),
         pytest.param(ttnn.gcd, ttnn.bfloat16, id="int32_only_gcd_bfloat16"),
@@ -132,6 +133,26 @@ def test_binary_unsupported_input_dtype_rejected(device, expect_error, op, dtype
         pytest.param(ttnn.add, ttnn.float32, ttnn.bfloat8_b, id="add_float32_bf8"),
         pytest.param(ttnn.div, ttnn.bfloat16, ttnn.float32, id="div_bfloat16_float32"),
         pytest.param(ttnn.div, ttnn.float32, ttnn.bfloat16, id="div_float32_bfloat16"),
+        pytest.param(
+            ttnn.floor_div,
+            ttnn.bfloat16,
+            ttnn.float32,
+            id="floor_div_bfloat16_float32",
+            marks=pytest.mark.skipif(
+                is_quasar(),
+                reason="float floor_div is unimplemented on Quasar (SFPU floor and fused Markstein path are WH/BH only)",
+            ),
+        ),
+        pytest.param(
+            ttnn.floor_div,
+            ttnn.float32,
+            ttnn.bfloat16,
+            id="floor_div_float32_bfloat16",
+            marks=pytest.mark.skipif(
+                is_quasar(),
+                reason="float floor_div is unimplemented on Quasar (SFPU floor and fused Markstein path are WH/BH only)",
+            ),
+        ),
     ],
 )
 def test_binary_mixed_float_allowed(device, op, dtype_a, dtype_b):

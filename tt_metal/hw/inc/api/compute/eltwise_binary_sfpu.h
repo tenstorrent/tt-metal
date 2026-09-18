@@ -389,6 +389,13 @@ ALWI void div_binary_tile_init() {
     MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::DIV))));
 }
 
+/**
+ * Programs SFPU reciprocal constants (vConstFloatPrgm*) used by floor_div_binary_tile,
+ * floor_div_binary_scalar_recip_tile, and floor_div_binary_scalar_tile.
+ * Call before those ops; same body as div_binary_tile_init.
+ */
+ALWI void floor_div_binary_tile_init() { div_binary_tile_init(); }
+
 ALWI void mul_binary_tile_init() {
     MATH((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
 }

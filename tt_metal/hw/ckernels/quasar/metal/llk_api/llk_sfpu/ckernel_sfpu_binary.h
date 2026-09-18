@@ -128,8 +128,8 @@ inline void calculate_sfpu_binary(
 
 /**
  * Fused float floor_div is implemented on Wormhole/Blackhole. These entry points
- * exist so the Compute API is architecture-uniform; BinaryNg does not select them
- * on Quasar (DIV + FLOOR postprocess). Calling them is a programming error.
+ * exist so the Compute API is architecture-uniform; BinaryNg TT_FATALs float
+ * floor_div on Quasar (SFPU floor is unimplemented). Calling them is a programming error.
  */
 template <
     [[maybe_unused]] bool APPROXIMATION_MODE,

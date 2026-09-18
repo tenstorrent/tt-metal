@@ -374,10 +374,12 @@ def test_binary_floor_div_overload_ttnn(input_shapes, value, device):
     assert comp_pass
 
 
-@pytest.mark.skipif(
-    is_quasar(),
-    reason="Quasar still uses unfused DIV+FLOOR; fused Markstein floor_div is WH/BH only",
+_FLOAT_FLOOR_DIV_QUASAR_SKIP = (
+    "float floor_div is unimplemented on Quasar (SFPU floor and fused Markstein path are WH/BH only)"
 )
+
+
+@pytest.mark.skipif(is_quasar(), reason=_FLOAT_FLOOR_DIV_QUASAR_SKIP)
 @pytest.mark.parametrize("divisor", [1, 3, 7, 16, 41, 100, 999])
 @pytest.mark.parametrize(
     "torch_dtype,ttnn_dtype",
@@ -405,7 +407,29 @@ def test_binary_floor_div_exact_multiples(torch_dtype, ttnn_dtype, tensor_tensor
     assert torch.equal(ttnn.to_torch(output_tensor), golden_tensor)
 
 
-@pytest.mark.skipif(is_quasar(), reason="fused float floor_div is WH/BH only")
+@pytest.mark.skipif(is_quasar(), reason=_FLOAT_FLOOR_DIV_QUASAR_SKIP)
+@pytest.mark.parametrize(
+    "lhs_tt, rhs_tt, lhs_torch, rhs_torch",
+    [
+        (ttnn.float32, ttnn.bfloat16, torch.float32, torch.bfloat16),
+        (ttnn.bfloat16, ttnn.float32, torch.bfloat16, torch.float32),
+    ],
+)
+def test_binary_floor_div_mixed_float_exact_multiples(lhs_tt, rhs_tt, lhs_torch, rhs_torch, device):
+    divisor = 41
+    values = torch.tensor([k * divisor for k in (1, 2, 3, 4, -1, -2)], dtype=lhs_torch)
+    host_lhs = values.repeat(171)[:1024].reshape(1, 1, 32, 32)
+    host_rhs = torch.full(host_lhs.shape, divisor, dtype=rhs_torch)
+    lhs = ttnn.from_torch(host_lhs, dtype=lhs_tt, layout=ttnn.TILE_LAYOUT, device=device)
+    rhs = ttnn.from_torch(host_rhs, dtype=rhs_tt, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.floor_div(lhs, rhs)
+    golden_tensor = torch.floor_divide(host_lhs, host_rhs)
+    got = ttnn.to_torch(output_tensor).to(torch.float32)
+    golden = golden_tensor.to(torch.float32)
+    assert torch.equal(got, golden)
+
+
+@pytest.mark.skipif(is_quasar(), reason=_FLOAT_FLOOR_DIV_QUASAR_SKIP)
 @pytest.mark.parametrize("tensor_tensor", [False, True])
 def test_binary_floor_div_finite_over_inf(tensor_tensor, device):
     host = torch.tensor([1.0, -2.0, 3.0, -4.0], dtype=torch.float32).repeat(256).reshape(1, 1, 32, 32)
@@ -420,7 +444,7 @@ def test_binary_floor_div_finite_over_inf(tensor_tensor, device):
     assert torch.equal(ttnn.to_torch(output_tensor), golden_tensor)
 
 
-@pytest.mark.skipif(is_quasar(), reason="fused float floor_div is WH/BH only")
+@pytest.mark.skipif(is_quasar(), reason=_FLOAT_FLOOR_DIV_QUASAR_SKIP)
 @pytest.mark.parametrize("tensor_tensor", [False, True])
 @pytest.mark.parametrize(
     "torch_dtype,ttnn_dtype",
@@ -446,7 +470,7 @@ def test_binary_floor_div_finite_over_nan(torch_dtype, ttnn_dtype, tensor_tensor
     assert torch.isnan(got).all(), f"expected all-NaN, got unique values {got.unique()}"
 
 
-@pytest.mark.skipif(is_quasar(), reason="fused float floor_div is WH/BH only")
+@pytest.mark.skipif(is_quasar(), reason=_FLOAT_FLOOR_DIV_QUASAR_SKIP)
 def test_binary_floor_div_scalar_recip_dest_slot(device):
     # SCALAR_RHS_ONCE caches the reciprocal in DEST tile 3 and reuses it across
     # LHS tiles in one dest acquire (fp32 dest holds 4 tiles: lhs0, scalar, lhs1, recip).
@@ -460,7 +484,7 @@ def test_binary_floor_div_scalar_recip_dest_slot(device):
     assert torch.equal(ttnn.to_torch(output_tensor), golden_tensor)
 
 
-@pytest.mark.skipif(is_quasar(), reason="fused float floor_div is WH/BH only")
+@pytest.mark.skipif(is_quasar(), reason=_FLOAT_FLOOR_DIV_QUASAR_SKIP)
 def test_binary_floor_div_scalar_all_row_groups(device):
     # Fill every DEST row-group (8 faces × 32) with a distinct exact multiple so a
     # rematerialized SFPLOAD after dst_reg++ cannot hide behind a uniform tile.
@@ -473,7 +497,7 @@ def test_binary_floor_div_scalar_all_row_groups(device):
     assert torch.equal(ttnn.to_torch(output_tensor), golden_tensor)
 
 
-@pytest.mark.skipif(is_quasar(), reason="fused float floor_div is WH/BH only")
+@pytest.mark.skipif(is_quasar(), reason=_FLOAT_FLOOR_DIV_QUASAR_SKIP)
 def test_binary_floor_div_bf16_scalar_large_quotient(device):
     # SCALAR_RHS_ONCE forces fp32 DEST; packer must still RNE 259 to bf16 (260), not trunc to 258.
     host = torch.full((1, 1, 32, 32), 1816, dtype=torch.bfloat16)
@@ -483,7 +507,7 @@ def test_binary_floor_div_bf16_scalar_large_quotient(device):
     assert torch.equal(ttnn.to_torch(output_tensor), golden_tensor)
 
 
-@pytest.mark.skipif(is_quasar(), reason="fused float floor_div is WH/BH only")
+@pytest.mark.skipif(is_quasar(), reason=_FLOAT_FLOOR_DIV_QUASAR_SKIP)
 def test_binary_floor_div_bf16_large_quotient(device):
     # 1816/7 = 259.428...; floor is 259, which is not a bf16 integer (ULP=2 in this range).
     # Truncating the fp32 floor to bf16 would store 258; RNE matches torch (260).
