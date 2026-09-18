@@ -381,6 +381,7 @@ _FLOAT_OPS = [
     ("DIV", MathOperation.SfpuElwdiv, ApproximationMode.No),
     ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.No),
     ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.Yes),
+    # COPY_DEST ignores APPROXIMATION_MODE (stateless copy); only one entry needed.
     ("COPY_DEST", MathOperation.SfpuCopyDest, ApproximationMode.No),
 ]
 

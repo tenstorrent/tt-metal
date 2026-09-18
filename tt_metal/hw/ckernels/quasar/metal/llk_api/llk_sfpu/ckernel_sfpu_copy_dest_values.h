@@ -11,6 +11,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_math_eltwise_sfpu_common.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -19,15 +20,18 @@ namespace sfpu {
 /**
  * @brief Copy one Dest tile onto another, bit-exact, using SFPLOAD/SFPSTORE.
  *
- * Int32 uses sfpmem::INT32 (TEN-4674: implied formats misbehave with unpack-to-dest
- * integers). Every other format uses sfpmem::DEFAULT so SFPLOAD/SFPSTORE resolve the
- * Dest encoding from the ALU format config the unpacker already programmed.
+ * The SFPLOAD/SFPSTORE sfpmem mode is the canonical _sfpu_sfpmem_type_<DATA_FORMAT>()
+ * mapping (Int32 → INT32 so TEN-4674 stays intact; UInt16/Int16/Int8/UInt8 keep their
+ * dedicated modes; formats with no dedicated mode fall back to DEFAULT). Naming the
+ * format avoids loading a narrow-integer payload as float, which is what DEFAULT
+ * would do — DEFAULT only re-derives FP32/FP16A/FP16B from ALU_FORMAT_SPEC_REG.
  *
  * Dest offsets are in rows, relative to the dest counter
  * @ref _llk_math_eltwise_binary_sfpu_params_ sets. Each iteration covers one SFPU pass
  * (SFP_ROWS = 2); VectorMode::RC walks the four faces around this loop.
  *
- * @tparam DATA_FORMAT: Dest encoding; only Int32 vs everything-else is distinguished.
+ * @tparam DATA_FORMAT: Dest encoding; any DataFormat enumerator. Must match the
+ *         format actually sitting in Dest (e.g. Float32 when dest-acc is on).
  * @tparam APPROXIMATION_MODE: unused, kept for ABI parity with the Blackhole kernel.
  * @tparam ITERATIONS: SFPU passes per face (default = SFPU_ITERATIONS).
  * @tparam TILE_SHAPE: Destination tile shape used to derive the tile stride.
@@ -46,8 +50,7 @@ inline void copy_dest_value(
     const std::uint32_t dst_index_in,
     const std::uint32_t dst_index_out,
     [[maybe_unused]] const std::uint32_t dst_index_unused) {
-    constexpr std::uint32_t SFPMEM_MODE =
-        (DATA_FORMAT == DataFormat::Int32) ? p_sfpu::sfpmem::INT32 : p_sfpu::sfpmem::DEFAULT;
+    constexpr std::uint32_t SFPMEM_MODE = _sfpu_sfpmem_type_<DATA_FORMAT>();
     constexpr std::uint32_t tile_stride = 1U << trisc::get_dest_tile_size_log2(TILE_SHAPE);
     const std::uint32_t in_offset = dst_index_in * tile_stride;
     const std::uint32_t out_offset = dst_index_out * tile_stride;
@@ -81,6 +84,8 @@ inline void copy_dest_value(
     const std::uint32_t dst_index_in,
     const std::uint32_t dst_index_out,
     [[maybe_unused]] const std::uint32_t dst_index_unused) {
+    // sfpi dst_reg indexes in SFP_ROWS (2) units, so the tile stride is dest-rows / 2
+    // (32 for Tile32x32; same as BH/WH 64/SFP_DESTREG_STRIDE).
     constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

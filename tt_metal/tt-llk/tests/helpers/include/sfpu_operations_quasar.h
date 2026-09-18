@@ -468,7 +468,11 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
 }
 
 /**
- * @brief Apply a Quasar binary SFPU op over two Dest operands into a result tile.
+ * @brief Apply a Quasar binary SFPU op over Dest operands into a result tile.
+ *
+ * Most ops read two Dest operands (`src0_tile`, `src1_tile`) into `dst_tile`.
+ * COPY_DEST is a Dest-to-Dest copy of `src0_tile` onto `dst_tile`; `src1_tile` is
+ * ignored and the kernel ABI is `(in, out, unused)` to match the shared compute API.
  *
  * @tparam OP The binary op (compile-time `ckernel::BinaryOp` constant).
  * @tparam DST_SYNC Destination synchronization mode used for bounds checking.
@@ -481,8 +485,11 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
  *         and skip the sign-magnitude<->2's-complement casts. Must match the init step.
  * @tparam APPROXIMATION_MODE Whether to use the operation's approximate path. Must match the
  *         init step; atan2 uses it to select the LUT-only reciprocal path.
- * @param src0_tile,src1_tile,dst_tile Operand / result tile indices.
- * @param math_format Dest math format (Int32 vs float path for MUL and max/min).
+ * @param src0_tile,src1_tile,dst_tile Operand / result tile indices. COPY_DEST ignores
+ *        `src1_tile` and writes `src0_tile` onto `dst_tile`.
+ * @param math_format Dest encoding. Int32 vs float path for MUL and max/min; COPY_DEST
+ *        forwards it as the `copy_dest_value` template argument so the sfpmem mode
+ *        matches Dest (Float16 / Float16_b / Int32 / UInt16 / …, not a Float32 placeholder).
  * @note Must be preceded by @ref init_binary_sfpu_operation_quasar for the same op.
  */
 template <
@@ -602,15 +609,55 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     else if constexpr (OP == BinaryOp::COPY_DEST)
     {
         // Dest-to-Dest copy of src0 onto dst. Kernel ABI is (in, out, unused), matching
-        // the shared compute API — not the usual binary (in0, in1, out). Int32 needs an
-        // explicit sfpmem mode (TEN-4674); every other math format uses DEFAULT.
+        // the shared compute API — not the usual binary (in0, in1, out). src1_tile is
+        // ignored. math_format is the Dest encoding and must be forwarded so
+        // copy_dest_value can pick the matching sfpmem mode via _sfpu_sfpmem_type_
+        // (Int32 → INT32 for TEN-4674; UInt16/Int16/Int8/UInt8 keep dedicated modes).
         if (math_format == DataFormat::Int32)
         {
             SFPU_BINARY_CALL(
                 DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::Int32, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
         }
+        else if (math_format == DataFormat::Float16)
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::Float16, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
+        }
+        else if (math_format == DataFormat::Float16_b)
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                copy_dest_value,
+                (DataFormat::Float16_b, false, ITERATIONS),
+                src0_tile,
+                dst_tile,
+                0 /* unused */,
+                VectorMode::RC);
+        }
+        else if (math_format == DataFormat::UInt16)
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::UInt16, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
+        }
+        else if (math_format == DataFormat::Int16)
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::Int16, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
+        }
+        else if (math_format == DataFormat::Int8)
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::Int8, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
+        }
+        else if (math_format == DataFormat::UInt8)
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::UInt8, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
+        }
         else
         {
+            // Float32 and Tf32 both map to sfpmem::FP32 inside copy_dest_value.
             SFPU_BINARY_CALL(
                 DST_SYNC, is_fp32_dest_acc_en, copy_dest_value, (DataFormat::Float32, false, ITERATIONS), src0_tile, dst_tile, 0 /* unused */, VectorMode::RC);
         }
