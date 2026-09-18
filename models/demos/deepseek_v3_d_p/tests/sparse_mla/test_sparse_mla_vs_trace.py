@@ -351,6 +351,7 @@ def test_indexer_device_vs_reference(mesh_device, model, layer, device_params, m
         num_kvpe_cache_layers=1,
         num_users=1,
         dtype=ttnn.bfloat8_b,
+        tp_axis=1,
     )
     idx_rope = RotarySetup(cfg, mesh_device, sp_axis=0, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
@@ -396,6 +397,7 @@ def _run_device_forward(model, config, layer, mesh_device):
         mesh_shape=list(mesh_device.shape),
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
+        tp_axis=1,
     )
     index_kv_cache = init_kvpe_cache(
         kvpe_cache_head_dim=config.index_head_dim,
@@ -406,6 +408,7 @@ def _run_device_forward(model, config, layer, mesh_device):
         num_kvpe_cache_layers=1,
         num_users=1,
         dtype=ttnn.bfloat8_b,
+        tp_axis=1,
     )
     rope_tensors = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
