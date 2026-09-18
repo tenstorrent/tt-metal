@@ -18,7 +18,7 @@
 
 #ifdef REDUCE_POST_MUL
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
+#include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_compute_common.hpp"
 #endif
 
 void kernel_main() {
