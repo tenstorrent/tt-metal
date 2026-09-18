@@ -62,7 +62,8 @@ uint32_t align_up_32(uint32_t x) { return (x + 31u) & ~31u; }
 //   - {0,0} (NoC 0) reads the routing ids and scores, computes/broadcasts the selected ("hit")
 //     expert ids (ascending) and their per-token weights, and is hub0 of the activation gather.
 //   - {1,0} (NoC 1) reads the activation tile row and broadcasts it to every
-//     core's L1 (cb_input).
+//     core's L1 (cb_input). A replicated input (`input_replicated`) skips this entirely: every core
+//     already holds the row, cb_input is aliased over its shard, and the reader only publishes it.
 //   - PHASE 1 -- gate_up + SwiGLU for the block's experts: each SwiGLU core fetches its
 //     [K, 64*swiglu_tiles_per_core] gate_up shard per expert (one NoC read -- a per-core
 //     [gate | up] block) and produces its slice of each expert's activation act[B, I]. The I
@@ -163,8 +164,13 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // whole tile-level pipeline below -- tile counts, matmuls, gather, output pages -- is exactly
     // what it is for a single token. Batch only shows up in the routing path: there are B routing
     // rows to scan for hits, and each expert's routing weight becomes a per-row column vector
-    // instead of one scalar.
-    const uint32_t batch = static_cast<uint32_t>(input_tensor.logical_shape()[-2]);
+    // instead of one scalar. A replicated ROW_MAJOR input counts `num_cores * rows` in dim -2, so
+    // the row count comes from its shard height instead.
+    const uint32_t batch = fused_experts_input_rows(input_tensor);
+    // The activation arrives either from DRAM (broadcast by the {1,0} sender) or already replicated
+    // in every core's L1 as a ROW_MAJOR HEIGHT_SHARDED shard, in which case cb_input is aliased over
+    // that shard and the whole read+broadcast stage is skipped.
+    const bool input_replicated = fused_experts_input_is_replicated(input_tensor);
 
     // gate_up weights are [K=H, N=2I] per expert (TILE layout), reshaped+permuted on the
     // host into per-shard [gate_32 | up_32] blocks. Each DRAM shard is one I-tile of gate
@@ -184,8 +190,10 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // be TILE 32x32 or a ROW_MAJOR decode stick (indexed linearly). Width must be 32 (kernels
     // index tile columns as 32-wide); height can be any supported tiny value (1, 2, 4, 8, 16,
     // 32). ROW_MAJOR decode (B==1) is forced to 1x32 so the RM stick is loaded as packed 1x16
-    // faces without a tilize. Bfp8_b at tiny heights is now valid tt-llk support, so cb_act /
-    // cb_out keep the Bfp8_b format their L1 budget was sized for.
+    // faces without a tilize -- and that is also what lets the replicated ROW_MAJOR input hand its
+    // L1 shard to compute verbatim, since a row-major row IS a run of 1x32 faces. Bfp8_b at tiny
+    // heights is now valid tt-llk support, so cb_act / cb_out keep the Bfp8_b format their L1
+    // budget was sized for.
     const auto input_tile = fused_experts_compute_tile(input_tensor);
     const uint32_t input_tile_h = input_tile.get_height();
     const uint32_t input_tile_hw = input_tile.get_tile_hw();
@@ -310,16 +318,36 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // Activation tiles: one 32-wide compute tile per K-slice. TILE tensors already page that
     // way (page == tile). ROW_MAJOR decode is a stick of H bf16; each 32-wide chunk is a 1x32
     // tile, so a source page may hold several compute tiles (the full stick, or a width shard).
+    // A replicated input is not read through its accessor at all -- cb_input is aliased straight
+    // over the per-core L1 shard, so the shard has to be exactly the tiles it backs.
     const uint32_t input_df_tile_bytes = input_tile.get_tile_size(input_df);
-    const uint32_t src_page_bytes = static_cast<uint32_t>(input_buffer->page_size());
-    TT_FATAL(
-        src_page_bytes >= input_df_tile_bytes && src_page_bytes % input_df_tile_bytes == 0,
-        "fused_experts: input page size {} must be a multiple of the {}-byte compute tile",
-        src_page_bytes,
-        input_df_tile_bytes);
-    const uint32_t src_tiles_per_page = src_page_bytes / input_df_tile_bytes;
     const uint32_t input_page_size = input_df_tile_bytes;
     const uint32_t input_num_pages = k_tiles;
+    uint32_t src_tiles_per_page = 1u;
+    if (input_replicated) {
+        const auto& in_shard = input_tensor.memory_config().shard_spec().value();
+        const uint64_t shard_bytes =
+            static_cast<uint64_t>(in_shard.shape[0]) * in_shard.shape[1] * input_tensor.element_size();
+        TT_FATAL(
+            shard_bytes == static_cast<uint64_t>(input_num_pages) * input_page_size,
+            "fused_experts: replicated input shard ({}x{} x {} B = {} B) must be exactly the {} compute "
+            "tiles of {} B that cb_input is aliased over ({} B)",
+            in_shard.shape[0],
+            in_shard.shape[1],
+            input_tensor.element_size(),
+            shard_bytes,
+            input_num_pages,
+            input_page_size,
+            static_cast<uint64_t>(input_num_pages) * input_page_size);
+    } else {
+        const uint32_t src_page_bytes = static_cast<uint32_t>(input_buffer->page_size());
+        TT_FATAL(
+            src_page_bytes >= input_df_tile_bytes && src_page_bytes % input_df_tile_bytes == 0,
+            "fused_experts: input page size {} must be a multiple of the {}-byte compute tile",
+            src_page_bytes,
+            input_df_tile_bytes);
+        src_tiles_per_page = src_page_bytes / input_df_tile_bytes;
+    }
 
     // Output compute tiles match the input tile. TILE DRAM pages are one tile; ROW_MAJOR pages
     // may pack several 1x32 faces (a shard stick or the full H row).
@@ -581,6 +609,21 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // Activation tiles (page = one tile) so the matmul can index them tile-by-tile.
     // The token-row-shaped tile (input_tile) is attached so JIT get_tile_size(cb_input) and
     // unpack strides match the real tile geometry rather than the default 32x32.
+    //
+    // A replicated input hands its per-core L1 shard to compute by aliasing this CB over the input
+    // buffer: the ROW_MAJOR row is already k_tiles consecutive 1x32 faces, which IS the tile layout
+    // of a 1x32 compute tile, so the reader only has to publish it (no read, no broadcast, no copy).
+    // Every compute core must carry that replica, and a globally-allocated CB does not consume the
+    // program's L1 budget -- it uses the buffer's own allocation.
+    if (input_replicated) {
+        const auto& in_grid = input_tensor.memory_config().shard_spec().value().grid;
+        TT_FATAL(
+            in_grid.contains(all_cores),
+            "fused_experts: every compute core needs the activation replica, but the input's shard grid "
+            "{} does not contain the compute grid {}",
+            in_grid.str(),
+            all_cores.str());
+    }
     constexpr uint32_t cb_input = CBIndex::c_2;
     desc.cbs.push_back(CBDescriptor{
         .total_size = input_cb_bytes,
@@ -591,6 +634,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             .page_size = input_page_size,
             .tile = input_tile_desc,
         }}},
+        .buffer = input_replicated ? input_buffer : nullptr,
     });
 
     // Per-core gate_up weight slice ([K, 128] = k_tiles x 4 tiles: gate 0,1 | up 2,3),
@@ -882,6 +926,9 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::NOC_0,
     };
+    if (input_replicated) {
+        sender_desc.defines.emplace_back("INPUT_REPLICATED", "1");
+    }
     // Pass the routing buffers as BufferBindings (not raw addresses) so the framework
     // patches the addresses on program-cache hits instead of rebuilding the descriptor.
     sender_desc.emplace_runtime_args(
@@ -966,6 +1013,9 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         .processor = DataMovementProcessor::RISCV_1,
         .noc = NOC::NOC_1,
     };
+    if (input_replicated) {
+        input_sender_desc.defines.emplace_back("INPUT_REPLICATED", "1");
+    }
     // NoC 1 multicasts traverse from high to low coordinates, so swap start/end.
     // input_buffer is a BufferBinding so the framework patches its address on cache hits.
     input_sender_desc.emplace_runtime_args(
@@ -1043,6 +1093,9 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = noc,
         };
+        if (input_replicated) {
+            d.defines.emplace_back("INPUT_REPLICATED", "1");
+        }
         for (const auto& cr : cores.ranges()) {
             for (const auto& core : cr) {
                 const uint32_t idx = core_index_for(core);

@@ -12,7 +12,9 @@
 // Reader kernel (runs on every compute core except the two senders {0,0} and {1,0}).
 //
 // Waits for both initial broadcasts to land in this core's L1:
-//   - {1,0} multicasts the activation row into cb_input and bumps sem_input_id.
+//   - {1,0} multicasts the activation row into cb_input and bumps sem_input_id. With
+//     INPUT_REPLICATED there is no activation broadcast: cb_input is aliased over this core's own
+//     ROW_MAJOR HEIGHT_SHARDED replica, and the tiles are published without waiting on anything.
 //   - {0,0} multicasts the expert ids into cb_bcast and bumps sem_id.
 // It then publishes the activation to the compute kernel (cb_input) and runs the
 // per-expert reader loop as a (non-leader) receiver: fetches this core's gate_up + down
@@ -117,9 +119,17 @@ void kernel_main() {
 
     const ActGatherConfig gather{hub_role, hub0_noc_x, hub0_noc_y, hub1_noc_x, hub1_noc_y, split_col, num_hubs};
 
-    // Activation arrived via multicast: publish it to the compute kernel.
+    // Activation: publish it to the compute kernel.
+#ifdef INPUT_REPLICATED
+    // Already in this core's L1 as a ROW_MAJOR HEIGHT_SHARDED replica, with cb_input aliased over
+    // its shard -- nothing was broadcast, so there is nothing to wait for.
+    publish_input(cb_input_id, k_tiles);
+    (void)sem_input_id;
+#else
+    // Arrived via the {1,0} input sender's multicast.
     Semaphore<>(sem_input_id).wait(1);
     publish_input(cb_input_id, k_tiles);
+#endif
 
     // Expert ids arrived, then run the per-expert reader loop.
     Semaphore<>(sem_id).wait(1);
