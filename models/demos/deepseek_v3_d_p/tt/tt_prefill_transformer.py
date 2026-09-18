@@ -138,9 +138,10 @@ class TtPrefillTransformer(LightweightModule):
             ):
                 return False
 
-        # Final norm + LM head: only the last rank that emits a token loads these
-        # (skipped for a kv_only last layer and for non-last pipeline ranks).
-        if is_last_rank and not kv_only_last_layer:
+        # Final norm + LM head: MTP only. #55796 removed the trunk's tail -- production prefill hands
+        # the KV cache to decode -- so these are loaded iff a predictor runs on this rank: h^0 is
+        # post-norm, and a generated level's lookahead token comes out of the LM head.
+        if mtp_levels and is_last_rank and not kv_only_last_layer:
             if not TtDistributedRmsNorm.check_cache_complete(cache_path, "norm"):
                 return False
             if not TtLMHead.check_cache_complete(cache_path):
@@ -288,10 +289,15 @@ class TtPrefillTransformer(LightweightModule):
             )
             self.layers.append(layer)
 
-        # --- Final norm (last token-emitting rank only) ---
-        # Built iff is_last_rank and not kv_only_last_layer: a kv_only last layer (chunked prefill)
-        # emits no token, and non-last pipeline ranks forward the hidden state — both skip the tail.
-        build_tail = is_last_rank and not kv_only_last_layer
+        # --- Final norm + LM head: MTP only ---
+        # #55796 removed the trunk's norm/LM-head/sampling tail: production prefill hands the KV
+        # cache to decode, and a test that wants logits runs the tail on the host. MTP is the one
+        # consumer that still needs it ON DEVICE, for two independent reasons -- h^0, the tensor
+        # level 1's `hnorm` consumes, is post-norm, and every level at or above `provided_levels`
+        # generates its own lookahead token through the LM head (see `mtp_generate_embedding`). So
+        # the tail is built iff a predictor runs here. A kv_only last layer produces no hidden
+        # state and a non-last pipeline rank forwards it, so both still skip the tail.
+        build_tail = mtp_predictor is not None and is_last_rank and not kv_only_last_layer
         self.norm = (
             TtDistributedRmsNorm(
                 mesh_device=mesh_device,
@@ -481,8 +487,8 @@ class TtPrefillTransformer(LightweightModule):
                         for dense (non-sparse) variants.
             return_intermediates: if True, sync + snapshot to host after each stage
             read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
-            temperature: Temperature for sampling. Can be a single float or list of floats.
-                        If list, returns first temperature result but stores all in intermediates.
+            temperature: unused since #55796 removed the trunk's sampling tail -- prefill emits no
+                        token. Still accepted so callers that pass it keep working.
             d2h_service: optional service used to send a layer-ack completion signal back to host once
                         each layer's KV cache has been populated on device. When set, each block zeros the
                         cache pad window and enqueues the ack via the outbound_socket_service_sync device op
@@ -504,15 +510,12 @@ class TtPrefillTransformer(LightweightModule):
                         gather. Set by the device MTP path, which embeds the trunk rows itself.
 
         Returns:
-            On a non-last rank: the hidden-state activation tensor to hand to the next
-            rank (no token — the tail did not run).
+            On a non-last rank: the hidden-state activation tensor to hand to the next rank.
 
-            On the last rank (and single-rank): a tuple of
-            (first_token_id, first_token_prob, intermediates_dict or None)
-            - first_token_id: sampled token ID (for first temperature if list provided)
-            - first_token_prob: probability of sampled token (for first temperature if list provided)
-            - intermediates: dict with keys like "embed", "layer_0", "norm", "lm_head", "first_token"
-                            where "first_token" is a list of results for each temperature
+            On the last rank (and single-rank): `(None, None, intermediates)`. Prefill produces no
+            token -- #55796 made the populated KV cache its whole product -- so the first two slots
+            are always None; the arity is kept for callers that still unpack three values.
+            - intermediates: dict with keys like "embed", "layer_0" and, under MTP, "norm" (h^0)
                             (None if return_intermediates=False)
         """
         # The two ack transports are mutually exclusive: the block takes the d2h_service branch and would
@@ -621,45 +624,32 @@ class TtPrefillTransformer(LightweightModule):
         indexer_indices = None
 
         # Non-last pipeline ranks stop here: the layer slice's output activation is
-        # handed to the next rank, which continues from this hidden state. The norm /
-        # LM-head / sample tail (and its weights) live only on the last rank.
+        # handed to the next rank, which continues from this hidden state.
         if not self.is_last_rank:
             return h
 
-        h = self.norm(h)
+        # The norm and the LM head exist on this rank iff MTP does (see __init__). With no
+        # predictor the populated KV cache is this rank's whole product, so the final hidden state
+        # is dropped here, exactly as the kv_only last layer above drops it; a caller that wants
+        # logits runs norm + LM head on the host from intermediates["layer_<last>"].
+        if self.norm is not None:
+            h = self.norm(h)  # h^0: the tensor level 1's `hnorm` consumes
 
-        if return_intermediates:
-            ttnn.synchronize_device(self.mesh_device)
-            intermediates["norm"] = self._to_host(h)
+            if return_intermediates:
+                ttnn.synchronize_device(self.mesh_device)
+                intermediates["norm"] = self._to_host(h)
 
-        # LM Head: extract logits for last real token
-        logits_host, first_token_logits = self._lm_head_and_extract(h, actual_isl)
-
-        if return_intermediates:
-            intermediates["lm_head"] = logits_host
-            intermediates["logits"] = first_token_logits
-
-        # Reorder intermediates if balanced. Skip reordering for logits and lm_head in zigzag mode.
-        no_reorder_keys = {"logits", "lm_head"}
+        # Reorder intermediates if balanced: zigzag SP shards the sequence in a permuted chunk
+        # order, so restore the natural order for every host snapshot (all are sequence tensors).
         if return_intermediates and self.is_balanced:
             for key, tensor in intermediates.items():
-                if key in no_reorder_keys:
-                    logger.debug(f"Skipping reordering for non-sequence intermediate {key}")
-                    continue
                 if isinstance(tensor, torch.Tensor):
                     logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
                     intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
                 else:
                     logger.debug(f"Skipping reordering for intermediate {key} of type {type(tensor)}")
 
-        # Sample token(s) from logits
-        first_token_id, first_token_prob, sweep_results = self._sample(first_token_logits, actual_isl, temperature)
-
-        if return_intermediates:
-            intermediates["first_token"] = sweep_results
-
-        # MTP runs after the trunk tail, so the trunk path is unchanged when MTP is off. `h` is h^0
-        # and is still live: neither the LM head nor _sample frees it.
+        # `h` is h^0, the post-norm trunk hidden, and is still live: nothing above frees it.
         if mtp_union is not None:
             assert actual_start is not None, (
                 "MTP needs actual_start on the host to know whether this chunk contains absolute "
@@ -686,7 +676,10 @@ class TtPrefillTransformer(LightweightModule):
             if on_mtp_complete is not None:
                 on_mtp_complete(mtp_out, mtp_generated)
 
-        return first_token_id, first_token_prob, intermediates
+        # No token from prefill: #55796 gave that job to decode. The 3-tuple arity is kept -- it is
+        # what the kv_only early return above already hands back -- so this stays a one-file change;
+        # main's callers, which expect the bare dict, arrive with the merge.
+        return None, None, intermediates
 
     def _lm_head_and_extract(
         self,
