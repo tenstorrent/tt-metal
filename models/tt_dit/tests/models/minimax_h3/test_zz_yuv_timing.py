@@ -27,6 +27,9 @@ EXPECTED_FORWARDS = NUM_INFERENCE_STEPS - 1
 # MINIMAX_H3_SEED overrides it, so a sweep can move off seed 0 -- the audio a seed produces is part of the
 # generation, not the decoder, so comparing decoder configurations does not require keeping it.
 SEED = int(os.environ.get("MINIMAX_H3_SEED", "0"))
+# MINIMAX_H3_PROMPT swaps the prompt. The calibrated one is what the timing numbers were taken on, so a
+# different prompt is for listening to or looking at a clip, not for comparing against those numbers.
+PROMPT = os.environ.get("MINIMAX_H3_PROMPT") or CALIBRATED_FOX_PROMPT
 ASPECT_RATIO = (16, 9)
 DURATIONS_S = [5, 10, 15]
 VSA_SPARSITY = 0.9
@@ -73,7 +76,7 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
 
     output = run_warm_generation(
         pipeline,
-        CALIBRATED_FOX_PROMPT,
+        PROMPT,
         num_frames=num_frames,
         height=height,
         width=width,
