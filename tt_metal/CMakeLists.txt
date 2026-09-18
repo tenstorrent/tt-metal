@@ -138,6 +138,9 @@ if(TT_METAL_USE_EMULE)
     # PRIVATE: only libtt_metal.so itself needs -rdynamic (to export TLS symbols
     # for dlopen'd JIT kernels). No need to propagate to all consumers.
     target_link_options(tt_metal PRIVATE -rdynamic)
+    # The emulation engine now lives in tt-emule-blaze's tt-emule::runtime OBJECT library; link its
+    # objects into libtt_metal.so so the -rdynamic export above still promotes the dlsym surface.
+    target_link_libraries(tt_metal PRIVATE tt-emule::runtime)
 endif()
 
 add_dependencies(tt_metal hw_toolchain)
