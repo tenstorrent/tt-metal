@@ -15,7 +15,7 @@
 //                              invocation, no barrier between reps; 0/1 = normal single pass)
 //   6: read_progress_every    (mode 2: emit a READ_PROG timestamp every N pages completed; 0=off)
 //
-// Compile-time args (see TensorAccessorArgs<8> for src accessor):
+// Compile-time args (see TensorAccessorArgs<9> for src accessor):
 //   0: cb_in
 //   1: READER_MODE            (0 = reserve N, read+push one-by-one with a global barrier
 //                              1 = reserve N, read all, single barrier, push N
@@ -36,6 +36,9 @@
 //   7: READ_BYTES_OVERRIDE     (reader_mode 2 only; 0 = read full page. >0 = NoC-read only this
 //                              many bytes per page but still push a full CB page -- "cheap read"
 //                              for the output-bound regime, valid only because payload is dummy.)
+//   8: WRITE_ONLY              (1 = issue NO NoC read at all; just run the CB handshake so the
+//                              consumer advances, leaving the read path completely idle. For pure
+//                              write-BW measurement. Takes precedence over READER_MODE.)
 //
 // Profiler on first tile of the slice only: READ_BEFORE_BARRIER / READ_AFTER_BARRIER
 // (research only; gated by PROFILE_DETAIL).
@@ -81,7 +84,9 @@ void kernel_main() {
     // Cheap-read override (reader_mode 2 only): 0 = read the full page; >0 = NoC-read only this
     // many BYTES per page but still push a full CB page (dummy payload -> reads ~free).
     constexpr uint32_t READ_BYTES_OVERRIDE = get_compile_time_arg_val(7);
-    constexpr auto src_args = TensorAccessorArgs<8>();
+    // Pure write-BW mode: no NoC reads whatsoever (see header). CB handshake only.
+    constexpr uint32_t WRITE_ONLY = get_compile_time_arg_val(8);
+    constexpr auto src_args = TensorAccessorArgs<9>();
 
     constexpr uint32_t chunk_size = PUSH_TILE_COUNT > 0 ? PUSH_TILE_COUNT : 1;
     constexpr uint32_t tiles_per_page = TILES_PER_PAGE > 0 ? TILES_PER_PAGE : 1;
@@ -115,6 +120,33 @@ void kernel_main() {
     // src accessor is configured with the matching page_size at build time.
     const uint32_t start_page_id = effective_start_tile_id / tiles_per_page;
     const uint32_t n_pages = n_tiles / tiles_per_page;
+
+    // Pure write-BW mode: no NoC read at all. We still run the CB handshake so compute and the
+    // writer advance exactly as they normally do; the CB payload is whatever L1 already held,
+    // which is fine because it is never validated in this mode. Markers are emitted in the same
+    // order as the read paths so the profiler walkers still pair up -- but the
+    // READ_BEFORE->READ_LAST span is a CB-push span here, NOT a read-BW span.
+    if constexpr (WRITE_ONLY) {
+        for (uint32_t rep = 0; rep < workload_repeat; ++rep) {  // kernel-unroll: no barrier between reps
+            DETAIL_MARK("READ_BEFORE_BARRIER", effective_start_tile_id);
+            for (uint32_t p = 0; p < n_pages; ++p) {
+                in_cb.reserve_back(tiles_per_page);
+                in_cb.push_back(tiles_per_page);
+                if (p == 0) {
+                    DETAIL_MARK("READ_AFTER_BARRIER", effective_start_tile_id);
+                }
+                if (read_progress_every && ((p + 1) % read_progress_every == 0)) {
+                    DeviceTimestampedData("READ_PROG", p + 1);
+                }
+            }
+            DETAIL_MARK("READ_LAST_BARRIER", effective_start_tile_id);
+            if (read_progress_every) {
+                DeviceTimestampedData("READ_PROG", n_pages);
+            }
+        }
+        DETAIL_MARK("NCRISC_DONE", program_id);
+        return;
+    }
 
     if constexpr (READER_MODE == 2) {
         // Per-trid double buffer, N = TRID_IN_FLIGHT reads in flight per side.

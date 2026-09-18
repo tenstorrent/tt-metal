@@ -8,8 +8,26 @@
 #include <yaml-cpp/yaml.h>
 
 #include <umd/device/types/arch.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
 
 namespace {
+// SYS-4948: CMFW publishes which noc2axi port MRISC is loaded on for each GDDR instance, and that
+// port is implicitly the noc0 port. Metal's noc0 assignment has to land on the same port.
+//
+// Nibble i is GDDR instance i (instance 0 in the least significant nibble), holding the port index
+// 0..2, or kMriscPortHarvested when that instance is disabled. A port is not a dram_view endpoint
+// index -- the two do not share a numbering, so each view declares its port (blackhole_140_arch.yaml).
+constexpr uint8_t kMriscPortsPerWord = 8;
+constexpr uint32_t kMriscPortNibbleMask = 0xF;
+constexpr uint32_t kMriscPortHarvested = 0xF;
+
+uint32_t mrisc_port_for_channel(uint32_t mrisc_noc2axi_ports, size_t channel) {
+    if (channel >= kMriscPortsPerWord) {
+        return kMriscPortHarvested;
+    }
+    return (mrisc_noc2axi_ports >> (4 * channel)) & kMriscPortNibbleMask;
+}
+
 // True if physical DRAM `channel` is harvested per `dram_harvesting_mask`. Single home for the
 // bit-masking convention used across the DRAM-view helpers below.
 bool is_dram_channel_harvested(uint32_t dram_harvesting_mask, size_t channel) {
@@ -253,8 +271,96 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_dram_compute_grid_size() const 
     return tt::tt_metal::CoreCoord(this->get_num_dram_views(), get_grid_size(tt::CoreType::DRAM).y);
 }
 
-void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
+std::optional<uint32_t> read_mrisc_noc2axi_ports(tt::umd::TTDevice* tt_device) {
+    // Not in UMD's TelemetryTag enum, so it goes in by number.
+    constexpr uint8_t kGddrMriscNoc2AxiPortTag = 72;
+
+    if (tt_device == nullptr) {
+        return std::nullopt;
+    }
+    auto* telemetry = tt_device->get_firmware_telemetry_reader();
+    // Absent on CMFW older than 19.12, which predates the relocation.
+    if (telemetry == nullptr || !telemetry->is_entry_available(kGddrMriscNoc2AxiPortTag)) {
+        return std::nullopt;
+    }
+    return telemetry->read_entry(kGddrMriscNoc2AxiPortTag);
+}
+
+namespace {
+// Picks whichever of the two assignments in `device_descriptor_yaml` matches the port CMFW reports.
+bool uses_relocated_dram_endpoints(
+    const YAML::Node& device_descriptor_yaml,
+    const std::optional<uint32_t>& mrisc_noc2axi_ports,
+    tt::ARCH arch,
+    uint32_t dram_harvesting_mask,
+    const std::string& descriptor_path) {
+    // Only Blackhole reserves a CMFW-owned noc0 DRAM endpoint, so no other arch has a second
+    // assignment to choose between.
+    if (arch != tt::ARCH::BLACKHOLE) {
+        return false;
+    }
+    // Absent telemetry means the pre-relocation layout, per the telemetry contract. That is also the
+    // safe direction: keeping the old endpoints only costs bandwidth, whereas guessing wrong
+    // collides a noc with MRISC (SYS-1419).
+    if (!mrisc_noc2axi_ports.has_value()) {
+        return false;
+    }
+
+    // Only channels whose two assignments declare different ports are informative; the rest keep
+    // MRISC where it was and move only noc1, so telemetry cannot tell them apart.
+    bool saw_relocated = false;
+    bool saw_legacy = false;
+    for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
+        const size_t channel = dram_view["channel"].as<size_t>();
+        if (is_dram_channel_harvested(dram_harvesting_mask, channel)) {
+            continue;
+        }
+        const uint32_t mrisc_port = mrisc_port_for_channel(mrisc_noc2axi_ports.value(), channel);
+        // A disabled GDDR instance is reported as harvested even when the descriptor still lists the
+        // channel, so it says nothing about which assignment is loaded.
+        if (mrisc_port == kMriscPortHarvested) {
+            continue;
+        }
+        const auto legacy_port = dram_view["mrisc_noc2axi_port"].as<uint32_t>();
+        const auto relocated_port = dram_view["relocated_mrisc_noc2axi_port"].as<uint32_t>();
+        if (legacy_port == relocated_port) {
+            continue;
+        }
+        TT_FATAL(
+            mrisc_port == legacy_port || mrisc_port == relocated_port,
+            "CMFW reports MRISC on noc2axi port {} for DRAM channel {}, which matches neither the "
+            "pre-relocation ({}) nor the relocated ({}) port declared in {}. Refusing to guess: putting a noc "
+            "on a port MRISC owns hangs the chip (SYS-1419).",
+            mrisc_port,
+            channel,
+            legacy_port,
+            relocated_port,
+            descriptor_path);
+        (mrisc_port == relocated_port ? saw_relocated : saw_legacy) = true;
+    }
+
+    // CMFW configures every instance the same way, so the informative channels must agree.
+    TT_FATAL(
+        !(saw_relocated && saw_legacy),
+        "CMFW reports a mix of pre-relocation and relocated MRISC ports across DRAM channels "
+        "(GDDR_MRISC_NOC2AXI_PORT = {:#010x}). The descriptor has no assignment matching that.",
+        mrisc_noc2axi_ports.value());
+
+    return saw_relocated;
+}
+}  // namespace
+
+void metal_SocDescriptor::load_dram_metadata_from_device_descriptor(
+    const std::optional<uint32_t>& mrisc_noc2axi_ports) {
     YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
+    const bool use_relocated_dram_endpoints = uses_relocated_dram_endpoints(
+        device_descriptor_yaml,
+        mrisc_noc2axi_ports,
+        this->arch,
+        this->harvesting_masks.dram_harvesting_mask,
+        this->device_descriptor_file_path);
+    const char* eth_endpoint_key = use_relocated_dram_endpoints ? "relocated_eth_endpoint" : "eth_endpoint";
+    const char* worker_endpoint_key = use_relocated_dram_endpoints ? "relocated_worker_endpoint" : "worker_endpoint";
     this->dram_view_size = device_descriptor_yaml["dram_view_size"].as<uint64_t>();
     const size_t num_dram_views_in_descriptor = device_descriptor_yaml["dram_views"].size();
     this->dram_core_size = num_dram_views_in_descriptor * this->dram_view_size;
@@ -282,7 +388,15 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         }
         size_t address_offset = dram_view["address_offset"].as<size_t>();
 
-        const auto eth_endpoint_ids = dram_view["eth_endpoint"].as<std::vector<int>>();
+        TT_FATAL(
+            dram_view[eth_endpoint_key] && dram_view[worker_endpoint_key],
+            "DRAM view for channel {} is missing '{}'/'{}' in {}",
+            channel,
+            eth_endpoint_key,
+            worker_endpoint_key,
+            this->device_descriptor_file_path);
+
+        const auto eth_endpoint_ids = dram_view[eth_endpoint_key].as<std::vector<int>>();
         std::vector<tt::tt_metal::CoreCoord> eth_dram_cores;
         std::vector<size_t> eth_endpoints;
         eth_dram_cores.reserve(eth_endpoint_ids.size());
@@ -300,7 +414,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
             eth_endpoints.push_back(eth_endpoint);
         }
 
-        const auto worker_endpoint_ids = dram_view["worker_endpoint"].as<std::vector<int>>();
+        const auto worker_endpoint_ids = dram_view[worker_endpoint_key].as<std::vector<int>>();
         std::vector<tt::tt_metal::CoreCoord> worker_dram_cores;
         std::vector<size_t> worker_endpoints;
         worker_dram_cores.reserve(worker_endpoint_ids.size());
@@ -399,9 +513,10 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 // removing the harvested physical coordinates Metal needs the true harvesting state so we generate physical
 // descriptors from virtual coordinates We also initialize additional lookup tables to translate physical coordinates to
 // virtual coordinates because UMD APIs expect virtual coordinates.
-metal_SocDescriptor::metal_SocDescriptor(const SocDescriptor& other, const tt::BoardType& /*board_type*/) :
+metal_SocDescriptor::metal_SocDescriptor(
+    const SocDescriptor& other, const tt::BoardType& /*board_type*/, std::optional<uint32_t> mrisc_noc2axi_ports) :
     SocDescriptor(other) {
-    this->load_dram_metadata_from_device_descriptor();
+    this->load_dram_metadata_from_device_descriptor(mrisc_noc2axi_ports);
     this->generate_logical_eth_coords_mapping();
     this->generate_physical_routing_to_profiler_flat_id();
 }
