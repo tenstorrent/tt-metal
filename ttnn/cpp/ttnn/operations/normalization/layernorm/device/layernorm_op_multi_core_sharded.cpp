@@ -91,7 +91,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     uint32_t block_ht = 0;
     uint32_t block_wt = 0;
     bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
     bool use_welford = false;
     std::visit(
         [&](const auto& program_config) {
@@ -102,7 +101,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 block_ht = program_config.block_h;
                 block_wt = program_config.block_w;
                 legacy_reduction = program_config.legacy_reduction;
-                legacy_rsqrt = program_config.legacy_rsqrt;
                 use_welford = program_config.use_welford;
             }
         },
@@ -348,7 +346,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .tile_width = tile_width,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .legacy_reduction = legacy_reduction,
-        .legacy_rsqrt = legacy_rsqrt,
         .eps = eps,
         .per_core_recip_lut_size = block_w,
         .reader_noc = reader_noc,

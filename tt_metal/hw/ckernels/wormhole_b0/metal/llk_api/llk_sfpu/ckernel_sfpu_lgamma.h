@@ -165,7 +165,7 @@ inline void calculate_lgamma_adjusted(
 template <bool APPROXIMATION_MODE>
 void lgamma_stirling_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    recip_init<APPROXIMATION_MODE, false, false>();
+    recip_init<APPROXIMATION_MODE, false>();
 }
 
 }  // namespace ckernel::sfpu

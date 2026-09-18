@@ -61,6 +61,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     uint32_t num_out_blocks = program_config.num_out_blocks;
     bool use_welford = operation_attributes.use_welford;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
+    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
 
     if (gamma.has_value()) {
         TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR, "Gamma tensor must have ROW_MAJOR layout");
@@ -188,7 +190,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
 
     // -1 sentinel from GroupNormMultiCoreProgramConfig means "auto select".
     // Any other value is taken as an explicit user choice and validated below.
-    if (num_out_blocks == static_cast<uint32_t>(-1)) {
+    const bool auto_num_out_blocks = num_out_blocks == static_cast<uint32_t>(-1);
+    if (auto_num_out_blocks) {
         num_out_blocks =
             groupnorm_heuristic_num_out_blocks(shape[1] * shape[2] * shape[3], num_virtual_cols * num_virtual_rows);
     }
@@ -253,6 +256,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             grid_size.y,
             Ht);
     }
+    if (auto_num_out_blocks && !use_welford && !fp32_dest_acc_en) {
+        num_out_blocks = groupnorm_bf16_num_out_blocks(num_out_blocks, block_ht_group_1, block_wt);
+    }
+
     // Groups that straddle tiles need out_block_h == 1, or the untilize corrupts later tile-rows.
     if (!use_welford && output.layout() == Layout::ROW_MAJOR && block_wt_last != block_wt) {
         log_warning(
@@ -283,9 +290,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     bool reader_repack_output = (per_core_N % tile_width) != 0;
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
-
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
     // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:
     //  - Welford: prerequisite for UnpackToDestFp32 (set below), which bypasses the unpacker's

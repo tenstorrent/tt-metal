@@ -600,7 +600,7 @@ class ModelOptimisations1024x1024BH:
                 "1D_RESNET_CONV_960_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(11, 10),
                     in0_block_w=1,
-                    out_subblock_h=5,
+                    out_subblock_h=1,  # FP32 destination accumulation supports at most four tiles.
                     out_subblock_w=1,
                     per_core_M=5,
                     per_core_N=10,
@@ -612,7 +612,7 @@ class ModelOptimisations1024x1024BH:
                 "1D_RESNET_CONV_640_320": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=(11, 10),
                     in0_block_w=1,
-                    out_subblock_h=5,
+                    out_subblock_h=1,
                     out_subblock_w=1,
                     per_core_M=5,
                     per_core_N=10,
@@ -638,7 +638,6 @@ class ModelOptimisations1024x1024BH:
             block_w=640 // 32 // self.core_grid_x,
             inplace=False,
             legacy_reduction=True,
-            legacy_rsqrt=True,
         )
         self.layernorm_configs["1280_config"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(10, 8),
@@ -647,7 +646,6 @@ class ModelOptimisations1024x1024BH:
             block_w=1280 // 32 // self.core_grid_x,
             inplace=False,
             legacy_reduction=True,
-            legacy_rsqrt=True,
         )
         # endregion
 
@@ -658,6 +656,21 @@ class ModelOptimisations1024x1024BH:
                 "core_grid": ttnn.CoreGrid(y=8, x=8),
                 "num_out_blocks": None,
                 "inplace": True,
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": False,
+        }
+        self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_WELFORD"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=8),
+                "num_out_blocks": None,
+                "inplace": True,
+                "use_welford": True,
+                "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    math_approx_mode=True,
+                    fp32_dest_acc_en=True,
+                ),
             },
             "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             "negative_mask": False,
@@ -745,6 +758,13 @@ class ModelOptimisations1024x1024BH:
             packer_l1_acc=True,
         )
 
+        self.compute_configs["FP32_MM_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         self.compute_configs["CONV_LOFI_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=True,
@@ -754,6 +774,13 @@ class ModelOptimisations1024x1024BH:
 
         self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        self.compute_configs["CONV_HIFI4_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -890,7 +917,9 @@ class ModelOptimisations1024x1024BH:
         return None
 
     def get_mm_compute_config(self, module_path):
-        # for now, return default config
+        if module_path in {f"up_blocks.2.resnets.{i}.conv_shortcut" for i in range(3)}:
+            # Preserve small residual corrections in the final up-block shortcuts.
+            return self.compute_configs["FP32_MM_COMPUTE_CONFIG"]
         if ".to_q" in module_path:
             return self.compute_configs["MATH_APPROX_MM_COMPUTE_CONFIG"]
         return self.compute_configs["DEFAULT_MM_COMPUTE_CONFIG"]
@@ -991,8 +1020,11 @@ class ModelOptimisations1024x1024BH:
             return self.conv_configs["DEFAULT"]
 
     def get_conv_compute_config(self, module_path):
-        if "conv_in" in module_path or "conv_out" in module_path:
+        if "conv_in" in module_path:
             return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
+        if "conv_out" in module_path:
+            # Final noise-prediction errors accumulate across denoising steps.
+            return self.compute_configs["CONV_HIFI4_FP32_COMPUTE_CONFIG"]
         if "resnets" in module_path:
             conv1_no_fp32 = {
                 "down_blocks.2.resnets",
@@ -1043,6 +1075,9 @@ class ModelOptimisations1024x1024BH:
         return mask, negative_mask, gamma, beta
 
     def _get_groupnorm_config(self, module_path):
+        if module_path == "unet.norm":
+            # Reduce final-normalization scale bias that accumulates across denoising steps.
+            return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_WELFORD"]
         if "up_blocks.2" in module_path and "norm1" in module_path:
             return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"]
         if "resnets" in module_path:
