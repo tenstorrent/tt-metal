@@ -199,29 +199,16 @@ def _prepare_demo_prefill_warmup(
     sampling_params,
     enable_trace,
     max_seq_len,
-    model_args_list,
-    batch_size,
-    input_prompts=None,
     decode_page_table=None,
 ):
-    """Shared prefill trace buckets + on-device sampling warmup for demo paths."""
+    """Shared prefill-trace gating + on-device sampling warmup for demo paths.
+
+    Prefill tracing buys ~nothing for single full-ISL runs (trace buffers scale
+    with chunk×batch). Gate off above GEMMA4_PREFILL_TRACE_MAX_SEQ unless traced
+    multi-chunk is on (GEMMA4_CHUNKED_PREFILL_TRACE=1): then we still capture the
+    4k sp0/sp1 buckets used by long-ISL chunk replay.
+    """
     from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
-
-    try:
-        from models.demos.gemma4.tt.generator_trace import (
-            enable_single_chunk_demo_prefill_trace_bucket,
-            reset_trace_prefill_seq_lens_to_default,
-            trim_demo_prefill_trace_buckets,
-        )
-    except ImportError:
-        reset_trace_prefill_seq_lens_to_default = None
-        trim_demo_prefill_trace_buckets = None
-        enable_single_chunk_demo_prefill_trace_bucket = None
-
-    if reset_trace_prefill_seq_lens_to_default is not None:
-        reset_trace_prefill_seq_lens_to_default()
-    if trim_demo_prefill_trace_buckets is not None and input_prompts is not None:
-        trim_demo_prefill_trace_buckets(input_prompts=input_prompts, max_seq_len=max_seq_len)
 
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
     prefill_enable_trace = enable_trace and (max_seq_len < prefill_trace_max or chunked_prefill_trace_enabled())
@@ -231,14 +218,8 @@ def _prepare_demo_prefill_warmup(
             f"decode stays traced. Set GEMMA4_PREFILL_TRACE_MAX_SEQ or "
             f"GEMMA4_CHUNKED_PREFILL_TRACE=1 to override."
         )
-    if prefill_enable_trace and enable_single_chunk_demo_prefill_trace_bucket is not None:
-        enable_single_chunk_demo_prefill_trace_bucket(
-            max_seq_len=max_seq_len,
-            max_prefill_chunk_size=int(getattr(model_args_list[0], "max_prefill_chunk_size", 0) or 0),
-            model_args_list=model_args_list,
-            batch_size=batch_size,
-        )
-
+    # Default on-device sample (product decode_only parity). Opt into host with
+    # GEMMA4_HOST_SAMPLE=1 if device-sample + decode-trace misbehaves.
     force_host = os.environ.get("GEMMA4_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
     can_sample = (not force_host) and model_can_sample_on_device(generator.model[0])
     device_sampling_params = build_device_sampling_params(sampling_params, can_sample=can_sample)
@@ -271,7 +252,7 @@ def _run_demo_prefill(
     temperature,
     top_p,
 ):
-    """Run measured prefill with the same sampling path as ``run_demo_text``."""
+    """Timed prefill + first-token sample (device sampling, else host top-p)."""
     import time
 
     logger.info("Starting prefill...")
@@ -711,9 +692,6 @@ def test_demo_text(
         sampling_params=sampling_params,
         enable_trace=enable_trace,
         max_seq_len=max_seq_len,
-        model_args_list=model_args_list,
-        batch_size=batch_size,
-        input_prompts=input_prompts,
         decode_page_table=page_table,
     )
     profiler.end("warmup_prefill")
@@ -883,7 +861,6 @@ def _run_spec_decode(
     enable_trace=False,
     draft_len=None,
     num_layers=None,
-    input_prompts=None,
 ):
     """Single-user speculative decode: target verifies the it-assistant drafter.
 
@@ -931,6 +908,9 @@ def _run_spec_decode(
 
     page_table = create_tt_page_table(batch_size, paged_attention_config)
 
+    # Prefill tracing has ~no perf gain and OOMs the trace region at long context
+    # (≥4K); gate it off above a threshold (decode/spec traces stay on), unless
+    # traced multi-chunk is measuring (GEMMA4_CHUNKED_PREFILL_TRACE=1).
     from models.demos.gemma4.tt.generator_trace import chunked_prefill_trace_enabled
 
     prefill_trace_max = int(os.environ.get("GEMMA4_PREFILL_TRACE_MAX_SEQ", 4096))
@@ -983,6 +963,11 @@ def _run_spec_decode(
         )
         max_generated_tokens = max(1, _safe_gen)
 
+    # Load the assistant only after target prefill warmup/prefill is complete.
+    # Loading it earlier makes the target prefill trace capture run with extra
+    # assistant tensors resident and has been observed to trigger runtime
+    # profiler sync timeouts in the speculative path while the plain path stays
+    # clean.
     _, assistant = create_assistant_model(
         mesh_device=mesh_device,
         target_model=target,
@@ -1085,7 +1070,6 @@ def _run_spec_decode_batched(
     enable_trace,
     draft_len=None,
     num_layers=None,
-    input_prompts=None,
 ):
     """Batched (B>1) greedy speculative decode: B independent users, one shared
     batched packed verify per iteration (KV-amortization), ragged per-user
@@ -1126,7 +1110,6 @@ def _run_spec_decode_batched(
     )
     target = generator.model[0]
     model_args = generator.model_args
-    model_args_list = model_args if isinstance(model_args, (list, tuple)) else [model_args]
     top_p = sampling_params.get("top_p", 1.0)
 
     page_table = create_tt_page_table(B, paged_attention_config)  # [B, blocks_per_user]
@@ -1137,9 +1120,6 @@ def _run_spec_decode_batched(
         sampling_params=sampling_params,
         enable_trace=enable_trace,
         max_seq_len=max_seq_len,
-        model_args_list=model_args_list,
-        batch_size=B,
-        input_prompts=input_prompts,
     )
 
     # Per-user prefill into each user's own KV blocks (prompts have distinct lengths).

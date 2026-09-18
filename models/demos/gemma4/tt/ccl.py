@@ -67,36 +67,28 @@ def ccl_sync_split_enabled() -> bool:
     return os.environ.get("GEMMA4_CCL_SPLIT", "1").lower() not in ("0", "false", "no")
 
 
-_PREFILL_RS_TALL_HEIGHT = 2048
-_CCL_ASYNC_MIN_HEIGHT = 2048
+def _ccl_rs_env_int(name: str, default: int) -> int:
+    """Positive int from ``name``, or ``default`` when unset/blank."""
+    env = os.environ.get(name, "")
+    return max(1, int(env)) if env.strip() else default
 
 
-def ccl_sync_rs_workers(padded_height: int | None = None) -> int:
+def ccl_sync_rs_workers() -> int:
     """``num_workers_per_link`` for split all-reduce reduce-scatter."""
-    env = os.environ.get("GEMMA4_CCL_SYNC_RS_WORKERS")
-    if env is not None and str(env).strip() != "":
-        return max(1, int(env))
-    if padded_height is not None and int(padded_height) >= _PREFILL_RS_TALL_HEIGHT:
-        return 2
-    return 1
+    return _ccl_rs_env_int("GEMMA4_CCL_SYNC_RS_WORKERS", 1)
 
 
-def ccl_sync_rs_chunks(padded_height: int | None = None) -> int:
+def ccl_sync_rs_chunks() -> int:
     """``chunks_per_sync`` for split all-reduce reduce-scatter."""
-    env = os.environ.get("GEMMA4_CCL_SYNC_RS_CHUNKS")
-    if env is not None and str(env).strip() != "":
-        return max(1, int(env))
-    if padded_height is not None and int(padded_height) >= _PREFILL_RS_TALL_HEIGHT:
-        return 2
-    return 1
+    return _ccl_rs_env_int("GEMMA4_CCL_SYNC_RS_CHUNKS", 1)
 
 
 def ccl_sync_rs_buffers() -> int:
     """``num_buffers_per_channel`` for split all-reduce reduce-scatter."""
-    return max(1, int(os.environ.get("GEMMA4_CCL_SYNC_RS_BUFFERS", "4")))
+    return _ccl_rs_env_int("GEMMA4_CCL_SYNC_RS_BUFFERS", 4)
 
 
-def default_ccl_topology(mesh_device=None, is_moe: bool = False):
+def default_ccl_topology(mesh_device=None):
     """Default CCL topology for Gemma4 TP collectives.
 
     Override with ``GEMMA4_CCL_TOPOLOGY=ring|linear``.
@@ -105,11 +97,12 @@ def default_ccl_topology(mesh_device=None, is_moe: bool = False):
       * **Ring** only on **Blackhole** meshes with **≥8 devices** (P150x8 TTFT
         sweep: Ring+sync ~28.8s vs Linear+sync ~31.0s @ 31B/128k).
       * **Ring** on **Wormhole** meshes with **≥8 devices** for **dense 31B**
-        (decode all-reduce, ``HF_MODEL`` containing "31b" and ``is_moe=False``).
+        (decode all-reduce; selected by ``HF_MODEL`` containing "31b").
         ``num_links=2`` is still unusable on WH (event-order hang); Ring on 1
-        link is the remaining TP=8 CCL lever. MoE stays Linear — Ring on WH
-        drops 26B-A4B ``test_full_model`` PCC below the TEMP 0.76 gate
-        (~0.7505 vs ~0.77/0.94 with Linear / main).
+        link is the remaining TP=8 CCL lever. Every other WH model — notably
+        the 26B-A4B MoE — stays Linear: Ring on WH drops its
+        ``test_full_model`` PCC below the TEMP 0.76 gate (~0.7505 vs
+        ~0.77/0.94 with Linear / main).
       * **Linear** everywhere else. Ring on 4-device BH also drops 12B
         full-model PCC (~0.97 → ~0.90).
 
@@ -128,8 +121,7 @@ def default_ccl_topology(mesh_device=None, is_moe: bool = False):
     if n:
         if n >= 8 and is_blackhole():
             return ttnn.Topology.Ring
-        model = os.environ.get("HF_MODEL", "").lower()
-        if n >= 8 and (not is_moe) and "31b" in model:
+        if n >= 8 and "31b" in os.environ.get("HF_MODEL", "").lower():
             return ttnn.Topology.Ring
         return ttnn.Topology.Linear
 
@@ -374,6 +366,8 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
         scattered.deallocate(True)
         return result
 
+    # Sync all_reduce: omit deprecated num_links/topology (Sep-2026 removal);
+    # Fabric / cluster_axis supply those defaults (same as sync all_gather).
     result = ttnn.all_reduce(
         tensor,
         cluster_axis=tp_axis,
@@ -415,6 +409,8 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
         tensor.deallocate(True)
         return gathered
 
+    # Sync all_gather: do not pass deprecated num_links/topology/chunks_* —
+    # Fabric config supplies those; passing them only emits Sep-2026 warnings.
     gathered = ttnn.all_gather(
         tensor,
         dim=dim,
