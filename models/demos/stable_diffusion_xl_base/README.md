@@ -18,6 +18,73 @@ Tenstorrent implementation of [Stable Diffusion XL Base 1.0](https://huggingface
 - Wormhole N300
 - Wormhole LoudBox/QuietBox
 - Wormhole Galaxy
+- Blackhole p150 (single chip, CI-covered)
+- Blackhole Galaxy — validated ad hoc on 1 and 4 chips, see [Blackhole notes](#blackhole-notes)
+
+## Blackhole notes
+
+SDXL has single-chip Blackhole CI coverage (`bh_p150b_civ2`). There is **no multi-chip
+Blackhole CI on any SKU** — the only multi-chip SDXL CI leg is Wormhole `wh_n300` (2 chips).
+The notes below record an ad hoc validation run on a Blackhole Galaxy (`g11blx01`,
+32 chips, 4x UBB trays) so the working configuration isn't rediscovered from scratch.
+
+### Measured results (BH Galaxy, 1024x1024, 50 steps, guidance 5.0, `with_trace`, on-device VAE + encoders)
+
+| Chips | `TT_VISIBLE_DEVICES` | Config | Denoising loop | On-device VAE | Wall clock |
+|-------|----------------------|--------|----------------|---------------|-----------|
+| 1     | `0`                  | `no_cfg_parallel` | 8.30 s / 1 prompt | 0.27 s | 78 s |
+| 4     | `0,1,4,5`            | `no_cfg_parallel` | 8.38 s / 4 prompts | 0.27 s | 77 s |
+
+4 chips denoise 4 prompts in the same wall time 1 chip takes for 1 prompt, i.e. ~linear
+**throughput** scaling. It is not a single-image latency win: `determine_tensor_parallel`
+asserts TP <= 2, and that "TP" is CFG parallelism (uncond / text on 2 chips joined by one
+`all_gather`). Chips beyond that are independent data-parallel replicas.
+
+### Required environment
+
+```bash
+export TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=10,9   # asserted on any Galaxy; "7,7" on Wormhole
+export TT_VISIBLE_DEVICES=0                            # or e.g. 0,1,4,5 for a 4-chip run
+```
+
+`TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE` is hard-asserted for Galaxy cluster types in
+`tt/tt_sdxl_pipeline.py`, and `is_galaxy()` is cluster-type based — so it is required even
+when only a **single chip** of a Galaxy is visible. (For reference, it yields an `11-10`
+compute grid on this box, not `10,9`.)
+
+### Gotchas
+
+- **`pytest`'s timeout is disabled.** This directory's `conftest.py` sets
+  `config.option.timeout = 0`, which overrides even a CLI `--timeout`. A hang will run
+  forever with nothing to abort it. Wrap runs in an external `timeout`:
+  `timeout 2400 pytest ...`
+- **Reset the chips after any hung or killed run.** Killing the host process does not clean
+  up device state; a wedged chip makes a later, unrelated run hang on its very first device
+  op (observed as TRISCs stuck in `ckernel::tensix_sync()` during
+  `compute_kernel_hw_startup`). `tt-smi -r <ids>` scoped to the chips you used clears it.
+  Avoid bare `tt-smi -r` on a shared Galaxy — it resets all 32 chips.
+- **Choose 4-chip groups by topology, not by PCI id.** On this Galaxy, PCI-consecutive
+  groups such as `0,1,2,3` are *not* mutually connected. Verified 4-chip blocks:
+  `0,1,4,5` / `2,3,6,7` / `8,9,12,13` / `10,11,14,15` / `16,17,20,21` / `18,19,22,23` /
+  `24,25,28,29` / `26,27,30,31`. Dump the real adjacency with
+  `ttnn._ttnn.cluster.serialize_cluster_descriptor()`.
+- **Images land in `output/` relative to the pytest cwd** (normally the repo root), not
+  under `demo/`. They are overwritten each run unless `--start-from` is varied.
+- **The demos assert nothing about image correctness** — a green run only means no crash.
+  Inspect the PNG. For scored runs use `tests/test_sdxl_accuracy.py` (CLIP/FID).
+- **A single prompt on N chips wastes N-1 of them.** `demo.py` pads the batch with empty
+  prompts and drops them, so 4 chips still yield 1 image. Use
+  `tests/test_sdxl_accuracy.py --num-prompts=N` to exercise data parallelism properly.
+- **To localize a hang**, `tt-triage` attaches to the live process and reports the stuck op,
+  device, core and kernel callstack:
+  `./tools/tt-triage.py --run=dump_running_operations` then `--run=dump_callstacks`.
+
+### Not yet validated on Blackhole
+
+- `use_cfg_parallel` (the `all_gather` + `FABRIC_1D` path) on Blackhole multi-chip.
+- Blackhole QuietBox 2 (`P300_X2`, 4 chips, native `[2,2]` descriptor).
+- 512x512 is explicitly skipped on Blackhole.
+
 
 ## Directory structure
 stable_diffusion_xl_base/</br>
