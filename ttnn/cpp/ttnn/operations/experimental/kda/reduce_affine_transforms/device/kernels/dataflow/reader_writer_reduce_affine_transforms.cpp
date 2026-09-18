@@ -60,6 +60,7 @@ template <uint32_t G, typename ArrivalSem, typename ReleaseSem>
 FORCE_INLINE void synchronize_head_stage(
     uint32_t worker_index,
     uint32_t group,
+    uint32_t active,
     uint32_t& completed_stages,
     Noc& noc,
     ArrivalSem& arrival,
@@ -70,8 +71,8 @@ FORCE_INLINE void synchronize_head_stage(
     const uint32_t coordinator_y = worker_y(coordinator);
     arrival.up(noc, coordinator_x, coordinator_y, 1);
     if (group == 0) {
-        arrival.wait_min(completed_stages * G);
-        for (uint32_t worker = coordinator; worker < coordinator + G; worker++) {
+        arrival.wait_min(completed_stages * active);
+        for (uint32_t worker = coordinator; worker < coordinator + active; worker++) {
             const uint32_t target_x = worker_x(worker);
             const uint32_t target_y = worker_y(worker);
             release.up(noc, target_x, target_y, 1);
@@ -81,7 +82,14 @@ FORCE_INLINE void synchronize_head_stage(
     release.wait_min(completed_stages);
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t G, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
+template <
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t G,
+    uint32_t has_actual_end,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
 TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
@@ -109,11 +117,54 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         noc.async_read(actual_start, chronology, sizeof(uint32_t), {.page_id = 0}, {});
         noc.async_read_barrier();
         auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_write_ptr());
-        topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);
+        const uint32_t start = words[0];
+        if constexpr (has_actual_end) {
+            const auto end = TensorAccessor(tensor::actual_end);
+            noc.async_read(end, chronology, sizeof(uint32_t), {.page_id = 0}, {});
+            noc.async_read_barrier();
+            topology = kda_chronology::derive_interval(start, words[0], sp_rank, sp_size, local_rows);
+        } else {
+            topology = kda_chronology::derive(start, sp_rank, sp_size, local_rows);
+        }
         kda_chronology::store(words, topology);
         chronology.push_back(1);
     }
     const uint32_t active = topology.head_groups(G);
+    if (active == 0) {
+        if (group == 0) {
+            remote_a.reserve_back(1);
+            noc.async_write_zeros(remote_a, remote_a.get_entry_size());
+            noc.write_zeros_l1_barrier();
+            const uint32_t head = worker_index / G;
+            for (uint32_t tile = 0; tile < b_tiles; ++tile) {
+                noc.async_write(
+                    remote_a, output_b_accessor, remote_a.get_entry_size(), {}, {.page_id = head * b_tiles + tile});
+            }
+            noc.async_write_barrier();
+            for (uint32_t row = 0; row < Kt; ++row) {
+                for (uint32_t col = 0; col < Kt; ++col) {
+                    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_a.get_write_ptr());
+                    // FLOAT32 tile diagonal, in four 16x16 faces.
+                    for (uint32_t r = 0; r < 16; ++r) {
+                        words[r * 16 + r] = row == col ? 0x3f800000 : 0;
+                        words[768 + r * 16 + r] = row == col ? 0x3f800000 : 0;
+                    }
+                    noc.async_write(
+                        remote_a,
+                        output_a_accessor,
+                        remote_a.get_entry_size(),
+                        {},
+                        {.page_id = head * a_tiles + row * Kt + col});
+                    noc.async_write_barrier();
+                }
+            }
+        }
+        return;
+    }
+    if (group >= active) {
+        return;
+    }
+
     if (group < active) {
         initial_a.reserve_back(a_tiles);
         initial_b.reserve_back(b_tiles);
@@ -127,7 +178,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     uint32_t completed_stages = 0;
 
     uint32_t ready_target = 0;
-    for (uint32_t distance = 1; distance < G; distance *= 2) {
+    for (uint32_t distance = 1; distance < active; distance *= 2) {
         if (group < active) {
             send_a.wait_front(a_tiles);
         }
@@ -151,7 +202,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         }
         // Do not release the next NoC stage until every receiver has consumed the remote buffers and produced its
         // next prefix. Otherwise the following stage can overwrite the remote buffers while compute is reading them.
-        synchronize_head_stage<G>(worker_index, group, completed_stages, noc, arrival, release);
+        synchronize_head_stage<G>(worker_index, group, active, completed_stages, noc, arrival, release);
     }
 
     if (group >= active) {

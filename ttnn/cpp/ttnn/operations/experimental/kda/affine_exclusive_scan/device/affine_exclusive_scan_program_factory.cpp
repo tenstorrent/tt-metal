@@ -288,6 +288,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     };
 
     kda_factory_detail::bind_chronology(program_spec, program_run_args, in.actual_start, dataflow, compute);
+    kda_factory_detail::bind_actual_end(program_spec, program_run_args, in.actual_end, in.actual_start, dataflow);
     program_spec.kernels = {std::move(dataflow), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{

@@ -19,8 +19,11 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
     const ttnn::Tensor& g,
     const ttnn::Tensor& beta,
     uint32_t num_heads,
+    const Tensor& actual_start,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    uint32_t output_bf16_mask = 0);
+    uint32_t output_bf16_mask = 0,
+    const std::optional<Tensor>& actual_end = std::nullopt,
+    uint32_t sequence_parallel_axis = 0);
 
 }  // namespace ttnn::experimental::kda

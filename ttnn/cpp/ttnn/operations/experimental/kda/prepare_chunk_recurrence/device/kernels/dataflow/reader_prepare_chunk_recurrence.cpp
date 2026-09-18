@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
+
 #include <cstdint>
 
 #include "tt-metalium/constants.hpp"
@@ -101,7 +103,14 @@ inline void fill_constant_tiles(
     block_masks.push_back(mask_tile_count);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t has_actual_end,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
 TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks, uint32_t num_heads) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
@@ -121,6 +130,31 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
     DataflowBuffer ones(dfb::ones);
     DataflowBuffer block_masks(dfb::block_masks);
     Noc noc;
+
+    uint32_t valid_chunks = num_chunks;
+    {
+        DataflowBuffer control(dfb::chronology_compute);
+        control.reserve_back(1);
+        const auto start_tensor = TensorAccessor(tensor::actual_start);
+        noc.async_read(start_tensor, control, 4, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_write_ptr());
+        const uint32_t start = words[0];
+        auto topology = kda_chronology::derive(start, sp_rank, sp_size, local_rows);
+        if constexpr (has_actual_end) {
+            const auto end_tensor = TensorAccessor(tensor::actual_end);
+            noc.async_read(end_tensor, control, 4, {.page_id = 0}, {});
+            noc.async_read_barrier();
+            topology = kda_chronology::derive_interval(start, words[0], sp_rank, sp_size, local_rows);
+        }
+        valid_chunks = topology.valid_rows / 32;
+        kda_chronology::store(words, topology);
+        control.push_back(1);
+        DataflowBuffer writer_control(dfb::chronology_writer);
+        writer_control.reserve_back(1);
+        kda_chronology::store(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_control.get_write_ptr()), topology);
+        writer_control.push_back(1);
+    }
 
     auto enqueue_contiguous_read = [&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
         buffer.reserve_back(tiles);
@@ -172,6 +206,9 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
 
     for (uint32_t index = 0; index < work_item_count; ++index) {
         const uint32_t head_chunk_index = work_item_start + index;
+        if (head_chunk_index % num_chunks >= valid_chunks) {
+            continue;
+        }
         enqueue_key_width_read(q_accessor, q, head_chunk_index);
         enqueue_key_width_read(k_accessor, k, head_chunk_index);
         enqueue_value_read(head_chunk_index);

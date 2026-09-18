@@ -18,6 +18,7 @@ void bind_chronological_selections(nb::module_& mod) {
     layout.attr("LOCAL_ENTRY_STATE") = local_entry_state;
     layout.attr("FINAL_STATE") = final_state;
     layout.def("affine_transform", &affine_transform);
+    layout.def("local_final_history", &local_final_history);
 
     ttnn::bind_function<"chronological_selections", "ttnn.experimental.kda.">(
         mod,
@@ -28,6 +29,8 @@ void bind_chronological_selections(nb::module_& mod) {
         nb::arg("local_rows"),
         nb::arg("batch_heads"),
         nb::arg("key_dim"),
-        nb::arg("value_dim"));
+        nb::arg("value_dim"),
+        nb::kw_only(),
+        nb::arg("actual_end") = nb::none());
 }
 }  // namespace ttnn::operations::experimental::kda::chronological_selections::detail

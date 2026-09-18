@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
+
 #include "ttnn/operations/experimental/kda/prepare_chunk_recurrence/device/prepare_chunk_recurrence_program_factory.hpp"
 
 #include <algorithm>
@@ -26,8 +28,11 @@ using namespace tt::constants;
 namespace ttnn::experimental::prim {
 namespace m2 = tt::tt_metal::experimental;
 
-ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::create_program_artifacts(
-    const PrepareChunkRecurrenceParams& attrs, const PrepareChunkRecurrenceInputs& in, std::vector<Tensor>& outputs) {
+ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFactory::create_mesh_workload_artifacts(
+    const PrepareChunkRecurrenceParams& attrs,
+    const PrepareChunkRecurrenceInputs& in,
+    std::vector<Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& q = in.q.mesh_tensor();
     const auto& k = in.k.mesh_tensor();
     const auto& v = in.v.mesh_tensor();
@@ -203,7 +208,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                 m2::TensorBinding{T_INV_OUTPUT, "t_inv_output"},
             },
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}},
-        .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
 
@@ -303,7 +308,7 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
                   return bits;
               }()},
              {"EPS_BITS", 0x358637BDU}},
-        .runtime_arg_schema = {.runtime_arg_names = {"work_item_count"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
         .hw_config = std::move(compute_hw),
     };
 
@@ -324,13 +329,15 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         m2::AddRuntimeArgsForNode(
             writer_run.runtime_arg_values,
             core,
-            {{"work_item_start", work_item_start}, {"work_item_count", work_item_count}});
-        m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"work_item_count", work_item_count}});
+            {{"work_item_start", work_item_start}, {"work_item_count", work_item_count}, {"num_chunks", num_chunks}});
+        m2::AddRuntimeArgsForNode(
+            compute_run.runtime_arg_values,
+            core,
+            {{"work_item_start", work_item_start}, {"work_item_count", work_item_count}, {"num_chunks", num_chunks}});
     }
 
     m2::ProgramSpec spec{
         .name = "prepare_chunk_recurrence",
-        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dfb_specs),
         .tensor_parameters =
             {
@@ -366,7 +373,24 @@ ttnn::device_operation::ProgramArtifacts PrepareChunkRecurrenceProgramFactory::c
         {FINAL_DECAY_OUTPUT, outputs[5].mesh_tensor()},
         {T_INV_OUTPUT, outputs[6].mesh_tensor()},
     };
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, reader, compute);
+    kda_factory_detail::bind_actual_end(spec, run_args, in.actual_end, in.actual_start, reader);
+    const m2::DFBSpecName writer_chronology{"chronology_writer"};
+    spec.dataflow_buffers.push_back(
+        {.unique_id = writer_chronology,
+         .entry_size = 32,
+         .num_entries = 1,
+         .data_format_metadata = tt::DataFormat::UInt32});
+    reader.dfb_bindings.push_back(m2::ProducerOf(writer_chronology, "chronology_writer"));
+    writer.dfb_bindings.push_back(m2::ConsumerOf(writer_chronology, "chronology_writer"));
+    spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
+    return kda_factory_detail::chronology_workload(
+        {.spec = std::move(spec), .run_params = std::move(run_args)},
+        tensor_coords,
+        device,
+        attrs.sequence_parallel_axis,
+        attrs.num_chunks * 32,
+        READER);
 }
 
 }  // namespace ttnn::experimental::prim

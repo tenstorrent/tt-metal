@@ -192,6 +192,10 @@ TT_KERNEL void compute(uint32_t group) {
         DataflowBuffer chronology(dfb::chronology_compute);
         topology = kda_chronology::receive(chronology);
     }
+    const uint32_t active = topology.active_groups(G);
+    if (group >= active) {
+        return;
+    }
     const uint32_t reset_group = topology.reset_group(G);
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
     initial_a.wait_front(affine_a_tiles);
@@ -225,7 +229,7 @@ TT_KERNEL void compute(uint32_t group) {
         initial_b.pop_front(affine_b_tiles);
     }
 
-    for (uint32_t distance = 1; distance < G; distance *= 2) {
+    for (uint32_t distance = 1; distance < active; distance *= 2) {
         if (group < distance) {
             continue;
         }
