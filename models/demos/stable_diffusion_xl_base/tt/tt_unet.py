@@ -4,7 +4,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
+from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import fused_silu, prepare_conv_params, run_group_norm
 from models.demos.stable_diffusion_xl_base.tt.tt_crossattndownblock2d import TtCrossAttnDownBlock2D
 from models.demos.stable_diffusion_xl_base.tt.tt_crossattnmidblock2d import TtUNetMidBlock2DCrossAttn
 from models.demos.stable_diffusion_xl_base.tt.tt_crossattnupblock2d import TtCrossAttnUpBlock2D
@@ -352,31 +352,35 @@ class TtUNet2DConditionModel(LightweightModule):
 
         ttnn.ReadDeviceProfiler(self.device)
 
-        sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
+        if not self.groupnorm_config.get("generated"):
+            sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
 
-        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-        if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
-            mem_cfg = ttnn.create_sharded_memory_config(
-                shape=sample.shape,
-                core_grid=self.groupnorm_config["core_grid"],
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            )
+            mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+            if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+                mem_cfg = ttnn.create_sharded_memory_config(
+                    shape=sample.shape,
+                    core_grid=self.groupnorm_config["core_grid"],
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                )
 
-        sample = ttnn.to_memory_config(sample, mem_cfg)
-        sample = ttnn.group_norm(
+            sample = ttnn.to_memory_config(sample, mem_cfg)
+        sample = run_group_norm(
             sample,
-            num_groups=self.norm_groups,
-            input_mask=self.input_mask,
-            negative_mask=self.input_negative_mask,
-            weight=self.gamma_t,
-            bias=self.beta_t,
-            epsilon=self.norm_eps,
-            memory_config=sample.memory_config(),
-            **self.groupnorm_config,
+            self.groupnorm_config,
+            self.groupnorm_memory_config,
+            self.input_mask,
+            self.input_negative_mask,
+            self.gamma_t,
+            self.beta_t,
+            self.norm_groups,
+            self.norm_eps,
+            in_place=True,
+            activation="silu",
         )
 
-        sample = ttnn.silu(sample)
+        if not fused_silu(self.groupnorm_config):
+            sample = ttnn.silu(sample)
 
         [sample, [H, W], [tt_conv2_weights, tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=sample,

@@ -90,4 +90,10 @@ def test_upsample2d(
     gc.collect()
 
     _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+    _e = output_tensor.float() - torch_output_tensor.float()
+
+    logger.info(
+        f"BIAS bias={_e.mean().item():+.5f} rms={_e.pow(2).mean().sqrt().item():.5f} std_ratio={(output_tensor.float().std() / torch_output_tensor.float().std()).item():.5f} torch_std={torch_output_tensor.float().std().item():.4f}"
+    )
     logger.info(f"PCC is {pcc_message}")

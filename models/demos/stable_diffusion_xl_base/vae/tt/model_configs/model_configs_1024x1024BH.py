@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1024BH import (
     ModelOptimisations1024x1024BH,
@@ -11,6 +13,8 @@ from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1
 # NOTE: This file is a placeholder for future optimizations of SDXL on Blackhole.
 # For now, it has identical configs as Wormhole_b0.
 class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
+    TRANSPOSED_RESNETS = False  # VAE convs stay on ROW_MAJOR block shards (the UNet transposition is UNet-only)
+
     def __init__(
         self,
         conv_act_dtype=ttnn.bfloat16,
@@ -19,6 +23,10 @@ class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
         ff_weights_dtype=ttnn.bfloat8_b,
     ):
         super().__init__(conv_act_dtype, conv_w_dtype, attention_weights_dtype, ff_weights_dtype)
+        # VAE GroupNorms stream 20-270 MB tensors from DRAM; the following SiLU is a separate full DRAM pass
+        # (27.6 ms per decode), so fusing it into the generated GN's apply pass is free here. SDXL_VAE_GN_FUSE_SILU=0 disables.
+        if self.use_generated_groupnorm:
+            self.fuse_gn_silu = os.environ.get("SDXL_VAE_GN_FUSE_SILU", "1") != "0"
 
         self.sdpa_configs["64_K"] = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),

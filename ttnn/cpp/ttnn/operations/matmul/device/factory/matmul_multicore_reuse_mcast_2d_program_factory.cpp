@@ -6,6 +6,8 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <set>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -332,12 +334,71 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     CoreRangeSet in0_receiver_interleaved(in0_receiver_interleaved_set);
     CoreRangeSet in1_receiver(in1_receiver_set);
 
+    // Diagonal in1 (weight) senders — fullgrid worklog experiment, env TT_MM2D_DIAG_IN1_SENDERS=1.
+    // The default puts every in1 sender on one line of cores (top row, or left column under
+    // transpose_mcast); a line of interleaved-DRAM readers shares NoC links and saturates them
+    // (examples/noc_placement: column line ~2.9x slower than a diagonal). Spread the senders so no two
+    // share a row or a column. The in0 roles (RISCV_1 kernels) are untouched: a core's in1 role is independent
+    // of its in0 role, so only the in1 sender / receiver core sets move.
+    const bool diag_in1_senders = std::getenv("TT_MM2D_DIAG_IN1_SENDERS") != nullptr;
+    // M-block index (in0_idx) of the in1 sender serving N block `j` (in1_idx).
+    // Interleaved in0 splits the receivers into two NoC setups (left half: in0 on in0_noc / in1 on in1_noc;
+    // right half rows >= 1: both swapped). An in1 sender always uses in1_noc, so it may only sit on a core
+    // whose in0 kernel uses in0_noc: the left half, or the first row (in0 senders / normal receivers).
+    auto in1_sender_in0_idx_for = [&](uint32_t j) -> uint32_t {
+        if (!diag_in1_senders) {
+            return 0u;
+        }
+        if (in0_block_sharded || !split_half) {
+            return j % num_blocks_y;
+        }
+        if (transpose_mcast) {
+            return j % std::min<uint32_t>(num_blocks_y, half_core + 1);  // sender column stays in the left half
+        }
+        return j <= half_core ? (j % num_blocks_y) : 0u;  // right-half columns keep their sender on the first row
+    };
+    CoreRangeSet in1_sender_crs = CoreRangeSet(in1_sender);
+    if (diag_in1_senders) {
+        std::set<CoreRange> sender_set;
+        std::set<CoreRange> receiver_set;
+        for (uint32_t j = 0; j < num_blocks_x; ++j) {
+            const uint32_t i = in1_sender_in0_idx_for(j);
+            const CoreCoord c = transpose_mcast ? CoreCoord{start_core_x + i, start_core_y + j}
+                                                : CoreCoord{start_core_x + j, start_core_y + i};
+            sender_set.insert(CoreRange(c, c));
+        }
+        for (const auto& c : grid_to_cores(all_cores_with_work.start_coord, all_cores_with_work.end_coord, true)) {
+            if (sender_set.count(CoreRange(c, c)) == 0) {
+                receiver_set.insert(CoreRange(c, c));
+            }
+        }
+        in1_sender_crs = CoreRangeSet(sender_set);
+        in1_receiver = CoreRangeSet(receiver_set);
+    }
+
     std::optional<CoreRange> in0_receiver_in1_receiver_interleaved_other_cores;
     if (split_half) {
         in0_receiver_in1_receiver_interleaved_other_cores = {
             {(std::size_t)start_core_x + half_core + 1, (std::size_t)start_core_y + 1},
             {(std::size_t)start_core_x + num_cores_with_work_c - 1,
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
+    }
+    // in1 receivers on the "other" NoC setup (right half of the grid). With diagonal senders the set is the
+    // non-sender cores that satisfy the same predicate the per-core runtime-arg loop uses.
+    CoreRangeSet in1_receiver_other_crs;
+    if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
+        in1_receiver_other_crs = CoreRangeSet(in0_receiver_in1_receiver_interleaved_other_cores.value());
+    }
+    if (diag_in1_senders) {
+        std::set<CoreRange> left_set;
+        std::set<CoreRange> other_set;
+        for (const auto& c : corerange_to_cores(in1_receiver, std::nullopt, true)) {
+            // must match the per-core runtime-arg predicate below (and the in0 receiver variant of the core)
+            const bool left = (c.x - start_core_x) <= half_core || c.y == start_core_y;
+            (left ? left_set : other_set).insert(CoreRange(c, c));
+        }
+        in1_receiver = CoreRangeSet(left_set);
+        in1_receiver_other_crs = CoreRangeSet(other_set);
     }
 
     // Mcast args — semaphore IDs assigned sequentially (0, 1, 2, 3)
@@ -782,7 +843,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     in1_sender_writer_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp";
     in1_sender_writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    in1_sender_writer_kernel_desc.core_ranges = CoreRangeSet(in1_sender);
+    in1_sender_writer_kernel_desc.core_ranges = in1_sender_crs;
     in1_sender_writer_kernel_desc.compile_time_args = in1_sender_writer_compile_time_args;
     in1_sender_writer_kernel_desc.defines = map_to_defines(mm_kernel_in1_sender_writer_defines);
     in1_sender_writer_kernel_desc.named_compile_time_args = {
@@ -827,14 +888,13 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
     }
 
-    if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
+    if (in1_receiver_other_crs.num_cores() > 0) {
         has_in1_receiver_writer_other_kernel = true;
         in1_receiver_writer_other_kernel_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
             "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp";
         in1_receiver_writer_other_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        in1_receiver_writer_other_kernel_desc.core_ranges =
-            CoreRangeSet(in0_receiver_in1_receiver_interleaved_other_cores.value());
+        in1_receiver_writer_other_kernel_desc.core_ranges = in1_receiver_other_crs;
         in1_receiver_writer_other_kernel_desc.compile_time_args = in1_receiver_writer_compile_time_args;
         in1_receiver_writer_other_kernel_desc.defines =
             map_to_defines(mm_kernel_in1_receiver_writer_other_noc_setup_defines);
@@ -845,7 +905,8 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         };
         in1_receiver_writer_other_kernel_desc.config =
             DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_split_noc};
-
+    }
+    if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
         has_in0_receiver_other_kernel = true;
         in0_receiver_other_kernel_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp";
@@ -1213,6 +1274,30 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             std::swap(in0_mcast_start, in1_mcast_end);
             std::swap(in0_mcast_end, in1_mcast_start);
         }
+        const uint32_t in1_sender_in0_idx = in1_sender_in0_idx_for(in1_idx);
+        const bool is_in1_sender = in0_idx == in1_sender_in0_idx;
+        if (diag_in1_senders) {
+            // The sender sits inside its line, so its multicast must cover the whole line (the NoC excludes the
+            // source core; MCAST_INCL_SRC is off) instead of "everything but the line's first core". Applied
+            // after the transpose swap so only the in1 rectangle changes (the interleaved in0 sender keeps its own).
+            const CoreCoord first_plus_one = transpose_mcast ? left_core_plus_one_physical : top_core_plus_one_physical;
+            const CoreCoord first = transpose_mcast ? left_core_physical : top_core_physical;
+            if (in1_mcast_start.x == first_plus_one.x && in1_mcast_start.y == first_plus_one.y) {
+                in1_mcast_start = first;
+            }
+            if (in1_mcast_end.x == first_plus_one.x && in1_mcast_end.y == first_plus_one.y) {
+                in1_mcast_end = first;
+            }
+            const CoreCoord sender_logical = transpose_mcast ? CoreCoord{start_core_x + in1_sender_in0_idx, core.y}
+                                                             : CoreCoord{core.x, start_core_y + in1_sender_in0_idx};
+            in1_mcast_sender = device->worker_core_from_logical_core(sender_logical);
+        }
+        // a diagonal sender can own the ragged last M block: give its writer the same padding the receivers get
+        const bool sender_last_h = diag_in1_senders && in0_idx == in0_end_idx;
+        const uint32_t sender_h_nonzero =
+            sender_last_h ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h;
+        const uint32_t sender_h_last = sender_last_h ? last_subblock_of_last_block_h : out_subblock_h;
+        const uint32_t sender_h_skip = sender_last_h ? last_block_padded_block_tiles_h_skip : 0u;
 
         // in0 sender
         if (in0_block_sharded) {
@@ -1293,7 +1378,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
 
         if (in0_idx < num_blocks_y and in1_idx < num_blocks_x) {
             // in1 sender
-            if (in0_idx == 0) {
+            if (is_in1_sender) {
                 std::vector<uint32_t> mm_in1_sender_writer_args = {
                     // READER
                     // in1 tensor args
@@ -1319,9 +1404,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_sender_writer_args.push_back(last_out_block_w);
 
                     // padding args (WRITER)
-                    mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(sender_h_nonzero);
+                    mm_in1_sender_writer_args.push_back(sender_h_last);
+                    mm_in1_sender_writer_args.push_back(sender_h_skip);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                     mm_in1_sender_writer_args.push_back(last_subblock_of_last_block_w);
@@ -1332,9 +1417,9 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_sender_writer_args.push_back(out_block_w);
 
                     // padding args (WRITER)
-                    mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(sender_h_nonzero);
+                    mm_in1_sender_writer_args.push_back(sender_h_last);
+                    mm_in1_sender_writer_args.push_back(sender_h_skip);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_subblock_w);
@@ -1529,7 +1614,8 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                         in1_recv_variant(mm_in1_receiver_writer_args.begin(), mm_in1_receiver_writer_args.end());
                     in1_recv_variant[2] = out_tensor;
                     // left half
-                    if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {
+                    if ((core.x - start_core_x) <= half_core ||
+                        (diag_in1_senders ? core.y == start_core_y : (transpose_mcast and core.y == start_core_y))) {
                         in1_receiver_writer_kernel_desc.emplace_runtime_args(core, in1_recv_variant);
                     }
                     // right half
@@ -1871,12 +1957,71 @@ create_program_mcast_in0_in1(
     CoreRangeSet in0_receiver_interleaved(in0_receiver_interleaved_set);
     CoreRangeSet in1_receiver(in1_receiver_set);
 
+    // Diagonal in1 (weight) senders — fullgrid worklog experiment, env TT_MM2D_DIAG_IN1_SENDERS=1.
+    // The default puts every in1 sender on one line of cores (top row, or left column under
+    // transpose_mcast); a line of interleaved-DRAM readers shares NoC links and saturates them
+    // (examples/noc_placement: column line ~2.9x slower than a diagonal). Spread the senders so no two
+    // share a row or a column. The in0 roles (RISCV_1 kernels) are untouched: a core's in1 role is independent
+    // of its in0 role, so only the in1 sender / receiver core sets move.
+    const bool diag_in1_senders = std::getenv("TT_MM2D_DIAG_IN1_SENDERS") != nullptr;
+    // M-block index (in0_idx) of the in1 sender serving N block `j` (in1_idx).
+    // Interleaved in0 splits the receivers into two NoC setups (left half: in0 on in0_noc / in1 on in1_noc;
+    // right half rows >= 1: both swapped). An in1 sender always uses in1_noc, so it may only sit on a core
+    // whose in0 kernel uses in0_noc: the left half, or the first row (in0 senders / normal receivers).
+    auto in1_sender_in0_idx_for = [&](uint32_t j) -> uint32_t {
+        if (!diag_in1_senders) {
+            return 0u;
+        }
+        if (in0_block_sharded || !split_half) {
+            return j % num_blocks_y;
+        }
+        if (transpose_mcast) {
+            return j % std::min<uint32_t>(num_blocks_y, half_core + 1);  // sender column stays in the left half
+        }
+        return j <= half_core ? (j % num_blocks_y) : 0u;  // right-half columns keep their sender on the first row
+    };
+    CoreRangeSet in1_sender_crs = CoreRangeSet(in1_sender);
+    if (diag_in1_senders) {
+        std::set<CoreRange> sender_set;
+        std::set<CoreRange> receiver_set;
+        for (uint32_t j = 0; j < num_blocks_x; ++j) {
+            const uint32_t i = in1_sender_in0_idx_for(j);
+            const CoreCoord c = transpose_mcast ? CoreCoord{start_core_x + i, start_core_y + j}
+                                                : CoreCoord{start_core_x + j, start_core_y + i};
+            sender_set.insert(CoreRange(c, c));
+        }
+        for (const auto& c : grid_to_cores(all_cores_with_work.start_coord, all_cores_with_work.end_coord, true)) {
+            if (sender_set.count(CoreRange(c, c)) == 0) {
+                receiver_set.insert(CoreRange(c, c));
+            }
+        }
+        in1_sender_crs = CoreRangeSet(sender_set);
+        in1_receiver = CoreRangeSet(receiver_set);
+    }
+
     std::optional<CoreRange> in0_receiver_in1_receiver_interleaved_other_cores;
     if (split_half) {
         in0_receiver_in1_receiver_interleaved_other_cores = {
             {(std::size_t)start_core_x + half_core + 1, (std::size_t)start_core_y + 1},
             {(std::size_t)start_core_x + num_cores_with_work_c - 1,
              (std::size_t)start_core_y + num_cores_with_work_r - 1}};
+    }
+    // in1 receivers on the "other" NoC setup (right half of the grid). With diagonal senders the set is the
+    // non-sender cores that satisfy the same predicate the per-core runtime-arg loop uses.
+    CoreRangeSet in1_receiver_other_crs;
+    if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
+        in1_receiver_other_crs = CoreRangeSet(in0_receiver_in1_receiver_interleaved_other_cores.value());
+    }
+    if (diag_in1_senders) {
+        std::set<CoreRange> left_set;
+        std::set<CoreRange> other_set;
+        for (const auto& c : corerange_to_cores(in1_receiver, std::nullopt, true)) {
+            // must match the per-core runtime-arg predicate below (and the in0 receiver variant of the core)
+            const bool left = (c.x - start_core_x) <= half_core || c.y == start_core_y;
+            (left ? left_set : other_set).insert(CoreRange(c, c));
+        }
+        in1_receiver = CoreRangeSet(left_set);
+        in1_receiver_other_crs = CoreRangeSet(other_set);
     }
 
     // Mcast args
@@ -2286,7 +2431,7 @@ create_program_mcast_in0_in1(
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
-        in1_sender,
+        in1_sender_crs,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
@@ -2339,12 +2484,12 @@ create_program_mcast_in0_in1(
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_other_noc_setup_id = mm_kernel_in1_receiver_writer_id;
     tt::tt_metal::KernelHandle mm_kernel_in0_receiver_other_noc_setup_id = mm_kernel_in0_receiver_id;
 
-    if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
+    if (in1_receiver_other_crs.num_cores() > 0) {
         mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
             "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
-            in0_receiver_in1_receiver_interleaved_other_cores.value(),
+            in1_receiver_other_crs,
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in1_split_noc,
@@ -2355,7 +2500,8 @@ create_program_mcast_in0_in1(
                     {"cb_bias", tt::CBIndex::c_3},
                     {"cb_out", tt::CBIndex::c_4},
                 }});
-
+    }
+    if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
         mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
@@ -2669,15 +2815,9 @@ create_program_mcast_in0_in1(
     uint32_t in1_end_idx = num_blocks_x - 1;
     const auto& in0_sender_interleaved_cores = grid_to_cores(
         in0_sender_interleaved.start_coord, in0_sender_interleaved.end_coord, true);  // Only used for interleaved in0
-    const auto& in1_sender_cores = grid_to_cores(in1_sender.start_coord, in1_sender.end_coord, true);
+    const auto& in1_sender_cores = corerange_to_cores(in1_sender_crs, std::nullopt, true);
     const auto& in1_receiver_cores = corerange_to_cores(in1_receiver, std::nullopt, true);
-    std::vector<CoreCoord> in1_receiver_other_cores;
-    if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
-        in1_receiver_other_cores = grid_to_cores(
-            in0_receiver_in1_receiver_interleaved_other_cores.value().start_coord,
-            in0_receiver_in1_receiver_interleaved_other_cores.value().end_coord,
-            true);
-    }
+    std::vector<CoreCoord> in1_receiver_other_cores = corerange_to_cores(in1_receiver_other_crs, std::nullopt, true);
 
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
@@ -2719,6 +2859,30 @@ create_program_mcast_in0_in1(
             std::swap(in0_mcast_start, in1_mcast_end);
             std::swap(in0_mcast_end, in1_mcast_start);
         }
+        const uint32_t in1_sender_in0_idx = in1_sender_in0_idx_for(in1_idx);
+        const bool is_in1_sender = in0_idx == in1_sender_in0_idx;
+        if (diag_in1_senders) {
+            // The sender sits inside its line, so its multicast must cover the whole line (the NoC excludes the
+            // source core; MCAST_INCL_SRC is off) instead of "everything but the line's first core". Applied
+            // after the transpose swap so only the in1 rectangle changes (the interleaved in0 sender keeps its own).
+            const CoreCoord first_plus_one = transpose_mcast ? left_core_plus_one_physical : top_core_plus_one_physical;
+            const CoreCoord first = transpose_mcast ? left_core_physical : top_core_physical;
+            if (in1_mcast_start.x == first_plus_one.x && in1_mcast_start.y == first_plus_one.y) {
+                in1_mcast_start = first;
+            }
+            if (in1_mcast_end.x == first_plus_one.x && in1_mcast_end.y == first_plus_one.y) {
+                in1_mcast_end = first;
+            }
+            const CoreCoord sender_logical = transpose_mcast ? CoreCoord{start_core_x + in1_sender_in0_idx, core.y}
+                                                             : CoreCoord{core.x, start_core_y + in1_sender_in0_idx};
+            in1_mcast_sender = device->worker_core_from_logical_core(sender_logical);
+        }
+        // a diagonal sender can own the ragged last M block: give its writer the same padding the receivers get
+        const bool sender_last_h = diag_in1_senders && in0_idx == in0_end_idx;
+        const uint32_t sender_h_nonzero =
+            sender_last_h ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h;
+        const uint32_t sender_h_last = sender_last_h ? last_subblock_of_last_block_h : out_subblock_h;
+        const uint32_t sender_h_skip = sender_last_h ? last_block_padded_block_tiles_h_skip : 0u;
 
         // in0 sender
         if (in0_block_sharded) {
@@ -2800,7 +2964,7 @@ create_program_mcast_in0_in1(
 
         if (in0_idx < num_blocks_y and in1_idx < num_blocks_x) {
             // in1 sender
-            if (in0_idx == 0) {
+            if (is_in1_sender) {
                 std::vector<uint32_t> mm_in1_sender_writer_args = {
                     // READER
                     // in1 tensor args
@@ -2826,9 +2990,9 @@ create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back(last_out_block_w);
 
                     // padding args (WRITER)
-                    mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(sender_h_nonzero);
+                    mm_in1_sender_writer_args.push_back(sender_h_last);
+                    mm_in1_sender_writer_args.push_back(sender_h_skip);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(last_block_num_nonzero_subblocks_w);
                     mm_in1_sender_writer_args.push_back(last_subblock_of_last_block_w);
@@ -2839,9 +3003,9 @@ create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back(out_block_w);
 
                     // padding args (WRITER)
-                    mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(out_subblock_h);
-                    mm_in1_sender_writer_args.push_back(0);
+                    mm_in1_sender_writer_args.push_back(sender_h_nonzero);
+                    mm_in1_sender_writer_args.push_back(sender_h_last);
+                    mm_in1_sender_writer_args.push_back(sender_h_skip);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_block_w / out_subblock_w);
                     mm_in1_sender_writer_args.push_back(out_subblock_w);
@@ -3020,7 +3184,8 @@ create_program_mcast_in0_in1(
                 }
 
                 // left half
-                if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {
+                if ((core.x - start_core_x) <= half_core ||
+                    (diag_in1_senders ? core.y == start_core_y : (transpose_mcast and core.y == start_core_y))) {
                     tt_metal::SetRuntimeArgs(
                         program, mm_kernel_in1_receiver_writer_id, core, mm_in1_receiver_writer_args);
                 }

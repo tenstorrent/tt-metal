@@ -2,12 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import re
+
+import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
+from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params, run_group_norm
 from models.demos.stable_diffusion_xl_base.tt.tt_transformerblock import TtBasicTransformerBlock
+
+_tm_dump_counter = {}
 
 
 class TtTransformer2DModel(LightweightModule):
@@ -23,6 +28,7 @@ class TtTransformer2DModel(LightweightModule):
         lora_weights_manager=None,
     ):
         super().__init__()
+        self.module_path = module_path
 
         self.device = device
         self.norm_groups = 32
@@ -57,6 +63,12 @@ class TtTransformer2DModel(LightweightModule):
             self.gamma_t,
             self.beta_t,
         ) = model_config.get_groupnorm_params(f"{module_path}.norm", norm_weights, norm_bias, self.norm_groups, device)
+        get_tbm = getattr(model_config, "get_transposed_block_memory_config", None)
+        self.transposed_block_memory_config = get_tbm(module_path) if get_tbm else None
+        # full transposed UNet: run the GN directly on the block's COL_MAJOR shard (sdxl_utility.run_group_norm)
+        self.gn_transposed = self.transposed_block_memory_config is not None and getattr(
+            model_config, "transposed_resnets", False
+        )
         assert (
             self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
             or self.groupnorm_memory_config == ttnn.DRAM_MEMORY_CONFIG
@@ -96,30 +108,44 @@ class TtTransformer2DModel(LightweightModule):
 
         hidden_states = input_tensor
 
-        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-        if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
-            mem_cfg = ttnn.create_sharded_memory_config(
-                shape=hidden_states.shape,
-                core_grid=self.groupnorm_config["core_grid"],
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            )
+        if not self.groupnorm_config.get("generated"):
+            mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+            if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+                mem_cfg = ttnn.create_sharded_memory_config(
+                    shape=hidden_states.shape,
+                    core_grid=self.groupnorm_config["core_grid"],
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                )
 
-        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-        hidden_states = ttnn.group_norm(
+            hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+        hidden_states = run_group_norm(
             hidden_states,
-            num_groups=self.norm_groups,
-            input_mask=self.input_mask,
-            negative_mask=self.input_negative_mask,
-            weight=self.gamma_t,
-            bias=self.beta_t,
-            epsilon=self.norm_eps,
-            memory_config=hidden_states.memory_config(),
-            **self.groupnorm_config,
+            self.groupnorm_config,
+            self.groupnorm_memory_config,
+            self.input_mask,
+            self.input_negative_mask,
+            self.gamma_t,
+            self.beta_t,
+            self.norm_groups,
+            self.norm_eps,
+            # transposed block: the GN runs on the block's own COL_MAJOR 11x10 shard (no reshard after it)
+            transposed=self.gn_transposed,
         )
 
+        _dump = os.environ.get("SDXL_UPBLOCK_DUMP")
+        if _dump:
+            _k = _tm_dump_counter.setdefault(self.module_path, 0)
+            _tm_dump_counter[self.module_path] = _k + 1
+            torch.save(
+                ttnn.to_torch(hidden_states).float(), f"{_dump}/tm_{self.module_path.replace('.', '_')}_{_k}_gn.pt"
+            )
         # C=1280 appears only in base, C=1536/768 appear only in refiner
-        if C == 1280 or C == 1536 or C == 768:
+        if self.transposed_block_memory_config is not None:
+            # transposed 11x10 block: reshard the GN output onto the block's shard so proj_in runs sharded-in0
+            if hidden_states.memory_config() != self.transposed_block_memory_config:
+                hidden_states = ttnn.to_memory_config(hidden_states, self.transposed_block_memory_config)
+        elif C == 1280 or C == 1536 or C == 768:
             # For 1280 channels shard layout will be over 64 cores, but MM runs on 40
             # To avoid assertion error we move data to L1 interleaved
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
@@ -131,6 +157,10 @@ class TtTransformer2DModel(LightweightModule):
             compute_kernel_config=self.compute_config_in,
             memory_config=self.memory_config_in,
         )
+        if _dump:
+            torch.save(
+                ttnn.to_torch(hidden_states).float(), f"{_dump}/tm_{self.module_path.replace('.', '_')}_{_k}_projin.pt"
+            )
 
         for i, transformer_block in enumerate(self.transformer_blocks):
             hidden_states = transformer_block(hidden_states, attention_mask, encoder_hidden_states)
@@ -144,6 +174,13 @@ class TtTransformer2DModel(LightweightModule):
             memory_config=self.memory_config_out,
         )
 
+        if (
+            hidden_states.is_sharded()
+            and input_tensor.is_sharded()
+            and hidden_states.memory_config() != input_tensor.memory_config()
+        ):
+            # transposed 11x10 proj_out shard vs the block input's shard: bring the residual onto the same shard
+            input_tensor = ttnn.to_memory_config(input_tensor, hidden_states.memory_config())
         hidden_states = ttnn.add(hidden_states, input_tensor)
 
         return hidden_states

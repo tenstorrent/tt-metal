@@ -2,6 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
+import torch
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
@@ -85,17 +89,26 @@ class TtCrossAttnUpBlock2D(LightweightModule):
 
         hidden_states = input_tensor
         tt_blocks = list(zip(self.resnets, self.attentions))
-        for resnet, attn in tt_blocks:
+        for i, (resnet, attn) in enumerate(tt_blocks):
             res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
 
+            if hidden_states.is_sharded():
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
             hidden_states = ttnn.concat([hidden_states, res_hidden_states], dim=3)
             C = list(hidden_states.shape)[3]
 
+            _dump = os.environ.get("SDXL_UPBLOCK_DUMP")  # investigation aid: per-stage intermediates
+            if _dump:
+                torch.save(ttnn.to_torch(hidden_states).float(), f"{_dump}/{'upblock'}_r{i}_concat.pt")
             hidden_states, [C, H, W] = resnet.forward(hidden_states, temb, [B, C, H, W])
+            if _dump:
+                torch.save(ttnn.to_torch(hidden_states).float(), f"{_dump}/{'upblock'}_r{i}_resnet.pt")
             hidden_states = attn.forward(
                 hidden_states, [B, C, H, W], encoder_hidden_states=encoder_hidden_states, attention_mask=attention_mask
             )
+            if _dump:
+                torch.save(ttnn.to_torch(hidden_states).float(), f"{_dump}/{'upblock'}_r{i}_attn.pt")
 
         ttnn.ReadDeviceProfiler(self.device)
 
@@ -103,4 +116,8 @@ class TtCrossAttnUpBlock2D(LightweightModule):
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])
             hidden_states, [C, H, W] = self.upsamplers.forward(hidden_states)
+            if os.environ.get("SDXL_UPBLOCK_DUMP"):
+                torch.save(
+                    ttnn.to_torch(hidden_states).float(), f"{os.environ['SDXL_UPBLOCK_DUMP']}/upblock_r9_upsampler.pt"
+                )
         return hidden_states, [C, H, W]

@@ -4,7 +4,12 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params, prepare_linear_params
+from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import (
+    fused_silu,
+    prepare_conv_params,
+    prepare_linear_params,
+    run_group_norm,
+)
 from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_slice_config, get_DRAM_GN_shape
 
 
@@ -135,48 +140,66 @@ class TtResnetBlock2D(LightweightModule):
         B, C, H, W = input_shape
         hidden_states = input_tensor
 
-        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-        if self.groupnorm_memory_config_1 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
-            mem_cfg = ttnn.create_sharded_memory_config(
-                shape=hidden_states.shape,
-                core_grid=self.groupnorm_config_1["core_grid"],
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        if self.groupnorm_config_1.get("generated"):
+            # generated GroupNorm, DRAM interleaved in and out (SiLU fused when the config says so)
+            hidden_states = run_group_norm(
+                hidden_states,
+                self.groupnorm_config_1,
+                self.groupnorm_memory_config_1,
+                None,
+                None,
+                self.gamma_t_1,
+                self.beta_t_1,
+                self.norm_groups,
+                self.norm_eps,
+                activation="silu",
+                placement="dram",
             )
             reciprocals_tensor = None
         else:
-            sharded_mem_config = ttnn.create_sharded_memory_config(
-                shape=self.reciprocals_tensor_1.shape,
-                core_grid=self.groupnorm_config_1["core_grid"],
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+            if self.groupnorm_memory_config_1 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+                mem_cfg = ttnn.create_sharded_memory_config(
+                    shape=hidden_states.shape,
+                    core_grid=self.groupnorm_config_1["core_grid"],
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                )
+                reciprocals_tensor = None
+            else:
+                sharded_mem_config = ttnn.create_sharded_memory_config(
+                    shape=self.reciprocals_tensor_1.shape,
+                    core_grid=self.groupnorm_config_1["core_grid"],
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                )
+                reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_1, sharded_mem_config)
+
+            hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+            # NOTE: On Blackhole, using welford causes PCC drop in unit tests
+            use_welford = reciprocals_tensor is not None
+            hidden_states = ttnn.group_norm(
+                hidden_states,
+                num_groups=self.norm_groups,
+                input_mask=self.input_mask_1,
+                negative_mask=self.input_negative_mask_1,
+                weight=self.gamma_t_1,
+                bias=self.beta_t_1,
+                epsilon=self.norm_eps,
+                memory_config=hidden_states.memory_config(),
+                use_welford=use_welford,
+                reciprocals=reciprocals_tensor if use_welford else None,
+                **self.groupnorm_config_1,
             )
-            reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_1, sharded_mem_config)
 
-        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-        # NOTE: On Blackhole, using welford causes PCC drop in unit tests
-        use_welford = reciprocals_tensor is not None
-        hidden_states = ttnn.group_norm(
-            hidden_states,
-            num_groups=self.norm_groups,
-            input_mask=self.input_mask_1,
-            negative_mask=self.input_negative_mask_1,
-            weight=self.gamma_t_1,
-            bias=self.beta_t_1,
-            epsilon=self.norm_eps,
-            memory_config=hidden_states.memory_config(),
-            use_welford=use_welford,
-            reciprocals=reciprocals_tensor if use_welford else None,
-            **self.groupnorm_config_1,
-        )
-
-        if self.conv1_slice_config != ttnn.Conv2dL1FullSliceConfig:
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            if self.conv1_slice_config != ttnn.Conv2dL1FullSliceConfig:
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         if reciprocals_tensor is not None:
             ttnn.deallocate(reciprocals_tensor)
 
-        hidden_states = ttnn.silu(hidden_states)
+        if not fused_silu(self.groupnorm_config_1):
+            hidden_states = ttnn.silu(hidden_states)
 
         [hidden_states, [H, W], [tt_conv1_weights, tt_conv1_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
@@ -206,48 +229,66 @@ class TtResnetBlock2D(LightweightModule):
             self.tt_conv1_weights = tt_conv1_weights
             self.tt_conv1_bias = tt_conv1_bias
 
-        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-        if self.groupnorm_memory_config_2 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
-            mem_cfg = ttnn.create_sharded_memory_config(
-                shape=hidden_states.shape,
-                core_grid=self.groupnorm_config_2["core_grid"],
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        if self.groupnorm_config_2.get("generated"):
+            # generated GroupNorm, DRAM interleaved in and out (SiLU fused when the config says so)
+            hidden_states = run_group_norm(
+                hidden_states,
+                self.groupnorm_config_2,
+                self.groupnorm_memory_config_2,
+                None,
+                None,
+                self.gamma_t_2,
+                self.beta_t_2,
+                self.norm_groups,
+                self.norm_eps,
+                activation="silu",
+                placement="dram",
             )
             reciprocals_tensor = None
         else:
-            sharded_mem_config = ttnn.create_sharded_memory_config(
-                shape=self.reciprocals_tensor_2.shape,
-                core_grid=self.groupnorm_config_2["core_grid"],
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+            if self.groupnorm_memory_config_2 == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+                mem_cfg = ttnn.create_sharded_memory_config(
+                    shape=hidden_states.shape,
+                    core_grid=self.groupnorm_config_2["core_grid"],
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                )
+                reciprocals_tensor = None
+            else:
+                sharded_mem_config = ttnn.create_sharded_memory_config(
+                    shape=self.reciprocals_tensor_2.shape,
+                    core_grid=self.groupnorm_config_2["core_grid"],
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                )
+                reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_2, sharded_mem_config)
+
+            hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+            # NOTE: On Blackhole, using welford causes PCC drop in unit tests
+            use_welford = reciprocals_tensor is not None
+            hidden_states = ttnn.group_norm(
+                hidden_states,
+                num_groups=self.norm_groups,
+                input_mask=self.input_mask_2,
+                negative_mask=self.input_negative_mask_2,
+                weight=self.gamma_t_2,
+                bias=self.beta_t_2,
+                epsilon=self.norm_eps,
+                memory_config=hidden_states.memory_config(),
+                use_welford=use_welford,
+                reciprocals=reciprocals_tensor if use_welford else None,
+                **self.groupnorm_config_2,
             )
-            reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_2, sharded_mem_config)
 
-        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-        # NOTE: On Blackhole, using welford causes PCC drop in unit tests
-        use_welford = reciprocals_tensor is not None
-        hidden_states = ttnn.group_norm(
-            hidden_states,
-            num_groups=self.norm_groups,
-            input_mask=self.input_mask_2,
-            negative_mask=self.input_negative_mask_2,
-            weight=self.gamma_t_2,
-            bias=self.beta_t_2,
-            epsilon=self.norm_eps,
-            memory_config=hidden_states.memory_config(),
-            use_welford=use_welford,
-            reciprocals=reciprocals_tensor if use_welford else None,
-            **self.groupnorm_config_2,
-        )
-
-        if self.conv2_slice_config != ttnn.Conv2dL1FullSliceConfig:
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            if self.conv2_slice_config != ttnn.Conv2dL1FullSliceConfig:
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         if reciprocals_tensor is not None:
             ttnn.deallocate(reciprocals_tensor)
 
-        hidden_states = ttnn.silu(hidden_states)  # note: silu hangs if not tile
+        if not fused_silu(self.groupnorm_config_2):
+            hidden_states = ttnn.silu(hidden_states)  # note: silu hangs if not tile
 
         [hidden_states, [H, W], [tt_conv2_weights, tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,

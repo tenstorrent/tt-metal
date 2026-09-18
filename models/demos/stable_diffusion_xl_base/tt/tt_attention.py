@@ -2,11 +2,33 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
+
+
+def _round_mantissa_torch(t, bits):
+    """Round a bf16-valued tensor to `bits` explicit mantissa bits, round to nearest even."""
+    i = t.float().contiguous().view(torch.int32)
+    drop = 23 - bits
+    half, mask = 1 << (drop - 1), ~((1 << drop) - 1)
+    lsb = (i >> drop) & 1
+    return ((i + half - 1 + lsb) & mask).view(torch.float32)
+
+
+def _preround_device_tensor(t, bits):
+    if bits >= 7:
+        return t
+    mc, dev = t.memory_config(), t.device()
+    host = ttnn.to_torch(t)
+    rounded = _round_mantissa_torch(host, bits)
+    out = ttnn.from_torch(rounded, ttnn.bfloat16, device=dev, layout=ttnn.TILE_LAYOUT, memory_config=mc)
+    ttnn.deallocate(t)
+    return out
 
 
 class TtAttention(LightweightModule):
@@ -47,10 +69,12 @@ class TtAttention(LightweightModule):
             module_path=module_path, is_self_attention=self.is_self_attention
         )
 
+        # Precision investigation knobs (env, default = shipped LoFi / no fp32 acc): SDXL_SDPA_FIDELITY=LoFi|HiFi2|HiFi4,
+        # SDXL_SDPA_FP32=1.
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("SDXL_SDPA_FIDELITY", "LoFi")),
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=os.environ.get("SDXL_SDPA_FP32", "0") == "1",
             packer_l1_acc=True,
         )
 
@@ -116,6 +140,8 @@ class TtAttention(LightweightModule):
         self.dense_out_program_config = model_config.get_matmul_config(f"{module_path}.to_out")
         self.default_compute_kernel_config = model_config.get_mm_compute_config(f"{module_path}.to_out")
         self.out_memory_config = model_config.get_mm_output_memory_config(f"{module_path}.to_out")
+        get_in0 = getattr(model_config, "get_to_out_in0_memory_config", None)
+        self.to_out_in0_memory_config = get_in0(module_path) if get_in0 else None
 
     def forward(self, hidden_states, attention_mask, encoder_hidden_states=None):
         if encoder_hidden_states is None:
@@ -187,6 +213,14 @@ class TtAttention(LightweightModule):
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
 
+        if os.environ.get("SDXL_QKV_PREROUND"):
+            # Precision experiment (host round trip, slow): round-to-nearest the SDPA operands to the mantissa width the
+            # LoFi FPU keeps, so the hardware truncation has nothing left to drop (= unbiased LoFi).
+            # Value "q_bits,k_bits,v_bits", e.g. "6,4,4"; 8 = untouched.
+            bits = [int(b) for b in os.environ["SDXL_QKV_PREROUND"].split(",")]
+            q_heads, k_heads, v_heads = (
+                _preround_device_tensor(t, b) for t, b in zip((q_heads, k_heads, v_heads), bits)
+            )
         hidden_states = ttnn.transformer.scaled_dot_product_attention(
             q_heads,
             k_heads,
@@ -198,6 +232,8 @@ class TtAttention(LightweightModule):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if self.to_out_in0_memory_config is not None:
+            hidden_states = ttnn.to_memory_config(hidden_states, self.to_out_in0_memory_config)
 
         hidden_states = ttnn.linear(
             hidden_states,

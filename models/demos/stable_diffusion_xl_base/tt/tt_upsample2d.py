@@ -2,9 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
+import torch
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
+from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import generated_gn_grid_transposed, prepare_conv_params
 
 
 class TtUpsample2D(LightweightModule):
@@ -40,8 +44,32 @@ class TtUpsample2D(LightweightModule):
             self.conv_config.weights_dtype,
         )
         self.conv_output_dtype = model_config.get_conv_output_dtype()
+        # Full transposed UNet: upsample on the resnet output's own COL_MAJOR 11x10 shard ([384, C/10]) so the
+        # 2x2 upsample lands on [1536, C/10] over 11 columns and the following conv keeps it (110 cores; the
+        # 8x8 -> conv path ran the two upsampler convs on 80 cores, 825 + 633 us).
+        self.transposed = getattr(model_config, "transposed_resnets", False)
 
     def interpolate(self, hidden_states):
+        if self.transposed:
+            # Pick the grid for the UPSAMPLED row count (the conv's output geometry): 16384 rows -> 10 columns x 52
+            # tile rows (11 columns would give 47, prime -> 1-tile act blocks), 4096 -> 11 x 12. The input shard is
+            # a quarter of that per core, so the upsample writes straight into the conv's shard.
+            *lead, C = [int(v) for v in hidden_states.shape]
+            HW = 1
+            for v in lead:
+                HW *= v
+            gx, gy, out_shard = generated_gn_grid_transposed(HW * self.scale_factor**2, C)
+            assert out_shard[0] % (32 * self.scale_factor**2) == 0, out_shard
+            grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
+            spec = ttnn.ShardSpec(
+                grid, [out_shard[0] // self.scale_factor**2, out_shard[1]], ttnn.ShardOrientation.COL_MAJOR
+            )
+            memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, spec)
+            if hidden_states.memory_config() != memory_config:
+                hidden_states = ttnn.to_memory_config(hidden_states, memory_config)
+            hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))
+            B, H, W, C = list(hidden_states.shape)
+            return hidden_states, [B, C, H, W]
         memory_config = ttnn.create_sharded_memory_config(
             shape=hidden_states.shape,
             core_grid=ttnn.CoreGrid(y=8, x=5 if hidden_states.shape[3] % 8 != 0 else 8),
@@ -55,6 +83,8 @@ class TtUpsample2D(LightweightModule):
 
     def forward(self, hidden_states):
         hidden_states, input_shape = self.interpolate(hidden_states)
+        if os.environ.get("SDXL_UPBLOCK_DUMP"):
+            torch.save(ttnn.to_torch(hidden_states).float(), f"{os.environ['SDXL_UPBLOCK_DUMP']}/upblock_r8_interp.pt")
         B, C, H, W = input_shape
 
         [hidden_states, [H, W], [tt_weights, tt_bias]] = ttnn.conv2d(

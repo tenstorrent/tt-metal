@@ -39,6 +39,10 @@ constexpr uint32_t kShardedKVStartAddrIdx = 16;  // ..._base_addr + remote_kv_he
 // mapping cannot drift; it also carries the reader/writer kernel indices, which shift when the
 // transpose_k_heads compute kernels are present.
 struct InterleavedWorkSplit {
+    // tile_split: work unit = one tile of the flattened (tile-row, row-tile) space (kernels *_tiles.cpp), used
+    // whenever there is no transpose_k_heads compute stage; otherwise the unit is a whole tile row.
+    bool tile_split = false;
+    uint32_t row_tiles = 0;
     std::vector<CoreCoord> cores;
     CoreRangeSet all_cores;
     CoreRangeSet core_group_1;
@@ -59,10 +63,14 @@ InterleavedWorkSplit build_interleaved_work_split(
     const uint32_t num_cores_y = grid.y;
     // Block is a unit of work; ie. num of in0_w_tiles per core
     const uint32_t num_blocks = input_shape[0] * input_shape[1] * input_shape[2] / TILE_HEIGHT;
-    auto [num_cores, all_cores, core_group_1, core_group_2, blocks_group_1, blocks_group_2] =
-        tt::tt_metal::split_work_to_cores(grid, num_blocks);
-
     InterleavedWorkSplit split;
+    split.tile_split = !operation_attributes.transpose_k_heads;
+    split.row_tiles = (operation_attributes.num_q_heads + 2 * operation_attributes.num_kv_heads) *
+                      (operation_attributes.head_dim / TILE_WIDTH);
+    const uint32_t num_units = split.tile_split ? num_blocks * split.row_tiles : num_blocks;
+    auto [num_cores, all_cores, core_group_1, core_group_2, blocks_group_1, blocks_group_2] =
+        tt::tt_metal::split_work_to_cores(grid, num_units);
+
     split.all_cores = std::move(all_cores);
     split.core_group_1 = std::move(core_group_1);
     split.core_group_2 = std::move(core_group_2);
@@ -157,10 +165,16 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     ProgramDescriptor desc;
 
+    constexpr uint32_t tile_chunk = 8;  // tile-split kernels: tiles per NoC barrier (CB holds 2 chunks)
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)q_num_tiles,
         (std::uint32_t)kv_num_tiles,
     };
+    if (split.tile_split) {
+        reader_compile_time_args.push_back(in0_w_tiles);
+        reader_compile_time_args.push_back(in1_w_tiles);
+        reader_compile_time_args.push_back(tile_chunk);
+    }
     tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
     // Always append placeholder/accessor for in1 to keep offsets stable
     tt::tt_metal::TensorAccessorArgs(read_from_input_tensor_kv ? in1_buffer : nullptr)
@@ -174,6 +188,9 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
         (std::uint32_t)num_q_heads,   // q_out_c
         (std::uint32_t)num_kv_heads,  // kv_out_c
     };
+    if (split.tile_split) {
+        writer_compile_time_args.push_back(tile_chunk);
+    }
     tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
@@ -218,8 +235,10 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
-        "reader_tm_tile_layout_nlp_create_qkv_heads.cpp";
+        split.tile_split ? "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/"
+                           "dataflow/reader_tm_tile_layout_nlp_create_qkv_heads_tiles.cpp"
+                         : "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/"
+                           "dataflow/reader_tm_tile_layout_nlp_create_qkv_heads.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
@@ -228,8 +247,10 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
-        "writer_tm_tile_layout_nlp_create_qkv_heads.cpp";
+        split.tile_split ? "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/"
+                           "dataflow/writer_tm_tile_layout_nlp_create_qkv_heads_tiles.cpp"
+                         : "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/"
+                           "dataflow/writer_tm_tile_layout_nlp_create_qkv_heads.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
@@ -243,7 +264,7 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     // TODO: Investigate perf allocating full in0_w_tiles with double buffer
     // uint32_t cb1_num_tiles = in0_w_tiles * 2; // double buffer; this runs out of space for generic shapes
     uint32_t src1_cb_index = 1;  // cb0 is needed for compute if we want to use generic transpose_wh compute kernel
-    uint32_t cb1_num_tiles = cb_num_tiles;
+    uint32_t cb1_num_tiles = split.tile_split ? 2 * tile_chunk : cb_num_tiles;
     desc.cbs.push_back(CBDescriptor{
         .total_size = cb1_num_tiles * single_tile_size,
         .core_ranges = all_cores,
@@ -295,6 +316,23 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
+        if (split.tile_split) {
+            // units are tiles: [num_blocks_written, + num_blocks_per_core) of the flattened row-major tile space
+            KernelDescriptor::RTArgList reader_rt;
+            reader_rt.push_back(in0_buffer);
+            if (in1_buffer != nullptr) {
+                reader_rt.push_back(in1_buffer);
+            } else {
+                reader_rt.push_back(uint32_t{0});
+            }
+            reader_rt.push_back(num_blocks_per_core);
+            reader_rt.push_back(num_blocks_written);
+            reader_desc.emplace_runtime_args(core, reader_rt);
+            writer_desc.emplace_runtime_args(
+                core, {q_buffer, k_buffer, v_buffer, num_blocks_per_core, num_blocks_written});
+            num_blocks_written += num_blocks_per_core;
+            continue;
+        }
         uint32_t q_out_h_dim = num_blocks_written % q_out_h_tiles;
         uint32_t q_out_tensor_tile_id =
             (num_blocks_written / q_out_h_tiles * q_out_CHtWt) + (q_out_h_dim * q_out_w_tiles);

@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import matplotlib.pyplot as plt
 import pytest
 import torch
@@ -266,6 +268,13 @@ def run_unet_inference(
     use_golden = golden_ci_mode(is_ci_env, is_ci_v2_env) and len(prompts) == 1
     golden_payload = load_golden(golden_name, golden_meta) if use_golden else None
     golden_latents = [] if golden_payload is None else None
+    # Local investigation aid: SDXL_LOOP_DUMP=<file.pt> saves the per-step torch and TT latents + PCCs.
+    dump_path = os.environ.get("SDXL_LOOP_DUMP")
+    dump = {"torch": [], "tt": [], "pcc": [], "timesteps": [float(t) for t in timesteps]}
+    # SDXL_LOOP_GOLDEN=<file.pt>: reuse the torch latents of an earlier dump instead of running the torch UNet
+    if os.environ.get("SDXL_LOOP_GOLDEN") and golden_payload is None:
+        golden_payload = {"golden": torch.load(os.environ["SDXL_LOOP_GOLDEN"])["torch"]}
+        assert len(golden_payload["golden"]) == len(timesteps), "golden dump has a different step count"
 
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts)):
@@ -324,6 +333,11 @@ def run_unet_inference(
             _, pcc_message = comp_pcc(latents, torch_tt_latents, 0.8)
             logger.info(f"PCC of {i}. iteration is: {pcc_message}")
             pcc_per_iter.append(float(pcc_message))
+            if dump_path:
+                dump["torch"].append(latents.detach().clone())
+                dump["tt"].append(torch_tt_latents.detach().clone())
+                dump["pcc"].append(float(pcc_message))
+                torch.save(dump, dump_path)
 
         tt_scheduler.set_step_index(0)
     if use_golden and golden_payload is None:

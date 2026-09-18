@@ -2,7 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
+import torch
+
 import ttnn
+
+
+def _tb_dump(block, tag, t):
+    """Investigation aid: SDXL_UPBLOCK_DUMP=<dir> saves the first transformer block's per-op outputs."""
+    d = os.environ.get("SDXL_UPBLOCK_DUMP")
+    if d and block.module_path.endswith("attentions.0.transformer_blocks.0"):
+        torch.save(ttnn.to_torch(t).float(), f"{d}/tb_{tag}.pt")
+
+
 from models.common.lightweightmodule import LightweightModule
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisationsBase
 from models.demos.stable_diffusion_xl_base.tt.tt_attention import TtAttention
@@ -81,10 +94,11 @@ class TtBasicTransformerBlock(LightweightModule):
         )
 
         self.ln_eps = 1e-5
+        # Precision investigation knobs (env): SDXL_LN_FIDELITY=HiFi2|HiFi4, SDXL_LN_FP32=1 (defaults = shipped).
         self.ln_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=getattr(ttnn.MathFidelity, os.environ.get("SDXL_LN_FIDELITY", "HiFi2")),
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=os.environ.get("SDXL_LN_FP32", "0") == "1",
             packer_l1_acc=True,
         )
         self.ln_core_grid_x = model_config.core_grid_x
@@ -103,8 +117,11 @@ class TtBasicTransformerBlock(LightweightModule):
             program_config=self.ln_program_config if input_tensor.is_sharded() else self.legacy_program_config,
         )
 
+        _tb_dump(self, "ln1", attn_hidden_states)
         attn_hidden_states = self.attn1(attn_hidden_states, attention_mask, None)
+        _tb_dump(self, "attn1", attn_hidden_states)
         hidden_states = ttnn.add(input_tensor, attn_hidden_states)
+        _tb_dump(self, "add1", hidden_states)
         ttnn.deallocate(input_tensor)
 
         attn_hidden_states = ttnn.layer_norm(
@@ -117,7 +134,9 @@ class TtBasicTransformerBlock(LightweightModule):
             program_config=self.ln_program_config if hidden_states.is_sharded() else self.legacy_program_config,
         )
 
+        _tb_dump(self, "ln2", attn_hidden_states)
         attn_hidden_states = self.attn2(attn_hidden_states, attention_mask, encoder_hidden_states)
+        _tb_dump(self, "attn2", attn_hidden_states)
 
         if self.is_refiner and ("down_blocks.1" in self.module_path or "up_blocks.2" in self.module_path):
             # Use interleaved memory layout as LayerNorm will output a tensor with interleaved layout
@@ -125,6 +144,7 @@ class TtBasicTransformerBlock(LightweightModule):
         else:
             hidden_states = ttnn.add(hidden_states, attn_hidden_states)
 
+        _tb_dump(self, "add2", hidden_states)
         attn_hidden_states = ttnn.layer_norm(
             hidden_states,
             weight=self.tt_norm3_weights,
@@ -139,7 +159,10 @@ class TtBasicTransformerBlock(LightweightModule):
             # Move add output to DRAM to make space in L1 for FeedForward Matmuls
             hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
+        _tb_dump(self, "ln3", attn_hidden_states)
         attn_hidden_states = self.ff(attn_hidden_states)
+        _tb_dump(self, "ff", attn_hidden_states)
         hidden_states = ttnn.add(hidden_states, attn_hidden_states)
+        _tb_dump(self, "add3", hidden_states)
 
         return hidden_states

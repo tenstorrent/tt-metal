@@ -6,7 +6,7 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
+from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import fused_silu, prepare_conv_params, run_group_norm
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_downblock2d import TtDownEncoderBlock2D
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
 from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_slice_config
@@ -133,31 +133,47 @@ class TtEncoder(LightweightModule):
         hidden_states, [C, H, W] = self.mid_block.forward(hidden_states, [B, C, H, W])
 
         logger.info("Executing out ops")
-        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-        if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
-            mem_cfg = ttnn.create_sharded_memory_config(
-                shape=hidden_states.shape,
-                core_grid=self.groupnorm_config["core_grid"],
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        if self.groupnorm_config.get("generated"):
+            hidden_states = run_group_norm(
+                hidden_states,
+                self.groupnorm_config,
+                self.groupnorm_memory_config,
+                None,
+                None,
+                self.gamma_t,
+                self.beta_t,
+                self.norm_groups,
+                self.norm_eps,
+                activation="silu",
+                placement="dram",
             )
+        else:
+            mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+            if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+                mem_cfg = ttnn.create_sharded_memory_config(
+                    shape=hidden_states.shape,
+                    core_grid=self.groupnorm_config["core_grid"],
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                )
 
-        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-        hidden_states = ttnn.group_norm(
-            hidden_states,
-            num_groups=self.norm_groups,
-            input_mask=self.input_mask,
-            negative_mask=self.input_negative_mask,
-            weight=self.gamma_t,
-            bias=self.beta_t,
-            epsilon=self.norm_eps,
-            memory_config=hidden_states.memory_config(),
-            **self.groupnorm_config,
-        )
-        if self.conv_out_slice_config != ttnn.Conv2dL1FullSliceConfig:
-            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+            hidden_states = ttnn.group_norm(
+                hidden_states,
+                num_groups=self.norm_groups,
+                input_mask=self.input_mask,
+                negative_mask=self.input_negative_mask,
+                weight=self.gamma_t,
+                bias=self.beta_t,
+                epsilon=self.norm_eps,
+                memory_config=hidden_states.memory_config(),
+                **self.groupnorm_config,
+            )
+            if self.conv_out_slice_config != ttnn.Conv2dL1FullSliceConfig:
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
-        hidden_states = ttnn.silu(hidden_states)
+        if not fused_silu(self.groupnorm_config):
+            hidden_states = ttnn.silu(hidden_states)
 
         [hidden_states, [H, W], [tt_conv_out_weights, tt_conv_out_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
+import os
 
 import pytest
 import torch
@@ -138,6 +139,35 @@ def run_unet_model(
     ) = prepare_ttnn_tensors(
         device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
     )
+    if os.environ.get("SDXL_UNET_DOUBLE_CALL"):
+        # investigation: does a forward mutate its inputs / is it deterministic? (the denoising loop calls the
+        # UNet twice per step on the same latents tensor)
+        _in_before = ttnn.to_torch(ttnn_input_tensor).float().clone()
+        _enc_before = ttnn.to_torch(ttnn_encoder_tensor).float().clone()
+        _te_before = ttnn.to_torch(ttnn_added_cond_kwargs["text_embeds"]).float().clone()
+        _ti_before = ttnn.to_torch(ttnn_added_cond_kwargs["time_ids"]).float().clone()
+        _ts_before = ttnn.to_torch(ttnn_timestep_tensor).float().clone()
+        _out1, _ = tt_unet.forward(
+            ttnn_input_tensor,
+            [B, C, H, W],
+            timestep=ttnn_timestep_tensor,
+            encoder_hidden_states=ttnn_encoder_tensor,
+            time_ids=ttnn_added_cond_kwargs["time_ids"],
+            text_embeds=ttnn_added_cond_kwargs["text_embeds"],
+        )
+        _out1 = ttnn.to_torch(_out1).float()
+        for _n, _b, _t in (
+            ("input", _in_before, ttnn_input_tensor),
+            ("encoder", _enc_before, ttnn_encoder_tensor),
+            ("text_embeds", _te_before, ttnn_added_cond_kwargs["text_embeds"]),
+            ("time_ids", _ti_before, ttnn_added_cond_kwargs["time_ids"]),
+            ("timestep", _ts_before, ttnn_timestep_tensor),
+        ):
+            if not _t.is_allocated():
+                logger.info(f"MUTATION {_n}: DEALLOCATED by forward")
+                continue
+            _a = ttnn.to_torch(_t).float()
+            logger.info(f"MUTATION {_n}: max|after-before|={(_a - _b).abs().max().item():.6f}")
     ttnn_output_tensor, output_shape = tt_unet.forward(
         ttnn_input_tensor,
         [B, C, H, W],
@@ -146,6 +176,11 @@ def run_unet_model(
         time_ids=ttnn_added_cond_kwargs["time_ids"],
         text_embeds=ttnn_added_cond_kwargs["text_embeds"],
     )
+    if os.environ.get("SDXL_UNET_DOUBLE_CALL"):
+        _out2 = ttnn.to_torch(ttnn_output_tensor).float()
+        logger.info(
+            f"MUTATION second call vs first: max diff={(_out2 - _out1).abs().max().item():.6f} mean diff={(_out2 - _out1).mean().item():+.6f}"
+        )
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor.cpu())
     output_tensor = output_tensor.reshape(B, output_shape[1], output_shape[2], output_shape[0])
@@ -161,6 +196,10 @@ def run_unet_model(
     ttnn.ReadDeviceProfiler(device)
 
     _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    _e = output_tensor.float() - torch_output_tensor.float()
+    logger.info(
+        f"BIAS bias={_e.mean().item():+.5f} rms={_e.pow(2).mean().sqrt().item():.5f} std_ratio={(output_tensor.float().std() / torch_output_tensor.float().std()).item():.5f} torch_std={torch_output_tensor.float().std().item():.4f}"
+    )
     logger.info(f"PCC of first iteration is: {pcc_message}")
 
     for _ in range(iterations - 1):

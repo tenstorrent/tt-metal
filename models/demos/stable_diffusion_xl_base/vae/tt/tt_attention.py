@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
+from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params, run_group_norm
 
 
 class TtAttention(LightweightModule):
@@ -97,27 +97,42 @@ class TtAttention(LightweightModule):
         B, C, H, W = input_shape
         hidden_states = input_tensor
 
-        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
-        if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
-            mem_cfg = ttnn.create_sharded_memory_config(
-                shape=hidden_states.shape,
-                core_grid=self.groupnorm_config["core_grid"],
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        if self.groupnorm_config.get("generated"):
+            # generated GroupNorm, DRAM interleaved in/out (the qkv linear below takes an interleaved in0)
+            hidden_states = run_group_norm(
+                hidden_states,
+                self.groupnorm_config,
+                self.groupnorm_memory_config,
+                None,
+                None,
+                self.gamma_t,
+                self.beta_t,
+                self.norm_groups,
+                self.norm_eps,
+                placement="dram",
             )
+        else:
+            mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+            if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+                mem_cfg = ttnn.create_sharded_memory_config(
+                    shape=hidden_states.shape,
+                    core_grid=self.groupnorm_config["core_grid"],
+                    strategy=ttnn.ShardStrategy.BLOCK,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                )
 
-        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-        hidden_states = ttnn.group_norm(
-            hidden_states,
-            num_groups=self.norm_groups,
-            input_mask=self.input_mask,
-            negative_mask=self.input_negative_mask,
-            weight=self.gamma_t,
-            bias=self.beta_t,
-            epsilon=self.norm_eps,
-            memory_config=hidden_states.memory_config(),
-            **self.groupnorm_config,
-        )
+            hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+            hidden_states = ttnn.group_norm(
+                hidden_states,
+                num_groups=self.norm_groups,
+                input_mask=self.input_mask,
+                negative_mask=self.input_negative_mask,
+                weight=self.gamma_t,
+                bias=self.beta_t,
+                epsilon=self.norm_eps,
+                memory_config=hidden_states.memory_config(),
+                **self.groupnorm_config,
+            )
 
         assert encoder_hidden_states is None, "VAE does self attention only"
         encoder_hidden_states = hidden_states

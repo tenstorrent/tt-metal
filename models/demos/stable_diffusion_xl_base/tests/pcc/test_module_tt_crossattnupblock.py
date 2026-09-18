@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
+import os
 
 import pytest
 import torch
@@ -123,6 +124,36 @@ def test_crossattnup(
         residual = torch_random(r, -0.1, 0.1, dtype=torch.float32)
         torch_residual_tensors = torch_residual_tensors + (residual,)
 
+    _dump = os.environ.get("SDXL_UPBLOCK_DUMP")  # investigation aid: torch per-stage intermediates
+
+    if _dump:
+
+        def _mk(name):
+            def _h(mod, inp, out):
+                o = out[0] if isinstance(out, tuple) else out
+
+                o = o.sample if hasattr(o, "sample") else o
+
+                torch.save(o.detach().float(), f"{_dump}/torch_{name}.pt")
+
+            return _h
+
+        for _i, _m in enumerate(torch_crosattn.resnets):
+            _m.register_forward_hook(_mk(f"r{_i}_resnet"))
+
+        for _i, _m in enumerate(torch_crosattn.attentions):
+            _m.register_forward_hook(_mk(f"r{_i}_attn"))
+
+            _m.norm.register_forward_hook(_mk(f"r{_i}_attn_gn"))
+
+            _m.proj_in.register_forward_hook(_mk(f"r{_i}_attn_projin"))
+        _tb0 = torch_crosattn.attentions[0].transformer_blocks[0]
+        for _nm in ("norm1", "attn1", "norm2", "attn2", "norm3", "ff"):
+            getattr(_tb0, _nm).register_forward_hook(_mk(f"tb_{_nm}"))
+
+        if torch_crosattn.upsamplers is not None:
+            torch_crosattn.upsamplers[0].register_forward_hook(_mk("r9_upsampler"))
+
     torch_output_tensor = torch_crosattn(
         torch_input_tensor, torch_residual_tensors, temb=torch_temb_tensor, encoder_hidden_states=torch_encoder_tensor
     )
@@ -162,4 +193,10 @@ def test_crossattnup(
     gc.collect()
 
     _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+    _e = output_tensor.float() - torch_output_tensor.float()
+
+    logger.info(
+        f"BIAS bias={_e.mean().item():+.5f} rms={_e.pow(2).mean().sqrt().item():.5f} std_ratio={(output_tensor.float().std() / torch_output_tensor.float().std()).item():.5f} torch_std={torch_output_tensor.float().std().item():.4f}"
+    )
     logger.info(f"PCC is: {pcc_message}")
