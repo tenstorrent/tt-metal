@@ -169,7 +169,7 @@ The profiler generates the standard ops performance CSV at ``generated/profiler/
 
 **Derived Metrics Reference**
 
-Derived metrics are computed per operation and per core, then aggregated to Min, Median, Max, and Avg columns across the cores of each operation in the CSV and console output. The formulas live in one shared module, ``tt_metal/tt-llk/tools/python/tt_llk_perf/metrics.py`` (the ``tt_llk_perf`` package, also used by the tt-llk test harness; counter names come from ``tt_metal/tt-llk/tools/include/perf_counters/types.h``), and the complete catalogue of metrics, grouped by topic with formulas and notes, is in the `PerfCounters tech report <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/PerfCounters/perf-counters.md#derived-metrics-reference>`_.
+Derived metrics are computed per operation and per core, then aggregated to Min, Median, Max, and Avg columns across the cores of each operation in the CSV and console output. The formulas live in one shared module, ``tt_metal/tt-llk/tools/python/tt_llk_perf/metrics.py`` (the ``tt_llk_perf`` package, also used by the tt-llk test harness; counter names come from ``tt_metal/tt-llk/tools/include/perf_counters/types.h``), and the complete catalogue of metrics, grouped by topic with formulas and notes, is in the `hardware reference in tt-llk <https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/tt-llk/docs/performance_counters/hardware_reference.md#derived-metrics-reference>`_.
 
 Two metric families appear in the output:
 
@@ -186,7 +186,7 @@ Wormhole and Blackhole expose different raw hardware signals:
 - Blackhole has additional L1 mux positions (4 extra for Tensix) providing deeper memory visibility through ``l1_2``, ``l1_3``, ``l1_4``, ``l1_5`` counter groups.
 - ``Math-to-Pack Handoff Efficiency`` falls back to the bank's reference cycles as denominator when ``PACKER_BUSY = 0`` on a given op (e.g. pure-SFPU ops); ``Packer Efficiency`` reports N/A there.
 
-For the authoritative per-architecture metric list, raw counter set, register maps, and signal definitions, see ``tech_reports/PerfCounters/perf-counters.md``.
+For the authoritative per-architecture metric list, raw counter set, register maps, and signal definitions, see ``tt_metal/tt-llk/docs/performance_counters/hardware_reference.md``; ``tech_reports/PerfCounters/perf-counters.md`` covers the profiler side.
 
 
 profile_this description
