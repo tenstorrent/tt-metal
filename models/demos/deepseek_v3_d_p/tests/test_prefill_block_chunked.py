@@ -46,7 +46,7 @@ from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     cache_half_pccs,
-    gather_cache_natural,
+    gather_cache_tp0,
     interleave_pe,
     read_sharded_rows,
     unrotate_cache_layer,
@@ -1122,7 +1122,7 @@ def test_kimi_prefill_block_chunked_padded(
 
 
 def run_chunked_block_glm_indexer(
-    variant, config, mesh_device, weight_cache_path, n_chunks, layer_idx, num_links, topology, tp_shard_kv=False
+    variant, config, mesh_device, weight_cache_path, n_chunks, layer_idx, num_links, topology
 ):
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
@@ -1143,12 +1143,6 @@ def run_chunked_block_glm_indexer(
     chunk_local = CHUNK // sp
     total_len = n_chunks * CHUNK
     assert total_len <= SEQ_CACHE, f"{n_chunks} chunks ({total_len}) exceed cache {SEQ_CACHE}"
-    if tp_shard_kv:
-        stripe = CHUNK // (sp * tp)
-        assert stripe % 32 == 0, (
-            f"the deduped cache needs a tile-aligned per-chip stripe: chunk {CHUNK} / "
-            f"(sp {sp} * tp {tp}) = {stripe}"
-        )
     emb_dim = config.hidden_size
     kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
     kv_lora = config.kv_lora_rank
@@ -1211,7 +1205,6 @@ def run_chunked_block_glm_indexer(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
         num_users=1,
-        tp_axis=tp_axis if tp_shard_kv else None,
     )
     tt_index_kv_cache = init_kvpe_cache(
         kvpe_cache_head_dim=idx_dim,
@@ -1222,7 +1215,6 @@ def run_chunked_block_glm_indexer(
         num_kvpe_cache_layers=num_full_indexer_layers(config) or 1,
         num_users=1,
         dtype=ttnn.bfloat8_b,
-        tp_axis=tp_axis if tp_shard_kv else None,
     )
 
     hidden_shard_dims = [None, None]
@@ -1265,17 +1257,13 @@ def run_chunked_block_glm_indexer(
         ttnn.synchronize_device(mesh_device)
         logger.info(f"  chunk {c} done (kv_actual={kv_actual})")
 
-    # Under tp_shard_kv the cache is dim-2 sharded across BOTH mesh axes (stripes = sp*tp in linear
-    # chip order); without it, TP-replicated (stripes = sp, tp-coord 0 == every tp-coord). gather_cache_natural
-    # returns the right layout for both; gather_cache_tp0 would silently drop (tp-1)/tp of the rows.
-    stripes = sp * tp if tp_shard_kv else sp
-    p = blockcyclic_positions(stripes, CHUNK, SEQ_CACHE)
+    p = blockcyclic_positions(sp, CHUNK, SEQ_CACHE)
     # Index cache is compact (GLM-5.2 reuse): this full layer wrote its full-indexer rank slot (== layer_idx
     # for glm_5_1). KVPE is per-layer and the block owns one slot (0).
-    idx_cache_full, _ = gather_cache_natural(tt_index_kv_cache, mesh_device, tp_shard_kv)
-    dev_idx = unrotate_cache_layer(idx_cache_full[full_indexer_rank(config, layer_idx)], p, total_len)
-    kvpe_cache_full, _ = gather_cache_natural(tt_kvpe_cache.storage, mesh_device, tp_shard_kv)
-    dev_kvpe = unrotate_cache_layer(kvpe_cache_full[0], p, total_len)
+    dev_idx = unrotate_cache_layer(
+        gather_cache_tp0(tt_index_kv_cache, mesh_device)[full_indexer_rank(config, layer_idx)], p, total_len
+    )
+    dev_kvpe = unrotate_cache_layer(gather_cache_tp0(tt_kvpe_cache.storage, mesh_device)[0], p, total_len)
     _, out_pcc = comp_pcc(ref_out, out_accum)
     idx_rope_pcc, idx_nope = cache_half_pccs(g_idx, dev_idx, idx_rope, pe_interleave=False)
     kv_nope, kv_pe = cache_half_pccs(g_post, dev_kvpe, kv_lora, pe_interleave=True)
@@ -1293,29 +1281,10 @@ def run_chunked_block_glm_indexer(
 
 
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
-# tp_shard_kv is folded into layer_idx as a joint axis: only the "parity" layers (L2 dense, L6 first
-# full-indexer MoE) run kv_tpkv, matching the old test_glm_prefill_block blaze scope. The mid/late-MoE
-# layers (L30/L62/L74) are net-new sp_only coverage and stay sp_only.
 @pytest.mark.parametrize(
-    "layer_idx, tp_shard_kv",
-    [
-        (2, False),
-        (2, True),
-        (6, False),
-        (6, True),
-        (30, False),
-        (62, False),
-        (74, False),
-    ],
-    ids=[
-        "dense-L2-kv_sp",
-        "dense-L2-kv_tpkv",
-        "moe-L6-kv_sp",
-        "moe-L6-kv_tpkv",
-        "moe-L30-kv_sp",
-        "moe-L62-kv_sp",
-        "moe-L74-kv_sp",
-    ],
+    "layer_idx",
+    [2, 6, 30, 62, 74],
+    ids=["dense-L2", "moe-L6", "moe-L30", "moe-L62", "moe-L74"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
@@ -1335,17 +1304,9 @@ def run_chunked_block_glm_indexer(
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA (indexer) is Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_prefill_block_indexer_teacher_forced(
-    variant, config_only, mesh_device, device_params, weight_cache_path, n_chunks, layer_idx, tp_shard_kv, num_links
+    variant, config_only, mesh_device, device_params, weight_cache_path, n_chunks, layer_idx, num_links
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_block_glm_indexer(
-        variant,
-        config_only,
-        mesh_device,
-        weight_cache_path,
-        n_chunks,
-        layer_idx,
-        num_links,
-        topology,
-        tp_shard_kv=tp_shard_kv,
+        variant, config_only, mesh_device, weight_cache_path, n_chunks, layer_idx, num_links, topology
     )
