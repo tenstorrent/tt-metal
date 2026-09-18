@@ -104,6 +104,9 @@ get_padded_slice_runtime_args_rm_sharded_output(
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
 
+    // Sliced last-dim width. Reader base already includes begins_bytes.
+    const int slice_row_size_bytes = static_cast<int>(actual_output_shape[-1] * input_tensor.element_size());
+
     uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
     uint32_t start_addr = input_tensor.buffer()->address();
     std::vector<uint32_t> common_reader_kernel_args = {
@@ -155,7 +158,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
         }
 
         int this_input_row_size_bytes =
-            std::max(std::min<int>(output_row_size_bytes, input_page_size - width_offset), 0);
+            std::max(std::min<int>(output_row_size_bytes, slice_row_size_bytes - width_offset), 0);
         uint32_t this_core_num_sticks = num_sticks_per_core;
         if (this_input_row_size_bytes == 0) {
             this_core_num_sticks = 0;
@@ -229,8 +232,8 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
     bool pad_output_row = false;
     log_debug(tt::LogOp, "Input Shape {}, Padded Shape : {}", a.logical_shape(), a.padded_shape());
 
-    uint32_t input_row_size_bytes = a.logical_shape()[-1] * a.element_size();
-    input_row_size_bytes = input_row_size_bytes / num_cores_channels;
+    uint32_t slice_row_size_bytes = actual_output_shape[-1] * a.element_size();
+    slice_row_size_bytes = slice_row_size_bytes / num_cores_channels;
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -281,7 +284,7 @@ PaddedSliceRMProgramFactory::cached_program_t PaddedSliceRMProgramFactory::creat
         output.buffer());
 
     CBHandle cb_output = std::get<1>(cb_output_tuple);
-    if (output_row_size_bytes > input_row_size_bytes) {
+    if (output_row_size_bytes > slice_row_size_bytes) {
         pad_output_row = true;
         tt::tt_metal::CircularBufferConfig cb_temp_pad_config =
             tt::tt_metal::CircularBufferConfig(1 * output_row_size_bytes, {{temp_pad_cb_index, cb_data_format}})
