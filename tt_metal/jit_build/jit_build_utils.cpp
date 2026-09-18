@@ -87,6 +87,7 @@ std::string compiler_version(const std::string& gpp) {
     }
     args.emplace_back("--version");
     std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
     for (auto& arg : args) {
         argv.push_back(arg.data());
     }

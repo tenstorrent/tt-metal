@@ -53,6 +53,7 @@ TEST_F(CompilerVersionTest, CompleteFirstLineCachedAcrossThreads) {
     script(compiler_, "echo probe >> \"$0.count\"\nprintf '" + version + "second line\\n'\n");
     std::vector<std::string> results(8);
     std::vector<std::thread> threads;
+    threads.reserve(results.size());
     for (auto& result : results) {
         threads.emplace_back([&result, this] { result = utils::compiler_version(compiler_.string()); });
     }
