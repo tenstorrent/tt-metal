@@ -136,142 +136,186 @@ void kernel_main() {
     const uint32_t last_active_ring_iter =
         find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
 
-    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
-        const bool do_joint_kv = ring_id == ring_size - 1;
-        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
+    // Loop order. Default: ring-outer / pass-inner — every pass advances in lockstep per ring
+    // iteration, one L1 state-FIFO entry and one resident Q chunk per pass. EXP_SEQ_PASSES:
+    // pass-outer / ring-inner — one pass runs all ring iterations before the next starts, so a single
+    // Q chunk and a single flash state are live (the scratch path) and per-core L1 stops scaling with
+    // the pass count. EXP_Q_GROUPS splits a segment's Q chunks into groups walked as extra passes;
+    // only group 0 of a segment forwards K/V over the fabric (later groups re-read the gathered
+    // K/V the first group already landed in DRAM).
+#ifdef EXP_SEQ_PASSES
+    constexpr bool seq_passes = true;
+    constexpr uint32_t q_groups = EXP_Q_GROUPS;
+    constexpr uint32_t group_stride = EXP_GROUP_STRIDE;
+#else
+    constexpr bool seq_passes = false;
+    constexpr uint32_t q_groups = 1;
+    constexpr uint32_t group_stride = 0;
+#endif
+    const uint32_t total_passes = q_count * q_groups;
+    const uint32_t n_outer = seq_passes ? total_passes : ring_size;
+    const uint32_t n_inner = seq_passes ? ring_size : total_passes;
+    const RingSDPAOpIndexer fused_op_indexer0 = fused_op_indexer;
+    for (uint32_t outer = 0; outer < n_outer; ++outer) {
+        uint32_t ring_id = 0;
+        const bool outer_is_last_ring_iter = !seq_passes && (outer == last_active_ring_iter);
+        for (uint32_t inner = 0; inner < n_inner; ++inner) {
+            const uint32_t ring_iter = seq_passes ? inner : outer;
+            const uint32_t pass = seq_passes ? outer : inner;
+            [[maybe_unused]] const bool pass_forwards = !seq_passes || (pass % q_groups == 0);
+            if (seq_passes) {
+                if (inner == 0) {
+                    fused_op_indexer = fused_op_indexer0;
+                }
+                ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+            } else if (inner == 0) {
+                ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+            }
+            if (seq_passes && inner == 0) {
+                // Fresh flash state per pass: the scratch path swaps roles across ring iterations.
+                scratch_state =
+                    RingAccumulatorState{{cb_sum_A, cb_max_A, cb_out_im_A}, {cb_sum_B, cb_max_B, cb_out_im_B}};
+            }
+            const bool do_joint_kv = ring_id == ring_size - 1;
+            const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
-        // First, find out if this ring iter processes any KV chunks.
-        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-        const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
+            // First, find out if this ring iter processes any KV chunks.
+            const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
+            const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
+            const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+            const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
 
-        if (!ring_iter_does_work) {
-            continue;
-        }
+            if (!ring_iter_does_work) {
+                continue;
+            }
 
-        const int32_t global_n_within_ring_iter = logical_n - ring_id * local_padded_N;
-        // Note the > and <=. This means there is real length of logical_n within this ring iter.
-        const bool global_n_is_within_ring_iter =
-            global_n_within_ring_iter > 0 && global_n_within_ring_iter <= (int32_t)local_padded_N;
-        const bool global_n_needs_masking = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-        const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
-        const uint32_t global_n_mask_chunk_id = global_n_within_ring_iter / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+            const int32_t global_n_within_ring_iter = logical_n - ring_id * local_padded_N;
+            // Note the > and <=. This means there is real length of logical_n within this ring iter.
+            const bool global_n_is_within_ring_iter =
+                global_n_within_ring_iter > 0 && global_n_within_ring_iter <= (int32_t)local_padded_N;
+            const bool global_n_needs_masking =
+                global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+            const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
+            const uint32_t global_n_mask_chunk_id =
+                global_n_within_ring_iter / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
-        // LOCAL N MASK
-        const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
-        const uint32_t local_n_mask_chunk_id = local_padded_Nt / Sk_chunk_t;
+            // LOCAL N MASK
+            const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
+            const uint32_t local_n_mask_chunk_id = local_padded_Nt / Sk_chunk_t;
 
-        // JOINT L MASK
-        const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-        const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
-        const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+            // JOINT L MASK
+            const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+            const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
+            const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
-        // Build lightweight mask context for this ring iteration
-        LightweightMaskContext lw_mask;
-        lw_mask.neginf_tile_idx = neginf_tile_idx;
-        lw_mask.local_n_padded_tiles = local_n_padded_tiles;
-        lw_mask.joint_n_padded_tiles = joint_n_padded_tiles;
-        lw_mask.global_n_partial_col = global_n_partial_col;
-        lw_mask.joint_l_partial_col = joint_l_partial_col;
-        lw_mask.global_n_partial_tile_idx = global_n_partial_tile_idx;
-        lw_mask.joint_l_partial_tile_idx = joint_l_partial_tile_idx;
-        if (ring_iter_needs_global_n_mask) {
-            const uint32_t unpadded_in_chunk = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT);
-            const uint32_t valid_tiles =
-                (unpadded_in_chunk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
-            lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles;
-        }
+            // Build lightweight mask context for this ring iteration
+            LightweightMaskContext lw_mask;
+            lw_mask.neginf_tile_idx = neginf_tile_idx;
+            lw_mask.local_n_padded_tiles = local_n_padded_tiles;
+            lw_mask.joint_n_padded_tiles = joint_n_padded_tiles;
+            lw_mask.global_n_partial_col = global_n_partial_col;
+            lw_mask.joint_l_partial_col = joint_l_partial_col;
+            lw_mask.global_n_partial_tile_idx = global_n_partial_tile_idx;
+            lw_mask.joint_l_partial_tile_idx = joint_l_partial_tile_idx;
+            if (ring_iter_needs_global_n_mask) {
+                const uint32_t unpadded_in_chunk =
+                    global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+                const uint32_t valid_tiles =
+                    (unpadded_in_chunk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+                lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles;
+            }
 
-        const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
-        static_assert(use_streaming_compute, "Streaming compute must be enabled for ring joint SDPA");
+            const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
+            static_assert(use_streaming_compute, "Streaming compute must be enabled for ring joint SDPA");
 
-        // Serial passes over this row's heads, same order as the reader and writer. Each pass is a
-        // single-Q-chunk sdpa_ring_v2 call (q_per_core == 1), so every L1-residency property of the
-        // single-head path holds per pass; the only per-pass state is which Q chunk it reads from
-        // cb_q_in (q_base_tiles) and which L1 FIFO entry it merges (handled inside sdpa_ring_v2).
-        for (uint32_t pass = 0; pass < q_count; ++pass) {
-            const uint32_t global_q_chunk = q_base + pass * q_stride;
-            sdpa_ring_v2<
-                Sq_chunk_t,
-                Sk_chunk_t,
-                0,  // Skt — not used for ring
-                DHt,
-                DHt,  // vDHt = DHt for ring
-                scale_fp32,
-                qk_subblock_h,
-                qk_subblock_w,
-                out_subblock_h,  // qktv_subblock_h
-                out_subblock_w,  // qktv_subblock_w
-                cb_q_in,
-                cb_k_in,
-                cb_v_in,
-                cb_qk_im,
-                cb_identity_scale_in,
-                cb_exp_max_diff,
-                cb_col_identity,
-                cb_recip_scratch,
-                cb_mask_in,
-                cb_scale_in,
-                cb_max_in,
-                cb_max_out,
-                cb_prev_out,
-                cb_out,
-                cb_out,  // cb_normalized_out — output goes directly to cb_out
-                cb_sum_out,
-                cb_sum_in,
-                cb_signal,
-                needs_lightweight_mask,
-                false,  // is_causal_sdpa
-                false,  // is_balanced_sdpa
-                false,  // chunked_enabled
-                local_padded_Nt,
-                local_padded_Nt,  // q_local_padded_Nt
-                0,                // chunk_size_t
-                global_n_has_padding,
-                local_n_has_padding,
-                joint_has_padding,
-                false,            // straddle_mask_enabled
-                use_state_fifo>(  // use_l1_state_fifo — single-pass programs keep the scratch path
-                global_q_chunk,
-                global_q_chunk + 1,
-                num_kv_chunks,
-                num_q_chunks,
-                ring_iter,
-                ring_id,
-                num_local_k_chunks,
-                logical_nt,
-                ring_iter_needs_global_n_mask,
-                ring_iter_needs_joint_n_mask,
-                local_n_needs_masking,
-                global_n_mask_chunk_id,
-                local_n_mask_chunk_id,
-                joint_n_mask_chunk_id,
-                scratch_state,
-                is_last_ring_iter,
-                /*q_per_core=*/1,
-                lw_mask,
-                /*skip_first_half_q=*/false,
-                /*use_zigzag_balancing=*/false,
-                ChunkedContext{},
-                /*is_first_active_iter=*/(ring_iter == 0),
-                /*logical_lt=*/0,
-                /*q_base_tiles=*/stream_q ? 0u : pass * q_chunk_tiles);
+            // Serial passes over this row's heads, same order as the reader and writer. Each pass is a
+            // single-Q-chunk sdpa_ring_v2 call (q_per_core == 1), so every L1-residency property of the
+            // single-head path holds per pass; the only per-pass state is which Q chunk it reads from
+            // cb_q_in (q_base_tiles) and which L1 FIFO entry it merges (handled inside sdpa_ring_v2).
+            {
+                const uint32_t global_q_chunk =
+                    q_base + (pass / q_groups) * q_stride + (pass % q_groups) * group_stride;
+                sdpa_ring_v2<
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    0,  // Skt — not used for ring
+                    DHt,
+                    DHt,  // vDHt = DHt for ring
+                    scale_fp32,
+                    qk_subblock_h,
+                    qk_subblock_w,
+                    out_subblock_h,  // qktv_subblock_h
+                    out_subblock_w,  // qktv_subblock_w
+                    cb_q_in,
+                    cb_k_in,
+                    cb_v_in,
+                    cb_qk_im,
+                    cb_identity_scale_in,
+                    cb_exp_max_diff,
+                    cb_col_identity,
+                    cb_recip_scratch,
+                    cb_mask_in,
+                    cb_scale_in,
+                    cb_max_in,
+                    cb_max_out,
+                    cb_prev_out,
+                    cb_out,
+                    cb_out,  // cb_normalized_out — output goes directly to cb_out
+                    cb_sum_out,
+                    cb_sum_in,
+                    cb_signal,
+                    needs_lightweight_mask,
+                    false,  // is_causal_sdpa
+                    false,  // is_balanced_sdpa
+                    false,  // chunked_enabled
+                    local_padded_Nt,
+                    local_padded_Nt,  // q_local_padded_Nt
+                    0,                // chunk_size_t
+                    global_n_has_padding,
+                    local_n_has_padding,
+                    joint_has_padding,
+                    false,            // straddle_mask_enabled
+                    use_state_fifo>(  // use_l1_state_fifo — single-pass programs keep the scratch path
+                    global_q_chunk,
+                    global_q_chunk + 1,
+                    num_kv_chunks,
+                    num_q_chunks,
+                    ring_iter,
+                    ring_id,
+                    num_local_k_chunks,
+                    logical_nt,
+                    ring_iter_needs_global_n_mask,
+                    ring_iter_needs_joint_n_mask,
+                    local_n_needs_masking,
+                    global_n_mask_chunk_id,
+                    local_n_mask_chunk_id,
+                    joint_n_mask_chunk_id,
+                    scratch_state,
+                    is_last_ring_iter,
+                    /*q_per_core=*/1,
+                    lw_mask,
+                    /*skip_first_half_q=*/false,
+                    /*use_zigzag_balancing=*/false,
+                    ChunkedContext{},
+                    /*is_first_active_iter=*/(ring_iter == 0),
+                    /*logical_lt=*/0,
+                    /*q_base_tiles=*/(stream_q || seq_passes) ? 0u : pass * q_chunk_tiles);
 
-            if constexpr (stream_q) {
-                // This pass's chunk is spent; free the slot so the reader can load the next pass's
-                // chunk. Uniform on every core (q_count == 1 rows re-read too).
-                sdpa_cb_pop_front_out_of_line(cb_q_in, q_chunk_tiles);
+                if constexpr (stream_q) {
+                    // This pass's chunk is spent; free the slot so the reader can load the next pass's
+                    // chunk. Uniform on every core (q_count == 1 rows re-read too).
+                    sdpa_cb_pop_front_out_of_line(cb_q_in, q_chunk_tiles);
+                }
             }
         }
 
         if constexpr (!stream_q && use_state_fifo) {
-            // All q_count Q chunks stay resident in cb_q_in for the whole op (each read once, on the
-            // first active ring iteration) and are popped together once the last pass has consumed
-            // them. On the scratch path (!use_state_fifo) sdpa_ring_v2 pops the single resident
-            // chunk itself on the last ring iteration — popping here too would double-pop.
-            if (is_last_ring_iter) {
+            // Lockstep schedule only (outer == ring iteration): all q_count Q chunks stay resident in
+            // cb_q_in for the whole op (each read once, on the first active ring iteration) and are
+            // popped together once the last pass of the last ring iteration has consumed them. On the
+            // scratch path (!use_state_fifo) sdpa_ring_v2 pops the single resident chunk itself on the
+            // last ring iteration — popping here too would double-pop.
+            if (outer_is_last_ring_iter) {
                 sdpa_cb_pop_front_out_of_line(cb_q_in, q_count * q_chunk_tiles);
             }
         }

@@ -469,7 +469,7 @@ consistent with `is_causal=False`. Observed: `(6,24)` 1,602,880 B; `(8,20)` 1,63
 | 5 | Re-profile the block with landed configs | blocked | **TODO** — needs the pinned `diffusers` fork; not installed here |
 | 6 | Pipeline re-run: warm total, denoise, ms/fwd, CLIP | **done** | Same-host A/B: **-69.9 ms/fwd, -0.58%**, exactly the isolated-sweep prediction. CLIP **35.88** (min 34.69, bar 33.0) on the later run |
 | 11 | Numerics of the landed blockings (the sweep never checked) | **done** | ff2 (8,7,10) pcc 1.0000000 vs torch, identical to (8,8,8) to one bf16 ulp; ff1 (8,7,10) pcc 0.9999843 on the real SwiGLU ring, = (8,3,14) to 6 dp. Both PASS |
-| 7 | `use_exp_ring_sdpa` on Wormhole | **done** | Brought up (header-pool and reader fixes, even-row grid, 2 or 4 links); PCC 0.99975. Fits only the SP=32-equivalent shard (3424 rows/device): there the normal op is **~9% faster** (14.76 vs 16.09 ms in-block); 4 links = 2 links. The 15 s shard does not fit its L1 model. See *Exp ring joint SDPA on Wormhole* below |
+| 7 | `use_exp_ring_sdpa` on Wormhole | **done** | Brought up (header-pool and reader fixes, even-row grid, 2 or 4 links, sequential passes for shards that do not fit L1); PCC 0.99975. 15 s shard (padded to 14336 rows): exp **206.7 ms** vs normal 192.9 ms (+7%) on 56 vs 63 cores; ~5% less core time per unit of work. See *Exp ring joint SDPA on Wormhole* |
 | 8 | FSDP layout conversions | not started | **TODO** — tilize/untilize go 0.13 -> 3.13 ms under FSDP, a 23x blowup and a quarter of the whole FSDP cost spent on format round-trips rather than communication. Cheapest apparent win in the breakdown |
 | 9 | Ring SDPA kernel utilization | not started | **TODO** — 48% at the shipped chunk size, inherent to the kernel at this shape rather than a chunk-size miss. Note `PM FPU UTIL (%)` is the perf-model ideal divided by measured time (`tools/tracy/process_ops_logs.py`), not a hardware counter; the exp kernel shares the same inner loop, so the work remains in `compute_streaming.hpp` |
 | 10 | `dit_fsdp: True` in `_PRESETS_WH` | not started | **TODO** — decision, not a measurement; costs 5.7% of the block, buys the headroom a 12 GB part needs |
@@ -534,6 +534,43 @@ untouched by either.
 Reproduce: unit test `test_exp_ring_joint_attention.py::…[wormhole_b0-4x8_wh_h3_sim32{,_p4,_nl4}-ring]`
 (PCC + timing under `--profile`), normal-op table `test_ring_joint_sdpa.py::…create_perf_table[minimax_h3_15s_768p_sim32]`,
 block A/B with `MINIMAX_H3_EXP_RING_SDPA={1,0}` and `MINIMAX_H3_EXP_RING_MAX_PASSES={3,4}`.
+
+### Sequential passes: the exp op on the 15 s shard (2026-09-18, branch `jameslee/exp_ring_sdpa_wh`)
+
+The L1 wall above comes from the lockstep schedule: every pass's Q chunk and flash state stay resident
+because all passes advance together per ring iteration. `TT_EXP_SDPA_Q_GROUPS=G` (factory + all three
+kernels, one setting per process) switches the op to **pass-outer / ring-inner**: one pass runs all
+ring iterations before the next starts, so one Q chunk and one flash state are live per core (the
+normal op's `q_per_core == 1` scratch path, no L1 state FIFO), and a head-segment's Q chunks are split
+into G groups of one chunk per column walked as extra passes. Only group 0 of a segment forwards K/V
+over the fabric; later groups re-read the gathered K/V the first group landed in DRAM. Per-core L1 is
+then the single-pass footprint (q256/k512: 599 tiles = 1.23 MB) at any shard size.
+
+Constraint: `num_q_chunks % (columns x G) == 0`. 13664 rows give 54 chunks of q=256, which no
+7-column layout divides, so the shard is padded to **14336 rows/device** (56 chunks = 7 x 4 x 2
+segments, +4.9% work). The normal op was measured at the same 14336 rows for the comparison.
+
+| op | layout | links | per call |
+|---|---|---|---|
+| normal `RingJointSDPA` (`create_perf_table[minimax_h3_15s_768p_pad14336]`) | q256 / k512, 63 cores | 4 | **192.9 ms** |
+| exp, sequential, G=4 | segs=2 (pair dedup on), 4 segment-passes on rows 0-3 and 3 on rows 4-7, 56 cores | 2 | 238.0 ms |
+| exp, sequential, G=4 | same | 4 | 238.2 ms |
+| exp, sequential, G=2 | segs=4 (7 balanced passes per row, no dedup: every row forwards) | 2 | 212.6 ms |
+| exp, sequential, G=2 | same | 4 | **206.7 ms** |
+
+Numerics: sequential mode PCC 0.99975 at the 3424-row shard (`4x8_wh_h3_sim32_seq`, G=2), identical to the
+lockstep schedule; the 14336-row runs are timing-only (the torch reference at 114688 tokens does not fit
+host memory) and validated end-to-end only through that smaller PCC.
+
+Reading: the exp op **now runs the 15 s shard on Wormhole**, best at 206.7 ms against the normal op's
+192.9 ms (+7%). Per core it is ahead: 206.7 ms x 56 cores = 11.6 core-s against 192.9 x 63 = 12.2 for the
+normal op, i.e. ~5% less core time for the same work. The remaining gap is exactly the 7 cores the
+even-row MUX-client constraint costs on a 9-row grid; a 9-row layout (asymmetric backward/forward
+client halves) would make the exp op the faster kernel at 15 s. Row balance matters more than fabric
+duplication: segs=4 forwards every head 4x yet beats segs=2 with pair dedup by 11%, and only at segs=4
+do 4 links help (212.6 -> 206.7 ms). Reproduce with
+`TT_EXP_SDPA_Q_GROUPS={2,4} … test_exp_ring_joint_attention.py::…[wormhole_b0-4x8_wh_h3_15s_seq{,_nl4}-ring]`
+under `--profile`; the normal-op row is `create_perf_table[minimax_h3_15s_768p_pad14336]`.
 
 ## TP/SP parallel-configuration sweep — 15 s / 16:9
 
