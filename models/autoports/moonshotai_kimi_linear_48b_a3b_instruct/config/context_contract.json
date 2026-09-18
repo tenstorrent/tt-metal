@@ -1,0 +1,11 @@
+{
+ "hf_advertised_context": 1048576,
+ "supported_context": {
+  "p300x2": 131072,
+  "p300": 65536
+ },
+ "largest_tested_prefill": 131072,
+ "largest_tested_decode": null,
+ "limiting_reason": "validated by the stage-06/07 context ladder (device DRAM: experts + replicated latent KV + trace region)",
+ "notes": "KDA layers carry constant-size state; only the 7 MLA layers use the paged latent KV cache (8 KB/token bf16 per chip, replicated)."
+}
