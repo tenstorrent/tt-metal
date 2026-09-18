@@ -1,0 +1,20 @@
+{
+  "dispatch_authorized": false,
+  "scope": "2k_writer_boundaries_without_model_or_manager",
+  "mesh": [
+    4,
+    8
+  ],
+  "fabric": "FABRIC_1D_RING",
+  "case": "test_llama_bfp8_writer_boundaries_preserve_packed_cache",
+  "evidence_directory": "/configure/new-writer-run",
+  "assigned_node": null,
+  "assigned_job": null,
+  "physical_lock": null,
+  "environment_script": "/configure/prefill_env.sh",
+  "expected_cases": 1,
+  "seed_calls": 128,
+  "boundary_calls": 10,
+  "pages_per_snapshot": 65536,
+  "bytes_per_snapshot": 285212672
+}
