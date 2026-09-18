@@ -114,6 +114,43 @@ class CausalMaskedDiffWithXvecRef(nn.Module):
         estimator = CausalConditionalDecoderRef()
         self.decoder = CausalConditionalCFMRef(estimator)
 
+    @classmethod
+    def from_checkpoint(cls, flow_state_dict: dict, **kwargs) -> "CausalMaskedDiffWithXvecRef":
+        """Real weights from `flow.pt` (see `tt/checkpoint.py`). Loaded in TWO
+        separate calls, not one: `self.decoder` is a `CausalConditionalCFMRef`
+        (a plain Python wrapper, not an `nn.Module` -- see that class), so
+        `nn.Module.state_dict()`/`load_state_dict()` on `self` never reaches
+        `self.decoder.estimator`'s 910 real parameter tensors at all (confirmed
+        empirically: `CausalMaskedDiffWithXvecRef().state_dict()` has exactly
+        211 keys -- `encoder`'s 206 plus this class's own top-level 5 --
+        `decoder.estimator`'s keys are not among them). `input_embedding`/
+        `spk_embed_affine_layer`/`encoder_proj` need no remapping (direct
+        attribute-name match against the real checkpoint's own top-level keys);
+        `encoder`/`decoder.estimator` each need their own real-checkpoint
+        remapping -- see `UpsampleConformerEncoderRef.from_checkpoint` and
+        `CausalConditionalDecoderRef.from_checkpoint` for exactly what and why.
+        """
+        from .decoder import CausalConditionalDecoderRef
+        from .encoder import UpsampleConformerEncoderRef
+
+        ref = cls(**kwargs)
+
+        enc_sub = {k[len("encoder.") :]: v for k, v in flow_state_dict.items() if k.startswith("encoder.")}
+        top = {k: v for k, v in flow_state_dict.items() if not k.startswith(("encoder.", "decoder."))}
+        ref.encoder = UpsampleConformerEncoderRef.from_checkpoint(enc_sub, d_model=ref.encoder.d_model)
+        # `top` only has the 5 non-encoder/non-decoder keys, so this load reports
+        # every encoder key as "missing" -- correct, since `encoder` was already
+        # loaded above via object replacement, not through this call.
+        missing, unexpected = ref.load_state_dict(top, strict=False)
+        assert not unexpected, unexpected
+        assert set(missing) == {k for k in ref.state_dict() if k.startswith("encoder.")}, missing
+
+        est_sub = {
+            k[len("decoder.estimator.") :]: v for k, v in flow_state_dict.items() if k.startswith("decoder.estimator.")
+        }
+        ref.decoder.estimator = CausalConditionalDecoderRef.from_checkpoint(est_sub)
+        return ref
+
     def inference(
         self,
         token: torch.Tensor,

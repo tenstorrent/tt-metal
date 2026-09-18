@@ -99,6 +99,19 @@ class TorchConvRNNF0PredictorRef(nn.Module):
             self.condnet = nn.Sequential(*layers)
             self.classifier = nn.Linear(cond_channels, num_class)
 
+    @classmethod
+    def from_checkpoint(cls, f0_predictor_state_dict: dict, **kwargs) -> "TorchConvRNNF0PredictorRef":
+        """Real weights from `hift.pt`'s `f0_predictor.*` keys (see
+        `tt/checkpoint.py`'s `sub_state_dict` to pull them out of the flat
+        checkpoint first). Zero renaming needed -- confirmed empirically:
+        `f0_predictor.condnet.{0,2,4,6,8}` and `f0_predictor.classifier.*`
+        match this class's own `state_dict()` keys 1:1 (17/17), because
+        `condnet`'s `[Conv1d, ELU] * 5` `Sequential` indexing lands the five
+        convs at exactly those indices on both sides."""
+        ref = cls(**kwargs)
+        ref.load_state_dict(f0_predictor_state_dict, strict=True)
+        return ref
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: [B, in_channels, T] channel-first -> f0 [B, T] Hz (non-negative)."""
         x = self.condnet(x)

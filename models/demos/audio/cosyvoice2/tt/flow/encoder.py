@@ -336,6 +336,32 @@ class UpsampleConformerEncoderRef(nn.Module):
 
         return self.after_norm(xs)
 
+    @classmethod
+    def from_checkpoint(cls, encoder_state_dict: dict, **kwargs) -> "UpsampleConformerEncoderRef":
+        """Real weights from `flow.pt`'s `encoder.*` keys (strip that prefix
+        first -- see `tt/checkpoint.py`'s `sub_state_dict`). Confirmed
+        empirically against the real checkpoint: every key matches this
+        class's own `state_dict()` 1:1 EXCEPT `embed`/`up_embed`, where real
+        upstream `LinearNoSubsampling` wraps its Linear+LayerNorm in
+        `self.out = nn.Sequential(...)` (`embed.out.0.*`/`embed.out.1.*`)
+        while this class keeps them as separate `linear`/`norm` attributes --
+        remapped here (`out.0.* -> linear.*`, `out.1.* -> norm.*`), nothing
+        else needs renaming (`pre_lookahead_layer`, all 6+4 `encoders`/
+        `up_encoders` transformer-layer internals, `up_layer`, `after_norm`
+        all match real upstream's own attribute names directly)."""
+        import re
+
+        remapped = {}
+        for k, v in encoder_state_dict.items():
+            nk = re.sub(r"^embed\.out\.0\.", "embed.linear.", k)
+            nk = re.sub(r"^embed\.out\.1\.", "embed.norm.", nk)
+            nk = re.sub(r"^up_embed\.out\.0\.", "up_embed.linear.", nk)
+            nk = re.sub(r"^up_embed\.out\.1\.", "up_embed.norm.", nk)
+            remapped[nk] = v
+        ref = cls(**kwargs)
+        ref.load_state_dict(remapped, strict=True)
+        return ref
+
 
 # ---------------------------------------------------------------------------
 # TTNN port. [N, L, C] throughout, per this package's convention.

@@ -184,9 +184,10 @@ class TorchHiFTDecodeRef(torch.nn.Module):
     `cosyvoice` package dependency (not installed here), so device output can be
     compared against it with no shared derivation on either side, the same bar
     `tests/pcc/test_istft.py::test_device_istft_matches_real_torch_istft` set.
-    Random-initialised (there is no CosyVoice2 checkpoint in this environment
-    yet); `TtHiFTDecoder.from_torch_ref` builds the device module from the exact
-    same weights, including folding the weight_norm wrapped here.
+    Random-initialised by default; `from_checkpoint` loads real weights instead
+    -- see that classmethod. `TtHiFTDecoder.from_torch_ref` builds the device
+    module from the exact same weights either way, including folding the
+    weight_norm wrapped here.
     """
 
     def __init__(
@@ -273,6 +274,28 @@ class TorchHiFTDecodeRef(torch.nn.Module):
         final_ch = base_channels // (2**self.num_upsamples)
         self.conv_post = init_(weight_norm(Conv1d(final_ch, n_fft + 2, 7, 1, padding=3)), std=0.5)
         self.stft_window = torch.from_numpy(periodic_hann(n_fft))
+
+    @classmethod
+    def from_checkpoint(cls, hift_state_dict: dict, **kwargs) -> "TorchHiFTDecodeRef":
+        """Real weights from `hift.pt` (see `tt/checkpoint.py`). `hift.pt` is a
+        flat `HiFTGenerator.state_dict()` -- `conv_pre`/`ups`/`source_downs`/
+        `source_resblocks`/`resblocks`/`conv_post` are THIS class's own keys
+        verbatim (confirmed directly: `ref.load_state_dict(decode_subset,
+        strict=True)` matches all 309 keys with zero renaming, because this
+        class's attribute names were already built to mirror real upstream
+        `HiFTGenerator.__init__` exactly). `f0_predictor.*`/`m_source.*` belong
+        to other objects (`TorchConvRNNF0PredictorRef.from_checkpoint`, and
+        `TorchHiFTGeneratorInferenceRef`'s own `source_linear_weight`/`_bias`
+        args) -- excluded here rather than passed through and ignored, so a
+        typo'd prefix fails loudly (`strict=True`) instead of silently no-op'ing.
+        Architecture kwargs (upsample_rates, resblock_kernel_sizes, ...) are NOT
+        in the checkpoint -- this class's own constructor defaults already match
+        `cosyvoice2.yaml` (see class docstring), so leaving them at default here
+        is correct, not an unchecked assumption."""
+        ref = cls(**kwargs)
+        decode_subset = {k: v for k, v in hift_state_dict.items() if not k.startswith(("f0_predictor.", "m_source."))}
+        ref.load_state_dict(decode_subset, strict=True)
+        return ref
 
     @staticmethod
     def _make_resblock(channels, kernel_size, dilations, g):

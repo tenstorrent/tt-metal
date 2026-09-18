@@ -33,14 +33,30 @@ separate `nn.Embedding(speech_token_size + 3, 896)` (`speech_token_size =
 6561`). Output projects through a small `nn.Linear(896, speech_token_size + 3)`
 (`= 6564`), NOT Qwen2's own (tied, 151936-wide) lm_head.
 
-No CosyVoice2 checkpoint is available yet, so `speech_embedding`, `llm_embedding`
-and the output head are randomly initialised here (matching the pattern used
-throughout this package: TorchHiFTDecodeRef, TtSourceModuleHnNSF's linear).
-The Qwen2 backbone itself -- embeddings and all 24 transformer layers -- uses
-REAL downloaded `Qwen/Qwen2-0.5B-Instruct` weights (architecturally identical
-to CosyVoice2's own fine-tuned checkpoint, confirmed above), giving a stronger
-validation baseline than random init for that part: see
+By default (`cosyvoice_state_dict=None`), `speech_embedding`, `llm_embedding` and
+the output head are randomly initialised (matching the pattern used throughout
+this package: TorchHiFTDecodeRef, TtSourceModuleHnNSF's linear), and the Qwen2
+backbone itself uses REAL downloaded `Qwen/Qwen2-0.5B-Instruct` weights
+(architecturally identical to CosyVoice2's own fine-tuned checkpoint, confirmed
+above, but NOT the same trained values -- confirmed by direct tensor diff
+against the real `llm.pt`, see tests/pcc/test_qwen2lm_checkpoint.py's module
+docstring) -- a stronger validation baseline than fully-random init for the
+backbone specifically, but not real CosyVoice2 weights throughout: see
 tests/pcc/test_qwen2lm.py.
+
+A real CosyVoice2-0.5B checkpoint (`FunAudioLLM/CosyVoice2-0.5B`'s `llm.pt`) can
+be loaded instead: pass `cosyvoice_state_dict` (real `llm.pt`'s own top-level
+keys -- `speech_embedding.weight`/`llm_embedding.weight`/`llm_decoder.weight`/
+`.bias`, confirmed direct 1:1 matches, no remapping needed) for the
+CosyVoice-specific tables, and build `state_dict`/`args` from `llm.pt`'s
+`llm.*`-prefixed keys (a real, standard `Qwen2ForCausalLM.state_dict()` once
+the outer `llm.` prefix is stripped -- confirmed directly: `Qwen2Encoder.model =
+Qwen2ForCausalLM(...)`, so `llm.model.*` IS that model's own state dict, keys
+and all) rather than the public `Qwen/Qwen2-0.5B-Instruct` checkpoint. See
+tests/pcc/test_qwen2lm_checkpoint.py for the real, end-to-end loading path
+(writes a local HF-format checkpoint directory and reuses `ModelArgs`' existing,
+already-validated HF-loading path, rather than a new custom loader for the
+backbone itself).
 
 Scope of this module: construction only (the "skeleton") -- 24
 `TransformerBlock`s, `RotarySetup`, final norm, the three embedding tables, and
@@ -141,6 +157,7 @@ class TtQwen2LM:
         speech_token_size: int = 6561,
         dtype=ttnn.bfloat16,
         seed: int = 0,
+        cosyvoice_state_dict: dict | None = None,
     ):
         self.args = args
         self.mesh_device = mesh_device
@@ -170,13 +187,23 @@ class TtQwen2LM:
             dtype=ttnn.bfloat16,  # row-major embedding lookup requires bf16, matching Transformer.__init__
         )
 
-        # -- CosyVoice-specific tables: no checkpoint yet, random-init (same
-        # pattern as TorchHiFTDecodeRef / TtSourceModuleHnNSF's linear).
-        g = torch.Generator().manual_seed(seed)
-        speech_embedding_weight = torch.empty(self.head_out_features, args.dim).normal_(0, 0.02, generator=g)
-        llm_embedding_weight = torch.empty(2, args.dim).normal_(0, 0.02, generator=g)
-        head_weight = torch.empty(self.head_out_features, args.dim).normal_(0, 0.02, generator=g)
-        head_bias = torch.zeros(self.head_out_features)
+        # -- CosyVoice-specific tables. Real weights if `cosyvoice_state_dict` is
+        # given (real `llm.pt`'s own top-level keys -- `speech_embedding.weight`,
+        # `llm_embedding.weight`, `llm_decoder.weight`/`.bias` -- confirmed direct
+        # attribute-name matches, no remapping needed, same as every other
+        # `from_checkpoint` in this package); random-init otherwise (same pattern
+        # as TorchHiFTDecodeRef / TtSourceModuleHnNSF's linear).
+        if cosyvoice_state_dict is not None:
+            speech_embedding_weight = cosyvoice_state_dict["speech_embedding.weight"]
+            llm_embedding_weight = cosyvoice_state_dict["llm_embedding.weight"]
+            head_weight = cosyvoice_state_dict["llm_decoder.weight"]
+            head_bias = cosyvoice_state_dict["llm_decoder.bias"]
+        else:
+            g = torch.Generator().manual_seed(seed)
+            speech_embedding_weight = torch.empty(self.head_out_features, args.dim).normal_(0, 0.02, generator=g)
+            llm_embedding_weight = torch.empty(2, args.dim).normal_(0, 0.02, generator=g)
+            head_weight = torch.empty(self.head_out_features, args.dim).normal_(0, 0.02, generator=g)
+            head_bias = torch.zeros(self.head_out_features)
 
         self.speech_embedding = TtSmallEmbedding(mesh_device, speech_embedding_weight, dtype=dtype)
         self.llm_embedding = TtSmallEmbedding(mesh_device, llm_embedding_weight, dtype=dtype)
