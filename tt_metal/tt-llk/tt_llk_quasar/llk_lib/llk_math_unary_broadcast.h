@@ -84,12 +84,13 @@ inline void _llk_math_eltwise_unary_broadcast_addrmod_(const TensorShape& tensor
  * @brief MOP / replay configuration for unary math broadcast.
  *
  * @tparam BROADCAST_TYPE: Scalar, row, or column broadcast, values = <COL/ROW/SCALAR>
+ * @tparam EN_32BIT_DEST: True if the Dest register is in 32-bit mode, values = <true/false>
  * @tparam unpack_to_dest: When true, unpack filled dest; MOVB2D reads srcB only, so @ref _llk_math_eltwise_unary_broadcast_ runs MOVD2B (dest->srcB) first,
  *         then programs this MOVB2D MOP. ROW uses the fixed replay below; COL/SCALAR use the same outer/inner template as the non-unpack_to_dest path with
  *         ADDR_MOD_3 from addrmod.
  * @param tensor_shape: Tile shape for loop counts and row dimensions
  */
-template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest>
+template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest>
 inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& tensor_shape)
 {
     static_assert(BROADCAST_TYPE != BroadcastType::NONE, "Broadcast type cannot be NONE");
@@ -177,36 +178,48 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
     }
     else
     {
-        const std::uint32_t num_rows =
-            (BROADCAST_TYPE == BroadcastType::SCALAR) ? tensor_shape.total_num_faces() * tensor_shape.face_r_dim : tensor_shape.face_r_dim;
-        const std::uint32_t outer = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1U : static_cast<std::uint32_t>(tensor_shape.total_num_faces());
-        const std::uint32_t inner = num_rows >> rows_log2(ELTWISE_MATH_ROWS);
+        // ELWADD (32-bit dest) or MOVB2D
+        const std::uint32_t num_faces     = static_cast<std::uint32_t>(tensor_shape.total_num_faces());
+        const std::uint32_t rows_per_face = tensor_shape.face_r_dim >> rows_log2(ELTWISE_MATH_ROWS);
+        const std::uint32_t outer         = (EN_32BIT_DEST || BROADCAST_TYPE != BroadcastType::SCALAR) ? num_faces : 1U;
+        const std::uint32_t inner         = (EN_32BIT_DEST || BROADCAST_TYPE != BroadcastType::SCALAR) ? rows_per_face : num_faces * rows_per_face;
 
-        const std::uint32_t bcast_row     = (BROADCAST_TYPE != BroadcastType::COL) ? 1U : 0U;
-        constexpr std::uint32_t bcast_col = (BROADCAST_TYPE != BroadcastType::ROW) ? 1U : 0U;
+        if constexpr (EN_32BIT_DEST)
+        {
+            constexpr auto srcb_bcast                   = (BROADCAST_TYPE == BroadcastType::COL)   ? p_elwise::SRCB_BCAST_COL
+                                                          : (BROADCAST_TYPE == BroadcastType::ROW) ? p_elwise::SRCB_BCAST_ROW
+                                                                                                   : p_elwise::SRCB_BCAST_ALL;
+            constexpr std::uint32_t last_inner_addr_mod = (BROADCAST_TYPE == BroadcastType::COL) ? ADDR_MOD_1 : ADDR_MOD_0;
+            const auto elwadd_bcast_instr               = [srcb_bcast](std::uint32_t clr, std::uint32_t addr_mod)
+            { return TT_OP_ELWADD(clr, p_elwise::DISABLE_ACCUM, srcb_bcast, addr_mod, 0); };
 
-        const auto bcast_instr = [bcast_col, bcast_row](std::uint8_t addr_mod)
-        {
-            return TT_OP_MOVB2D(0, 0, addr_mod, p_mov_src_to_dest::MOV_8_ROWS, bcast_col, bcast_row /* dst_addr */);
-        }; // adding 1 to dst_addr enables row broadcast
-
-        ckernel_template temp(outer, inner, bcast_instr(ADDR_MOD_0));
-        temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
-        if constexpr (BROADCAST_TYPE == BroadcastType::SCALAR)
-        {
-            temp.set_last_outer_loop_instr(bcast_instr(ADDR_MOD_1));
-        }
-        else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
-        {
-            temp.set_last_inner_loop_instr(bcast_instr(ADDR_MOD_1));
+            ckernel_template temp(outer, inner, elwadd_bcast_instr(p_elwise::CLR_NONE, ADDR_MOD_0));
+            if constexpr (BROADCAST_TYPE != BroadcastType::SCALAR)
+            {
+                temp.set_last_inner_loop_instr(elwadd_bcast_instr(p_elwise::CLR_SRCB_VLD, last_inner_addr_mod));
+            }
+            temp.set_last_outer_loop_instr(elwadd_bcast_instr(p_elwise::CLR_SRCAB_VLD, ADDR_MOD_0));
+            temp.program_bank0_sw_cntl(instrn_buffer);
         }
         else
         {
-            temp.set_last_inner_loop_instr(bcast_instr(ADDR_MOD_0));
-            temp.set_last_outer_loop_instr(bcast_instr(ADDR_MOD_2));
-        }
+            constexpr std::uint32_t bcast_row = (BROADCAST_TYPE != BroadcastType::COL) ? 1U : 0U;
+            constexpr std::uint32_t bcast_col = (BROADCAST_TYPE != BroadcastType::ROW) ? 1U : 0U;
+            const auto movb2d                 = [bcast_col, bcast_row](std::uint8_t addr_mod)
+            { return TT_OP_MOVB2D(0, 0, addr_mod, p_mov_src_to_dest::MOV_8_ROWS, bcast_col, bcast_row); }; // dst_addr += 1 enables row broadcast
 
-        temp.program_bank0_sw_cntl(instrn_buffer);
+            ckernel_template temp(outer, inner, movb2d(ADDR_MOD_0));
+            temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
+            if constexpr (BROADCAST_TYPE == BroadcastType::SCALAR)
+            {
+                temp.set_last_outer_loop_instr(movb2d(ADDR_MOD_1));
+            }
+            else if constexpr (BROADCAST_TYPE == BroadcastType::COL)
+            {
+                temp.set_last_inner_loop_instr(movb2d(ADDR_MOD_1));
+            }
+            temp.program_bank0_sw_cntl(instrn_buffer);
+        }
     }
 }
 
@@ -214,12 +227,13 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
  * @brief Init unary-broadcast math: addrmods, mop configuration, reset counters.
  *
  * @tparam BROADCAST_TYPE: Scalar, row, or column broadcast, values = <COL/ROW/SCALAR>
+ * @tparam EN_32BIT_DEST: True if the Dest register is in 32-bit mode, values = <true/false>
  * @tparam unpack_to_dest: UNP path wrote to dest
  * @param tensor_shape: Passed to addrmod / MOP setup
  * @note On the unpack thread, pair with @ref _llk_unpack_unary_broadcast_operands_init_ (T0) with matching BROADCAST_TYPE/unpack_to_dest.
  * @note @ref _llk_math_eltwise_unary_broadcast_ runs the configured op with matching template args.
  */
-template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest>
+template <BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest>
 inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_shape)
 {
     LLK_ASSERT(
@@ -227,7 +241,7 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_sha
         "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
 
     _llk_math_eltwise_unary_broadcast_addrmod_<BROADCAST_TYPE, unpack_to_dest>(tensor_shape);
-    _llk_math_eltwise_unary_broadcast_mop_config_<BROADCAST_TYPE, unpack_to_dest>(tensor_shape);
+    _llk_math_eltwise_unary_broadcast_mop_config_<BROADCAST_TYPE, EN_32BIT_DEST, unpack_to_dest>(tensor_shape);
 
     _reset_counters_<p_setrwc::SET_ABD_F>();
 }
@@ -235,17 +249,22 @@ inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_sha
 /**
  * @brief Run one tile of unary broadcast math: set dest write addr
  *
+ * @tparam unpack_to_dest: When true, UNP_A unpacks to the Dest register
  * @param tile_idx: Destination tile index within current dest bank (SyncHalf)
  * @note Call @ref _llk_math_eltwise_unary_broadcast_init_ with matching template args before this function.
  */
+template <bool unpack_to_dest>
 inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx)
 {
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 
-    // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
-    // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit. MATH drains the
-    // preceding math instructions so their source-bank release has landed before SRCB_VLD tests it.
-    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH, p_stall::WAIT_SFPU, p_stall::SRCB_VLD); // TEN-4367 - SrcB sync workaround
+    if constexpr (unpack_to_dest)
+    {
+        // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
+        // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit. MATH drains the
+        // preceding math instructions so their source-bank release has landed before SRCB_VLD tests it.
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH, p_stall::WAIT_SFPU, p_stall::SRCB_VLD); // TEN-4367 - SrcB sync workaround
+    }
 
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 
