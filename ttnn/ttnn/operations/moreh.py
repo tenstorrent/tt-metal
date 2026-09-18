@@ -54,11 +54,6 @@ SoftmaxOp = ttnn._ttnn.operations.moreh.MorehSoftmaxOpParallelizationStrategy
 SoftmaxOpParallelizationStrategy = ttnn._ttnn.operations.moreh.MorehSoftmaxOpParallelizationStrategy
 
 
-# ---------------------------------------------------------------------------
-# Golden functions
-# ---------------------------------------------------------------------------
-
-
 def _golden_abs_pow(input, p, *_, **__):
     import torch
 
@@ -336,11 +331,6 @@ def _golden_nll_loss(input_tensor, target_tensor, reduction, *_, weight_tensor=N
 
 
 ttnn.attach_golden_function(ttnn.moreh_nll_loss, golden_function=_golden_nll_loss)
-
-
-# ---------------------------------------------------------------------------
-# Backward goldens
-# ---------------------------------------------------------------------------
 
 
 def _golden_sum_backward(output_grad, input=None, dim=None, *_, keepdim=False, **__):
@@ -737,11 +727,6 @@ ttnn.attach_golden_function(
     golden_function=_golden_nll_loss_unreduced_backward,
     output_tensor_kwarg_names=("input_grad_tensor",),
 )
-
-
-# ---------------------------------------------------------------------------
-# Optimizer goldens
-# ---------------------------------------------------------------------------
 
 
 def _golden_adam(

@@ -414,6 +414,16 @@ def _golden_function(buffer, shape, dtype, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.from_buffer, golden_function=_golden_function)
 
 
+def _fold_nhwc(input, stride_h, stride_w, collapse_output):
+    N, H, W, C = input.shape
+    reshaped = input.reshape(N, H // stride_h, stride_h, W // stride_w, stride_w, C)
+    transposed = reshaped.permute(0, 1, 3, 2, 4, 5)
+    output_tensor = transposed.reshape(N, H // stride_h, W // stride_w, C * stride_h * stride_w)
+    if collapse_output:
+        output_tensor = output_tensor.reshape(1, 1, N * (H // stride_h) * (W // stride_w), C * stride_h * stride_w)
+    return output_tensor
+
+
 def _parse_fold_padding(padding):
     if padding is None:
         return 0, 0, 0, 0, 0, 0
@@ -422,15 +432,6 @@ def _parse_fold_padding(padding):
     if len(padding) == 4:
         return tuple(padding) + (0, 0)
     return tuple(padding)
-
-
-def _fold_nhwc(input_tensor, stride_h, stride_w, collapse_output):
-    N, H, W, C = input_tensor.shape
-    reshaped = input_tensor.reshape(N, H // stride_h, stride_h, W // stride_w, stride_w, C)
-    output_tensor = reshaped.permute(0, 1, 3, 2, 4, 5).reshape(N, H // stride_h, W // stride_w, C * stride_h * stride_w)
-    if collapse_output:
-        output_tensor = output_tensor.reshape(1, 1, N * (H // stride_h) * (W // stride_w), C * stride_h * stride_w)
-    return output_tensor
 
 
 def _golden_function_fold_transposed(input_tensor, stride_h, stride_w, padding, collapse_output):
@@ -455,6 +456,8 @@ def _golden_function(
     use_transpose_as_fold=False,
     **kwargs,
 ):
+    import torch
+
     if use_transpose_as_fold:
         return _golden_function_fold_transposed(input, stride_h, stride_w, padding, collapse_output)
 
