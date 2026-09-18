@@ -161,8 +161,10 @@ CPMRegisterPackage("googletest" "1.13.0")
 # boost-ext reflect : https://github.com/boost-ext/reflect
 ############################################################################################################################
 
-CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.2.6)
-if(reflect_ADDED)
+if(NOT DEFINED reflect_SOURCE_DIR)
+    CPMAddPackage(NAME reflect GITHUB_REPOSITORY boost-ext/reflect GIT_TAG v1.2.6)
+endif()
+if(reflect_ADDED OR DEFINED reflect_SOURCE_DIR)
     add_library(reflect INTERFACE)
     add_library(Reflect::Reflect ALIAS reflect)
     target_include_directories(reflect SYSTEM INTERFACE "$<BUILD_INTERFACE:${reflect_SOURCE_DIR}>")
@@ -190,6 +192,7 @@ CPMAddPackage(
     GIT_TAG 8ca5b0eb7e7ebe0252e5bc6915083f1dd1b8294e
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS GLOBAL
 )
 
 ############################################################################################################################
@@ -218,11 +221,28 @@ CPMAddPackage(
 # nanobind : https://github.com/wjakob/nanobind
 ############################################################################################################################
 
+# GTest's own CMake (googletest/cmake/internal_utils.cmake) already calls
+# find_package(Python COMPONENTS Interpreter), which defines a Python::Interpreter target but no
+# Python::Module target. nanobind >= 2.13 only self-detects Python when *both* Python::Interpreter
+# and Python::Module are missing (previously: *either*), so with a partial Python::Interpreter
+# target already in scope, nanobind skips its own find_package(Python) call and fails when
+# nanobind-config.cmake asserts that Python::Module also exists. Find both components explicitly
+# here so nanobind sees a complete target set.
+find_package(
+    Python
+    REQUIRED
+    COMPONENTS
+        Interpreter
+        Development.Module
+    OPTIONAL_COMPONENTS
+        Development.SABIModule
+)
+
 CPMAddPackage(
     NAME nanobind
     GITHUB_REPOSITORY wjakob/nanobind
     GIT_TAG
-        2a61ad2494d09fecb2e13322c1383342c299900d # 2.12.0
+        86e5626728fc282637a6c338597120913dded1bb # 2.14.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "NB_USE_SUBMODULE_DEPS ON"
@@ -363,8 +383,10 @@ CPMAddPackage(
 # simd-everywhere/simde : https://github.com/simd-everywhere/simde
 ############################################################################################################################
 
-CPMAddPackage(NAME simd-everywhere GITHUB_REPOSITORY simd-everywhere/simde GIT_TAG v0.8.2)
-if(simd-everywhere_ADDED)
+if(NOT DEFINED simd-everywhere_SOURCE_DIR)
+    CPMAddPackage(NAME simd-everywhere GITHUB_REPOSITORY simd-everywhere/simde GIT_TAG v0.8.2)
+endif()
+if(simd-everywhere_ADDED OR DEFINED simd-everywhere_SOURCE_DIR)
     add_library(simde INTERFACE)
     add_library(simde::simde ALIAS simde)
     target_include_directories(simde SYSTEM INTERFACE ${simd-everywhere_SOURCE_DIR})
@@ -404,14 +426,16 @@ CPMAddPackage(
 # Upstream has no CMakeLists.txt; after CPM download we build STATIC from the same sources as makefile.in
 # (src/*.cpp minus cadical/mobical, plus src/*.c). NBUILD avoids generated build.hpp; patch fixes vivify.hpp.
 ####################################################################################################################
-CPMAddPackage(
-    NAME cadical
-    GITHUB_REPOSITORY arminbiere/cadical
-    GIT_TAG rel-2.2.1
-    DOWNLOAD_ONLY YES
-    PATCHES
-        cadical_vivify_include_tuple.patch
-)
+if(NOT DEFINED cadical_SOURCE_DIR)
+    CPMAddPackage(
+        NAME cadical
+        GITHUB_REPOSITORY arminbiere/cadical
+        GIT_TAG rel-2.2.1
+        DOWNLOAD_ONLY YES
+        PATCHES
+            cadical_vivify_include_tuple.patch
+    )
+endif()
 
 file(GLOB CADICAL_CXX CONFIGURE_DEPENDS "${cadical_SOURCE_DIR}/src/*.cpp")
 list(FILTER CADICAL_CXX EXCLUDE REGEX ".*/(cadical|mobical)\\.cpp$")

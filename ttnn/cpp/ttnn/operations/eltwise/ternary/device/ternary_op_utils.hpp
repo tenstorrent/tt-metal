@@ -102,19 +102,19 @@ tt::tt_metal::ShardSpec adjust_to_shape(
 tt::tt_metal::MemoryConfig compute_mem_config_actual(
     const Tensor& input_tensor, const ttnn::Shape& output_logical_shape);
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec);
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);
 
-bool is_uneven(const TensorSpec& t);
+bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
 bool is_native_L1_sharding(
-    const TensorSpec& predicate_spec,
-    const std::optional<TensorSpec>& true_spec,
-    const std::optional<TensorSpec>& false_spec,
+    const tt::tt_metal::TensorSpec& predicate_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& true_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& false_spec,
     const tt::tt_metal::MemoryConfig& output_memory_config);
 
 std::optional<AllShardVolumes> get_shard_volumes(
-    const TensorSpec& predicate_spec,
-    const std::optional<TensorSpec>& true_spec,
-    const std::optional<TensorSpec>& false_spec,
-    const TensorSpec& output);
+    const tt::tt_metal::TensorSpec& predicate_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& true_spec,
+    const std::optional<tt::tt_metal::TensorSpec>& false_spec,
+    const tt::tt_metal::TensorSpec& output);
 }  // namespace ttnn::operations::ternary

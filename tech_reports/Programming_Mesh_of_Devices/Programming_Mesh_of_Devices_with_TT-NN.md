@@ -592,6 +592,8 @@ The Collective Communication Library (CCL) provides a set of operations for effi
 
 ### 5.1 CCL Operations
 
+For tips on getting the best performance out of CCL ops (Fabric initialization, trace mode, op-specific parameters, pre-allocated buffers, and custom packet size), see [CCL Performance Tuning Tips](./CCL_Performance_Best_Practices.md).
+
 CCL supports several collective operations, including:
 
 1. All-Gather (Ring, Line)
@@ -921,7 +923,7 @@ The main changes involve:
 #### 8.3.2 Key Components
 
 These three components are used to achieve linear scaling of performance as we tile our model replicas across the mesh.
-See `models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_hybrid_data_tensor_parallel` for full example.
+See `models/demos/llama3_70b_galaxy/tt/generator_vllm.py` (`create_submeshes`) for a full example of tiling model replicas across a mesh.
 
 1. Submesh Creation
 

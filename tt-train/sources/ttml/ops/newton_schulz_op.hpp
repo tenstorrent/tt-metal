@@ -7,8 +7,8 @@
 
 namespace ttml::ops {
 
-tt::tt_metal::Tensor newtonschulz5(const tt::tt_metal::Tensor& G, int steps = 5, float eps = 1e-7f);
+ttnn::Tensor newtonschulz5(const ttnn::Tensor& G, int steps = 5, float eps = 1e-7f);
 
-tt::tt_metal::Tensor newtonschulz(const tt::tt_metal::Tensor& G, int steps, float eps, float a, float b, float c);
+ttnn::Tensor newtonschulz(const ttnn::Tensor& G, int steps, float eps, float a, float b, float c);
 
 }  // namespace ttml::ops

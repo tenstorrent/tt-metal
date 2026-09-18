@@ -12,21 +12,86 @@ This module orchestrates the full MoE pipeline:
 4. Combine: Reconstruct outputs to original token positions
 5. Split Connection: Apply gate weights and sum expert contributions
 6. Final: Add routed output + shared output
+
+Kimi-K3 adds a "LatentMoE" variant: the routed half of that pipeline (steps 1, 2, 4, 5) runs in a
+reduced ``routed_emb_dim`` latent space, entered by a shared down-projection before dispatch and left
+by a latent RMSNorm plus shared up-projection after the reduce. The gate and the shared expert still
+see the full ``emb_dim`` input. Enabled by passing ``routed_emb_dim``; absent, behaviour is unchanged.
 """
 
 from typing import Optional
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from loguru import logger
 
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
-from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
+from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, TorchExpert
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe_intermediates import MoEIntermediates
 from models.demos.deepseek_v3_d_p.reference.tt.moe.reduce import TorchReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_gate_outputs
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
+
+
+class TorchLatentMoeProjections(nn.Module):
+    """The three tensors that wrap Kimi-K3's routed experts in a shared latent space.
+
+    ``down_proj`` [routed_emb_dim, emb_dim] enters the latent space before dispatch; ``norm`` and
+    ``up_proj`` [emb_dim, routed_emb_dim] exits it after the top-k weighted sum. HF weight
+    convention throughout: ``(out_features, in_features)``.
+
+    The RMSNorm math is a deliberate transcription of the vendored ``KimiRMSNorm``
+    (fp32 accumulate, ``weight * normalised``) so the two references cannot disagree on eps handling.
+    """
+
+    def __init__(
+        self,
+        emb_dim: int,
+        routed_emb_dim: int,
+        torch_weights: dict = None,
+        use_norm: bool = True,
+        rms_norm_eps: float = 1e-5,
+    ):
+        super().__init__()
+        self.emb_dim = emb_dim
+        self.routed_emb_dim = routed_emb_dim
+        self.use_norm = use_norm
+        self.rms_norm_eps = rms_norm_eps
+
+        if torch_weights is not None:
+            self.down_proj = nn.Parameter(torch_weights["down_proj"].float())
+            self.up_proj = nn.Parameter(torch_weights["up_proj"].float())
+            norm_weight = torch_weights.get("norm")
+        else:
+            self.down_proj = nn.Parameter(torch.randn(routed_emb_dim, emb_dim) * 0.02)
+            self.up_proj = nn.Parameter(torch.randn(emb_dim, routed_emb_dim) * 0.02)
+            norm_weight = None
+
+        if use_norm:
+            self.norm_weight = nn.Parameter(torch.ones(routed_emb_dim) if norm_weight is None else norm_weight.float())
+        else:
+            self.norm_weight = None
+
+    def to_latent(self, x: torch.Tensor) -> torch.Tensor:
+        """emb_dim -> routed_emb_dim, applied before dispatch.
+
+        Casts to the weight dtype rather than assuming fp32: callers hand this module whatever the
+        MoE input happens to be (``initialize_test_inputs`` produces bf16, the PCC tests fp32), and
+        the surrounding reference already casts at each compute site the same way.
+        """
+        return F.linear(x.to(self.down_proj.dtype), self.down_proj)
+
+    def from_latent(self, y: torch.Tensor) -> torch.Tensor:
+        """routed_emb_dim -> emb_dim, applied after the top-k weighted sum (norm first)."""
+        y = y.to(self.up_proj.dtype)
+        if self.use_norm:
+            dtype = y.dtype
+            t = y.float()
+            t = t * torch.rsqrt(t.pow(2).mean(-1, keepdim=True) + self.rms_norm_eps)
+            y = self.norm_weight * t.to(dtype)
+        return F.linear(y, self.up_proj)
 
 
 def load_moe_weights_from_hf(
@@ -105,6 +170,15 @@ class TorchMoe(nn.Module):
         n_expert_groups: int = None,
         n_limited_groups: int = None,
         route_scale: float = None,
+        routed_emb_dim: int = None,
+        shared_hidden_dim: int = None,
+        latent_weights: dict = None,
+        latent_use_norm: bool = True,
+        rms_norm_eps: float = 1e-5,
+        activation: str = ACTIVATION_SILU,
+        situ_beta: float = 1.0,
+        situ_linear_beta: float | None = None,
+        shared_activation: str | None = None,
     ):
         """
         Initialize MinimalMoE with configuration parameters.
@@ -131,6 +205,20 @@ class TorchMoe(nn.Module):
             routed_expert_weights: Optional list of dicts with gate_proj, up_proj, down_proj per expert
             shared_expert_weights: Optional dict with gate_proj, up_proj, down_proj for shared expert
             gate_weights: Optional dict with "weight" and "e_score_correction_bias" keys for gate
+            routed_emb_dim: LatentMoE routed-side width. Defaults to emb_dim (no latent space).
+                When set (Kimi-K3: 3584), dispatch / experts / combine / reduce all run at this
+                width and the latent projections wrap them.
+            shared_hidden_dim: Shared expert's FFN intermediate. Defaults to hidden_dim. K3 needs
+                this separate because its shared expert is one MLP at moe_intermediate_size *
+                num_shared_experts (6144), not at moe_intermediate_size (3072).
+            latent_weights: Optional dict with down_proj / up_proj / norm for the latent projections.
+            latent_use_norm / rms_norm_eps: latent RMSNorm control (K3: True / 1e-5).
+            activation / situ_beta / situ_linear_beta: GLU activation for the ROUTED experts, and
+                for the shared expert unless shared_activation overrides it. Defaults to "silu".
+                Kimi-K3's routed experts run "situ" on device (RoutedExpertActivation.SituGlu).
+            shared_activation: GLU activation for the SHARED expert; defaults to activation. The
+                two sites are configured independently on device -- a fused kernel vs composed ttnn
+                ops -- so the reference mirrors them independently. No model splits them today.
         """
         super().__init__()
 
@@ -169,7 +257,23 @@ class TorchMoe(nn.Module):
         self.emb_dim = emb_dim
         self.expert_dispatch_table = expert_dispatch_table
 
-        # Create dispatch module
+        # Defaulting to emb_dim constructs no latent projections at all.
+        self.routed_emb_dim = emb_dim if routed_emb_dim is None else routed_emb_dim
+        self.shared_hidden_dim = hidden_dim if shared_hidden_dim is None else shared_hidden_dim
+        self.use_latent_moe = self.routed_emb_dim != emb_dim
+        self.latent_projections = (
+            TorchLatentMoeProjections(
+                emb_dim=emb_dim,
+                routed_emb_dim=self.routed_emb_dim,
+                torch_weights=latent_weights,
+                use_norm=latent_use_norm,
+                rms_norm_eps=rms_norm_eps,
+            )
+            if self.use_latent_moe
+            else None
+        )
+
+        # Dispatch moves latent rows, halving the fabric bytes per dispatched token.
         self.dispatch_module = TorchDispatchModule(
             dispatch_group_size=dispatch_group_size,
             experts_per_chip=experts_per_chip,
@@ -179,7 +283,7 @@ class TorchMoe(nn.Module):
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             max_dispatch_buffer_token_size=max_dispatch_buffer_token_size,
             seq_len_per_chip=seq_len_per_chip,
-            emb_dim=emb_dim,
+            emb_dim=self.routed_emb_dim,
             num_dispatch_groups=num_dispatch_groups,
             expert_dispatch_table=expert_dispatch_table,
         )
@@ -202,20 +306,30 @@ class TorchMoe(nn.Module):
         else:
             routed_weights, shared_weights = None, None
 
-        # Create experts
+        # The shared expert stays at emb_dim on the pre-projection input, with its own intermediate.
         use_identity = routed_weights is None
+        situ = dict(situ_beta=situ_beta, situ_linear_beta=situ_linear_beta)
+        act = dict(activation=activation, **situ)
+        shared_act = dict(activation=activation if shared_activation is None else shared_activation, **situ)
         self.routed_experts = nn.ModuleList(
             [
                 TorchExpert(
-                    emb_dim,
+                    self.routed_emb_dim,
                     hidden_dim,
                     torch_weights=routed_weights[i] if routed_weights else None,
                     use_identity=use_identity,
+                    **act,
                 )
                 for i in range(num_routed_experts)
             ]
         )
-        self.shared_expert = TorchExpert(emb_dim, hidden_dim, torch_weights=shared_weights, use_identity=use_identity)
+        self.shared_expert = TorchExpert(
+            emb_dim,
+            self.shared_hidden_dim,
+            torch_weights=shared_weights,
+            use_identity=use_identity,
+            **shared_act,
+        )
 
         # Create reduce module (sums over topk dimension)
         # topk_dim=2 because combined_output shape is (dispatch_group_size, seq_len, topk, emb_dim)
@@ -285,16 +399,21 @@ class TorchMoe(nn.Module):
             assert expert_offsets is not None and expert_token_counts is not None
             assert expert_region_offsets is not None
 
-        # Step 1: Run shared expert on original input
+        # Step 1: Run shared expert on original input.
+        # Before the down-projection: the shared expert reads the full-width pre-projection hidden.
         with torch.no_grad():
             shared_output = self.shared_expert(x.float())
 
+        # Step 1b: LatentMoE -- project into the latent space. Everything from here to the reduce runs at
+        # routed_emb_dim.
+        routed_input = self.latent_projections.to_latent(x) if self.use_latent_moe else x
+
         # Step 2: Dispatch tokens to expert buffers
-        dispatched_buffer, metadata = self.dispatch_module(x, weights, indices, expert_offsets)
+        dispatched_buffer, metadata = self.dispatch_module(routed_input, weights, indices, expert_offsets)
 
         # Step 3: Run routed experts on dispatch buffer slices.
         # dispatched_buffer is 4D: (num_dispatch_groups, dispatch_group_size,
-        # max_dispatch_buffer_token_size, emb_dim). Each expert's
+        # max_dispatch_buffer_token_size, routed_emb_dim -- == emb_dim without a latent space). Each expert's
         # token region lives at expert_region_offsets[group, chip, global_expert] within
         # the flat token dim (TILE_SIZE-aligned), matching the real dispatch kernel layout.
         expert_outputs = torch.zeros_like(dispatched_buffer)
@@ -326,9 +445,16 @@ class TorchMoe(nn.Module):
         combined_output = self.combine_module(expert_outputs, metadata, expert_token_counts, expert_region_offsets)
 
         # Step 5: Apply gate weights and sum over topk
-        # combined_output: (dispatch_group_size, seq_len, topk, emb_dim)
-        # routed_output: (dispatch_group_size, seq_len, emb_dim)
+        # combined_output: (dispatch_group_size, seq_len, topk, routed_emb_dim)
+        # routed_output: (dispatch_group_size, seq_len, routed_emb_dim)
         routed_output = self.reduce_module(combined_output, weights=weights)
+
+        # Step 5b: LatentMoE -- project back out of the latent space: RMSNorm then up-projection back to emb_dim.
+        # The norm sits after the weighted top-k sum, so it sees the summed latent.
+        latent_routed_output = None
+        if self.use_latent_moe:
+            latent_routed_output = routed_output
+            routed_output = self.latent_projections.from_latent(routed_output)
 
         # Step 6: Final output = routed + shared
         final_output = routed_output + shared_output
@@ -346,6 +472,8 @@ class TorchMoe(nn.Module):
                 shared_output=shared_output,
                 combined_output=combined_output,
                 routed_output=routed_output,
+                latent_routed_output=latent_routed_output,
+                latent_input=routed_input if self.use_latent_moe else None,
                 expert_token_counts=expert_token_counts,
                 expert_region_offsets=expert_region_offsets,
             )

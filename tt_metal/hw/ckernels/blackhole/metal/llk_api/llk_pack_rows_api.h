@@ -39,7 +39,7 @@ inline void llk_pack_rows(
     const std::uint8_t output_id = get_output_id(output);
     const std::uint32_t pack_addr = get_output_tile_address<true, PackMode::Default>(output_id, output_index);
     LLK_ASSERT(
-        (dst_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        (dst_index < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));

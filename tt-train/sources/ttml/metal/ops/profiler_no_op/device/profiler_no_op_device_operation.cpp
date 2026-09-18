@@ -17,9 +17,8 @@ void ProfilerNoopOperation::validate_on_program_cache_miss(
                            const std::string& name,
                            const tt::tt_metal::Layout required_layout,
                            const tt::tt_metal::DataType required_dtype) {
-
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "ProfilerNoop operation requires '{}' to be on DEVICE. Got storage type: '{}'",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -41,7 +40,7 @@ void ProfilerNoopOperation::validate_on_program_cache_miss(
             enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
@@ -65,7 +64,7 @@ ProfilerNoopOperation::spec_return_value_t ProfilerNoopOperation::compute_output
         return tensor_args.preallocated_output->tensor_spec();
     }
     auto input_logical_shape = tensor_args.input.logical_shape();
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         ttnn::Shape(input_logical_shape),
         tt::tt_metal::TensorLayout(
             tensor_args.input.dtype(), tt::tt_metal::Layout::TILE, tensor_args.input.memory_config()));
@@ -80,7 +79,7 @@ ProfilerNoopOperation::tensor_return_value_t ProfilerNoopOperation::create_outpu
     if (tensor_args.preallocated_output.has_value()) {
         output_tensor = tensor_args.preallocated_output.value();
     } else {
-        output_tensor = create_device_tensor(output_specs, tensor_args.input.device());
+        output_tensor = ttnn::create_device_tensor(output_specs, tensor_args.input.device());
     }
 
     return output_tensor;

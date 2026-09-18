@@ -6,6 +6,10 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <internal/cluster_noc_helpers.hpp>
+#include <umd/device/chip_helpers/tlb_manager.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
@@ -454,6 +458,141 @@ TEST_F(HDSocketFixture, H2DSocketLoopbackMultiThreadedStress) {
                 mesh_device_, 16512, 1088, 156672, h2d_mode, 100, MeshCoreCoord(socket_coord, CoreCoord(0, 1)));
         }
     }
+}
+
+// L2CPU socket support: the DRAM bank table, the L2CPU static-TLB registration, and
+// the L2CPU constructors' argument validation. These do not complete construction of
+// an L2CPU socket, which would write to LIM; a partial-line write to LIM whose ECC has
+// not been initialised can fault, and initialising it requires running code on the
+// L2CPU itself. A single device is sufficient throughout.
+using L2CpuSocketFixture = MeshDevice1x1Fixture;
+
+namespace {
+
+// TRANSLATED NOC coords of the unharvested L2CPU tiles on this device, or
+// empty when the architecture has none.
+std::vector<tt::umd::CoreCoord> get_l2cpu_cores(ChipId device_id) {
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    return soc_desc.get_cores(tt::CoreType::L2CPU, tt::CoordSystem::TRANSLATED);
+}
+
+bool is_blackhole() { return MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE; }
+
+}  // namespace
+
+// Assert the bank table against the same allocator and soc-descriptor sources that
+// RiscFirmwareInitializer programs BRISC from.
+TEST_F(L2CpuSocketFixture, DramBankTableMatchesAllocatorAndSocDescriptor) {
+    auto* device = mesh_device_->get_device(MeshCoordinate(0, 0));
+    const ChipId device_id = device->id();
+
+    const auto table = internal::get_dram_bank_table(device_id);
+
+    const auto& allocator = *device->allocator();
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
+    const uint32_t num_banks = allocator.get_num_banks(BufferType::DRAM);
+
+    ASSERT_EQ(table.size(), num_banks) << "one entry per logical DRAM bank";
+
+    for (uint32_t bank_id = 0; bank_id < num_banks; ++bank_id) {
+        const auto& entry = table[bank_id];
+        EXPECT_EQ(entry.bank_id, bank_id) << "table must be indexed by bank_id";
+        EXPECT_EQ(
+            entry.base_addr,
+            static_cast<uint64_t>(static_cast<int64_t>(allocator.get_bank_offset(BufferType::DRAM, bank_id))))
+            << "bank " << bank_id << " base_addr must equal the allocator's bank offset";
+        EXPECT_EQ(entry.bank_size, soc_desc.dram_view_size) << "bank " << bank_id;
+
+        // On virtualized-DRAM architectures the table reports the TRANSLATED coord
+        // verbatim, so it must equal the soc descriptor's DRAM view exactly. Other
+        // architectures route through hal.noc_coordinate().
+        const CoreCoord preferred =
+            soc_desc.get_preferred_worker_core_for_dram_view(static_cast<int>(bank_id), /*noc=*/0);
+        if (is_blackhole()) {
+            EXPECT_EQ(entry.noc_x, static_cast<uint32_t>(preferred.x))
+                << "bank " << bank_id << " noc_x: table says " << entry.noc_x << ", DRAM view is at " << preferred.x;
+            EXPECT_EQ(entry.noc_y, static_cast<uint32_t>(preferred.y))
+                << "bank " << bank_id << " noc_y: table says " << entry.noc_y << ", DRAM view is at " << preferred.y;
+        }
+    }
+}
+
+// Every L2CPU tile must have a static TLB window anchored at the LIM base; without
+// the registration get_tlb_window() throws.
+TEST_F(L2CpuSocketFixture, L2CpuStaticTlbsAnchoredAtLimBase) {
+    if (!is_blackhole()) {
+        GTEST_SKIP() << "L2CPU tiles only exist on Blackhole";
+    }
+    auto* device = mesh_device_->get_device(MeshCoordinate(0, 0));
+    const ChipId device_id = device->id();
+
+    const auto l2cpu_cores = get_l2cpu_cores(device_id);
+    if (l2cpu_cores.empty()) {
+        GTEST_SKIP() << "No unharvested L2CPU tiles on this device";
+    }
+
+    constexpr uint64_t kL2CpuLimBase = 0x08000000ULL;
+    auto* tlb_manager = MetalContext::instance().get_cluster().get_driver()->get_chip(device_id)->get_tlb_manager();
+    ASSERT_NE(tlb_manager, nullptr);
+
+    for (const auto& core : l2cpu_cores) {
+        const tt_xy_pair xy(core.x, core.y);
+        ASSERT_TRUE(tlb_manager->is_tlb_mapped(xy))
+            << "L2CPU (" << core.x << ", " << core.y << ") has no static TLB; H2D/D2H socket setup would throw";
+        EXPECT_EQ(tlb_manager->get_tlb_window(xy)->get_base_address(), kL2CpuLimBase)
+            << "L2CPU (" << core.x << ", " << core.y << ") TLB must be anchored at the LIM base";
+        // The config buffer and (in HOST_PUSH) the data FIFO are addressed
+        // through this window, so LIM base itself must be inside it.
+        EXPECT_TRUE(tlb_manager->is_tlb_mapped(xy, kL2CpuLimBase, sizeof(uint32_t)));
+    }
+}
+
+// The L2CPU constructors take caller-reserved LIM addresses, so argument validation is
+// the only guard against a mis-placed socket. All of these throw before any pinned
+// memory is allocated or any LIM byte is written.
+TEST_F(L2CpuSocketFixture, L2CpuSocketRejectsInvalidLimAddresses) {
+    if (!is_blackhole()) {
+        GTEST_SKIP() << "L2CPU sockets are Blackhole-only";
+    }
+    const auto l2cpu_cores = get_l2cpu_cores(mesh_device_->get_device(MeshCoordinate(0, 0))->id());
+    if (l2cpu_cores.empty()) {
+        GTEST_SKIP() << "No unharvested L2CPU tiles on this device";
+    }
+
+    const MeshCoreCoord l2cpu(MeshCoordinate(0, 0), CoreCoord(l2cpu_cores.front().x, l2cpu_cores.front().y));
+    const uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    constexpr uint32_t kLimBase = 0x08000000;
+    constexpr uint32_t kFifoSize = 4096;
+    const uint32_t config_addr = kLimBase;
+    const uint32_t data_addr = kLimBase + 0x10000;
+
+    // Zero addresses are never valid -- 0 is not in LIM at all.
+    EXPECT_ANY_THROW(
+        H2DSocket(*mesh_device_, l2cpu, kFifoSize, /*config_buffer_address=*/0, data_addr, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(
+        H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, /*data_fifo_address=*/0, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(D2HSocket(*mesh_device_, l2cpu, kFifoSize, /*config_buffer_address=*/0));
+
+    // Misaligned addresses would corrupt the wire structs.
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr + 1, data_addr, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, data_addr + 1, H2DMode::HOST_PUSH));
+
+    // A non-PCIe-aligned or zero FIFO breaks the ring arithmetic.
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, /*fifo_size=*/0, config_addr, data_addr, H2DMode::HOST_PUSH));
+    EXPECT_ANY_THROW(H2DSocket(*mesh_device_, l2cpu, pcie_alignment + 1, config_addr, data_addr, H2DMode::HOST_PUSH));
+
+    // In HOST_PUSH the ring lives in LIM and is reached through the static TLB window,
+    // so a ring running past the window end must be rejected at construction.
+    EXPECT_ANY_THROW(H2DSocket(
+        *mesh_device_,
+        l2cpu,
+        /*fifo_size=*/0x200000,
+        /*config_buffer_address=*/kLimBase + 0x100000,
+        kLimBase + 0x180000,
+        H2DMode::HOST_PUSH));
+    // A ring below the LIM window entirely is also invalid in HOST_PUSH.
+    EXPECT_ANY_THROW(
+        H2DSocket(*mesh_device_, l2cpu, kFifoSize, config_addr, /*data_fifo_address=*/0x1000, H2DMode::HOST_PUSH));
 }
 
 }  // namespace tt::tt_metal::distributed

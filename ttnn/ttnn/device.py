@@ -222,20 +222,20 @@ def get_allocator_base_address(device, buffer_type):
     return ttnn._ttnn.device.GetAllocatorBaseAddress(device, buffer_type)
 
 
-pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
-
 SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceId = ttnn._ttnn.device.SubDeviceId
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
 
 # Real-time profiler callbacks (experimental)
 ProgramRealtimeRecord = ttnn._ttnn.device.ProgramRealtimeRecord
+ProgramRealtimeRecordBatch = ttnn._ttnn.device.ProgramRealtimeRecordBatch
 RegisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.RegisterProgramRealtimeProfilerCallback
 UnregisterProgramRealtimeProfilerCallback = ttnn._ttnn.device.UnregisterProgramRealtimeProfilerCallback
 IsProgramRealtimeProfilerActive = ttnn._ttnn.device.IsProgramRealtimeProfilerActive
 
 __all__ = [
     "ProgramRealtimeRecord",
+    "ProgramRealtimeRecordBatch",
     "RegisterProgramRealtimeProfilerCallback",
     "UnregisterProgramRealtimeProfilerCallback",
     "IsProgramRealtimeProfilerActive",

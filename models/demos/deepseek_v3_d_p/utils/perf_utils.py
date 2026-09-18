@@ -73,7 +73,7 @@ def _is_galaxy_env() -> bool:
     or even in-test before `run_device_perf` spawns its tracy subprocess, the parent
     holds chip locks and the subprocess deadlocks waiting for them.
 
-    CI sets `MESH_DEVICE=TG` for galaxy jobs (see galaxy_deepseek_prefill_tests.yaml
+    CI sets `MESH_DEVICE=TG` for galaxy jobs (see blaze_models_prefill_tests.yaml
     and demo_sp_release_tests.yaml).
     """
     return os.environ.get("MESH_DEVICE", "").upper() in ("TG", "GALAXY")
@@ -538,32 +538,3 @@ def run_moe_perf_with_approximation(
     if perf_failures:
         summary = "; ".join(f"{which}: {msg}" for which, msg in perf_failures)
         raise AssertionError(f"Perf check(s) outside expected range — {summary}")
-
-
-def run_mla_perf_with_approximation(
-    command_2x4: str,
-    expected_ns_2x4: float,
-    model_name_2x4: str,
-    subdir: str,
-    num_iterations: int = 1,
-    batch_size: int = 1,
-    margin: float = 0.03,
-    comments_2x4: str = "",
-):
-    logger.info("=== 2x4 MLA perf test on LB ===")
-    run_model_device_perf_test_with_merge(
-        command=command_2x4,
-        expected_device_perf_ns_per_iteration=expected_ns_2x4,
-        subdir=subdir,
-        model_name=model_name_2x4,
-        num_iterations=num_iterations,
-        batch_size=batch_size,
-        margin=margin,
-        comments=comments_2x4,
-    )
-    csv_2x4 = get_latest_ops_log_filename(subdir)
-    logger.info(f"2x4 CSV: {csv_2x4}")
-
-    logger.info("=== Approximating 8x4 Galaxy total from 2x4 ===")
-    df_approx = approximate_mla_galaxy_perf(csv_2x4=csv_2x4)
-    logger.info(f"\n{df_approx.to_string(index=False)}")

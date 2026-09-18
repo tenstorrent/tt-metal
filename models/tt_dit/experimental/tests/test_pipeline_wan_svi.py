@@ -130,16 +130,9 @@ def _read_svi_config(regime: str, width: int, height: int) -> _SVIRunConfig:
     )
 
 
-def _pipeline_kwargs(config: _SVIRunConfig, *, mesh_device, num_links, dynamic_load, topology, is_fsdp):
+def _pipeline_kwargs(config: _SVIRunConfig):
+    """The SVI-specific half of the constructor arguments (the config is built separately)."""
     kwargs = dict(
-        mesh_device=mesh_device,
-        num_links=num_links,
-        dynamic_load=dynamic_load,
-        topology=topology,
-        is_fsdp=is_fsdp,
-        height=config.height,
-        width=config.width,
-        num_frames=config.num_frames,
         svi_high=config.svi_high,
         svi_low=config.svi_low,
         regime=config.regime,
@@ -224,15 +217,21 @@ def test_long_video(
 ):
     config = _read_svi_config(regime, width, height)
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(*mesh_shape))
-    pipeline = WanPipelineSVI.create_pipeline(
-        **_pipeline_kwargs(
-            config,
+    pipeline = WanPipelineSVI(
+        device=mesh_device,
+        config=WanPipelineSVI.default_config(
             mesh_device=mesh_device,
-            num_links=num_links,
-            dynamic_load=dynamic_load,
-            topology=topology,
-            is_fsdp=is_fsdp,
-        )
+            height=config.height,
+            width=config.width,
+            num_frames=config.num_frames,
+            config_overrides={
+                "num_links": num_links,
+                "dynamic_load": dynamic_load,
+                "topology": topology,
+                "is_fsdp": is_fsdp,
+            },
+        ),
+        **_pipeline_kwargs(config),
     )
 
     logger.info(
@@ -262,9 +261,9 @@ def test_long_video(
     _save_outputs(video, config.output_basename)
 
 
-def test_comfyui_regime_requires_lightx2v(tmp_path):
+def test_comfyui_regime_requires_lightx2v(tmp_path, expect_error):
     """regime='comfyui' must demand LightX2V LoRA paths."""
-    with pytest.raises(ValueError, match="lightx2v_high"):
+    with expect_error(ValueError, "lightx2v_high"):
         WanPipelineSVI(
             device=None,
             config=None,

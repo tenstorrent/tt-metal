@@ -12,7 +12,7 @@ namespace ttnn::experimental {
 
 Tensor rotate_half(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
     using namespace tt::constants;
-    using tt::tt_metal::PadValue;
+    using ttnn::PadValue;
 
     TT_FATAL(
         input_tensor.storage_type() == StorageType::DEVICE,

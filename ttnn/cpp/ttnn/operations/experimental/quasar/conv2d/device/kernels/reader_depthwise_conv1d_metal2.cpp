@@ -77,7 +77,7 @@ void kernel_main() {
     // has no DRAM-config variant); both are reached by L1 base address from local TensorAccessors
     // (tensor::act_sharded / tensor::reader_indices), not borrowed self-loop CBs.
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::reader_indices).get_noc_addr(0)));
+        noc_address_backend::extract_local_address(TensorAccessor(tensor::reader_indices).get_noc_addr(0)));
 
     uint32_t reader_idx = 0;
 
@@ -89,7 +89,7 @@ void kernel_main() {
 
     reader_offset_idx = 0;
     uint32_t act_l1_offset = 0;
-    uint32_t act_l1_read_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::act_sharded).get_noc_addr(0));
+    uint32_t act_l1_read_addr = noc_address_backend::extract_local_address(TensorAccessor(tensor::act_sharded).get_noc_addr(0));
 
     if constexpr (coalesced_read_bytes <= NOC_MAX_BURST_SIZE) {
         experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);

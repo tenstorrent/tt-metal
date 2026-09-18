@@ -23,6 +23,7 @@ import yaml
 import tt_train_metrics
 import analyze_memory
 import analyze_steps
+import plot_training_comparison
 from model_tracer.generic_ops_tracer import get_machine_info
 
 
@@ -106,7 +107,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model_config",
         type=str,
-        default=f"{tt_metal_runtime_root}/tt-train/scripts/run_models_config.yaml",
+        default=f"{tt_metal_runtime_root}/tt-train/scripts/run_models_configs/single_cards.yaml",
         help="Path to run_models_config.yaml",
     )
     parser.add_argument(
@@ -199,6 +200,13 @@ def main() -> int:
         if exclude_filenames:
             if model_filename in exclude_filenames:
                 continue
+        if "mgd" in model:
+            os.environ["TT_MESH_GRAPH_DESC_PATH"] = _verify_path(
+                os.path.expandvars(model["mgd"]), tt_metal_runtime_root
+            )
+        else:
+            # Since mgd is optional, clear env so previous iterations won't affect current
+            os.environ.pop("TT_MESH_GRAPH_DESC_PATH", None)
 
         binary = os.path.expandvars(model["binary"])
         args = process_args(model["args"]) if model["args"] is not None else []
@@ -243,7 +251,8 @@ def main() -> int:
         print()
         cmd_start = time.time()
         ret_code = run_and_save_log(cmd, log_path)
-        elapsed_time = str(timedelta(seconds=(int(time.time() - cmd_start))))
+        elapsed_time_s = time.time() - cmd_start
+        elapsed_time = str(timedelta(seconds=(int(elapsed_time_s))))
         print(f"{model_filename} elapsed time: {elapsed_time}")
 
         # Record failing model run but continue to run remaining models
@@ -288,6 +297,9 @@ def main() -> int:
             mfu=step_data["mfu"],
             arch_name=arch_name,
             ci_runner_label=card_type,
+            github_event_name=get_env("GITHUB_EVENT_NAME"),
+            elapsed_time_ms=elapsed_time_s * 1000,
+            tps=step_data["tps"],
         )
         print(pydantic_data)
 
@@ -296,14 +308,38 @@ def main() -> int:
 
         set_model_status(filename=model_filename, status="✅", elapsed_time=elapsed_time, log_path=str(log_path))
 
+        # Export loss plots into PNG and Mermaid markdown. The Mermaid markdown will be
+        # used in Github CI Summary to display the plots inline.
+        plot_dir = output_dir / "plots"
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Plot directory: {plot_dir}")
+        # To prevent filenaming conflicts, a prefix will be added to the output files
+        # instead of using per-model subdirectories.
+        file_prefix = f"{model_filename}_{card_type}_"
+        plot_training_comparison.main(
+            [
+                "--baseline",
+                str(log_path),
+                "--output-dir",
+                str(plot_dir),
+                "--mermaid",
+                "--file-prefix",
+                file_prefix,
+            ]
+        )
+
     # Show summary and display to Github if environment variable exists
     df = pd.DataFrame(model_status)
     df_md = df.to_markdown(index=False)
     print("Summary:")
     print(df_md)
-    if "GITHUB_STEP_SUMMARY" in os.environ:
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
-            print(df_md, file=fh)
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        if os.path.exists(summary_path):
+            with open(summary_path, "a") as fh:
+                print(df_md, file=fh)
+        else:
+            print(f"GITHUB_STEP_SUMMARY file not found: {summary_path}")
 
     # Return error code 1 if any tests have failed
     return 1 if any(s["run status"] == "❌" for s in model_status) else 0

@@ -5,65 +5,57 @@
 #include <cstdint>
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
 
-    constexpr auto cb_y = tt::CBIndex::c_0;
-    CircularBuffer cb_y_obj(cb_y);
-    constexpr auto cb_dy = tt::CBIndex::c_1;
-    CircularBuffer cb_dy_obj(cb_dy);
-    constexpr auto cb_dx = tt::CBIndex::c_16;
-    CircularBuffer cb_dx_obj(cb_dx);
+    DataflowBuffer dfb_y_obj(dfb::y);
+    DataflowBuffer dfb_dy_obj(dfb::dy);
+    DataflowBuffer dfb_dx_obj(dfb::dx);
 
-    constexpr auto cb_ydy = tt::CBIndex::c_24;  // y * dy
-    CircularBuffer cb_ydy_obj(cb_ydy);
-    constexpr auto cb_sum = tt::CBIndex::c_25;
-    CircularBuffer cb_sum_obj(cb_sum);
-    constexpr auto cb_dy_m_sum = tt::CBIndex::c_26;  // dy - sum
-    CircularBuffer cb_dy_m_sum_obj(cb_dy_m_sum);
+    DataflowBuffer dfb_ydy_obj(dfb::ydy);  // y * dy
+    DataflowBuffer dfb_sum_obj(dfb::sum);
+    DataflowBuffer dfb_dy_m_sum_obj(dfb::dy_m_sum);  // dy - sum
 
-    uint32_t N = get_compile_time_arg_val(0);
-    uint32_t dim_size = get_compile_time_arg_val(1);
+    uint32_t N = get_arg(args::N);
+    uint32_t dim_size = get_arg(args::dim_size);
 
-    binary_op_init_common(cb_dy, cb_y, cb_dx);
+    compute_kernel_hw_startup(dfb::dy, dfb::y, dfb::dx);
 
     constexpr int dst0 = 0;
     for (uint32_t n = 0; n < N; ++n) {
 #ifdef LOG
         for (uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
-                copy_tile_to_cb(cb_dy_obj, cb_sum_obj);
+                copy_tile_to_cb(dfb_dy_obj, dfb_sum_obj);
             } else {
-                add_tiles_to_cb(cb_sum_obj, cb_dy_obj, cb_sum_obj);
+                add_tiles_to_cb(dfb_sum_obj, dfb_dy_obj, dfb_sum_obj);
             }
         }
 
         for (uint32_t i = 0; i < dim_size; ++i) {
             // exp(y)
-            constexpr auto cb_exp = tt::CBIndex::c_24;
-            CircularBuffer cb_exp_obj(cb_exp);
-            exp_tile_to_cb(cb_y_obj, cb_exp_obj);
+            auto& dfb_exp_obj = dfb_ydy_obj;  // the y * dy buffer, reused to hold exp(y)
+            exp_tile_to_cb(dfb_y_obj, dfb_exp_obj);
 
             // sum * exp(y)
-            constexpr auto cb_inter2 = tt::CBIndex::c_26;
-            CircularBuffer cb_inter2_obj(cb_inter2);
-            mul_tiles_to_cb(cb_sum_obj, cb_exp_obj, cb_inter2_obj, 0, 0, /*pop0=*/0, /*pop1=*/1);
+            mul_tiles_to_cb(dfb_sum_obj, dfb_exp_obj, dfb_dy_m_sum_obj, 0, 0, /*pop0=*/0, /*pop1=*/1);
 
             // dy - sum * exp(y)
-            sub_tiles_to_cb(cb_dy_obj, cb_inter2_obj, cb_dx_obj);
+            sub_tiles_to_cb(dfb_dy_obj, dfb_dy_m_sum_obj, dfb_dx_obj);
         }
-        cb_sum_obj.pop_front(onetile);
+        dfb_sum_obj.pop_front(onetile);
 #else
         // compute sum(y * dy)
         for (uint32_t i = 0; i < dim_size; ++i) {
-            mul_tiles_to_cb(cb_y_obj, cb_dy_obj, cb_ydy_obj);
+            mul_tiles_to_cb(dfb_y_obj, dfb_dy_obj, dfb_ydy_obj);
 
             if (i == 0) {
-                copy_tile_to_cb(cb_ydy_obj, cb_sum_obj);
+                copy_tile_to_cb(dfb_ydy_obj, dfb_sum_obj);
             } else {
-                add_tiles_to_cb(cb_sum_obj, cb_ydy_obj, cb_sum_obj);
+                add_tiles_to_cb(dfb_sum_obj, dfb_ydy_obj, dfb_sum_obj);
             }
         }
 
@@ -71,9 +63,9 @@ void kernel_main() {
         for (uint32_t i = 0; i < dim_size; ++i) {
             // dy - sum
             sub_tiles_to_cb(
-                cb_dy_obj,
-                cb_sum_obj,
-                cb_dy_m_sum_obj,
+                dfb_dy_obj,
+                dfb_sum_obj,
+                dfb_dy_m_sum_obj,
                 /*itile0=*/0,
                 /*itile1=*/0,
                 /*pop0=*/1,
@@ -81,13 +73,13 @@ void kernel_main() {
 
 #ifdef SOFTMAX
             // (dy - sum) * y
-            mul_tiles_to_cb(cb_dy_m_sum_obj, cb_y_obj, cb_dx_obj);
+            mul_tiles_to_cb(dfb_dy_m_sum_obj, dfb_y_obj, dfb_dx_obj);
 #else
             // -(dy - sum) * y
-            mul_tiles_and_negative_to_cb(cb_dy_m_sum_obj, cb_y_obj, cb_dx_obj);
+            mul_tiles_and_negative_to_cb(dfb_dy_m_sum_obj, dfb_y_obj, dfb_dx_obj);
 #endif
         }
-        cb_sum_obj.pop_front(onetile);
+        dfb_sum_obj.pop_front(onetile);
 #endif
     }
 }

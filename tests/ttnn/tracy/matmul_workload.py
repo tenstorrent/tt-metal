@@ -22,7 +22,6 @@ Exit codes:
 import json
 import os
 import sys
-import threading
 
 import torch
 
@@ -75,10 +74,9 @@ def main():
     )
 
     records = []
-    lock = threading.Lock()
 
-    def collect(record):
-        with lock:
+    def collect_records(batch):
+        for record in batch.records:
             records.append(
                 {
                     "runtime_id": record.runtime_id,
@@ -90,7 +88,7 @@ def main():
                 }
             )
 
-    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect)
+    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
 
     try:
         if mode == "simple":
@@ -117,8 +115,7 @@ def main():
         ttnn.close_mesh_device(device)
         ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
 
-    with lock:
-        snapshot = list(records)
+    snapshot = list(records)
     with open(rt_path, "w") as f:
         json.dump(snapshot, f)
     print(f"Saved {len(snapshot)} RT records -> {rt_path}")

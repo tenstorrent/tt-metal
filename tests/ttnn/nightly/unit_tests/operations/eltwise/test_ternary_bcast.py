@@ -6,7 +6,7 @@ import torch
 import ttnn
 import pytest
 
-from tests.ttnn.utils_for_testing import assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_ulp, assert_equal
 
 
 @pytest.mark.parametrize(
@@ -192,3 +192,134 @@ def test_ttnn_lerp_ttt_row_col_mixed_bcast(input_shape, end_shape, weight_shape,
     result = ttnn.to_torch(ttnn_result)
 
     assert_with_ulp(golden, result, ulp_threshold=10)
+
+
+# --------------------------------------------------------------------------------------------------
+# Tests to verify cache collision due to different outer dims
+# --------------------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def isolate_program_cache(device):
+    """Start each case with an empty cache, so the first dispatch is a genuine MISS.
+    Without this the parametrized cases leak into each other -- e.g. the two 5D cases hash
+    identically, so the second one's first dispatch would already be a hit."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    yield
+    device.disable_and_clear_program_cache()
+
+
+def _where_variant(device, variant, pred, true_t, false_t, scalar_true=1.5, scalar_false=-2.5):
+    """Dispatch `variant` and return (ttnn result, torch golden). TTS/TST replace one operand
+    with a scalar, which exercises the packed-scalar compute arg and the TTS/TST reader layout
+    (buffers at slots 0/1, slot 2 a plain 0) rather than TTT's three-buffer layout."""
+    pred_tt = ttnn.from_torch(pred, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    if variant == "TTT":
+        true_tt = ttnn.from_torch(true_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        false_tt = ttnn.from_torch(false_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        return ttnn.to_torch(ttnn.where(pred_tt, true_tt, false_tt)), torch.where(pred.bool(), true_t, false_t)
+    if variant == "TTS":
+        true_tt = ttnn.from_torch(true_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        golden = torch.where(pred.bool(), true_t, torch.full_like(true_t, scalar_false))
+        return ttnn.to_torch(ttnn.where(pred_tt, true_tt, scalar_false)), golden
+    # TST
+    false_tt = ttnn.from_torch(false_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    golden = torch.where(pred.bool(), torch.full_like(false_t, scalar_true), false_t)
+    return ttnn.to_torch(ttnn.where(pred_tt, scalar_true, false_tt)), golden
+
+
+@pytest.mark.parametrize("variant", ["TTT", "TTS", "TST"])
+@pytest.mark.parametrize(
+    "pred_shape_1, pred_shape_2",
+    [
+        ((4, 1, 32, 32), (1, 4, 32, 32)),  # N/C swap, equal volume
+        ((2, 2, 1, 32, 32), (2, 1, 2, 32, 32)),  # 5D: D/N/C permutation
+        ((2, 2, 1, 32, 32), (1, 2, 2, 32, 32)),
+    ],
+)
+def test_where_program_cache_same_volume_different_leading_dims(
+    device, isolate_program_cache, variant, pred_shape_1, pred_shape_2
+):
+    """Predicates that hash identically (same padded volume, same H/W) but need different strides."""
+    torch.manual_seed(42)
+    # The true/false tensors are the broadcast target: same shape for both calls, so the ONLY
+    # difference between the two dispatches is the predicate's dim factorization.
+    out_shape = [max(a, b) for a, b in zip(pred_shape_1, pred_shape_2)]
+
+    results = []
+    deltas = []
+    for pred_shape in (pred_shape_1, pred_shape_2):
+        pred = torch.randint(0, 2, pred_shape).to(torch.bfloat16)
+        true_t = torch.randn(out_shape, dtype=torch.bfloat16)
+        false_t = torch.randn(out_shape, dtype=torch.bfloat16)
+
+        device.cache_entries_counter.reset()
+        with device.cache_entries_counter.measure():
+            result, expected = _where_variant(device, variant, pred, true_t, false_t)
+        deltas.append(device.cache_entries_counter.total)
+        results.append((result, expected))
+
+    # Both halves matter. Asserting only "the second call added nothing" is vacuous: it also holds
+    # when the program cache is off and NOTHING was ever cached, so the test would go green without
+    # exercising a cache hit at all.
+    assert deltas[0] == 1, (
+        f"first dispatch {pred_shape_1} added {deltas[0]} cache entries, expected exactly 1 "
+        "(program cache disabled, or the op did not compile a program?)"
+    )
+    # And the second must REUSE it: if the hash is ever widened so these shapes stop colliding, both
+    # calls become independent, both pass, and the coverage silently disappears.
+    assert deltas[1] == 0, (
+        f"{pred_shape_1} and {pred_shape_2} no longer collide in the program cache "
+        f"(second dispatch added {deltas[1]} entries); this test no longer covers issue 54235"
+    )
+
+    for result, expected in results:
+        assert_equal(expected, result)
+
+
+def test_where_program_cache_same_input_volume_different_output_volume(device, isolate_program_cache):
+    """
+    Equal per-tensor input volumes and equal H/W hash identically, but the OUTPUT shape is the
+    per-dim broadcast maximum of the three inputs and is absent from the key entirely -- so the
+    work-split (per-core tile counts and start ids) differs between these two dispatches.
+
+    Order matters: small output first, then large, then small again. The large-after-small step is
+    the one that promotes a core from noop to work, so the cached zero-filled noop row has to be
+    replaced with real args and buffer addresses -- a path the reverse order never reaches.
+    """
+    torch.manual_seed(42)
+    # Every call: predicate volume 4096, true volume 4096, false volume 1024, H=W=32 -> one key.
+    cases = [
+        ((4, 1, 32, 32), (4, 1, 32, 32), (1, 1, 32, 32)),  # out [4,1,32,32]  (small)
+        ((4, 1, 32, 32), (1, 4, 32, 32), (1, 1, 32, 32)),  # out [4,4,32,32]  (large: noop -> work)
+        ((4, 1, 32, 32), (4, 1, 32, 32), (1, 1, 32, 32)),  # out [4,1,32,32]  (back to small)
+    ]
+
+    deltas = []
+    for pred_shape, true_shape, false_shape in cases:
+        pred = torch.randint(0, 2, pred_shape).to(torch.bfloat16)
+        true_t = torch.randn(true_shape, dtype=torch.bfloat16)
+        false_t = torch.randn(false_shape, dtype=torch.bfloat16)
+        expected = torch.where(pred.bool(), true_t, false_t)
+
+        pred_tt = ttnn.from_torch(pred, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        true_tt = ttnn.from_torch(true_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        false_tt = ttnn.from_torch(false_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+        device.cache_entries_counter.reset()
+        with device.cache_entries_counter.measure():
+            result = ttnn.to_torch(ttnn.where(pred_tt, true_tt, false_tt))
+        deltas.append(device.cache_entries_counter.total)
+
+        assert_equal(expected, result)
+
+    # As above, both halves: the first call must actually cache something, and the rest must reuse it.
+    assert deltas[0] == 1, (
+        f"first dispatch added {deltas[0]} cache entries, expected exactly 1 "
+        "(program cache disabled, or the op did not compile a program?)"
+    )
+    assert deltas[1:] == [0, 0], (
+        "the output-volume cases no longer collide in the program cache "
+        f"(dispatches 2,3 added {deltas[1:]} entries); this test no longer covers issue 54235"
+    )

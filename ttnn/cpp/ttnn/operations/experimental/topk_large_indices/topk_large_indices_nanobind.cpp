@@ -40,14 +40,23 @@ void bind_topk_large_indices(nb::module_& mod) {
             * the flattened row count must be > 0;
             * the last dimension must be >= k and <= 1,073,741,824 elements.
 
+        valid_length (optional):
+            * restricts the search to the first ``valid_length`` columns of each row;
+            * the remaining columns are ignored -- neither read nor ranked -- so an
+              over-allocated row whose tail is stale can be searched without slicing it;
+            * must be in [k, last dimension]; defaults to the full last dimension;
+            * applied at runtime (no recompile), so a loop growing valid_length reuses one program.
+
         Args:
             input_tensor: device tensor with ROW_MAJOR layout and BFLOAT16 dtype.
             k: required number of indices to return.
+            valid_length: optional number of leading columns to search (default: full width).
         )doc",
         &ttnn::experimental::topk_large_indices,
         nb::arg("input_tensor"),
         nb::kw_only(),
-        nb::arg("k"));
+        nb::arg("k"),
+        nb::arg("valid_length") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::detail

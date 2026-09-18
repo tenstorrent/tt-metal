@@ -105,17 +105,17 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         explicit LocalNocEventDstTrailer(uint32_t) = delete;
         explicit LocalNocEventDstTrailer(int) = delete;
 
-        void setDstAddr(uint32_t addr) {
+        void setDstAddr(uint64_t addr) {
             dst_addr_4b = addr >> 2;
             dst_addr_offset = addr & 0x3;
         }
-        uint32_t getDstAddr() const { return (dst_addr_4b << 2) | (dst_addr_offset & 0x3); }
+        uint64_t getDstAddr() const { return (dst_addr_4b << 2) | (dst_addr_offset & 0x3); }
 
-        void setSrcAddr(uint32_t addr) {
+        void setSrcAddr(uint64_t addr) {
             src_addr_4b = addr >> 2;
             src_addr_offset = addr & 0x3;
         }
-        uint32_t getSrcAddr() const { return (src_addr_4b << 2) | (src_addr_offset & 0x3); }
+        uint64_t getSrcAddr() const { return (src_addr_4b << 2) | (src_addr_offset & 0x3); }
     };
 
     // represents a fabric NOC event
@@ -206,6 +206,27 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
 
     static bool isFabricScatterEventType(NocEventType event_type) {
         return event_type == NocEventType::FABRIC_UNICAST_SCATTER_WRITE;
+    }
+
+    static constexpr bool isDebugOnlyEventType(NocEventType event_type) {
+        switch (event_type) {
+            case NocEventType::READ_BARRIER_START:
+            case NocEventType::READ_BARRIER_END:
+            case NocEventType::READ_BARRIER_WITH_TRID:
+            case NocEventType::WRITE_BARRIER_START:
+            case NocEventType::WRITE_BARRIER_END:
+            case NocEventType::WRITE_BARRIER_WITH_TRID:
+            case NocEventType::WRITE_FLUSH:
+            case NocEventType::WRITE_FLUSH_WITH_TRID:
+            case NocEventType::FULL_BARRIER:
+            case NocEventType::ATOMIC_BARRIER:
+            case NocEventType::SEMAPHORE_WAIT:
+            case NocEventType::SEMAPHORE_SET:
+            case NocEventType::WRITE_INLINE:
+            case NocEventType::SEMAPHORE_INC:
+            case NocEventType::SEMAPHORE_INC_MULTICAST: return true;
+            default: return false;
+        }
     }
 
     // Getter to return the correct variant based on the tag (noc_xfer_type)

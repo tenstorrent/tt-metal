@@ -26,13 +26,12 @@ struct UntilizeOperationAttributes {
     bool use_multicore{};
     bool fp32_dest_acc_en{};
     std::optional<CoreRangeSet> sub_core_grids;
-    bool enough_space_width{};
     bool enough_space_height{};
     uint32_t pf_type{};
 };
 
 using UntilizeTensorReturnValue = Tensor;
-using UntilizeSpecReturnValue = ttnn::TensorSpec;
+using UntilizeSpecReturnValue = tt::tt_metal::TensorSpec;
 using UntilizeShapeReturnValue = ttnn::Shape;
 
 }  // namespace ttnn::prim

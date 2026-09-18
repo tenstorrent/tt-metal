@@ -184,7 +184,7 @@ double run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batc
     const auto q_pre = make_input(batch, seq_len, shape.n_heads * qk_head, 1001U);
     const auto kv_up = make_input(batch, seq_len, shape.n_heads * (shape.qk_nope_dim + shape.v_dim), 2002U);
     const auto k_pe = make_input(batch, seq_len, shape.qk_rope_dim, 3003U);
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
 
     const auto run_step = [&]() {
         if (use_fused) {
@@ -200,13 +200,13 @@ double run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batc
     for (uint32_t step = 0; step < cfg.num_warmup; ++step) {
         run_step();
     }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
 
     const auto t0 = std::chrono::high_resolution_clock::now();
     for (uint32_t step = 0; step < cfg.num_measure; ++step) {
         run_step();
     }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
     const auto t1 = std::chrono::high_resolution_clock::now();
 
     ttml::autograd::ctx().reset_graph();
@@ -222,7 +222,7 @@ double run_single_bw(
     const auto dQ = make_input_hm(batch, shape.n_heads, seq_len, qk_head, 4004U);
     const auto dK = make_input_hm(batch, shape.n_heads, seq_len, qk_head, 5005U);
     const auto dV = make_input_hm(batch, shape.n_heads, seq_len, shape.v_dim, 6006U);
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
 
     const auto run_step = [&]() {
         if (use_fused) {
@@ -238,13 +238,13 @@ double run_single_bw(
     for (uint32_t step = 0; step < cfg.num_warmup; ++step) {
         run_step();
     }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
 
     const auto t0 = std::chrono::high_resolution_clock::now();
     for (uint32_t step = 0; step < cfg.num_measure; ++step) {
         run_step();
     }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
     const auto t1 = std::chrono::high_resolution_clock::now();
 
     ttml::autograd::ctx().reset_graph();

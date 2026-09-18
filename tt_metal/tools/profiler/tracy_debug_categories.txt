@@ -1,0 +1,12 @@
+# --build-perf-debug categories: one per line, lower-case-hyphenated; '#' and blank lines ignored.
+#
+#   !! The call-site token is the UPPER_SNAKE form of the category:
+#          rt-profiler  ->  TTZoneScopedD(RT_PROFILER)
+#
+# 'misc' is a catch-all for zones that fit no specific category.
+dispatch
+program
+data-format
+rt-profiler
+jit
+misc

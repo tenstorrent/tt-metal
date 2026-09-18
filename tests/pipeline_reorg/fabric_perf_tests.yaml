@@ -1,0 +1,54 @@
+# Fabric perf test matrix — consumed by .github/workflows/tm-fabric-tests-perf-impl.yaml.
+# T3K microbenchmarks on wh_llmbox_perf (uses pipeline-perf runner pool).
+#
+# Each entry:
+#   name: GitHub Actions job display name.
+#   cmd: Shell command(s) to run from TT_METAL_HOME (/work).
+#   skus: SKU -> { timeout } (minutes).
+#   team: Required for time_budget verification (scaleout).
+#   owner_id: Slack user ID to notify on failure.
+# `arch` is derived from the SKU inline in the impl workflow's ARCH_NAME
+# expression (bh_* -> blackhole, wh_* -> wormhole_b0), not authored per entry.
+#   upload_benchmarks: (optional) When true and github.ref_name==main, impl runs
+#     check-latency-bw-results + SFTP upload of fabric BW / latency CSVs.
+#
+# Container env for this list defaults to TT_METAL_DEVICE_PROFILER=1 and
+# TRACY_NO_INVARIANT_CHECK=1 (set in tm-fabric-tests-perf-impl.yaml). Entries
+# that need the profiler off (e.g. the BW golden calibrated to uninstrumented
+# routers) prepend TT_METAL_DEVICE_PROFILER=0 to their cmd.
+#
+# For max allowed timeout refer to .github/time_budget.yaml (scaleout -> perf).
+
+- name: T3K ubench - Fabric BW && Latency
+  # TT_METAL_DEVICE_PROFILER=0 overrides the job-level profiler env: the BW
+  # golden is calibrated to real (uninstrumented) fabric bandwidth, but the
+  # container enables the device profiler, which JIT-compiles kernels with
+  # -DPROFILE_KERNEL=1 and inflates router cycle counts (worst on
+  # multicast/ring/mesh: 11-18% low) -> systematic golden-comparison failures.
+  # BW is measured from the fabric router's own always-on telemetry, not Tracy,
+  # so disabling the profiler yields the clean measurement the golden expects.
+  cmd: TT_METAL_CLEAR_L1=1 TT_METAL_DEVICE_PROFILER=0 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_at_least_2x2_mesh.yaml
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar
+  upload_benchmarks: true
+
+- name: T3K ubench - Fabric Mux BW
+  # Mux BW golden was recalibrated to the profiler-off measurement in d7bfc04;
+  # keep TT_METAL_DEVICE_PROFILER=0 to match.
+  cmd: TT_METAL_DEVICE_PROFILER=0 pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_bandwidth.py
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar
+
+- name: T3K ubench - Fabric Mux V2 Throughput
+  cmd: TT_METAL_DEVICE_PROFILER=0 pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_v2_throughput.py
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+  team: scaleout
+  owner_id: U06US5C7M7X # Sean Nijjar

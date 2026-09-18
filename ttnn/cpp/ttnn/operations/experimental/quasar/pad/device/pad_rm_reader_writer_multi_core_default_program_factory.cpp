@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -221,7 +222,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
                   "start_dim_h",
                   "start_dim_c",
                   "start_dim_n"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
     if (has_pad_align) {
         reader_spec.compiler_options.defines = {{"HAS_PAD_ALIGN", "1"}};
@@ -245,7 +246,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .compile_time_args = writer_cta,
         .runtime_arg_schema = {.runtime_arg_names = {"num_sticks_per_core", "num_sticks_per_barrier", "start_page_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
     // ------------------------------------------------------------------------
@@ -275,23 +276,31 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
 
         const NodeCoord node = core;
 
-        reader_run.runtime_arg_values.push_back(
-            {node,
-             {{"num_sticks_per_core", num_sticks_per_core},
-              {"num_sticks_per_barrier", num_sticks_per_barrier},
-              {"start_page_id", curr_sticks_read * num_input_pages_in_row},
-              {"front_pad_n", static_cast<uint32_t>(front_pad[-4])},
-              {"front_pad_c", static_cast<uint32_t>(front_pad[-3])},
-              {"front_pad_h", static_cast<uint32_t>(front_pad[-2])},
-              {"start_dim_h", off_h},
-              {"start_dim_c", off_c},
-              {"start_dim_n", off_n}}});
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            reader_rtas,
+            node,
+            {
+                {"num_sticks_per_core", num_sticks_per_core},
+                {"num_sticks_per_barrier", num_sticks_per_barrier},
+                {"start_page_id", curr_sticks_read * num_input_pages_in_row},
+                {"front_pad_n", static_cast<uint32_t>(front_pad[-4])},
+                {"front_pad_c", static_cast<uint32_t>(front_pad[-3])},
+                {"front_pad_h", static_cast<uint32_t>(front_pad[-2])},
+                {"start_dim_h", off_h},
+                {"start_dim_c", off_c},
+                {"start_dim_n", off_n},
+            });
 
-        writer_run.runtime_arg_values.push_back(
-            {node,
-             {{"num_sticks_per_core", num_sticks_per_core},
-              {"num_sticks_per_barrier", num_sticks_per_barrier},
-              {"start_page_id", curr_sticks_write * num_output_pages_in_row}}});
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        AddRuntimeArgsForNode(
+            writer_rtas,
+            node,
+            {
+                {"num_sticks_per_core", num_sticks_per_core},
+                {"num_sticks_per_barrier", num_sticks_per_barrier},
+                {"start_page_id", curr_sticks_write * num_output_pages_in_row},
+            });
 
         curr_sticks_write += num_sticks_per_core;
 

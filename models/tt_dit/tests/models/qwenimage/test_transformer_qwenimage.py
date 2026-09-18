@@ -15,12 +15,14 @@ from ....parallel.manager import CCLManager
 from ....utils import cache, tensor
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
+from ....utils.test import line_params_req_exact_devices
 from ....utils.tracing import Tracer
 
 
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links"),
     [
+        pytest.param((2, 2), 0, 1, 1, id="2x2sp0tp1"),
         pytest.param((1, 8), 0, 1, 1, id="1x8sp0tp1"),
         pytest.param((2, 4), 0, 1, 1, id="2x4sp0tp1"),
         pytest.param((4, 8), 0, 1, 4, id="4x8sp0tp1"),
@@ -42,7 +44,10 @@ from ....utils.tracing import Tracer
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 34000000}],
+    # 60MB covers the 2x2 mesh, whose trace measured 47636480B in run 31911772448.
+    # Larger meshes don't actually need this much memory but just keep the size the same for simplicity.
+    [{**line_params_req_exact_devices, "trace_region_size": 60000000}],
+    ids=["line"],
     indirect=True,
 )
 def test_transformer(
@@ -110,6 +115,7 @@ def test_transformer(
         subfolder="transformer",
         parallel_config=parallel_config,
         mesh_shape=tuple(mesh_device.shape),
+        mesh_device=mesh_device,
     )
 
     spatial_seq_len = (latents_height // patch_size) * (latents_width // patch_size)
@@ -157,7 +163,7 @@ def test_transformer(
         torch_output = torch_model.forward(
             hidden_states=spatial,
             encoder_hidden_states=prompt,
-            encoder_hidden_states_mask=torch.tensor([]),  # an empty tensor to mark that this value is never used
+            encoder_hidden_states_mask=None,  # None marks that this value is never used
             timestep=timestep / 1000,
             img_shapes=img_shapes,
             txt_seq_lens=txt_seq_lens,

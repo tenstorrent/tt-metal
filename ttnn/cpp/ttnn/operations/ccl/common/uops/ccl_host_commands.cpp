@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
 
 #include <variant>

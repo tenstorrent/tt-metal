@@ -7,7 +7,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -34,16 +33,13 @@ void kernel_main() {
 
     auto write_tiles = [&](const uint32_t& num_tiles, const uint32_t& width_size) {
         cb_out.wait_front(num_tiles);
-        uint32_t l1_read_addr = cb_out.get_read_ptr();
         for (uint32_t k = 0; k < tile_height; k++) {
-            CoreLocalMem<uint32_t> src(l1_read_addr);
             noc.async_write(
-                src,
+                cb_out,
                 s,
                 width_size,
-                {.offset_bytes = 0},
+                {.offset_bytes = k * width_size},
                 {.page_id = row_stick_ids[k], .offset_bytes = curr_stick_offset});
-            l1_read_addr += width_size;
         }
         noc.async_write_barrier();
         cb_out.pop_front(num_tiles);

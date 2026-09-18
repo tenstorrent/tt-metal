@@ -159,7 +159,7 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(temp.logical_shape() == Shape({num_users}), "temp must have shape [{}] (one per user)!", num_users);
 }
 
-TensorSpec SamplingDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec SamplingDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -176,7 +176,7 @@ TensorSpec SamplingDeviceOperation::compute_output_specs(
     const bool use_32bit_index = !(arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE);
     const DataType output_dtype = use_32bit_index ? DataType::INT32 : DataType::UINT32;
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), input_values_tensor.memory_config()));
 }
 

@@ -127,7 +127,18 @@ def run(
             pass
         elif isinstance(scalar_value, int):
             scalar_value = float(scalar_value)
-        torch_output_tensor = torch.mul(torch_input_tensor_a, scalar_value)
+        # The device materializes the scalar in the operand dtype before multiplying,
+        # so a scalar that is not representable there is rounded first. Master traces
+        # -FLT_MAX (3.4028e38) as an attention-mask value, and that is above
+        # bfloat16's max (3.3895e38), so the device operand becomes -inf. A golden
+        # that keeps the scalar in fp32 instead computes a finite product for every
+        # |x| < 1 and disagrees with the device on exactly those positions. Round the
+        # scalar the same way the device does -- verified bit-exact against device
+        # output for both representable and non-representable scalars.
+        golden_scalar = scalar_value
+        if torch_input_tensor_a.is_floating_point() and isinstance(scalar_value, float):
+            golden_scalar = torch.tensor(scalar_value, dtype=torch_input_tensor_a.dtype)
+        torch_output_tensor = torch.mul(torch_input_tensor_a, golden_scalar)
         is_scalar_multiply = True
     else:
         # Tensor-tensor multiply: generate second tensor
@@ -243,6 +254,9 @@ def run(
 
     # Pre-allocate output tensor if the master config recorded one
     output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
+    # Initialised unconditionally: the traced-output block below is conditional, and the gather
+    # references this, so leaving it unbound raises UnboundLocalError on every vector that skips it.
+    ot_placement = None
     if output_tensor_info and output_tensor_info.get("shape"):
         ot_shape = tuple(output_tensor_info["shape"])
         ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
@@ -301,7 +315,11 @@ def run(
 
         output_tensor = ttnn.multiply(input_tensor_a, input_tensor_b, **op_kwargs)
 
-    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
+    output_tensor = mesh_tensor_to_torch(
+        output_tensor,
+        device if is_mesh_device else None,
+        scatter_placement=(ot_placement or input_a_tensor_placement) if is_mesh_device else None,
+    )
     e2e_perf = stop_measuring_time(start_time)
 
     # Reconcile the per-chip torch golden to the mesh-stitched actual output:

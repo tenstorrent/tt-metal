@@ -26,11 +26,11 @@ void kernel_main() {
 
     constexpr auto src_args = TensorAccessorArgs<2>();
 
-    const uint32_t tile_bytes = get_tile_size(cb_id_in);
-
     const auto s = TensorAccessor(src_args, src_addr);
 
     CircularBuffer cb_in(cb_id_in);
+
+    const uint32_t tile_bytes = cb_in.get_tile_size();
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t tile_id = start_tile_id;

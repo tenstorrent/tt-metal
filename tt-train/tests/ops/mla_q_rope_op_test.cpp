@@ -14,9 +14,11 @@
 #include "metal/operations.hpp"
 #include "ops/rope_op.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp"
+#include "ttnn/types.hpp"
 
 namespace {
 
@@ -164,3 +166,50 @@ INSTANTIATE_TEST_SUITE_P(
         MLA_QRopeShape{
             .name = "batch4_st2", .batch = 4, .seq_len = 64, .n_heads = 2, .qk_nope_dim = 32, .qk_rope_dim = 32}),
     [](const ::testing::TestParamInfo<MLA_QRopeShape>& info) { return info.param.name; });
+
+class MLA_QRopeCacheTest : public ::testing::Test {
+protected:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+// Buffer placement is a compile-time property: TensorAccessorArgs bake it into the
+// kernel binary, so the program cache must key on every input's memory config. Runs
+// the op with q_in interleaved in DRAM and again with q_in in L1 at identical shapes,
+// asserting the second run compiles a distinct program and still matches the
+// reference — a cache key blind to placement reuses the DRAM program for the L1
+// buffer and reads through the wrong accessor tables.
+TEST_F(MLA_QRopeCacheTest, DistinctProgramPerInputPlacement) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    const MLA_QRopeShape shape{
+        .name = "cache_small", .batch = 1, .seq_len = 32, .n_heads = 4, .qk_nope_dim = 64, .qk_rope_dim = 32};
+    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
+    auto q_in = make_bf16_4d(shape.batch, shape.n_heads, shape.seq_len, qk_head, /*seed=*/11U);
+    auto params = build_params(shape.seq_len, shape.qk_rope_dim);
+    const auto ref = reference_q_rope(q_in, params, shape.qk_nope_dim, shape.qk_rope_dim);
+
+    const auto entries_start = device->num_program_cache_entries();
+    const auto fused_dram = ttml::metal::mla_q_rope(
+        q_in, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
+    const auto entries_after_dram = device->num_program_cache_entries();
+    // Guard against a vacuous test: the first call must actually populate the cache,
+    // else the delta check below would pass trivially with the cache disabled.
+    ASSERT_GT(entries_after_dram, entries_start) << "program cache not populated by the DRAM-placement run";
+    expect_q_rope_matches_reference(fused_dram, ref, shape, /*label_prefix=*/"dram: ");
+
+    auto q_in_l1 = ttnn::to_memory_config(q_in, ttnn::L1_MEMORY_CONFIG);
+    const auto entries_before_l1 = device->num_program_cache_entries();
+    const auto fused_l1 = ttml::metal::mla_q_rope(
+        q_in_l1, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
+    const auto entries_after_l1 = device->num_program_cache_entries();
+    EXPECT_GT(entries_after_l1, entries_before_l1)
+        << "mla_q_rope reused the DRAM-placement program for an L1 input (stale cache key)";
+    expect_q_rope_matches_reference(fused_l1, ref, shape, /*label_prefix=*/"l1: ");
+}

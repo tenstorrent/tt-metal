@@ -27,7 +27,7 @@ uint32_t float_bits_u32(float value) {
     return bits;
 }
 
-void set_cb_page_size_for_tile(tt::tt_metal::CBDescriptor& cb_desc, const tt::tt_metal::Tensor& tensor) {
+void set_cb_page_size_for_tile(tt::tt_metal::CBDescriptor& cb_desc, const ttnn::Tensor& tensor) {
     const auto& spec = tensor.tensor_spec();
     const auto& tile = spec.tile();
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(spec.data_type());
@@ -98,12 +98,11 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     constexpr uint8_t input_indices_cb = 3;
     constexpr uint8_t output_indices_cb = 4;
 
-    auto in_cb_desc = tt::tt_metal::cb_descriptor_from_sharded_tensor(input_cb, input_tensor);
-    auto bias_cb_desc = tt::tt_metal::cb_descriptor_from_sharded_tensor(bias_cb, bias_tensor);
-    auto out_cb_desc = tt::tt_metal::cb_descriptor_from_sharded_tensor(output_cb, output_tensor);
-    auto in_indices_cb_desc = tt::tt_metal::cb_descriptor_from_sharded_tensor(input_indices_cb, input_indices_tensor);
-    auto out_indices_cb_desc =
-        tt::tt_metal::cb_descriptor_from_sharded_tensor(output_indices_cb, output_indices_tensor);
+    auto in_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(input_cb, input_tensor);
+    auto bias_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(bias_cb, bias_tensor);
+    auto out_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(output_cb, output_tensor);
+    auto in_indices_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(input_indices_cb, input_indices_tensor);
+    auto out_indices_cb_desc = ttnn::cb_descriptor_from_sharded_tensor(output_indices_cb, output_indices_tensor);
 
     set_cb_page_size_for_tile(in_cb_desc, input_tensor);
     set_cb_page_size_for_tile(bias_cb_desc, bias_tensor);

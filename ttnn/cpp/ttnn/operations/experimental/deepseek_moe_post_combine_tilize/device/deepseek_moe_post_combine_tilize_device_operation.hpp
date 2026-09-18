@@ -17,7 +17,7 @@ namespace ttnn::experimental::prim {
 struct DeepseekMoEPostCombineTilizeDeviceOperation {
     using operation_attributes_t = DeepseekMoEPostCombineTilizeParams;
     using tensor_args_t = DeepseekMoEPostCombineTilizeInputs;
-    using spec_return_value_t = ttnn::TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
     using program_factory_t = std::variant<DeepseekMoEPostCombineTilizeProgramFactory>;
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);

@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "device.hpp"
@@ -50,7 +51,8 @@ void MeshTrace::populate_mesh_buffer(
     MeshCommandQueue& mesh_cq,
     std::shared_ptr<MeshTraceBuffer>& trace_buffer,
     DeviceAddr dram_allocation_high_water_mark,
-    DeviceAddr dram_deletion_high_water_mark) {
+    DeviceAddr dram_deletion_high_water_mark,
+    DeviceAddr max_live_trace_high_water_mark) {
     uint64_t unpadded_size = trace_buffer->desc->total_trace_size;
     size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(
         unpadded_size, mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM));
@@ -90,14 +92,22 @@ void MeshTrace::populate_mesh_buffer(
         .size = padded_size,
     };
 
-    trace_buffer->mesh_buffer =
-        MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
+    // Give dynamically allocated trace storage a useful diagnostic context. The allocator excludes BufferType::TRACE
+    // storage in the reserved trace region, but intentionally tracks top-down BufferType::DRAM trace storage because
+    // it can be unsafe for older traces.
+    {
+        auto trace_storage_context = tt::tt_metal::make_allocation_context_guard("trace_storage");
+        trace_buffer->mesh_buffer =
+            MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
+    }
 
-    // In dynamic allocation mode, validate that trace buffer doesn't overlap with allocations during trace
-    DeviceAddr dram_high_water_mark = std::max(dram_allocation_high_water_mark, dram_deletion_high_water_mark);
-    if (trace_region_size == 0 && dram_high_water_mark > 0) {
+    // In dynamic allocation mode, validate that the new trace buffer is outside the replay footprint of every live
+    // trace.
+    trace_buffer->dram_high_water_mark = std::max(dram_allocation_high_water_mark, dram_deletion_high_water_mark);
+    const DeviceAddr effective_high_water_mark = std::max({trace_buffer->dram_high_water_mark, max_live_trace_high_water_mark});
+    if (trace_region_size == 0 && effective_high_water_mark > 0) {
         DeviceAddr trace_buffer_address = trace_buffer->mesh_buffer->address();
-        if (trace_buffer_address < dram_high_water_mark) {
+        if (trace_buffer_address < effective_high_water_mark) {
             // Determine which high water mark caused the overlap for a more specific error message
             bool allocation_overlap =
                 dram_allocation_high_water_mark > 0 && trace_buffer_address < dram_allocation_high_water_mark;
@@ -121,7 +131,7 @@ void MeshTrace::populate_mesh_buffer(
                     "Avoid deallocating DRAM buffers during trace capture or set a non-zero trace_region_size.",
                     trace_buffer_address,
                     dram_deletion_high_water_mark);
-            } else {
+            } else if (allocation_overlap) {
                 TT_FATAL(
                     false,
                     "Trace buffer at address {} overlaps with buffers allocated during trace capture "
@@ -129,6 +139,14 @@ void MeshTrace::populate_mesh_buffer(
                     "Reduce allocations during trace capture or set a non-zero trace_region_size.",
                     trace_buffer_address,
                     dram_allocation_high_water_mark);
+            } else {
+                TT_FATAL(
+                    false,
+                    "Trace buffer at address {} overlaps with DRAM activity captured by another live trace "
+                    "(maximum live trace high water mark: {}). "
+                    "Release the existing trace before capturing this trace or set a non-zero trace_region_size.",
+                    trace_buffer_address,
+                    max_live_trace_high_water_mark);
             }
         }
     }

@@ -42,13 +42,21 @@ on:
         type: boolean
         default: false
         description: "When true, collect LLVM profraw data and upload per-job profdata artifact for coverage aggregation."
+      per-test-timeout:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
-      has-sim: ${{ steps.detect-sim.outputs.has-sim }}
+      sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
       skip-args-wormhole_b0: ${{ steps.skip-list.outputs.skip-args-wormhole_b0 }}
       skip-args-blackhole: ${{ steps.skip-list.outputs.skip-args-blackhole }}
     env:
@@ -72,11 +80,16 @@ jobs:
       - name: Verify test timeouts against budget
         if: ${{ inputs.timeout-minutes-override == 0 }}
         run: |
-          set -e
+          set -euo pipefail
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "merge_gate"
+            "merge_gate" \
+            "${extra[@]}"
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
@@ -84,14 +97,8 @@ jobs:
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "ALL_SKUS_IN_TESTS" \
-            ./.github/sku_config.yaml
-
-      - name: Detect sim SKUs in matrix
-        id: detect-sim
-        run: |
-          matrix='${{ steps.build-matrix.outputs.matrix }}'
-          has_sim=$(echo "$matrix" | jq -r 'any(.[]; .sku | startswith("sim_"))')
-          echo "has-sim=$has_sim" >> "$GITHUB_OUTPUT"
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
 
       # Load the TTSim skip list ONCE for the whole matrix and expose per-arch --deselect
       # args. The ttnn job applies these (via PYTEST_ADDOPTS) on every sim_* entry so the
@@ -112,44 +119,41 @@ jobs:
   # the resolved matrix contains sim_* SKUs. Consumed by setup-ttsim below.
   fetch-ttsim:
     needs: load-test-matrix
-    if: ${{ needs.load-test-matrix.outputs.has-sim == 'true' }}
-    runs-on: ubuntu-latest
+    if: ${{ needs.load-test-matrix.outputs.sim-libs != '[]' }}
+    runs-on: ubuntu-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: ${{ fromJson(needs.load-test-matrix.outputs.sim-libs) }}
+    concurrency:
+      group: ttsim-lib-${{ github.run_id }}-${{ matrix.lib }}
+      cancel-in-progress: false
+      queue: max
+    # The probe and upload talk to the artifact service with the runtime token, not
+    # GITHUB_TOKEN, so no actions: scope is needed — and requesting one fails for callers that
+    # run with the default actions: none (a nested job cannot exceed its caller's grant).
+    permissions:
+      contents: read
     steps:
-      - name: Checkout ttsim version
+      - name: Checkout fetch-ttsim action and pinned ttsim version
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: tt_metal/ttsim-version
+          sparse-checkout: |
+            .github/actions/fetch-ttsim
+            tt_metal/ttsim-version
           sparse-checkout-cone-mode: false
-      - name: Read ttsim version
-        id: ttsim-version
-        run: echo "version=$(cat tt_metal/ttsim-version)" >> "$GITHUB_OUTPUT"
-      - name: Download wormhole_b0 ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+          ref: ${{ inputs.ref || github.sha }}
+      - name: ⬇️  Fetch ttsim
+        uses: ./.github/actions/fetch-ttsim
+        timeout-minutes: 10
         with:
-          repository: tenstorrent/ttsim
-          tag: ${{ steps.ttsim-version.outputs.version }}
-          fileName: libttsim_wh.so
-          out-file-path: /tmp/ttsim
-      - name: Download blackhole ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
-        with:
-          repository: tenstorrent/ttsim
-          tag: ${{ steps.ttsim-version.outputs.version }}
-          fileName: libttsim_bh.so
-          out-file-path: /tmp/ttsim
-      - name: Upload ttsim binaries artifact
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: ttsim-binaries
-          path: /tmp/ttsim/
-          if-no-files-found: error
-          retention-days: 1
+          lib: ${{ matrix.lib }}
 
   ttnn:
     needs: [load-test-matrix, fetch-ttsim]
     # fetch-ttsim is skipped when the matrix has no sim_* SKUs; allow that.
-    if: ${{ !cancelled() && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' && !cancelled() && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -208,7 +212,7 @@ jobs:
       # header before kernels are JIT-compiled. Wormhole sim only; this patches the runner's
       # /opt/venv (so it must run here, not in load-test-matrix). Remove once LLK ships a fix.
       - name: Apply ttsim wormhole workaround patches
-        if: ${{ matrix.test-group.sku == 'sim_wormhole_b0' }}
+        if: ${{ startsWith(matrix.test-group.sku, 'sim_wh') }}
         run: |
           HEADER=$(find /opt/venv -name "cunpack_common.h" -path "*wormhole_b0*" 2>/dev/null | head -1)
           echo "Patching: $HEADER"
@@ -245,7 +249,7 @@ jobs:
         if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         env:
-          PYTEST_ADDOPTS: "-p no:timeout -n 4 ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+          PYTEST_ADDOPTS: "-p no:timeout -n 4 ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
         run: |
           # Strip the per-test `pytest --timeout N` from the cmd: the simulator is ~10-50x slower than
           # HW, so that per-op limit kills slow-but-correct ops (the job timeout-minutes is the backstop;
@@ -257,7 +261,7 @@ jobs:
             exit 0
           fi
           echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
-          export PYTEST_ADDOPTS="-p no:timeout ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+          export PYTEST_ADDOPTS="-p no:timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
           eval "$cmd --lf --lfnf=all --tb=long -v" || true
           exit 1
 
@@ -296,18 +300,24 @@ jobs:
       - name: 📊 CCache Report
         if: ${{ !cancelled() }}
         run: |
-          echo '## CCache Summary (kernel)' >> $GITHUB_STEP_SUMMARY
+          echo '<details><summary>CCache Summary (kernel)</summary>' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '</details>' >> $GITHUB_STEP_SUMMARY
 
           # Surface remote storage stats and errors from the ccache log.
           # Uses a filter script to avoid overflowing the 1024k step summary limit.
           if [ -f /tmp/ccache.log ]; then
-            echo '## CCache Remote Storage (kernel)' >> $GITHUB_STEP_SUMMARY
+            echo '<details><summary>CCache Remote Storage (kernel)</summary>' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             .github/scripts/ccache_log_filter.sh /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '</details>' >> $GITHUB_STEP_SUMMARY
           fi
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main

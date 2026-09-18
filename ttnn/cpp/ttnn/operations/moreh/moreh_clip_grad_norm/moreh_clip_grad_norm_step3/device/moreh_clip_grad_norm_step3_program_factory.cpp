@@ -133,21 +133,18 @@ ProgramDescriptor MorehClipGradNormStep3Operation::create_descriptor(
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
     auto cores = grid_to_cores(num_cores_to_be_used, num_cores_x, num_cores_y, false);
-    const auto clip_coef_clamped_addr = clip_coef_clamped.buffer()->address();
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores.at(i);
 
         const auto& input = inputs.at(i);
-        const auto input_addr = input.buffer()->address();
         const auto num_tiles = static_cast<uint32_t>(input.physical_volume()) / tt::constants::TILE_HW;
 
         // reader
-        reader_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{input_addr, clip_coef_clamped_addr, num_tiles});
+        reader_desc.emplace_runtime_args(core, {input.buffer(), clip_coef_clamped.buffer(), num_tiles});
 
         // writer
-        writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{input_addr, num_tiles});
+        writer_desc.emplace_runtime_args(core, {input.buffer(), num_tiles});
 
         // compute
         compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{num_tiles});

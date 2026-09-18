@@ -26,6 +26,10 @@
  */
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -33,6 +37,7 @@
 #include <cstdint>
 #include "api/debug/dprint.h"
 #include "strided_ring_reduce_scatter_common.hpp"
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
@@ -66,11 +71,20 @@ constexpr uint32_t mm_block_wt = get_compile_time_arg_val(20);
 constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(21);
 // [22]=fuse_mm_op (via FUSE_MM_OP_SIGNALER define)
 constexpr uint32_t slice_Ht = get_compile_time_arg_val(23);
+// Rolling L1 window over the matmul output, in M blocks; 0 = no window (the whole output is
+// resident, so a row's address is its row). With a window the matmul recycles slot m % this, and a
+// row's address is remapped into the window — see windowed_slice_row below.
+constexpr uint32_t mm_window_blocks = get_compile_time_arg_val(24);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
+
+    Noc noc_obj;
+    CircularBuffer cb_input(cb_input_id);
+    CircularBuffer cb_intermediate(cb_intermediate_id);
+    CircularBuffer cb_reader_output(cb_reader_output_id);
 
     uint32_t arg_idx = 0;
     // Load the input tensor spec
@@ -81,8 +95,8 @@ void kernel_main() {
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 24;  // [20]=mm_block_wt, [21]=slice_Ht_per_core, [22]=fuse_mm_op (via
-                                     // FUSE_MM_OP_SIGNALER define), [23]=slice_Ht
+    constexpr uint32_t ct_idx = 25;  // [20]=mm_block_wt, [21]=slice_Ht_per_core, [22]=fuse_mm_op (via
+                                     // FUSE_MM_OP_SIGNALER define), [23]=slice_Ht, [24]=mm_window_blocks
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -125,8 +139,29 @@ void kernel_main() {
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_tensor_address);
 #endif
 #ifdef FUSE_MM_OP_SIGNALER
-    size_t mm_op_ready_sem = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    // Per-core MM progress counters (replaces the old single aggregate semaphore)
+    const uint32_t mm_progress_counters = get_arg_val<uint32_t>(arg_idx++);  // L1 base addr
+    // mm_cores_x = number of MM cores along N
+    const uint32_t mm_cores_x = (input_tensor_Wt + mm_N_full_block_wt - 1) / mm_N_full_block_wt;
     uint32_t mm_sem_target = 0;
+    // Rolling-window return path: this reader's credit slot on every MM core, published by
+    // multicast SET once per M block so the matmul knows when a window slot is free to recycle.
+    uint32_t rs_credit_counters = 0;
+    uint32_t num_mm_cores = 0;
+    uint32_t rs_credit_mm_coords_arg_base = 0;
+    if constexpr (mm_window_blocks > 0) {
+        rs_credit_counters = get_arg_val<uint32_t>(arg_idx++);
+        num_mm_cores = get_arg_val<uint32_t>(arg_idx++);
+        rs_credit_mm_coords_arg_base = arg_idx;  // num_mm_cores (x, y) pairs follow
+        arg_idx += 2 * num_mm_cores;
+    }
+    {
+        // Zero the counters before any MM increment can arrive
+        volatile tt_l1_ptr uint32_t* c = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_progress_counters);
+        for (uint32_t i = 0; i < mm_cores_x * mm_cores_y; i++) {
+            c[i] = 0;
+        }
+    }
 #endif
 
 #ifdef FUSE_RS_ADDCMUL
@@ -150,6 +185,8 @@ void kernel_main() {
     constexpr auto addcmul_b_tensor_args = TensorAccessorArgs<ct_idx_addcmul_base + 2 + ct_offset_a>();
     auto addcmul_a_addrgen = TensorAccessor(addcmul_a_tensor_args, addcmul_a_address);
     auto addcmul_b_addrgen = TensorAccessor(addcmul_b_tensor_args, addcmul_b_address);
+    CircularBuffer cb_addcmul_a(addcmul_a_cb);
+    CircularBuffer cb_addcmul_b(addcmul_b_cb);
     // a tile index: batch * (mm_cores_y * slice_Ht_per_core * slice_Wt) + slice_row * slice_Wt + col_in_slice
     // b tile index (broadcast):     batch * slice_Wt + col_in_slice  (b has 1 row per batch)
     // b tile index (non-broadcast): same as a  (b has full N rows per batch)
@@ -183,6 +220,11 @@ void kernel_main() {
                 const uint32_t effective_chunk_width_in_tiles =
                     get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, mm_N_full_block_wt);
                 const uint32_t effective_subchunk_size = current_mm_block_ht * effective_chunk_width_in_tiles;
+                // Hoist the (run-invariant) divisions out of the per-tile advance.
+                const auto steps_worker = decompose_tile_advance(
+                    effective_worker_id, effective_subchunk_size, effective_chunk_width_in_tiles);
+                const auto steps_advance = decompose_tile_advance(
+                    effective_advance_by_tiles, effective_subchunk_size, effective_chunk_width_in_tiles);
                 int32_t slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
 #ifdef FUSE_MM_OP_SIGNALER
@@ -192,14 +234,14 @@ void kernel_main() {
                 // signals guarantees all N-full-blocks covering this chunk are ready.
                 const uint32_t sem_increment = (effective_chunk_width_in_tiles + mm_block_wt - 1) / mm_block_wt;
                 mm_sem_target += sem_increment;
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), mm_sem_target);
+                // The wait is now PER-TILE on the producing MM core's counter (see the input read site below)
 #endif
                 // Run a full bidirectional ring reduce-scatter for the current chunk.
                 // i=0: read input -> reader_output_cb (writer forwards to neighbor, no compute).
                 // i>0: read input -> input_cb, read intermediate -> intermediate_cb (compute reduces).
                 for (uint32_t i = 0; i < ring_size; i++) {
                     const bool do_reduce = i != 0;
-                    const uint32_t cb_in0 = do_reduce ? cb_input_id : cb_reader_output_id;
+                    CircularBuffer& cb_in0 = do_reduce ? cb_input : cb_reader_output;
                     const uint32_t actual_slice_idx = wrap_slice_idx(slice_idx, direction, ring_size);
 #ifdef FUSE_RS_ADDCMUL
                     // At the final ring step the local chip's slice is written to DRAM by the writer.
@@ -210,6 +252,10 @@ void kernel_main() {
 
                     const auto [mm_N_full_blocks_per_slice, cols_before_actual_slice] =
                         get_slice_N_block_info(actual_slice_idx, slice_Wt, mm_N_full_block_wt);
+#ifdef FUSE_MM_OP_SIGNALER
+                    // Producing MM core-x base for this ring slice
+                    const uint32_t mm_core_x_base = (actual_slice_idx * slice_Wt) / mm_N_full_block_wt;
+#endif
                     // Wait for the neighboring device's writer to signal that it has finished
                     // writing this chunk's tiles into our intermediate buffer.
                     if (do_reduce) {
@@ -223,13 +269,16 @@ void kernel_main() {
                         uint32_t tile_row_in_mm_M_unit_block = 0;
                         uint32_t chunk_col_in_tiles = 0;
                         uint32_t mm_core_idx = 0;
+#ifdef FUSE_MM_OP_SIGNALER
+                        // core-x is constant across this chunk piece (one MM N-band)
+                        const uint32_t mm_core_x = mm_core_x_base + chunk_piece_idx;
+#endif
                         // Get the first tile coordinates for the current chunk piece
                         get_next_tile_coordinates(
                             tile_row_in_mm_M_unit_block,
                             chunk_col_in_tiles,
                             mm_core_idx,
-                            effective_worker_id,
-                            effective_subchunk_size,
+                            steps_worker,
                             effective_chunk_width_in_tiles,
                             current_mm_block_ht);
                         uint32_t tiles_to_read = how_many_tiles_to_read_formula(
@@ -245,21 +294,21 @@ void kernel_main() {
                             const uint32_t tiles_to_read_in_this_step = std::min(tiles_to_read, tile_granularity);
                             tiles_to_read -= tiles_to_read_in_this_step;
 
-                            cb_reserve_back(cb_in0, tile_granularity);
-                            uint32_t l1_write_addr = get_write_ptr(cb_in0);
+                            cb_in0.reserve_back(tile_granularity);
+                            uint32_t l1_write_addr = cb_in0.get_write_ptr();
                             uint32_t intermediate_l1_write_addr;
                             if (do_reduce) {
-                                cb_reserve_back(cb_intermediate_id, tile_granularity);
-                                intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
+                                cb_intermediate.reserve_back(tile_granularity);
+                                intermediate_l1_write_addr = cb_intermediate.get_write_ptr();
                             }
 #ifdef FUSE_RS_ADDCMUL
                             uint32_t addcmul_a_l1_write_addr = 0;
                             uint32_t addcmul_b_l1_write_addr = 0;
                             if (is_final_ring_step) {
-                                cb_reserve_back(addcmul_a_cb, tile_granularity);
-                                addcmul_a_l1_write_addr = get_write_ptr(addcmul_a_cb);
-                                cb_reserve_back(addcmul_b_cb, tile_granularity);
-                                addcmul_b_l1_write_addr = get_write_ptr(addcmul_b_cb);
+                                cb_addcmul_a.reserve_back(tile_granularity);
+                                addcmul_a_l1_write_addr = cb_addcmul_a.get_write_ptr();
+                                cb_addcmul_b.reserve_back(tile_granularity);
+                                addcmul_b_l1_write_addr = cb_addcmul_b.get_write_ptr();
                             }
 #endif
 
@@ -279,16 +328,49 @@ void kernel_main() {
                                 if (slice_row < slice_Ht && slice_col >= cols_before_actual_slice &&
                                     slice_col < cols_before_actual_slice + slice_Wt) {
                                     const uint32_t col_in_slice = slice_col - cols_before_actual_slice;
+                                    // The intermediate tensor is always full height, so it is indexed by the
+                                    // true row. The input (matmul output) may be a rolling window, in which
+                                    // case its row folds into slot m_block_iter % mm_window_blocks. slice_row
+                                    // itself stays unwindowed above so the ghost-row bound still refers to the
+                                    // real data.
                                     const uint32_t global_tile_idx = slice_coordinates_to_global_tile_index(
                                         slice_row, col_in_slice, actual_slice_idx, slice_Wt, input_tensor_Wt);
-                                    const uint32_t input_tile_id = global_tile_idx + batch_offset;
-                                    noc_async_read(
-                                        input_tensor_addrgen.get_noc_addr(input_tile_id), l1_write_addr, page_size);
+                                    uint32_t input_tile_id = global_tile_idx + batch_offset;
+                                    if constexpr (mm_window_blocks > 0) {
+                                        const uint32_t windowed_slice_row =
+                                            mm_core_idx * (mm_window_blocks * mm_block_ht) +
+                                            (m_block_iter % mm_window_blocks) * mm_block_ht +
+                                            tile_row_in_mm_M_unit_block;
+                                        input_tile_id = slice_coordinates_to_global_tile_index(
+                                            windowed_slice_row,
+                                            col_in_slice,
+                                            actual_slice_idx,
+                                            slice_Wt,
+                                            input_tensor_Wt);
+                                    }
+#ifdef FUSE_MM_OP_SIGNALER
+                                    // Per-tile gate: block until the MM core (row-major id) that produced this tile
+                                    const uint32_t mm_core_id = mm_core_idx * mm_cores_x + mm_core_x;
+                                    volatile tt_l1_ptr uint32_t* mm_counter_ptr =
+                                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                            mm_progress_counters + mm_core_id * sizeof(uint32_t));
+                                    if (*mm_counter_ptr < mm_sem_target) {
+                                        noc_semaphore_wait_min(mm_counter_ptr, mm_sem_target);
+                                    }
+#endif
+                                    noc_obj.async_read(
+                                        input_tensor_addrgen,
+                                        CoreLocalMem<uint8_t>(l1_write_addr),
+                                        page_size,
+                                        {.page_id = input_tile_id},
+                                        {});
                                     if (do_reduce) {
-                                        noc_async_read(
-                                            intermediate_tensor_addrgen.get_noc_addr(global_tile_idx),
-                                            intermediate_l1_write_addr,
-                                            page_size);
+                                        noc_obj.async_read(
+                                            intermediate_tensor_addrgen,
+                                            CoreLocalMem<uint8_t>(intermediate_l1_write_addr),
+                                            page_size,
+                                            {.page_id = global_tile_idx},
+                                            {});
                                     }
 #ifdef FUSE_RS_ADDCMUL
                                     if (is_final_ring_step) {
@@ -300,14 +382,18 @@ void kernel_main() {
                                         const uint32_t b_gate_idx =
                                             b * addcmul_a_batch_pages + slice_row * slice_Wt + col_in_slice;
 #endif
-                                        noc_async_read(
-                                            addcmul_a_addrgen.get_noc_addr(a_tile_idx),
-                                            addcmul_a_l1_write_addr,
-                                            page_size);
-                                        noc_async_read(
-                                            addcmul_b_addrgen.get_noc_addr(b_gate_idx),
-                                            addcmul_b_l1_write_addr,
-                                            page_size);
+                                        noc_obj.async_read(
+                                            addcmul_a_addrgen,
+                                            CoreLocalMem<uint8_t>(addcmul_a_l1_write_addr),
+                                            page_size,
+                                            {.page_id = a_tile_idx},
+                                            {});
+                                        noc_obj.async_read(
+                                            addcmul_b_addrgen,
+                                            CoreLocalMem<uint8_t>(addcmul_b_l1_write_addr),
+                                            page_size,
+                                            {.page_id = b_gate_idx},
+                                            {});
                                     }
 #endif
                                 }
@@ -328,20 +414,19 @@ void kernel_main() {
                                     tile_row_in_mm_M_unit_block,
                                     chunk_col_in_tiles,
                                     mm_core_idx,
-                                    effective_advance_by_tiles,
-                                    effective_subchunk_size,
+                                    steps_advance,
                                     effective_chunk_width_in_tiles,
                                     current_mm_block_ht);
                             }
-                            noc_async_read_barrier();
-                            cb_push_back(cb_in0, tile_granularity);
+                            noc_obj.async_read_barrier();
+                            cb_in0.push_back(tile_granularity);
                             if (do_reduce) {
-                                cb_push_back(cb_intermediate_id, tile_granularity);
+                                cb_intermediate.push_back(tile_granularity);
                             }
 #ifdef FUSE_RS_ADDCMUL
                             if (is_final_ring_step) {
-                                cb_push_back(addcmul_a_cb, tile_granularity);
-                                cb_push_back(addcmul_b_cb, tile_granularity);
+                                cb_addcmul_a.push_back(tile_granularity);
+                                cb_addcmul_b.push_back(tile_granularity);
                             }
 #endif
                         }
@@ -350,14 +435,30 @@ void kernel_main() {
                     slice_idx += direction ? -1 : 1;
                 }
             }
+#ifdef FUSE_MM_OP_SIGNALER
+            if constexpr (mm_window_blocks > 0) {
+                // Every tile of this M block is now read: the ring loop above covered all ring_size
+                // slices, i.e. the block's full width. Bump this reader's counter on every matmul
+                // core so it can recycle slot m_block_iter % mm_window_blocks once EVERY reader has
+                // reached at least this block. One increment per M block, so the counter is the
+                // number of blocks this reader has released. Walking the cores individually mirrors
+                // OpSignaler::signal_op_per_core, the signalling path in the other direction.
+                const uint32_t rs_credit_slot_addr = rs_credit_counters + effective_worker_id * sizeof(uint32_t);
+                for (uint32_t i = 0; i < num_mm_cores; i++) {
+                    const uint64_t dst = get_noc_addr(
+                        get_arg_val<uint32_t>(rs_credit_mm_coords_arg_base + i * 2),
+                        get_arg_val<uint32_t>(rs_credit_mm_coords_arg_base + i * 2 + 1),
+                        rs_credit_slot_addr);
+                    noc_semaphore_inc(dst, 1);
+                }
+            }
+#endif
         }
-        // Reset between batches so the counter doesn't overflow across batches.
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
-        out_ready_sem_target = 0;
+        // No per-batch reset: a local reset races the writer's monotonic fabric atomic-inc
+        // (lost signal). Target grows across batches; reset once at kernel exit. See #50793.
 
 #ifdef FUSE_MM_OP_SIGNALER
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mm_op_ready_sem), 0);
-        mm_sem_target = 0;
+        // Per-core signaling: mm_sem_target and the per-core counters are MONOTONIC across batches
 #endif
     }
 

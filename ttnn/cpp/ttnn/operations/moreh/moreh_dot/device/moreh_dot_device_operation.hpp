@@ -5,10 +5,12 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+
+#include <variant>
 
 namespace ttnn::operations::moreh::moreh_dot {
 
@@ -25,13 +27,18 @@ struct MorehDotOperation {
         const std::optional<Tensor>& output;
     };
 
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output);
+    // Metal 2.0 program factory (MetalV2FactoryConcept).
+    struct ProgramFactory {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+
+    using program_factory_t = std::variant<ProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate(const operation_attributes_t&, const tensor_args_t&);

@@ -14,9 +14,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.sampling._utils import compact_debug_list as _compact_debug_list
-from models.common.sampling._utils import is_llama33_70b_model
-from models.common.sampling._utils import log_sampling_debug as _log_sampling_debug
 
 
 @dataclass
@@ -30,29 +27,6 @@ class PenaltyContext:
     repetition_penalties: ttnn.Tensor
     inverse_repetition_penalties: ttnn.Tensor
     sub_core_grids: Any | None = None
-
-
-def _tokens_debug_summary(tokens: torch.Tensor) -> dict[str, Any]:
-    valid = tokens >= 0
-    row_lengths = valid.sum(dim=1).tolist()
-    flat_valid = tokens[valid]
-    if flat_valid.numel() == 0:
-        unique_count = 0
-        duplicate_count = 0
-        head = []
-    else:
-        unique_count = int(torch.unique(flat_valid).numel())
-        duplicate_count = int(flat_valid.numel() - unique_count)
-        head = flat_valid[:16].tolist()
-    return {
-        "shape": list(tokens.shape),
-        "dtype": str(tokens.dtype),
-        "valid_tokens": int(valid.sum().item()),
-        "unique_tokens": unique_count,
-        "duplicate_tokens": duplicate_count,
-        "row_lengths": _compact_debug_list(row_lengths),
-        "head_tokens": head,
-    }
 
 
 def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> ttnn.Tensor:
@@ -109,7 +83,6 @@ class TTPenalties(LightweightModule):
     def __init__(self, mesh_device, args):
         super().__init__()
         self.mesh_device = mesh_device
-        self._sampling_debug_enabled = is_llama33_70b_model(args)
         self.cluster_shape = mesh_device.shape
         # Floor at 32 so that ROW_MAJOR [batch, vocab] buffers passed to
         # ttnn.tilize always have physical_volume divisible by TILE_HW
@@ -164,6 +137,8 @@ class TTPenalties(LightweightModule):
         self._shard_dims_gathered = shard_dims_gathered
 
         self.prompt_mask = self._alloc_int_buffer(shard_dims=shard_dims)
+        # Host shadow of the per-slot prompt tokens, so a partial update keeps other rows' masks.
+        self._prompt_tokens_host = None
         self.output_mask = self._alloc_int_buffer(shard_dims=shard_dims)
         self.output_counts_gathered = self._alloc_int_buffer(shard_dims=shard_dims_gathered)
         self.output_counts = self._alloc_int_buffer(shard_dims=shard_dims)
@@ -280,14 +255,35 @@ class TTPenalties(LightweightModule):
             return tokens_2d[: self._total_batch]
         return tokens_2d
 
-    def reset_prompt_tokens(self, prompt_tokens: torch.Tensor):
+    def reset_prompt_tokens(self, prompt_tokens: torch.Tensor, slots: list[int] | None = None):
+        """Rebuild the prompt mask. With ``slots``, only those rows are taken from
+        ``prompt_tokens``; every other row keeps the prompt it was last given.
+
+        The device buffer covers all rows at once, so a caller that only knows about the requests it
+        is prefilling used to zero everyone else's mask: rows outside the call arrive as the -1
+        padding and hash to an empty mask. repetition_penalty is the only consumer of prompt_mask, so
+        a live request silently stopped penalising its own prompt until something refreshed it.
+        Under vLLM the next decode's reset_batch does refresh it, which is why this stayed hidden;
+        the demo path never sets reset_batch and keeps the wiped mask for the whole generation.
+        """
         prompt_tokens_2d = prompt_tokens.reshape(-1, prompt_tokens.shape[-1])
         prompt_tokens_2d = self._pad_batch_to_max(prompt_tokens_2d, pad_value=-1)
-        _log_sampling_debug(
-            self._sampling_debug_enabled,
-            "TTPenalties reset prompt tokens",
-            tokens=_tokens_debug_summary(prompt_tokens_2d),
-        )
+
+        if slots is None:
+            self._prompt_tokens_host = prompt_tokens_2d.clone()
+        else:
+            shadow = getattr(self, "_prompt_tokens_host", None)
+            width = max(prompt_tokens_2d.shape[-1], shadow.shape[-1] if shadow is not None else 0)
+            merged = torch.full((self._total_batch, width), -1, dtype=prompt_tokens_2d.dtype)
+            if shadow is not None:
+                merged[:, : shadow.shape[-1]] = shadow
+            for slot in slots:
+                slot = int(slot)
+                if 0 <= slot < self._total_batch:
+                    merged[slot, :] = -1
+                    merged[slot, : prompt_tokens_2d.shape[-1]] = prompt_tokens_2d[slot]
+            self._prompt_tokens_host = merged
+            prompt_tokens_2d = merged
 
         # Build reset masks on host to avoid device scatter_add races on
         # duplicate prompt token ids (common in penalty tests/prompts).
@@ -308,27 +304,21 @@ class TTPenalties(LightweightModule):
         if tokens is not None:
             tokens_2d = tokens.reshape(-1, tokens.shape[-1])
             tokens_2d = self._pad_batch_to_max(tokens_2d, pad_value=-1)
-            _log_sampling_debug(
-                self._sampling_debug_enabled,
-                "TTPenalties reset output tokens",
-                tokens=_tokens_debug_summary(tokens_2d),
-            )
             output_counts = self._token_counts_host(tokens_2d)
             output_mask = (output_counts > 0).to(torch.int32)
             self._copy_int_host_to_device(self.output_counts_gathered, output_counts, self._shard_dims_gathered)
             self._copy_int_host_to_device(self.output_counts, output_counts, self._shard_dims_mask)
             self._copy_int_host_to_device(self.output_mask, output_mask, self._shard_dims_mask)
-        else:
-            _log_sampling_debug(self._sampling_debug_enabled, "TTPenalties reset output tokens", tokens=None)
 
     def update_output_tokens(self, new_tokens):
         # Reshape decode token to [batch, 1] for scatter_add.
         # Non-row-sharded: token shape is [1,1,1,batch] → shape[-1]==batch, shape[-2]==1
         # Row-sharded:     token shape is [1,1,batch,1] → shape[-2]==batch, shape[-1]==1
         batch = self.per_row_batch_size
-        if (new_tokens.shape[-1] == batch and new_tokens.shape[-2] == 1) or (
+        fast_path = (new_tokens.shape[-1] == batch and new_tokens.shape[-2] == 1) or (
             new_tokens.shape[-2] == batch and new_tokens.shape[-1] == 1
-        ):
+        )
+        if fast_path:
             new_tokens = ttnn.reshape(new_tokens, [batch, 1], **self._op_kwargs)
             src = self.decode_src
         else:

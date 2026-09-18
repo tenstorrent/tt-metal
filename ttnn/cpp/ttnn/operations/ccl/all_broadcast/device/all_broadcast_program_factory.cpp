@@ -188,13 +188,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     writer_compile_args.insert(writer_compile_args.end(), mcast_forward_args.begin(), mcast_forward_args.end());
     writer_compile_args.insert(writer_compile_args.end(), mcast_backward_args.begin(), mcast_backward_args.end());
     std::map<std::string, std::string> kernel_defines;
+    const auto& output_tensor = output_tensors[ring_index];
     if (sharded) {
         kernel_defines["SHARDED"] = "1";
         shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
     } else {
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
     }
 
     // Build kernel descriptors.  Push them onto desc.kernels NOW (before the
@@ -346,7 +347,7 @@ tt::tt_metal::WorkloadDescriptor AllBroadcastProgramFactory::create_workload_des
     auto* mesh_device = input.device();
     auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
-    ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
+    ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
     // Allocate the two workload-scoped GlobalSemaphores.  Park them on the
     // descriptor's `semaphores` vector so their device-side allocations stay
@@ -364,7 +365,7 @@ tt::tt_metal::WorkloadDescriptor AllBroadcastProgramFactory::create_workload_des
     const auto& init_barrier_semaphore = workload_descriptor.semaphores[0];
     const auto& final_barrier_semaphore = workload_descriptor.semaphores[1];
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     // Build a per-coord ProgramDescriptor.  Unlike pool/upsample, all_broadcast's

@@ -130,7 +130,7 @@ ttnn::Tensor routed_expert_ffn_chunked(
             N);
         full_output = *output;
     } else {
-        ttnn::SmallVector<uint32_t> out_dims(x_rank, 1u);
+        ttsl::SmallVector<uint32_t> out_dims(x_rank, 1u);
         out_dims[x_rank - 2] = M;
         out_dims[x_rank - 1] = N;
         full_output = ttnn::empty(

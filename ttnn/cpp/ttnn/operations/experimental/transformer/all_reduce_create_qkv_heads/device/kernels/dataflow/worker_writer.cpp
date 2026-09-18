@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -45,14 +46,14 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t reduction_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+    const uint32_t reduction_semaphore_send_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_mcast_ranges = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
     // Set up for mcasting to reduction workers
-    volatile tt_l1_ptr uint32_t* reduction_semaphore_send_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduction_semaphore_send_addr);
-    noc_semaphore_set(reduction_semaphore_send_addr_ptr, VALID);
+    Noc noc_obj;
+    Semaphore<> reduction_semaphore_send(reduction_semaphore_send_id);
+    reduction_semaphore_send.set(VALID);
 
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
@@ -133,6 +134,14 @@ void kernel_main() {
         }
     }
 
+    // Commit this chip's own contribution to the local reduction workers' reduction_input CB
+    // before releasing them. The payload writes above only noc_async_writes_flushed (sent, not
+    // landed), and the reduction_semaphore mcast release below is on a different NoC VC than the
+    // unicast payload write (no cross-VC ordering on Wormhole), so without this barrier a
+    // reduction worker can be released and read stale reduction_input. The exit barrier is too
+    // late (it runs after the release).
+    noc_async_write_barrier();
+
     // 2. mcast output ready semaphore
     auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
     uint64_t out_ready_sem_noc_addr_in_pkt =
@@ -166,18 +175,14 @@ void kernel_main() {
     // loop over mcast ranges
     for (uint32_t i = 0; i < num_mcast_ranges; i++) {
         // Signal the reduction workers
-        const uint64_t reduction_semaphore_recv_noc_addr = get_noc_multicast_addr(
+        reduction_semaphore_send.set_multicast(
+            noc_obj,
             mcast_dest_noc_start_x[i],
             mcast_dest_noc_start_y[i],
             mcast_dest_noc_end_x[i],
             mcast_dest_noc_end_y[i],
-            reduction_semaphore_send_addr);
-
-        noc_semaphore_set_multicast(
-            reduction_semaphore_send_addr,
-            reduction_semaphore_recv_noc_addr,
             i == 0 ? num_mcast_cores : 0,
-            false);  // linked = false
+            /*linked=*/false);
     }
 
     // 4. global semaphore reset

@@ -22,7 +22,7 @@ struct DropoutParams {
     const float prob = 0.0f;
     const float scale = 1.0f;
 
-    // `seed` is re-applied via get_dynamic_runtime_args, so it is excluded from the program hash
+    // `seed` is re-applied via override_runtime_arguments, so it is excluded from the program hash
     // (calls differing only in seed cache-hit). `prob`/`scale` are baked as compile-time args and
     // `use_per_device_seed` selects the program factory, so all three are structural and kept.
     static constexpr auto attribute_names =
@@ -36,7 +36,7 @@ struct DropoutParams {
 // structurally to discover the Tensor leaves (output-spec counting, buffer extraction). Compile-time
 // attributes here would both be ambiguous against the Reflectable visitor and hide the Tensors, so
 // the input is hashed in full via its TensorSpec (correct and stricter than the old volume-only
-// hash; the seed is still excluded via DropoutParams + get_dynamic_runtime_args).
+// hash; the seed is still excluded via DropoutParams + override_runtime_arguments).
 struct DropoutInputs {
     const Tensor& input;
     std::optional<Tensor> preallocated_output;

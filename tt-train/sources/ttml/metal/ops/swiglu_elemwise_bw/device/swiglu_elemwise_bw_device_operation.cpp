@@ -15,7 +15,7 @@ void SwigluElemwiseBwDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "SwigluElemwiseBw requires {} on Device. Storage type: {}",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -31,7 +31,7 @@ void SwigluElemwiseBwDeviceOperation::validate_on_program_cache_miss(
             name,
             enchantum::to_string(tensor.dtype()));
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "SwigluElemwiseBw requires INTERLEAVED. {} layout: {}",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
@@ -96,11 +96,11 @@ void SwigluElemwiseBwDeviceOperation::validate_on_program_cache_miss(
 
 spec_return_value_t SwigluElemwiseBwDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto make_spec = [&](const std::optional<ttnn::Tensor>& prealloc) -> ttnn::TensorSpec {
+    auto make_spec = [&](const std::optional<ttnn::Tensor>& prealloc) -> tt::tt_metal::TensorSpec {
         if (prealloc.has_value()) {
             return prealloc->tensor_spec();
         }
-        return ttnn::TensorSpec(
+        return tt::tt_metal::TensorSpec(
             tensor_args.linear1.logical_shape(),
             tt::tt_metal::TensorLayout(
                 tensor_args.linear1.dtype(), tt::tt_metal::Layout::TILE, tensor_args.linear1.memory_config()));
@@ -116,9 +116,9 @@ tensor_return_value_t SwigluElemwiseBwDeviceOperation::create_output_tensors(
 
     return {
         tensor_args.preallocated_dL_dlinear1.has_value() ? tensor_args.preallocated_dL_dlinear1.value()
-                                                         : create_device_tensor(specs[0], device),
+                                                         : ttnn::create_device_tensor(specs[0], device),
         tensor_args.preallocated_dL_dgate.has_value() ? tensor_args.preallocated_dL_dgate.value()
-                                                      : create_device_tensor(specs[1], device),
+                                                      : ttnn::create_device_tensor(specs[1], device),
     };
 }
 

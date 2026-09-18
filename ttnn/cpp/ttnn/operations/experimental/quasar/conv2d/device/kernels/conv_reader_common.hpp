@@ -88,7 +88,7 @@ FORCE_INLINE void pass_to_the_next_image_width(
     pixel_row++;
     cb_act.reserve_back(act_cb_tiles);
     l1_write_addr_act = cb_start_addr + pixel_row * window_reuse_offset;
-    get_local_cb_interface(cb_id_act).fifo_wr_ptr = l1_write_addr_act;
+    cb_act.evil_set_write_ptr(l1_write_addr_act);
 
     if (new_batch_image_rows_to_fill > 0) {
         new_batch_image_rows_to_fill--;
@@ -105,7 +105,7 @@ template <uint32_t cb_id_act, uint32_t act_cb_w_tiles, uint32_t image_width_tile
 FORCE_INLINE void push_remaining_tiles(Cb cb_act, uint32_t remaining_tiles_to_push, uint32_t cb_start_addr) {
     constexpr uint32_t tiles_to_push = image_width_tiles * act_cb_w_tiles;
     for (uint32_t i = 0; i < remaining_tiles_to_push; i += image_width_tiles) {
-        get_local_cb_interface(cb_id_act).fifo_wr_ptr = cb_start_addr;
+        cb_act.evil_set_write_ptr(cb_start_addr);
         cb_act.push_back(tiles_to_push);
     }
 }

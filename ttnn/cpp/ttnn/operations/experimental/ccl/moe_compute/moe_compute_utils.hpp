@@ -39,8 +39,8 @@ struct WeightCoreShardMaps {
 // compute op expects. Uses ``shard_tiles`` (Euclidean rhythm) for W0/W1 and
 // ``w2_shard_tiles`` (complementary when ``Nt%n_cores + Ht%n_cores == n_cores``)
 // for W2. Ring ordering: DRAM bank logical coords sorted by ``(y, x)`` descending.
-// The matmul ring size is auto-detected from the device arch (8 on Blackhole,
-// 12 — the DRAM-bank count — on Wormhole), matching ``ttnn.experimental.moe_compute``.
+// The matmul ring size is the live DRAM-bank count (12 on Wormhole, 7/8 on Blackhole),
+// matching ``ttnn.experimental.moe_compute``.
 WeightCoreShardMaps get_weight_core_shard_maps(
     ttnn::MeshDevice* mesh_device, uint32_t hidden_size, uint32_t intermediate_size);
 

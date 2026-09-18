@@ -40,6 +40,9 @@ void kernel_main() {
     constexpr uint32_t my_rank = get_compile_time_arg_val(17);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(18);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(19);
+    // Per-chunk tile widths + prefix-sum offsets (from CHUNK_TILE_WIDTHS/CHUNK_TILE_OFFSETS defines).
+    constexpr uint32_t chunk_tile_widths[N_chunks] = {CHUNK_TILE_WIDTHS};
+    constexpr uint32_t chunk_tile_offsets[N_chunks + 1] = {CHUNK_TILE_OFFSETS};
     constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(20));
     constexpr bool is_linear = (topology == Topology::Linear);
     constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(21);
@@ -107,8 +110,6 @@ void kernel_main() {
     Semaphore<> in1_sender_sem(in1_sender_semaphore_id);
     Semaphore<> in1_receiver_sem(in1_receiver_semaphore_id);
     Semaphore<> in1_valid_sem(in1_valid_semaphore_id);
-    const uint32_t in1_valid_semaphore_addr = get_semaphore(in1_valid_semaphore_id);
-    const uint32_t in1_receiver_semaphore_addr = get_semaphore(in1_receiver_semaphore_id);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -193,6 +194,14 @@ void kernel_main() {
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
+#ifdef FUSE_SWIGLU
+    // SwiGLU emits one output tile per interleaved gate/up pair -> output N is half the
+    // matmul (weight) N. Weight-space n ranges are halved at each write call site.
+    constexpr uint32_t out_N_block_tiles = N_block_tiles / 2;
+    constexpr uint32_t out_block_num_tiles_swiglu = M_block_tiles * out_N_block_tiles;
+    const TensorShape2D out_shape_swiglu(M_tiles, N_tiles / 2, padded_M_tiles, padded_N_tiles / 2);
+#endif
+
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
 #ifdef FUSE_BIAS
@@ -207,9 +216,6 @@ void kernel_main() {
 #endif
 
     in1_valid_sem.set(VALID);
-
-    const uint64_t in1_receiver_semaphore_noc_addr =
-        get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_receiver_semaphore_addr);
 
     const uint64_t in1_unicast_data_base_addr = get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, 0);
 
@@ -305,6 +311,21 @@ void kernel_main() {
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
+#ifdef FUSE_SWIGLU
+                        cb_out.wait_front(out_block_num_tiles_swiglu);
+                        uint32_t out_read_ptr = cb_out.get_read_ptr();
+                        write_block_sync<M_block_tiles, out_N_block_tiles>(
+                            noc_obj,
+                            std::get<0>(outputs_tuple),
+                            out_shape_swiglu,
+                            out_read_ptr,
+                            out_tile_size,
+                            defer_write_m_tile,
+                            defer_write_m_tile_end,
+                            defer_write_n_tile / 2,
+                            defer_write_n_tile_end / 2);
+                        cb_out.pop_front(out_block_num_tiles_swiglu);
+#else
                         cb_out.wait_front(out_block_num_tiles);
                         uint32_t out_read_ptr = cb_out.get_read_ptr();
                         // write_block_sync_split is more generic (support multiple output tensors)
@@ -321,10 +342,12 @@ void kernel_main() {
                                 defer_write_n_tile,
                                 defer_write_n_tile_end);
                         } else {
-                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks>(
                                 noc_obj,
                                 outputs_tuple,
                                 out0_shape,
+                                chunk_tile_widths,
+                                chunk_tile_offsets,
                                 out_read_ptr,
                                 out_tile_size,
                                 defer_write_m_tile,
@@ -333,6 +356,7 @@ void kernel_main() {
                                 defer_write_n_tile_end);
                         }
                         cb_out.pop_front(out_block_num_tiles);
+#endif  // FUSE_SWIGLU
                     }
                 }
 
@@ -513,7 +537,7 @@ void kernel_main() {
                     noc_obj.async_writes_flushed();
 #endif
 
-                    noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
+                    in1_valid_sem.relay_unicast(noc_obj, in1_receiver_sem, in1_dest_noc_x, in1_dest_noc_y);
                 }
 #ifdef FSDP_FUSED
                 // Fabric relay (uni-ring, mirrors in0): on the first m-pass, relay the just-consumed
@@ -637,6 +661,18 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
+#ifdef FUSE_SWIGLU
+                    write_block_sync_granular<M_block_tiles, out_N_block_tiles>(
+                        noc_obj,
+                        std::get<0>(outputs_tuple),
+                        out_shape_swiglu,
+                        cb_out,
+                        out_tile_size,
+                        m_tile,
+                        m_tile_end,
+                        n_tile / 2,
+                        n_tile_end / 2);
+#else
                     // write_block_sync_granular_split is more generic (support multiple output tensors)
                     // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
                     if constexpr (N_chunks == 1) {
@@ -651,10 +687,12 @@ void kernel_main() {
                             n_tile,
                             n_tile_end);
                     } else {
-                        write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                        write_block_sync_granular_split<M_block_tiles, N_block_tiles, N_chunks>(
                             noc_obj,
                             outputs_tuple,
                             out0_shape,
+                            chunk_tile_widths,
+                            chunk_tile_offsets,
                             cb_out,
                             out_tile_size,
                             m_tile,
@@ -662,6 +700,7 @@ void kernel_main() {
                             n_tile,
                             n_tile_end);
                     }
+#endif  // FUSE_SWIGLU
                 }
             }
         }

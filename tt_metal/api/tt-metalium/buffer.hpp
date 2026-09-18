@@ -120,7 +120,8 @@ struct BufferConfig {
     BufferType buffer_type;
 };
 
-using InterleavedBufferConfig = BufferConfig;
+using InterleavedBufferConfig
+    [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]] = BufferConfig;
 
 // copied from above instead of using inheritance such that we can use
 // designator constructor

@@ -5,6 +5,9 @@
 #include <cstdint>
 
 #include "api/compute/pack_untilize.h"
+#ifdef FAST_UNTILIZE
+#include "api/compute/experimental/fast_untilize.h"
+#endif
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
@@ -28,11 +31,13 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in);
     DataflowBuffer dfb_out0(dfb::out);
 
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+
+#ifndef FAST_UNTILIZE
     constexpr uint32_t num_blocks_per_col = compute_num_blocks_per_col(per_core_block_tile_cnt);
     constexpr uint32_t block_ct_dim = per_core_block_tile_cnt / num_blocks_per_col;
     constexpr uint32_t full_ct_dim = per_core_block_tile_cnt;
 
-    compute_kernel_hw_startup(dfb::in, dfb::out);
     pack_untilize_init<block_ct_dim, full_ct_dim>(dfb::in, dfb::out);
 
     for (uint32_t r = 0; r < per_core_block_cnt; ++r) {
@@ -47,4 +52,21 @@ void kernel_main() {
     }
 
     pack_untilize_uninit(dfb::out);
+#else
+    constexpr uint32_t full_ct_dim = per_core_block_tile_cnt;
+
+    fast_untilize_init<full_ct_dim>(dfb::in, dfb::out);
+
+    for (uint32_t r = 0; r < per_core_block_cnt; ++r) {
+        dfb_in0.wait_front(full_ct_dim);
+        dfb_out0.reserve_back(full_ct_dim);
+
+        fast_untilize_block<full_ct_dim>(dfb::in, dfb::out);
+
+        dfb_in0.pop_front(full_ct_dim);
+        dfb_out0.push_back(full_ct_dim);
+    }
+
+    fast_untilize_uninit<full_ct_dim>(dfb::out);
+#endif
 }

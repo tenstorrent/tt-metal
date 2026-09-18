@@ -29,9 +29,7 @@ def calculate_flops_per_token(config, seq_len: int) -> int:
     # Get the actual vocab size from the model config
     vocab_size = config.vocab_size
 
-    # Parameter calculation using actual Llama architecture
-    # Embedding: vocab_size * hidden_size
-    embed_params = vocab_size * config.hidden_size
+    # Parameter calculation using actual Llama architecture.
 
     # Get intermediate size using the same logic as LlamaMLP
     intermediate_size = getattr(config, "intermediate_size", None)
@@ -74,16 +72,14 @@ def calculate_flops_per_token(config, seq_len: int) -> int:
     params_per_layer = attention_params + mlp_params
     transformer_params = config.num_hidden_layers * params_per_layer
 
-    # Output head (if not weight-tied)
+    # Output projection (LM head).
     head_params = vocab_size * config.hidden_size
-    if hasattr(config, "weight_tying") and config.weight_tying.name == "Enabled":
-        head_params = 0
 
     # Final layer norm (RMSNorm - no bias)
     final_norm_params = config.hidden_size
 
     # Total parameters
-    N = embed_params + transformer_params + head_params + final_norm_params
+    N = transformer_params + head_params + final_norm_params
 
     # Standard LLM FLOPs formula
     L = config.num_hidden_layers

@@ -7,7 +7,7 @@
 #include "api/debug/dprint.h"
 #include "experimental/kernel_args.h"
 
-// Quick check that DFBAccessor implicitly converts to uint32_t at compile time.
+// Quick check that DFBBindingToken implicitly converts to uint32_t at compile time.
 // This is a shim to enable DFB to work with WH/BH LLK compute APIs that expect raw CB ids.
 // If implicit conversion (or its constexpr-ness) regressed, this line would fail to compile.
 // NOTE: This check is piggybacking along on an unrelated test kernel.

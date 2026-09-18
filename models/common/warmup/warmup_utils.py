@@ -103,6 +103,7 @@ class WarmupForwardMixin:
         can_sample_on_device,
         read_from_device=True,
         greedy_only: bool = False,
+        skip_trace_precompile: bool = False,
     ):
         """
         This function is called by vLLM
@@ -118,7 +119,7 @@ class WarmupForwardMixin:
 
         for param in sampling_params:
             logger.info(f"Warming up decode for sampling params: {param}")
-            self.decode_forward(
+            decode_kwargs = dict(
                 tokens=tokens,
                 start_pos=start_pos,
                 page_table=page_table,
@@ -127,5 +128,8 @@ class WarmupForwardMixin:
                 read_from_device=read_from_device,
                 sampling_params=param,
             )
+            if skip_trace_precompile:
+                decode_kwargs["skip_trace_precompile"] = True
+            self.decode_forward(**decode_kwargs)
 
         logger.info("Decode warmup completed")

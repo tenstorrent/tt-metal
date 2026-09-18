@@ -139,6 +139,7 @@ std::vector<std::string> topological_sort(
     }
 
     std::vector<std::string> order;
+    order.reserve(all_nodes.size());
     while (!q.empty()) {
         auto node = q.front();
         q.pop();
@@ -180,6 +181,13 @@ std::map<std::string, size_t> assign_submeshes(
             // Verify every loopback edge has a direct physical link.
             for (const auto& [src, dst, is_lb] : edges) {
                 if (!is_lb) {
+                    continue;
+                }
+                // A self-loop is satisfied trivially: a single-stage graph's return path
+                // never leaves its submesh, so there is no inter-submesh link to require.
+                // discover_connections() skips i == j, so demanding one here would make
+                // every single-stage graph unassignable.
+                if (src == dst) {
                     continue;
                 }
                 size_t si = node_to_sub.at(src);
@@ -269,6 +277,7 @@ std::map<std::string, size_t> assign_submeshes(
 }  // anonymous namespace
 
 GraphLayoutResult resolve_graph_layout(
+    const std::vector<std::string>& nodes,
     const std::vector<EdgeInputTuple>& edges,
     const std::vector<std::vector<ChipTuple>>& submesh_chips,
     const std::map<std::string, uint32_t>& node_chip_counts) {
@@ -289,17 +298,23 @@ GraphLayoutResult resolve_graph_layout(
     auto connections = discover_connections(chips);
 
     // ------------------------------------------------------------------
-    // 2. Collect unique node names and separate loopback edges
+    // 2. Collect node names.
+    //
+    // The explicit `nodes` list is authoritative, so graphs whose nodes are
+    // not all covered by edges (e.g. a single-stage pipeline with no edges)
+    // still register every node.  Every endpoint referenced by an edge must
+    // appear in `nodes`; an edge referencing an unlisted node is an error.
     // ------------------------------------------------------------------
-    std::vector<std::string> all_nodes;
+    const std::vector<std::string>& all_nodes = nodes;
     {
-        std::set<std::string> seen;
+        // Check all nodes in edges to ensure they are all registered.
+        std::set<std::string> node_set(nodes.begin(), nodes.end());
         for (const auto& [src, dst, is_lb] : edges) {
-            if (seen.insert(src).second) {
-                all_nodes.push_back(src);
+            if (!node_set.contains(src)) {
+                throw std::runtime_error("resolve_graph_layout: node " + src + " not found in the explicit nodes list");
             }
-            if (seen.insert(dst).second) {
-                all_nodes.push_back(dst);
+            if (!node_set.contains(dst)) {
+                throw std::runtime_error("resolve_graph_layout: node " + dst + " not found in the explicit nodes list");
             }
         }
     }
@@ -320,6 +335,12 @@ GraphLayoutResult resolve_graph_layout(
     std::vector<ResolvedEdge> resolved_edges;
     resolved_edges.reserve(edges.size());
     for (const auto& [src, dst, is_lb] : edges) {
+        // Self-loop: no physical hop to resolve (see assign_submeshes). It is left out of
+        // resolved_edges deliberately — a single-stage caller reads its entry/exit from
+        // h2d_entry_* / d2h_exit_* below, not from a per-edge entry.
+        if (src == dst) {
+            continue;
+        }
         size_t si = node_to_sub.at(src);
         size_t sj = node_to_sub.at(dst);
         auto it = connections.find({si, sj});
@@ -350,17 +371,21 @@ GraphLayoutResult resolve_graph_layout(
         size_t curr_sub = node_to_sub.at(stage_order[i]);
 
         // Find the resolved entry edge for this stage (non-loopback, dst == stage_order[i]).
-        uint32_t entry_row = UINT32_MAX, entry_col = UINT32_MAX;
-        for (const auto& re : resolved_edges) {
+        // Keep the edge itself: in a FORK graph the topological stage_order interleaves the
+        // branches, so stage_order[i-1] is NOT this stage's predecessor — the entry edge's
+        // own source is (that's what the connection lookup below must use).
+        ResolvedEdge* entry_re = nullptr;
+        for (auto& re : resolved_edges) {
             if (!re.is_loopback && re.dst == stage_order[i]) {
-                entry_row = re.entry_row;
-                entry_col = re.entry_col;
+                entry_re = &re;
                 break;
             }
         }
-        if (entry_row == UINT32_MAX) {
+        if (entry_re == nullptr) {
             continue;  // stage 0 — no entry edge
         }
+        uint32_t entry_row = entry_re->entry_row;
+        uint32_t entry_col = entry_re->entry_col;
 
         // Find the resolved exit edge for this stage (src == stage_order[i], any kind).
         ResolvedEdge* exit_re = nullptr;
@@ -390,16 +415,11 @@ GraphLayoutResult resolve_graph_layout(
                 }
             }
             if (!resolved) {
-                // No alternative exit link — try changing the entry edge instead.
-                size_t prev_sub = node_to_sub.at(stage_order[i - 1]);
+                // No alternative exit link — try changing the entry edge instead. Use the
+                // entry edge's ACTUAL source submesh (not stage_order[i-1], which is the
+                // wrong branch in an interleaved fork topological order).
+                size_t prev_sub = node_to_sub.at(entry_re->src);
                 const auto& entry_links = connections.at({prev_sub, curr_sub}).links;
-                ResolvedEdge* entry_re = nullptr;
-                for (auto& re : resolved_edges) {
-                    if (!re.is_loopback && re.dst == stage_order[i]) {
-                        entry_re = &re;
-                        break;
-                    }
-                }
                 for (const auto& lp : entry_links) {
                     if (lp.entry_row != exit_re->exit_row || lp.entry_col != exit_re->exit_col) {
                         entry_re->exit_row = lp.exit_row;
@@ -440,6 +460,7 @@ GraphLayoutResult resolve_graph_layout(
     }
 
     std::vector<std::pair<uint32_t, uint32_t>> unclaimed;
+    unclaimed.reserve(chips[stage0_sub].size());
     for (const auto& [fid, row, col] : chips[stage0_sub]) {
         if (!used_coords.contains({row, col})) {
             unclaimed.push_back({row, col});

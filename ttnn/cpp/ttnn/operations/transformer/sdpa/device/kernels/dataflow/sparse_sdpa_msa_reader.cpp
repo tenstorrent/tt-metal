@@ -9,6 +9,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
+#include "dataflow_common.hpp"         // fill_vertical_tile_bf16 (causal partial-column mask tile)
+#include "block_cyclic_remap.hpp"      // tt::block_cyclic::logical_to_physical_page (block-cyclic cache remap)
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
 
@@ -37,8 +39,21 @@ void kernel_main() {
     constexpr uint32_t k_tile_bytes = get_compile_time_arg_val(18);  // K is tiled: per-tile read size
     constexpr uint32_t v_tile_bytes = get_compile_time_arg_val(19);  // V is tiled: per-tile read size
 
+    // Causal masking (token-level diagonal-block mask)
+    constexpr bool CAUSAL_MASK_ENABLED = get_compile_time_arg_val(20) != 0;
+    constexpr uint32_t block_size = get_compile_time_arg_val(21);  // tokens per block (for p%bs, p/bs)
+    constexpr uint32_t cb_vmask = get_compile_time_arg_val(22);    // per-token partial-column mask tile
+
+    // Block-cyclic ("slab") cache remap in BLOCK units: baked compile-time so a natural-order cache folds to
+    // identity (block_cyclic false). Kept in lockstep with the writer's block remap.
+    constexpr bool block_cyclic = get_compile_time_arg_val(23) != 0;
+    constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(24);
+    constexpr uint32_t bc_sp = get_compile_time_arg_val(25);
+    constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(26);
+    constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(27);
+
     // K/V use RuntimeTensorShape so T can vary without recompilation.
-    constexpr auto q_args = TensorAccessorArgs<20, 0>();
+    constexpr auto q_args = TensorAccessorArgs<28, 0>();
     constexpr auto k_args =
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto v_args =
@@ -61,6 +76,9 @@ void kernel_main() {
         k_group_tile_stride = get_arg_val<uint32_t>(8);
         v_group_tile_stride = get_arg_val<uint32_t>(9);
     }
+    // Per-device global position of this core's query row 0 (chunk_start_idx + rank*S); patched at dispatch.
+    const uint32_t chunk_start_local = CAUSAL_MASK_ENABLED ? get_arg_val<uint32_t>(10) : 0;
+    constexpr uint32_t keys_per_tile = tt::constants::TILE_WIDTH;
 
     Noc noc;
     experimental::CB q_cb(cb_q_rm), k_cb(cb_k_in), v_cb(cb_v_in), idx_cb(cb_idx), ctrl_cb(cb_ctrl);
@@ -122,13 +140,45 @@ void kernel_main() {
         }
         const uint32_t n_active = nv_blocks;  // each active chunk is one full block
 
-        // Compute sees full selected blocks; no token-level boundary mask is applied.
+        // Causal control: locate the diagonal block (the query's own) among the selected blocks and the
+        // within-block boundary, so compute masks the future tokens inside it. Non-causal -> sentinel, no mask.
+        uint32_t diag_chunk = sentinel;
+        uint32_t boundary_tile = 0;  // first fully-masked key-tile within the diagonal block
+        uint32_t boundary_col = 0;   // within-tile column where masking starts (0 -> boundary_tile fully masked)
+        if constexpr (CAUSAL_MASK_ENABLED) {
+            const uint32_t p = chunk_start_local + tok;  // global query position
+            const uint32_t diag_block = p / block_size;
+            for (uint32_t c = 0; c < n_active; ++c) {  // block_ids are topk-ordered (unsorted) -> linear scan
+                if (idx_ptr[c] == diag_block) {
+                    diag_chunk = c;
+                    break;
+                }
+            }
+            const uint32_t first_masked = (p % block_size) + 1;  // local offset of the first future token
+            boundary_tile = first_masked / keys_per_tile;
+            boundary_col = first_masked % keys_per_tile;
+        }
+        [[maybe_unused]] const bool build_vmask = (diag_chunk != sentinel) && (boundary_col > 0);
+
         ctrl_cb.reserve_back(1);
         {
             volatile tt_l1_ptr uint32_t* cp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
             cp[0] = n_active;
+            cp[1] = diag_chunk;     // chunk index of the diagonal block (sentinel = none -> no token mask)
+            cp[2] = boundary_tile;  // key-tiles >= this are fully masked in the diagonal block
+            cp[3] = boundary_col;   // partial-column boundary within boundary_tile (0 -> none)
         }
         ctrl_cb.push_back(1);
+
+        // Build the partial-column mask tile for the boundary key-tile (only when it splits a tile).
+        if constexpr (CAUSAL_MASK_ENABLED) {
+            if (build_vmask) {
+                constexpr uint32_t mask_tile_bytes = get_tile_size(cb_vmask);
+                experimental::CB(cb_vmask).reserve_back(1);
+                fill_vertical_tile_bf16<mask_tile_bytes>(noc, cb_vmask, 0, boundary_col);
+                experimental::CB(cb_vmask).push_back(1);
+            }
+        }
 
         for (uint32_t chunk = 0; chunk < n_active; ++chunk) {
             const uint32_t block_id = idx_ptr[chunk];
@@ -136,8 +186,14 @@ void kernel_main() {
             ASSERT(block_id != sentinel);
 
             // Reader reserves the whole block; writer fills the lower half, reader fills the upper half.
-            uint32_t k_tile0 = k_batch_tile_offset + block_id * k_tiles_per_block;
-            uint32_t v_tile0 = v_batch_tile_offset + block_id * v_tiles_per_block;
+            // Block-cyclic cache: remap the logical block id to its physical block before addressing (invP).
+            // Addressing only — the sentinel search and the diagonal-block causal match stay on the logical id.
+            // Identity for a natural-order cache (block_cyclic false).
+            const uint32_t phys_block = tt::block_cyclic::
+                logical_to_physical_page<block_cyclic, bc_chunk_local, bc_sp, bc_shard_stride_gap, bc_slab_stride_gap>(
+                    block_id);
+            uint32_t k_tile0 = k_batch_tile_offset + phys_block * k_tiles_per_block;
+            uint32_t v_tile0 = v_batch_tile_offset + phys_block * v_tiles_per_block;
             if constexpr (n_kv > 1) {
                 k_tile0 += kv_group * k_group_tile_stride;
                 v_tile0 += kv_group * v_group_tile_stride;

@@ -149,7 +149,8 @@ The overall flow follows the standard pattern for unary compute kernels:
         // uses software floating-point. Constexpr making this evaluation compile-time
         constexpr float inv_delta = 1.0f / (edge1 - edge0);
 
-        init_sfpu(cb_in0, cb_out0);
+        compute_kernel_hw_startup(cb_in0, cb_out0);
+        copy_init(cb_in0);
 
         for (uint32_t i = 0; i < n_tiles; i++) {
             cb_wait_front(cb_in0, 1);
@@ -184,8 +185,8 @@ The ``my_smoothstep_tiles`` function uses the layered abstraction pattern shown 
         for (size_t i = 0; i < vectors_per_face; i++) {
             sfpi::vFloat x = sfpi::dst_reg[i];
             sfpi::vFloat t = (x - edge0) * inv_delta;
-            v_if(t < sfpi::vConst0) { t = sfpi::vConst0; }
-            v_elseif(t > sfpi::vConst1) { t = sfpi::vConst1; }
+            v_if(t < 0.0f) { t = 0.0f; }
+            v_elseif(t > 1.0f) { t = 1.0f; }
             v_endif;
             sfpi::vFloat result = t * t * (3.0f - 2.0f * t);
             sfpi::dst_reg[i] = result;
@@ -231,13 +232,11 @@ The clamping of the intermediate value ``t`` to the [0, 1] range is implemented 
 
 .. code-block:: cpp
 
-    v_if(t < sfpi::vConst0) { t = sfpi::vConst0; }
-    v_elseif(t > sfpi::vConst1) { t = sfpi::vConst1; }
+    v_if(t < 0.0f) { t = 0.0f; }
+    v_elseif(t > 1.0f) { t = 1.0f; }
     v_endif;
 
 The ``v_if`` and ``v_elseif`` instructions perform element-wise conditional assignments on the ``vFloat`` vector ``t``. Each lane of the SIMD vector is evaluated independently. A ``v_endif`` is required to terminate the conditional block.
-
-The SFPI constants ``sfpi::vConst0`` and ``sfpi::vConst1`` are vectors with all 32 lanes set to 0.0f and 1.0f, respectively. These constants are hardware-defined, readily available for SFPI programs, and do not require manual initialization. Using these pre-defined constants is more efficient than using literal values because the SFPU operates on vectors. Literal values would require broadcasting to a vector, which adds instructions and overhead.
 
 This is analogous to conditional execution in other parallel programming models, where a mask is used to control which processing elements are active.
 

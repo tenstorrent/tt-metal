@@ -90,6 +90,27 @@ void configure_static_tlbs(
     for (const  tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::ETH, tt::CoordSystem::TRANSLATED)) {
         device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
     }
+    // Setup static TLBs for dispatch-engine cores (Quasar soc dispatch tiles). Required for FetchQ
+    // writes via get_static_tlb_window in SD/FD prefetch paths once prefetch runs on CoreType::DISPATCH.
+    for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::DISPATCH, tt::CoordSystem::TRANSLATED)) {
+        device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
+    }
+
+    // Static TLBs for L2CPU tiles, anchored at the LIM base rather than 0 because
+    // LIM does not start at 0. Sized to the 2 MiB static window, not a 4 GiB one,
+    // which DRAM below consumes in full.
+    if (arch == tt::ARCH::BLACKHOLE) {
+        TT_FATAL(
+            get_static_tlb_size() == kL2cpuLimTlbSize,
+            "L2CPU LIM aperture ({} B) must match the static TLB size ({} B); consumers validate LIM addresses "
+            "against kL2cpuLimTlbEnd.",
+            kL2cpuLimTlbSize,
+            get_static_tlb_size());
+        for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::L2CPU, tt::CoordSystem::TRANSLATED)) {
+            device_driver.configure_tlb(
+                mmio_device_id, core, get_static_tlb_size(), kL2cpuLimBase, tt::umd::tlb_data::Strict);
+        }
+    }
 
     if (arch == tt::ARCH::BLACKHOLE && sdesc.get_num_dram_channels() == blackhole::NUM_DRAM_CHANNELS &&
         include_dram_tlbs) {

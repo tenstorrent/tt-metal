@@ -1,65 +1,53 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
-#include "api/compute/eltwise_binary.h"
+#include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const auto num_input_tiles = get_arg_val<uint32_t>(0);
-    const auto num_output_tiles = get_arg_val<uint32_t>(1);
+    const auto num_input_tiles = get_arg(args::num_input_tiles);
+    const auto num_output_tiles = get_arg(args::num_output_tiles);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_in1 = tt::CBIndex::c_1;
-    constexpr auto cb_out0 = tt::CBIndex::c_3;
-    constexpr auto cb_intermed0 = tt::CBIndex::c_2;
-    constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
-    constexpr uint32_t first_tile = 0;
+    // dfb::in = input DFB (c_0), dfb::out = output DFB (c_3).
+    constexpr std::uint32_t onetile = 1;
+    constexpr std::uint32_t dst0 = 0;
 
-    CircularBuffer cb_in0_obj(cb_in0);
-    CircularBuffer cb_in1_obj(cb_in1);
-    CircularBuffer cb_intermed0_obj(cb_intermed0);
-    CircularBuffer cb_out0_obj(cb_out0);
+    DataflowBuffer dfb_in0_obj(dfb::in);
+    DataflowBuffer dfb_out0_obj(dfb::out);
 
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    cb_in1_obj.wait_front(onetile);
+    compute_kernel_hw_startup(dfb::in, dfb::in, dfb::out);
+    pack_reconfig_data_format(dfb::out);
 
-    for (uint32_t i = 0; i < num_output_tiles; i++) {
-        bool enable_reload = false;
-        for (uint32_t j = 0; j < num_input_tiles; ++j) {
-            bool last_out = (j == num_input_tiles - 1);
-            uint32_t cb_add = (enable_reload) ? (cb_intermed0) : (cb_in1);
+    for (std::uint32_t i = 0; i < num_output_tiles; ++i) {
+        // Each output tile is an independent reduction of num_input_tiles.
+        // The running product lives in DEST.
+        tile_regs_acquire();
 
-            cb_in0_obj.wait_front(onetile);
-            if (enable_reload) {
-                cb_intermed0_obj.wait_front(onetile);
-            }
+        // Seed DEST with the first input tile of this reduction.
+        dfb_in0_obj.wait_front(onetile);
+        copy_init(dfb::in);
+        copy_tile(dfb::in, 0, dst0);
+        dfb_in0_obj.pop_front(onetile);
 
-            tile_regs_acquire();
-            mul_tiles_init(cb_in0, cb_add);
-            mul_tiles(cb_in0, cb_add, first_tile, first_tile, dst0);
-            tile_regs_commit();
-
-            cb_in0_obj.pop_front(onetile);
-            if (enable_reload) {
-                cb_intermed0_obj.pop_front(onetile);
-            }
-
-            auto& cb_out_obj = last_out ? cb_out0_obj : cb_intermed0_obj;
-            cb_out_obj.reserve_back(onetile);
-            tile_regs_wait();
-            pack_tile(dst0, cb_out_obj.get_cb_id());
-            tile_regs_release();
-            cb_out_obj.push_back(onetile);
-            enable_reload = true;
+        mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb::in);
+        for (std::uint32_t j = 1; j < num_input_tiles; ++j) {
+            dfb_in0_obj.wait_front(onetile);
+            mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb::in, 0, dst0);
+            dfb_in0_obj.pop_front(onetile);
         }
+
+        tile_regs_commit();
+
+        dfb_out0_obj.reserve_back(onetile);
+        tile_regs_wait();
+        pack_tile(dst0, dfb::out);
+        dfb_out0_obj.push_back(onetile);
+        tile_regs_release();
     }
-    // cb_in1 holds a single broadcast scaler tile waited once and reused across all output
-    // tiles; pop it at the end so the CB is left balanced.
-    cb_in1_obj.pop_front(onetile);
 }

@@ -15,12 +15,14 @@ ttnn::Tensor sparse_sdpa(
     const ttnn::Tensor& kv,
     const ttnn::Tensor& indices,
     uint32_t v_dim,
+    SparseKVFormat kv_format,
     std::optional<float> scale,
     uint32_t k_chunk_size,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local) {
+    std::optional<uint32_t> block_cyclic_chunk_local,
+    bool block_cyclic_cache_tp_sharded) {
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
 
@@ -30,6 +32,9 @@ ttnn::Tensor sparse_sdpa(
     TT_FATAL(
         block_cyclic_sp_axis.has_value() == block_cyclic_chunk_local.has_value(),
         "sparse_sdpa: block_cyclic_sp_axis and block_cyclic_chunk_local must both be set or both unset");
+    TT_FATAL(
+        !block_cyclic_cache_tp_sharded || block_cyclic_sp_axis.has_value(),
+        "sparse_sdpa: block_cyclic_cache_tp_sharded requires block_cyclic_sp_axis / block_cyclic_chunk_local");
     std::optional<ttnn::prim::BlockCyclicLayout> block_cyclic = std::nullopt;
     if (block_cyclic_sp_axis.has_value()) {
         const auto mesh_shape = q.device()->get_view().shape();
@@ -51,7 +56,20 @@ ttnn::Tensor sparse_sdpa(
             chunk_local,
             q_isl,
             q_isl * tp);
-        block_cyclic = ttnn::prim::BlockCyclicLayout{sp, chunk_local};
+        // KV dedup: cache striped over all sp*tp devices (linear chip = sp_coord*tp + tp_coord), so stripe it
+        // sp*tp x chunk_local/tp. stripes*chunk is unchanged, so only the invP key remap sees the finer split.
+        uint32_t stripes = sp;
+        uint32_t stripe_chunk = chunk_local;
+        if (block_cyclic_cache_tp_sharded) {
+            TT_FATAL(
+                chunk_local % tp == 0,
+                "sparse_sdpa: block_cyclic_cache_tp_sharded needs block_cyclic_chunk_local ({}) divisible by tp ({})",
+                chunk_local,
+                tp);
+            stripes = sp * tp;
+            stripe_chunk = chunk_local / tp;
+        }
+        block_cyclic = ttnn::prim::BlockCyclicLayout{stripes, stripe_chunk};
     }
 
     // fp8 q/kv must be tilized through a 32-bit dest accumulator, so default fp32_dest_acc_en on for fp8.
@@ -65,7 +83,7 @@ ttnn::Tensor sparse_sdpa(
         /*default_l1_acc=*/false);
 
     return ttnn::prim::sparse_sdpa(
-        q, kv, indices, resolved_scale, v_dim, k_chunk_size, kernel_config, cache_batch_idx, block_cyclic);
+        q, kv, indices, resolved_scale, v_dim, kv_format, k_chunk_size, kernel_config, cache_batch_idx, block_cyclic);
 }
 
 }  // namespace ttnn::transformer

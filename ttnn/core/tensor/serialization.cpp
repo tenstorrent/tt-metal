@@ -27,7 +27,10 @@
 #include "tensor/flatbuffer/tensor_flatbuffer.hpp"
 #include "ttnn/distributed/host_ccl.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn {
+using tt::tt_metal::HostBuffer;
+using tt::tt_metal::MemoryPin;
+
 namespace {
 
 void safe_fwrite_bytes(
@@ -59,7 +62,7 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
         // already be fully host-local. In this latter case, host buffer context will consist of a single (local) host
         // rank, and each host will attempt to flush the serialized tensor file to disk.
         cpu_tensor = ttnn::distributed::host_ccl::all_gather(cpu_tensor);
-        const auto& ctx = distributed::multihost::DistributedContext::get_current_world();
+        const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
         if (ctx->rank() != tt::tt_metal::distributed::multihost::Rank(0)) {
             ctx->barrier();
             return;
@@ -97,7 +100,7 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
     TT_FATAL(fflush(output_file) == 0, "Failed to flush \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
 
     if (mode == DumpTensorMode::DISTRIBUTED_GATHER) {
-        const auto& ctx = distributed::multihost::DistributedContext::get_current_world();
+        const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
         ctx->barrier();
     }
 }
@@ -108,7 +111,7 @@ void dump_tensor_flatbuffer(const std::string& file_name, const Tensor& tensor, 
     dump_tensor_flatbuffer_impl(file_name, tensor, mode);
 }
 
-Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDevice* device) {
+Tensor load_tensor_flatbuffer(const std::string& file_name, tt::tt_metal::distributed::MeshDevice* device) {
     int fd = open(file_name.c_str(), O_RDONLY | O_CLOEXEC);
     TT_FATAL(fd != -1, "Cannot open \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
     auto cleanup = ttsl::make_cleanup([fd]() { close(fd); });
@@ -160,4 +163,4 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, distributed::MeshDev
     return tensor;
 }
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

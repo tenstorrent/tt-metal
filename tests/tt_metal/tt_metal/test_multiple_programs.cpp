@@ -15,8 +15,9 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 using std::vector;
@@ -52,8 +53,7 @@ std::map<std::string, std::string> get_defines(BinaryOpType::Enum op_type) {
     return defines;
 }
 
-std::tuple<Program, KernelHandle, KernelHandle> setup_program_one(
-    IDevice* /*device*/, const CoreCoord& core, uint32_t single_tile_size) {
+std::tuple<Program, KernelHandle, KernelHandle> setup_program_one(const CoreCoord& core, uint32_t single_tile_size) {
     Program program = CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -102,8 +102,7 @@ std::tuple<Program, KernelHandle, KernelHandle> setup_program_one(
     return {std::move(program), binary_reader_kernel, unary_writer_kernel};
 }
 
-std::tuple<Program, KernelHandle, KernelHandle> setup_program_two(
-    IDevice* /*device*/, const CoreCoord& core, uint32_t single_tile_size) {
+std::tuple<Program, KernelHandle, KernelHandle> setup_program_two(const CoreCoord& core, uint32_t single_tile_size) {
     Program program = CreateProgram();
 
     uint32_t src0_cb_index = 0;
@@ -150,22 +149,25 @@ std::tuple<Program, KernelHandle, KernelHandle> setup_program_two(
 }
 
 void write_program_runtime_args_to_device(
-    IDevice* /*device*/,
     Program& program,
     KernelHandle reader_kernel_id,
     KernelHandle writer_kernel_id,
     const CoreCoord& core,
     uint32_t num_tiles,
-    Buffer& src0_dram_buffer,
-    Buffer& src1_dram_buffer,
-    Buffer& dst_dram_buffer) {
+    distributed::MeshBuffer& src0_dram_buffer,
+    distributed::MeshBuffer& src1_dram_buffer,
+    distributed::MeshBuffer& dst_dram_buffer) {
     SetRuntimeArgs(
         program,
         reader_kernel_id,
         core,
-        {src0_dram_buffer.address(), (uint32_t)0, src1_dram_buffer.address(), (uint32_t)0, num_tiles});
+        {(uint32_t)src0_dram_buffer.address(),
+         (uint32_t)0,
+         (uint32_t)src1_dram_buffer.address(),
+         (uint32_t)0,
+         num_tiles});
 
-    SetRuntimeArgs(program, writer_kernel_id, core, {dst_dram_buffer.address(), (uint32_t)0, num_tiles});
+    SetRuntimeArgs(program, writer_kernel_id, core, {(uint32_t)dst_dram_buffer.address(), (uint32_t)0, num_tiles});
 }
 
 }  // namespace
@@ -175,22 +177,21 @@ void write_program_runtime_args_to_device(
 // 2. Host read the results from eltwise binary
 // 3. Second program runs matmul, using results from step 2 as input activation
 //////////////////////////////////////////////////////////////////////////////////////////
-TEST_F(MeshDeviceSingleCardFixture, MultiplePrograms) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+TEST_F(UnitMeshFixture, MultiplePrograms) {
     CoreCoord core = {0, 0};
     uint32_t single_tile_size = 2 * 1024;
     uint32_t num_tiles = 1;
 
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
-    InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
 
-    auto src0_dram_buffer = CreateBuffer(dram_config);
-    auto src1_dram_buffer = CreateBuffer(dram_config);
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
 
-    auto [program1, reader1_kernel_id, writer1_kernel_id] = setup_program_one(dev, core, single_tile_size);
-    auto [program2, reader2_kernel_id, writer2_kernel_id] = setup_program_two(dev, core, single_tile_size);
+    auto [program1, reader1_kernel_id, writer1_kernel_id] = setup_program_one(core, single_tile_size);
+    auto [program2, reader2_kernel_id, writer2_kernel_id] = setup_program_two(core, single_tile_size);
 
     // Execute Program One
     SHAPE shape = {1, 1, 32, 32};
@@ -199,17 +200,16 @@ TEST_F(MeshDeviceSingleCardFixture, MultiplePrograms) {
     auto src0_activations_tile_layout =
         convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(src0_tensor.get_values()));
     auto src0_activations = pack_bfloat16_vec_into_uint32_vec(src0_activations_tile_layout);
-    detail::WriteToBuffer(src0_dram_buffer, src0_activations);
+    slow_dispatch::WriteToBuffer(*src0_dram_buffer, src0_activations);
 
     tt::deprecated::Tensor<bfloat16> src1_tensor = tt::deprecated::initialize_tensor<bfloat16>(
         shape, tt::deprecated::Initialize::ZEROS, 0, 100, std::chrono::system_clock::now().time_since_epoch().count());
     auto src1_activations_tile_layout =
         convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(src1_tensor.get_values()));
     auto src1_activations = pack_bfloat16_vec_into_uint32_vec(src1_activations_tile_layout);
-    detail::WriteToBuffer(src1_dram_buffer, src1_activations);
+    slow_dispatch::WriteToBuffer(*src1_dram_buffer, src1_activations);
 
     write_program_runtime_args_to_device(
-        dev,
         program1,
         reader1_kernel_id,
         writer1_kernel_id,
@@ -219,10 +219,10 @@ TEST_F(MeshDeviceSingleCardFixture, MultiplePrograms) {
         *src1_dram_buffer,
         *dst_dram_buffer);
 
-    detail::LaunchProgram(dev, program1);
+    LaunchProgram(this->device(), std::move(program1), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> intermediate_result_vec;
-    detail::ReadFromBuffer(dst_dram_buffer, intermediate_result_vec);
+    slow_dispatch::ReadFromBuffer(*dst_dram_buffer, intermediate_result_vec);
 
     // Validate Intermediate Result
     EXPECT_EQ(src0_activations, intermediate_result_vec) << "Eltwise binary did not produce expected result";
@@ -231,10 +231,9 @@ TEST_F(MeshDeviceSingleCardFixture, MultiplePrograms) {
     auto identity = create_identity_matrix(32, 32, 32);
     auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-    detail::WriteToBuffer(src1_dram_buffer, weights);
+    slow_dispatch::WriteToBuffer(*src1_dram_buffer, weights);
 
     write_program_runtime_args_to_device(
-        dev,
         program2,
         reader2_kernel_id,
         writer2_kernel_id,
@@ -244,10 +243,10 @@ TEST_F(MeshDeviceSingleCardFixture, MultiplePrograms) {
         *src1_dram_buffer,
         *dst_dram_buffer);
 
-    detail::LaunchProgram(dev, program2);
+    LaunchProgram(this->device(), std::move(program2), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    slow_dispatch::ReadFromBuffer(*dst_dram_buffer, result_vec);
 
     // Validate - matmul with identity should give same result
     EXPECT_EQ(intermediate_result_vec, result_vec);

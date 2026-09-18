@@ -56,7 +56,7 @@ NlpCreateHeadsVitDeviceOperation::spec_return_value_t NlpCreateHeadsVitDeviceOpe
     }
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.padded_shape();
-    TensorSpec spec(
+    tt::tt_metal::TensorSpec spec(
         Shape({input_shape[0], 12, input_shape[2], 64}),
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), args.output_mem_config));

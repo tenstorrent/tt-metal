@@ -21,7 +21,7 @@ class ExalensServer:
     its output for the readiness pattern, and provides graceful shutdown.
     """
 
-    READY_PATTERN = "[4B MODE]"
+    READY_PATTERN = "device:0 loc:"
     READY_TIMEOUT_S = 600
     POLL_INTERVAL_S = 2
 

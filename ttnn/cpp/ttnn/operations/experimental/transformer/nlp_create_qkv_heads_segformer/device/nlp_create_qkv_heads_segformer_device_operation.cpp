@@ -56,7 +56,7 @@ NlpCreateQkvHeadsSegformerResultSpec NlpCreateHeadsSegformerDeviceOperation::com
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (args.output_mem_config.is_sharded()) {
         TT_FATAL(false, "Sharded output memory config is not supported for nlp_create_qkv_heads_segformer");
-        TensorSpec spec(
+        tt::tt_metal::TensorSpec spec(
             ttnn::Shape({}),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::INVALID,
@@ -69,7 +69,7 @@ NlpCreateQkvHeadsSegformerResultSpec NlpCreateHeadsSegformerDeviceOperation::com
     const auto& input_shape = input_tensor.padded_shape();
     const auto head_dim = 32;                                      // head_dim is hard-coded = 32
     auto num_heads = input_shape[3] / tt::constants::TILE_HEIGHT;  // head_dim is hard-coded = 32
-    TensorSpec spec(
+    tt::tt_metal::TensorSpec spec(
         ttnn::Shape({input_shape[0], num_heads, input_shape[2], head_dim}),
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), args.output_mem_config));

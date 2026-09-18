@@ -5,28 +5,31 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--triage-summary-path=<path>] [--llm-output] [--llm-output-path=<path>]
+    triage [--noc-id=<id>] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--disable-elf-cache] [--print-elf-cache-stats] [--triage-summary-path=<path>] [--llm-output] [--llm-output-path=<path>] [--sqlite-output-path=<path>] [--additional-scripts-directory=<dir>]...
 
 Options:
-    --remote-exalens                 Connect to remote exalens server.
-    --remote-server=<remote-server>  Specify the remote server to connect to. [default: localhost]
-    --remote-port=<remote-port>      Specify the remote server port. [default: 5555]
-    --initialize-with-noc1           Initialize debugger context with NOC1 enabled. [default: False]
-    --verbosity=<verbosity>          Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
-    --run=<script>                   Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
-    --skip-version-check             Do not enforce debugger version check. [default: False]
-    --print-script-times             Print the execution time of each script. [default: False]
-    -v                               Increase verbosity level (can be repeated: -v, -vv, -vvv).
-                                     Controls which columns/fields are displayed:
-                                     Level 0 (default): Essential fields (Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, Callstack)
-                                     Level 1 (-v): Include detailed dispatcher fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset, Previous Kernel)
-                                     Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
-    --disable-colors                 Disable colored output. [default: False]
-    --disable-progress               Disable progress bars. [default: False]
-    --disable-elf-cache              Re-parse ELF files on every access instead of caching. [default: False]
-    --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
-    --llm-output                     Replace Rich tables on the console with a machine-readable report (CSV-formatted tables). Easier and cheaper for LLMs (and grep/CI) to consume. Implies --disable-colors.
-    --llm-output-path=<path>         Additionally write the machine-readable report to <path>. Can be combined with --llm-output; without it, Rich output still goes to the console.
+    --remote-exalens                      Connect to remote exalens server.
+    --remote-server=<remote-server>       Specify the remote server to connect to. [default: localhost]
+    --remote-port=<remote-port>           Specify the remote server port. [default: 5555]
+    --noc-id=<id>                         NOC used for device communication (0/NOC0, 1/NOC1, 2/SYSTEM_NOC, case-insensitive). Defaults to the tt-exalens default.
+    --verbosity=<verbosity>               Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
+    --run=<script>                        Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
+    --skip-version-check                  Do not enforce debugger version check. [default: False]
+    --print-script-times                  Print the execution time of each script. [default: False]
+    -v                                    Increase verbosity level (can be repeated: -v, -vv, -vvv).
+                                          Controls which columns/fields are displayed:
+                                          Level 0 (default): Essential fields (Kernel ID:Name, Go Message, Subdevice, Preload, Waypoint, PC, Callstack)
+                                          Level 1 (-v): Include detailed dispatcher fields (Firmware/Kernel Path, Host Assigned ID, Kernel Offset, Previous Kernel)
+                                          Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
+    --disable-colors                      Disable colored output. [default: False]
+    --disable-progress                    Disable progress bars. [default: False]
+    --disable-elf-cache                   Re-parse ELF files on every access instead of caching. [default: False]
+    --print-elf-cache-stats               Print ELF cache statistics at the end of the run. [default: False]
+    --triage-summary-path=<path>          Write a triage summary file to the given path (used by CI for hang reports).
+    --llm-output                          Replace Rich tables on the console with a machine-readable report (CSV-formatted tables). Easier and cheaper for LLMs (and grep/CI) to consume. Implies --disable-colors.
+    --llm-output-path=<path>              Additionally write the machine-readable report to <path>. Can be combined with --llm-output; without it, Rich output still goes to the console.
+    --sqlite-output-path=<path>           Additionally write a SQLite database to <path>, with one table per script that returns non-empty tabular data; check-only output is stored in the diagnostics table.
+    --additional-scripts-directory=<dir>  Discover triage scripts in <dir> too. Repeat for several directories. Scripts are imported by module name, so file names there must not repeat a file name used in tools/triage.
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -53,7 +56,7 @@ from time import time
 import traceback
 import sys
 import utils
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 import re
 
@@ -79,7 +82,7 @@ import importlib.metadata as importlib_metadata
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TimeElapsedColumn, TimeRemainingColumn, BarColumn, TextColumn
 import sys
-from ttexalens.context import Context
+from ttexalens.context import Context, to_noc_id
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.elf import ElfVariable
@@ -106,6 +109,14 @@ def _raise_open_file_limit(desired: int = 65536) -> None:
         utils.WARN(
             f"Failed to raise open file limit: {e}. This may cause issues when processing many ELF files. Consider increasing the limit manually (ulimit -n {desired})."
         )
+
+
+def _normalize_path(path: str) -> str:
+    return os.path.realpath(os.path.expanduser(path))
+
+
+BUILTIN_SCRIPTS_DIRECTORY = _normalize_path(os.path.dirname(__file__))
+DEFAULT_SCRIPTS_DIRECTORIES: tuple[str, ...] = (BUILTIN_SCRIPTS_DIRECTORY,)
 
 
 class ScriptPriority(Enum):
@@ -236,6 +247,7 @@ class TriageScript:
     module: ModuleType
     run_method: Callable[..., Any]
     documentation: str
+    dependency_search_path: list[str] = field(default_factory=list)
     depends: list["TriageScript"] = field(default_factory=list)
     failed: bool = False
     failure_message: str | None = None
@@ -269,7 +281,7 @@ class TriageScript:
                 raise
 
     @staticmethod
-    def load(script_path: str) -> "TriageScript":
+    def load(script_path: str, scripts_directories: Sequence[str] = DEFAULT_SCRIPTS_DIRECTORIES) -> "TriageScript":
         script_path = os.path.abspath(script_path)
         base_path = os.path.dirname(script_path)
         appended = False
@@ -279,6 +291,14 @@ class TriageScript:
         try:
             script_name = os.path.splitext(os.path.basename(script_path))[0]
             script_module = importlib.import_module(script_name)
+
+            # Check that the imported module corresponds to the expected script file.
+            module_file = getattr(script_module, "__file__", None)
+            if module_file is None or os.path.realpath(module_file) != os.path.realpath(script_path):
+                raise ValueError(
+                    f"Script {script_path} cannot be imported: module name '{script_name}' already "
+                    f"resolves to {module_file}. Rename the script so its file name is unique."
+                )
 
             # Check if script has a configuration. The value comes from a dynamically imported
             # user module, so it may be missing/None at runtime even though the declared type isn't.
@@ -311,6 +331,7 @@ class TriageScript:
                     f"Script {script_path} does not have a valid run method with two arguments (args, context)."
                 )
 
+            search_path = _dedupe_directories([base_path, *scripts_directories])
             triage_script = TriageScript(
                 name=os.path.basename(script_path),
                 path=script_path,
@@ -318,6 +339,7 @@ class TriageScript:
                 module=script_module,
                 run_method=run_method,
                 documentation=script_module.__doc__,
+                dependency_search_path=search_path,
             )
 
             # 'depends' comes from a user-authored module and may be None or contain non-str
@@ -328,7 +350,11 @@ class TriageScript:
                 triage_script.config.depends = []
             else:
                 normalized = [dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py" for dep in depends]
-                triage_script.config.depends = [os.path.join(base_path, dep) for dep in normalized]
+                resolved_depends = []
+                for dep in normalized:
+                    candidates = [os.path.join(directory, dep) for directory in search_path]
+                    resolved_depends.append(next((c for c in candidates if os.path.exists(c)), candidates[0]))
+                triage_script.config.depends = resolved_depends
 
             return triage_script
         finally:
@@ -336,20 +362,27 @@ class TriageScript:
                 sys.path.remove(base_path)
 
     @staticmethod
-    def load_all(script_path: str) -> dict[str, "TriageScript"]:
+    def load_all(
+        script_path: str, scripts_directories: Sequence[str] = DEFAULT_SCRIPTS_DIRECTORIES
+    ) -> dict[str, "TriageScript"]:
         scripts: dict[str, TriageScript] = {}
-        loading: list[str] = []
-        script = TriageScript.load(script_path)
+        script = TriageScript.load(script_path, scripts_directories)
         scripts[script_path] = script
 
         # Load all dependencies
-        loading.extend(script.config.depends)
+        loading: list[tuple[str, TriageScript]] = [(dep, script) for dep in script.config.depends]
         while len(loading) > 0:
-            loading_script = loading.pop(0)
+            loading_script, required_by = loading.pop(0)
             if loading_script not in scripts:
-                script = TriageScript.load(loading_script)
+                if not os.path.exists(loading_script):
+                    searched = ", ".join(required_by.dependency_search_path)
+                    raise TTTriageError(
+                        f"{required_by.name} depends on {os.path.basename(loading_script)}, which does not exist "
+                        f"({loading_script}). Bare dependency names are searched for in: {searched}."
+                    )
+                script = TriageScript.load(loading_script, scripts_directories)
                 scripts[loading_script] = script
-                loading.extend(script.config.depends)
+                loading.extend((dep, script) for dep in script.config.depends)
 
         # Update dependencies in scripts
         for script in scripts.values():
@@ -359,18 +392,29 @@ class TriageScript:
         return scripts
 
     @staticmethod
-    def discover_all_in_directory(directory: str) -> dict[str, "TriageScript"]:
-        directory = os.path.abspath(directory)
+    def discover_all(directories: Sequence[str]) -> dict[str, "TriageScript"]:
+        directories = _dedupe_directories(directories)
         scripts: dict[str, TriageScript] = {}
-        for fname in os.listdir(directory):
-            if not fname.endswith(".py") or fname == os.path.basename(__file__):
+        for directory in directories:
+            scripts.update(TriageScript.discover_all_in_directory(directory, directories))
+        return scripts
+
+    @staticmethod
+    def discover_all_in_directory(
+        directory: str, scripts_directories: Sequence[str] = DEFAULT_SCRIPTS_DIRECTORIES
+    ) -> dict[str, "TriageScript"]:
+        directory = _normalize_path(directory)
+        scripts: dict[str, TriageScript] = {}
+        for fname in _python_file_names(directory):
+            if fname == os.path.basename(__file__):
                 continue
             script_path = os.path.join(directory, fname)
             try:
-                triage_script = TriageScript.load(script_path)
+                triage_script = TriageScript.load(script_path, scripts_directories)
                 if triage_script.config.disabled:
                     continue
-            except Exception:
+            except (Exception, SystemExit) as e:
+                utils.VERBOSE(f"Skipping {script_path}: {type(e).__name__}: {e}")
                 continue
             scripts[script_path] = triage_script
         return scripts
@@ -433,10 +477,13 @@ def init_console_and_verbosity(args: ScriptArguments) -> None:
     if console is not None:
         return
 
-    # When redirecting to file, use a larger width to avoid wrapping.
-    # When in a terminal, let Rich auto-detect the terminal width.
-    # Similarly, if verbosity is increased, use larger width to avoid wrapping.
-    width = None if sys.stdout.isatty() and _verbose_level == 0 else 10000
+    # When redirecting to file (or a zero-width pty), use a larger width to avoid wrapping;
+    # in a real terminal let Rich auto-detect. Higher verbosity also uses the larger width.
+    width = (
+        None
+        if sys.stdout.isatty() and os.get_terminal_size(sys.stdout.fileno()).columns > 0 and _verbose_level == 0
+        else 10000
+    )
     # --llm-output implies no colors: non-table console output (status lines,
     # warnings) needs to stay plain text for cheap LLM consumption.
     disable_colors = bool(args["--disable-colors"]) or bool(args["--llm-output"])
@@ -470,6 +517,55 @@ def create_progress() -> Progress:
         transient=True,
         disable=progress_disabled,
     )
+
+
+def _dedupe_directories(directories: Sequence[str]) -> list[str]:
+    deduped: list[str] = []
+    for directory in directories:
+        resolved = _normalize_path(directory)
+        if resolved not in deduped:
+            deduped.append(resolved)
+    return deduped
+
+
+def _python_file_names(directory: str) -> list[str]:
+    return sorted(f for f in os.listdir(directory) if f.endswith(".py") and f != "__init__.py")
+
+
+def _warn_on_shadowed_module_names(directories: Sequence[str]) -> None:
+    owner = {fname: BUILTIN_SCRIPTS_DIRECTORY for fname in _python_file_names(BUILTIN_SCRIPTS_DIRECTORY)}
+    for directory in directories:
+        shadowed = []
+        for fname in _python_file_names(directory):
+            if fname in owner:
+                shadowed.append(f"{fname} (also in {owner[fname]})")
+            else:
+                owner[fname] = directory
+        if shadowed:
+            utils.WARN(
+                f"{directory}: {', '.join(shadowed)}. Everything is imported by module name, so only the "
+                f"first copy is ever used. Rename them to keep them usable."
+            )
+
+
+def resolve_scripts_directories(args: ScriptArguments) -> list[str]:
+    requested: list[str] = args["--additional-scripts-directory"] or []
+    for directory in requested:
+        if not directory:
+            raise TTTriageError("--additional-scripts-directory was given an empty value.")
+        if not os.path.isdir(_normalize_path(directory)):
+            raise TTTriageError(f"--additional-scripts-directory {directory} is not a directory.")
+
+    # Built-in directory first, so it wins every lookup and naming it with the flag is a no-op.
+    directories = _dedupe_directories([BUILTIN_SCRIPTS_DIRECTORY, *requested])
+
+    # Everything except the built-in directory, which is importable already.
+    additional = directories[1:]
+    _warn_on_shadowed_module_names(additional)
+    for directory in additional:
+        if directory not in sys.path:
+            sys.path.append(directory)
+    return directories
 
 
 def process_arguments(args: ScriptArguments) -> None:
@@ -625,6 +721,7 @@ def log_warning_risc(risc_name: str, location: OnChipCoordinate, message: str) -
 
 
 _output_serializer: Any = None
+_output_serializer_initialized = False
 
 
 def get_output_serializer() -> Any:
@@ -650,7 +747,17 @@ def init_output_serializer(args: ScriptArguments) -> None:
       --llm-output                      -> CsvSerializer on the console (replaces Rich)
       --llm-output-path=<path>          -> Rich on console + CsvSerializer to file
       --llm-output --llm-output-path=.. -> CsvSerializer on console + CsvSerializer to file
+
+    Builds once per process. `main()` calls this, and so does every
+    `run_script()`, so without the guard a `--run=` invocation would rebuild the
+    back ends per script - reopening `FileSink` with mode "w" and truncating the
+    report down to the last script alone.
     """
+    global _output_serializer_initialized
+    if _output_serializer_initialized:
+        return
+    _output_serializer_initialized = True
+
     from serializers import ConsoleSink, CsvSerializer, FileSink, MultiSerializer, RichSerializer
 
     console_sink = ConsoleSink(console)
@@ -668,6 +775,15 @@ def init_output_serializer(args: ScriptArguments) -> None:
             serializers.append(CsvSerializer(file_sink, get_verbose_level))
         except OSError as e:
             utils.WARN(f"Failed to open --llm-output-path={csv_path!r}: {e}. File output will be skipped.")
+
+    sqlite_path = utils.safe_path(args["--sqlite-output-path"])
+    if sqlite_path:
+        try:
+            from sqlite_serializer import SqliteSerializer
+
+            serializers.append(SqliteSerializer(sqlite_path, get_verbose_level))
+        except Exception as e:
+            utils.WARN(f"Failed to open --sqlite-output-path={sqlite_path!r}: {e}. SQLite output will be skipped.")
 
     set_output_serializer(serializers[0] if len(serializers) == 1 else MultiSerializer(serializers))
 
@@ -690,6 +806,24 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
         script_failed=script.failed if script is not None else False,
         failure_message=script.failure_message if script is not None else None,
         documentation=script.documentation if script is not None else None,
+    )
+
+
+def record_diagnostics(script: TriageScript) -> None:
+    global FAILURE_CHECKS, WARNING_CHECKS
+    with FAILURE_CHECKS_LOCK:
+        failures = FAILURE_CHECKS
+        FAILURE_CHECKS = []
+    with WARNING_CHECKS_LOCK:
+        warnings = WARNING_CHECKS
+        WARNING_CHECKS = []
+
+    get_output_serializer().record_diagnostics(
+        script_name=script.name,
+        failures=failures,
+        warnings=warnings,
+        script_failed=script.failed,
+        failure_message=script.failure_message,
     )
 
 
@@ -830,7 +964,10 @@ def _init_ttexalens(args: ScriptArguments) -> Context:
     if args["--remote-exalens"]:
         context = init_ttexalens_remote(ip_address=args["--remote-server"], port=args["--remote-port"])
     else:
-        context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
+        if args["--noc-id"]:
+            context = init_ttexalens(noc_id=to_noc_id(args["--noc-id"]))
+        else:
+            context = init_ttexalens()
 
     _patch_risc_debug()
     return context
@@ -842,8 +979,14 @@ def run_script(
     context: Context | None = None,
     argv: list[str] | None = None,
     return_result: bool = False,
+    scripts_directories: Sequence[str] | None = None,
 ) -> Any:
     force_exit = False
+
+    if scripts_directories is None:
+        scripts_directories = resolve_scripts_directories(
+            args if args is not None else parse_arguments(only_triage_script_args=True, argv=argv)
+        )
 
     # Resolve script path
     if script_path is None:
@@ -856,22 +999,28 @@ def run_script(
     else:
         if not script_path.endswith(".py"):
             script_path = script_path + ".py"
-        application_path = os.path.dirname(__file__)
-        if not os.path.isabs(script_path):
-            script_path = os.path.join(application_path, script_path)
-        script_path = os.path.abspath(script_path)
-        if not os.path.exists(script_path):
-            raise FileNotFoundError(f"Script {script_path} does not exist.")
+        if os.path.isabs(script_path):
+            candidates = [script_path]
+        else:
+            candidates = [os.path.join(directory, script_path) for directory in scripts_directories]
+        found = next((os.path.abspath(c) for c in candidates if os.path.exists(c)), None)
+        if found is None:
+            searched = ", ".join(os.path.abspath(c) for c in candidates)
+            raise FileNotFoundError(f"Script {script_path} does not exist. Looked in: {searched}.")
+        script_path = found
+
+    # Add script path to list of directories
+    scripts_directories = _dedupe_directories([*scripts_directories, os.path.dirname(script_path)])
 
     # Load script and its dependencies (drives execution order).
-    scripts = TriageScript.load_all(script_path)
+    scripts = TriageScript.load_all(script_path, scripts_directories)
 
     # Find execution order of scripts
     script_queue = resolve_execution_order(scripts)
 
     # Parse arguments using every script's options
     if args is None:
-        all_scripts = TriageScript.discover_all_in_directory(os.path.dirname(script_path))
+        all_scripts = TriageScript.discover_all(scripts_directories)
         # Ensure the target and its deps are present even if discovery missed them somehow.
         for path, script in scripts.items():
             all_scripts.setdefault(path, script)
@@ -923,10 +1072,10 @@ def main():
     triage_start = time()
 
     # Parse only tt-triage script arguments first to initialize logging and console
-    parse_arguments(only_triage_script_args=True)
+    bootstrap_args = parse_arguments(only_triage_script_args=True)
 
-    # Enumerate all scripts in application directory
-    application_path = os.path.abspath(os.path.dirname(__file__))
+    # Read before discovery: this is the full set of directories that gets discovered.
+    scripts_directories = resolve_scripts_directories(bootstrap_args)
 
     # To avoid multiple imports of this script, we add it to sys.modules
     my_name = os.path.splitext(os.path.basename(__file__))[0]
@@ -935,7 +1084,7 @@ def main():
 
     # Load tt-triage scripts
     # TODO: do we need to check for subdirectories?
-    scripts = TriageScript.discover_all_in_directory(application_path)
+    scripts = TriageScript.discover_all(scripts_directories)
 
     # Resolve dependencies
     for script in scripts.values():
@@ -943,7 +1092,8 @@ def main():
             if dep in scripts:
                 script.depends.append(scripts[dep])
             else:
-                utils.ERROR(f"Dependency {dep} for script {script.name} not found.")
+                searched = ", ".join(script.dependency_search_path)
+                utils.ERROR(f"Dependency {dep} for script {script.name} not found (searched {searched}).")
                 script.failed = True
                 script.failure_message = f"Dependency {dep} not found."
 
@@ -967,7 +1117,7 @@ def main():
             progress.update(scripts_task, total=len(args["--run"]))
             for script_name in args["--run"]:
                 progress.update(scripts_task, description=f"Running {script_name}")
-                run_script(script_name, args, context)
+                run_script(script_name, args, context, scripts_directories=scripts_directories)
                 progress.advance(scripts_task)
         else:
             # Execute all scripts
@@ -980,11 +1130,14 @@ def main():
             for script in script_queue:
                 progress.update(scripts_task, description=f"Running {script.name}")
                 if not all(not dep.failed for dep in script.depends):
-                    # Silently mark as skipped — the original root-cause failure already
-                    # printed its own message; cascading "Cannot run due to failed dependencies"
-                    # lines for every downstream script are noise.
+                    # A dependency failed (or was itself skipped); surface the skip
+                    failed_deps = ", ".join(dep.name for dep in script.depends if dep.failed)
                     script.failed = True
-                    script.failure_message = "Cannot run script due to failed dependencies."
+                    script.failure_message = f"Skipped: dependency {failed_deps} failed."
+                    print()
+                    utils.INFO(f"{script.name}:")
+                    utils.WARN(f"  Skipping: dependency {failed_deps} failed")
+                    record_diagnostics(script)
                 else:
                     start_time = time()
                     result = script.run(args=args, context=context)
@@ -1003,6 +1156,7 @@ def main():
                             print()
                             utils.INFO(f"{script.name}{execution_time}:")
                             utils.INFO("  pass")
+                        record_diagnostics(script)
                     else:
                         start_time = time()
                         serialize_result(script, result, execution_time)
@@ -1026,9 +1180,10 @@ def main():
         except Exception as e:
             utils.WARN(f"Failed to write triage summary: {e}")
 
-    from elfs_cache import run as get_elfs_cache
+    if args["--print-elf-cache-stats"]:
+        from elfs_cache import run as get_elfs_cache
 
-    get_elfs_cache(args, context).log_stats()
+        get_elfs_cache(args, context).log_stats()
 
     get_output_serializer().close()
 

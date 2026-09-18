@@ -18,6 +18,7 @@
 #include <tt-metalium/mxint.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "impl/program/program_impl.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
@@ -39,31 +40,25 @@ namespace unit_tests::llk::mxint_typecast {
 // unpacker/packer performs the format conversion implicitly. Identical to the
 // MXFP4/MXFP8 typecast drivers — only the format(s) under test differ.
 static vector<uint32_t> run_mxint_typecast(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     tt::DataFormat input_fmt,
     tt::DataFormat output_fmt,
     const vector<uint32_t>& src_vec,
     uint32_t num_tiles,
     bool fp32_dest_acc_en) {
-    IDevice* dev = mesh_device.get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     uint32_t input_tile_size = tt::tile_size(input_fmt);
     uint32_t output_tile_size = tt::tile_size(output_fmt);
 
-    InterleavedBufferConfig src_config{
-        .device = dev,
-        .size = num_tiles * input_tile_size,
-        .page_size = num_tiles * input_tile_size,
-        .buffer_type = BufferType::DRAM};
-    auto src_buffer = CreateBuffer(src_config);
-
-    InterleavedBufferConfig dst_config{
-        .device = dev,
-        .size = num_tiles * output_tile_size,
-        .page_size = num_tiles * output_tile_size,
-        .buffer_type = BufferType::DRAM};
-    auto dst_buffer = CreateBuffer(dst_config);
+    auto src_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * input_tile_size},
+        {.page_size = num_tiles * input_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
+    auto dst_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * output_tile_size},
+        {.page_size = num_tiles * output_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
 
     const experimental::DFBSpecName INPUT_DFB{"input_dfb"};
     const experimental::DFBSpecName OUTPUT_DFB{"output_dfb"};
@@ -90,9 +85,7 @@ static vector<uint32_t> run_mxint_typecast(
         .num_threads = 1,
         .dfb_bindings = {experimental::ProducerOf(INPUT_DFB, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec writer_spec{
@@ -101,9 +94,7 @@ static vector<uint32_t> run_mxint_typecast(
         .num_threads = 1,
         .dfb_bindings = {experimental::ConsumerOf(OUTPUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config =
-            experimental::DataMovementHardwareConfig{
-                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+        .hw_config = experimental::DataMovementGen2Config{},
     };
 
     experimental::KernelSpec compute_spec{
@@ -125,8 +116,8 @@ static vector<uint32_t> run_mxint_typecast(
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
+            experimental::ComputeGen2Config{
+                .enable_32_bit_dest = fp32_dest_acc_en,
             },
     };
 
@@ -145,7 +136,8 @@ static vector<uint32_t> run_mxint_typecast(
 
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    detail::WriteToBuffer(src_buffer, src_vec);
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
     // These simple test kernels take an explicit bank id and linear address,
     // so keep each buffer as one DRAM page and walk tiles contiguously within
     // bank 0 instead of using interleaved per-tile pages.
@@ -156,30 +148,30 @@ static vector<uint32_t> run_mxint_typecast(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_buffer->address()},
-                   {"src_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", src_dram_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src_addr", src_buffer->address()},
+                 {"src_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", src_dram_stride}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", dst_buffer->address()},
-                   {"dst_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", dst_dram_stride}}}},
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", dst_buffer->address()},
+                 {"dst_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"dram_page_stride", dst_dram_stride}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program, params);
 
-    detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
 
     vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(dst_buffer, result_vec);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
     return result_vec;
 }
 
@@ -237,7 +229,7 @@ constexpr float kOffset = -10.0f;  // U(0, 20) + (-10) = U(-10, 10)
 // power-of-two block scale), so the conversion is lossless. We compare the
 // device output against the host-decoded source — both must be bit-identical.
 static void run_widening_or_identity_test(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     tt::DataFormat input_fmt,   // an MxInt format
     tt::DataFormat output_fmt,  // Float16_b or the same MxInt format
     bool fp32_dest_acc_en) {
@@ -262,7 +254,7 @@ static void run_widening_or_identity_test(
 // validates that the hardware quantizer matches the OCP MX golden bit-for-bit
 // (modulo rare rounding ties absorbed by `atol`).
 static void run_narrowing_test(
-    const distributed::MeshDevice& mesh_device,
+    distributed::MeshDevice& mesh_device,
     tt::DataFormat output_fmt,  // an MxInt format
     float atol,
     bool fp32_dest_acc_en) {
@@ -292,27 +284,27 @@ namespace mxint_tc = unit_tests::llk::mxint_typecast;
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt8ToFloat16b) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt8, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
+        this->device(), tt::DataFormat::MxInt8, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt8ToFloat16bFp32Dest) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt8, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
+        this->device(), tt::DataFormat::MxInt8, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt4ToFloat16b) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt4, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
+        this->device(), tt::DataFormat::MxInt4, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt4ToFloat16bFp32Dest) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt4, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
+        this->device(), tt::DataFormat::MxInt4, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToFloat16b) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt2, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
+        this->device(), tt::DataFormat::MxInt2, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToFloat16bFp32Dest) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt2, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
+        this->device(), tt::DataFormat::MxInt2, tt::DataFormat::Float16_b, /*fp32_dest_acc_en=*/true);
 }
 
 // ============================================================================
@@ -322,22 +314,22 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToFloat16bFp32Dest) {
 // ============================================================================
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt8) {
-    mxint_tc::run_narrowing_test(*devices_[0], tt::DataFormat::MxInt8, /*atol=*/0.125f, /*fp32_dest_acc_en=*/false);
+    mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt8, /*atol=*/0.125f, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt8Fp32Dest) {
-    mxint_tc::run_narrowing_test(*devices_[0], tt::DataFormat::MxInt8, /*atol=*/0.125f, /*fp32_dest_acc_en=*/true);
+    mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt8, /*atol=*/0.125f, /*fp32_dest_acc_en=*/true);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt4) {
-    mxint_tc::run_narrowing_test(*devices_[0], tt::DataFormat::MxInt4, /*atol=*/2.0f, /*fp32_dest_acc_en=*/false);
+    mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt4, /*atol=*/2.0f, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt4Fp32Dest) {
-    mxint_tc::run_narrowing_test(*devices_[0], tt::DataFormat::MxInt4, /*atol=*/2.0f, /*fp32_dest_acc_en=*/true);
+    mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt4, /*atol=*/2.0f, /*fp32_dest_acc_en=*/true);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt2) {
-    mxint_tc::run_narrowing_test(*devices_[0], tt::DataFormat::MxInt2, /*atol=*/8.0f, /*fp32_dest_acc_en=*/false);
+    mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt2, /*atol=*/8.0f, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt2Fp32Dest) {
-    mxint_tc::run_narrowing_test(*devices_[0], tt::DataFormat::MxInt2, /*atol=*/8.0f, /*fp32_dest_acc_en=*/true);
+    mxint_tc::run_narrowing_test(this->device(), tt::DataFormat::MxInt2, /*atol=*/8.0f, /*fp32_dest_acc_en=*/true);
 }
 
 // ============================================================================
@@ -346,27 +338,27 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxInt2Fp32Dest) {
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt8ToMxInt8) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt8, tt::DataFormat::MxInt8, /*fp32_dest_acc_en=*/false);
+        this->device(), tt::DataFormat::MxInt8, tt::DataFormat::MxInt8, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt8ToMxInt8Fp32Dest) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt8, tt::DataFormat::MxInt8, /*fp32_dest_acc_en=*/true);
+        this->device(), tt::DataFormat::MxInt8, tt::DataFormat::MxInt8, /*fp32_dest_acc_en=*/true);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt4ToMxInt4) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt4, tt::DataFormat::MxInt4, /*fp32_dest_acc_en=*/false);
+        this->device(), tt::DataFormat::MxInt4, tt::DataFormat::MxInt4, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt4ToMxInt4Fp32Dest) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt4, tt::DataFormat::MxInt4, /*fp32_dest_acc_en=*/true);
+        this->device(), tt::DataFormat::MxInt4, tt::DataFormat::MxInt4, /*fp32_dest_acc_en=*/true);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToMxInt2) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt2, tt::DataFormat::MxInt2, /*fp32_dest_acc_en=*/false);
+        this->device(), tt::DataFormat::MxInt2, tt::DataFormat::MxInt2, /*fp32_dest_acc_en=*/false);
 }
 TEST_F(QuasarMeshDeviceSingleCardFixture, TensixMxInt2ToMxInt2Fp32Dest) {
     mxint_tc::run_widening_or_identity_test(
-        *devices_[0], tt::DataFormat::MxInt2, tt::DataFormat::MxInt2, /*fp32_dest_acc_en=*/true);
+        this->device(), tt::DataFormat::MxInt2, tt::DataFormat::MxInt2, /*fp32_dest_acc_en=*/true);
 }
 
 }  // namespace tt::tt_metal

@@ -17,7 +17,7 @@ namespace ttnn::experimental::prim {
 struct ConvertToHWCDeviceOperation {
     using operation_attributes_t = ConvertToHwcParams;
     using tensor_args_t = ConvertToHwcInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<ConvertToHWCProgramFactory>;
     using shared_variables_t = ConvertToHWCProgramFactory::shared_variables_t;

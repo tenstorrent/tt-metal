@@ -27,8 +27,9 @@ import numpy as np
 import ttnn
 import ttml
 
-from .. import WeightTyingType
+from ttml.common.utils import resolve_padded_load_shape
 
+from .. import WeightTyingType
 
 # ---------------------------------------------------------------------------
 # Weight-permutation helpers (module-private)
@@ -96,7 +97,7 @@ def _repermute_norm_weights(w: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def _pad_to_tile(arr: np.ndarray, tgt_rows: int, tgt_cols: int) -> np.ndarray:
+def _pad_to_target(arr: np.ndarray, tgt_rows: int, tgt_cols: int) -> np.ndarray:
     src_rows, src_cols = arr.shape
     if src_rows == tgt_rows and src_cols == tgt_cols:
         return arr
@@ -125,6 +126,55 @@ def _to_bf16_4d(arr: np.ndarray) -> np.ndarray:
 
 def _assign(param, arr_4d: np.ndarray) -> None:
     param.assign(ttml.autograd.Tensor.from_numpy(arr_4d, layout=ttnn.Layout.TILE))
+
+
+def _fit_to_param_shape(arr: np.ndarray, param, hf_name: str, expected_shape: Optional[tuple] = None) -> np.ndarray:
+    """Verify ``arr`` matches the model config, then zero-pad it up to the param's shape.
+
+    The shape policy (raise on config divergence / transpose / crop, tile-pad
+    only, warn on unverified tile-pad) lives in
+    :func:`ttml.common.utils.resolve_padded_load_shape`; this wrapper just applies
+    the numpy padding to the returned target shape.
+    """
+    shape = param.shape()
+    if arr.ndim == 2:
+        tgt = resolve_padded_load_shape(arr.shape, (shape[-2], shape[-1]), expected_shape, name=hf_name)
+        return _pad_to_target(arr, tgt[0], tgt[1])
+    if arr.ndim == 1:
+        (tgt_dim,) = resolve_padded_load_shape(arr.shape, (shape[-1],), expected_shape, name=hf_name)
+        if arr.shape[0] == tgt_dim:
+            return arr
+        padded = np.zeros((tgt_dim,), dtype=arr.dtype)
+        padded[: arr.shape[0]] = arr
+        return padded
+    return arr
+
+
+def _fuse_kv(k: np.ndarray, v: np.ndarray, num_kv_heads: int) -> np.ndarray:
+    """Build the fused ``kv_proj`` array from HF k_proj (K) and v_proj (V).
+
+    The ttml Qwen3 attention uses a single ``kv_proj`` of width ``2*kv_out`` whose
+    rows are ``[all-K ; all-V]`` (single-device; grouped_heads_creation splits the
+    last dim at its midpoint into K then V). K carries the RoPE row-permute (like
+    q_proj), so it is un-permuted here; V is left as-is. Weights are 2-D
+    ``[kv_out, hidden]`` and biases are 1-D ``[kv_out]``.
+    """
+    k = _unpermute_proj_rows(k, num_kv_heads)
+    return np.concatenate([k, v], axis=0)
+
+
+def _split_kv(fused: np.ndarray, kv_out: int, num_kv_heads: int):
+    """Inverse of :func:`_fuse_kv`: fused ``kv_proj`` -> (HF k_proj, HF v_proj).
+
+    Takes the first ``kv_out`` rows as K and the next ``kv_out`` as V (tolerating
+    any TILE tail padding by using the config-derived ``kv_out`` rather than the
+    padded row count), then re-permutes K back to HF RoPE layout; V is untouched.
+    Returns ``(k_hf, v_hf)``.
+    """
+    k = fused[:kv_out]
+    v = fused[kv_out : 2 * kv_out]
+    k = _repermute_proj_rows(k, num_kv_heads)
+    return k, v
 
 
 # ---------------------------------------------------------------------------
@@ -177,16 +227,34 @@ def _ttml_to_hf_name(ttml_name: str, *, root: str) -> Optional[str]:
 
 
 def _proj_transform_heads(hf_name: str, num_attention_heads: int, num_key_value_heads: int) -> int | None:
-    """Return the head count to use when un/repermuting, or None if not a Q/K projection."""
+    """Return the head count to use when un/repermuting, or None if not a Q projection.
+
+    Only q_proj is handled here. k_proj/v_proj are fused into a single ``kv_proj``
+    parameter (see :func:`_stage_or_none` / :func:`_fuse_kv`), so they are staged
+    and transformed separately rather than through the generic per-tensor path.
+    """
     if ".self_attn.q_proj." in hf_name:
         return num_attention_heads
-    if ".self_attn.k_proj." in hf_name:
-        return num_key_value_heads
     return None
 
 
 def _is_norm_proj(hf_name: str) -> bool:
     return hf_name.endswith(".self_attn.q_norm.weight") or hf_name.endswith(".self_attn.k_norm.weight")
+
+
+# k_proj / v_proj weight & bias, capturing (layer, "k"|"v", "weight"|"bias").
+_KV_RE = re.compile(r"^model\.layers\.(\d+)\.self_attn\.(k|v)_proj\.(weight|bias)$")
+
+
+def _kv_match(hf_name: str):
+    """Return (layer_idx, which, kind) for a k_proj/v_proj tensor, else None.
+
+    ``which`` is "k" or "v"; ``kind`` is "weight" or "bias".
+    """
+    m = _KV_RE.match(hf_name)
+    if m is None:
+        return None
+    return int(m.group(1)), m.group(2), m.group(3)
 
 
 def _validate_attention_dims(hf_tensors: Dict[str, np.ndarray], config) -> None:
@@ -282,10 +350,25 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
     tied = config.weight_tying == WeightTyingType.Enabled
     loaded: set[str] = set()
     unmapped_hf: list[str] = []
+    # Config-implied LOGICAL (un-tile-padded) HF shapes, used to verify each
+    # checkpoint tensor matches the model config before tile-padding it (catches
+    # e.g. a vocab_size that diverges from the config by less than a tile).
+    hf_shapes = _build_hf_shapes(config)
+    # HF ships separate k_proj/v_proj; the ttml model has a single fused kv_proj.
+    # Stage each layer's K and V arrays keyed by (layer, "weight"|"bias") and fuse
+    # them into kv_proj after the main loop (both must be present to fuse).
+    kv_staged: Dict[tuple, dict] = {}
 
     _validate_attention_dims(hf_tensors, config)
 
     for hf_name, hf_arr in hf_tensors.items():
+        # ── Fused KV: stage k_proj / v_proj, fuse after the loop ──
+        kv = _kv_match(hf_name)
+        if kv is not None:
+            layer_idx, which, kind = kv
+            kv_staged.setdefault((layer_idx, kind), {})[which] = hf_arr.astype(np.float32)
+            continue
+
         ttml_name = _hf_to_ttml_name(hf_name, root=root)
         if ttml_name is None:
             unmapped_hf.append(hf_name)
@@ -314,41 +397,38 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
             arr = _unpermute_norm_weights(arr)
 
         param = parameters[ttml_name]
-        shape = param.shape()
-
-        if arr.ndim == 2:
-            tgt_rows, tgt_cols = shape[-2], shape[-1]
-            r, c = arr.shape
-            if r == tgt_rows and c == tgt_cols:
-                pass
-            elif c == tgt_rows and r == tgt_cols:
-                arr = arr.T
-            else:
-                # ``_pad_to_tile`` pads with zeros and crops via min(...) when
-                # HF is larger than ttml. Cropping silently drops data, so warn
-                # so users notice obvious config mismatches (e.g. ``Qwen3Config.
-                # vocab_size`` smaller than the HF checkpoint's vocab).
-                if r > tgt_rows or c > tgt_cols:
-                    print(
-                        f"  Warning: cropping {hf_name} from ({r}x{c}) to fit ttml ({tgt_rows}x{tgt_cols}); "
-                        f"check that Qwen3Config matches the HF checkpoint."
-                    )
-                arr = _pad_to_tile(arr, tgt_rows, tgt_cols)
-        elif arr.ndim == 1:
-            tgt_dim = shape[-1]
-            src_dim = arr.shape[0]
-            if src_dim > tgt_dim:
-                print(
-                    f"  Warning: cropping {hf_name} from ({src_dim},) to fit ttml ({tgt_dim},); "
-                    f"check that Qwen3Config matches the HF checkpoint."
-                )
-                arr = arr[:tgt_dim]
-            elif src_dim < tgt_dim:
-                padded = np.zeros((tgt_dim,), dtype=arr.dtype)
-                padded[:src_dim] = arr
-                arr = padded
-
+        # expected_shape uses the ORIGINAL hf_name (before any tie remap) so the
+        # config lookup is correct even when embed_tokens/lm_head share a param.
+        arr = _fit_to_param_shape(arr, param, hf_name, expected_shape=hf_shapes.get(hf_name))
         _assign(param, _to_bf16_4d(arr))
+        loaded.add(ttml_name)
+
+    # ── Fuse staged K/V into kv_proj ──
+    for (layer_idx, kind), kv in sorted(kv_staged.items()):
+        ttml_name = f"{root}/blocks/{layer_idx}/self_attn/kv_proj/{kind}"
+        if ttml_name not in parameters:
+            # Model has no fused kv_proj (or a different layout); surface the
+            # skipped HF tensors rather than silently dropping K/V.
+            unmapped_hf.extend(f"model.layers.{layer_idx}.self_attn.{w}_proj.{kind}" for w in kv)
+            continue
+        if "k" not in kv or "v" not in kv:
+            missing = "v" if "k" in kv else "k"
+            print(
+                f"  Warning: layer {layer_idx} {kind}: missing {missing}_proj; "
+                f"cannot fuse kv_proj, leaving it at init."
+            )
+            unmapped_hf.extend(f"model.layers.{layer_idx}.self_attn.{w}_proj.{kind}" for w in kv)
+            continue
+        fused = _fuse_kv(kv["k"], kv["v"], config.num_key_value_heads)
+        param = parameters[ttml_name]
+        # Fused kv_proj logical shape: K and V stacked -> 2*kv_dim rows (2*kv_dim
+        # for a 1-D bias), hidden cols. Verifies k_proj/v_proj match the config.
+        kv_dim = config.num_key_value_heads * config.head_dim
+        kv_expected = (2 * kv_dim, config.hidden_size) if kind == "weight" else (2 * kv_dim,)
+        fused = _fit_to_param_shape(
+            fused, param, f"model.layers.{layer_idx}.self_attn.kv_proj.{kind}", expected_shape=kv_expected
+        )
+        _assign(param, _to_bf16_4d(fused))
         loaded.add(ttml_name)
 
     unused = sorted(p for p in parameters if p not in loaded)
@@ -439,31 +519,57 @@ def export_hf_model(model, config, out_dir, hf_source_dir=None) -> str:
         raise RuntimeError("model has no parameters; cannot infer root prefix")
     root = next(iter(parameters)).split("/", 1)[0]
 
-    hf_state: Dict[str, np.ndarray] = {}
-    for ttml_name, param in parameters.items():
-        hf_name = _ttml_to_hf_name(ttml_name, root=root)
-        # Skip params that don't map to an HF name we know how to write.
-        # When tying is enabled, ``hf_shapes`` omits ``lm_head.weight`` (HF
-        # ships only ``model.embed_tokens.weight``), so ``fc/weight`` is
-        # naturally skipped here; the embedding itself is written from
-        # ``tok_emb/weight`` which shares the same underlying tensor.
-        if hf_name is None or hf_name not in hf_shapes or hf_name in hf_state:
-            continue
-        arr = param.to_numpy(ttnn.DataType.FLOAT32).squeeze()
+    kv_out = config.num_key_value_heads * config.head_dim
 
+    def _emit_hf(hf_name: str, arr: np.ndarray) -> None:
+        """Repermute (Q/K) or norm-repermute, crop to HF shape, and record ``arr``."""
         heads = _proj_transform_heads(hf_name, config.num_attention_heads, config.num_key_value_heads)
         if heads is not None:
             arr = _repermute_proj_rows(arr, heads)
         elif _is_norm_proj(hf_name):
             arr = _repermute_norm_weights(arr)
-
         hf_shape = hf_shapes[hf_name]
         if arr.ndim == 2:
             arr = _crop_to_hf_2d(arr, hf_shape[0], hf_shape[1])
         elif arr.ndim == 1:
             arr = _crop_to_hf_1d(arr, hf_shape[0])
-
         hf_state[hf_name] = arr.astype(ml_dtypes.bfloat16)
+
+    hf_state: Dict[str, np.ndarray] = {}
+    for ttml_name, param in parameters.items():
+        hf_name = _ttml_to_hf_name(ttml_name, root=root)
+        if hf_name is None:
+            continue
+        arr = param.to_numpy(ttnn.DataType.FLOAT32).squeeze()
+
+        # ── Fused KV: split kv_proj back into HF k_proj + v_proj ──
+        # (``_ttml_to_hf_name`` renders kv_proj as ``...self_attn.kv_proj.{kind}``,
+        # which is not a real HF name and not in hf_shapes, so it must be handled
+        # here rather than through the generic path below.)
+        if ".self_attn.kv_proj." in hf_name:
+            kind = "bias" if hf_name.endswith(".bias") else "weight"
+            base = hf_name[: -len(f".kv_proj.{kind}")]
+            k_name = f"{base}.k_proj.{kind}"
+            v_name = f"{base}.v_proj.{kind}"
+            if k_name not in hf_shapes or v_name not in hf_shapes:
+                continue
+            k_arr, v_arr = _split_kv(arr, kv_out, config.num_key_value_heads)
+            # _emit_hf re-permutes k_proj (via _proj_transform_heads) and leaves
+            # v_proj as-is; both are cropped to their HF shape.
+            if k_name not in hf_state:
+                _emit_hf(k_name, k_arr)
+            if v_name not in hf_state:
+                _emit_hf(v_name, v_arr)
+            continue
+
+        # Skip params that don't map to an HF name we know how to write.
+        # When tying is enabled, ``hf_shapes`` omits ``lm_head.weight`` (HF
+        # ships only ``model.embed_tokens.weight``), so ``fc/weight`` is
+        # naturally skipped here; the embedding itself is written from
+        # ``tok_emb/weight`` which shares the same underlying tensor.
+        if hf_name not in hf_shapes or hf_name in hf_state:
+            continue
+        _emit_hf(hf_name, arr)
 
     save_file(hf_state, str(out_path / "model.safetensors"))
 

@@ -69,7 +69,7 @@ MorehNllLossStep2DeviceOperation::spec_return_value_t MorehNllLossStep2DeviceOpe
     auto dtype = tensor_args.input_tensor.dtype();
     Layout layout{Layout::TILE};
 
-    ttnn::SmallVector<uint32_t> output_shape_vec;
+    ttsl::SmallVector<uint32_t> output_shape_vec;
 
     // Need extend 1d output to 2d, because TT not support 1d tensor
     if (input_rank == 2) {
@@ -86,7 +86,8 @@ MorehNllLossStep2DeviceOperation::spec_return_value_t MorehNllLossStep2DeviceOpe
     }
 
     auto output_shape = Shape{output_shape_vec};
-    return TensorSpec(output_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config));
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(dtype, PageConfig(layout), operation_attributes.memory_config));
 }
 
 MorehNllLossStep2DeviceOperation::tensor_return_value_t MorehNllLossStep2DeviceOperation::create_output_tensors(

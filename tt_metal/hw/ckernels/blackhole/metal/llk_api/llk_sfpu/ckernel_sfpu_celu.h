@@ -6,14 +6,17 @@
 
 #include <cstdint>
 
+#include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_expm1_cw.h"
 
 namespace ckernel::sfpu {
 
+inline void celu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+
 // celu(x) = x for x>=0, alpha*(exp(x/alpha)-1) for x<0
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_celu(std::uint32_t param0, std::uint32_t param1) {
     sfpi::vFloat alpha = Converter::as_float(param0);
     sfpi::vFloat alpha_recip = Converter::as_float(param1);

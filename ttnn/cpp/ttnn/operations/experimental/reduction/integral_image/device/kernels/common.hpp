@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 constexpr uint32_t ONE_TILE{1};
 constexpr uint32_t FIRST_TILE{0};
@@ -50,26 +50,26 @@ template <DataFormat df>
 using std_type_t = typename df_to_std<df>::std_type;
 
 /**
- * @brief RAII guard for safely reading from a Circular Buffer (CB).
+ * @brief RAII guard for safely reading from a Dataflow Buffer (DFB).
  *
- * `ReadCBGuard` automatically manages CB read synchronization in a scoped manner.
- * When constructed, it waits for `tiles` tiles to be available at the CB front
- * (`cb_wait_front`), ensuring data readiness before access. Upon destruction,
- * it automatically pops those tiles from the CB front (`cb_pop_front`),
+ * `ReadCBGuard` automatically manages DFB read synchronization in a scoped manner.
+ * When constructed, it waits for `tiles` tiles to be available at the DFB front
+ * (`wait_front`), ensuring data readiness before access. Upon destruction,
+ * it automatically pops those tiles from the DFB front (`pop_front`),
  * signaling that the tiles have been consumed.
  *
- * This guarantees balanced `cb_wait_front`/`cb_pop_front` calls, even in the
- * presence of early returns or exceptions, preventing CB underflows and race
+ * This guarantees balanced `wait_front`/`pop_front` calls, even in the
+ * presence of early returns or exceptions, preventing DFB underflows and race
  * conditions.
  *
  * @note This class is strictly non-copyable and non-movable to prevent any
- *       double-pop or premature release of CB resources.
+ *       double-pop or premature release of DFB resources.
  *
  * Example usage:
  * @code
  * {
  *     ReadCBGuard guard(cb_id, num_tiles);
- *     // Safely read from CB: data is guaranteed ready.
+ *     // Safely read from DFB: data is guaranteed ready.
  *     // ...
  * } // Automatically pops the tiles on scope exit.
  * @endcode
@@ -79,8 +79,8 @@ class ReadCBGuard {
     uint32_t tiles;
 
 public:
-    ReadCBGuard(uint32_t cb, uint32_t tiles) : cb{cb}, tiles{tiles} { CircularBuffer(cb).wait_front(tiles); }
-    ~ReadCBGuard() { CircularBuffer(cb).pop_front(tiles); }
+    ReadCBGuard(uint32_t cb, uint32_t tiles) : cb{cb}, tiles{tiles} { DataflowBuffer(cb).wait_front(tiles); }
+    ~ReadCBGuard() { DataflowBuffer(cb).pop_front(tiles); }
 
     ReadCBGuard(const ReadCBGuard&) = delete;  // can not allow to touch the object anyhow
     ReadCBGuard(ReadCBGuard&&) = delete;
@@ -91,27 +91,27 @@ public:
 };
 
 /**
- * @brief RAII guard for safely writing to a Circular Buffer (CB).
+ * @brief RAII guard for safely writing to a Dataflow Buffer (DFB).
  *
- * `WriteCBGuard` automatically manages CB write synchronization in a scoped manner.
- * When constructed, it reserves space for `tiles` tiles at the CB back
- * (`cb_reserve_back`), ensuring sufficient room for writing. Upon destruction,
- * it automatically pushes those tiles to the CB back (`cb_push_back`),
+ * `WriteCBGuard` automatically manages DFB write synchronization in a scoped manner.
+ * When constructed, it reserves space for `tiles` tiles at the DFB back
+ * (`reserve_back`), ensuring sufficient room for writing. Upon destruction,
+ * it automatically pushes those tiles to the DFB back (`push_back`),
  * making them visible to downstream consumers.
  *
- * This ensures balanced `cb_reserve_back`/`cb_push_back` calls and prevents
+ * This ensures balanced `reserve_back`/`push_back` calls and prevents
  * buffer overflows or mismatched producer-consumer behavior.
  *
  * @note Like `ReadCBGuard`, this class is non-copyable and non-movable to ensure
- *       one-to-one ownership of the CB reservation.
+ *       one-to-one ownership of the DFB reservation.
  *
  * Example usage:
  * @code
  * {
  *     WriteCBGuard guard(cb_id, num_tiles);
- *     // Safely write to CB: space is guaranteed reserved.
+ *     // Safely write to DFB: space is guaranteed reserved.
  *     // ...
- * } // Automatically pushes tiles to the CB on scope exit.
+ * } // Automatically pushes tiles to the DFB on scope exit.
  * @endcode
  */
 class WriteCBGuard {
@@ -119,8 +119,8 @@ class WriteCBGuard {
     uint32_t tiles;
 
 public:
-    WriteCBGuard(uint32_t cb, uint32_t tiles) : cb{cb}, tiles{tiles} { CircularBuffer(cb).reserve_back(tiles); }
-    ~WriteCBGuard() { CircularBuffer(cb).push_back(tiles); }
+    WriteCBGuard(uint32_t cb, uint32_t tiles) : cb{cb}, tiles{tiles} { DataflowBuffer(cb).reserve_back(tiles); }
+    ~WriteCBGuard() { DataflowBuffer(cb).push_back(tiles); }
 
     WriteCBGuard(const WriteCBGuard&) = delete;  // can not allow to touch the object anyhow
     WriteCBGuard(WriteCBGuard&&) = delete;

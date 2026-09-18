@@ -4,74 +4,21 @@
 
 #include "ttnn/operations/data_movement/split/device/split_program_factory.hpp"
 
+#include <string>
+#include <vector>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
-namespace {
-
-// Assigns runtime args for the TILE N-way split.
-// Each core belongs to exactly one chunk group and writes to one output buffer.
-//
-// Core layout (row-major in metal notation):
-//   rows  (x): z_batch * num_cores_x  — parallelizes Z (dim 1) and dim-2 tiles
-//   cols  (y): num_chunks * num_cores_per_chunk — parallelizes dim-3 tiles, grouped by chunk
-//
-// Within a column group k (k=0..num_chunks-1):
-//   cores in that group write tiles from [k * tiles_per_chunk, (k+1) * tiles_per_chunk) of the last dim
-//   to output buffer k.
-void setup_runtime(
-    KernelDescriptor& reader_desc,
-    KernelDescriptor& writer_desc,
-    const uint32_t num_chunks,
-    const uint32_t num_cores_per_chunk,
-    const uint32_t num_cores_z,
-    const uint32_t num_cores_x,
-    const uint32_t per_core_tiles_y,
-    const uint32_t per_core_tiles_x,
-    const uint32_t num_tiles_per_z,
-    Buffer* in0_buffer,
-    const std::vector<Buffer*>& output_buffers) {
-    // Total Y-cores = num_chunks * num_cores_per_chunk
-    const uint32_t num_cores_c = num_chunks * num_cores_per_chunk;
-
-    for (uint32_t id_r_outer = 0; id_r_outer < num_cores_z; id_r_outer++) {
-        for (uint32_t id_r_inner = 0; id_r_inner < num_cores_x; id_r_inner++) {
-            uint32_t id_r = id_r_outer * num_cores_x + id_r_inner;
-
-            // Starting tile ID in the INPUT buffer for this (z, x) row of cores.
-            uint32_t id_r_reader =
-                (id_r_outer * num_tiles_per_z) + (id_r_inner * per_core_tiles_y * num_cores_c * per_core_tiles_x);
-
-            // Corresponding starting tile in each OUTPUT buffer (output has 1/num_chunks fewer Y tiles).
-            uint32_t id_r_writer = id_r_reader / num_chunks;
-
-            for (uint32_t chunk_id = 0; chunk_id < num_chunks; chunk_id++) {
-                for (uint32_t id_c_inner = 0; id_c_inner < num_cores_per_chunk; id_c_inner++) {
-                    uint32_t id_c = chunk_id * num_cores_per_chunk + id_c_inner;
-                    CoreCoord core = {(std::size_t)id_r, (std::size_t)id_c};
-
-                    uint32_t reader_core_id = id_c * per_core_tiles_y + id_r_reader;
-                    uint32_t writer_core_id = id_c_inner * per_core_tiles_y + id_r_writer;
-
-                    reader_desc.emplace_runtime_args(core, {reader_core_id, in0_buffer, (std::uint32_t)0});
-
-                    writer_desc.emplace_runtime_args(core, {writer_core_id, output_buffers[chunk_id]});
-                }
-            }
-        }
-    }
-}
-
-}  // namespace
-
-ProgramDescriptor SplitProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts SplitProgramFactory::create_program_artifacts(
     const SplitParams& operation_attributes, const SplitInputs& tensor_args, std::vector<Tensor>& tensor_return_value) {
     const auto& input_tensor = tensor_args.input;
     const uint32_t num_chunks = static_cast<uint32_t>(operation_attributes.num_splits);
@@ -81,9 +28,9 @@ ProgramDescriptor SplitProgramFactory::create_descriptor(
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    Buffer* in0_buffer = input_tensor.buffer();
 
-    // Collect output buffers and validate they are all the same type / page size.
+    // Collect output buffers and validate they are all the same type / page size. This invariant is
+    // what lets every per-chunk writer share one identical compile-time-arg set and one src0 DFB shape.
     TT_FATAL(
         tensor_return_value.size() == num_chunks,
         "Number of output tensors ({}) must equal number of chunks ({})",
@@ -138,74 +85,181 @@ ProgramDescriptor SplitProgramFactory::create_descriptor(
     uint32_t z_stride_read = num_tiles_per_z;
     uint32_t y_stride_read = per_core_tiles_y * num_cores_c;
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)(z / num_cores_z),
-        (std::uint32_t)per_core_tiles_x,
-        (std::uint32_t)per_core_tiles_y,
-        (std::uint32_t)z_stride_read,
-        (std::uint32_t)y_stride_read};
-    TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
-
     uint32_t z_stride_write = num_tiles_per_z / num_chunks;
     uint32_t y_stride_write = per_core_tiles_y * num_cores_per_chunk;
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)per_core_tiles_x,
-        (std::uint32_t)per_core_tiles_y,
-        (std::uint32_t)(z / num_cores_z),
-        (std::uint32_t)z_stride_write,
-        (std::uint32_t)y_stride_write};
-    // ONE shared TensorAccessorArgs: all output chunks have the same buffer type.
-    TensorAccessorArgs(*output_buffers[0]).append_to(writer_compile_time_args);
 
-    ProgramDescriptor desc;
+    // ---- Metal 2.0 spec resources ----
+    // Typed name constants are function-local (avoids anonymous-namespace symbol clashes under
+    // unity builds); the per-chunk writer / output names are generated in the chunk loop below.
+    const DFBSpecName SRC0{"src0"};
+    const TensorParamName IN0{"in0"};
+    const KernelSpecName READER{"reader"};
 
-    constexpr uint32_t src0_cb_index = 0;
-    constexpr uint32_t num_input_tiles = 2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_input_tiles * single_tile_size,
-        .core_ranges = CoreRangeSet{all_cores},
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
-        }}},
-    });
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
+    const std::string reader_source =
         "ttnn/cpp/ttnn/operations/data_movement/split/device/kernels/dataflow/"
         "reader_tm_tile_layout_split_two_chunks.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = CoreRangeSet{all_cores};
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
+    const std::string writer_source =
         "ttnn/cpp/ttnn/operations/data_movement/split/device/kernels/dataflow/"
         "writer_split_n_chunks_tile.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = CoreRangeSet{all_cores};
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
 
-    setup_runtime(
-        reader_desc,
-        writer_desc,
-        num_chunks,
-        num_cores_per_chunk,
-        num_cores_z,
-        num_cores_x,
-        per_core_tiles_y,
-        per_core_tiles_x,
-        num_tiles_per_z,
-        in0_buffer,
-        output_buffers);
+    // One src0 DFB (double-buffered): produced by the reader, consumed by each chunk's writer.
+    DataflowBufferSpec src0_dfb{
+        .unique_id = SRC0,
+        .entry_size = single_tile_size,
+        .num_entries = 2,
+        .data_format_metadata = cb_data_format,
+    };
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    // Reader: one KernelSpec over all cores. Producer of src0; reads the single input tensor.
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = reader_source,
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = SRC0,
+            .accessor_name = "src0",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        }},
+        .tensor_bindings = {TensorBinding{
+            .tensor_parameter_name = IN0,
+            .accessor_name = "in0",
+        }},
+        .compile_time_args =
+            {
+                {"z", z / num_cores_z},
+                {"out_num_tiles_per_tensor_y", per_core_tiles_x},
+                {"out_num_tiles_per_tensor_x", per_core_tiles_y},
+                {"z_stride", z_stride_read},
+                {"y_stride", y_stride_read},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"in0_tensor_tile_id"}},
+        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+    };
 
-    return desc;
+    // N writers of ONE source, one per chunk. Each writer is bound to its chunk's output tensor and is
+    // placed on that chunk's disjoint column band (Metal 2.0 binds a tensor per KernelSpec, and the
+    // writer kernel uses a single tensor::out accessor, so the N distinct outputs need N KernelSpecs).
+    // Every writer carries identical compile-time args; the equal split makes them chunk-independent.
+    Group<KernelSpec> kernels;
+    kernels.push_back(std::move(reader));
+
+    Group<TensorParameter> tensor_parameters;
+    tensor_parameters.push_back(TensorParameter{.unique_id = IN0, .spec = input_tensor.tensor_spec()});
+
+    Group<WorkUnitSpec> work_units;
+    std::vector<KernelRunArgs> writer_run_args;
+    writer_run_args.reserve(num_chunks);
+    std::vector<TensorParamName> out_param_names;
+    out_param_names.reserve(num_chunks);
+
+    for (uint32_t chunk_id = 0; chunk_id < num_chunks; chunk_id++) {
+        const KernelSpecName writer_name{"writer_" + std::to_string(chunk_id)};
+        const TensorParamName out_name{"out_" + std::to_string(chunk_id)};
+        out_param_names.push_back(out_name);
+
+        kernels.push_back(KernelSpec{
+            .unique_id = writer_name,
+            .source = writer_source,
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = SRC0,
+                .accessor_name = "src0",
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            }},
+            .tensor_bindings = {TensorBinding{
+                .tensor_parameter_name = out_name,
+                .accessor_name = "out",
+            }},
+            .compile_time_args =
+                {
+                    {"out_num_tiles_per_tensor_y", per_core_tiles_x},
+                    {"out_num_tiles_per_tensor_x", per_core_tiles_y},
+                    {"z", z / num_cores_z},
+                    {"z_stride", z_stride_write},
+                    {"y_stride", y_stride_write},
+                },
+            .runtime_arg_schema = {.runtime_arg_names = {"out_tensor_tile_id"}},
+            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        });
+
+        tensor_parameters.push_back(
+            TensorParameter{.unique_id = out_name, .spec = tensor_return_value[chunk_id].tensor_spec()});
+
+        // Chunk chunk_id owns the column band y in [chunk_id * num_cores_per_chunk, +num_cores_per_chunk)
+        // across all rows. The reader is listed in every work unit, so its node set is the union
+        // (all_cores); each writer runs only on its band.
+        CoreRange chunk_band(
+            {(std::size_t)start_core_x, (std::size_t)(start_core_y + chunk_id * num_cores_per_chunk)},
+            {(std::size_t)(start_core_x + num_cores_r - 1),
+             (std::size_t)(start_core_y + (chunk_id + 1) * num_cores_per_chunk - 1)});
+        work_units.push_back(WorkUnitSpec{
+            .name = "chunk_" + std::to_string(chunk_id),
+            .kernels = {READER, writer_name},
+            .target_nodes = chunk_band,
+        });
+
+        writer_run_args.push_back(KernelRunArgs{.kernel = writer_name});
+    }
+
+    // ---- Runtime args (per-core page offsets) ----
+    // Assigns the per-core tile offsets for the TILE N-way split. Each core belongs to exactly one
+    // chunk group and writes to one output chunk.
+    //
+    // Core layout (row-major in metal notation):
+    //   rows  (x): z_batch * num_cores_x  — parallelizes Z (dim 1) and dim-2 tiles
+    //   cols  (y): num_chunks * num_cores_per_chunk — parallelizes dim-3 tiles, grouped by chunk
+    //
+    // Within a column group k (k=0..num_chunks-1):
+    //   cores in that group write tiles from [k * tiles_per_chunk, (k+1) * tiles_per_chunk) of the last
+    //   dim to output chunk k.
+    KernelRunArgs reader_run_args{.kernel = READER};
+    for (uint32_t id_r_outer = 0; id_r_outer < num_cores_z; id_r_outer++) {
+        for (uint32_t id_r_inner = 0; id_r_inner < num_cores_x; id_r_inner++) {
+            uint32_t id_r = id_r_outer * num_cores_x + id_r_inner;
+
+            // Starting tile ID in the INPUT buffer for this (z, x) row of cores.
+            uint32_t id_r_reader =
+                (id_r_outer * num_tiles_per_z) + (id_r_inner * per_core_tiles_y * num_cores_c * per_core_tiles_x);
+
+            // Corresponding starting tile in each OUTPUT buffer (output has 1/num_chunks fewer Y tiles).
+            uint32_t id_r_writer = id_r_reader / num_chunks;
+
+            for (uint32_t chunk_id = 0; chunk_id < num_chunks; chunk_id++) {
+                for (uint32_t id_c_inner = 0; id_c_inner < num_cores_per_chunk; id_c_inner++) {
+                    uint32_t id_c = chunk_id * num_cores_per_chunk + id_c_inner;
+                    CoreCoord core = {(std::size_t)id_r, (std::size_t)id_c};
+
+                    uint32_t reader_core_id = id_c * per_core_tiles_y + id_r_reader;
+                    uint32_t writer_core_id = id_c_inner * per_core_tiles_y + id_r_writer;
+
+                    AddRuntimeArgsForNode(
+                        reader_run_args.runtime_arg_values, core, {{"in0_tensor_tile_id", reader_core_id}});
+                    AddRuntimeArgsForNode(
+                        writer_run_args[chunk_id].runtime_arg_values, core, {{"out_tensor_tile_id", writer_core_id}});
+                }
+            }
+        }
+    }
+
+    // ---- Assemble the spec and run-args ----
+    ProgramSpec spec{
+        .name = "split",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = {src0_dfb},
+        .tensor_parameters = std::move(tensor_parameters),
+        .work_units = std::move(work_units),
+    };
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(reader_run_args));
+    for (auto& kra : writer_run_args) {
+        run_args.kernel_run_args.push_back(std::move(kra));
+    }
+    run_args.tensor_args.emplace(IN0, TensorArgument{input_tensor.mesh_tensor()});
+    for (uint32_t chunk_id = 0; chunk_id < num_chunks; chunk_id++) {
+        run_args.tensor_args.emplace(
+            out_param_names[chunk_id], TensorArgument{tensor_return_value[chunk_id].mesh_tensor()});
+    }
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim

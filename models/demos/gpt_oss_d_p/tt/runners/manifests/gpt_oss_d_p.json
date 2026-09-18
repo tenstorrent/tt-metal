@@ -1,0 +1,11 @@
+{
+  "env": {
+    "PREFILL_MODEL": "gpt_oss_d_p",
+    "PREFILL_NUM_LAYERS": "36",
+    "PREFILL_SP": "4",
+    "PREFILL_TP": "8",
+    "PREFILL_GATE_FALLBACK_MODE": "DEVICE_FP32",
+    "PREFILL_STANDALONE_NCHUNKS": "2",
+    "PREFILL_STANDALONE_PCC": "1"
+  }
+}

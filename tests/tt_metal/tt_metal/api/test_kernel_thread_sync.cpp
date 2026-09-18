@@ -19,14 +19,17 @@
 
 #include "impl/context/metal_context.hpp"
 #include "device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers.hpp"
 
 namespace tt::tt_metal::experimental {
 namespace {
 
-using test_helpers::MakeMinimalDMKernel;
-using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalGen2DMKernel;
+using test_helpers::MakeMinimalReaderDMKernel;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakeMinimalWriterDMKernel;
 
 constexpr CoreCoord kCore{0, 0};
 constexpr const char* kKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/kernel_thread_barrier.cpp";
@@ -70,11 +73,9 @@ ProgramRunArgs::KernelRunArgs make_run_params(
     };
 }
 
-class KernelThreadSyncTest : public tt::tt_metal::MeshDeviceFixture {};
+class KernelThreadSyncTest : public tt::tt_metal::UnitMeshFixture {};
 
 TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
-    auto mesh_device = devices_.at(0);
-    IDevice* device = mesh_device->get_devices()[0];
     NodeCoord node{0, 0};
 
     // Arch-specific config: kernels to launch, one scratch layout per kernel,
@@ -88,27 +89,29 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     const bool is_quasar = (this->arch_ == tt::ARCH::QUASAR);
     const uint32_t expected_num_threads = is_quasar ? 6u : 1u;
 
-    uint32_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_base = this->device().allocator()->get_base_allocator_addr(HalMemType::L1);
 
     std::vector<KernelConfig> kernel_configs;
     std::vector<std::string> work_unit_kernel_names;
 
     if (is_quasar) {
-        auto spec = MakeMinimalDMKernel("dm_barrier_kernel", expected_num_threads);
+        auto spec = MakeMinimalGen2DMKernel("dm_barrier_kernel", expected_num_threads);
         spec.source = kKernelPath;
         spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
         kernel_configs.push_back({"dm_barrier_kernel", spec, make_layout(l1_base, kRounds)});
         work_unit_kernel_names = {"dm_barrier_kernel"};
     } else {
-        auto make_gen1 = [&](const std::string& name, tt::tt_metal::DataMovementProcessor proc, uint32_t layout_base) {
-            auto spec = MakeMinimalGen1DMKernel(name, proc);
+        auto make_gen1 = [&](KernelSpec spec, uint32_t layout_base) {
             spec.source = kKernelPath;
             spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
-            return KernelConfig{name, spec, make_layout(layout_base, kRounds)};
+            return KernelConfig{*spec.unique_id, std::move(spec), make_layout(layout_base, kRounds)};
         };
-        kernel_configs.push_back(make_gen1("brisc_barrier_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0, l1_base));
+        // BRISC uses the writer role (RISCV_0/NOC_1); NCRISC uses the reader helper (RISCV_1/NOC_0).
+        // The two DM kernels thus land on distinct processors AND distinct NOCs, as spec validation
+        // requires for dedicated-NOC data movement kernels sharing a node.
+        kernel_configs.push_back(make_gen1(MakeMinimalWriterDMKernel("brisc_barrier_kernel"), l1_base));
         uint32_t ncrisc_base = l1_base + kernel_configs[0].layout.total_words * sizeof(uint32_t);
-        kernel_configs.push_back(make_gen1("ncrisc_barrier_kernel", tt::tt_metal::DataMovementProcessor::RISCV_1, ncrisc_base));
+        kernel_configs.push_back(make_gen1(MakeMinimalReaderDMKernel("ncrisc_barrier_kernel"), ncrisc_base));
         work_unit_kernel_names = {"brisc_barrier_kernel", "ncrisc_barrier_kernel"};
     }
 
@@ -117,12 +120,12 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     for (const auto& cfg : kernel_configs) { spec.kernels.push_back(cfg.spec); }
     spec.work_units = {MakeMinimalWorkUnit("work_unit_0", node, work_unit_kernel_names)};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program = MakeProgramFromSpec(this->device(), spec);
 
     uint32_t total_zeros = 0;
     for (const auto& cfg : kernel_configs) { total_zeros += cfg.layout.total_words; }
     std::vector<uint32_t> zeros(total_zeros, 0);
-    detail::WriteToDeviceL1(device, kCore, l1_base, zeros);
+    slow_dispatch::WriteToL1(this->device(), kCore, l1_base, zeros);
 
     ProgramRunArgs params;
     for (const auto& cfg : kernel_configs) {
@@ -130,18 +133,20 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
             make_run_params(KernelSpecName{cfg.name}, node, cfg.layout, kRounds, kSkewIters));
     }
     SetProgramRunArgs(program, params);
-    detail::LaunchProgram(device, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     for (const auto& cfg : kernel_configs) {
         std::vector<uint32_t> observed;
-        detail::ReadFromDeviceL1(device, kCore, cfg.layout.observed_addr, (kRounds + 1) * sizeof(uint32_t), observed);
+        slow_dispatch::ReadFromL1(
+            this->device(), kCore, cfg.layout.observed_addr, (kRounds + 1) * sizeof(uint32_t), observed);
         ASSERT_EQ(observed.size(), kRounds + 1);
         EXPECT_EQ(observed[kRounds], expected_num_threads) << cfg.name << ": get_num_threads() mismatch";
 
         if (is_quasar) {
             std::vector<uint32_t> arrivals, post;
-            detail::ReadFromDeviceL1(device, kCore, cfg.layout.arrivals_addr, kRounds * sizeof(uint32_t), arrivals);
-            detail::ReadFromDeviceL1(device, kCore, cfg.layout.post_addr, kRounds * sizeof(uint32_t), post);
+            slow_dispatch::ReadFromL1(
+                this->device(), kCore, cfg.layout.arrivals_addr, kRounds * sizeof(uint32_t), arrivals);
+            slow_dispatch::ReadFromL1(this->device(), kCore, cfg.layout.post_addr, kRounds * sizeof(uint32_t), post);
             ASSERT_EQ(arrivals.size(), kRounds);
             ASSERT_EQ(post.size(), kRounds);
             for (uint32_t r = 0; r < kRounds; r++) {

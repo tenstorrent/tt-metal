@@ -14,6 +14,7 @@
 
 using namespace tt;
 using namespace tt_metal;
+using ttnn::Tensor;
 using namespace constants;
 
 bool test_2d_tensor(distributed::MeshDevice* device) {

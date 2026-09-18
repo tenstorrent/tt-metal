@@ -13,17 +13,17 @@
 #include "metal/common/program_utils.hpp"
 #include "mla_q_rope_device_operation_types.hpp"
 
-// L1 circular buffer sizes (tiles). Tr <= 8, max_dst <= 8, nope_chunk_tiles <= 8.
-//   cb_nope=2*nope_batch_tiles; worst 16
-//   cb_q_pe=dst_batch?max_chunk:2*Tr; worst 16
-//   cb_rope_out=2*Tr; worst 16
-//   cb_cos=2*Tr; worst 16
-//   cb_sin=2*Tr; worst 16
+// L1 circular buffer sizes (tiles). Tr <= 4 (asserted below), max_dst_tiles = 4
+// (fp32_dest_acc_en=true), nope_chunk_tiles = 4.
+//   cb_nope=2*nope_batch_tiles; scales with heads batched per DST pass and round_up(Tn, 4)
+//   cb_q_pe=dst_batch?max_chunk:2*Tr; worst 8
+//   cb_rope_out=2*Tr; worst 8
+//   cb_cos=2*Tr; worst 8
+//   cb_sin=2*Tr; worst 8
 //   cb_trans=1; worst 1
-//   rotated_in=dst_batch?max_chunk:Tr; worst 8
-//   cos_interm=Tr; worst 8
-//   sin_interm=Tr; worst 8
-//   total worst 105 tiles at Tr=8 (~210 KiB at 2 KiB/tile)
+//   rotated_in=dst_batch?max_chunk:Tr; worst 4
+//   cos_interm=Tr; worst 4
+//   sin_interm=Tr; worst 4
 
 namespace {
 

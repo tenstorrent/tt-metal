@@ -8,10 +8,10 @@
 
 #include <tt-metalium/host_api.hpp>
 
+#include "metal/ops/common/ring_sdpa_utils.hpp"
 #include "metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.hpp"
 #include "metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation_types.hpp"
 #include "metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.hpp"
-#include "ring_sdpa_bw_factory_utils.hpp"
 #include "ring_sdpa_bw_q_device_operation_types.hpp"
 
 namespace ttml::metal::ops::ring_sdpa_bw::q {

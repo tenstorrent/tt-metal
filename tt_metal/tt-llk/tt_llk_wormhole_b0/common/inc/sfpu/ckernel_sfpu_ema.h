@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 /*
@@ -69,15 +70,54 @@ sfpi_inline void _ema_store_current_input_()
  * alpha and beta parameters. It takes the previous EMA value from LREG4 for all 32 columns.
  * The output is stored in the LREG0-3 registers.
  */
-sfpi_inline void _compute_ema_math_()
-{
-    // Transpose the input data to the correct order
-    TTI_SFPTRANSP(0, 0, 0, 0);
+// Replay-buffer slot for the recorded part of the math body, and its exact count:
+//   8 SFPMAD + 8 SFPNOP = 16
+// The length MUST equal the number of instructions actually emitted by
+// _compute_ema_math_body_(), or the replay buffer misaligns and the kernel silently
+// executes the wrong sequence. Update both together.
+//
+// The record is deliberately 16 and not the body's full 19. cmath_common.h splits the
+// per-thread replay buffer between the two issuers -- ckernel::math::replay_buf_offset
+// == 16, so [0, 16) is the SFPU half and [16, 32) belongs to the FPU. Recording all 19
+// here would run to slot 18 and overwrite the first three FPU slots. That is not
+// theoretical: _llk_math_transpose_dest_init_ records its MOP into [16, 32) and the
+// per-tile op replays out of it, so a kernel that inits transpose_dest and then runs an
+// EMA tile gets silently wrong transposes. Measured on n300 with a NoExec probe that
+// claims [0, N) between that record and its replays: N <= 16 leaves all 16384 outputs
+// correct, N = 17/18/19 corrupts 4096/8192/12288 of them -- exactly 4096 per FPU slot
+// crossed.
+//
+// Keeping the record at 16 and issuing the other three inline costs 0.04 cycles/tile
+// (247.89 -> 247.93) and 84 bytes. See _compute_ema_math_() below.
+//
+// Within the SFPU half, slot 0 is shared: the accurate exp path records [0, 32) and topk
+// up to [0, 29), so a caller interleaving EMA with either must not rely on slot 0
+// surviving across the call.
+constexpr std::uint32_t EMA_MATH_REPLAY_SLOT = 0;
+constexpr std::uint32_t EMA_MATH_REPLAY_LEN  = 16;
 
-    // EMA equation: EMA_new = α * EMA_old + β * input
-    // Where: LREG0=input, LREG4=EMA_old, LREG5=α, LREG6=(1-α), LREG7=EMA_new
-    // Thus, LREG7 = LREG5 * LREG4 + LREG6 * LREG0
-    // We do this for each of the 4 inputs.
+// The recorded part: exactly the 8 SFPMAD + 8 SFPNOP pairs. The two SFPTRANSPs and the
+// SFPMOV that bracket them are issued inline by _compute_ema_math_() instead, to hold the
+// record to 16 slots.
+sfpi_inline void _compute_ema_math_body_()
+{
+    // EMA equation: EMA_new = alpha * EMA_old + beta * input
+    // Registers: LREG0-3 = the 4 input rows, updated in place to become the 4 outputs;
+    //            LREG4 = EMA_old carried in (and the new carry out); LREG5 = alpha;
+    //            LREG6 = beta; LREG7 = temp holding alpha * previous row.
+    //
+    // Two SFPMADs per row: LREG7 = alpha*prev, then row = beta*input + LREG7. Both sit on
+    // the dependency chain, so each needs an SFPNOP behind it (2-cycle SFPMAD write
+    // latency). Those NOPs cannot be filled: the rows must occupy LREG0-3 to be transposed
+    // as a group, they are live for the whole span where the slots exist, and the stores
+    // need the post-transpose layout, so no independent work can be scheduled into them.
+    //
+    // Reassociating to remove them (pre-scaling the inputs by beta) does work and is worth
+    // a further -19%, but it changes which product gets its own rounding and is therefore
+    // not bit-neutral: measured over a 1000-alpha sweep it moves 87 of 2048000 outputs, 84
+    // of them by one bfloat16 ULP, at unchanged accuracy. It was not taken here. Replaying
+    // the body instead recovers nearly the same win with no numerical change at all -- see
+    // _compute_ema_math_() below.
 
     // Step 1(in0): Calculate α * EMA_old in LREG7
     // LREG7 = LREG5 * LREG4 (α * EMA_old)
@@ -118,12 +158,60 @@ sfpi_inline void _compute_ema_math_()
     // LREG3 = (LREG6 * LREG3) + LREG7
     TTI_SFPMAD(ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG3, 0);
     TTI_SFPNOP; // Next cycle cannot read from LREG3 (2-cycle operation)
+}
 
-    // Update EMA_old for next iteration
-    // LREG4 = LREG3 (copy new EMA to old EMA register)
+/**
+ * @brief Record the math body on the first block of a tile, replay it on the other seven.
+ *
+ * _compute_ema_math_body_() takes no template parameters, so all 8 blocks in a tile emit
+ * byte-identical instructions -- only the surrounding loads and stores differ, through
+ * compile-time dst offsets. That makes the body a clean record-once/replay candidate. The
+ * 8 x 16 recorded instructions collapse to 16 + 7; the SFPTRANSP/SFPMOV/SFPTRANSP that
+ * bracket the body stay inline and are issued on all 8 blocks.
+ *
+ * @note This is a cycle win, not just a code-size win, and the size of it was surprising:
+ *       MATH_ISOLATE drops from 320.77 to 247.93 cycles/tile (-22.7%) on Wormhole n300,
+ *       with TEXT_SIZE 3015 -> 2599. The arithmetic is untouched, so the result is
+ *       bit-identical -- verified over a 1000-alpha sweep, 2048000 outputs, zero differing.
+ *
+ * @note Do not read the win as "fewer instructions issued is proportionally faster". The
+ *       obvious model -- the TRISC is push-rate bound, so each collapsed instruction buys
+ *       time -- fits the headline number (126 instructions collapsed, 72.9 cycles saved,
+ *       ~0.58 cycles each) but is contradicted by direct measurement. Moving 3 of the 19
+ *       instructions out of the record and back inline puts 21 pushes per tile back, which
+ *       that model prices at ~12 cycles; measured, it costs 0.04 (247.89 with all 19
+ *       recorded, 247.93 with 16). Both figures reproduce exactly across runs.
+ *
+ *       What fits: the fully inlined kernel, at 152 pushes per tile, really is push-bound,
+ *       which is where the 72.9 cycles come from. Once the body is replayed the bottleneck
+ *       moves to replay expansion inside Tensix, and a few extra pushes per block hide
+ *       underneath it. So the first ~126 collapsed instructions are nearly all of the win
+ *       and the last few are worth almost nothing -- which is what makes holding the record
+ *       to the SFPU half of the buffer essentially free.
+ */
+template <bool RECORD>
+sfpi_inline void _compute_ema_math_()
+{
+    // Transpose the input data to the correct order. Inline, not recorded -- see
+    // EMA_MATH_REPLAY_LEN for why the record stops at 16.
+    TTI_SFPTRANSP(0, 0, 0, 0);
+
+    if constexpr (RECORD)
+    {
+        // lltt::Exec so the first block both records and executes; the recorded copy is
+        // what the remaining seven replay.
+        lltt::record<lltt::Exec>(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN);
+        _compute_ema_math_body_();
+    }
+    else
+    {
+        lltt::replay(EMA_MATH_REPLAY_SLOT, EMA_MATH_REPLAY_LEN);
+    }
+
+    // Update EMA_old for next iteration: LREG4 = LREG3. Inline, not recorded.
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG3, ckernel::p_sfpu::LREG4, 0);
 
-    // Transpose the output data to the correct order
+    // Transpose the output data to the correct order. Inline, not recorded.
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
@@ -136,11 +224,11 @@ sfpi_inline void _compute_ema_math_()
  * This is a helper function that performs all three steps for a single block:
  * load inputs, compute EMA, and store results.
  */
-template <std::uint32_t I, std::uint32_t J>
+template <std::uint32_t I, std::uint32_t J, bool RECORD = false>
 sfpi_inline void _process_ema_block_()
 {
     _ema_load_current_input_<I, J>();
-    _compute_ema_math_();
+    _compute_ema_math_<RECORD>();
     _ema_store_current_input_<I, J>();
 }
 
@@ -198,7 +286,7 @@ sfpi_inline void _calculate_ema_tile_()
     // To finish the entire tile, we need to repeat this process 8 times.
 
     // Process the first block (4 rows of 32 columns)
-    _process_ema_block_<0, 0>();
+    _process_ema_block_<0, 0, /* RECORD */ true>();
 
     // Repeat this 7 more times to process the remaining blocks
     _process_ema_block_<0, 1>();

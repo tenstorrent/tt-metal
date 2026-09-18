@@ -10,35 +10,46 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
-    constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
-    constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
-    constexpr uint32_t do_beta = get_compile_time_arg_val(2);
-    constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(3);
-    constexpr uint32_t block_w = get_compile_time_arg_val(5);
-    constexpr uint32_t block_h_const = get_compile_time_arg_val(4);
-    volatile uint32_t block_h_volatile = get_compile_time_arg_val(4);
-    constexpr uint32_t subblock_w_const = get_compile_time_arg_val(6);
-    volatile uint32_t subblock_w_volatile = get_compile_time_arg_val(6);
-    constexpr uint32_t num_subblocks_w = get_compile_time_arg_val(7);
-    const bool is_allgather_worker = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t num_tiles_per_block = get_compile_time_arg_val(9);
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(10) == 1;
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(11) == 1;
-    constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
-
-    const uint32_t num_reduce_tiles_per_block_h =
-        get_arg_val<uint32_t>(0);  // This value is the same for all cores, except ones that have padding tiles in it.
-                                   // In that case, skip reduce for padding tiles.
-    const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
-    const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
-    const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
-    const uint32_t num_distributed_blocks = is_allgather_worker ? get_arg_val<uint32_t>(4) : 0;
+    constexpr auto num_blocks_first_stage = get_arg(args::num_blocks_first_stage);
+    constexpr auto block_w = get_arg(args::block_w);
+    constexpr auto block_h_const = get_arg(args::block_h);
+    volatile uint32_t block_h_volatile = get_arg(args::block_h);
+    constexpr auto subblock_w_const = get_arg(args::subblock_w);
+    volatile uint32_t subblock_w_volatile = get_arg(args::subblock_w);
+    constexpr auto num_subblocks_w = get_arg(args::num_subblocks_w);
+    constexpr auto num_tiles_per_block = get_arg(args::num_tiles_per_block);
+    constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
+    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
+    constexpr auto num_blocks_second_stage = get_arg(args::num_blocks_second_stage);
+    // gamma and beta each gate a buffer that only exists when their tensor was supplied, so the flag
+    // has to reach the preprocessor as well as `if constexpr`.
+#ifdef FUSE_GAMMA
+    constexpr bool do_gamma = true;
+#else
+    constexpr bool do_gamma = false;
+#endif
+#ifdef FUSE_BETA
+    constexpr bool do_beta = true;
+#else
+    constexpr bool do_beta = false;
+#endif
+    const uint32_t num_reduce_tiles_per_block_h = get_arg(
+        args::num_reduce_tiles_per_block_h);  // This value is the same for all cores, except ones that have
+                                              // padding tiles in it. In that case, skip reduce for padding tiles.
+    // Only the cores that gather reduce the gathered statistics. They alone read that reduction's
+    // runtime arguments and touch its three buffers, so the distinction is a compile-time one and
+    // everything the reduction needs lives inside it.
+#ifdef IS_ALLGATHER_WORKER
+    const uint32_t num_tiles_per_allgather_worker = get_arg(args::num_rows_per_all_to_all_worker);
+    const bool use_two_stage_reduce = get_arg(args::use_two_stage_reduce) == 1;
+    const bool is_second_stage_reader = get_arg(args::is_second_stage_reader) == 1;
+    const uint32_t num_distributed_blocks = get_arg(args::num_distributed_blocks);
 
     uint32_t num_blocks_reduce;
     if (is_second_stage_reader) {
@@ -53,56 +64,77 @@ void kernel_main() {
     } else {
         enable_sqrt = true;
     }
+#endif
 
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
 
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_eps = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
+    constexpr uint32_t dfb_in0 = dfb::in0;
+    constexpr uint32_t dfb_eps = dfb::eps;
+    constexpr uint32_t dfb_scaler_global = dfb::scaler_global;
+#ifdef FUSE_GAMMA
+    constexpr uint32_t dfb_gamma = dfb::gamma;
+#endif
+#ifdef FUSE_BETA
+    constexpr uint32_t dfb_beta = dfb::beta;
+#endif
 
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;              // E[x] global reduce
-    constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;            // E[x^2]
-    constexpr uint32_t cb_stats = tt::CBIndex::c_7;           // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_21;  // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;      // E[x] global reduce
-    constexpr uint32_t cb_reciprocal = tt::CBIndex::c_20;     // [E[x^2]-E[x]^2]+eps
-    constexpr uint32_t cb_fusion = tt::CBIndex::c_18;         // stream gamma/beta
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_var = tt::CBIndex::c_19;
-    constexpr uint32_t cb_ex_sqr = tt::CBIndex::c_24;  // E[x]^2
+    constexpr uint32_t dfb_ex2 = dfb::ex2;              // E[x^2]
+    constexpr uint32_t dfb_ex_global = dfb::ex_global;  // E[x] global reduce
+    constexpr uint32_t dfb_fusion = dfb::xmm;           // stream gamma/beta
+    constexpr uint32_t dfb_out = dfb::out;
+    constexpr uint32_t dfb_ex_sqr = dfb::x;  // E[x]^2
+    // The statistics reduction and its three buffers exist only on the cores that gather.
+#ifdef IS_ALLGATHER_WORKER
+    constexpr uint32_t dfb_stats = dfb::stats;                  // gathered [E[x], E[x^2]] from every device
+    constexpr uint32_t dfb_stats_reduced = dfb::stats_reduced;  // reduced statistics
+    constexpr uint32_t dfb_var = dfb::var;                      // Var[x]
+#endif
 
-    CircularBuffer cb_in0_obj(cb_in0);
-    CircularBuffer cb_eps_obj(cb_eps);
-    CircularBuffer cb_scaler_global_obj(cb_scaler_global);
-    CircularBuffer cb_gamma_obj(cb_gamma);
-    CircularBuffer cb_beta_obj(cb_beta);
-    CircularBuffer cb_ex2_obj(cb_ex2);
-    CircularBuffer cb_stats_obj(cb_stats);
-    CircularBuffer cb_stats_reduced_obj(cb_stats_reduced);
-    CircularBuffer cb_ex_global_obj(cb_ex_global);
-    CircularBuffer cb_fusion_obj(cb_fusion);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_var_obj(cb_var);
-    CircularBuffer cb_ex_sqr_obj(cb_ex_sqr);
+    DataflowBuffer dfb_in0_obj(dfb_in0);
+    DataflowBuffer dfb_eps_obj(dfb_eps);
+    DataflowBuffer dfb_scaler_global_obj(dfb_scaler_global);
+#ifdef FUSE_GAMMA
+    DataflowBuffer dfb_gamma_obj(dfb_gamma);
+#endif
+#ifdef FUSE_BETA
+    DataflowBuffer dfb_beta_obj(dfb_beta);
+#endif
+    DataflowBuffer dfb_ex2_obj(dfb_ex2);
+    DataflowBuffer dfb_ex_global_obj(dfb_ex_global);
+    DataflowBuffer dfb_fusion_obj(dfb_fusion);
+    DataflowBuffer dfb_out_obj(dfb_out);
+    DataflowBuffer dfb_ex_sqr_obj(dfb_ex_sqr);
+#ifdef IS_ALLGATHER_WORKER
+    DataflowBuffer dfb_stats_obj(dfb_stats);
+    DataflowBuffer dfb_stats_reduced_obj(dfb_stats_reduced);
+    DataflowBuffer dfb_var_obj(dfb_var);
+#endif
 
 #ifdef RMSNORM
-    constexpr uint32_t init_in_cb = is_allgather_worker ? cb_stats : cb_in0;
-    constexpr uint32_t init_out_cb = is_allgather_worker ? cb_var : cb_out;
     constexpr uint32_t stats_tiles = 1;
-    constexpr uint32_t cb_xmm = cb_in0;  // x
+    constexpr uint32_t dfb_xmm = dfb_in0;  // x
+#ifdef IS_ALLGATHER_WORKER
+    constexpr uint32_t init_in_dfb = dfb_stats;
+    constexpr uint32_t init_out_dfb = dfb_var;
 #else
-    constexpr uint32_t init_in_cb = is_allgather_worker ? cb_stats : cb_in0;
-    constexpr uint32_t init_out_cb = is_allgather_worker ? cb_stats_reduced : cb_out;
-    constexpr uint32_t stats_tiles = 2;
-    constexpr uint32_t cb_xmm = tt::CBIndex::c_18;  // x minus mean
+    constexpr uint32_t init_in_dfb = dfb_in0;
+    constexpr uint32_t init_out_dfb = dfb_out;
 #endif
-    binary_op_init_common(init_in_cb, cb_scaler_global, init_out_cb);
-    CircularBuffer cb_xmm_obj(cb_xmm);
+#else
+    constexpr uint32_t stats_tiles = 2;
+    constexpr uint32_t dfb_xmm = dfb::xmm;  // x minus mean
+#ifdef IS_ALLGATHER_WORKER
+    constexpr uint32_t init_in_dfb = dfb_stats;
+    constexpr uint32_t init_out_dfb = dfb_stats_reduced;
+#else
+    constexpr uint32_t init_in_dfb = dfb_in0;
+    constexpr uint32_t init_out_dfb = dfb_out;
+#endif
+#endif
+    compute_kernel_hw_startup(init_in_dfb, dfb_scaler_global, init_out_dfb);
+    DataflowBuffer dfb_xmm_obj(dfb_xmm);
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
@@ -112,239 +144,243 @@ void kernel_main() {
     int index_h_offset = 0;
     int index = 0;
 
-    constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_ex_sqr : cb_out;
-    CircularBuffer cb_im_obj(cb_im);
-    constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
-    CircularBuffer cb_outgamma_obj(cb_outgamma);
+    constexpr uint32_t dfb_im = (do_gamma | do_beta) ? dfb_ex_sqr : dfb_out;
+    DataflowBuffer dfb_im_obj(dfb_im);
+    constexpr uint32_t dfb_outgamma = do_beta ? dfb_fusion : dfb_out;
+    DataflowBuffer dfb_outgamma_obj(dfb_outgamma);
 
-    // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
-    if constexpr (is_allgather_worker) {
-        if (enable_sqrt) {
+    // global reduce over the gathered statistics
+#ifdef IS_ALLGATHER_WORKER
+    if (enable_sqrt) {
 #ifdef RMSNORM
-            cb_var_obj.reserve_back(1);
+        dfb_var_obj.reserve_back(1);
 #else
-            cb_stats_reduced_obj.reserve_back(1);
-            cb_ex2_obj.reserve_back(1);
+        dfb_stats_reduced_obj.reserve_back(1);
+        dfb_ex2_obj.reserve_back(1);
 #endif
 
-            cb_scaler_global_obj.wait_front(1);
-            reconfig_data_format(cb_scaler_global, cb_stats);
-            reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_stats, cb_scaler_global, cb_var);
-            tile_regs_acquire();
-            // striding over cb_stats, consisting [E(X), E(X^2)] from all the distributed devices in interleaved order
-            for (uint32_t w = 0; w < stats_tiles * num_distributed_blocks; w++) {
-                reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(
-                    cb_stats,
-                    cb_scaler_global,
-                    0,
-                    scaler0,
-                    w % stats_tiles);  // reducing E(x) and E(x^2) separately to different dst
-                cb_stats_obj.pop_front(1);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
+        dfb_scaler_global_obj.wait_front(1);
+        reconfig_data_format(dfb_scaler_global, dfb_stats);
+        reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(dfb_stats, dfb_scaler_global, dfb_var);
+        tile_regs_acquire();
+        // striding over the statistics, consisting [E(X), E(X^2)] from all the distributed devices in interleaved order
+        for (uint32_t w = 0; w < stats_tiles * num_distributed_blocks; w++) {
+            reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(
+                dfb_stats,
+                dfb_scaler_global,
+                0,
+                scaler0,
+                w % stats_tiles);  // reducing E(x) and E(x^2) separately to different dst
+            dfb_stats_obj.pop_front(1);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
 
 #ifdef RMSNORM
-            pack_tile(dst0, cb_var);
+        pack_tile(dst0, dfb_var);
 #else
-            pack_tile(dst0, cb_stats_reduced);
-            pack_tile(dst1, cb_ex2);
+        pack_tile(dst0, dfb_stats_reduced);
+        pack_tile(dst1, dfb_ex2);
 #endif
-            tile_regs_release();
-            reduce_uninit();
+        tile_regs_release();
+        reduce_uninit();
 #ifdef RMSNORM
-            cb_var_obj.push_back(stats_tiles);
+        dfb_var_obj.push_back(stats_tiles);
 #else
-            cb_stats_reduced_obj.push_back(1);
-            cb_ex2_obj.push_back(1);
+        dfb_stats_reduced_obj.push_back(1);
+        dfb_ex2_obj.push_back(1);
 #endif
 
 #ifndef RMSNORM
-            // calculate var = E(x^2) - E(x)^2
-            // E(x)^2
-            reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
-            cb_ex_sqr_obj.reserve_back(1);
-            cb_stats_reduced_obj.wait_front(1);
-            tile_regs_acquire();
-            mul_tiles_init(cb_stats_reduced, cb_stats_reduced);
-            mul_tiles(cb_stats_reduced, cb_stats_reduced, 0, 0, dst0);  // first tile in stats is always E(x)
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex_sqr);
-            cb_ex_sqr_obj.push_back(1);
-            tile_regs_release();
+        // calculate var = E(x^2) - E(x)^2
+        // E(x)^2
+        reconfig_data_format(dfb_stats_reduced, dfb_stats_reduced);
+        dfb_ex_sqr_obj.reserve_back(1);
+        dfb_stats_reduced_obj.wait_front(1);
+        tile_regs_acquire();
+        mul_init(dfb_stats_reduced, dfb_stats_reduced);
+        mul_tiles(dfb_stats_reduced, dfb_stats_reduced, 0, 0, dst0);  // first tile in stats is always E(x)
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(dst0, dfb_ex_sqr);
+        dfb_ex_sqr_obj.push_back(1);
+        tile_regs_release();
 
-            // E(x^2) - E(x)^2
-            reconfig_data_format_srca(cb_stats_reduced, cb_ex2);
-            reconfig_data_format_srcb(cb_stats_reduced, cb_ex_sqr);
-            pack_reconfig_data_format(cb_var);
-            cb_ex2_obj.wait_front(1);
-            cb_ex_sqr_obj.wait_front(1);
-            cb_var_obj.reserve_back(1);
-            tile_regs_acquire();
-            sub_tiles_init(cb_ex2, cb_ex_sqr);
-            sub_tiles(cb_ex2, cb_ex_sqr, 0, 0, dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_var);
-            cb_var_obj.push_back(1);
-            tile_regs_release();
-            cb_ex2_obj.pop_front(1);
-            cb_ex_sqr_obj.pop_front(1);
+        // E(x^2) - E(x)^2
+        reconfig_data_format_srca(dfb_stats_reduced, dfb_ex2);
+        reconfig_data_format_srcb(dfb_stats_reduced, dfb_ex_sqr);
+        pack_reconfig_data_format(dfb_var);
+        dfb_ex2_obj.wait_front(1);
+        dfb_ex_sqr_obj.wait_front(1);
+        dfb_var_obj.reserve_back(1);
+        tile_regs_acquire();
+        sub_init(dfb_ex2, dfb_ex_sqr);
+        sub_tiles(dfb_ex2, dfb_ex_sqr, 0, 0, dst0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(dst0, dfb_var);
+        dfb_var_obj.push_back(1);
+        tile_regs_release();
+        dfb_ex2_obj.pop_front(1);
+        dfb_ex_sqr_obj.pop_front(1);
 #endif
 
-            // 1/[sqrt(Var + eps)],
-            reconfig_data_format(cb_var, cb_eps);  // cb_var is cb_stats in case of RMS norm
-            pack_reconfig_data_format(cb_stats_reduced);
-            cb_var_obj.wait_front(1);
-            cb_eps_obj.wait_front(1);
-            cb_stats_reduced_obj.reserve_back(1);
+        // 1/[sqrt(Var + eps)],
+        reconfig_data_format(dfb_var, dfb_eps);  // the Var[x] buffer holds the gathered stats for RMS norm
+        pack_reconfig_data_format(dfb_stats_reduced);
+        dfb_var_obj.wait_front(1);
+        dfb_eps_obj.wait_front(1);
+        dfb_stats_reduced_obj.reserve_back(1);
 
-            add_tiles_init(cb_var, cb_eps);
-            tile_regs_acquire();
-            add_tiles(cb_var, cb_eps, 0, 0, dst0);
-            tile_regs_wait();
-            rsqrt_tile_init<LEGACY_RSQRT>();
-            rsqrt_tile<LEGACY_RSQRT>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_stats_reduced);
-            tile_regs_release();
-            cb_var_obj.pop_front(1);
-            cb_eps_obj.pop_front(1);
-            cb_stats_reduced_obj.push_back(1);
-        }
+        add_init(dfb_var, dfb_eps);
+        tile_regs_acquire();
+        add_tiles(dfb_var, dfb_eps, 0, 0, dst0);
+        tile_regs_wait();
+        rsqrt_tile_init<LEGACY_RSQRT>();
+        rsqrt_tile<LEGACY_RSQRT>(dst0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(dst0, dfb_stats_reduced);
+        tile_regs_release();
+        dfb_var_obj.pop_front(1);
+        dfb_eps_obj.pop_front(1);
+        dfb_stats_reduced_obj.push_back(1);
     }
+#endif
 
 #ifndef RMSNORM
     // x - E[x]
-    reconfig_data_format(cb_in0, cb_ex_global);
-    pack_reconfig_data_format(cb_xmm);
+    reconfig_data_format(dfb_in0, dfb_ex_global);
+    pack_reconfig_data_format(dfb_xmm);
     index_h_offset = 0;
-    sub_bcast_cols_init_short(cb_in0, cb_ex_global);
-    cb_xmm_obj.reserve_back(num_tiles_per_block);
+    sub_bcast_cols_init(dfb_in0, dfb_ex_global);
+    dfb_xmm_obj.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
-        cb_ex_global_obj.wait_front(1);
+        dfb_ex_global_obj.wait_front(1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset;
-                sub_tiles_bcast_cols(cb_in0, cb_ex_global, index, 0, w);
+                sub_tiles_bcast_cols(dfb_in0, dfb_ex_global, index, 0, w);
             }
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, cb_xmm);
+                pack_tile(i, dfb_xmm);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
-        cb_ex_global_obj.pop_front(1);
-        cb_in0_obj.pop_front(block_w);
+        dfb_ex_global_obj.pop_front(1);
+        dfb_in0_obj.pop_front(block_w);
     }
-    cb_xmm_obj.push_back(num_tiles_per_block);
+    dfb_xmm_obj.push_back(num_tiles_per_block);
 #endif
 
     if constexpr (do_gamma == 0 && do_beta == 0) {
-        pack_reconfig_data_format(cb_out);
+        pack_reconfig_data_format(dfb_out);
     } else {
-        pack_reconfig_data_format(cb_im);
+        pack_reconfig_data_format(dfb_im);
     }
 
     // (x - Ex) * 1/[sqrt(Var + eps)]
-    reconfig_data_format(cb_xmm, cb_ex_global);
-    mul_bcast_cols_init_short(cb_xmm, cb_ex_global);
+    reconfig_data_format(dfb_xmm, dfb_ex_global);
+    mul_bcast_cols_init(dfb_xmm, dfb_ex_global);
     index_h_offset = 0;
-    cb_im_obj.reserve_back(num_tiles_per_block);
+    dfb_im_obj.reserve_back(num_tiles_per_block);
 #ifndef RMSNORM
-    cb_xmm_obj.wait_front(num_tiles_per_block);
+    dfb_xmm_obj.wait_front(num_tiles_per_block);
 #endif
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
-        cb_ex_global_obj.wait_front(1);
+        dfb_ex_global_obj.wait_front(1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset + index_h_offset;
-                mul_tiles_bcast_cols(cb_xmm, cb_ex_global, index, 0, w);
+                mul_tiles_bcast_cols(dfb_xmm, dfb_ex_global, index, 0, w);
             }
             tile_regs_commit();
 
             tile_regs_wait();
             for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, cb_im);
+                pack_tile(i, dfb_im);
             }
             tile_regs_release();
 
             index_subblock_w_offset += subblock_w;
         }
         index_h_offset += block_w;
-        cb_ex_global_obj.pop_front(1);
+        dfb_ex_global_obj.pop_front(1);
     }
-    cb_im_obj.push_back(num_tiles_per_block);
+    dfb_im_obj.push_back(num_tiles_per_block);
 
-    cb_xmm_obj.pop_front(num_tiles_per_block);
-    cb_im_obj.wait_front(num_tiles_per_block);
+    dfb_xmm_obj.pop_front(num_tiles_per_block);
+    dfb_im_obj.wait_front(num_tiles_per_block);
 
-    if constexpr (do_gamma) {
-        reconfig_data_format(cb_im, cb_gamma);
+#ifdef FUSE_GAMMA
+    {
+        reconfig_data_format(dfb_im, dfb_gamma);
         if constexpr (do_beta == 0) {
-            pack_reconfig_data_format(cb_out);
+            pack_reconfig_data_format(dfb_out);
         }
-        mul_bcast_rows_init_short(cb_im, cb_gamma);
-        cb_gamma_obj.wait_front(block_w);
+        mul_bcast_rows_init(dfb_im, dfb_gamma);
+        dfb_gamma_obj.wait_front(block_w);
         index_h_offset = 0;
-        cb_outgamma_obj.reserve_back(num_tiles_per_block);
+        dfb_outgamma_obj.reserve_back(num_tiles_per_block);
         for (uint32_t i = 0; i < block_h; i++) {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     index = w + index_subblock_w_offset;
-                    mul_tiles_bcast_rows(cb_im, cb_gamma, index + index_h_offset, index, w);
+                    mul_tiles_bcast_rows(dfb_im, dfb_gamma, index + index_h_offset, index, w);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t i = 0; i < subblock_w; i++) {
-                    pack_tile(i, cb_outgamma);
+                    pack_tile(i, dfb_outgamma);
                 }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
-                cb_outgamma_obj.push_back(subblock_w);
+                dfb_outgamma_obj.push_back(subblock_w);
             }
             index_h_offset += block_w;
         }
-        cb_im_obj.pop_front(num_tiles_per_block);
+        dfb_im_obj.pop_front(num_tiles_per_block);
     }
+#endif
 
-    if constexpr (do_beta) {
-        cb_outgamma_obj.wait_front(num_tiles_per_block);
-        reconfig_data_format(cb_fusion, cb_beta);
-        pack_reconfig_data_format(cb_out);
-        add_bcast_rows_init_short(cb_fusion, cb_beta);
-        cb_beta_obj.wait_front(block_w);
+#ifdef FUSE_BETA
+    {
+        dfb_outgamma_obj.wait_front(num_tiles_per_block);
+        reconfig_data_format(dfb_fusion, dfb_beta);
+        pack_reconfig_data_format(dfb_out);
+        add_bcast_rows_init(dfb_fusion, dfb_beta);
+        dfb_beta_obj.wait_front(block_w);
         index_h_offset = 0;
-        cb_out_obj.reserve_back(num_tiles_per_block);
+        dfb_out_obj.reserve_back(num_tiles_per_block);
         for (uint32_t i = 0; i < block_h; i++) {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
                 for (uint32_t w = 0; w < subblock_w; w++) {
                     index = w + index_subblock_w_offset;
-                    add_tiles_bcast_rows(cb_fusion, cb_beta, index + index_h_offset, index, w);
+                    add_tiles_bcast_rows(dfb_fusion, dfb_beta, index + index_h_offset, index, w);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t i = 0; i < subblock_w; i++) {
-                    pack_tile(i, cb_out);
+                    pack_tile(i, dfb_out);
                 }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
             }
             index_h_offset += block_w;
         }
-        cb_out_obj.push_back(num_tiles_per_block);
-        cb_fusion_obj.pop_front(num_tiles_per_block);
+        dfb_out_obj.push_back(num_tiles_per_block);
+        dfb_fusion_obj.pop_front(num_tiles_per_block);
     }
+#endif
 }

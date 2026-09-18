@@ -32,7 +32,22 @@ class ResetUtil:
         # Back-compat: expose the primary mechanism as command/args.
         self.command, self.args = self.mechanisms[0]
         # Retry policy (overridable via env for tuning per runner).
-        self.reset_attempts = max(1, int(os.getenv("TT_SMI_RESET_ATTEMPTS", "3")))
+        #
+        # Default is a SINGLE attempt. Across every sweep run examined (runs
+        # 29471789178, 30185389725, 30324574397) a failing reset failed on all three
+        # attempts -- retrying never once recovered the host -- while each extra
+        # attempt costs reset_backoff_seconds (30s) plus the reset itself, ~3 min per
+        # incident. On Galaxy it is doubly redundant: `tt-smi -glx_reset_auto`
+        # (galaxy_6u_trays_reset_auto) already retries internally, so 3 attempts here
+        # meant up to 9 resets. Failing fast into the infra-abort path is more useful
+        # than a slow, repeated failure.
+        #
+        # Tradeoff: reset_backoff_seconds is only slept BETWEEN attempts, so a single
+        # attempt also removes the "wait for the device to be released" grace. That
+        # grace was belt-and-braces -- callers already _kill_child() before resetting,
+        # so the device should be free -- but if a slow-release case ever shows up,
+        # raise TT_SMI_RESET_ATTEMPTS (per runner) rather than reverting the default.
+        self.reset_attempts = max(1, int(os.getenv("TT_SMI_RESET_ATTEMPTS", "1")))
         self.reset_backoff_seconds = max(0, int(os.getenv("TT_SMI_RESET_BACKOFF_SECONDS", "30")))
         # After a reset, wait for the kernel driver / UMD to finish re-enumerating
         # the devices before returning. A PCIe-level reset (tt-smi -r) tears the
@@ -80,7 +95,17 @@ class ResetUtil:
         elif tt_smi:
             p_args = primary[1]
             if any("glx" in a for a in p_args):
-                mechanisms.append((tt_smi, ["-r", "all"]))  # PCIe-level reset
+                # NO auto-fallback on Galaxy. The only other mechanism is the PCIe-level
+                # reset (`tt-smi -r`), which is known-bad on 6u Galaxy: it hangs / leaves
+                # the driver half-initialized. Observed in run 30324574397 (both timed-out
+                # jobs): `-glx_reset_auto` failed 3x, the auto-appended `tt-smi -r all`
+                # then reported "Reset Complete Successfully", and the very next device
+                # operation blocked forever -- 49 min mid-vector in one job, 24 min in
+                # teardown in the other, each burning the full 60-min job budget.
+                # Failing fast (ResetFailed -> infra abort) is strictly better than a
+                # half-reset that hangs. Set TT_SMI_RESET_FALLBACK_COMMAND explicitly to
+                # opt back in.
+                pass
             elif any(a in ("-r", "--reset") for a in p_args):
                 mechanisms.append((tt_smi, ["-glx_reset"]))  # IPMI/tray reset
 

@@ -4,27 +4,29 @@
 
 #pragma once
 
+#include <cstdint>
 #include "llk_defs.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_binary.h"
+#include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
 inline void calculate_addcdiv(
-    const uint dst_index_in0,  // input_a
-    const uint dst_index_in1,  // input_b
-    const uint dst_index_in2,  // input_c
-    const uint dst_index_out,  // output
-    const uint value) {        // scalar value to multiply with input_b
+    const std::uint32_t dst_index_in0,  // input_a
+    const std::uint32_t dst_index_in1,  // input_b
+    const std::uint32_t dst_index_in2,  // input_c
+    const std::uint32_t dst_index_out,  // output
+    const std::uint32_t value) {        // scalar value to multiply with input_b
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
         "Unsupported data format for calculate_addcdiv(). Supported data formats are: Float32, Float16_b.");
 
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
     const sfpi::vFloat value_float = Converter::as_float(value);
 
 #pragma GCC unroll 8

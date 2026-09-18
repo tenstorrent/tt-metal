@@ -46,7 +46,7 @@ constexpr uint32_t READ_RESPONSE_STATIC_VC = 12;
 // NOC V2 command buffer VC assignments (same HW values as overlay::CMDBUF_*_VC)
 constexpr uint32_t NOC_V2_RD_REQ_VC = 1;
 constexpr uint32_t NOC_V2_RD_RESP_VC = 12;
-constexpr uint32_t NOC_V2_WR_REQ_VC = 2;
+constexpr uint32_t NOC_V2_WR_REQ_VC = 1;
 constexpr uint32_t NOC_V2_WR_RESP_VC = 13;
 constexpr uint32_t NOC_V2_MCAST_REQ_VC = 8;
 constexpr uint32_t NOC_V2_MCAST_RESP_VC = 14;
@@ -132,10 +132,66 @@ inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
     *ptr = val;
 }
 
+inline __attribute__((always_inline)) uint64_t NOC_CMD_BUF_READ_OVERLAY_REG(uint32_t buf, uint32_t reg_offset) {
+    // The AT buffer is backed by Quasar's simple command buffer; WR/RD buffers are regular indexed command buffers.
+    if (buf == OVERLAY_AT_CMD_BUF) {
+        return __builtin_riscv_ttrocc_scmdbuf_rd_reg(reg_offset / 8);
+    }
+    return __builtin_riscv_ttrocc_cmdbuf_rd_reg(buf, reg_offset / 8);
+}
+
 inline __attribute__((always_inline)) uint32_t NOC_CMD_BUF_READ_REG(uint32_t noc, uint32_t buf, uint32_t addr) {
-    uintptr_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
-    volatile uint32_t* ptr = (volatile uint32_t*)offset;
-    return *ptr;
+    switch (addr) {
+        // NOC_TARG_ADDR_* -> cmd-buf SRC_{ADDR,COORD} (data source: remote for reads, local for writes)
+        case NOC_TARG_ADDR_LO:
+            return (uint32_t)NOC_CMD_BUF_READ_OVERLAY_REG(
+                buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET);
+
+        case NOC_TARG_ADDR_MID:
+            return (
+                uint32_t)(NOC_CMD_BUF_READ_OVERLAY_REG(buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET) >>
+                          32);
+
+        case NOC_TARG_ADDR_HI:  // NOC_TARG_ADDR_COORDINATE aliases this
+            return (uint32_t)NOC_CMD_BUF_READ_OVERLAY_REG(
+                buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET);
+
+        // NOC_RET_ADDR_* -> cmd-buf DEST_{ADDR,COORD} (data dest: local for reads, remote for writes)
+        case NOC_RET_ADDR_LO:
+            return (uint32_t)NOC_CMD_BUF_READ_OVERLAY_REG(
+                buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET);
+
+        case NOC_RET_ADDR_MID:
+            return (uint32_t)(NOC_CMD_BUF_READ_OVERLAY_REG(
+                                  buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET) >>
+                              32);
+
+        // NOC_RET_ADDR_COORDINATE aliases this
+        case NOC_RET_ADDR_HI:
+            return (uint32_t)NOC_CMD_BUF_READ_OVERLAY_REG(
+                buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET);
+
+        // NOC_AT_LEN_BE aliases NOC_AT_LEN on Quasar
+        case NOC_AT_LEN:
+            return (uint32_t)NOC_CMD_BUF_READ_OVERLAY_REG(
+                buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET);
+
+        // Inline write / atomic data value
+        case NOC_AT_DATA:
+            return (uint32_t)NOC_CMD_BUF_READ_OVERLAY_REG(
+                buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET);
+
+        // NOC_CMD_CTRL is the transaction trigger on BH/WH (written as 0x1 to fire);
+        // on Quasar the trigger is cmdbuf_issue_trans() with no stored state.
+        case NOC_CMD_CTRL: return 0;
+
+        // NOC_NODE_ID and other NOC config registers are true MMIO globals - not cmd buf registers (buf-independent).
+        default: {
+            ASSERT(buf == 0);  // cmd-buf regs route through RoCC above; this path is globals-only
+            uintptr_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
+            return *((volatile uint32_t*)offset);
+        }
+    }
 }
 
 inline __attribute__((always_inline)) uint32_t NOC_STATUS_REG_ADDR(uint32_t noc, uint32_t reg_id) {
@@ -195,6 +251,8 @@ inline __attribute__((always_inline)) void noc_cmd_buf_save_state(
 }
 
 inline __attribute__((always_inline)) void noc_clear_packet_tag(uint32_t /* noc */, uint32_t /* cmd_buf */) {}
+
+inline __attribute__((always_inline)) void noc_clear_packet_tags(uint32_t /* noc */) {}
 
 inline __attribute__((always_inline)) void noc_cmd_buf_restore_state(
     uint32_t noc, uint32_t cmd_buf, const NocCmdBufState* state) {
@@ -276,6 +334,29 @@ inline __attribute__((always_inline)) uint64_t noc_local_xy() {
     return NOC_XY_COORD(my_x, my_y);
 }
 
+// snoop asks the destination NIU to raise a cache snoop on receive. flush, per quasar noc spec,
+// prevents the next packet from committing until all previous packets have committed -- so tagging
+// just the final transfer guarantees the whole payload is committed before any later same-VC packet
+// to that destination.
+//
+// Persistent command-buffer state, not a per-transaction argument: set the tags, issue the transfer
+// that should carry them, then call again with both false. Left set, they tag every subsequent packet
+// on this buffer.
+//
+// Writes the whole register, so a call overwrites the other caller's bit as well as its own.
+template <uint32_t cmd_buf>
+inline __attribute__((always_inline)) void noc_set_packet_tags(bool snoop, bool flush) {
+    static_assert(
+        cmd_buf == OVERLAY_WR_CMD_BUF || cmd_buf == OVERLAY_RD_CMD_BUF,
+        "packet tags are only defined for the full command buffers (0/1)");
+    TT_ROCC_CMD_BUF_PACKET_TAGS_reg_u tags;
+    tags.val = 0;
+    tags.f.snoop_bit = snoop;
+    tags.f.flush_bit = flush;
+    __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PACKET_TAGS_REG_OFFSET / 8, tags.val);
+}
+
 inline __attribute__((always_inline)) void init_wr_cmd_buf(uint64_t my_xy) {
     __builtin_riscv_ttrocc_cmdbuf_reset(OVERLAY_WR_CMD_BUF);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -338,6 +419,12 @@ inline __attribute__((always_inline)) void overlay_cmd_buff_init(uint32_t atomic
     init_rd_cmd_buf(my_xy);  // Read command buffer (CMDBUF_1): remote src -> local dest
     init_at_cmd_buf(
         my_xy, atomic_ret_val);  // Atomic command buffer (SCMDBUF): simple buffer for atomics and inline writes
+}
+
+// Point atomic return values back at the slot init_at_cmd_buf() programmed at startup.
+inline __attribute__((always_inline)) void noc_restore_default_atomic_ret_addr(uint32_t atomic_ret_val) {
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_val);
 }
 
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
@@ -746,6 +833,35 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     if (!posted) {
         noc_nonposted_atomics_acked[noc] += 1;
     }
+}
+
+// Quasar NoC CAS: a 4-BIT compare-and-swap on one 4-byte word of a 16B L1 atom. Succeeds
+// iff word == {28'b0, cmp4}, then word <- {28'b0, swap4}; the PRE-OP word is returned to
+// this hart's R_SRC_ADDR slot. Usable ONLY for words whose value stays in [0, 15].
+template <uint8_t noc_mode = DM_DEDICATED_NOC>
+inline __attribute__((always_inline)) void noc_fast_atomic_cas4(
+    uint32_t noc, uint64_t addr, uint32_t vc, uint32_t cmp4, uint32_t swap4, uint32_t atomic_ret_val) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+    // Masked to 4 bits below; an out-of-range cmp could ACQUIRE a free lock.
+    ASSERT(cmp4 <= 0xF && swap4 <= 0xF);
+    uint64_t misc = CMD_BUF_MISC_ATOMIC_TRANS | CMD_BUF_MISC_SRC_INCLUDE;
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_V2_WR_RESP_VC);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_val);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, (uint32_t)(addr & 0xFFFFFFFF));
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8,
+        (uint32_t)(addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    uint64_t at_len = NOC_AT_INS(NOC_AT_INS_CAS) | ((uint64_t)(swap4 & 0xF) << 6) | ((uint64_t)(cmp4 & 0xF) << 2) |
+                      NOC_AT_IND_32((addr >> 2) & 0x3);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, at_len);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, (uint64_t)0);
+    __builtin_riscv_ttrocc_scmdbuf_issue_trans();
+
+    noc_nonposted_atomics_acked[noc] += 1;
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
@@ -1485,9 +1601,10 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
     if constexpr (send) {
         __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        // Only a call that issues a transaction has a response to account for. Counting one that merely programs
+        // state would overstate the reads in flight, which is what noc_common_read_with_state avoids on tt-1xx.
+        noc_reads_num_issued[noc] += 1;
     }
-
-    noc_reads_num_issued[noc] += 1;
 }
 
 // Same as above, but with src_noc_addr giving the source NOC address separately.
@@ -1519,9 +1636,10 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
     if constexpr (send) {
         __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        // Only a call that issues a transaction has a response to account for. Counting one that merely programs
+        // state would overstate the reads in flight, which is what noc_common_read_with_state avoids on tt-1xx.
+        noc_reads_num_issued[noc] += 1;
     }
-
-    noc_reads_num_issued[noc] += 1;
 }
 
 // clang-format off
@@ -1731,7 +1849,11 @@ inline __attribute__((always_inline)) uint32_t get_noc_counter_address(uint32_t 
     static_assert(proc_t < MaxDMProcessorsPerCoreType);
     static_assert(static_cast<std::underlying_type_t<NocBarrierType>>(barrier_type) < NUM_BARRIER_TYPES);
 
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+    constexpr uint32_t base = MEM_DISPATCH_NOC_COUNTER_BASE;
+#else
     constexpr uint32_t base = MEM_NOC_COUNTER_BASE;
+#endif
     constexpr uint32_t size = MEM_NOC_COUNTER_SIZE;
 
     // Calculate most of the offset at compile time. Only the noc is variable at runtime.

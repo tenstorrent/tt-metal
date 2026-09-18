@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,7 +13,7 @@
 namespace ttnn {
 
 Tensor fill_implicit_tile_padding(
-    const Tensor& input_tensor, tt::tt_metal::PadValue fill_value, const std::optional<MemoryConfig>& memory_config) {
+    const Tensor& input_tensor, ttnn::PadValue fill_value, const std::optional<MemoryConfig>& memory_config) {
     // if padded shape == logical shape for last 2 dims no padding should be present, and no fill pad is necessary
     uint32_t padded_height =
         tt::div_up(input_tensor.logical_shape()[-2], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
@@ -24,12 +24,14 @@ Tensor fill_implicit_tile_padding(
     }
     auto mutable_input_tensor = input_tensor;
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
-    if (input_tensor.dtype() == DataType::BFLOAT8_B) {
+    if (is_block_float(input_tensor.dtype())) {
         mutable_input_tensor = ttnn::typecast(mutable_input_tensor, DataType::BFLOAT16);
     }
     Tensor output_tensor;
     // if input_tensor is rank > 3, then we need to reshape it to rank 3 such that the last 2 dims are the same
-    if (mutable_input_tensor.logical_shape().rank() > 3) {
+    // Rank>3 interleaved tensors are collapsed to rank-3 before fill_pad. Sharded tensors keep
+    // their rank so NdShardSpec stays aligned with logical_shape (reshard cannot collapse shard rank).
+    if (mutable_input_tensor.logical_shape().rank() > 3 && !mutable_input_tensor.is_sharded()) {
         ttnn::Shape original_shape = mutable_input_tensor.logical_shape();
 
         uint32_t third_dim = 1;
@@ -62,11 +64,11 @@ Tensor fill_implicit_tile_padding(
     } else {
         output_tensor = ttnn::prim::fill_pad(mutable_input_tensor, fill_value, output_memory_config);
     }
-    // BFLOAT8_B was typecast to BFLOAT16 above for fill_pad; restore the original dtype on every return path,
-    // including the rank>3 branch (previously the cast-back only fired on the rank<=3 path, leaking BFLOAT16
-    // for rank>3 BFLOAT8_B inputs).
-    if (input_tensor.dtype() == DataType::BFLOAT8_B) {
-        return ttnn::typecast(output_tensor, DataType::BFLOAT8_B);
+    // Block-float inputs were typecast to BFLOAT16 above for fill_pad; restore the original dtype on every
+    // return path, including the rank>3 branch (previously the cast-back only fired on the rank<=3 path,
+    // leaking BFLOAT16 for rank>3 block-float inputs).
+    if (is_block_float(input_tensor.dtype())) {
+        return ttnn::typecast(output_tensor, input_tensor.dtype());
     }
     return output_tensor;
 }

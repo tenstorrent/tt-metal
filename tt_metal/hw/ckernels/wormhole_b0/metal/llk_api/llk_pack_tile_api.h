@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_pack_common_api.h"
 #include "sanitizer/api.h"
 
@@ -10,12 +11,23 @@
  * LLK PACK
  *************************************************************************/
 
+/**
+ * @brief No-op pack-side ordering primitive; present only for API parity with Quasar.
+ *
+ * WH/BH have no pack-side WAIT/PUSH ordering requirement, so this has no functional role in a kernel. It
+ * exists only so the shared compute-API dummy_pack() resolves on every architecture; on Quasar the same
+ * call is a required TEN-4746 drain primitive (see that arch's llk_pack_tile_api.h).
+ *
+ * @param pack_output  The output dataflow buffer identifier (unused).
+ */
+inline void llk_pack_dummy([[maybe_unused]] const std::uint32_t pack_output) {}
+
 template <
     PackMode pack_mode = PackMode::Default,
     bool zero_output = false,
     bool skip_addrmod_config = false,
     bool skip_packer_strides = false>
-inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1) {
+inline void llk_pack_init(const std::uint32_t pack_output, std::uint32_t num_tiles = 1) {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
         "Wormhole B0: pack init supports PackMode::Default and PackMode::Untilize only");
@@ -36,7 +48,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
 inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32_t output_tile_index = 0) {
     LLK_ASSERT(
-        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     std::uint8_t output_id = get_output_id(output);
@@ -64,14 +76,14 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
 
 template <bool is_fp32_dest_acc_en, bool out_of_order_output = false, PackMode pack_mode = PackMode::Default>
 inline void llk_matmul_pack(
-    std::uint32_t start_tile_index, std::uint32_t output, uint32_t ntiles, std::uint32_t output_tile_index = 0) {
+    std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles, std::uint32_t output_tile_index = 0) {
     std::uint8_t output_id = get_output_id(output);
 
     static_assert(
         !((pack_mode == PackMode::Untilize) && out_of_order_output), "untilize out of order packing is not supported!");
     LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
     LLK_ASSERT(
-        ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
+        ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
 
     llk::san::pack_operand_check(
@@ -84,7 +96,7 @@ inline void llk_matmul_pack(
         get_output_partial_face(output_id),
         get_output_narrow_tile(output_id));
 
-    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         std::uint32_t pack_tile_addr =
             get_output_tile_address<out_of_order_output, pack_mode>(output_id, output_tile_index);
 

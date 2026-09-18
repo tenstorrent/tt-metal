@@ -87,6 +87,14 @@ class DataFormat(Enum):
     Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
 
     @property
+    def cpp_enum_value(self) -> str:
+        return f"DataFormat::{self.name}"
+
+    @property
+    def cpp_underlying_value(self) -> str:
+        return f"ckernel::to_underlying(DataFormat::{self.name})"
+
+    @property
     def size(self) -> Fraction:
         """Returns the byte size of the data format."""
         return self.value.byte_size
@@ -184,6 +192,15 @@ class DataFormat(Enum):
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
             DataFormat.MxFp4,
+        }
+
+    def is_block_float(self) -> bool:
+        """Checks if the data format is a block float format."""
+        return self in {
+            DataFormat.Bfp8,
+            DataFormat.Bfp8_b,
+            DataFormat.Bfp4_b,
+            DataFormat.Bfp2_b,
         }
 
     def supports_l1_accumulation(self) -> bool:
@@ -388,6 +405,8 @@ class FormatConfig:
     pack_S_src (DataFormat): The source format for the S path in the Packer. Defaults to `pack_src` when omitted.
     pack_S_dst (DataFormat): The destination format for the S path in the Packer. Defaults to `pack_dst` when omitted.
     math (DataFormat): The format used for _llk_math_ functions.
+    sfpu_src (DataFormat): The format SFPU reads from the destination register.
+    sfpu_dst (DataFormat): The format SFPU writes to the destination register.
 
     Optional Parameters:
     same_src_format (bool): If `True`, the formats for source registers A and B will be the same for unpack operations.
@@ -425,7 +444,8 @@ class FormatConfig:
     pack_S_src: DataFormat
     pack_S_dst: DataFormat
     math: DataFormat
-    sfpu_math: DataFormat
+    sfpu_src: DataFormat
+    sfpu_dst: DataFormat
 
     def __init__(
         self,
@@ -434,9 +454,12 @@ class FormatConfig:
         pack_src: DataFormat,
         pack_dst: DataFormat,
         math: DataFormat,
-        sfpu_math: Optional[
+        sfpu_src: Optional[
             DataFormat
-        ] = None,  # SFPU-side math format; defaults to `math`. Differs only when the SFPU operates in a format with no native register/dest representation (e.g. UInt16 on Quasar, routed through an Int16 data path).
+        ] = None,  # Format loaded by SFPU; defaults to math.
+        sfpu_dst: Optional[
+            DataFormat
+        ] = None,  # Format stored by SFPU; defaults to sfpu_src for non-converting operations.
         same_src_format: bool = True,  # If True, A and B share unpack formats; omit unpack_B_src / unpack_B_dst (they are set from A).
         # Optional unpack_S_* and pack_S_* default to the A and main pack paths when omitted (mirrors common "S same as A" usage).
         unpack_B_src: Optional[DataFormat] = None,
@@ -452,7 +475,8 @@ class FormatConfig:
         self.pack_src = pack_src
         self.pack_dst = pack_dst
         self.math = math
-        self.sfpu_math = sfpu_math if sfpu_math is not None else math
+        self.sfpu_src = sfpu_src if sfpu_src is not None else math
+        self.sfpu_dst = sfpu_dst if sfpu_dst is not None else self.sfpu_src
         if same_src_format:
             self.unpack_B_src = unpack_A_src
             self.unpack_B_dst = unpack_A_dst
@@ -486,7 +510,8 @@ class FormatConfig:
             ("unpack_S_src", self.unpack_S_src),
             ("unpack_S_dst", self.unpack_S_dst),
             ("math", self.math),
-            ("sfpu_math", self.sfpu_math),
+            ("sfpu_src", self.sfpu_src),
+            ("sfpu_dst", self.sfpu_dst),
             ("pack_src", self.pack_src),
             ("pack_dst", self.pack_dst),
             ("pack_S_src", self.pack_S_src),
@@ -523,7 +548,8 @@ struct FormatConfig
     std::uint32_t unpack_B_dst = 0;
     std::uint32_t unpack_S_dst = 0;
     std::uint32_t math = 0;
-    std::uint32_t sfpu_math = 0;
+    std::uint32_t sfpu_src = 0;
+    std::uint32_t sfpu_dst = 0;
     std::uint32_t pack_src = 0;
     std::uint32_t pack_dst = 0;
     std::uint32_t pack_S_src = 0;
@@ -543,7 +569,8 @@ FORMATS_CONFIG_STRUCT_COMPILETIME = [
     "    const std::uint32_t unpack_B_dst;",
     "    const std::uint32_t unpack_S_dst;",
     "    const std::uint32_t math;",
-    "    const std::uint32_t sfpu_math;",
+    "    const std::uint32_t sfpu_src;",
+    "    const std::uint32_t sfpu_dst;",
     "    const std::uint32_t pack_src;",
     "    const std::uint32_t pack_dst;",
     "    const std::uint32_t pack_S_src;",
@@ -557,7 +584,8 @@ FORMATS_CONFIG_STRUCT_COMPILETIME = [
     "        std::uint32_t unpack_B_dst_,",
     "        std::uint32_t unpack_S_dst_,",
     "        std::uint32_t math_,",
-    "        std::uint32_t sfpu_math_,",
+    "        std::uint32_t sfpu_src_,",
+    "        std::uint32_t sfpu_dst_,",
     "        std::uint32_t pack_src_,",
     "        std::uint32_t pack_dst_,",
     "        std::uint32_t pack_S_src_,",
@@ -569,7 +597,8 @@ FORMATS_CONFIG_STRUCT_COMPILETIME = [
     "        unpack_B_dst(unpack_B_dst_),",
     "        unpack_S_dst(unpack_S_dst_),",
     "        math(math_),",
-    "        sfpu_math(sfpu_math_),",
+    "        sfpu_src(sfpu_src_),",
+    "        sfpu_dst(sfpu_dst_),",
     "        pack_src(pack_src_),",
     "        pack_dst(pack_dst_),",
     "        pack_S_src(pack_S_src_),",

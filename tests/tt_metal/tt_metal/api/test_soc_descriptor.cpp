@@ -13,6 +13,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include "device_fixture.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
@@ -58,16 +59,9 @@ std::unordered_set<int> get_harvested_rows(ChipId device_id) {
 namespace tt::tt_metal {
 
 // This test ensures that no logical core maps to a harvested row
-TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
-    size_t num_devices = tt_metal::GetNumAvailableDevices();
-    ASSERT_TRUE(num_devices > 0);
-    std::vector<int> devices_to_open;
-    for (int device_id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
-        devices_to_open.push_back(device_id);
-    }
-    auto devices = detail::CreateDevices(devices_to_open);
-    for (int device_id = 0; device_id < num_devices; device_id++) {
-        tt_metal::IDevice* device = devices[device_id];
+TEST_F(AnyDispatchMeshDeviceFixture, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
+    for (const auto& mesh_device : this->devices_) {
+        const auto device_id = mesh_device->get_device_ids()[0];
         uint32_t harvested_rows_mask =
             tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
         const metal_SocDescriptor& soc_desc =
@@ -76,7 +70,7 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
         std::unordered_set<int> harvested_rows = unit_tests::basic::soc_desc::get_harvested_rows(device_id);
         auto tensix_harvest_axis = tt::tt_metal::MetalContext::instance().hal().get_tensix_harvest_axis();
 
-        CoreCoord logical_grid_size = device->logical_grid_size();
+        CoreCoord logical_grid_size = mesh_device->logical_grid_size();
         for (int x = 0; x < logical_grid_size.x; x++) {
             for (int y = 0; y < logical_grid_size.y; y++) {
                 CoreCoord logical_core_coord(x, y);
@@ -86,8 +80,6 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
             }
         }
     }
-
-    tt::tt_metal::detail::CloseDevices(devices);
 }
 
 }  // namespace tt::tt_metal

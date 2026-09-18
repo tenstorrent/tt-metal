@@ -62,7 +62,20 @@ void kernel_main() {
                         curr_coalesced_num_pages,
                         curr_coalesced_page_size,
                         noc);
-                    noc_async_posted_writes_flushed();
+                    // The data writes and the credit inc issued by remote_cb_push_back_and_write_pages
+                    // are posted iff skip_ptr_update (remote_circular_buffer.h: posted = skip_ptr_update).
+                    // cb_pop_front below frees the local CB source page, so we must drain the writes
+                    // whose SOURCE is that page before releasing it. Posted and non-posted writes are
+                    // tracked by separate NoC counters, so the flush must match: in the default
+                    // (skip_ptr_update == false) path the writes are non-posted and
+                    // noc_async_posted_writes_flushed() polls the wrong (posted) counter -- it returns
+                    // immediately without waiting, letting the reader overwrite still-in-flight source
+                    // data. Use noc_async_writes_flushed() there.
+                    if constexpr (skip_ptr_update) {
+                        noc_async_posted_writes_flushed(noc);
+                    } else {
+                        noc_async_writes_flushed(noc);
+                    }
                     cb_pop_front(local_cb_id, max_block_num_tiles);
                 }
             }

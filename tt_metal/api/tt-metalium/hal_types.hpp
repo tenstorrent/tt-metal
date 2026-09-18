@@ -12,7 +12,7 @@ using DeviceAddr = std::uint64_t;
 
 enum class HalProcessorClassType : uint8_t { DM = 0, COMPUTE = 1 };
 
-enum class HalProgrammableCoreType { TENSIX = 0, ACTIVE_ETH = 1, IDLE_ETH = 2, DRAM = 3, COUNT = 4 };
+enum class HalProgrammableCoreType { TENSIX = 0, ACTIVE_ETH = 1, IDLE_ETH = 2, DRAM = 3, DISPATCH = 4, COUNT = 5 };
 
 static constexpr uint32_t NumHalProgrammableCoreTypes = static_cast<uint32_t>(HalProgrammableCoreType::COUNT);
 

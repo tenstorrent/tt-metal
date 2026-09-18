@@ -22,7 +22,17 @@ constexpr uint32_t UncachedStallSequenceIdx = 0;
 constexpr uint32_t CachedStallSequenceIdx = 1;
 
 struct ProgramCommandSequence {
-    ProgramCommandSequence() = default;
+    explicit ProgramCommandSequence(MetalContext& metal_ctx) :
+        ctx(&metal_ctx),
+        preamble_command_sequence(metal_ctx),
+        stall_command_sequences{HostMemDeviceCommand(metal_ctx), HostMemDeviceCommand(metal_ctx)},
+        program_config_buffer_command_sequence(metal_ctx),
+        program_binary_setup_prefetcher_cache_command(metal_ctx),
+        program_binary_command_sequence(metal_ctx),
+        wait_barrier_command_sequence(metal_ctx),
+        launch_msg_command_sequence(metal_ctx),
+        go_msg_command_sequence(metal_ctx) {}
+
     ProgramCommandSequence(const ProgramCommandSequence&) = delete;
     ProgramCommandSequence& operator=(const ProgramCommandSequence&) = delete;
 
@@ -31,6 +41,12 @@ struct ProgramCommandSequence {
 
     struct RtaUpdate {
         const void* src;
+        void* dst;
+        uint32_t size;
+    };
+    struct CrossNodeConfigUpdate {
+        CoreCoord logical_core;
+        uint8_t remote_dfb_id;
         void* dst;
         uint32_t size;
     };
@@ -44,6 +60,8 @@ struct ProgramCommandSequence {
         LaunchMsgData(bool is_multicast, dev_msgs::launch_msg_t original_msg, dev_msgs::launch_msg_t::View msg_ptr) :
             is_multicast(is_multicast), original_msg(std::move(original_msg)), msg_ptr(msg_ptr) {}
     };
+
+    MetalContext* ctx = nullptr;
     HostMemDeviceCommand preamble_command_sequence;
     uint32_t current_stall_seq_idx = 0;
     HostMemDeviceCommand stall_command_sequences[2];
@@ -67,6 +85,9 @@ struct ProgramCommandSequence {
     // Note: some RTAs may be have their RuntimeArgsData modified so the source-of-truth of their data is the command
     // sequence. They won't be listed in rta_updates.
     std::vector<RtaUpdate> rta_updates;
+    // Copies the current host-only CrossNode page image into the cached launch command
+    // before each enqueue. The destination is the dedicated config Buffer.
+    std::vector<CrossNodeConfigUpdate> cross_node_config_updates;
     std::vector<LaunchMsgData> launch_messages;
     std::vector<CQDispatchWritePackedCmd*> launch_msg_write_packed_cmd_ptrs;
     std::vector<CQDispatchWritePackedCmd*> unicast_launch_msg_write_packed_cmd_ptrs;

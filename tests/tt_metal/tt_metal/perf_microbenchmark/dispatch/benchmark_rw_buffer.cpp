@@ -22,7 +22,7 @@
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/vector_aligned.hpp>
+#include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <benchmark/benchmark.h>
 #include "context/metal_context.hpp"

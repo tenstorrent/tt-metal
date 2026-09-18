@@ -12,7 +12,7 @@ static bool is_float_dtype(ttnn::DataType dtype) {
     return dtype == ttnn::DataType::FLOAT32 || dtype == ttnn::DataType::BFLOAT16;
 }
 
-void AutocastTensor::set_tensor(const tt::tt_metal::Tensor &tensor) {
+void AutocastTensor::set_tensor(const ttnn::Tensor &tensor) {
     if (tensor.dtype() == ttnn::DataType::FLOAT32) {
         m_full_precision_tensor = tensor;
         m_half_precision_tensor = ttnn::Tensor();
@@ -39,7 +39,7 @@ bool AutocastTensor::has_full() const {
     return core::is_tensor_initialized(m_full_precision_tensor);
 }
 
-const tt::tt_metal::Tensor &AutocastTensor::get_tensor(PreferredPrecision preferred_precision) const {
+const ttnn::Tensor &AutocastTensor::get_tensor(PreferredPrecision preferred_precision) const {
     // Non-float tensors (e.g. UINT32 embedding indices) are stored in the full-precision
     // slot and returned unchanged — they cannot be typecast to half/full float precision.
     if (has_full() && !is_float_dtype(m_full_precision_tensor.dtype())) {
@@ -71,7 +71,7 @@ const tt::tt_metal::Tensor &AutocastTensor::get_tensor(PreferredPrecision prefer
     return m_full_precision_tensor;
 }
 
-AutocastTensor::AutocastTensor(const tt::tt_metal::Tensor &tensor) {
+AutocastTensor::AutocastTensor(const ttnn::Tensor &tensor) {
     set_tensor(tensor);
 }
 

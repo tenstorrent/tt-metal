@@ -16,6 +16,7 @@ target_link_libraries(
         Metalium::Metal::LLRT
         Tracy::TracyClient
         TT::Metalium::HostDevCommon
+        yaml-cpp::yaml-cpp
 )
 
 if(ENABLE_FAKE_KERNELS_TARGET)

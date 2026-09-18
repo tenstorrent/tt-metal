@@ -4,31 +4,27 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr auto dst_args = TensorAccessorArgs<0>();
-
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tiles = get_arg_val<uint32_t>(1);
-    uint32_t start_id = get_arg_val<uint32_t>(2);
-
-    constexpr uint32_t cb_id_out = 16;
+    uint32_t num_tiles = get_arg(args::num_tiles);
+    uint32_t start_id = get_arg(args::start_id);
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    CircularBuffer cb_out_obj(cb_id_out);
-    const auto out_tile_bytes = get_tile_size(cb_id_out);
+    DataflowBuffer dfb_out_obj(dfb::out);
+    const auto out_tile_bytes = dfb_out_obj.get_tile_size();
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_out_obj.wait_front(onetile);
-        uint32_t l1_read_addr = cb_out_obj.get_read_ptr();
+        dfb_out_obj.wait_front(onetile);
+        uint32_t l1_read_addr = dfb_out_obj.get_read_ptr();
 
         volatile tt_l1_ptr int32_t* out_l1_ptr = reinterpret_cast<volatile tt_l1_ptr int32_t*>(l1_read_addr);
         for (uint32_t h = 0; h < 16; h++) {
@@ -38,8 +34,8 @@ void kernel_main() {
             }
         }
 
-        noc.async_write(cb_out_obj, s, out_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
+        noc.async_write(dfb_out_obj, s, out_tile_bytes, {.offset_bytes = 0}, {.page_id = i});
         noc.async_write_barrier();
-        cb_out_obj.pop_front(onetile);
+        dfb_out_obj.pop_front(onetile);
     }
 }

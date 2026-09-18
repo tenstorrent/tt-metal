@@ -13,7 +13,6 @@
 #define ENABLE_DEBUG_PRINT 0
 
 #if ENABLE_DEBUG_PRINT == 1
-#include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 #endif
 

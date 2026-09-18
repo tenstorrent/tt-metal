@@ -27,11 +27,24 @@
 
 namespace tt::tt_metal::experimental {
 
+namespace {
+
+tt::umd::DeviceBufferAccess to_umd_access(PinnedMemoryDeviceAccess access) {
+    return access == PinnedMemoryDeviceAccess::ReadOnly ? tt::umd::DeviceBufferAccess::READ_ONLY
+                                                        : tt::umd::DeviceBufferAccess::READ_WRITE;
+}
+
+}  // namespace
+
 // PinnedMemoryImpl implementation
 PinnedMemoryImpl::PinnedMemoryImpl(
-    const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc) :
-    buffer_size_(buffer_size), map_to_noc_(map_to_noc) {
-    initialize_from_devices(devices, host_buffer, buffer_size, map_to_noc);
+    const std::vector<IDevice*>& devices,
+    void* host_buffer,
+    size_t buffer_size,
+    bool map_to_noc,
+    PinnedMemoryDeviceAccess access) :
+    buffer_size_(buffer_size), map_to_noc_(map_to_noc), device_access_(access) {
+    initialize_from_devices(devices, host_buffer, buffer_size, map_to_noc, access);
 }
 
 PinnedMemoryImpl::~PinnedMemoryImpl() {
@@ -42,8 +55,11 @@ PinnedMemoryImpl::~PinnedMemoryImpl() {
 PinnedMemoryImpl::PinnedMemoryImpl(PinnedMemoryImpl&& other) noexcept :
     buffer_size_(std::exchange(other.buffer_size_, 0)),
     map_to_noc_(std::exchange(other.map_to_noc_, false)),
+    device_access_(std::exchange(other.device_access_, PinnedMemoryDeviceAccess::ReadWrite)),
     use_64bit_address_space_(std::exchange(other.use_64bit_address_space_, false)),
     host_offset_(std::exchange(other.host_offset_, 0)),
+    is_mock_(std::exchange(other.is_mock_, false)),
+    mock_host_ptr_(std::exchange(other.mock_host_ptr_, nullptr)),
     device_buffers_(std::move(other.device_buffers_)),
     device_to_mmio_map_(std::move(other.device_to_mmio_map_)),
     barrier_events_(std::move(other.barrier_events_)) {}
@@ -55,8 +71,11 @@ PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept
 
         buffer_size_ = std::exchange(other.buffer_size_, 0);
         map_to_noc_ = std::exchange(other.map_to_noc_, false);
+        device_access_ = std::exchange(other.device_access_, PinnedMemoryDeviceAccess::ReadWrite);
         use_64bit_address_space_ = std::exchange(other.use_64bit_address_space_, false);
         host_offset_ = std::exchange(other.host_offset_, 0);
+        is_mock_ = std::exchange(other.is_mock_, false);
+        mock_host_ptr_ = std::exchange(other.mock_host_ptr_, nullptr);
         device_buffers_ = std::move(other.device_buffers_);
         device_to_mmio_map_ = std::move(other.device_to_mmio_map_);
         barrier_events_ = std::move(other.barrier_events_);
@@ -65,7 +84,11 @@ PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept
 }
 
 void PinnedMemoryImpl::initialize_from_devices(
-    const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc) {
+    const std::vector<IDevice*>& devices,
+    void* host_buffer,
+    size_t buffer_size,
+    bool map_to_noc,
+    PinnedMemoryDeviceAccess access) {
     if (devices.empty()) {
         throw std::invalid_argument("Cannot create PinnedMemory with empty device list");
     }
@@ -92,6 +115,18 @@ void PinnedMemoryImpl::initialize_from_devices(
         unique_mmio_devices.insert(mmio_device_id);
     }
 
+    // MockChip has no SysmemManager, so there is nothing to map: keep the host pointer and let
+    // device/NOC queries return dummies (see get_device_addr / get_noc_addr). Mock only, not
+    // is_mock_or_emulated() — SWEmuleChip has a real SimulationSysmemManager, and a dummy address
+    // would strand the host-facing socket counters an emulated kernel writes back.
+    if (cluster.get_target_device_type() == tt::TargetDevice::Mock) {
+        is_mock_ = true;
+        mock_host_ptr_ = host_buffer;
+        host_offset_ = 0;
+        device_to_mmio_map_ = std::move(device_to_mmio_map);
+        return;
+    }
+
     // Determine system page size and align the host buffer down to page boundary
     size_t page_size = 4096;
     long sys_page = sysconf(_SC_PAGESIZE);
@@ -114,7 +149,8 @@ void PinnedMemoryImpl::initialize_from_devices(
     }
 
     for (ChipId mmio_device_id : unique_mmio_devices) {
-        auto buffer = cluster.map_sysmem_buffer(mmio_device_id, aligned_host_ptr, mapped_size, map_to_noc);
+        auto buffer =
+            cluster.map_sysmem_buffer(mmio_device_id, aligned_host_ptr, mapped_size, map_to_noc, to_umd_access(access));
 
         if (!buffer) {
             throw std::runtime_error("Failed to create SysmemBuffer for MMIO device " + std::to_string(mmio_device_id));
@@ -158,6 +194,9 @@ const tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(ChipId device_id) cons
 }
 
 void* PinnedMemoryImpl::get_host_ptr() {
+    if (is_mock_) {
+        return mock_host_ptr_;
+    }
     if (device_buffers_.empty()) {
         throw std::runtime_error("No buffers available in PinnedMemory");
     }
@@ -167,6 +206,9 @@ void* PinnedMemoryImpl::get_host_ptr() {
 }
 
 const void* PinnedMemoryImpl::get_host_ptr() const {
+    if (is_mock_) {
+        return mock_host_ptr_;
+    }
     if (device_buffers_.empty()) {
         throw std::runtime_error("No buffers available in PinnedMemory");
     }
@@ -176,10 +218,19 @@ const void* PinnedMemoryImpl::get_host_ptr() const {
 }
 
 uint64_t PinnedMemoryImpl::get_device_addr(ChipId device_id) const {
+    if (is_mock_) {
+        return 0;
+    }
     return get_buffer(device_id).get_device_io_addr() + static_cast<uint64_t>(host_offset_);
 }
 
 std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId device_id) const {
+    if (is_mock_) {
+        // No sysmem mapping under mock; hand back a dummy NOC address. device_id is
+        // echoed back so the H2D/D2H socket's "mapped to the same device as the
+        // {receiver,sender} core" FATAL check passes.
+        return PinnedMemory::NocAddr{.pcie_xy_enc = 0, .addr = 0, .device_id = device_id};
+    }
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
         return std::nullopt;
@@ -284,8 +335,12 @@ void PinnedMemoryImpl::unlock() {}
 
 // PinnedMemory pimpl wrapper implementation
 PinnedMemory::PinnedMemory(
-    const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc) :
-    pImpl(std::make_unique<PinnedMemoryImpl>(devices, host_buffer, buffer_size, map_to_noc)) {}
+    const std::vector<IDevice*>& devices,
+    void* host_buffer,
+    size_t buffer_size,
+    bool map_to_noc,
+    PinnedMemoryDeviceAccess access) :
+    pImpl(std::make_unique<PinnedMemoryImpl>(devices, host_buffer, buffer_size, map_to_noc, access)) {}
 
 PinnedMemory::~PinnedMemory() = default;
 
@@ -308,6 +363,8 @@ std::optional<PinnedMemory::NocAddr> PinnedMemory::get_noc_addr(ChipId device_id
 
 size_t PinnedMemory::get_buffer_size() const { return pImpl->get_buffer_size(); }
 
+PinnedMemoryDeviceAccess PinnedMemory::get_device_access() const { return pImpl->get_device_access(); }
+
 std::vector<ChipId> PinnedMemory::get_device_ids() const { return pImpl->get_device_ids(); }
 
 bool PinnedMemory::has_device(ChipId device_id) const { return pImpl->has_device(device_id); }
@@ -326,7 +383,14 @@ std::shared_ptr<PinnedMemory> PinnedMemory::Create(
     distributed::MeshDevice& mesh_device,
     const distributed::MeshCoordinateRangeSet& coordinate_range_set,
     HostBuffer& host_buffer,
-    bool map_to_noc) {
+    bool map_to_noc,
+    PinnedMemoryDeviceAccess access) {
+    TT_FATAL(
+        access != PinnedMemoryDeviceAccess::ReadOnly || GetMemoryPinningParameters(mesh_device).supports_read_only,
+        "Device-read-only pinning was requested but is not available on this system; it needs an active IOMMU and "
+        "KMD 2.9.0 or newer. Check MemoryPinningParameters::supports_read_only before requesting ReadOnly, or "
+        "request ReadWrite.");
+
     // Extract all coordinates from the range set
     std::vector<distributed::MeshCoordinate> coordinates = coordinate_range_set.coords();
 
@@ -350,7 +414,8 @@ std::shared_ptr<PinnedMemory> PinnedMemory::Create(
     void* host_ptr = static_cast<void*>(bytes.data());
     size_t buffer_size = bytes.size();
 
-    auto pinned_memory = std::shared_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc));
+    auto pinned_memory =
+        std::shared_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc, access));
     HostBufferSetPinnedMemory(host_buffer, pinned_memory);
     return pinned_memory;
 }
@@ -359,7 +424,7 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
     // Use UMD Cluster to determine IOMMU and NOC mapping support and arch
     bool iommu_enabled = MetalContext::instance().get_cluster().is_iommu_enabled();
     if (!iommu_enabled) {
-        return experimental::MemoryPinningParameters{0u, 0u, false};
+        return experimental::MemoryPinningParameters{0u, 0u, false, false};
     }
 
     const auto& hal = MetalContext::instance().hal();
@@ -368,8 +433,8 @@ experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::Me
     params.max_total_pin_size = hal.get_total_pinned_memory_size();
     // Ideally use a 64-bit addresses through the NOC, but otherwise use the iATU to translate 36-bit addresses to 64
     // bit addresses.
-    params.can_map_to_noc = MetalContext::instance().hal().get_supports_64_bit_pcie_addressing() ||
-                            MetalContext::instance().get_cluster().is_noc_mapping_enabled();
+    params.can_map_to_noc = true;
+    params.supports_read_only = MetalContext::instance().get_cluster().is_read_only_page_pinning_supported();
     return params;
 }
 

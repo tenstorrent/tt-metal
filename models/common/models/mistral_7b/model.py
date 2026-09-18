@@ -9,21 +9,21 @@ Tensor layout contracts:
   - **Prefill** hidden states: ``[1, 1, S, dim]`` TILE, ``S % 128 == 0``.
   - **Decode** hidden states: ``[1, 1, B, dim]`` TILE (``B`` padded to tile in modules).
 
-Executor contract (``EagerLLMExecutor`` / ``TracedLLMExecutor``): pre-embedded forwards,
-``set_kv_cache``, ``rope_setup``, ``page_table`` through attention, ``model_args`` holds a
-:class:`Mistral7BExecutorRuntimeConfig` (not v1 ``ModelArgs``).
+The tensor graph is provider-neutral. ``hf_adaptor.py`` owns Hugging Face loading and
+builds :class:`Mistral7BTransformerConfig`; the model exposes the strict duck-typed
+surface consumed by ``models.common.llm_runtime``.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, List
+from typing import Any
 
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoModelForCausalLM
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -39,8 +39,8 @@ from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig, _nearest_32
 from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _dram_shard_core_grid_k_n
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig, _create_sharded_norm_program_config
-from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D, prepare_rot_idxs
-from models.common.modules.sampling.sampling_1d import Sampling1D
+from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D
+from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig
 from models.common.modules.tt_ccl import default_topology, get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim
 
@@ -64,42 +64,31 @@ class Mistral7BPagedAttentionConfig:
 
 
 @dataclass
-class Mistral7BExecutorRuntimeConfig:
-    """Engine-facing runtime knobs. Exposed as ``model.model_args`` for shared ``EagerLLMExecutor``."""
+class Mistral7BTransformerConfig:
+    """Complete provider-neutral tensor-graph configuration."""
 
     n_layers: int
-    n_kv_heads: int
-    head_dim: int
+    vocab_size: int
     max_batch_size: int
     max_seq_len: int
-    cluster_shape: list[int]
-    max_prefill_chunk_size: int = 2048
-    model_cache_path: Path | None = None
-    kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
-    optimizations: Any = None
-
-    def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int = 0) -> bool:
-        # Mirror TTTv1's prefill-trace gate (model_config.get_trace_prefill_supported_seq_lens):
-        # only trace the seq lens TTTv1 lists -- bigger seq lens already have small op2op gaps, so
-        # tracing buys nothing. Mistral-7B has no model-specific entry, so it uses the family
-        # default: N150 -> [128], N300/T3K -> [128, 1024]. (The old `return False` -- "prefill trace
-        # capture hits TT_FATAL under LazyWeight + distributed norms" -- no longer reproduces;
-        # prefill compiles, captures and replays cleanly, confirmed on N150/N300/T3K.) Decode trace
-        # remains enabled at the engine layer regardless.
-        num_devices = int(self.cluster_shape[0]) * int(self.cluster_shape[1])
-        allowed = {1: (128,), 2: (128, 1024), 8: (128, 1024)}.get(num_devices, (128,))
-        return (
-            prefill_seq_len in allowed
-            and prefill_seq_len <= self.max_prefill_chunk_size
-            and prefill_seq_len <= self.max_seq_len
-        )
+    dim: int
+    num_devices: int
+    mesh_device: ttnn.MeshDevice
+    embedding_config: Embedding1DConfig
+    rope_config: Rope1DConfig
+    block_configs: list[Mistral7BDecoderLayerConfig]
+    norm_config: RMSNorm1DConfig
+    lm_head_config: LMHead1DConfig
+    sampling_config: Sampling1DConfig | None = None
+    decode_residual_memcfg: ttnn.MemoryConfig | None = None
+    prefill_residual_memcfg: ttnn.MemoryConfig | None = None
+    activation_dtypes: list[ttnn.DataType | None] = field(default_factory=list)
+    tt_ccl: Any = None
+    cache_path: str | None = None
 
 
-@dataclass
-class Mistral7BConfig:
-    """Resolved hyper-parameters for a loaded HF Mistral-7B-Instruct-v0.3 checkpoint."""
-
-    hf_model_id: str
+@dataclass(frozen=True)
+class Mistral7BModelParameters:
     dim: int
     n_heads: int
     n_kv_heads: int
@@ -107,11 +96,29 @@ class Mistral7BConfig:
     hidden_dim: int
     vocab_size: int
     rms_norm_eps: float
-    rope_theta: float
-    num_hidden_layers: int
     max_batch_size: int
     max_seq_len: int
-    rope_table_len: int
+
+
+@dataclass(frozen=True)
+class Mistral7BLayerWeights:
+    wqkv: torch.Tensor
+    wo: torch.Tensor
+    w1: torch.Tensor
+    w2: torch.Tensor
+    w3: torch.Tensor
+    attention_norm: torch.Tensor
+    ff_norm: torch.Tensor
+
+
+@dataclass(frozen=True)
+class Mistral7BWeights:
+    embedding: torch.Tensor
+    rope_cos: torch.Tensor
+    rope_sin: torch.Tensor
+    layers: tuple[Mistral7BLayerWeights, ...]
+    final_norm: torch.Tensor
+    lm_head: torch.Tensor
 
 
 @dataclass(frozen=True)
@@ -121,7 +128,7 @@ class Mistral7BPrecisionConfig:
     Mirrors the fields TTTv1's ``DecodersPrecision`` actually distinguishes for Mistral-7B
     (Llama-family group in ``model_config.py:130-159`` for ``accuracy()``, ``:208-218`` for
     ``performance()``). Two module-level recipes are exposed: :data:`MISTRAL_ACCURACY` and
-    :data:`MISTRAL_PERFORMANCE`. Pass one to :meth:`Mistral7B.from_pretrained` via
+    :data:`MISTRAL_PERFORMANCE`. Pass one to :meth:`Mistral7BForCausalLM.from_pretrained` via
     ``precision=``; use ``dataclasses.replace(MISTRAL_ACCURACY, lm_head_dtype=...)`` to
     customize a single field.
 
@@ -177,7 +184,6 @@ def _slice_last_token_tile(x: ttnn.Tensor, last_token_idx: int) -> ttnn.Tensor:
 
 
 def _post_attn_norm_decode_configs(
-    mlp: MLP1D,
     *,
     dim: int,
     hidden_dim: int,
@@ -194,7 +200,14 @@ def _post_attn_norm_decode_configs(
     grid = _dram_shard_core_grid_k_n(dim, padded_hidden // num_devices)
     tile_padded_batch_rows = TILE_SIZE * math.ceil(max_batch_size / TILE_SIZE)
     program_config = _create_sharded_norm_program_config(dim, grid, tile_padded_batch_rows, TILE_SIZE)
-    return program_config, mlp.config.decode_input_memcfg
+    memory_config = ttnn.create_sharded_memory_config(
+        (tile_padded_batch_rows, dim // grid.num_cores),
+        grid,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return program_config, memory_config
 
 
 def _all_gather_rmsnorm_tensor(
@@ -244,6 +257,10 @@ class _Mistral7BWHTuning:
 
     mlp_prefill_len_cutoff: int | None = None
     mlp_decode_spill_w1_to_dram: bool = False
+    # Use ttnn.experimental.minimal_matmul for QKV + W2 prefill matmuls above seq_len > 128 (TTTv1
+    # parity, PLAN_01). A/B escape hatch: set DISABLE_MINIMAL_MATMUL=1 to force ttnn.linear. On a 7B
+    # the prefill matmuls are large, so minimal_matmul is a real prefill-TTFT win (unlike tiny 1B).
+    prefill_minimal_matmul: bool = True
 
 
 def _resolve_mistral_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Mistral7BWHTuning:
@@ -257,136 +274,151 @@ def _resolve_mistral_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Mistral
     t.mlp_prefill_len_cutoff = 512 if num_dev == 1 else 1024
     # Decode W1→DRAM spill: leave off by default; promote only if N150 batch decode trips L1.
     t.mlp_decode_spill_w1_to_dram = False
+    t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
     logger.info(
         f"MLP tuning for Mistral-7B on {num_dev} device(s): "
         f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
-        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}"
+        f"decode_spill_w1_to_dram={t.mlp_decode_spill_w1_to_dram}, "
+        f"prefill_minimal_matmul={t.prefill_minimal_matmul}"
     )
     return t
+
+
+@dataclass
+class Mistral7BDecoderLayerConfig:
+    attention_norm_config: RMSNorm1DConfig
+    attention_config: Attention1DConfig
+    ff_norm_config: RMSNorm1DConfig
+    mlp_config: MLP1DConfig
 
 
 def _build_decoder_layer(
     *,
     idx: int,
-    hf_layer: Any,
-    mcfg: Mistral7BConfig,
+    weights: Mistral7BLayerWeights,
+    mcfg: Mistral7BModelParameters,
     mesh_device: ttnn.MeshDevice,
     tt_ccl: Any,
     topology: Any,
     num_dev: int,
-    torch_dtype: torch.dtype,
     precision: Mistral7BPrecisionConfig,
-    executor_mode: bool,
-    paged_cfg: Mistral7BPagedAttentionConfig | None,
+    paged_cfg: Mistral7BPagedAttentionConfig,
     cache_path: Path | None,
     wh: _Mistral7BWHTuning,
-) -> "Mistral7BDecoderLayer":
-    """Construct one decoder layer (attention + MLP + the two RMSNorms) from an HF layer."""
+) -> Mistral7BDecoderLayerConfig:
+    """Build one decoder-layer config from provider-converted tensors."""
     prefix = f"layer{idx}"
 
-    wqkv, wo = weight_utils.attention_wqkv_wo_from_hf_layer(hf_layer.self_attn, num_dev)
     lazy_wqkv = _lazy(
-        wqkv, dtype=precision.wqkv_dtype, cache=(cache_path / "attn", f"{prefix}_wqkv") if cache_path else None
+        weights.wqkv,
+        dtype=precision.wqkv_dtype,
+        cache=(cache_path / "attn", f"{prefix}_wqkv") if cache_path else None,
     )
-    lazy_wo = _lazy(wo, dtype=precision.wo_dtype, cache=(cache_path / "attn", f"{prefix}_wo") if cache_path else None)
-
-    attn = Attention1D.from_config(
-        Attention1DConfig(
-            wqkv=lazy_wqkv,
-            wo=lazy_wo,
-            mesh_device=mesh_device,
-            tt_ccl=tt_ccl,
-            topology=topology,
-            n_heads=mcfg.n_heads,
-            n_kv_heads=mcfg.n_kv_heads,
-            head_dim=mcfg.head_dim,
-            max_batch_size=mcfg.max_batch_size,
-            max_seq_len=mcfg.max_seq_len,
-            use_vllm_paged_kv_cache=executor_mode,
-            paged_attention_config=paged_cfg,
-            kv_cache=None,
-            kv_cache_dtype=precision.kv_cache_dtype,
-        )
+    lazy_wo = _lazy(
+        weights.wo,
+        dtype=precision.wo_dtype,
+        cache=(cache_path / "attn", f"{prefix}_wo") if cache_path else None,
     )
 
-    w1, w2, w3 = weight_utils.mlp_weights_from_hf_layer(hf_layer.mlp)
-    mlp = MLP1D.from_config(
-        MLP1DConfig(
-            w1=_lazy(
-                w1, dtype=precision.mlp_w1_w3_dtype, cache=(cache_path / "mlp", f"{prefix}_w1") if cache_path else None
-            ),
-            w2=_lazy(
-                w2, dtype=precision.mlp_w2_dtype, cache=(cache_path / "mlp", f"{prefix}_w2") if cache_path else None
-            ),
-            w3=_lazy(
-                w3, dtype=precision.mlp_w1_w3_dtype, cache=(cache_path / "mlp", f"{prefix}_w3") if cache_path else None
-            ),
-            mesh_device=mesh_device,
-            tt_ccl=tt_ccl,
-            topology=topology,
-            max_batch_size=mcfg.max_batch_size,
-            prefill_len_cutoff=wh.mlp_prefill_len_cutoff,
-            decode_spill_w1_to_dram_before_w3=wh.mlp_decode_spill_w1_to_dram,
-            w1_w3_dtype=precision.mlp_w1_w3_dtype,
-            w2_dtype=precision.mlp_w2_dtype,
-            ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
-            decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
-            ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
-            decode_ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
-        )
+    attention_config = Attention1DConfig(
+        wqkv=lazy_wqkv,
+        wo=lazy_wo,
+        mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
+        topology=topology,
+        n_heads=mcfg.n_heads,
+        n_kv_heads=mcfg.n_kv_heads,
+        head_dim=mcfg.head_dim,
+        max_batch_size=mcfg.max_batch_size,
+        max_seq_len=mcfg.max_seq_len,
+        q_norm_config=None,
+        k_norm_config=None,
+        wqkv_bias=None,
+        use_vllm_paged_kv_cache=True,
+        paged_attention_config=paged_cfg,
+        kv_cache=None,
+        kv_cache_dtype=precision.kv_cache_dtype,
+        prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
+    )
+
+    mlp_config = MLP1DConfig(
+        w1=_lazy(
+            weights.w1,
+            dtype=precision.mlp_w1_w3_dtype,
+            cache=(cache_path / "mlp", f"{prefix}_w1") if cache_path else None,
+        ),
+        w2=_lazy(
+            weights.w2,
+            dtype=precision.mlp_w2_dtype,
+            cache=(cache_path / "mlp", f"{prefix}_w2") if cache_path else None,
+        ),
+        w3=_lazy(
+            weights.w3,
+            dtype=precision.mlp_w1_w3_dtype,
+            cache=(cache_path / "mlp", f"{prefix}_w3") if cache_path else None,
+        ),
+        mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
+        topology=topology,
+        max_batch_size=mcfg.max_batch_size,
+        prefill_len_cutoff=wh.mlp_prefill_len_cutoff,
+        decode_spill_w1_to_dram_before_w3=wh.mlp_decode_spill_w1_to_dram,
+        w1_w3_dtype=precision.mlp_w1_w3_dtype,
+        w2_dtype=precision.mlp_w2_dtype,
+        ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
+        decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
+        ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
+        decode_ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
+        prefill_w2_minimal_matmul=wh.prefill_minimal_matmul,
     )
 
     post_attn_decode_program_config, post_attn_decode_memory_config = _post_attn_norm_decode_configs(
-        mlp,
         dim=mcfg.dim,
         hidden_dim=mcfg.hidden_dim,
         num_devices=num_dev,
         max_batch_size=mcfg.max_batch_size,
     )
 
-    def _build_norm(hf_norm: Any, name: str, **extra: Any) -> RMSNorm1D:
+    def _build_norm(weight: torch.Tensor, name: str, **extra: Any) -> RMSNorm1DConfig:
         lw = _lazy(
-            weight_utils.rms_weight_torch(hf_norm).to(torch_dtype),
+            weight,
             dtype=ttnn.bfloat16,
             cache=(cache_path / "norm", f"{prefix}_{name}") if cache_path else None,
         )
-        return RMSNorm1D.from_config(
-            RMSNorm1DConfig(
-                weight=lw,
-                mesh_device=mesh_device,
-                eps=mcfg.rms_norm_eps,
-                max_batch_size=mcfg.max_batch_size,
-                tt_ccl=tt_ccl,
-                **extra,
-            )
+        return RMSNorm1DConfig(
+            weight=lw,
+            mesh_device=mesh_device,
+            eps=mcfg.rms_norm_eps,
+            max_batch_size=mcfg.max_batch_size,
+            tt_ccl=tt_ccl,
+            **extra,
         )
 
-    return Mistral7BDecoderLayer(
-        input_layernorm=_build_norm(hf_layer.input_layernorm, "pre_attn"),
-        self_attn=attn,
-        post_attention_layernorm=_build_norm(
-            hf_layer.post_attention_layernorm,
+    return Mistral7BDecoderLayerConfig(
+        attention_norm_config=_build_norm(weights.attention_norm, "pre_attn"),
+        attention_config=attention_config,
+        ff_norm_config=_build_norm(
+            weights.ff_norm,
             "post_attn",
             decode_program_config=post_attn_decode_program_config,
             decode_memory_config=post_attn_decode_memory_config,
         ),
-        mlp=mlp,
+        mlp_config=mlp_config,
     )
 
 
 def _build_lm_head(
     *,
     mesh_device: ttnn.MeshDevice,
-    hf_lm_head: torch.nn.Module,
-    mcfg: Mistral7BConfig,
+    lm_head_weight: torch.Tensor,
+    mcfg: Mistral7BModelParameters,
     lm_head_dtype: ttnn.DataType,
     cache_path: Path | None,
-) -> LMHead1D:
+) -> LMHead1DConfig:
     """Build the vocab-sharded LM head with DRAM-matmul program configs."""
-    lm_w = hf_lm_head.weight.detach().to(torch.bfloat16).clone()
     lm_splits, lm_split_sizes, lm_weights_memcfgs = weight_utils.build_lm_head_lazy_weights(
         mesh_device,
-        lm_w,
+        lm_head_weight,
         dim=mcfg.dim,
         vocab_size=mcfg.vocab_size,
         dtype=lm_head_dtype,
@@ -405,18 +437,130 @@ def _build_lm_head(
         ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    return LMHead1D.from_config(
-        LMHead1DConfig(
-            output_weights=lm_splits,
-            mesh_device=mesh_device,
-            dim=mcfg.dim,
-            max_batch_size=mcfg.max_batch_size,
-            lm_head_dtype=lm_head_dtype,
-            program_configs=lm_prog_configs,
-            compute_kernel_config=None,
-            input_memcfg=lm_input_memcfg,
-            weights_memcfgs=lm_weights_memcfgs,
+    return LMHead1DConfig(
+        output_weights=lm_splits,
+        mesh_device=mesh_device,
+        dim=mcfg.dim,
+        max_batch_size=mcfg.max_batch_size,
+        lm_head_dtype=lm_head_dtype,
+        program_configs=lm_prog_configs,
+        compute_kernel_config=None,
+        input_memcfg=lm_input_memcfg,
+        weights_memcfgs=lm_weights_memcfgs,
+    )
+
+
+def build_mistral_7b_transformer_config(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    params: Mistral7BModelParameters,
+    weights: Mistral7BWeights,
+    n_layers: int,
+    precision: Mistral7BPrecisionConfig,
+    cache_path: Path | None,
+    paged_attention_config: Mistral7BPagedAttentionConfig,
+) -> Mistral7BTransformerConfig:
+    """Build the TT tensor graph from provider-neutral dimensions and converted tensors."""
+
+    num_devices = mesh_device.get_num_devices()
+    if params.n_heads % num_devices or params.n_kv_heads % num_devices:
+        raise ValueError(
+            f"Checkpoint heads ({params.n_heads}/{params.n_kv_heads}) "
+            f"must be divisible by device count ({num_devices})"
         )
+    if len(weights.layers) != n_layers:
+        raise ValueError(f"Expected {n_layers} decoder layer weight sets, got {len(weights.layers)}")
+
+    tt_ccl = get_tt_ccl(mesh_device) if num_devices > 1 else None
+    topology = default_topology(mesh_device)
+    wh = _resolve_mistral_wh_tuning(num_dev=num_devices, max_batch_size=params.max_batch_size)
+    embedding_config = Embedding1DConfig(
+        weights=_lazy(
+            weights.embedding,
+            dtype=ttnn.bfloat16,
+            cache=(cache_path / "embedding", "tok_embeddings") if cache_path else None,
+        ),
+        mesh_device=mesh_device,
+        embed_scale=1.0,
+    )
+    rope_config = Rope1DConfig(
+        cos_matrix=_lazy(
+            weights.rope_cos,
+            dtype=ttnn.bfloat16,
+            cache=(cache_path / "rope", "cos") if cache_path else None,
+        ),
+        sin_matrix=_lazy(
+            weights.rope_sin,
+            dtype=ttnn.bfloat16,
+            cache=(cache_path / "rope", "sin") if cache_path else None,
+        ),
+        max_batch_size=params.max_batch_size,
+        head_dim=params.head_dim,
+        device=mesh_device,
+        use_qk_fused=False,
+    )
+    block_configs = [
+        _build_decoder_layer(
+            idx=index,
+            weights=weights.layers[index],
+            mcfg=params,
+            mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
+            topology=topology,
+            num_dev=num_devices,
+            precision=precision,
+            paged_cfg=paged_attention_config,
+            cache_path=cache_path,
+            wh=wh,
+        )
+        for index in range(n_layers)
+    ]
+    norm_config = RMSNorm1DConfig(
+        weight=_lazy(
+            weights.final_norm,
+            dtype=ttnn.bfloat16,
+            cache=(cache_path / "norm", "final") if cache_path else None,
+        ),
+        mesh_device=mesh_device,
+        eps=params.rms_norm_eps,
+        max_batch_size=params.max_batch_size,
+        tt_ccl=tt_ccl,
+    )
+    lm_head_config = _build_lm_head(
+        mesh_device=mesh_device,
+        lm_head_weight=weights.lm_head,
+        mcfg=params,
+        lm_head_dtype=precision.lm_head_dtype,
+        cache_path=cache_path,
+    )
+    sampling_config = Sampling1DConfig(
+        vocab_size=params.vocab_size,
+        valid_vocab_size=params.vocab_size,
+        mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
+        max_batch_size=_nearest_32(params.max_batch_size),
+        allow_force_argmax=False,
+        pad_to_power_of_2=True,
+    )
+    return Mistral7BTransformerConfig(
+        n_layers=n_layers,
+        vocab_size=params.vocab_size,
+        max_batch_size=params.max_batch_size,
+        max_seq_len=params.max_seq_len,
+        dim=params.dim,
+        num_devices=num_devices,
+        mesh_device=mesh_device,
+        embedding_config=embedding_config,
+        rope_config=rope_config,
+        block_configs=block_configs,
+        norm_config=norm_config,
+        lm_head_config=lm_head_config,
+        sampling_config=sampling_config,
+        decode_residual_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        prefill_residual_memcfg=ttnn.DRAM_MEMORY_CONFIG,
+        activation_dtypes=[None] * n_layers,
+        tt_ccl=tt_ccl,
+        cache_path=str(cache_path) if cache_path is not None else None,
     )
 
 
@@ -434,6 +578,19 @@ class Mistral7BDecoderLayer(LightweightModule):
         self.self_attn = self_attn
         self.post_attention_layernorm = post_attention_layernorm
         self.mlp = mlp
+        self.attention_norm = input_layernorm
+        self.attention = self_attn
+        self.ff_norm = post_attention_layernorm
+        self.feed_forward = mlp
+
+    @classmethod
+    def from_config(cls, config: Mistral7BDecoderLayerConfig) -> Mistral7BDecoderLayer:
+        return cls(
+            input_layernorm=RMSNorm1D.from_config(config.attention_norm_config),
+            self_attn=Attention1D.from_config(config.attention_config),
+            post_attention_layernorm=RMSNorm1D.from_config(config.ff_norm_config),
+            mlp=MLP1D.from_config(config.mlp_config),
+        )
 
     def prefill_forward(
         self,
@@ -444,20 +601,25 @@ class Mistral7BDecoderLayer(LightweightModule):
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
+        batch_size: int = 1,
+        chunk_start_idx_tensor: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
+        # For batched prefill (batch_size > 1) x is the folded [1,1,B*S,dim] hidden state; norm,
+        # residual add and MLP are row-independent so they treat B*S as one long sequence unchanged.
+        # Only attention unfolds the batch axis internally (see Attention1D.prefill_forward).
         # Fractured embed/norm activations must be all-gathered to full ``dim`` before
         # Attention1D / MLP1D (QKV matmul expects width ``dim``).
         r = self.input_layernorm.prefill_forward(x)
         r = _all_gather_rmsnorm_tensor(self.input_layernorm, r)
-        r = self.self_attn.forward(
+        r = self.self_attn.prefill_forward(
             r,
-            None,
             rot_mats,
-            mode="prefill",
             user_id=user_id,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            batch_size=batch_size,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
         )
         h = ttnn.add(x, r, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         r2 = self.post_attention_layernorm.prefill_forward(h)
@@ -490,244 +652,116 @@ class Mistral7B(LightweightModule):
     """
     Full decoder for Mistral-7B-Instruct-v0.3 (TTTv2 modules only).
 
-    Prefill/decode on **embedded** activations match ``EagerLLMExecutor``. Token embedding
-    is ``embed_prefill`` / ``embed_decode``. Bind KV with ``set_kv_cache`` before first forward.
+    Prefill/decode on **embedded** activations are orchestrated by ``Mistral7BExecutor``. Token
+    embedding is ``embed_prefill`` / ``embed_decode``. Bind KV with ``set_kv_cache`` before first forward.
     """
 
     decode_residual_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
-    def __init__(
-        self,
-        cfg: Mistral7BConfig,
-        embed: Embedding1D,
-        rope_setup: RotarySetup1D,
-        layers: List[Mistral7BDecoderLayer],
-        norm: RMSNorm1D,
-        lm_head: LMHead1D,
-        mesh_device: ttnn.MeshDevice,
-    ):
+    def __init__(self, config: Mistral7BTransformerConfig):
+        from tqdm import tqdm
+
         super().__init__()
-        self.cfg = cfg
-        self.embed = embed
-        self.rope_setup = rope_setup
-        self.layers = layers
-        self.norm = norm
-        self.lm_head = lm_head
-        self.mesh_device = mesh_device
-        self.model_args: Mistral7BExecutorRuntimeConfig | None = None
-
-        self.vocab_size = cfg.vocab_size
-        self.n_layers = cfg.num_hidden_layers
-        self.num_devices = mesh_device.get_num_devices()
-        self.tt_ccl = get_tt_ccl(mesh_device) if self.num_devices > 1 else None
-
-        # The model owns its sampler; callers pick behavior per request via sampling_params.
-        # On-device sampling traces/replays on all 1D meshes (1x1 .. 1x8) -- the prior
-        # `num_devices >= 8` gate was over-conservative (test_sampling1d_trace_capture). Buffers
-        # are lazy (nothing materializes until the first on-device sampled decode), so this is
-        # harmless when sampling_params is None (host-argmax, the shipped demo default).
-        self.supports_on_device_sampling = self.num_devices >= 1
-        self.sampling = (
-            Sampling1D(
-                vocab_size=self.vocab_size,
-                mesh_device=mesh_device,
-                tt_ccl=self.tt_ccl,
-                max_batch_size=_nearest_32(cfg.max_batch_size),
-                # Clone TTTv1: allow_force_argmax=False for all non-Galaxy meshes (only
-                # Llama-3.1-8B on TG flips it True; Mistral-7B never does). The greedy recipe
-                # (temp=0, top_k=32, top_p=0.08) routes through the cheap top-k op path, not the
-                # full-vocab force-argmax all-gather. See model_config.py default_sampling_params.
-                allow_force_argmax=False,
-                pad_to_power_of_2=True,
-            )
-            if self.supports_on_device_sampling
-            else None
-        )
+        self.config = config
+        self.embed = Embedding1D.from_config(config.embedding_config)
+        self.embedding = self.embed
+        self.rope_setup = RotarySetup1D.from_config(config.rope_config)
+        self.layers = [
+            Mistral7BDecoderLayer.from_config(config.block_configs[index])
+            for index in tqdm(range(config.n_layers), desc="Building layers")
+        ]
+        self.norm = RMSNorm1D.from_config(config.norm_config)
+        self.lm_head = LMHead1D.from_config(config.lm_head_config)
+        self.sampling = Sampling1D.from_config(config.sampling_config) if config.sampling_config is not None else None
+        self.supports_on_device_sampling = self.sampling is not None
+        self.mesh_device = config.mesh_device
+        self.tt_ccl = config.tt_ccl or (get_tt_ccl(config.mesh_device) if config.num_devices > 1 else None)
+        self.vocab_size = config.vocab_size
+        self.n_layers = config.n_layers
+        self.num_devices = config.num_devices
+        self.decode_residual_memcfg = config.decode_residual_memcfg or ttnn.DRAM_MEMORY_CONFIG
+        self.prefill_residual_memcfg = config.prefill_residual_memcfg or ttnn.DRAM_MEMORY_CONFIG
+        self.activation_dtypes = config.activation_dtypes or [None] * config.n_layers
+        self.model_args = None
 
     @property
     def n_kv_heads(self) -> int:
-        return self.cfg.n_kv_heads
+        return self.config.block_configs[0].attention_config.n_kv_heads
 
-    @classmethod
-    def from_pretrained(
-        cls,
-        mesh_device: ttnn.MeshDevice,
-        hf_model_id: str = "mistralai/Mistral-7B-Instruct-v0.3",
-        *,
-        revision: str | None = None,
-        max_batch_size: int = 32,
-        max_seq_len: int = 4096,
-        num_layers: int | None = None,
-        cache_dir: Path | str | None = None,
-        precision: Mistral7BPrecisionConfig = MISTRAL_ACCURACY,
-        block_size: int = 32,
-        executor_mode: bool = False,
-    ) -> Mistral7B:
-        """
-        Load HF weights on host and build TTNN modules (weights materialize on first forward).
+    def iter_executor_named_modules(self):
+        if not hasattr(self, "layers"):
+            return
+        for index, layer in enumerate(self.layers):
+            for suffix, submodule in (
+                ("attn_norm", getattr(layer, "attention_norm", None)),
+                ("attention", getattr(layer, "attention", None)),
+                ("ff_norm", getattr(layer, "ff_norm", None)),
+                ("mlp", getattr(layer, "feed_forward", None)),
+            ):
+                if submodule is not None:
+                    yield f"layer[{index}].{suffix}", submodule
+        if hasattr(self, "norm"):
+            yield "final_norm", self.norm
+        if hasattr(self, "lm_head"):
+            yield "lm_head", self.lm_head
 
-        Args:
-            mesh_device: Open mesh device (N150 ``(1,1)``, N300 ``(1,2)``, …).
-            hf_model_id: Hugging Face hub id.
-            max_batch_size: Decode batch / KV allocation (tile-padded internally).
-            max_seq_len: KV cache sequence budget (per layer).
-            num_layers: If set, truncate stack for smoke tests.
-            cache_dir: Optional directory for ``LazyWeight`` tensor caches.
-            precision: Per-layer precision + math-fidelity recipe (see :class:`Mistral7BPrecisionConfig`).
-                Defaults to :data:`MISTRAL_ACCURACY` (mirrors TTTv1 ``DecodersPrecision.accuracy`` for
-                Mistral-7B). Use :data:`MISTRAL_PERFORMANCE` for TTTv1's perf recipe (BFP4 FF1/FF3 +
-                LOFI), or ``dataclasses.replace(...)`` to customize a single field.
-            block_size: Paged attention block size (tokens per block).
-            executor_mode: If True, use external paged KV (``set_kv_cache`` + shared executor).
-                If False, internal KV tensors (smoke / ``prefill_from_token_ids`` without executor).
-        """
-        ttnn.SetDefaultDevice(mesh_device)
-        cache_path = Path(cache_dir) if cache_dir else None
-        num_dev = mesh_device.get_num_devices()
-        tt_ccl = get_tt_ccl(mesh_device) if num_dev > 1 else None
-        topology = default_topology(mesh_device)
-
-        hf_cfg = AutoConfig.from_pretrained(hf_model_id, revision=revision)
-        n_heads_hf = hf_cfg.num_attention_heads
-        n_kv_hf = hf_cfg.num_key_value_heads
-        if num_dev > 1 and (n_heads_hf % num_dev != 0 or n_kv_hf % num_dev != 0):
-            raise ValueError(
-                f"This checkpoint requires num_attention_heads ({n_heads_hf}) and "
-                f"num_key_value_heads ({n_kv_hf}) to each be divisible by the mesh device "
-                f"count ({num_dev}) for Attention1D sharding."
+    def configure_paged_attention(self, *, block_size: int, max_num_blocks: int) -> None:
+        for name, value in (("block_size", block_size), ("max_num_blocks", max_num_blocks)):
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        live_configs = tuple(layer.attention.config for layer in self.layers)
+        for layer_index, config in enumerate(live_configs):
+            if not config.use_vllm_paged_kv_cache or config.paged_attention_config is None:
+                raise RuntimeError(f"Model layer {layer_index} is not configured for externally managed paged KV cache")
+            if config.kv_cache is not None or getattr(self.layers[layer_index].attention, "kv_cache", None) is not None:
+                raise RuntimeError(f"Model layer {layer_index} already has a bound KV cache")
+        construction_configs = tuple(block.attention_config for block in self.config.block_configs)
+        for config in tuple({id(item): item for item in (*construction_configs, *live_configs)}.values()):
+            config.paged_attention_config = replace(
+                config.paged_attention_config,
+                block_size=block_size,
+                max_num_blocks=max_num_blocks,
             )
-        torch_dtype = torch.bfloat16
-        logger.info(f"Loading HF weights: {hf_model_id} (revision={revision})")
-        hf = AutoModelForCausalLM.from_pretrained(hf_model_id, revision=revision, torch_dtype=torch_dtype)
-        hf.eval()
-        base = hf.model
-        n_layers = num_layers if num_layers is not None else hf_cfg.num_hidden_layers
-        dim = hf_cfg.hidden_size
-        n_heads = hf_cfg.num_attention_heads
-        n_kv = hf_cfg.num_key_value_heads
-        head_dim = dim // n_heads
-        inter = hf_cfg.intermediate_size
-        vocab = hf_cfg.vocab_size
-        rope_len = max(max_seq_len * 2, 8192)
-        rope_len = (rope_len + 127) // 128 * 128
 
-        blocks_per_user = (max_seq_len + block_size - 1) // block_size
-        max_num_blocks = blocks_per_user * max_batch_size
-        paged_cfg = (
-            Mistral7BPagedAttentionConfig(block_size=block_size, max_num_blocks=max_num_blocks)
-            if executor_mode
-            else None
-        )
+    def set_kv_cache(self, kv_cache: list | None) -> None:
+        if kv_cache is None:
+            for layer in self.layers:
+                layer.attention.config.kv_cache = None
+                if hasattr(layer.attention, "kv_cache"):
+                    layer.attention.kv_cache = None
+            return
+        if len(kv_cache) != len(self.layers):
+            raise ValueError(f"kv_cache has {len(kv_cache)} entries but model has {len(self.layers)} layers")
+        cache_pairs = []
+        for index, value in enumerate(kv_cache):
+            try:
+                pair = tuple(value)
+            except TypeError as error:
+                raise TypeError(f"kv_cache layer {index} must provide an iterable K/V tensor pair") from error
+            if len(pair) != 2:
+                raise ValueError(f"kv_cache layer {index} must contain exactly two K/V tensors")
+            cache_pairs.append(pair)
+        for layer, pair in zip(self.layers, cache_pairs):
+            layer.attention.config.kv_cache = pair
+            if hasattr(layer.attention, "kv_cache"):
+                layer.attention.kv_cache = pair
 
-        mcfg = Mistral7BConfig(
-            hf_model_id=hf_model_id,
-            dim=dim,
-            n_heads=n_heads,
-            n_kv_heads=n_kv,
-            head_dim=head_dim,
-            hidden_dim=inter,
-            vocab_size=vocab,
-            rms_norm_eps=hf_cfg.rms_norm_eps,
-            rope_theta=getattr(hf_cfg, "rope_theta", 1_000_000.0),
-            num_hidden_layers=n_layers,
-            max_batch_size=max_batch_size,
-            max_seq_len=max_seq_len,
-            rope_table_len=rope_len,
-        )
-
-        emb_src = weight_utils.embed_tokens_torch(base.embed_tokens)
-        emb = Embedding1D.from_config(
-            Embedding1DConfig(
-                weights=_lazy(
-                    emb_src,
-                    dtype=ttnn.bfloat16,
-                    cache=(cache_path / "embedding", "tok_embeddings") if cache_path else None,
-                ),
-                mesh_device=mesh_device,
-                embed_scale=1.0,
-            )
-        )
-
-        cos_t, sin_t = weight_utils.build_rope_cos_sin_torch(base.rotary_emb, rope_len, head_dim, torch_dtype)
-        cos_lw = _lazy(cos_t, dtype=ttnn.bfloat16, cache=(cache_path / "rope", "cos") if cache_path else None)
-        sin_lw = _lazy(sin_t, dtype=ttnn.bfloat16, cache=(cache_path / "rope", "sin") if cache_path else None)
-        rope_setup = RotarySetup1D.from_config(
-            Rope1DConfig(
-                cos_matrix=cos_lw,
-                sin_matrix=sin_lw,
-                max_batch_size=max_batch_size,
-                head_dim=head_dim,
-                device=mesh_device,
-                use_qk_fused=False,
-            )
-        )
-
-        wh = _resolve_mistral_wh_tuning(num_dev=num_dev, max_batch_size=max_batch_size)
-
-        layers: list[Mistral7BDecoderLayer] = [
-            _build_decoder_layer(
-                idx=idx,
-                hf_layer=base.layers[idx],
-                mcfg=mcfg,
-                mesh_device=mesh_device,
-                tt_ccl=tt_ccl,
-                topology=topology,
-                num_dev=num_dev,
-                torch_dtype=torch_dtype,
-                precision=precision,
-                executor_mode=executor_mode,
-                paged_cfg=paged_cfg,
-                cache_path=cache_path,
-                wh=wh,
-            )
-            for idx in range(n_layers)
-        ]
-
-        norm_lw = _lazy(
-            weight_utils.rms_weight_torch(base.norm).to(torch_dtype),
-            dtype=ttnn.bfloat16,
-            cache=(cache_path / "norm", "final") if cache_path else None,
-        )
-        final_norm = RMSNorm1D.from_config(
-            RMSNorm1DConfig(
-                weight=norm_lw,
-                mesh_device=mesh_device,
-                eps=hf_cfg.rms_norm_eps,
-                max_batch_size=max_batch_size,
-                tt_ccl=tt_ccl,
-            )
-        )
-
-        lm = _build_lm_head(
-            mesh_device=mesh_device,
-            hf_lm_head=hf.lm_head,
-            mcfg=mcfg,
-            lm_head_dtype=precision.lm_head_dtype,
-            cache_path=cache_path,
-        )
-
-        del hf
-
-        model = cls(mcfg, emb, rope_setup, layers, final_norm, lm, mesh_device)
-        if executor_mode:
-            model.model_args = Mistral7BExecutorRuntimeConfig(
-                n_layers=n_layers,
-                n_kv_heads=n_kv,
-                head_dim=head_dim,
-                max_batch_size=max_batch_size,
-                max_seq_len=max_seq_len,
-                cluster_shape=list(mesh_device.shape),
-                model_cache_path=cache_path,
-                kv_cache_dtype=precision.kv_cache_dtype,
-            )
-        return model
-
-    def set_kv_cache(self, kv_cache: list) -> None:
-        assert len(kv_cache) == len(
-            self.layers
-        ), f"kv_cache has {len(kv_cache)} entries but model has {len(self.layers)} layers"
-        for i, layer in enumerate(self.layers):
-            layer.self_attn.config.kv_cache = tuple(kv_cache[i])
+    def prepare_prefill_rot_mats(self, position_indices: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        self.rope_setup.load_device_weights()
+        cos = None
+        sin = None
+        try:
+            cos = ttnn.embedding(position_indices, self.rope_setup.cos_matrix, layout=ttnn.TILE_LAYOUT)
+            sin = ttnn.embedding(position_indices, self.rope_setup.sin_matrix, layout=ttnn.TILE_LAYOUT)
+            return ttnn.unsqueeze_to_4D(cos), ttnn.unsqueeze_to_4D(sin)
+        except BaseException:
+            for tensor in (sin, cos):
+                if tensor is not None:
+                    try:
+                        ttnn.deallocate(tensor)
+                    except BaseException:
+                        pass
+            raise
 
     def embed_decode(self, tokens: ttnn.Tensor) -> ttnn.Tensor:
         x = self.embed.forward(tokens)
@@ -742,13 +776,19 @@ class Mistral7B(LightweightModule):
         self,
         x_embed: ttnn.Tensor,
         rot_mats: tuple[ttnn.Tensor, ttnn.Tensor],
-        *,
         user_id: int = 0,
         page_table: ttnn.Tensor | None = None,
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
+        batch_size: int = 1,
+        chunk_start_idx_tensor: ttnn.Tensor | None = None,
+        last_token_slice: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        last_token_index: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
+        # batch_size > 1: x_embed is the folded [1,1,B*S,dim] tensor (B users). The batched path always
+        # returns the full hidden state when no runtime last-token slice is supplied; the executor does
+        # per-slot last-token extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
         x = x_embed
         for layer in self.layers:
             x = layer.prefill_forward(
@@ -758,18 +798,65 @@ class Mistral7B(LightweightModule):
                 page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
+                batch_size=batch_size,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
             )
 
-        if get_last_token == -1:
+        if last_token_index is not None and last_token_slice is None:
+            raise ValueError("last_token_index is required with a runtime last_token_slice")
+        if get_last_token == -1 and last_token_slice is None:
             return x
 
         old = x
-        x_tile = _slice_last_token_tile(old, get_last_token)
+        if last_token_slice is None:
+            x_tile = _slice_last_token_tile(old, get_last_token)
+        else:
+            x_tile = ttnn.slice(
+                old,
+                last_token_slice[0],
+                last_token_slice[1],
+                slice_dim=2,
+                num_devices=int(old.shape[2]) // 32,
+            )
         ttnn.deallocate(old)
+        if last_token_index is not None:
+            if x_tile.dtype != ttnn.bfloat16:
+                old_tile = x_tile
+                x_tile = ttnn.typecast(x_tile, ttnn.bfloat16)
+                ttnn.deallocate(old_tile)
+            old_tile = x_tile
+            x_tile = ttnn.embedding(last_token_index, x_tile, layout=ttnn.TILE_LAYOUT)
+            x_tile = ttnn.unsqueeze_to_4D(x_tile)
+            ttnn.deallocate(old_tile)
         return self._last_tile_logits(x_tile)
 
-    def post_process_prefill_output(self, hidden_states: ttnn.Tensor, last_token_idx: int) -> ttnn.Tensor:
-        return self._last_tile_logits(_slice_last_token_tile(hidden_states, last_token_idx))
+    def post_process_prefill_output(
+        self,
+        hidden_states: ttnn.Tensor,
+        last_token_idx: int,
+        last_token_slice: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        last_token_index: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        if last_token_slice is None:
+            x = _slice_last_token_tile(hidden_states, last_token_idx)
+        else:
+            x = ttnn.slice(
+                hidden_states,
+                last_token_slice[0],
+                last_token_slice[1],
+                slice_dim=2,
+                num_devices=int(hidden_states.shape[2]) // 32,
+            )
+        if last_token_index is not None:
+            if x.dtype != ttnn.bfloat16:
+                old = x
+                x = ttnn.typecast(x, ttnn.bfloat16)
+                ttnn.deallocate(old)
+            old = x
+            x = ttnn.embedding(last_token_index, x, layout=ttnn.TILE_LAYOUT)
+            x = ttnn.unsqueeze_to_4D(x)
+            ttnn.deallocate(old)
+        return self._last_tile_logits(x)
 
     def _last_tile_logits(self, x_tile: ttnn.Tensor) -> ttnn.Tensor:
         """Final-norm + all-gather + LM-head on a 32-row tile. ``x_tile`` shape ``[1, 1, 32, dim]``."""
@@ -780,6 +867,43 @@ class Mistral7B(LightweightModule):
             x = ttnn.interleaved_to_sharded(x, lm_head_memcfg)
         x = self.lm_head.forward(x)
         return ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
+    def post_process_batched_prefill_output(
+        self,
+        hidden_states: ttnn.Tensor,
+        last_token_idx_list: list[int],
+        padded_batch: int,
+        prefill_seq_len: int,
+        last_token_slice: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        last_token_index: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        del last_token_slice, last_token_index
+        fold_len = padded_batch * prefill_seq_len
+        selector = torch.zeros(1, 1, 32, fold_len, dtype=torch.bfloat16)
+        for local_row, last_token_idx in enumerate(last_token_idx_list):
+            selector[0, 0, local_row, local_row * prefill_seq_len + last_token_idx] = 1.0
+        selector = ttnn.from_torch(
+            selector,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        x = ttnn.matmul(
+            selector,
+            hidden_states,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            ),
+        )
+        ttnn.deallocate(selector)
+        return self._last_tile_logits(x)
 
     def decode_forward(
         self,
@@ -818,48 +942,3 @@ class Mistral7B(LightweightModule):
     def increment_positions(self, current_pos: ttnn.Tensor, rot_mat_idxs: ttnn.Tensor) -> None:
         ttnn.plus_one(current_pos, skip_negative_entries=True)
         ttnn.plus_one(rot_mat_idxs)
-
-    def prefill_from_token_ids(self, token_ids_tt: ttnn.Tensor, *, start_pos: int = 0, user_id: int = 0) -> ttnn.Tensor:
-        """Legacy path: embed + RoPE + blocks + final norm (no page table). For tests only."""
-        x = self.embed_prefill(token_ids_tt)
-        seq_len = x.shape[2]
-        assert seq_len % 128 == 0, "prefill seq_len must be divisible by 128"
-        rot = self.rope_setup.prefill_forward(start_pos, seq_len)
-        h = x
-        for layer in self.layers:
-            h = layer.prefill_forward(h, rot, user_id=user_id, page_table=None)
-        h = self.norm.prefill_forward(h)
-        return _all_gather_rmsnorm_tensor(self.norm, h)
-
-    def decode_from_token_ids(self, token_ids_tt: ttnn.Tensor, *, current_pos: int) -> ttnn.Tensor:
-        """Legacy path: single-token decode without paged ``page_table``."""
-        x = self.embed.forward(token_ids_tt)
-        x = ttnn.unsqueeze_to_4D(x)
-        pos = torch.tensor([current_pos], dtype=torch.long)
-        rot_idxs = prepare_rot_idxs(self.rope_setup.config, pos, on_host=False)
-        rot = self.rope_setup.decode_forward(rot_idxs)
-        cur = ttnn.from_torch(
-            pos,
-            device=self.mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(self.mesh_device),
-        )
-        h = x
-        for layer in self.layers:
-            h = layer.decode_forward(h, cur, rot, page_table=None)
-        h = _all_gather_rmsnorm_tensor(self.norm, h, memory_config=self.norm.config.decode_memory_config)
-        return self.norm.forward(h, "decode")
-
-    def lm_logits(self, hidden: ttnn.Tensor) -> ttnn.Tensor:
-        """Project last hidden to logits (vocab-sharded on multi-device).
-
-        Skip the explicit interleaved→shard if the caller already produced a sharded
-        input (e.g. ``decode_from_token_ids`` returns a width-sharded norm output that
-        already matches ``LMHead1D.config.input_memcfg``).
-        """
-        x = hidden
-        lm_head_memcfg = self.lm_head.config.input_memcfg
-        if lm_head_memcfg is not None and lm_head_memcfg.is_sharded() and not x.memory_config().is_sharded():
-            x = ttnn.interleaved_to_sharded(x, lm_head_memcfg)
-        return self.lm_head.forward(x)

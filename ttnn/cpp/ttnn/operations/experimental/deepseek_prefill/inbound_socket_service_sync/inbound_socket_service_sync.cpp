@@ -14,7 +14,7 @@ std::vector<Tensor> inbound_socket_service_sync(
 }
 
 std::vector<Tensor> inbound_socket_service_sync(
-    const tt::tt_metal::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes) {
+    const ttnn::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes) {
     return ttnn::prim::inbound_socket_service_sync(service, metadata_size_bytes);
 }
 

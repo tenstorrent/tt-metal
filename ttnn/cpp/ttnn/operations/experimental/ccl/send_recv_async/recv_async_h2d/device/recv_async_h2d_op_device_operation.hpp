@@ -12,7 +12,7 @@ namespace ttnn::experimental::prim {
 struct RecvAsyncH2DDeviceOperation {
     using operation_attributes_t = RecvAsyncH2DParams;
     using tensor_args_t = Tensor;
-    using spec_return_value_t = std::vector<TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<RecvAsyncH2DMeshWorkloadFactory>;
 

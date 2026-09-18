@@ -42,7 +42,7 @@ struct ReduceScatterDeviceOperation {
         std::optional<Tensor> optional_output_tensor;
     };
 
-    using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
     struct ReduceScatterProgram {

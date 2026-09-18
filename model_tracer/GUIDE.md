@@ -1,9 +1,11 @@
 # Model Tracer Guide
 
-The model tracer extracts operation configuration data while running models and stores them in a PostgreSQL database. From there, configurations can be reconstructed into JSON and used as sweep test vectors — in CI, on a branch, or in nightly runs.
+The model tracer extracts operation configuration data while running models and stores them in Snowflake. From there, configurations can be reconstructed into JSON and used as sweep test vectors — in CI, on a branch, or in nightly runs.
 
-**Schema:** All data lives in `ttnn_ops_v6` on Metal Ops PostgreSQL (configurable via `--schema`).
-**Connection:** Set `TTNN_OPS_DATABASE_URL`
+**Schema:** All data lives in `SELF_SERVE.TTNN_OPS_V6` in Snowflake (configurable via `--schema`). The schema and its owner/reader roles are provisioned via [Data Central](https://datacentral.ds.aws.tenstorrent.com/database/self-serve).
+**Connection:** Configured via env — `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, and `SNOWFLAKE_ROLE` (defaults to the read-only `SELF_SERVE_READER_TTNN_OPS_V6`; set `SELF_SERVE_OWNER_TTNN_OPS_V6` to write). Auth is an RSA keypair (`SNOWFLAKE_PRIVATE_KEY` or `SNOWFLAKE_PRIVATE_KEY_PATH`) for service users, or SSO for humans. Warehouse via `SNOWFLAKE_WAREHOUSE` (default `PUBLIC`).
+**Prerequisites:** `pip install snowflake-connector-python cryptography` (already in the sweeps CI image), and access to the schema's roles — provision them via Data Central (see the Snowflake Reference below).
+**Writes need the owner role:** the default role is read-only, so run write commands (`load`, `set-model-name`) with `SNOWFLAKE_ROLE=SELF_SERVE_OWNER_TTNN_OPS_V6`. Reads (`reconstruct-*`, `list-*`) work with the default reader role.
 
 ---
 
@@ -13,7 +15,8 @@ The model tracer extracts operation configuration data while running models and 
 # 1. Trace a model
 python model_tracer/generic_ops_tracer.py models/demos/deepseek_v3/demo/demo.py
 
-# 2. Load into DB (creates trace_run, auto-appends draft to manifest)
+# 2. Load into DB (writes → owner role; creates trace_run, auto-appends draft to manifest)
+SNOWFLAKE_ROLE=SELF_SERVE_OWNER_TTNN_OPS_V6 \
 python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
     model_tracer/traced_operations/ttnn_operations_master.json
 
@@ -24,6 +27,102 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
     model_tracer/trace_selection_registry.yaml \
     model_tracer/traced_operations/ttnn_operations_master.json
+```
+
+---
+
+## Snowflake Reference (common commands)
+
+Concrete values for this project: account `TLUIIGS-MN66866`, database `SELF_SERVE`,
+schema `TTNN_OPS_V6`, warehouse `PUBLIC`, owner role `SELF_SERVE_OWNER_TTNN_OPS_V6`,
+reader role `SELF_SERVE_READER_TTNN_OPS_V6`, service user `SVC_TTOPS_SWEEPS`.
+
+### 0. Provision the schema (one-time — Data Central, not SQL)
+
+You don't create the database — `SELF_SERVE` already exists. Create a *schema* at
+<https://datacentral.ds.aws.tenstorrent.com/database/self-serve>. It mints two roles:
+`SELF_SERVE_OWNER_<project>` (write, granted to you) and `SELF_SERVE_READER_<project>`
+(read-only). No role can `CREATE SCHEMA` directly, so this step is required first.
+
+### Connection env
+
+```bash
+export SNOWFLAKE_ACCOUNT=TLUIIGS-MN66866
+export SNOWFLAKE_USER=SVC_TTOPS_SWEEPS            # or your SSO user
+export SNOWFLAKE_PRIVATE_KEY_PATH=~/key.pem       # service user (keypair); omit for SSO
+export SNOWFLAKE_WAREHOUSE=PUBLIC
+export SNOWFLAKE_DATABASE=SELF_SERVE
+export SNOWFLAKE_ROLE=SELF_SERVE_READER_TTNN_OPS_V6   # reader = read-only; owner = write
+```
+
+### 1. Create / recreate the tables (owner role)
+
+The schema itself is provisioned by Data Central; this only (re)creates the 10 tables
+inside it, so it must run under the **owner** role. Pick one:
+
+```bash
+# a) Snowflake CLI (SSO connection, e.g. the one from `snow connection add`)
+snow sql -c myconn --role SELF_SERVE_OWNER_TTNN_OPS_V6 \
+  -f model_tracer/create_ttnn_ops_schema_v6_snowflake.sql
+
+# b) headless with a service-account keypair (no browser)
+python - <<'PY'
+import os
+from cryptography.hazmat.primitives import serialization
+import snowflake.connector
+pk = serialization.load_pem_private_key(
+    open(os.environ["SNOWFLAKE_PRIVATE_KEY_PATH"], "rb").read(), password=None
+).private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption())
+c = snowflake.connector.connect(
+    account="TLUIIGS-MN66866", user=os.environ["SNOWFLAKE_USER"], private_key=pk,
+    role="SELF_SERVE_OWNER_TTNN_OPS_V6", warehouse="PUBLIC", database="SELF_SERVE")
+for _ in c.execute_string(open("model_tracer/create_ttnn_ops_schema_v6_snowflake.sql").read()):
+    pass
+print("tables created")
+PY
+```
+
+Or, in **Snowsight**, run `USE ROLE SELF_SERVE_OWNER_TTNN_OPS_V6;` then paste the file's
+contents into a worksheet.
+
+### 2. Load traces into the DB (owner role — writes)
+
+```bash
+SNOWFLAKE_ROLE=SELF_SERVE_OWNER_TTNN_OPS_V6 \
+  python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
+  model_tracer/traced_operations/ttnn_operations_master.json
+```
+
+### 3. Reconstruct the master JSON / sweep vectors (reader role — read-only)
+
+```bash
+# default role is the reader, so no SNOWFLAKE_ROLE needed
+python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+  model_tracer/trace_selection_registry.yaml \
+  model_tracer/traced_operations/ttnn_operations_master.json
+```
+
+### 4. Grant access to others
+
+Run under the owner role (in Snowsight, or headless if your user/service account holds
+the owner role):
+
+```sql
+USE ROLE SELF_SERVE_OWNER_TTNN_OPS_V6;
+
+-- read-only, to a teammate (SSO) or a service user
+GRANT ROLE SELF_SERVE_READER_TTNN_OPS_V6 TO USER "teammate@tenstorrent.com";
+GRANT ROLE SELF_SERVE_READER_TTNN_OPS_V6 TO USER SVC_OTHER;
+
+-- read + write (full control — trusted pipelines only)
+GRANT ROLE SELF_SERVE_OWNER_TTNN_OPS_V6 TO USER SVC_WRITER;
+
+-- or grant privileges directly to an existing team role
+GRANT USAGE  ON SCHEMA SELF_SERVE.TTNN_OPS_V6                 TO ROLE <other_role>;
+GRANT SELECT ON ALL TABLES    IN SCHEMA SELF_SERVE.TTNN_OPS_V6 TO ROLE <other_role>;
+GRANT SELECT ON FUTURE TABLES IN SCHEMA SELF_SERVE.TTNN_OPS_V6 TO ROLE <other_role>;
+GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA SELF_SERVE.TTNN_OPS_V6 TO ROLE <other_role>;  -- write
 ```
 
 ---
@@ -57,6 +156,9 @@ Output: `model_tracer/traced_operations/ttnn_operations_master.json`
 ### Step 2: Load into DB
 
 ```bash
+# Loading writes, so use the owner role (export once; all loads below inherit it):
+export SNOWFLAKE_ROLE=SELF_SERVE_OWNER_TTNN_OPS_V6
+
 python tests/sweep_framework/load_ttnn_ops_data_v2.py load
 
 # Load a specific JSON file
@@ -85,13 +187,8 @@ On load the tool:
 `trace_run.pytest_args`. This lets you answer "have I traced model X with these args on
 hardware Y?" purely via SQL without re-running anything.
 
-If you're upgrading an existing `ttnn_ops_v6` deployment, apply the additive migration:
-
-```bash
-psql "$TTNN_OPS_DATABASE_URL" -f model_tracer/migrate_v6_add_pytest_args.sql
-```
-
-Pre-migration `trace_run` rows simply have `pytest_args = NULL`.
+The Snowflake `SELF_SERVE.TTNN_OPS_V6` schema already includes `trace_run.pytest_args`
+(see `model_tracer/create_ttnn_ops_schema_v6_snowflake.sql`), so no migration is needed.
 - **Auto-appends a `draft` entry** to `model_tracer/trace_selection_registry.yaml`
 
 Example output:
@@ -109,6 +206,9 @@ With `--dry-run`, the transaction is rolled back and the summary shows what the 
 Each model gets a short, lowercase `model_name` derived from its source path or HF identifier when it is first inserted. If the loader reports a `model_name` uniqueness error, disambiguate with:
 
 ```bash
+# set-model-name writes, so use the owner role:
+export SNOWFLAKE_ROLE=SELF_SERVE_OWNER_TTNN_OPS_V6
+
 # Override a specific model's name
 python tests/sweep_framework/load_ttnn_ops_data_v2.py set-model-name \
     --source-file "path/to/demo.py" --model-name custom_name

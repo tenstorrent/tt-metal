@@ -3,9 +3,14 @@
 
 #include "transpose_utils.hpp"
 
+#include <algorithm>
+
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
+
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 
 namespace ttnn::operations::data_movement::transpose {
 
@@ -15,7 +20,7 @@ namespace {
 
 // True if padded shape doesn't divide evenly into shard, or if the sharded config has no spec.
 // Conservatively true for rank < 2 so callers fall back to interleaved.
-bool is_unevenly_sharded(const TensorSpec& t) {
+bool is_unevenly_sharded(const tt::tt_metal::TensorSpec& t) {
     if (!t.memory_config().is_sharded()) {
         return false;
     }
@@ -70,7 +75,7 @@ bool side_native(const MemoryConfig& mc, Layout layout) {
 }  // namespace
 
 bool is_native_transpose_sharding(
-    const TensorSpec& input_spec, const std::optional<MemoryConfig>& output_memory_config) {
+    const tt::tt_metal::TensorSpec& input_spec, const std::optional<MemoryConfig>& output_memory_config) {
     if (!side_native(input_spec.memory_config(), input_spec.layout())) {
         return false;
     }
@@ -129,55 +134,30 @@ std::optional<ShardSpec> adjust_shard_spec_to_shape(
     return ret;
 }
 
-// Build a sharded spec over the full compute grid (used when no input shard_spec is available
-// to scale from, e.g. interleaved input + sharded output request).
+// Size CoreRangeSet to populated shards (avoids L1 waste + misleading .grid.num_cores()).
 ShardSpec generate_transpose_shard_spec(
     const Tensor& input_tensor,
     const ttnn::Shape& padded_out_shape,
     TensorMemoryLayout memory_layout,
     std::optional<ShardOrientation> orientation_hint) {
     auto* device = input_tensor.device();
-    auto compute_grid_size = device->compute_with_storage_grid_size();
-    CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
-    uint32_t num_cores = all_cores.num_cores();
-
-    // uint64 intermediates avoid overflow when leading-dim product exceeds 2^32; final shard
-    // dims are still uint32 (the hardware representation).
-    uint64_t tensor_height = 1;
-    for (int i = 0; i < static_cast<int>(padded_out_shape.rank()) - 1; ++i) {
-        tensor_height *= static_cast<uint64_t>(padded_out_shape[i]);
-    }
-    uint64_t tensor_width = padded_out_shape[-1];
-
-    std::array<uint32_t, 2> shard_shape = {0, 0};
-    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto height_padded = tt::round_up(tensor_height, static_cast<uint64_t>(num_cores) * tt::constants::TILE_HEIGHT);
-        auto shard_height =
-            tt::round_up(tt::div_up(height_padded, static_cast<uint64_t>(num_cores)), tt::constants::TILE_HEIGHT);
-        shard_shape = {static_cast<uint32_t>(shard_height), static_cast<uint32_t>(tensor_width)};
-    } else if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        auto shard_width =
-            tt::round_up(tt::div_up(tensor_width, static_cast<uint64_t>(num_cores)), tt::constants::TILE_WIDTH);
-        shard_shape = {static_cast<uint32_t>(tensor_height), static_cast<uint32_t>(shard_width)};
-    } else {
-        CoreCoord grid_size = all_cores.bounding_box().grid_size();
-        auto height_padded =
-            tt::round_up(tensor_height, static_cast<uint64_t>(grid_size.y) * tt::constants::TILE_HEIGHT);
-        auto shard_height =
-            tt::round_up(tt::div_up(height_padded, static_cast<uint64_t>(grid_size.y)), tt::constants::TILE_HEIGHT);
-        auto shard_width =
-            tt::round_up(tt::div_up(tensor_width, static_cast<uint64_t>(grid_size.x)), tt::constants::TILE_WIDTH);
-        shard_shape = {static_cast<uint32_t>(shard_height), static_cast<uint32_t>(shard_width)};
-    }
-    log_debug(tt::LogOp, "Transpose: generated shard spec over full compute grid ({} cores)", num_cores);
-    // Prefer explicit hint, then input's orientation, else ROW_MAJOR.
-    ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
-    if (orientation_hint.has_value()) {
-        orientation = *orientation_hint;
-    } else if (input_tensor.shard_spec().has_value()) {
-        orientation = input_tensor.shard_spec()->orientation;
-    }
-    return ShardSpec(all_cores, shard_shape, orientation);
+    auto spec = common::synthesize_output_shard_spec(
+        device->compute_with_storage_grid_size(),
+        padded_out_shape,
+        memory_layout,
+        {.is_tile = true,
+         .orientation_hint = orientation_hint,
+         .input_orientation = input_tensor.shard_spec().has_value()
+                                  ? std::optional{input_tensor.shard_spec()->orientation}
+                                  : std::nullopt,
+         .caller_tag = "Transpose"});
+    log_debug(
+        tt::LogOp,
+        "Transpose: generated shard spec ({}, {}) over {} populated cores",
+        spec.shape[0],
+        spec.shape[1],
+        spec.grid.num_cores());
+    return spec;
 }
 
 }  // namespace ttnn::operations::data_movement::transpose

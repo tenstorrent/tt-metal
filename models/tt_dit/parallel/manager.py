@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 
-from ..utils.tensor import bf16_tensor, local_device_to_torch
+from ..utils.tensor import local_device_to_torch
 
 
 class CCLManager:
@@ -32,18 +32,38 @@ class CCLManager:
         self._ping_pong_buffer_cache = {}
         self._ping_pong_buffer_indices = {}
 
+        # Ping-pong pool of persistent stats buffers for the fused distributed-norm op,
+        # keyed by the caller's shape/config key. See get_fused_norm_stats_buffer.
+        self._fused_norm_stats_buffer_cache = {}
+
+        # Lazily-allocated ping-pong pool of semaphore lists for the strided all-gather-matmul op
+        self._strided_ag_mm_sem_cache = {}
+        self._strided_ag_mm_sem_idx = {}
+        # Single shared MM->RS progress counter array. See get_mm_progress_counters_buffer.
+        self._mm_progress_counters_buffer = None
+        # Single shared RS->MM window credit array. See get_mm_credit_counters_buffer.
+        self._mm_credit_counters_buffer = None
+
         # Setup semaphores
         self._init_subdevice()
 
         # Initialize semaphores for reduce scatter and all gather and neighbor pad
         self._init_semaphores()
+        # Barrier: GlobalSemaphores are created + zeroed with per-device work; without a
+        # sync here a fast device can start an op and fire a cross-device atomic-inc at a
+        # peer whose semaphore isn't created/zeroed yet -> the inc is lost (ops that read
+        # the semaphore without re-zeroing at startup then desync / hang). Mirrors the
+        # post-buffer-creation syncs in the ping-pong buffer getters.
+        ttnn.synchronize_device(self.mesh_device)
         self.rs_ping_pong_idx = [0, 0]
         self.rs_ping_pong_idx_fused = [0, 0]
         self.ag_ping_pong_idx = [0, 0]
         self.exp_ring_ping_pong_idx = [0, 0]
         self.np_ping_pong_idx = [0, 0]
+        self.np_fused_ping_pong_idx = [0, 0]
         self.sr_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
+        self.barrier_fused_idx = [0, 0]
 
     def _init_subdevice(self):
         compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
@@ -51,11 +71,6 @@ class CCLManager:
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
 
-        _worker_sub_device = ttnn.SubDevice(
-            [
-                self.ccl_cores,
-            ]
-        )
         self.ccl_sub_device_id = ttnn.SubDeviceId(0)
 
     def _init_semaphores(self):
@@ -86,7 +101,7 @@ class CCLManager:
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(exp_ring_n_sems)],
         }
 
-        # Initialize neighbor pad semaphores
+        # Initialize neighbor pad semaphores (standalone NP path)
         np_n_sems = 1 * 2
         self.np_ping_pong_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(np_n_sems)],
@@ -107,7 +122,31 @@ class CCLManager:
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
         }
 
-    def get_rs_ping_pong_buffer(self, shape, dim, mesh_axis):
+        # Separate semaphores for fused NP+Conv3d path to avoid state conflicts when standalone NP and fused ops.
+        # Per-(region,link) progress sems cover 4 face regions {H-top, H-bot, W-left, W-right} per link.
+        # These three pools allocate on first use: nothing selects the fused path yet, and a global
+        # semaphore is a device resource held for the lifetime of every CCLManager.
+        self._np_fused_n_sems = np_n_sems
+        self._barrier_fused_n_sems = barrier_n_sems
+        self._np_region_n_sems = 4 * self.num_links
+        self.np_fused_ping_pong_semaphores = None
+        self.barrier_fused_semaphores = None
+        self.np_region_progress_semaphores = None
+
+    def get_dim(self, dim, shape):
+        if dim < 0:
+            dim += len(shape)
+        return dim
+
+    def get_rs_ping_pong_buffer(
+        self,
+        shape,
+        dim,
+        mesh_axis,
+        return_output_buffer: bool = True,
+        return_intermediate: bool = True,
+        device_synchronize: bool = True,
+    ):
         """
         Get or create ping pong buffers for reduce scatter operations.
         Caches buffers based on shape, dim, and mesh_axis.
@@ -121,27 +160,58 @@ class CCLManager:
             Current ping pong buffer (alternates between two buffers)
         """
         # Create cache key from the parameters
+        dim = self.get_dim(dim, shape)
         cache_key = (tuple(shape), dim, mesh_axis)
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
             # Synchronize devices to ensure all are ready to allocate and proceed
-            ttnn.synchronize_device(self.mesh_device)
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
             # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] //= self.mesh_device.shape[mesh_axis]
 
+            # The op's tiled intermediate is input-shaped, except on Linear topology where it holds
+            # two slices stacked on dim 0. Matching this exactly is required: reduce_scatter rejects
+            # an intermediate that is neither the tiled spec nor the contiguous staging buffer.
+            # TODO: Switch over to using reduce_scatter_minimal_async_create_intermediate_buffer.
             intermediate_buffer_shape = list(shape)
-            intermediate_buffer_shape = [2] + intermediate_buffer_shape
+            if self.topology == ttnn.Topology.Linear:
+                intermediate_buffer_shape[0] *= 2
             for _ in range(2):
-                intermediate_buffer = bf16_tensor(torch.empty(intermediate_buffer_shape), device=self.mesh_device)
-                output_buffer = bf16_tensor(torch.empty(output_buffer_shape), device=self.mesh_device)
+                # Device-native, uninitialized allocation: these scratch ping-pong
+                # buffers are fully overwritten by the reduce-scatter op, so no
+                # zero-init is needed.
+                intermediate_buffer = (
+                    ttnn.allocate_tensor_on_device(
+                        ttnn.Shape(intermediate_buffer_shape),
+                        ttnn.bfloat16,
+                        ttnn.TILE_LAYOUT,
+                        self.mesh_device,
+                        ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    if return_intermediate
+                    else None
+                )
+                output_buffer = (
+                    ttnn.allocate_tensor_on_device(
+                        ttnn.Shape(output_buffer_shape),
+                        ttnn.bfloat16,
+                        ttnn.TILE_LAYOUT,
+                        self.mesh_device,
+                        ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    if return_output_buffer
+                    else None
+                )
                 buffers.append([intermediate_buffer, output_buffer])
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
-            ttnn.synchronize_device(self.mesh_device)
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
         current_idx = self._ping_pong_buffer_indices[cache_key]
@@ -149,7 +219,7 @@ class CCLManager:
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
-    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis, dtype=ttnn.bfloat16):
+    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True):
         """
         Get or create ping pong buffers for all gather operations.
         Caches buffers based on shape, dim, and mesh_axis.
@@ -163,29 +233,34 @@ class CCLManager:
             Current ping pong buffer (alternates between two buffers)
         """
         # Create cache key from the parameters (use different namespace than rs)
+        dim = self.get_dim(dim, shape)
         cache_key = ("ag", tuple(shape), dim, mesh_axis, dtype)
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
             # Synchronize devices to ensure all are ready to allocate and proceed
-            ttnn.synchronize_device(self.mesh_device)
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
             # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] *= self.mesh_device.shape[mesh_axis]  # All gather increases size
             for _ in range(2):
-                output_buffer = ttnn.from_torch(
-                    torch.empty(output_buffer_shape),
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=dtype,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    device=self.mesh_device,
+                # Device-native, uninitialized allocation: the all-gather fully
+                # overwrites this buffer, so no zero-init is needed.
+                output_buffer = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape(output_buffer_shape),
+                    dtype,
+                    ttnn.TILE_LAYOUT,
+                    self.mesh_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
                 )
                 buffers.append(output_buffer)
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
-            ttnn.synchronize_device(self.mesh_device)
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
         current_idx = self._ping_pong_buffer_indices[cache_key]
@@ -238,6 +313,124 @@ class CCLManager:
         self.ag_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.ag_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
+    def get_strided_ag_mm_semaphore(self, mesh_axis, num_workers_per_link):
+        """
+        Get semaphores for the strided all-gather-matmul op (strided_all_gather_minimal_matmul_async).
+
+        Unlike the 2-semaphore all-gather path, the strided op needs 2 out-ready semaphores plus
+        2 * num_links * num_workers_per_link per-worker aggregator semaphores (incremented over the
+        fabric by writer workers on the receiving device), all in a single list. A 2-deep ping-pong
+        pool is allocated lazily per (mesh_axis, num_workers_per_link) and rotated on each call.
+
+        Args:
+            mesh_axis: The mesh axis (0 or 1) to get semaphores for
+            num_workers_per_link: The op's num_workers_per_link (sets the aggregator-sem count)
+
+        Returns:
+            List of (2 + 2 * num_links * num_workers_per_link) GlobalSemaphores for this cycle
+        """
+        cache_key = (mesh_axis, num_workers_per_link)
+        if cache_key not in self._strided_ag_mm_sem_cache:
+            ttnn.synchronize_device(self.mesh_device)
+            n_sems = 2 + 2 * self.num_links * num_workers_per_link
+            self._strided_ag_mm_sem_cache[cache_key] = [
+                [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(n_sems)]
+                for _ in range(2)
+            ]
+            self._strided_ag_mm_sem_idx[cache_key] = 0
+            ttnn.synchronize_device(self.mesh_device)
+
+        cur_idx = self._strided_ag_mm_sem_idx[cache_key]
+        self._strided_ag_mm_sem_idx[cache_key] = 1 - cur_idx
+        return self._strided_ag_mm_sem_cache[cache_key][cur_idx]
+
+    def get_fused_norm_stats_buffer(self, key, create_buffer, device_synchronize=True):
+        """Own the ping-pong pool + lifetime of the fused distributed-norm op's persistent
+        stats (all-gather scratch) buffer.
+
+        `create_buffer` is a 0-arg factory that returns a freshly allocated buffer (or None
+        when the op needs no AG scratch — the non-MUX / no-all-gather path). A 2-deep pool is
+        allocated once per `key` and rotated on each call, so the buffer handed out is free of
+        the previous invocation's in-flight AG traffic (paired with the 2-set AG-semaphore
+        ping-pong from get_ag_ping_pong_semaphore). The pool lives as long as this CCLManager.
+
+        The caller is responsible for creating the buffer correctly for its parameters (shape,
+        num_links, weight/RoPE, norm type) inside `create_buffer` and for encoding those in
+        `key`; num_links MUST match the op's num_preferred_links or the gather geometry desyncs.
+
+        Returns the buffer to pass as persistent_output_buffer, or None on the no-AG path.
+        """
+        entry = self._fused_norm_stats_buffer_cache.get(key)
+        if entry is None:
+            entry = {"bufs": [create_buffer() for _ in range(2)], "idx": 0}
+            self._fused_norm_stats_buffer_cache[key] = entry
+            # Barrier before first use: ensure every device has allocated the persistent
+            # stats buffer (and its DRAM scratch is live) before any device launches the op
+            # and writes/atomic-incs into a peer's copy over fabric.
+            if entry["bufs"][0] is not None and device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
+        bufs = entry["bufs"]
+        if bufs[0] is None:
+            return None
+        buf = bufs[entry["idx"]]
+        entry["idx"] = (entry["idx"] + 1) % len(bufs)
+        return buf
+
+    def get_mm_progress_counters_buffer(self):
+        """Own the progress-counter array for the fused matmul -> strided reduce-scatter op's
+        per-core MM->RS signaling: one uint32 slot per matmul core, one row per core.
+
+        Same per-core row as the array the op allocates for itself, over the whole compute grid
+        rather than just the RS worker cores, and allocated once here instead of per compiled
+        program. The op's own copy is retained for as long as the program stays cached, and because
+        L1 is handed out top-down each of those small permanent blocks pins the freed space above it,
+        which eventually leaves a later op (the VAE's ring joint SDPA) short of contiguous L1 for its
+        circular buffers.
+        """
+        if self._mm_progress_counters_buffer is None:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            slots = grid.x * grid.y
+            self._mm_progress_counters_buffer = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([slots, slots]),
+                ttnn.uint32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                self.mesh_device,
+                ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(self.ccl_cores, [1, slots], ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+            )
+        return self._mm_progress_counters_buffer
+
+    def get_mm_credit_counters_buffer(self):
+        """Own the credit-counter array for the fused matmul -> strided reduce-scatter op's
+        rolling L1 window (mm_window_blocks): one uint32 slot per RS reader, one row per matmul
+        core. The RS readers bump their slot on every matmul core as they release an M block; the
+        matmul waits on the minimum across readers before recycling a window slot.
+
+        The counterpart of get_mm_progress_counters_buffer, and shared for the same reason: the
+        op's per-program fallback allocation is retained for as long as the program stays cached,
+        and each of those small permanent L1 blocks pins the freed space above it. A row is sized
+        to the full compute grid (comfortably above any real reader count); the op validates the
+        row is wide enough for its num_rs_readers.
+        """
+        if self._mm_credit_counters_buffer is None:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            slots = grid.x * grid.y
+            self._mm_credit_counters_buffer = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([slots, slots]),
+                ttnn.uint32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                self.mesh_device,
+                ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(self.ccl_cores, [1, slots], ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+            )
+        return self._mm_credit_counters_buffer
+
     def get_exp_ring_ping_pong_semaphore(self, mesh_axis):
         """
         Get semaphores for exp ring joint SDPA operations.
@@ -255,12 +448,37 @@ class CCLManager:
 
     def get_np_ping_pong_semaphore(self, mesh_axis):
         """
-        Get semaphores for neighbor pad operations.
+        Get semaphores for standalone neighbor pad operations.
         """
         cur_idx = self.np_ping_pong_idx[mesh_axis]
         n_sems = 1
         self.np_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.np_ping_pong_semaphores[mesh_axis][cur_idx]
+
+    def _make_semaphore_pool(self, n_sems):
+        """Allocate a per-axis bank of `n_sems` global semaphores."""
+        return {
+            axis: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(n_sems)]
+            for axis in (0, 1)
+        }
+
+    def get_np_fused_ping_pong_semaphore(self, mesh_axis):
+        """
+        Get semaphores for fused NP+Conv3d operations (separate pool from standalone NP).
+        """
+        if self.np_fused_ping_pong_semaphores is None:
+            self.np_fused_ping_pong_semaphores = self._make_semaphore_pool(self._np_fused_n_sems)
+        cur_idx = self.np_fused_ping_pong_idx[mesh_axis]
+        self.np_fused_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
+        return self.np_fused_ping_pong_semaphores[mesh_axis][cur_idx]
+
+    def get_barrier_fused_semaphore(self, mesh_axis):
+        """Get barrier semaphore for fused NP+Conv3d (separate pool from standalone NP)."""
+        if self.barrier_fused_semaphores is None:
+            self.barrier_fused_semaphores = self._make_semaphore_pool(self._barrier_fused_n_sems)
+        cur_idx = self.barrier_fused_idx[mesh_axis]
+        self.barrier_fused_idx[mesh_axis] = (cur_idx + 1) % 2
+        return self.barrier_fused_semaphores[mesh_axis][cur_idx]
 
     def get_sr_ping_pong_semaphore(self, mesh_axis):
         """
@@ -270,6 +488,182 @@ class CCLManager:
         n_sems = 1
         self.sr_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.sr_ping_pong_semaphores[mesh_axis][cur_idx]
+
+    def get_np_region_progress_semaphores(self, mesh_axis):
+        """Get the 4*num_links per-(region,link) progress sems (static, single bank), indexed [region*num_links + link]."""
+        if self.np_region_progress_semaphores is None:
+            self.np_region_progress_semaphores = self._make_semaphore_pool(self._np_region_n_sems)
+        return self.np_region_progress_semaphores[mesh_axis]
+
+    def get_np_halo_buffer(self, input_shape, dim, padding, dtype=ttnn.bfloat16, dim2=None, padding2=0):
+        """
+        Get or create a ping-pong compact halo buffer for fabric-only NeighborPad.
+        Handles H halo and optionally W halo.
+
+        Layout: [H-top | H-bot | W-left | W-right] where H sections are
+        outer_dim × padding_h × W_dev sticks, and W sections are
+        outer_dim × padding_w × (H_dev + 2*padding_h) sticks (extended for corner fix).
+        """
+        import torch
+
+        outer_dim_size = 1
+        for d in range(dim):
+            outer_dim_size *= input_shape[d]
+        # H sticks per halo row = product of dims after dim (excluding last C dim)
+        h_sticks = 1
+        for d in range(dim + 1, len(input_shape) - 1):
+            h_sticks *= input_shape[d]
+        # W sticks per halo col = H_dev + 2*padding_h (extended to include H-padded rows for corner fix)
+        w_sticks = (input_shape[dim] + 2 * padding) if dim2 is not None else 0
+
+        h_halo_total = outer_dim_size * 2 * padding * h_sticks
+        w_halo_total = outer_dim_size * 2 * padding2 * w_sticks if dim2 is not None else 0
+        total_sticks = h_halo_total + w_halo_total
+        # Each "stick" = C channels × 2 bytes (BF16)
+        C = input_shape[-1]  # channel dimension
+
+        cache_key = ("np_halo", tuple(input_shape), dim, padding, dim2, padding2, dtype)
+        if cache_key not in self._ping_pong_buffer_cache:
+            bufs = []
+            for _ in range(2):
+                buf = ttnn.from_torch(
+                    torch.zeros([total_sticks, C], dtype=torch.bfloat16),
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    device=self.mesh_device,
+                )
+                bufs.append(buf)
+            self._ping_pong_buffer_cache[cache_key] = bufs
+            self._ping_pong_buffer_indices[cache_key] = 0
+
+        cur = self._ping_pong_buffer_indices[cache_key]
+        self._ping_pong_buffer_indices[cache_key] = 1 - cur
+        return self._ping_pong_buffer_cache[cache_key][cur]
+
+    def neighbor_pad_halo_only(
+        self,
+        tensor: ttnn.Tensor,
+        *,
+        dims: list,
+        pad_left: list,
+        pad_right: list,
+        axes: list,
+        neighbor_sems: list,
+        num_links: list,
+        padding_mode: str = "zeros",
+        input_pad_h: int = 0,
+        input_pad_w: int = 0,
+        padded_output: ttnn.Tensor = None,
+    ) -> ttnn.Tensor:
+        """Fill and return the compact [H-top|H-bot|W-left|W-right] halo buffer via the standalone
+        neighbor_pad_halo op. Pair with ttnn.experimental.conv3d(halo_buffer=...) for the two-dispatch
+        halo-aware path (no full-pad interior copy). Halo-only variant of the neighbor-pad exchange.
+
+        input_pad_h/w > 0: `tensor` is a padded [.,H+2*ipad_h,W+2*ipad_w,C] buffer; exchange the halo of
+        its INTERIOR (copy-free path). The compact buffer is sized for the interior dims.
+
+        padded_output: fused mode — the op ALSO copies the interior (tensor -> padded_output) on free
+        cores CONCURRENTLY with the fabric exchange. Returns the compact buffer (still needed for the
+        border scatter); the padded interior is filled as a side effect."""
+        barrier_sem = self.get_barrier_semaphore(axes[0])
+        dim2 = dims[1] if len(dims) > 1 else None
+        padding2 = pad_left[1] if dim2 is not None else 0
+        # Compact buffer is sized from the INTERIOR shape (input_pad strips the padded border).
+        halo_shape = list(tensor.shape)
+        if input_pad_h:
+            halo_shape[dims[0]] -= 2 * input_pad_h
+        if input_pad_w and dim2 is not None:
+            halo_shape[dim2] -= 2 * input_pad_w
+        halo_buf = self.get_np_halo_buffer(
+            halo_shape, dims[0], pad_left[0], dtype=tensor.get_dtype(), dim2=dim2, padding2=padding2
+        )
+        pw = pad_left[1] if dim2 is not None and len(pad_left) > 1 else 0
+        w_sem = neighbor_sems[1] if len(neighbor_sems) > 1 else neighbor_sems[0]
+        np_pad2_left = pad_left[1] if dim2 is not None and len(pad_left) > 1 else 0
+        np_pad2_right = pad_right[1] if dim2 is not None and len(pad_right) > 1 else 0
+        np_pad_dim2_val = dim2 if dim2 is not None else 0
+        np_pad2_cluster_axis_val = axes[1] if dim2 is not None and len(axes) > 1 else 0
+        np_pad2_num_links = num_links[1] if dim2 is not None and len(num_links) > 1 else 1
+        ttnn.experimental.neighbor_pad_halo(
+            tensor,
+            halo_buf,
+            np_padding_h=pad_left[0],
+            np_padding_w=pw,
+            np_cluster_axis=axes[0],
+            np_num_links=num_links[0],
+            np_topology=self.topology,
+            h_neighbor_semaphore=neighbor_sems[0],
+            barrier_semaphore=barrier_sem,
+            w_neighbor_semaphore=w_sem,
+            np_pad_dim2=np_pad_dim2_val,
+            np_pad2_left=np_pad2_left,
+            np_pad2_right=np_pad2_right,
+            np_pad2_cluster_axis=np_pad2_cluster_axis_val,
+            np_pad2_num_links=np_pad2_num_links,
+            padding_mode=padding_mode,
+            input_pad_h=input_pad_h,
+            input_pad_w=input_pad_w,
+            padded_output=padded_output,
+        )
+        return halo_buf
+
+    def neighbor_pad_halo_scatter(
+        self,
+        tensor: ttnn.Tensor,
+        *,
+        dims: list,
+        pad_left: list,
+        pad_right: list,
+        axes: list,
+        neighbor_sems: list,
+        num_links: list,
+        padding_mode: str = "zeros",
+        input_pad_h: int = 0,
+        input_pad_w: int = 0,
+        border_only: bool = False,
+    ) -> ttnn.Tensor:
+        """Fused halo op: fabric halo exchange (into the compact buffer) then local scatter into a padded
+        [.,H+2pH,W+2pW,C] buffer, returned ready for a plain (pad=0) conv3d. Folds neighbor_pad_halo_only
+        + halo_scatter into one call.
+
+        border_only: `tensor` already carries a padded interior (previous conv's padded output), so only
+        the border is written in place (copy-free). Otherwise (repack) the padded buffer is allocated and
+        the interior copy is FUSED into the exchange op (runs concurrently on free cores), then the border
+        is scattered — overlapping the interior copy with the fabric transport instead of serializing it."""
+        pH = pad_left[0]
+        pW = pad_left[1] if len(pad_left) > 1 else 0
+        if border_only:
+            compact = self.neighbor_pad_halo_only(
+                tensor,
+                dims=dims,
+                pad_left=pad_left,
+                pad_right=pad_right,
+                axes=axes,
+                neighbor_sems=neighbor_sems,
+                num_links=num_links,
+                padding_mode=padding_mode,
+                input_pad_h=input_pad_h,
+                input_pad_w=input_pad_w,
+            )
+            return ttnn.experimental.halo_scatter(compact, tensor, np_padding_h=pH, np_padding_w=pW, border_only=True)
+
+        # Repack: allocate the padded output; the exchange op copies the interior into it concurrently.
+        padded = self.get_np_ping_pong_buffer(list(tensor.shape), dims, pad_left, pad_right, dtype=tensor.get_dtype())
+        compact = self.neighbor_pad_halo_only(
+            tensor,
+            dims=dims,
+            pad_left=pad_left,
+            pad_right=pad_right,
+            axes=axes,
+            neighbor_sems=neighbor_sems,
+            num_links=num_links,
+            padding_mode=padding_mode,
+            input_pad_h=input_pad_h,
+            input_pad_w=input_pad_w,
+            padded_output=padded,
+        )
+        return ttnn.experimental.halo_scatter(compact, padded, np_padding_h=pH, np_padding_w=pW, border_only=True)
 
     def get_barrier_semaphore(self, mesh_axis):
         """
@@ -281,7 +675,7 @@ class CCLManager:
         return self.barrier_semaphores[mesh_axis][cur_idx]
 
     def get_np_ping_pong_buffer(
-        self, input_shape, dims, pad_left, pad_right, dtype=ttnn.bfloat16, t_front_pad: int = 0
+        self, input_shape, dims, pad_left, pad_right, dtype=ttnn.bfloat16, t_front_pad: int = 0, device_synchronize=True
     ):
         """
         Get or create ping pong buffers for neighbor pad operations.
@@ -307,21 +701,26 @@ class CCLManager:
         cache_key = ("np", tuple(output_shape), dtype)
 
         if cache_key not in self._ping_pong_buffer_cache:
-            ttnn.synchronize_device(self.mesh_device)
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
             buffers = []
             for _ in range(2):
-                output_buffer = ttnn.from_torch(
-                    torch.zeros(output_shape),
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    dtype=dtype,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    device=self.mesh_device,
+                # neighbor_pad relies on zeroed boundary-pad regions, so this buffer
+                # must be zero-initialized.
+                output_buffer = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape(output_shape),
+                    dtype,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    self.mesh_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
                 )
+                ttnn.fill(output_buffer, 0.0, output_tensor=output_buffer)
                 buffers.append(output_buffer)
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
-            ttnn.synchronize_device(self.mesh_device)
+            if device_synchronize:
+                ttnn.synchronize_device(self.mesh_device)
 
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
@@ -411,6 +810,15 @@ class CCLManager:
                 ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.ag_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
+            # Lazily-allocated fused NP+Conv3d pools; skipped entirely until something asks for them.
+            for pool in (
+                self.np_fused_ping_pong_semaphores,
+                self.barrier_fused_semaphores,
+                self.np_region_progress_semaphores,
+            ):
+                if pool is not None:
+                    for sem in pool[axis]:
+                        ttnn.reset_global_semaphore_value(sem, 0)
 
     def all_gather_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None, use_hyperparams: bool = False

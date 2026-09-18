@@ -5,9 +5,9 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::moreh::moreh_layer_norm_backward_input_grad {
 struct MorehLayerNormBackwardInputGradOperation {
@@ -26,11 +26,11 @@ struct MorehLayerNormBackwardInputGradOperation {
         const std::optional<const Tensor>& gamma;
     };
 
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct MorehLayerNormBackwardInputGradFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& input_grad);

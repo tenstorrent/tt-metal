@@ -18,7 +18,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -26,6 +25,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -40,9 +40,34 @@
 
 #include "stream_service_common.hpp"
 
-namespace tt::tt_metal {
+namespace ttnn {
+
+// Metal names that ADL provided when this TU lived in tt::tt_metal.
+// Keep only high-frequency symbols; rare ones stay qualified at use sites.
+// Do not alias `distributed` at this scope — it collides with ttnn::distributed.
+using tt::tt_metal::Buffer;
+using tt::tt_metal::BufferType;
+using tt::tt_metal::CircularBufferConfig;
+using tt::tt_metal::CoreCoord;
+using tt::tt_metal::CoreRange;
+using tt::tt_metal::CoreRangeSet;
+using tt::tt_metal::CreateCircularBuffer;
+using tt::tt_metal::CreateKernel;
+using tt::tt_metal::CreateProgram;
+using tt::tt_metal::DataMovementConfig;
+using tt::tt_metal::DataMovementProcessor;
+using tt::tt_metal::DeviceAddr;
+using tt::tt_metal::GlobalSemaphore;
+using tt::tt_metal::NOC;
+using tt::tt_metal::Program;
+using tt::tt_metal::SetRuntimeArgs;
+using tt::tt_metal::TensorAccessorArgs;
+using tt::tt_metal::TensorSpec;
+using tt::tt_metal::TensorTopology;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
+namespace distributed = tt::tt_metal::distributed;
+namespace stream_service_common = tt::tt_metal::stream_service_common;
 
 // make_zero_host_tensor / ChunkPlan / derive_chunk_plan / core_range_size are
 // shared verbatim with the H2D service (socket_services.cpp); they live in
@@ -231,7 +256,7 @@ MapperOutput run_mapper(D2DStreamConfig& cfg) {
     TT_FATAL(cfg.mapper != nullptr, "D2DStreamService: cfg.mapper must not be null");
     auto mapper = std::move(cfg.mapper);
     // Qualify explicitly: an unqualified call would, via ADL on the
-    // tt::tt_metal::TensorSpec argument, also find tt::tt_metal::make_zero_host_tensor
+    // TensorSpec argument, also find tt::tt_metal::make_zero_host_tensor
     // from socket_service_common.hpp (same Unity translation unit) and be ambiguous.
     const auto distributed_dummy = (*mapper)(stream_service_common::make_zero_host_tensor(cfg.global_spec));
     return MapperOutput{
@@ -248,6 +273,10 @@ struct CommonPlan {
     uint32_t tensor_page_size;
     uint32_t fabric_max_payload_size;
     uint32_t metadata_size_bytes;
+    // Bytes actually staged + shipped for the metadata blob: metadata_size_bytes
+    // rounded up to the L1 alignment (0 when metadata is disabled). Sized off the
+    // metadata itself, NOT off socket_page_size — see derive_common_plan.
+    uint32_t metadata_span_bytes;
     bool metadata_enabled;
     uint32_t l1_alignment;
 };
@@ -259,7 +288,7 @@ CommonPlan derive_common_plan(const D2DStreamConfig& cfg, const Tensor& backing)
         cfg.socket_mem_config.socket_storage_type == BufferType::L1,
         "D2DStreamService: V0 supports socket_storage_type == L1 only");
 
-    const uint32_t l1_alignment = hal::get_l1_alignment();
+    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     const uint32_t tensor_page_size = backing.buffer()->aligned_page_size();
     const uint32_t tensor_num_pages = backing.buffer()->num_pages();
     TT_FATAL(
@@ -269,7 +298,11 @@ CommonPlan derive_common_plan(const D2DStreamConfig& cfg, const Tensor& backing)
         tensor_page_size,
         l1_alignment);
 
-    const auto plan = derive_chunk_plan(tensor_page_size, tensor_num_pages, cfg.socket_mem_config.fifo_size);
+    // Socket page is flow control only -- payload bypasses the FIFO (see "no L1 FIFO copy" above) -- so
+    // it is sized to the write alignment, not to a tensor page. Page as both args => pages_per_chunk 1.
+    constexpr uint32_t kSocketPageSizeBytes = 64;
+    const uint32_t socket_page_size = tt::align(kSocketPageSizeBytes, l1_alignment);
+    const auto plan = derive_chunk_plan(socket_page_size, tensor_num_pages, socket_page_size);
 
     const auto fabric_max_payload_size = static_cast<uint32_t>(
         tt::round_down(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(), static_cast<size_t>(l1_alignment)));
@@ -277,17 +310,32 @@ CommonPlan derive_common_plan(const D2DStreamConfig& cfg, const Tensor& backing)
 
     const uint32_t metadata_size_bytes = cfg.metadata_size_bytes;
     const bool metadata_enabled = metadata_size_bytes > 0;
+    // Metadata capacity is bounded by fifo_size, NOT by socket_page_size. The blob is
+    // staged in sender service-core L1 and fabric-written to the receiver's FIFO base
+    // (the receiver never pops, so its read_ptr stays at that base), so the FIFO is the
+    // only region it has to fit in — the 64 B flow-control page is independent of how
+    // much metadata a transfer carries. The shipped span is L1-aligned so both the
+    // staging allocation and the fabric write stay alignment-legal; the padding tail is
+    // zero-init (see the staging buffer below) and the receiver mcasts only the
+    // un-padded metadata_size_bytes.
+    const uint32_t metadata_span_bytes = metadata_enabled ? tt::align(metadata_size_bytes, l1_alignment) : 0u;
+    const uint32_t min_fifo_size = std::max(socket_page_size, metadata_span_bytes);
     TT_FATAL(
-        !metadata_enabled || metadata_size_bytes <= plan.socket_page_size,
-        "D2DStreamService: metadata_size_bytes ({}) exceeds socket_page_size ({}); metadata must fit one socket page",
-        metadata_size_bytes,
-        plan.socket_page_size);
+        cfg.socket_mem_config.fifo_size >= min_fifo_size,
+        "D2DStreamService: fifo_size ({} B) must be >= {} B — max of socket_page_size ({} B) and the L1-aligned "
+        "metadata span ({} B, for metadata_size_bytes={})",
+        cfg.socket_mem_config.fifo_size,
+        min_fifo_size,
+        socket_page_size,
+        metadata_span_bytes,
+        metadata_size_bytes);
 
     return CommonPlan{
         .plan = plan,
         .tensor_page_size = tensor_page_size,
         .fabric_max_payload_size = fabric_max_payload_size,
         .metadata_size_bytes = metadata_size_bytes,
+        .metadata_span_bytes = metadata_span_bytes,
         .metadata_enabled = metadata_enabled,
         .l1_alignment = l1_alignment,
     };
@@ -324,14 +372,14 @@ struct ServiceCoreReleaseGuard {
 // persistent MeshWorkload. The handle destructor tears all of it down.
 
 struct D2DStreamServiceSender::Impl {
-    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device;
     TensorSpec per_shard_spec;
     Tensor backing_tensor;
     CoreRange worker_cores;
-    std::map<distributed::MeshCoordinate, CoreCoord> service_cores;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, CoreCoord> service_cores;
     // Sender endpoint of the MeshSocket pair (no data buffer — sender only owns
     // the config buffer). std::optional because MeshSocket has no default ctor.
-    std::optional<distributed::MeshSocket> socket;
+    std::optional<tt::tt_metal::distributed::MeshSocket> socket;
 
     // Chunk plan + worker-sync resources.
     uint32_t socket_page_size = 0;
@@ -339,8 +387,8 @@ struct D2DStreamServiceSender::Impl {
     uint32_t pages_per_chunk = 0;
     uint32_t num_workers = 0;
     // Per-coord service-core L1 words (service cores differ per device).
-    std::map<distributed::MeshCoordinate, DeviceAddr> data_ready_counter_addrs;
-    std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> data_ready_counter_addrs;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> termination_addrs;
     // Fabric-link lease. share_fabric_links mirrors Config; when true the kernel
     // holds no fabric connection until granted a turn. link_grant is a single per-
     // coord service-core L1 word forming a strict host<->kernel ping-pong:
@@ -351,12 +399,12 @@ struct D2DStreamServiceSender::Impl {
     // boundary, so one word is race-free (writers never overlap). Always set from
     // Config in create_pair (this member default never takes effect).
     bool share_fabric_links = true;
-    std::map<distributed::MeshCoordinate, DeviceAddr> link_grant_addrs;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> link_grant_addrs;
     // Multi-lane sender (Step 2a) lane-sync words: master bumps go_count to release
     // the sub for a transfer; sub bumps done_count when its half is shipped. One pair
     // per coord in service-core L1; unused (but allocated) when single-lane.
-    std::map<distributed::MeshCoordinate, DeviceAddr> go_count_addrs;
-    std::map<distributed::MeshCoordinate, DeviceAddr> done_count_addrs;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> go_count_addrs;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> done_count_addrs;
     // Mesh-wide GlobalSemaphore on sender_worker_cores; the service kernel
     // multicast-incs it once per drained iteration.
     std::optional<GlobalSemaphore> consumed_sem;
@@ -365,28 +413,28 @@ struct D2DStreamServiceSender::Impl {
     // (allocated via ServiceCoreManager, AFTER the socket reservation); the
     // designated worker writes the blob here before acking. Empty when disabled.
     uint32_t metadata_size_bytes = 0;
-    std::map<distributed::MeshCoordinate, DeviceAddr> metadata_addrs;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> metadata_addrs;
 
     // Persistent sender workload, launched once at create_pair.
-    std::unique_ptr<distributed::MeshWorkload> workload;
+    std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> workload;
     bool launched = false;
 
     // Cached lease workloads (LEASE mode only): release_fabric_links enqueues the RELEASE
     // (write grant=1) BEFORE the producer; wait_for_fabric_links enqueues the WAIT (spin
     // grant==0) AFTER. Both CQ-ordered — no host PCIe poke. Null in OWN mode.
-    std::unique_ptr<distributed::MeshWorkload> lease_wait_workload;
-    std::unique_ptr<distributed::MeshWorkload> lease_release_workload;
+    std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> lease_wait_workload;
+    std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> lease_release_workload;
 };
 
 struct D2DStreamServiceReceiver::Impl {
-    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device;
     TensorSpec per_shard_spec;
     Tensor backing_tensor;
     CoreRange worker_cores;
-    std::map<distributed::MeshCoordinate, CoreCoord> service_cores;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, CoreCoord> service_cores;
     // Receiver endpoint of the MeshSocket pair (owns the data FIFO + config
     // buffer). std::optional because MeshSocket has no default ctor.
-    std::optional<distributed::MeshSocket> socket;
+    std::optional<tt::tt_metal::distributed::MeshSocket> socket;
 
     // Chunk plan + worker-sync resources.
     uint32_t socket_page_size = 0;
@@ -394,13 +442,13 @@ struct D2DStreamServiceReceiver::Impl {
     uint32_t pages_per_chunk = 0;
     uint32_t num_workers = 0;
     // Per-coord service-core L1 words (service cores differ per device).
-    std::map<distributed::MeshCoordinate, DeviceAddr> consumed_counter_addrs;
-    std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> consumed_counter_addrs;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> termination_addrs;
     // Fabric-link lease — mirror of the sender. Single per-coord link_grant word
     // (0 = idle/done, 1 = granted one drain); same ping-pong protocol. Always set
     // from Config in create_pair (this member default never takes effect).
     bool share_fabric_links = true;
-    std::map<distributed::MeshCoordinate, DeviceAddr> link_grant_addrs;
+    std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> link_grant_addrs;
     // Mesh-wide GlobalSemaphore on receiver_worker_cores; the service kernel
     // multicast-incs it after the transfer has landed.
     std::optional<GlobalSemaphore> data_ready_sem;
@@ -409,16 +457,16 @@ struct D2DStreamServiceReceiver::Impl {
     // (uniform address mesh-wide), mirroring H2D; the service kernel multicasts
     // the blob here on every receiver worker core. Null/0 when disabled.
     uint32_t metadata_size_bytes = 0;
-    std::shared_ptr<distributed::MeshBuffer> metadata_buffer;
+    std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> metadata_buffer;
     DeviceAddr metadata_l1_addr = 0;
 
     // Persistent receiver workload, launched once at create_pair.
-    std::unique_ptr<distributed::MeshWorkload> workload;
+    std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> workload;
     bool launched = false;
 
     // Cached lease workloads (LEASE mode only), mirror of the sender's. Null in OWN mode.
-    std::unique_ptr<distributed::MeshWorkload> lease_wait_workload;
-    std::unique_ptr<distributed::MeshWorkload> lease_release_workload;
+    std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> lease_wait_workload;
+    std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> lease_release_workload;
 };
 
 // ===========================================================================
@@ -450,7 +498,7 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
                 tt::tt_metal::detail::WriteToDeviceL1(
                     mesh->get_device(coord), impl_->service_cores.at(coord), static_cast<uint32_t>(addr), one_word);
             }
-            distributed::Finish(mesh->mesh_command_queue());
+            tt::tt_metal::distributed::Finish(mesh->mesh_command_queue());
             for (const auto& [coord, core] : impl_->service_cores) {
                 svc.wait_done(mesh->get_device(coord), core);
             }
@@ -499,7 +547,7 @@ const TensorSpec& D2DStreamServiceSender::get_per_shard_spec() const { return im
 
 CoreRange D2DStreamServiceSender::get_worker_cores() const { return impl_->worker_cores; }
 
-CoreCoord D2DStreamServiceSender::get_service_core(const distributed::MeshCoordinate& coord) const {
+CoreCoord D2DStreamServiceSender::get_service_core(const tt::tt_metal::distributed::MeshCoordinate& coord) const {
     auto it = impl_->service_cores.find(coord);
     TT_FATAL(
         it != impl_->service_cores.end(),
@@ -508,7 +556,8 @@ CoreCoord D2DStreamServiceSender::get_service_core(const distributed::MeshCoordi
     return it->second;
 }
 
-DeviceAddr D2DStreamServiceSender::get_data_ready_counter_addr(const distributed::MeshCoordinate& coord) const {
+DeviceAddr D2DStreamServiceSender::get_data_ready_counter_addr(
+    const tt::tt_metal::distributed::MeshCoordinate& coord) const {
     auto it = impl_->data_ready_counter_addrs.find(coord);
     TT_FATAL(
         it != impl_->data_ready_counter_addrs.end(),
@@ -524,7 +573,7 @@ DeviceAddr D2DStreamServiceSender::get_consumed_sem_addr() const {
     return impl_->consumed_sem->address();
 }
 
-DeviceAddr D2DStreamServiceSender::get_metadata_addr(const distributed::MeshCoordinate& coord) const {
+DeviceAddr D2DStreamServiceSender::get_metadata_addr(const tt::tt_metal::distributed::MeshCoordinate& coord) const {
     TT_FATAL(
         impl_->metadata_size_bytes > 0,
         "D2DStreamServiceSender::get_metadata_addr: metadata not configured (Config::metadata_size_bytes == 0)");
@@ -595,7 +644,7 @@ D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
                 tt::tt_metal::detail::WriteToDeviceL1(
                     mesh->get_device(coord), impl_->service_cores.at(coord), static_cast<uint32_t>(addr), one_word);
             }
-            distributed::Finish(mesh->mesh_command_queue());
+            tt::tt_metal::distributed::Finish(mesh->mesh_command_queue());
             for (const auto& [coord, core] : impl_->service_cores) {
                 svc.wait_done(mesh->get_device(coord), core);
             }
@@ -636,7 +685,7 @@ const TensorSpec& D2DStreamServiceReceiver::get_per_shard_spec() const { return 
 
 CoreRange D2DStreamServiceReceiver::get_worker_cores() const { return impl_->worker_cores; }
 
-CoreCoord D2DStreamServiceReceiver::get_service_core(const distributed::MeshCoordinate& coord) const {
+CoreCoord D2DStreamServiceReceiver::get_service_core(const tt::tt_metal::distributed::MeshCoordinate& coord) const {
     auto it = impl_->service_cores.find(coord);
     TT_FATAL(
         it != impl_->service_cores.end(),
@@ -653,7 +702,8 @@ DeviceAddr D2DStreamServiceReceiver::get_data_ready_sem_addr() const {
     return impl_->data_ready_sem->address();
 }
 
-DeviceAddr D2DStreamServiceReceiver::get_consumed_counter_addr(const distributed::MeshCoordinate& coord) const {
+DeviceAddr D2DStreamServiceReceiver::get_consumed_counter_addr(
+    const tt::tt_metal::distributed::MeshCoordinate& coord) const {
     auto it = impl_->consumed_counter_addrs.find(coord);
     TT_FATAL(
         it != impl_->consumed_counter_addrs.end(),
@@ -703,6 +753,7 @@ void D2DStreamServiceReceiver::release_fabric_links() {
 // ===========================================================================
 
 namespace CMAKE_UNIQUE_NAMESPACE {
+namespace distributed = tt::tt_metal::distributed;
 
 // Both kernels run on the single service core, RISCV_0. CB indices are private
 // to each program so the sender (scratch + headers) and receiver (headers only)
@@ -808,10 +859,10 @@ Program build_sender_program(
     const ChunkPlan& plan,
     uint32_t tensor_page_size,
     uint32_t fabric_max_payload_size,
-    DataType dtype,
+    tt::tt_metal::DataType dtype,
     const WorkerSyncArgs& ws,
     bool metadata_enabled,
-    uint32_t metadata_size_bytes,
+    uint32_t metadata_span_bytes,
     uint32_t sender_metadata_l1_addr,
     bool share_fabric_links,
     uint32_t link_grant_addr,
@@ -874,7 +925,7 @@ Program build_sender_program(
             ws.mcast_noc_y_end,
             ws.num_workers,
             metadata_enabled ? 1u : 0u,    // [18]
-            metadata_size_bytes,           // [19]
+            metadata_span_bytes,           // [19] L1-aligned bytes shipped from the staging buffer
             sender_metadata_l1_addr,       // [20] sender service-core L1 (per-coord)
             share_fabric_links ? 1u : 0u,  // [21] fabric-link lease mode
             link_grant_addr,               // [22] service-core L1 (lease ping-pong word)
@@ -928,7 +979,7 @@ std::unique_ptr<distributed::MeshWorkload> build_lease_workload(
     const CoreCoord lease_core = worker_cores.start_coord;
     const CoreRange lease_core_range{lease_core, lease_core};
     constexpr tt::CBIndex kLeaseScratchCb = tt::CBIndex::c_0;
-    const uint32_t scratch_bytes = hal::get_l1_alignment();
+    const uint32_t scratch_bytes = tt::tt_metal::hal::get_l1_alignment();
 
     auto workload = std::make_unique<distributed::MeshWorkload>();
     for (const auto& [coord, svc_core] : service_cores) {
@@ -1022,17 +1073,14 @@ SenderSideResources build_sender_side(
 
     std::map<distributed::MeshCoordinate, DeviceAddr> metadata_addrs;
     if (common.metadata_enabled) {
-        // Size the metadata L1 buffer to a full socket page, not just
-        // metadata_size_bytes. The sender kernel ships the metadata as one
-        // trailing socket page and fabric_write_socket_page() always reads
-        // socket_page_size bytes from this address; a buffer sized only to the
-        // metadata would make it over-read adjacent service-core L1 (counters /
-        // reserved socket region) and ship those bytes over fabric. The worker
-        // writes metadata_size_bytes into the front; the zero-init keeps the
-        // padding tail clean. socket_page_size is already L1-aligned (it is a
-        // multiple of the L1-aligned tensor page), so the align() is a no-op
-        // guard.
-        const uint32_t aligned_md = tt::align(common.plan.socket_page_size, common.l1_alignment);
+        // Size the metadata L1 buffer to the shipped span (metadata_size_bytes rounded
+        // up to the L1 alignment), NOT to a socket page: the sender kernel fabric-writes
+        // exactly metadata_span_bytes from this address, so the allocation must cover the
+        // span or the write would over-read adjacent service-core L1 (counters /
+        // reserved socket region) and ship those bytes over fabric. The worker writes
+        // metadata_size_bytes into the front; the zero-init keeps the alignment padding
+        // tail clean.
+        const uint32_t aligned_md = common.metadata_span_bytes;
         std::vector<uint32_t> zero(aligned_md / sizeof(uint32_t), 0u);
         for (const auto& coord : coords) {
             auto* d = mesh->get_device(coord);
@@ -1090,7 +1138,7 @@ SenderSideResources build_sender_side(
                 backing.dtype(),
                 ws,
                 common.metadata_enabled,
-                common.metadata_size_bytes,
+                common.metadata_span_bytes,
                 common.metadata_enabled ? static_cast<uint32_t>(metadata_addrs.at(coord)) : 0u,
                 cfg.share_fabric_links,
                 cfg.share_fabric_links ? static_cast<uint32_t>(link_grant_addrs.at(coord)) : 0u,
@@ -1180,14 +1228,14 @@ ReceiverSideResources build_receiver_side(
         distributed::DeviceLocalBufferConfig device_local = {
             .page_size = aligned_shard_size,
             .buffer_type = BufferType::L1,
-            .sharding_args = BufferShardingArgs(
-                ShardSpecBuffer(
+            .sharding_args = tt::tt_metal::BufferShardingArgs(
+                tt::tt_metal::ShardSpecBuffer(
                     CoreRangeSet(cfg.receiver_worker_cores),
                     {1, 1},
                     ShardOrientation::ROW_MAJOR,
                     {1, 1},
                     {num_workers, 1}),
-                TensorMemoryLayout::HEIGHT_SHARDED),
+                tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED),
             .bottom_up = std::nullopt,
             .sub_device_id = std::nullopt,
         };
@@ -1278,10 +1326,10 @@ ReceiverSideResources build_receiver_side(
 // ===========================================================================
 
 std::unique_ptr<D2DStreamServiceSender> D2DStreamService::finalize_sender(
-    const std::shared_ptr<distributed::MeshDevice>& mesh,
-    distributed::MeshSocket socket,
-    std::map<distributed::MeshCoordinate, CoreCoord> service_cores,
-    const std::map<distributed::MeshCoordinate, DeviceAddr>& receiver_tensor_addrs,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
+    tt::tt_metal::distributed::MeshSocket socket,
+    std::map<tt::tt_metal::distributed::MeshCoordinate, CoreCoord> service_cores,
+    const std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr>& receiver_tensor_addrs,
     const Tensor& backing,
     const D2DStreamConfig& cfg) {
     // Release the claimed cores if we throw before the handle owns them; on success
@@ -1325,9 +1373,9 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::finalize_sender(
 }
 
 std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
-    const std::shared_ptr<distributed::MeshDevice>& mesh,
-    distributed::MeshSocket socket,
-    std::map<distributed::MeshCoordinate, CoreCoord> service_cores,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh,
+    tt::tt_metal::distributed::MeshSocket socket,
+    std::map<tt::tt_metal::distributed::MeshCoordinate, CoreCoord> service_cores,
     const Tensor& backing,
     const D2DStreamConfig& cfg) {
     bool ok = false;
@@ -1372,8 +1420,8 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
 
 std::pair<std::unique_ptr<D2DStreamServiceSender>, std::unique_ptr<D2DStreamServiceReceiver>>
 D2DStreamService::create_pair(
-    const std::shared_ptr<distributed::MeshDevice>& sender_mesh,
-    const std::shared_ptr<distributed::MeshDevice>& receiver_mesh,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_mesh,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver_mesh,
     D2DStreamConfig cfg) {
     // --- validate shapes + mapper ---------------------------------------------
     TT_FATAL(sender_mesh != nullptr, "D2DStreamService: sender_mesh must not be null");
@@ -1410,8 +1458,9 @@ D2DStreamService::create_pair(
     // PARTICIPATING coord (mo.coords, NOT the full mesh range).
     auto connections =
         CMAKE_UNIQUE_NAMESPACE::build_connections(mo.coords, sender_service_cores, receiver_service_cores);
-    distributed::SocketConfig socket_config(connections, cfg.socket_mem_config);
-    auto socket_pair = distributed::MeshSocket::create_socket_pair(sender_mesh, receiver_mesh, socket_config);
+    tt::tt_metal::distributed::SocketConfig socket_config(connections, cfg.socket_mem_config);
+    auto socket_pair =
+        tt::tt_metal::distributed::MeshSocket::create_socket_pair(sender_mesh, receiver_mesh, socket_config);
     auto& sender_socket = socket_pair.first;
     auto& receiver_socket = socket_pair.second;
 
@@ -1448,12 +1497,13 @@ D2DStreamService::create_pair(
 }
 
 std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
-    const std::shared_ptr<distributed::MeshDevice>& sender_mesh,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& sender_mesh,
     D2DStreamConfig cfg,
     const D2DEndpointConfig& endpoints) {
     TT_FATAL(sender_mesh != nullptr, "D2DStreamService::create_sender: sender_mesh must not be null");
-    const auto ctx = endpoints.distributed_context ? endpoints.distributed_context
-                                                   : distributed::multihost::DistributedContext::get_current_world();
+    const auto ctx = endpoints.distributed_context
+                         ? endpoints.distributed_context
+                         : tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     TT_FATAL(
         *ctx->rank() == *endpoints.sender_rank,
         "D2DStreamService::create_sender must run on the sender rank (local rank {}, endpoints.sender_rank {})",
@@ -1499,9 +1549,9 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
     // process reaches its matching MeshSocket ctor, subject to the socket timeout).
     auto connections =
         CMAKE_UNIQUE_NAMESPACE::build_connections(mo.coords, sender_service_cores, receiver_service_cores);
-    distributed::SocketConfig socket_config(
+    tt::tt_metal::distributed::SocketConfig socket_config(
         connections, cfg.socket_mem_config, endpoints.sender_rank, endpoints.receiver_rank, ctx);
-    distributed::MeshSocket sender_socket(sender_mesh, socket_config);
+    tt::tt_metal::distributed::MeshSocket sender_socket(sender_mesh, socket_config);
 
     // Build + assemble (shared with create_pair). The service cores move into the
     // handle Impl here, emptying the map sender_guard references.
@@ -1521,12 +1571,13 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
 }
 
 std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
-    const std::shared_ptr<distributed::MeshDevice>& receiver_mesh,
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& receiver_mesh,
     D2DStreamConfig cfg,
     const D2DEndpointConfig& endpoints) {
     TT_FATAL(receiver_mesh != nullptr, "D2DStreamService::create_receiver: receiver_mesh must not be null");
-    const auto ctx = endpoints.distributed_context ? endpoints.distributed_context
-                                                   : distributed::multihost::DistributedContext::get_current_world();
+    const auto ctx = endpoints.distributed_context
+                         ? endpoints.distributed_context
+                         : tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     TT_FATAL(
         *ctx->rank() == *endpoints.receiver_rank,
         "D2DStreamService::create_receiver must run on the receiver rank (local rank {}, endpoints.receiver_rank {})",
@@ -1564,9 +1615,9 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
 
     auto connections =
         CMAKE_UNIQUE_NAMESPACE::build_connections(mo.coords, sender_service_cores, receiver_service_cores);
-    distributed::SocketConfig socket_config(
+    tt::tt_metal::distributed::SocketConfig socket_config(
         connections, cfg.socket_mem_config, endpoints.sender_rank, endpoints.receiver_rank, ctx);
-    distributed::MeshSocket receiver_socket(receiver_mesh, socket_config);
+    tt::tt_metal::distributed::MeshSocket receiver_socket(receiver_mesh, socket_config);
 
     // Build + assemble (shared with create_pair). The service cores move into the
     // handle Impl here, emptying the map receiver_guard references.
@@ -1579,4 +1630,4 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
     return receiver_handle;
 }
 
-}  // namespace tt::tt_metal
+}  // namespace ttnn

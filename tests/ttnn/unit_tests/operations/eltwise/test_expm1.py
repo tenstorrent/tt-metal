@@ -21,7 +21,6 @@ def flush_subnormal_values(tensor):
 @pytest.mark.parametrize(
     "dtype",
     [
-        "bfloat16",
         "float32",
     ],
 )

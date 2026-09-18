@@ -7,7 +7,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
@@ -31,14 +30,9 @@ void kernel_main() {
         bool has_rows = (num_rows) > 0;
 
         cb_out0.wait_front(single_block_size * has_rows);
-        // Read from the front of the waited entries. The legacy kernel used get_write_ptr() here,
-        // which only coincides with the front when the CB is sized EXACTLY to one block (full ->
-        // write ptr wraps to read ptr). The Metal 2.0 port shares one DFB sized to the max region
-        // block count across sub-regions, so smaller regions never fill it; get_read_ptr() is the
-        // size-independent address of the block's data.
-        uint32_t l1_read_addr = cb_out0.get_read_ptr();
 
-        for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
+        for (uint32_t row = 0; row < num_rows; ++row) {
+            const uint32_t k = start_row_id + row;
             uint32_t total_size = start_column_id + width_size;
             uint32_t write_size = width_size;
 
@@ -47,13 +41,14 @@ void kernel_main() {
                 write_size -= padded_size;
             }
 
-            CoreLocalMem<uint32_t> src(l1_read_addr);
             noc.async_write(
-                src, s, write_size, {.offset_bytes = 0}, {.page_id = size_2d + k, .offset_bytes = start_column_id});
+                cb_out0,
+                s,
+                write_size,
+                {.offset_bytes = row * width_size},
+                {.page_id = size_2d + k, .offset_bytes = start_column_id});
 
             noc.async_write_barrier();
-
-            l1_read_addr += width_size;
         }
 
         cb_out0.pop_front(single_block_size * has_rows);

@@ -37,7 +37,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/vector_aligned.hpp>
+#include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include "math.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
@@ -115,90 +115,88 @@ bool dram_ping(
 }  // namespace unit_tests::basic::device
 
 TEST_F(MeshDeviceFixture, PingAllLegalDramChannels) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         {
-            size_t start_byte_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::DRAM);
+            size_t start_byte_address = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device, 4, start_byte_address, device->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device, 12, start_byte_address, device->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device, 16, start_byte_address, device->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device, 1024, start_byte_address, device->num_dram_channels()));
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                devices_.at(id), 4, start_byte_address, devices_.at(id)->num_dram_channels()));
+                device, 2 * 1024, start_byte_address, device->num_dram_channels()));
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                devices_.at(id), 12, start_byte_address, devices_.at(id)->num_dram_channels()));
-            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                devices_.at(id), 16, start_byte_address, devices_.at(id)->num_dram_channels()));
-            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                devices_.at(id), 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
-            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                devices_.at(id), 2 * 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
-            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
+                device, 32 * 1024, start_byte_address, device->num_dram_channels()));
         }
         {
-            size_t start_byte_address = devices_.at(id)->dram_size_per_channel() - (32 * 1024);
+            size_t start_byte_address = device->dram_size_per_channel() - (32 * 1024);
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device, 4, start_byte_address, device->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device, 12, start_byte_address, device->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device, 16, start_byte_address, device->num_dram_channels()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::dram_ping(device, 1024, start_byte_address, device->num_dram_channels()));
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                devices_.at(id), 4, start_byte_address, devices_.at(id)->num_dram_channels()));
+                device, 2 * 1024, start_byte_address, device->num_dram_channels()));
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                devices_.at(id), 12, start_byte_address, devices_.at(id)->num_dram_channels()));
-            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                devices_.at(id), 16, start_byte_address, devices_.at(id)->num_dram_channels()));
-            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                devices_.at(id), 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
-            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                devices_.at(id), 2 * 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
-            ASSERT_TRUE(unit_tests::basic::device::dram_ping(
-                devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
+                device, 32 * 1024, start_byte_address, device->num_dram_channels()));
         }
     }
 }
 TEST_F(MeshDeviceFixture, PingIllegalDramChannels) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto num_channels = devices_.at(id)->num_dram_channels() + 1;
-        size_t start_byte_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::DRAM);
+    for (auto& device : this->devices_) {
+        auto num_channels = device->num_dram_channels() + 1;
+        size_t start_byte_address = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
         ;
-        ASSERT_ANY_THROW(unit_tests::basic::device::dram_ping(devices_.at(id), 4, start_byte_address, num_channels));
+        ASSERT_ANY_THROW(unit_tests::basic::device::dram_ping(device, 4, start_byte_address, num_channels));
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixPingAllLegalL1Cores) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& device : this->devices_) {
         {
-            size_t start_byte_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                devices_.at(id), 4, start_byte_address, devices_.at(id)->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                devices_.at(id), 12, start_byte_address, devices_.at(id)->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                devices_.at(id), 16, start_byte_address, devices_.at(id)->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                devices_.at(id), 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                devices_.at(id), 2 * 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
+            size_t start_byte_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(device, 4, start_byte_address, device->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device, 12, start_byte_address, device->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device, 16, start_byte_address, device->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device, 1024, start_byte_address, device->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device, 2 * 1024, start_byte_address, device->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device, 32 * 1024, start_byte_address, device->logical_grid_size()));
         }
         {
-            size_t start_byte_address = devices_.at(id)->l1_size_per_core() - (32 * 1024);
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                devices_.at(id), 4, start_byte_address, devices_.at(id)->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                devices_.at(id), 12, start_byte_address, devices_.at(id)->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                devices_.at(id), 16, start_byte_address, devices_.at(id)->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                devices_.at(id), 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                devices_.at(id), 2 * 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
-            ASSERT_TRUE(unit_tests::basic::device::l1_ping(
-                devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
+            size_t start_byte_address = device->l1_size_per_core() - (32 * 1024);
+            ASSERT_TRUE(unit_tests::basic::device::l1_ping(device, 4, start_byte_address, device->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device, 12, start_byte_address, device->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device, 16, start_byte_address, device->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device, 1024, start_byte_address, device->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device, 2 * 1024, start_byte_address, device->logical_grid_size()));
+            ASSERT_TRUE(
+                unit_tests::basic::device::l1_ping(device, 32 * 1024, start_byte_address, device->logical_grid_size()));
         }
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixPingIllegalL1Cores) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto grid_size = devices_.at(id)->logical_grid_size();
+    for (auto& device : this->devices_) {
+        auto grid_size = device->logical_grid_size();
         grid_size.x++;
         grid_size.y++;
-        size_t start_byte_address = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
-        ASSERT_ANY_THROW(unit_tests::basic::device::l1_ping(devices_.at(id), 4, start_byte_address, grid_size));
+        size_t start_byte_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        ASSERT_ANY_THROW(unit_tests::basic::device::l1_ping(device, 4, start_byte_address, grid_size));
     }
 }
 
@@ -210,8 +208,7 @@ TEST_F(MeshDeviceFixture, TensixPingIllegalL1Cores) {
 // 3. Host validates that the value from step 1 has been incremented
 // Purpose of this test is to ensure that L1 reader/writer APIs do not target harvested cores
 TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
         uint32_t num_l1_banks = mesh_device->allocator()->get_num_banks(BufferType::L1);
         std::vector<uint32_t> host_input(1);
@@ -233,7 +230,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
 
         std::string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
         CoreCoord logical_target_core(0, 0);
-        uint32_t intermediate_l1_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
+        uint32_t intermediate_l1_addr = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
         tt_metal::CreateKernel(
             program,
@@ -246,6 +243,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
 
         workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         std::vector<uint32_t> output;
         for (uint32_t bank_id = 0; bank_id < num_l1_banks; bank_id++) {
@@ -265,7 +263,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
 // For a given collection of MMIO device and remote devices, ensure that channels are unique
 TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
     std::unordered_map<ChipId, std::set<ChipId>> mmio_device_to_device_group;
-    for (unsigned int dev_id = 0; dev_id < num_devices_; dev_id++) {
+    for (unsigned int dev_id = 0; dev_id < this->devices_.size(); dev_id++) {
         ChipId assoc_mmio_dev_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(dev_id);
         std::set<ChipId>& device_ids = mmio_device_to_device_group[assoc_mmio_dev_id];
@@ -381,7 +379,9 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
 
     tt_metal::SetRuntimeArgs(program_, kernel1, core, {l1_unreserved_base, value_to_write, sem0_id});
 
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(uint32_t), random_vec);
     EXPECT_EQ(random_vec[0], value_to_write);
@@ -438,6 +438,7 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
             .compile_args = {kernel1_l1_address, logical_grid_size.x, logical_grid_size.y}});
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     for (size_t x = 0; x < logical_grid_size.x; x++) {
         for (size_t y = 0; y < logical_grid_size.y; y++) {

@@ -19,6 +19,10 @@ class DeepSeekV3Adapter(MLAPrefillAdapter):
     ttnn_cache_default = "/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure"
     default_gate_mode = "DEVICE_FP32"
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_56320_nopad"
+    mla_trace_defaults = (
+        "/mnt/models/deepseek-prefill-cache/golden/mla_sdpa_traces/deepseek_math_56320_sdpa_mla",
+        "/mnt/models/deepseek-prefill-cache/golden/mla_sdpa_traces/deepseek_metal_56320_sdpa_mla",
+    )
 
     # --- test metadata (HF download coordinates + PCC thresholds) ---
     hf_repo_id = "deepseek-ai/DeepSeek-R1-0528"
@@ -32,6 +36,11 @@ class DeepSeekV3Adapter(MLAPrefillAdapter):
     mla_pcc_threshold = 0.996
     moe_pcc_threshold = 0.982
     prefill_trace_layout = "single_file"
+    # Stock fast tokenizer — no custom tokenizer code to import, so skip trust_remote_code (Kimi keeps it).
+    tokenizer_trust_remote_code = False
+    # No trust_remote_code, so config/tokenizer load fine from the HF snapshot dir — skip the flat copy
+    # (which is wasteful and fails on a read-only HF cache mount). Kimi keeps it (inherits True).
+    needs_flat_config_dir = False
 
     @property
     def reference_model_cls(self):

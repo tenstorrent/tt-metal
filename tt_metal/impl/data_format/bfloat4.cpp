@@ -18,7 +18,7 @@
 #include "impl/context/metal_context.hpp"
 #include "math.hpp"
 #include "tile.hpp"
-#include "tracy/Tracy.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include "tt_backend_api_types.hpp"
 
 template <typename T>
@@ -47,6 +47,8 @@ template std::vector<uint32_t> pack_as_bfp4_tiles<uint32_t>(
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
+template std::vector<uint32_t> pack_as_bfp4_tiles<int8_t>(
+    ttsl::Span<const int8_t> data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile);
 template std::vector<uint32_t> pack_as_bfp4_tiles<uint8_t>(
     ttsl::Span<const uint8_t> data,
     bool row_major_input,
@@ -63,7 +65,7 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
     bool row_major_output,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile) {
-    ZoneScoped;
+    TTZoneScopedD(DATA_FORMAT);
 
     uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
 

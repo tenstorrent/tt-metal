@@ -76,6 +76,7 @@ public:
         const ContextDescriptor& descriptor,
         dispatch_core_manager& dispatch_core_manager,
         const GetControlPlaneFn& get_control_plane,
+        const GetDispatchQueryManagerFn& get_dispatch_query_manager,
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores) :
         FDKernel(
             node_id,
@@ -86,7 +87,7 @@ public:
             descriptor,
             dispatch_core_manager,
             get_control_plane,
-            {},
+            get_dispatch_query_manager,
             {},
             get_reads_dispatch_cores),
         d2h_{d2h},

@@ -189,7 +189,7 @@ void kernel_main() {
 
                             noc.async_read(
                                 src_b,
-                                CoreLocalMem<uint32_t>(l1_write_addr_src_b),
+                                cb_src_b,
                                 current_read_len_b,
                                 {.page_id = row_block_b, .offset_bytes = current_chunk_offset},
                                 {});
@@ -220,7 +220,7 @@ void kernel_main() {
 
                             noc.async_read(
                                 src,
-                                CoreLocalMem<uint32_t>(l1_write_addr_src),
+                                cb_src,
                                 current_read_len_a,
                                 {.page_id = row_block_a, .offset_bytes = current_chunk_offset},
                                 {});

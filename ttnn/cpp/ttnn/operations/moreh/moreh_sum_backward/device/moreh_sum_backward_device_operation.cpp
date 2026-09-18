@@ -46,6 +46,7 @@ void MorehSumBackwardOperation::validate_inputs(
         }
     } else {
         std::vector<uint32_t> expected_output_grad_shape;
+        expected_output_grad_shape.reserve(input_rank);
         std::vector<uint32_t> reduced_dims(input_rank, 0);
         for (auto dim : dims) {
             TT_FATAL(dim < input_rank, "dim {} < input_rank {}", dim, input_rank);
@@ -106,7 +107,7 @@ MorehSumBackwardOperation::spec_return_value_t MorehSumBackwardOperation::comput
         return tensor_args.input_grad->tensor_spec();
     }
     TT_FATAL(tensor_args.input.has_value(), "input tensor should not be std::nullopt.");
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         tensor_args.input->logical_shape(),
         TensorLayout(tensor_args.input->dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
@@ -133,10 +134,11 @@ ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation::tensor_r
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
-        ttnn::SmallVector<int64_t>(dims.begin(), dims.end()),
+        ttsl::SmallVector<int64_t>(dims.begin(), dims.end()),
         keepdim,
         memory_config.value_or(output_grad.memory_config()),
-        init_device_compute_kernel_config(output_grad.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(
+            output_grad.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{output_grad, input, input_grad};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

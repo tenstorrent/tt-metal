@@ -11,6 +11,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -34,8 +36,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
-    auto mesh_device = devices_[0];
     const experimental::NodeCoord node{0, 0};
 
     uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
@@ -43,12 +43,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     uint32_t dram_address = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
     std::vector<uint32_t> value = {0x12345678};
 
-    tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, dram_address, value);
-    MetalContext::instance().get_cluster().dram_barrier(dev->id());
-
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    slow_dispatch::WriteToDRAMChannel(this->device(), 0, dram_address, value);
+    MetalContext::instance().get_cluster().dram_barrier(this->device().get_device_ids()[0]);
 
     // Metal 2.0 reserves DM0/DM1; max 6 user DM threads per node.
     // Reduced from 4+4=8 to 3+3=6 loopback stages to fit within the limit.
@@ -74,9 +70,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
                 {
                     .runtime_arg_names = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         };
     };
 
@@ -93,9 +87,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
                 {
                     .runtime_arg_names = {"dram_addr", "l1_addr", "dram_buffer_size", "dram_bank_id", "signal_value"},
                 },
-            .hw_config =
-                experimental::DataMovementHardwareConfig{
-                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+            .hw_config = experimental::DataMovementGen2Config{},
         };
     };
 
@@ -122,7 +114,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
         .semaphores = {sem},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
 
     const experimental::KernelSpecName dram_to_l1_names[] = {DRAM_TO_L1_0, DRAM_TO_L1_1, DRAM_TO_L1_2};
     const experimental::KernelSpecName l1_to_dram_names[] = {L1_TO_DRAM_0, L1_TO_DRAM_1, L1_TO_DRAM_2};
@@ -132,35 +124,34 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     for (uint32_t i = 0; i < num_loopback_stages; i++) {
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = dram_to_l1_names[i],
-            .runtime_arg_values = {
-                {node,
-                 {{"dram_addr", dram_address},
-                  {"l1_addr", l1_address},
-                  {"dram_buffer_size", 4u},
-                  {"dram_bank_id", 0u},
-                  {"signal_value", signal_value}}}}});
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dram_addr", dram_address},
+                 {"l1_addr", l1_address},
+                 {"dram_buffer_size", 4u},
+                 {"dram_bank_id", 0u},
+                 {"signal_value", signal_value}})});
         dram_address += 1024;
         signal_value++;
 
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = l1_to_dram_names[i],
-            .runtime_arg_values = {
-                {node,
-                 {{"dram_addr", dram_address},
-                  {"l1_addr", l1_address},
-                  {"dram_buffer_size", 4u},
-                  {"dram_bank_id", 0u},
-                  {"signal_value", signal_value}}}}});
+            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dram_addr", dram_address},
+                 {"l1_addr", l1_address},
+                 {"dram_buffer_size", 4u},
+                 {"dram_bank_id", 0u},
+                 {"signal_value", signal_value}})});
         l1_address += sizeof(uint32_t);
         signal_value++;
     }
     experimental::SetProgramRunArgs(program, params);
 
-    workload.add_program(device_range, std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, true);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> outputs{0};
-    tt_metal::detail::ReadFromDeviceDRAMChannel(dev, 0, dram_address, sizeof(uint32_t), outputs);
+    slow_dispatch::ReadFromDRAMChannel(this->device(), 0, dram_address, sizeof(uint32_t), outputs);
 
     ASSERT_EQ(outputs[0], value[0]) << "Got the value " << std::hex << outputs[0] << " instead of " << value[0];
 }

@@ -44,7 +44,7 @@ ttnn::Tensor create_random_tensor(
     ttml::core::parallel_generate(
         std::span{data.data(), data.size()}, []() { return std::uniform_real_distribution<float>(-0.1f, 0.1f); }, seed);
     return ttnn::Tensor::from_vector(
-        data, ttnn::TensorSpec(shape, TensorLayout(dtype, Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)), device);
+        data, tt::tt_metal::TensorSpec(shape, TensorLayout(dtype, Layout::TILE, ttnn::DRAM_MEMORY_CONFIG)), device);
 }
 
 void report_counters(benchmark::State& state, double time_us, uint32_t M, uint32_t K, uint32_t N) {
@@ -96,13 +96,13 @@ void run_matmul_bench(benchmark::State& state, bool transpose_a, bool transpose_
 
     for (int i = 0; i < kWarmupIterations; ++i) {
         run_once();
-        distributed::Synchronize(device.get(), std::nullopt);
+        distributed::Synchronize(*device, std::nullopt);
     }
 
     for (auto _ : state) {
         auto start = std::chrono::high_resolution_clock::now();
         run_once();
-        distributed::Synchronize(device.get(), std::nullopt);
+        distributed::Synchronize(*device, std::nullopt);
         auto end = std::chrono::high_resolution_clock::now();
         double time_us = std::chrono::duration<double, std::micro>(end - start).count();
         state.SetIterationTime(time_us / 1e6);

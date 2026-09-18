@@ -59,13 +59,13 @@ MorehArangeOperation::spec_return_value_t MorehArangeOperation::compute_output_s
         std::ceil((operation_attributes.end - operation_attributes.start) / operation_attributes.step));
 
     if (operation_attributes.untilize_out) {
-        return TensorSpec(
+        return tt::tt_metal::TensorSpec(
             Shape({num_elems}),
             TensorLayout(
                 operation_attributes.dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.memory_config));
     }
 
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         Shape({1, num_elems}),
         TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
 };

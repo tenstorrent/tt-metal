@@ -4,7 +4,12 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
+from loguru import logger
+from safetensors import safe_open
+from safetensors.torch import load_file
 
 import ttnn
 
@@ -15,9 +20,84 @@ from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils import cache as cache_module
+from ....utils.fuse_loras import LoraSpec, fuse_loras_into
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
+from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
+from .quant_config import LtxQuantProfile
+
+
+def _tile_preserving_chunk0(x: ttnn.Tensor, n: int) -> list[ttnn.Tensor]:
+    """Split ``x`` into ``n`` size-1 slices along dim 0 WITHOUT leaving TILE layout.
+
+    ``ttnn.chunk`` is a host fallback that untilizes to ROW_MAJOR (and, for the
+    ``(coeff,B,1,D)`` AdaLN modulation, the ``(1,B,1,D)`` slices never re-tile), forcing
+    every downstream ``addcmul``/matmul epilogue to re-tilize the shift/scale/gate vectors
+    (the dominant BF16->BF16 tilize cost per block). Slicing dim 0 -- a non-tile outer dim --
+    on the already-TILE ``shifted`` tensor keeps every slice in TILE, so consumers take the
+    fused LLK path instead of the composite (multiply+add w/ per-input tilize) fallback.
+    Output is bit-identical to ``ttnn.chunk`` (pure layout, no value change).
+
+    ``x`` is already TILE here (``TILE scale_shift_table.data`` + temb; ttnn add promotes to
+    TILE), so no explicit re-tilize is needed -- ``ttnn.slice`` is a trace-safe device op that
+    preserves the input layout, whereas ``ttnn.chunk``'s host untilize is what forced RM."""
+    shape = list(x.shape)
+    out = []
+    for i in range(n):
+        starts = [0] * len(shape)
+        ends = list(shape)
+        starts[0] = i
+        ends[0] = i + 1
+        out.append(ttnn.slice(x, starts, ends))
+    return out
+
+
+def build_audio_masks(
+    audio_N: int, audio_N_real: int, *, mesh_device: ttnn.MeshDevice, sp_axis: int
+) -> tuple[ttnn.Tensor | None, ttnn.Tensor | None, ttnn.Tensor | None]:
+    """SDPA attn mask + padding masks for SP-sharded vs gathered audio tokens.
+
+    Returns ``(attn_mask, pad_mask_sp, pad_mask_full)`` — ``pad_mask_sp`` is sharded on the
+    sequence dim for multiply with local audio activations; ``pad_mask_full`` is replicated
+    for multiply after the all_gather on A→V keys. All ``None`` when no padding is needed.
+    """
+    if audio_N <= audio_N_real:
+        return None, None, None
+
+    # Column mask only: real/padded queries are barred from attending TO padded keys.
+    # Do NOT mask padded-query rows to -inf — that makes all attention scores in those
+    # rows -inf → softmax NaN → NaN propagates via padded-token outputs (which we then
+    # multiply by 0; IEEE 0*NaN = NaN, not 0). The pad mask already zeros the padded-query
+    # outputs after attention, so column-only masking is sufficient and numerically safer
+    # at high σ where activations have largest magnitude.
+    mask = torch.zeros(1, 1, audio_N, audio_N)
+    mask[:, :, :, audio_N_real:] = float("-inf")
+    tt_attn_mask = bf16_tensor(mask.to(torch.bfloat16), device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
+
+    pad_mask = torch.ones(1, 1, audio_N, 1, dtype=torch.bfloat16)
+    pad_mask[:, :, audio_N_real:, :] = 0.0
+    tt_pad_mask_sp = bf16_tensor(pad_mask, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
+    tt_pad_mask_full = bf16_tensor(pad_mask, device=mesh_device)
+    return tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full
+
+
+def build_video_pad_mask(
+    video_N: int, video_N_real: int, *, mesh_device: ttnn.MeshDevice, sp_axis: int
+) -> ttnn.Tensor | None:
+    """SP-sharded video padding mask ``(1, 1, video_N, 1)``; ``None`` when no padding is needed.
+
+    Multiply the local (sharded) video activations by this to zero padded slots before they
+    propagate downstream (self-attn residual / cross-attn K / FF). No SDPA attn_mask is needed
+    (unlike audio) — video self-attention uses ring SDPA, which masks padded keys via its
+    ``logical_n=video_N_real`` arg.
+    """
+    if video_N <= video_N_real:
+        return None
+    pad_mask = torch.ones(1, 1, video_N, 1, dtype=torch.bfloat16)
+    pad_mask[:, :, video_N_real:, :] = 0.0
+    return bf16_tensor(pad_mask, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
 
 
 class LTXTransformerBlock(Module):
@@ -40,6 +120,8 @@ class LTXTransformerBlock(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
+        quant_config: LtxQuantProfile | None = None,
+        lora_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -67,7 +149,15 @@ class LTXTransformerBlock(Module):
             "parallel_config": parallel_config,
             "is_fsdp": is_fsdp,
             "apply_gated_attention": apply_gated_attention,
+            "quant_config": quant_config,
+            "lora_enabled": lora_enabled,
         }
+
+        # FFN precision: the profile supplies the ff dtypes + casts; no quant_config leaves the
+        # ParallelFeedForward ctor defaults, reproducing bf16. lora_enabled always threads through.
+        ffn_kwargs = {"lora_enabled": lora_enabled}
+        if quant_config is not None:
+            ffn_kwargs.update(quant_config.ffn_kwargs())
 
         # FSDP fractures FFN weights across the SP axis (on top of the TP fracture);
         # without it the FFN is only TP-sharded and replicated across every SP device.
@@ -93,6 +183,7 @@ class LTXTransformerBlock(Module):
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
+            **ffn_kwargs,
         )
         self.adaln_coeff = 9 if cross_attention_adaln else 6
         # Outer-param layout (coeff, 1, 1, D): keeps each modulation parameter on the
@@ -133,6 +224,7 @@ class LTXTransformerBlock(Module):
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
                 fsdp_mesh_axis=fsdp_mesh_axis,
+                **ffn_kwargs,
             )
             self.audio_scale_shift_table = Parameter(
                 total_shape=[self.adaln_coeff, 1, 1, audio_dim],
@@ -177,13 +269,16 @@ class LTXTransformerBlock(Module):
                 dtype=ttnn.bfloat16,
             )
 
-        self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
+        if quant_config is not None:
+            self.ff_compute_kernel_config = quant_config.mm_compute_config(mesh_device.arch())
+        else:
+            self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "ff.net.0.proj", "ffn.ff1")
@@ -217,6 +312,30 @@ class LTXTransformerBlock(Module):
                 t[scale_idxs, :, :, :] += 1.0
                 state[key] = t.to(dtype=torch.bfloat16)
 
+    def _modulated_ffn(self, ffn, norm, x_1BND, shift_ff, scale_ff_p1, gate_ff):
+        """norm -> AdaLN (shift + x * scale_p1) -> gated FFN residual.
+
+        Ring fuses ff1(AG) + ff2 + RS + addcmul; Linear needs explicit AG + plain ffn().
+        """
+        normed = norm(x_1BND)
+        normed = ttnn.addcmul(shift_ff, normed, scale_ff_p1)
+        if self.ccl_manager.topology == ttnn.Topology.Ring:
+            return ffn.forward_fused_addcmul(
+                normed,
+                x_1BND,
+                gate_ff,
+                scalar=1.0,
+                compute_kernel_config=self.ff_compute_kernel_config,
+                parallel_config=self.parallel_config,
+            )
+        else:
+            if self.parallel_config.tensor_parallel.factor > 1:
+                normed = self.ccl_manager.all_gather_persistent_buffer(
+                    normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+            ff_out = ffn(normed, compute_kernel_config=self.ff_compute_kernel_config)
+            return ttnn.addcmul(x_1BND, ff_out, gate_ff)
+
     def forward(
         self,
         video_1BND: ttnn.Tensor,
@@ -241,8 +360,6 @@ class LTXTransformerBlock(Module):
         video_cross_pe_sin: ttnn.Tensor | None = None,
         audio_cross_pe_cos: ttnn.Tensor | None = None,
         audio_cross_pe_sin: ttnn.Tensor | None = None,
-        video_cross_pe_cos_full: ttnn.Tensor | None = None,
-        video_cross_pe_sin_full: ttnn.Tensor | None = None,
         audio_cross_pe_cos_full: ttnn.Tensor | None = None,
         audio_cross_pe_sin_full: ttnn.Tensor | None = None,
         skip_cross_attn: bool = False,
@@ -254,7 +371,7 @@ class LTXTransformerBlock(Module):
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         # Video modulation; `_p1` chunks carry +1 baked into the scale slot (see _prepare_torch_state).
         shifted_v = self.scale_shift_table.data + video_temb
-        chunks = ttnn.chunk(shifted_v, self.adaln_coeff, dim=0)
+        chunks = _tile_preserving_chunk0(shifted_v, self.adaln_coeff)
         v_shift_sa, v_scale_sa_p1, v_gate_sa = chunks[0], chunks[1], chunks[2]
         v_shift_ff, v_scale_ff_p1, v_gate_ff = chunks[3], chunks[4], chunks[5]
         if self.cross_attention_adaln:
@@ -279,7 +396,7 @@ class LTXTransformerBlock(Module):
             video_ca_input = ttnn.addcmul(v_shift_ca, self.norm2(video_1BND), v_scale_ca_p1)
             if video_prompt_temb is not None:
                 shifted_prompt_v = self.prompt_scale_shift_table.data + video_prompt_temb
-                v_kv_shift, v_kv_scale_p1 = ttnn.chunk(shifted_prompt_v, 2, dim=0)
+                v_kv_shift, v_kv_scale_p1 = _tile_preserving_chunk0(shifted_prompt_v, 2)
                 video_prompt_mod = ttnn.addcmul(v_kv_shift, video_prompt, v_kv_scale_p1)
             else:
                 video_prompt_mod = video_prompt
@@ -303,26 +420,7 @@ class LTXTransformerBlock(Module):
 
         if not self.has_audio:
             # Video-only feed forward
-            video_normed = self.norm3(video_1BND)
-            video_normed = ttnn.addcmul(v_shift_ff, video_normed, v_scale_ff_p1)
-            # Ring fuses ff1(AG) + ff2 + RS + addcmul; Linear needs explicit AG + plain ffn().
-            if self.ccl_manager.topology == ttnn.Topology.Ring:
-                video_1BND = self.ffn.forward_fused_addcmul(
-                    video_normed,
-                    video_1BND,
-                    v_gate_ff,
-                    scalar=1.0,
-                    compute_kernel_config=self.ff_compute_kernel_config,
-                    parallel_config=self.parallel_config,
-                )
-            else:
-                if self.parallel_config.tensor_parallel.factor > 1:
-                    video_normed = self.ccl_manager.all_gather_persistent_buffer(
-                        video_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-                    )
-                video_ff = self.ffn(video_normed, compute_kernel_config=self.ff_compute_kernel_config)
-                video_1BND = ttnn.addcmul(video_1BND, video_ff, v_gate_ff)
-            return video_1BND
+            return self._modulated_ffn(self.ffn, self.norm3, video_1BND, v_shift_ff, v_scale_ff_p1, v_gate_ff)
 
         # Audio path (has_audio=True from here)
         shifted_a = self.audio_scale_shift_table.data + audio_temb
@@ -356,10 +454,14 @@ class LTXTransformerBlock(Module):
                 audio_prompt_mod = ttnn.addcmul(a_kv_shift, audio_prompt, a_kv_scale_p1)
             else:
                 audio_prompt_mod = audio_prompt
-            audio_ca_out = self.audio_attn2(
-                spatial_1BND=audio_ca_input, N=audio_N, prompt_1BLP=audio_prompt_mod, kv_replicated=True
+            audio_1BND = self.audio_attn2(
+                spatial_1BND=audio_ca_input,
+                N=audio_N,
+                prompt_1BLP=audio_prompt_mod,
+                kv_replicated=True,
+                addcmul_residual=audio_1BND,
+                addcmul_gate=a_gate_ca,
             )
-            audio_1BND = ttnn.addcmul(audio_1BND, audio_ca_out, a_gate_ca)
         else:
             audio_ca_input = self.audio_norm2(audio_1BND)
             audio_ca_out = self.audio_attn2(
@@ -399,8 +501,10 @@ class LTXTransformerBlock(Module):
                 k_rope_cos=audio_cross_pe_cos_full,
                 k_rope_sin=audio_cross_pe_sin_full,
                 trans_mat=trans_mat,
+                addcmul_residual=video_1BND,
+                addcmul_gate=v_ca_gate,
             )
-            video_1BND = ttnn.addcmul(video_1BND, a2v_output, v_ca_gate)
+            video_1BND = a2v_output
 
             # V→A: video provides context for audio
             audio_q_v2a = ttnn.addcmul(a_shift_v2a, audio_normed_xattn, a_scale_v2a_p1)
@@ -414,51 +518,24 @@ class LTXTransformerBlock(Module):
                 prompt_1BLP=video_kv_v2a,
                 rope_cos=audio_cross_pe_cos,
                 rope_sin=audio_cross_pe_sin,
-                k_rope_cos=video_cross_pe_cos_full,
-                k_rope_sin=video_cross_pe_sin_full,
+                # Ring cross keeps video K/V SP-sharded: pass the sharded K-rope and kv_logical_n so
+                # the ring SDPA gathers internally instead of a separate K/V all-gather.
+                k_rope_cos=video_cross_pe_cos,
+                k_rope_sin=video_cross_pe_sin,
+                kv_logical_n=video_N,
                 trans_mat=trans_mat,
+                addcmul_residual=audio_1BND,
+                addcmul_gate=a_ca_gate,
             )
-            audio_1BND = ttnn.addcmul(audio_1BND, v2a_output, a_ca_gate)
+            audio_1BND = v2a_output
 
         # Video feed forward
-        video_normed = self.norm3(video_1BND)
-        video_normed = ttnn.addcmul(v_shift_ff, video_normed, v_scale_ff_p1)
-        if self.ccl_manager.topology == ttnn.Topology.Ring:
-            video_1BND = self.ffn.forward_fused_addcmul(
-                video_normed,
-                video_1BND,
-                v_gate_ff,
-                scalar=1.0,
-                compute_kernel_config=self.ff_compute_kernel_config,
-                parallel_config=self.parallel_config,
-            )
-        else:
-            if self.parallel_config.tensor_parallel.factor > 1:
-                video_normed = self.ccl_manager.all_gather_persistent_buffer(
-                    video_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-                )
-            video_ff = self.ffn(video_normed, compute_kernel_config=self.ff_compute_kernel_config)
-            video_1BND = ttnn.addcmul(video_1BND, video_ff, v_gate_ff)
+        video_1BND = self._modulated_ffn(self.ffn, self.norm3, video_1BND, v_shift_ff, v_scale_ff_p1, v_gate_ff)
 
         # Audio feed forward
-        audio_normed = self.audio_norm3(audio_1BND)
-        audio_normed = ttnn.addcmul(a_shift_ff, audio_normed, a_scale_ff_p1)
-        if self.ccl_manager.topology == ttnn.Topology.Ring:
-            audio_1BND = self.audio_ff.forward_fused_addcmul(
-                audio_normed,
-                audio_1BND,
-                a_gate_ff,
-                scalar=1.0,
-                compute_kernel_config=self.ff_compute_kernel_config,
-                parallel_config=self.parallel_config,
-            )
-        else:
-            if self.parallel_config.tensor_parallel.factor > 1:
-                audio_normed = self.ccl_manager.all_gather_persistent_buffer(
-                    audio_normed, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
-                )
-            audio_ff = self.audio_ff(audio_normed, compute_kernel_config=self.ff_compute_kernel_config)
-            audio_1BND = ttnn.addcmul(audio_1BND, audio_ff, a_gate_ff)
+        audio_1BND = self._modulated_ffn(
+            self.audio_ff, self.audio_norm3, audio_1BND, a_shift_ff, a_scale_ff_p1, a_gate_ff
+        )
 
         return video_1BND, audio_1BND
 
@@ -490,6 +567,9 @@ class LTXTransformerModel(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
+        lora_enabled: bool = False,
+        image_conditioning: bool = False,
+        quant_config: LtxQuantProfile | None = None,
     ) -> None:
         super().__init__()
 
@@ -499,6 +579,10 @@ class LTXTransformerModel(Module):
         self.num_layers = num_layers
         self.has_audio = has_audio
         self.cross_attention_adaln = cross_attention_adaln
+        self.lora_enabled = lora_enabled
+        # I2V: video AdaLN modulation is per-token (denoise_mask * sigma) instead of batch-scalar.
+        # Audio / prompt / A<->V cross AdaLN stay batch-scalar regardless.
+        self.image_conditioning = image_conditioning
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
@@ -632,6 +716,8 @@ class LTXTransformerModel(Module):
                     has_audio=has_audio,
                     apply_gated_attention=apply_gated_attention,
                     cross_attention_adaln=cross_attention_adaln,
+                    quant_config=quant_config,
+                    lora_enabled=lora_enabled,
                 )
             )
 
@@ -679,6 +765,8 @@ class LTXTransformerModel(Module):
         # Shared
         trans_mat: ttnn.Tensor | None,
         timestep_torch: torch.Tensor,
+        # I2V per-token video timestep (B, N); required when image_conditioning=True.
+        video_timestep_torch: torch.Tensor | None = None,
         # Audio (only used when has_audio=True)
         audio_1BNI_torch: torch.Tensor | None = None,
         audio_prompt_1BLP: ttnn.Tensor | None = None,
@@ -690,8 +778,6 @@ class LTXTransformerModel(Module):
         video_cross_pe_sin: ttnn.Tensor | None = None,
         audio_cross_pe_cos: ttnn.Tensor | None = None,
         audio_cross_pe_sin: ttnn.Tensor | None = None,
-        video_cross_pe_cos_full: ttnn.Tensor | None = None,
-        video_cross_pe_sin_full: ttnn.Tensor | None = None,
         audio_cross_pe_cos_full: ttnn.Tensor | None = None,
         audio_cross_pe_sin_full: ttnn.Tensor | None = None,
         skip_cross_attn: bool = False,
@@ -705,7 +791,18 @@ class LTXTransformerModel(Module):
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         video_1BNI = bf16_tensor(video_1BNI_torch, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2)
         B_size = video_1BNI_torch.shape[1]
+        # Scalar timestep (1,1,B,1) drives audio / prompt / A<->V cross modulation.
         timestep = bf16_tensor(timestep_torch.reshape(1, 1, B_size, 1) * 1000.0, device=self.mesh_device)
+        # Per-token video timestep (1,1,B*N,1), SP-sharded on dim 2 to match video_1BNI (shard_dim=-2).
+        video_timestep = None
+        if self.image_conditioning:
+            assert video_timestep_torch is not None, "video_timestep_torch required when image_conditioning=True"
+            video_timestep = bf16_tensor(
+                video_timestep_torch.reshape(1, 1, -1, 1) * 1000.0,
+                device=self.mesh_device,
+                mesh_axis=sp_axis,
+                shard_dim=-2,
+            )
         audio_1BNI = (
             bf16_tensor(audio_1BNI_torch, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2)
             if self.has_audio
@@ -714,6 +811,7 @@ class LTXTransformerModel(Module):
         return self.inner_step(
             video_1BNI=video_1BNI,
             timestep=timestep,
+            video_timestep=video_timestep,
             audio_1BNI=audio_1BNI,
             video_prompt_1BLP=video_prompt_1BLP,
             video_rope_cos=video_rope_cos,
@@ -728,8 +826,6 @@ class LTXTransformerModel(Module):
             video_cross_pe_sin=video_cross_pe_sin,
             audio_cross_pe_cos=audio_cross_pe_cos,
             audio_cross_pe_sin=audio_cross_pe_sin,
-            video_cross_pe_cos_full=video_cross_pe_cos_full,
-            video_cross_pe_sin_full=video_cross_pe_sin_full,
             audio_cross_pe_cos_full=audio_cross_pe_cos_full,
             audio_cross_pe_sin_full=audio_cross_pe_sin_full,
             skip_cross_attn=skip_cross_attn,
@@ -740,11 +836,15 @@ class LTXTransformerModel(Module):
             video_padding_mask=video_padding_mask,
         )
 
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def inner_step(
         self,
         *,
         video_1BNI: ttnn.Tensor,
         timestep: ttnn.Tensor,
+        video_timestep: ttnn.Tensor | None = None,
+        video_ts_pair: ttnn.Tensor | None = None,
+        video_pin_mask: ttnn.Tensor | None = None,
         audio_1BNI: ttnn.Tensor | None = None,
         video_prompt_1BLP: ttnn.Tensor = None,
         video_rope_cos: ttnn.Tensor = None,
@@ -759,8 +859,6 @@ class LTXTransformerModel(Module):
         video_cross_pe_sin: ttnn.Tensor | None = None,
         audio_cross_pe_cos: ttnn.Tensor | None = None,
         audio_cross_pe_sin: ttnn.Tensor | None = None,
-        video_cross_pe_cos_full: ttnn.Tensor | None = None,
-        video_cross_pe_sin_full: ttnn.Tensor | None = None,
         audio_cross_pe_cos_full: ttnn.Tensor | None = None,
         audio_cross_pe_sin_full: ttnn.Tensor | None = None,
         skip_cross_attn: bool = False,
@@ -778,17 +876,59 @@ class LTXTransformerModel(Module):
         ``gather_output`` SP-gathers the velocity outputs to full sequence length (default,
         for the host-Euler path). Pass ``False`` to keep them SP-sharded so an on-device
         solver can step the latent without leaving the device (the traced WAN pattern)."""
-        # Video modulation (6 or 9 params depending on cross_attention_adaln)
+        # Video modulation (6 or 9 params depending on cross_attention_adaln).
         adaln_coeff = 9 if self.cross_attention_adaln else 6
-        video_modulation, video_emb_ts = self.adaln_single(timestep)
-        B = video_modulation.shape[2]
-        video_mod_CB1D = ttnn.reshape(video_modulation, (1, B, adaln_coeff, self.inner_dim))
-        if self.parallel_config.tensor_parallel.factor > 1:
-            video_mod_CB1D = ttnn.mesh_partition(
-                video_mod_CB1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
-            )
-        # Move the coeff axis to dim 0 once per step so each block's chunk(dim=0) is free.
-        video_mod_CB1D = ttnn.permute(video_mod_CB1D, (2, 1, 0, 3))
+        # I2V compact path: per-token timestep has 2 values (pinned frame-0 vs. sigma), passed as a
+        # (1,1,2,1) pair + {0,1} pin mask. Blend per token to avoid the dense (1,1,N,coeff*D) modulation.
+        compact_i2v = self.image_conditioning and video_ts_pair is not None and video_pin_mask is not None
+        if compact_i2v:
+            N = video_pin_mask.shape[2]
+            mod_pair, emb_pair = self.adaln_single(video_ts_pair)  # (1,1,2,coeff*D), (1,1,2,D)
+            mod_pair = ttnn.reshape(mod_pair, (1, 2, adaln_coeff, self.inner_dim))
+            if self.parallel_config.tensor_parallel.factor > 1:
+                mod_pair = ttnn.mesh_partition(
+                    mod_pair, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+            mod_pair = ttnn.permute(mod_pair, (2, 0, 1, 3))  # (coeff,1,2,Dloc)
+            mod_pin, mod_base = ttnn.chunk(mod_pair, 2, dim=2)  # each (coeff,1,1,Dloc)
+            ttnn.deallocate(mod_pair)
+            # video_mod = base + (pin - base) * mask, materialized per token via broadcast-safe ops.
+            mod_delta = ttnn.sub(mod_pin, mod_base)
+            mod_delta = ttnn.repeat(mod_delta, ttnn.Shape([1, 1, N, 1]))  # (coeff,1,N,Dloc)
+            mod_delta = ttnn.mul(mod_delta, video_pin_mask)  # mask broadcasts over coeff/Dloc
+            video_mod_CB1D = ttnn.add(mod_base, mod_delta)  # base broadcasts over N
+            ttnn.deallocate(mod_delta)
+            ttnn.deallocate(mod_pin)
+            ttnn.deallocate(mod_base)
+            # Embedded timestep (for norm_out), same per-token blend, kept full-D.
+            emb_pin, emb_base = ttnn.chunk(emb_pair, 2, dim=2)  # each (1,1,1,D)
+            ttnn.deallocate(emb_pair)
+            emb_delta = ttnn.sub(emb_pin, emb_base)
+            emb_delta = ttnn.repeat(emb_delta, ttnn.Shape([1, 1, N, 1]))  # (1,1,N,D)
+            emb_delta = ttnn.mul(emb_delta, video_pin_mask)
+            video_emb_ts = ttnn.add(emb_base, emb_delta)
+            ttnn.deallocate(emb_delta)
+            ttnn.deallocate(emb_pin)
+            ttnn.deallocate(emb_base)
+            B = 1
+        else:
+            # I2V (dense): feed the per-token timestep so each token gets its own AdaLN modulation.
+            video_ts = video_timestep if self.image_conditioning else timestep
+            video_modulation, video_emb_ts = self.adaln_single(video_ts)
+            # dim 2 is B (scalar) or B*N (per-token, B=1 -> N_local on the SP shard).
+            X = video_modulation.shape[2]
+            video_mod_CB1D = ttnn.reshape(video_modulation, (1, X, adaln_coeff, self.inner_dim))
+            if self.parallel_config.tensor_parallel.factor > 1:
+                video_mod_CB1D = ttnn.mesh_partition(
+                    video_mod_CB1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+            # Move the coeff axis to dim 0 once per step so each block's chunk(dim=0) is free.
+            # Scalar: (1,B,coeff,D) -> (coeff,B,1,D). Per-token: (1,N,coeff,D) -> (coeff,1,N,D).
+            if self.image_conditioning:
+                video_mod_CB1D = ttnn.permute(video_mod_CB1D, (2, 0, 1, 3))
+            else:
+                video_mod_CB1D = ttnn.permute(video_mod_CB1D, (2, 1, 0, 3))
+            B = 1 if self.image_conditioning else X
 
         # Video prompt modulation (2 params, only for 9-output mode)
         video_prompt_2B1D = None
@@ -869,8 +1009,6 @@ class LTXTransformerModel(Module):
                 video_cross_pe_sin=video_cross_pe_sin,
                 audio_cross_pe_cos=audio_cross_pe_cos,
                 audio_cross_pe_sin=audio_cross_pe_sin,
-                video_cross_pe_cos_full=video_cross_pe_cos_full,
-                video_cross_pe_sin_full=video_cross_pe_sin_full,
                 audio_cross_pe_cos_full=audio_cross_pe_cos_full,
                 audio_cross_pe_sin_full=audio_cross_pe_sin_full,
                 skip_cross_attn=skip_cross_attn,
@@ -886,15 +1024,36 @@ class LTXTransformerModel(Module):
                 video_1BND = result
 
         v_inner_local = video_emb_ts.shape[-1]
-        v_emb_1B1D = ttnn.reshape(video_emb_ts, (1, B, 1, v_inner_local))
-        if self.parallel_config.tensor_parallel.factor > 1:
-            v_emb_1B1D = ttnn.mesh_partition(
-                v_emb_1B1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+        if self.image_conditioning:
+            # Per-token (video_emb_ts is (1,1,N,D)): split the (shift, scale) table, broadcast-add per token.
+            v_emb_1B1D = video_emb_ts
+            if self.parallel_config.tensor_parallel.factor > 1:
+                v_emb_1B1D = ttnn.mesh_partition(
+                    v_emb_1B1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+            sst_shift, sst_scale_p1 = ttnn.chunk(self.scale_shift_table.data, 2, dim=2)  # each (1,1,1,Dloc)
+            v_shift_out = ttnn.add(sst_shift, v_emb_1B1D)  # (1,1,N,Dloc)
+            v_scale_out_p1 = ttnn.add(sst_scale_p1, v_emb_1B1D)
+        else:
+            v_emb_1B1D = ttnn.reshape(video_emb_ts, (1, B, 1, v_inner_local))
+            if self.parallel_config.tensor_parallel.factor > 1:
+                v_emb_1B1D = ttnn.mesh_partition(
+                    v_emb_1B1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+                )
+            shifted_v = self.scale_shift_table.data + v_emb_1B1D
+            v_shift_out, v_scale_out_p1 = ttnn.chunk(shifted_v, 2, dim=2)
+        if self.image_conditioning:
+            # Per-token: fused norm_out gamma/beta can't carry per-token scale/shift, so plain
+            # layernorm then manual shift + normed * scale_p1, in fp32 to match the T2V branch.
+            video_1BND = self.norm_out(video_1BND, dtype=ttnn.float32)
+            v_shift_out = ttnn.typecast(v_shift_out, ttnn.float32)
+            v_scale_out_p1 = ttnn.typecast(v_scale_out_p1, ttnn.float32)
+            video_1BND = ttnn.addcmul(v_shift_out, video_1BND, v_scale_out_p1)
+        else:
+            # Fuse the AdaLN (1 + scale) * normed + shift modulation into norm_out (WAN pattern).
+            video_1BND = self.norm_out(
+                video_1BND, dynamic_weight=v_scale_out_p1, dynamic_bias=v_shift_out, dtype=ttnn.float32
             )
-        shifted_v = self.scale_shift_table.data + v_emb_1B1D
-        v_shift_out, v_scale_out_p1 = ttnn.chunk(shifted_v, 2, dim=2)
-        video_normed = self.norm_out(video_1BND)
-        video_1BND = ttnn.addcmul(v_shift_out, video_normed, v_scale_out_p1)
         if self.parallel_config.tensor_parallel.factor > 1:
             video_1BND = self.ccl_manager.all_gather_persistent_buffer(
                 video_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -913,8 +1072,10 @@ class LTXTransformerModel(Module):
                 )
             shifted_a = self.audio_scale_shift_table.data + a_emb_1B1D
             a_shift_out, a_scale_out_p1 = ttnn.chunk(shifted_a, 2, dim=2)
-            audio_normed = self.audio_norm_out(audio_1BND)
-            audio_1BND = ttnn.addcmul(a_shift_out, audio_normed, a_scale_out_p1)
+            # Fuse the AdaLN (1 + scale) * normed + shift modulation into audio_norm_out (WAN pattern).
+            audio_1BND = self.audio_norm_out(
+                audio_1BND, dynamic_weight=a_scale_out_p1, dynamic_bias=a_shift_out, dtype=ttnn.float32
+            )
             if self.parallel_config.tensor_parallel.factor > 1:
                 audio_1BND = self.ccl_manager.all_gather_persistent_buffer(
                     audio_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -960,3 +1121,114 @@ class LTXTransformerModel(Module):
                 mesh_dims[parallel_config.sequence_parallel.mesh_axis] = 2
             return ccl_manager.device_to_host(tt_tensor, mesh_dims).float().clone()
         return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0]).float()
+
+
+class LTXTransformerCheckpoint:
+    """An LTX transformer checkpoint: parses variant config, builds transformers, and loads weights.
+
+    Mirrors ``WanCheckpoint`` but for the single-file LTX safetensors layout. The pipeline-level
+    flags that vary per instance (``has_audio`` / ``image_conditioning``) are passed into ``build``
+    explicitly — the checkpoint never reads pipeline state. LoRA specs vary per variant, so they
+    are threaded through ``state_dict`` / ``cache_name`` / ``load`` rather than stored.
+    """
+
+    def __init__(self, checkpoint_path: str, *, inner_dim: int) -> None:
+        self._checkpoint_path = checkpoint_path
+        # Transformer + connector detection (key scan + one tensor-shape read). No tensor loads.
+        with safe_open(checkpoint_path, framework="pt") as f:
+            keys = list(f.keys())
+            adaln_key = "model.diffusion_model.adaln_single.linear.weight"
+            if adaln_key in keys:
+                self.cross_attention_adaln = f.get_tensor(adaln_key).shape[0] > 6 * inner_dim
+            else:
+                self.cross_attention_adaln = True
+            self.has_gate = any("to_gate_logits" in k for k in keys)
+        logger.info(f"Detected: has_gate={self.has_gate}, cross_attention_adaln={self.cross_attention_adaln}")
+
+    def state_dict(self, lora_specs: list[LoraSpec]) -> dict[str, torch.Tensor]:
+        """Load + LoRA-fuse the transformer state dict from safetensors. Only
+        invoked on cache miss by ``cache_module.load_model``."""
+        logger.info(f"Transformer cache miss — loading safetensors: {self._checkpoint_path}")
+        raw = load_file(self._checkpoint_path)
+        prefix = "model.diffusion_model."
+        sd = {k[len(prefix) :]: v for k, v in raw.items() if k.startswith(prefix)}
+        if lora_specs:
+            sd = fuse_loras_into(sd, lora_specs)
+        return sd
+
+    def cache_name(self, lora_specs: list[LoraSpec], quant_tag: str | None = None) -> str:
+        """Cache key for ``cache_module.load_model``. LoRA-tagged so fused and base weights don't
+        alias in ``TT_DIT_CACHE_DIR``; quant-tagged because cached tensorbins carry their dtype, so
+        a bf8 preset run and the bf16 baseline must live in separate dirs."""
+        base = os.path.basename(self._checkpoint_path).removesuffix(".safetensors")
+        if lora_specs:
+            tag = "+".join(f"{os.path.basename(s.path).removesuffix('.safetensors')}@{s.strength}" for s in lora_specs)
+            base = f"{base}.lora-{tag}"
+        if quant_tag:
+            base = f"{base}.q-{quant_tag}"
+        return base
+
+    def build(
+        self,
+        *,
+        num_attention_heads: int,
+        attention_head_dim: int,
+        in_channels: int,
+        out_channels: int,
+        num_layers: int,
+        cross_attention_dim: int,
+        mesh_device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+        has_audio: bool,
+        image_conditioning: bool,
+        quant_config: LtxQuantProfile | None = None,
+        lora_enabled: bool = False,
+    ) -> LTXTransformerModel:
+        """Construct an ``LTXTransformerModel`` for this checkpoint (weights NOT loaded).
+
+        Loading is deferred so the caller can manage the lifecycle (deallocate / reload).
+        ``quant_config`` bakes the preset dtypes into construction, so a cache miss loads
+        weights direct-to-quant and the cache write holds the quantized tensorbins.
+        """
+        return LTXTransformerModel(
+            num_attention_heads=num_attention_heads,
+            attention_head_dim=attention_head_dim,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            num_layers=num_layers,
+            cross_attention_dim=cross_attention_dim,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            has_audio=has_audio,
+            apply_gated_attention=self.has_gate,
+            cross_attention_adaln=self.cross_attention_adaln,
+            image_conditioning=image_conditioning,
+            quant_config=quant_config,
+            lora_enabled=lora_enabled,
+        )
+
+    def load(
+        self,
+        model: LTXTransformerModel,
+        *,
+        parallel_config: DiTParallelConfig,
+        mesh_shape: tuple[int, ...],
+        is_fsdp: bool,
+        lora_specs: list[LoraSpec],
+        quant_tag: str | None = None,
+    ) -> None:
+        """Load (or reload) weights for a previously-built transformer."""
+        cache_module.load_model(
+            model,
+            model_name=self.cache_name(lora_specs, quant_tag),
+            subfolder="transformer",
+            parallel_config=parallel_config,
+            mesh_shape=mesh_shape,
+            mesh_device=model.mesh_device,
+            is_fsdp=is_fsdp,
+            get_torch_state_dict=lambda: self.state_dict(lora_specs),
+        )

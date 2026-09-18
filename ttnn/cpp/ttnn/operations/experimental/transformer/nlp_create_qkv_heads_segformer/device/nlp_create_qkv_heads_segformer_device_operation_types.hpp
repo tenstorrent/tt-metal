@@ -18,6 +18,7 @@ struct NlpCreateQkvHeadsSegformerInputs {
 };
 
 using NlpCreateQkvHeadsSegformerResult = std::tuple<Tensor, Tensor, Tensor>;
-using NlpCreateQkvHeadsSegformerResultSpec = std::tuple<TensorSpec, TensorSpec, TensorSpec>;
+using NlpCreateQkvHeadsSegformerResultSpec =
+    std::tuple<tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec, tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::experimental::prim

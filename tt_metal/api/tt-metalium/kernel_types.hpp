@@ -42,9 +42,10 @@ enum NOC_MODE : uint8_t {
     DM_DYNAMIC_NOC = 1,
 };
 
-// 341 = (4096/(3 * sizeof(uint32_t)), where
-// - 4096 - packet size in dispatch
-// - 3 - number of kernels per tensix
+// Conservative minimum number of runtime args (unique + common combined) guaranteed to be settable on
+// any core type. This is a stable floor for callers that want a portable limit; it is NOT the enforced
+// hard cap. The actual per-core ceiling is larger and computed by the runtime from the available L1
+// kernel-config space for the target core type (see Kernel::validate_runtime_args_size).
 constexpr uint32_t max_runtime_args = 341;
 
 using KernelHandle = std::uint32_t;
@@ -108,6 +109,12 @@ struct ComputeConfig {
     std::vector<UnpackToDestMode> unpack_to_dest_mode;
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
+    // Opt-in: compile this kernel's TRISC2 (pack) binary with the RISC-V Vector (Zve32f)
+    // extension enabled. Blackhole only (program compile fails on other archs). The unpack and
+    // math TRISC compiles are unchanged, and the vector unit is reachable only through explicit
+    // intrinsics (auto-vectorization stays disabled); guard kernel-side vector code with
+    // the compiler-provided __riscv_vector macro or the pack-thread defines.
+    bool enable_trisc2_rvv = false;
     std::vector<uint32_t> compile_args;
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation

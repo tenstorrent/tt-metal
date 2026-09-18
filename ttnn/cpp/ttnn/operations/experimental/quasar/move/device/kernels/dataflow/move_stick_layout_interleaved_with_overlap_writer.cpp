@@ -15,7 +15,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -34,12 +33,14 @@ void kernel_main() {
     // Drain the staged pages (CB -> dst). wait_front unblocks only after the reader's
     // post-handshake push_back, i.e. after all cores have finished reading src.
     cb.wait_front(num_pages);
-    uint32_t l1_read_addr = cb.get_read_ptr();
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
-        CoreLocalMem<uint32_t> src(l1_read_addr);
-        noc.async_write(src, dst_addrgen, page_size, {.offset_bytes = 0}, {.page_id = i, .offset_bytes = 0});
+        noc.async_write(
+            cb,
+            dst_addrgen,
+            page_size,
+            {.offset_bytes = (i - start_id) * aligned_page_size},
+            {.page_id = i, .offset_bytes = 0});
         noc.async_write_barrier();
-        l1_read_addr += aligned_page_size;
     }
     cb.pop_front(num_pages);
 }

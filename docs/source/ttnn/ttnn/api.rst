@@ -15,7 +15,41 @@ Device
    ttnn.synchronize_device
    ttnn.SetDefaultDevice
    ttnn.GetDefaultDevice
-   ttnn.pad_to_tile_shape
+
+Deprecated Device APIs
+======================
+
+.. _ttnn-pad-to-tile-shape-deprecated:
+
+``ttnn.pad_to_tile_shape``
+------------------------------------
+
+``ttnn.pad_to_tile_shape`` has been removed. It previously rounded the last two
+dimensions of a shape to multiples of 32 (tile alignment).
+
+**Migration options:**
+
+1. **Preferred** — use :func:`ttnn.to_layout` which handles tile-alignment
+   automatically when converting to tile layout:
+
+   .. code-block:: python
+
+      # Before
+      padded = ttnn.pad_to_tile_shape(tensor.padded_shape)
+      tensor = ttnn.tilize_with_val_padding(tensor, padded, 0.0, mem_config)
+
+      # After
+      tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=mem_config)
+
+2. If you only need the padded shape value (e.g. for memory config calculations),
+   use ``align_shape_to_tile`` from model utilities:
+
+   .. code-block:: python
+
+      from models.common.tensor_utils import align_shape_to_tile
+
+      padded = align_shape_to_tile([1, 384, 49, 96])
+      # => [1, 384, 64, 96]
 
 Memory Config
 *************
@@ -218,6 +252,7 @@ Pointwise Unary
    ttnn.silu
    ttnn.sin
    ttnn.sinh
+   ttnn.softcap
    ttnn.softplus
    ttnn.softshrink
    ttnn.softsign
@@ -300,6 +335,7 @@ Pointwise Binary
    ttnn.rpow
    ttnn.rsub
    ttnn.rsub_
+   ttnn.situ_glu
    ttnn.squared_difference
    ttnn.squared_difference_
    ttnn.subalpha
@@ -468,6 +504,7 @@ Transformer
 
    ttnn.transformer.attention_softmax
    ttnn.transformer.attention_softmax_
+   ttnn.transformer.chunk_gated_delta_rule
    ttnn.transformer.chunked_flash_mla_prefill
    ttnn.transformer.chunked_scaled_dot_product_attention
    ttnn.transformer.concatenate_heads
@@ -599,6 +636,7 @@ KV Cache
    ttnn.kv_cache.update_cache_for_token_
    ttnn.fill_cache
    ttnn.update_cache
+   ttnn.experimental.indexed_fused_update_cache
 
 Backward operations
 ===================

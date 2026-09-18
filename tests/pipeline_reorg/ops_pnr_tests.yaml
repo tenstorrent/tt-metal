@@ -1,0 +1,50 @@
+# This file defines the test matrix for the ops unit tests that run in
+# package-and-release.
+#
+# Same schema and same impl workflow (ops-unit-tests-impl.yaml) as
+# ops_unit_tests.yaml; in consequence each (test, sku) leg has exactly
+# one owning pipeline and one time budget.
+
+- name: ttnn release matmul tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150_civ2:
+      timeout: 50
+    bh_p150b_civ2:
+      timeout: 50
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  category: matmul
+
+- name: ttnn release fused tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150_civ2:
+      timeout: 65
+    bh_p150b_civ2:
+      timeout: 65
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  category: fused
+
+- name: ttnn release reduction tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/reduction -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150_civ2:
+      timeout: 45
+    bh_p150b_civ2:
+      timeout: 45
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  category: reduction
+
+- name: ttnn release moreh tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150_civ2:
+      timeout: 45
+    bh_p150b_civ2:
+      timeout: 45
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  category: moreh

@@ -19,12 +19,16 @@ static_assert(
 
 // Simple packet header pool manager for fabric networking
 // This class manages allocation of packet headers from a fixed pool
-// located at MEM_PACKET_HEADER_POOL_BASE in L1 memory.
+// located at the packet header pool base in L1 memory.
 // Thread (multiple risc access) safe allocation
 class PacketHeaderPool {
 private:
     static uint32_t current_offset_;
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+    static constexpr uint32_t POOL_BASE = MEM_DISPATCH_PACKET_HEADER_POOL_BASE;
+#else
     static constexpr uint32_t POOL_BASE = MEM_PACKET_HEADER_POOL_BASE;
+#endif
     static constexpr uint32_t POOL_SIZE = MEM_PACKET_HEADER_POOL_SIZE;
     static constexpr uint32_t HEADER_SIZE = PACKET_HEADER_MAX_SIZE;
     static constexpr uint32_t POOL_SIZE_PER_RISC = POOL_SIZE / MaxDMProcessorsPerCoreType;

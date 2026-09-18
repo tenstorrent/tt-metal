@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "common_globals.h"
 #include "sentinel/compute_kernel_sentinel.h"
 #include "sanitizer/api.h"
@@ -20,7 +21,9 @@ namespace ckernel {
 /**
  * Initializes the packer to pack tiles into the specified output circular buffer.
  *
- * Call this function before using `pack_tile` or `pack_tile_block`.
+ * This explicit init is only needed when packing without an op-specific init. `pack_tile` /
+ * `pack_block` do not require it once a preceding op-specific init (`tilize_init`, `reduce_init`,
+ * etc.) has already configured the packer — see the NOTE on `pack_tile`.
  *
  * Return value: None
  *
@@ -29,7 +32,7 @@ namespace ckernel {
  * | Function   | ocb  | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31     | True     |
  */
 // clang-format on
-ALWI void pack_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+ALWI void pack_init(std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
     state_configure<Operand::PACK>(ocb, call_line);
     PACK((llk_pack_init(ocb)));
 }
@@ -83,11 +86,11 @@ ALWI void pack_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
  * | Function   | output_tile_index| The index of the tile in the output CB to copy to | uint32_t | Must be less than the size of the CB                 | False    |
  */
 // clang-format on
-template <bool out_of_order_output = false>
-ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_index = 0) {
+template <bool out_of_order_output = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t output_tile_index = 0) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
-    PACK((llk_pack<DST_ACCUM_MODE, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
+    PACK((llk_pack<is_fp32_dest_acc_en, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
 #else
     PACK((llk_pack<out_of_order_output>(ifrom_dst, icb, output_tile_index)));
 #endif
@@ -96,25 +99,30 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
 // clang-format off
 /**
  * Copies a block of tiles from the DEST register buffer starting at a specified index
- * to a specified circular buffer (CB). The DEST register buffer must be in acquired
+ * to a specified circular buffer (CB). This is the uniform block entry point for the pack
+ * op group. The DEST register buffer must be in acquired
  * state via *acquire_dst* call. This call is blocking and is only available on the
  * compute engine. Before calling this function, cb_reserve_back(n) must be called to
- * reserve at least n > 0 tiles in the output CB. Each call to `pack_tile_block` will
+ * reserve at least n > 0 tiles in the output CB. Each call to `pack_block` will
  * copy `ntiles` tiles from the DEST register to the reserved region of the CB, starting
  * from index 0. The internal write pointer in the CB is advanced by `ntiles` after each
  * call, and is reset by another cb_push_back call. Operates in tandem with functions
  * cb_reserve_back and cb_push_back.
  *
  * A typical use case is for the producer to ensure that there are enough tiles available
- * in the buffer via cb_reserve_back, then use pack_tile_block to copy a block of tiles
+ * in the buffer via cb_reserve_back, then use pack_block to copy a block of tiles
  * from the DEST slots to the reserved space in the CB, and finally call cb_push_back to
  * announce visibility of the reserved section of the circular buffer to the consumer.
  *
- * NOTE: pack_tile_block doesn't need explicit initialization function prior to its call. Other op-specific
+ * NOTE: pack_block doesn't need explicit initialization function prior to its call. Other op-specific
  * initialization functions (such as `tilize_init`, `reduce_init`, etc.) ensure proper initialization
  * of the packer. The reason for this stems from the fact that MATH and PACK threads need to be explicitly
  * synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate
  * API call.
+ *
+ * NOTE: In the future the block pack must be folded further into a hardware MOP / REPLAY buffer (as
+ * is being done for Quasar) inside llk-lib, without changing this signature. Tracked under the Compute
+ * API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47480.
  *
  * Return value: None
  *
@@ -125,13 +133,60 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
  * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | Must be less than the size of the DEST register (16) | True     |
  */
 // clang-format on
-ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
-    PACK((llk_matmul_pack<DST_ACCUM_MODE, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
+    PACK((llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>(ifrom_dst, icb, ntiles)));
 #else
     PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
 #endif
+}
+
+// clang-format off
+/**
+ * Issues a single no-write packer op: it steps the packer engine only -- no DST is committed to L1 and it
+ * does NOT push/advance the CB (the surrounding cb_push_back does that). Call it between cb_reserve_back
+ * and cb_push_back when a CB is being pushed but its tile data is not needed.
+ *
+ * On Quasar this is required: the hardware needs a real packer op between a WAIT_TILES and its PUSH_TILES
+ * on the same output CB, or the PUSH can retire before the space is available (TEN-4746 / #48552). This op
+ * programs the strided packer to write nothing (PACK_STRIDE_NO_WRITE, all rows masked) and issues one
+ * PACR_STRIDE to satisfy that ordering while leaving the output buffer untouched. On WH/BH there is no such
+ * ordering requirement and this compiles to a no-op. Each architecture supplies its own llk_pack_dummy();
+ * this helper dispatches to it through PACK(...). This call is only available on the compute engine.
+ *
+ * This is a temporary workaround, only needed because these kernels drive reserve/push loops directly over
+ * hand-written L1. It goes away once those loops are replaced by the real fix -- LocalTensorAccessors, which
+ * bypass the wait/pop and reserve/push loops entirely.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                              | Data type | Valid range | required |
+ * |----------|----------------------------------------------------------|-----------|-------------|----------|
+ * | cb_id    | The identifier of the CB whose WAIT/PUSH this orders      | uint32_t  | 0 to 31     | True     |
+ * */
+// clang-format on
+ALWI void dummy_pack(std::uint32_t cb_id) { PACK((llk_pack_dummy(cb_id))); }
+
+// clang-format off
+/**
+ * @deprecated Renamed to `pack_block()`. This forwarding shim is retained only for backwards
+ * compatibility and will be removed after August 15th, 2026 (see .github/deprecations.json).
+ *
+ * Return value: None
+ *
+ * | Param Type | Name      | Description                                       | Type     | Valid Range                                          | Required |
+ * |------------|-----------|---------------------------------------------------|----------|------------------------------------------------------|----------|
+ * | Function   | ifrom_dst | The index of the first tile in the DEST register  | uint32_t | Must be less than the size of the DEST register (16) | True     |
+ * | Function   | icb       | The identifier of the output circular buffer (CB) | uint32_t | 0 to 31                                              | True     |
+ * | Function   | ntiles    | The number of tiles to copy from DEST to CB       | uint32_t | Must be less than the size of the DEST register (16) | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+[[deprecated("Renamed to pack_block(); pack_tile_block will be removed after August 15th, 2026.")]] ALWI void
+pack_tile_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ntiles) {
+    pack_block<is_fp32_dest_acc_en>(ifrom_dst, icb, ntiles);
 }
 
 // clang-format off
@@ -155,7 +210,7 @@ ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
  * | Function   | l1_acc_en | L1 accumulation enable flag        | uint32_t | 0 or 1      | True     |
  */
 // clang-format on
-ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
+ALWI void pack_reconfig_l1_acc(const std::uint32_t l1_acc_en) { PACK((llk_pack_reconfig_l1_acc(l1_acc_en))); }
 
 // clang-format off
 /**
@@ -174,9 +229,7 @@ ALWI void pack_reconfig_l1_acc(const uint32_t l1_acc_en) { PACK((llk_pack_reconf
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void pack_rows_init(uint32_t num_rows) {
-    PACK((llk_pack_rows_init(num_rows)));
-}
+ALWI void pack_rows_init(std::uint32_t num_rows) { PACK((llk_pack_rows_init(num_rows))); }
 #endif
 
 // clang-format off
@@ -203,7 +256,7 @@ ALWI void pack_rows_init(uint32_t num_rows) {
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
+ALWI void pack_rows(std::uint32_t idst, std::uint32_t ocb, std::uint32_t output_index = 0) {
     PACK((llk_pack_rows(idst, ocb, output_index)));
 }
 #endif
@@ -222,9 +275,7 @@ ALWI void pack_rows(uint32_t idst, uint32_t ocb, uint32_t output_index = 0) {
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void pack_rows_uninit() {
-    PACK((llk_pack_rows_uninit()));
-}
+ALWI void pack_rows_uninit() { PACK((llk_pack_rows_uninit())); }
 #endif
 
 /**

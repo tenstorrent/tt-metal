@@ -20,7 +20,7 @@ inline Tensor mean_NHW(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
-    ttnn::SmallVector<int> dims = {2, 3};
+    ttsl::SmallVector<int> dims = {2, 3};
     Tensor mean_hw = ttnn::mean(input_tensor, dims, true, output_mem_config, compute_kernel_config);
     return ttnn::mean(mean_hw, 0, true, output_mem_config, compute_kernel_config);
 }
@@ -127,7 +127,8 @@ Tensor batch_norm(
     auto output_tensor = ttnn::prim::batch_norm(
         input, batch_mean, batch_var, eps, weight, bias, output, memory_config, compute_kernel_config);
 
-    if (training) {
+    // Skip when neither running stat is provided: the return value is discarded.
+    if (training && (running_mean.has_value() || running_var.has_value())) {
         ttnn::prim::running_statistics(
             batch_mean, batch_var, momentum, running_mean, running_var, memory_config, compute_kernel_config);
     }

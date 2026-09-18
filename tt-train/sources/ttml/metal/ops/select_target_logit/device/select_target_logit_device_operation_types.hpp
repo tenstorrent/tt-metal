@@ -39,6 +39,6 @@ using tensor_args_t = SelectTargetLogitInputs;
 //                       if target[n, s] in [device_first_v, device_last_v)
 //                     = 0.0 otherwise
 using tensor_return_value_t = ttnn::Tensor;
-using spec_return_value_t = ttnn::TensorSpec;
+using spec_return_value_t = tt::tt_metal::TensorSpec;
 
 }  // namespace ttml::metal::ops::select_target_logit::device

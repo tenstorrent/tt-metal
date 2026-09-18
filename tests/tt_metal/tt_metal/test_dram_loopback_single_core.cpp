@@ -11,7 +11,9 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/buffer.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/program/program_impl.hpp"
+
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -21,8 +23,7 @@ using namespace tt::tt_metal;
 //      in step 1. to buffer in L1 and back to another buffer in DRAM
 // 4. Host reads from buffer written to in step 2.
 //////////////////////////////////////////////////////////////////////////////////////////
-TEST_F(MeshDeviceSingleCardFixture, DramLoopbackSingleCore) {
-    IDevice* dev = devices_[0]->get_devices()[0];
+TEST_F(UnitMeshFixture, DramLoopbackSingleCore) {
     Program program = CreateProgram();
 
     CoreCoord core = {0, 0};
@@ -32,12 +33,12 @@ TEST_F(MeshDeviceSingleCardFixture, DramLoopbackSingleCore) {
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
     uint32_t l1_buffer_addr = 400 * 1024;
 
-    InterleavedBufferConfig dram_config{
-        .device = dev, .size = dram_buffer_size, .page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
-    auto input_dram_buffer = CreateBuffer(dram_config);
-    uint32_t input_dram_buffer_addr = input_dram_buffer->address();
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = dram_buffer_size, .buffer_type = BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
 
-    auto output_dram_buffer = CreateBuffer(dram_config);
+    auto input_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
+    auto output_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, &this->device());
+    uint32_t input_dram_buffer_addr = input_dram_buffer->address();
     uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
     auto dram_copy_kernel = CreateKernel(
@@ -49,7 +50,7 @@ TEST_F(MeshDeviceSingleCardFixture, DramLoopbackSingleCore) {
     // Execute
     std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    detail::WriteToBuffer(input_dram_buffer, input_vec);
+    slow_dispatch::WriteToBuffer(*input_dram_buffer, input_vec);
 
     SetRuntimeArgs(
         program,
@@ -57,10 +58,10 @@ TEST_F(MeshDeviceSingleCardFixture, DramLoopbackSingleCore) {
         core,
         {l1_buffer_addr, input_dram_buffer_addr, 0, output_dram_buffer_addr, 0, dram_buffer_size});
 
-    detail::LaunchProgram(dev, program);
+    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
 
     std::vector<uint32_t> result_vec;
-    detail::ReadFromBuffer(output_dram_buffer, result_vec);
+    slow_dispatch::ReadFromBuffer(*output_dram_buffer, result_vec);
 
     // Validation
     EXPECT_EQ(input_vec, result_vec);

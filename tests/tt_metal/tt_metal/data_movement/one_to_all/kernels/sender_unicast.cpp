@@ -15,6 +15,7 @@ void kernel_main() {
     constexpr uint32_t test_id = get_named_compile_time_arg_val("test_id");
     constexpr uint32_t num_subordinates = get_named_compile_time_arg_val("num_subordinates");
     constexpr uint32_t num_virtual_channels = get_named_compile_time_arg_val("num_vc");
+    constexpr uint32_t loopback = get_named_compile_time_arg_val("loopback");
 
     // Derivative values
     constexpr uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
@@ -47,4 +48,5 @@ void kernel_main() {
     DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
     DeviceTimestampedData("NoC Index", noc_index);
     DeviceTimestampedData("Number of subordinates", num_subordinates);
+    DeviceTimestampedData("Loopback", loopback);
 }

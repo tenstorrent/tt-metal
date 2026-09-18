@@ -40,7 +40,7 @@ inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1
     static_assert(num_faces == 4, "num_faces other than 4 is not supported in llk_math_matmul");
     LLK_ASSERT(
         (ckernel::math::get_dest_max_matmul_tiles(dst_index, ct_dim, rt_dim) <
-         get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+         get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "llk_math_matmul: computed matmul dest tile range exceeds available dest register "
         "capacity. Uncomment the DPRINT block below and enable DPRINT support to inspect "
         "the calculated and max dest tile values.");
@@ -48,7 +48,7 @@ inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1
     // DPRINT("llk_math_matmul: calculated dest tiles = {}, max dest tiles = {} (dst_index={}, ct_dim={},
     // rt_dim={})\n",
     //     ckernel::math::get_dest_max_matmul_tiles(dst_index, ct_dim, rt_dim),
-    //     get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
+    //     get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>(),
     //     dst_index,
     //     ct_dim,
     //     rt_dim);

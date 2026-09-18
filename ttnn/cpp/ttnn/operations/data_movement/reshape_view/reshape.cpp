@@ -88,7 +88,7 @@ static bool has_inner_2d_tile_padding(const ttnn::Shape& shape) {
 // derivation from the input tensor's spec (layout should match the input).
 MemoryConfig recompute_shard_spec_for_output(
     const MemoryConfig& memory_config,
-    const TensorSpec& output_shape,
+    const tt::tt_metal::TensorSpec& output_shape,
     bool explicit_memory_config = false,
     const std::optional<tt::tt_metal::ShardSpec>& input_shard_spec = std::nullopt) {
     // Auto-derive: caller asked for a sharded output but didn't pin a shard_spec. Seed
@@ -396,9 +396,9 @@ ttnn::Tensor reshape_tiled(
         memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
 
-        // BFLOAT8_B: typecast kernels require interleaved inputs, so keep both typecasts
-        // on interleaved tensors and only convert to sharded at the very end.
-        if (tensor.dtype() == DataType::BFLOAT8_B) {
+        // Block-float (BFLOAT8_B / BFLOAT4_B): typecast kernels require interleaved inputs, so keep
+        // both typecasts on interleaved tensors and only convert to sharded at the very end.
+        if (is_block_float(tensor.dtype())) {
             if (tensor.memory_config().is_sharded()) {
                 MemoryConfig working_input_memory_config{
                     TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
@@ -419,8 +419,8 @@ ttnn::Tensor reshape_tiled(
                 recreate_mapping_tensor,
                 sub_core_grid);
             // Fill in BF16 (rank-3, non-recursive). skip_padding_fill is *intentionally*
-            // ignored for BF8: shared exponent over 16-elem sub-blocks would otherwise let
-            // unfilled padding corrupt logical lanes. See skip_padding_fill docstring.
+            // ignored for block-float: shared exponent over 16-elem sub-blocks would otherwise
+            // let unfilled padding corrupt logical lanes. See skip_padding_fill docstring.
             if (detail::has_inner_2d_tile_padding(requested_shape_3d)) {
                 output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
             }
@@ -439,11 +439,12 @@ ttnn::Tensor reshape_tiled(
         }
 
         // Direct sharded path: TILED factories use TensorAccessorArgs for transparent sharded I/O.
-        // Temporary interleaved TensorSpec provides physical dims and alignment to recompute_shard_spec_for_output.
+        // Temporary interleaved tt::tt_metal::TensorSpec provides physical dims and alignment to
+        // recompute_shard_spec_for_output.
         MemoryConfig target_output_mem_config = memory_config;
         if (memory_config.is_sharded()) {
             MemoryConfig interleaved_output_mem_config{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
-            auto interleaved_output_spec = TensorSpec(
+            auto interleaved_output_spec = tt::tt_metal::TensorSpec(
                 requested_shape_3d,
                 tt::tt_metal::TensorLayout::fromPaddedShape(
                     tensor3d.dtype(),
@@ -494,8 +495,8 @@ ttnn::Tensor reshape_tiled(
     }
 
     // Interleaved (DRAM / L1) tensors: call prim::reshape_view directly.
-    if (tensor.dtype() == DataType::BFLOAT8_B) {
-        TT_FATAL(!sub_core_grid.has_value(), "Bfloat8 reshape does not support sub core grid specification\n");
+    if (is_block_float(tensor.dtype())) {
+        TT_FATAL(!sub_core_grid.has_value(), "Block-float reshape does not support sub core grid specification\n");
         tensor3d = ttnn::typecast(tensor3d, DataType::BFLOAT16);
     }
 
@@ -503,7 +504,7 @@ ttnn::Tensor reshape_tiled(
     // If block/height-sharded output, compute the correct shard spec
     if (updated_mem_config.is_sharded()) {
         // Synthesize TensorLayout from the requested padded shape, but with an interleaved
-        // MemoryConfig (no shard_spec). Dropping the shard_spec is what lets the TensorSpec
+        // MemoryConfig (no shard_spec). Dropping the shard_spec is what lets the tt::tt_metal::TensorSpec
         // constructor below skip its shape-fits-shard-grid validation, which would otherwise
         // apply the *input* shard_spec to the *output* shape and fatal. The padded shape
         // passed here ends up baked into the layout's alignment, so synthetic_spec.physical_shape()
@@ -516,7 +517,7 @@ ttnn::Tensor reshape_tiled(
             requested_shape_3d,
             requested_padded_shape_3d);
 
-        // Construct synthetic TensorSpec
+        // Construct synthetic tt::tt_metal::TensorSpec
         tt::tt_metal::TensorSpec synthetic_spec(requested_shape_3d, synthetic_layout);
 
         // Recompute the shard spec for the output tensor shape
@@ -533,21 +534,22 @@ ttnn::Tensor reshape_tiled(
         sub_core_grid);
 
     // Fill rules:
-    //   - BFLOAT8_B: ALWAYS fill (skip_padding_fill is ignored). The downstream typecast's 16-elem
-    //     shared exponent would otherwise let unfilled padding corrupt logical lanes in the same block.
+    //   - Block-float (BFLOAT8_B / BFLOAT4_B): ALWAYS fill (skip_padding_fill is ignored). The downstream
+    //     typecast's 16-elem shared exponent would otherwise let unfilled padding corrupt logical lanes in
+    //     the same block.
     //   - Otherwise (BF16/FP32/int): fill only when the caller EXPLICITLY passed pad_value. A default-on
     //     fill writes into "padding" lanes of prim::reshape_view, which can be a zero-cost alias of the
     //     input buffer; in extreme low-rank cases (e.g. inner-2D (1, 1)) this clobbers logical lanes of
     //     aliased tensors and silently corrupts unrelated callers (e.g. tt-train AdamW / ColumnParallel).
-    //   - skip_padding_fill (when caller did pass pad_value) still suppresses non-BF8 fills.
-    const bool is_bfloat8_b_output = (tensor.dtype() == DataType::BFLOAT8_B);
-    const bool should_fill = is_bfloat8_b_output || (pad_value_explicit && !skip_padding_fill);
+    //   - skip_padding_fill (when caller did pass pad_value) still suppresses non-block-float fills.
+    const bool is_block_float_output = is_block_float(tensor.dtype());
+    const bool should_fill = is_block_float_output || (pad_value_explicit && !skip_padding_fill);
     if (should_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
         output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
     }
 
-    if (tensor.dtype() == DataType::BFLOAT8_B) {
-        TT_FATAL(!sub_core_grid.has_value(), "Bfloat8 reshape does not support sub core grid specification\n");
+    if (is_block_float(tensor.dtype())) {
+        TT_FATAL(!sub_core_grid.has_value(), "Block-float reshape does not support sub core grid specification\n");
         output_tensor_3d = ttnn::typecast(output_tensor_3d, tensor.dtype());
     }
 
@@ -578,8 +580,8 @@ ttnn::Tensor ttnn::reshape(
         return tensor;
     }
     PadValue default_pad_value;
-    if (tensor.dtype() == DataType::BFLOAT8_B or tensor.dtype() == DataType::BFLOAT16 or
-        tensor.dtype() == DataType::FLOAT32) {
+    if (tensor.dtype() == DataType::BFLOAT8_B or tensor.dtype() == DataType::BFLOAT4_B or
+        tensor.dtype() == DataType::BFLOAT16 or tensor.dtype() == DataType::FLOAT32) {
         default_pad_value = 0.0f;
     } else {
         default_pad_value = (uint32_t)0;

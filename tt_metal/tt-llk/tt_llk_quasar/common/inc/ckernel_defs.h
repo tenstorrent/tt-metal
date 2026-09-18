@@ -25,6 +25,13 @@ constexpr auto to_underlying(T t) noexcept
     return static_cast<std::underlying_type_t<T>>(t);
 }
 
+enum Srcs
+{
+    SrcA = 0,
+    SrcB = 1,
+    SrcC = 2
+};
+
 enum register_space_e
 {
     TDMA_REGS     = 0x0,
@@ -32,13 +39,26 @@ enum register_space_e
     ADDR_COUNTERS = 0x2
 };
 
-// TODO: AM; rename enum values, issue #1275
+// Mailbox slot index per Quasar Neo-cluster TRISC role: 0=unpack, 1=math, 2=pack, 3=isolate-sfpu.
+// The ground truth for this numbering is the mailbox aperture itself -- TENSIX_MAILBOX0..3_BASE in
+// quasar/tt_t6_trisc_map.h, which backs mailbox_base[4] in ckernel.h. Note hal_2xx_common.cpp's
+// COMPILE_FOR_TRISC=<processor_id> is the cluster-GLOBAL id (NEO_n_COMPUTE_m = n*4 + m, see
+// QuasarComputeProcessor in impl/kernels/kernel.hpp); it only agrees with this enum modulo 4.
 enum ThreadId
 {
-    BriscThreadId  = 0,
-    UnpackThreadId = 1,
-    MathThreadId   = 2,
-    PackThreadId   = 3
+    UnpackThreadId      = 0,
+    MathThreadId        = 1,
+    PackThreadId        = 2,
+    IsolateSfpuThreadId = 3
+};
+
+// Selects how a float32 SFPU result is narrowed when it is stored back into a
+// bf16 DEST. Ignored when fp32 DEST accumulation is enabled, since no narrowing
+// happens in that case.
+enum class DstRoundingMode : std::uint8_t
+{
+    Default     = 0, // SFPSTORE truncates fp32->bf16 on all architectures; no software rounding
+    NearestEven = 1, // IEEE 754 round-to-nearest-even, applied in software before the store
 };
 
 enum class BinaryOp : std::uint8_t
@@ -53,6 +73,10 @@ enum class BinaryOp : std::uint8_t
     GE,
     MAX,
     MIN,
+    QUANT,
+    REQUANT,
+    DEQUANT,
+    ATAN2,
 };
 
 // For instructions that address lower/upper 16 bits of a register

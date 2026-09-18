@@ -1,0 +1,36 @@
+# Baseline for scripts/detect_override_rebuild.py
+#
+# Pre-existing rebuilds of a ProgramDescriptor inside override_runtime_arguments, grandfathered one
+# offender at a time. Every listed file is still FULLY scanned: any new or additional violation not
+# already fingerprinted below is blocked, so a baselined file keeps its guard.
+#
+# Each entry is a live per-dispatch cost: override_runtime_arguments runs on EVERY program-cache hit,
+# so calling create_descriptor() there pays the full cache-MISS host cost (work split, CoreRangeSet
+# construction, arch queries, TensorAccessorArgs, kernel-source strings, compile-time arg vectors, a
+# heap-allocated arg vector per core) on every dispatch. Fixing an op means deleting its line(s) here.
+#
+# For reference, the equivalent fix measured on the ops migrated in #49889 / #50338:
+#   rotary_embedding cache hit  35.1 -> 27.2 us
+#   uniform          cache hit  23.2 -> 13.8 us
+#
+# Format: one tab-separated <repo-relative-path>\t<symbol>\t<source-line> per offender. Regenerate
+# with:  python3 scripts/detect_override_rebuild.py --update-baseline <files...>
+# Comments (#) and blank lines are ignored.
+
+ttnn/cpp/ttnn/operations/ccl/mesh_partition/device/mesh_partition_program_factory.cpp	Factory::create_descriptor	auto descriptor = Factory::create_descriptor(slice_attrs, slice_tensor_args, tensor_return_value);
+ttnn/cpp/ttnn/operations/ccl/mesh_partition/device/mesh_partition_program_factory.cpp	apply_descriptor_runtime_args	tt::tt_metal::apply_descriptor_runtime_args(program, descriptor);
+ttnn/cpp/ttnn/operations/data_movement/move/device/move_sharded_program_factory.cpp	MoveOverlapProgramFactory::create_descriptor	desc = MoveOverlapProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+ttnn/cpp/ttnn/operations/data_movement/move/device/move_sharded_program_factory.cpp	MoveProgramFactory::create_descriptor	desc = MoveProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+ttnn/cpp/ttnn/operations/data_movement/move/device/move_sharded_program_factory.cpp	MoveShardedProgramFactory::create_descriptor	desc = MoveShardedProgramFactory::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+ttnn/cpp/ttnn/operations/data_movement/move/device/move_sharded_program_factory.cpp	apply_descriptor_runtime_args	tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.cpp	apply_descriptor_runtime_args	tt::tt_metal::apply_descriptor_runtime_args(program, cb_addr_only);
+ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.cpp	apply_descriptor_runtime_args	tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+ttnn/cpp/ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.cpp	create_descriptor	return std::decay_t<decltype(f)>::create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+ttnn/cpp/ttnn/operations/data_movement/tilize/device/tilize_device_operation.cpp	apply_descriptor_runtime_args	tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+ttnn/cpp/ttnn/operations/data_movement/tilize/device/tilize_device_operation.cpp	create_descriptor	return factory.create_descriptor(operation_attributes, tensor_args, tensor_return_value);
+ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp	ProgramFactory::create_descriptor	auto desc = ProgramFactory::create_descriptor(operation_attributes, tensor_args, output);
+ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp	apply_descriptor_runtime_args	tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/moreh_adam_program_factory.cpp	apply_descriptor_runtime_args	tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+ttnn/cpp/ttnn/operations/moreh/moreh_adam/device/moreh_adam_program_factory.cpp	create_descriptor	auto desc = create_descriptor(operation_attributes, tensor_args, output_tensor);
+ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/multi_core_program_factory.cpp	apply_descriptor_runtime_args	tt::tt_metal::apply_descriptor_runtime_args(program, desc);
+ttnn/cpp/ttnn/operations/moreh/moreh_adamw/device/multi_core_program_factory.cpp	create_descriptor	auto desc = create_descriptor(operation_attributes, tensor_args, tensor_return_value);

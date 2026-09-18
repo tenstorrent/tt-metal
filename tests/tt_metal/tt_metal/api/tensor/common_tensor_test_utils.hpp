@@ -5,7 +5,7 @@
 #pragma once
 
 #include <tt-metalium/shape.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;

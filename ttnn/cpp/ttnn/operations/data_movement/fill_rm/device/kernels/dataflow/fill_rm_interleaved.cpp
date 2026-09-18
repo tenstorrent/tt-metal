@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdlib>
+#include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // Kernel args
@@ -16,62 +18,48 @@ void kernel_main() {
 
     // Note: this kernel is written with maximum simplicity in mind and (deliberately) doesn't pursue performance
 
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t NC = get_arg_val<uint32_t>(1);
-    uint32_t H = get_arg_val<uint32_t>(2);
-    uint32_t W = get_arg_val<uint32_t>(3);
-    uint32_t fillH = get_arg_val<uint32_t>(4);
-    uint32_t fillW = get_arg_val<uint32_t>(5);
-    uint32_t val_hi = get_arg_val<uint32_t>(6);
-    uint32_t val_lo = get_arg_val<uint32_t>(7);
+    std::uint32_t NC = get_arg(args::NC);
+    std::uint32_t H = get_arg(args::H);
+    std::uint32_t W = get_arg(args::W);
+    std::uint32_t fillH = get_arg(args::fillH);
+    std::uint32_t fillW = get_arg(args::fillW);
+    std::uint32_t val_hi = get_arg(args::val_hi);
+    std::uint32_t val_lo = get_arg(args::val_lo);
 
-    constexpr auto dst_args = TensorAccessorArgs<0>();
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
-    const auto s0 = TensorAccessor(dst_args, dst_addr, W << 1);
+    const auto s0 = TensorAccessor(tensor::out);
 
     // DPRINT("fill_rm_8bank: NC={} H={} W={} fillH={} fillW={}\n", NC, H, W, fillH, fillW);
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
-    // How many bytes along a row in the original tensor
-    uint32_t num_bytes_per_tile = get_tile_size(cb_id_in0);
-    uint32_t num_bytes_per_tile_row = 64;
-    uint32_t Wt = (W >> 5);
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
 
-    // Variables
-    uint64_t replicate_dest_addr;
-    uint32_t start_dram_addr_offset_for_tensor_row = 0;
-
-    cb_in0.reserve_back(16);
-    cb_in1.reserve_back(16);
-    uint32_t l1_w_addr = cb_in0.get_write_ptr();
-    uint32_t l1_zeros_addr = cb_in1.get_write_ptr();
-    uint32_t w;
+    dfb_in0.reserve_back(16);
+    dfb_in1.reserve_back(16);
+    std::uint32_t l1_w_addr = dfb_in0.get_write_ptr();
+    std::uint32_t l1_zeros_addr = dfb_in1.get_write_ptr();
+    std::uint32_t w;
     for (w = 0; w < fillW; w++) {
-        reinterpret_cast<uint16_t*>(l1_w_addr)[w] = val_hi;
+        reinterpret_cast<std::uint16_t*>(l1_w_addr)[w] = val_hi;
     }
     for (w = fillW; w < W; w++) {
-        reinterpret_cast<uint16_t*>(l1_w_addr)[w] = val_lo;
+        reinterpret_cast<std::uint16_t*>(l1_w_addr)[w] = val_lo;
     }
     for (w = 0; w < W; w++) {
-        reinterpret_cast<uint16_t*>(l1_zeros_addr)[w] = val_lo;
+        reinterpret_cast<std::uint16_t*>(l1_zeros_addr)[w] = val_lo;
     }
-    cb_in0.push_back(16);
-    cb_in1.push_back(16);
+    dfb_in0.push_back(16);
+    dfb_in1.push_back(16);
 
     Noc noc;
-    uint32_t nch_dst = 0;
+    std::uint32_t nch_dst = 0;
     // input is NCH(Wt*32) unpadded RM
-    for (uint32_t nc = 0; nc < NC; nc++) {
-        for (uint32_t h = 0; h < H; h++) {
+    for (std::uint32_t nc = 0; nc < NC; nc++) {
+        for (std::uint32_t h = 0; h < H; h++) {
             if (h < fillH) {
                 noc.async_write(
-                    cb_in0, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
+                    dfb_in0, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
             } else {
                 noc.async_write(
-                    cb_in1, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
+                    dfb_in1, s0, (W << 1), {.offset_bytes = 0}, {.page_id = nch_dst});  // TODO(AP): segment this write
             }
             noc.async_write_barrier();
             nch_dst++;

@@ -4,19 +4,18 @@
 
 #include <stdint.h>
 #include <api/dataflow/dataflow_api.h>
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
-    constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t is_reader = get_compile_time_arg_val(2);
-    constexpr uint32_t config_cb_id = get_compile_time_arg_val(3);
+    constexpr auto is_reader = get_arg(args::is_reader);
 
-    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(4);
-    constexpr uint32_t in_nsticks_per_core = get_compile_time_arg_val(5);
-    constexpr uint32_t scale_h = get_compile_time_arg_val(6);
-    constexpr uint32_t scale_w = get_compile_time_arg_val(7);
-    constexpr uint32_t elem_per_core = get_compile_time_arg_val(8);
+    constexpr auto stick_nbytes = get_arg(args::stick_nbytes);
+    constexpr auto in_nsticks_per_core = get_arg(args::in_nsticks_per_core);
+    constexpr auto scale_h = get_arg(args::scale_h);
+    constexpr auto scale_w = get_arg(args::scale_w);
+    constexpr auto elem_per_core = get_arg(args::elem_per_core);
 
     constexpr uint32_t elem_per_core_reader = elem_per_core / 2;
 
@@ -24,19 +23,19 @@ void kernel_main() {
         ((in_nsticks_per_core * scale_h + 1) / 2) *
         scale_w;  // divided by 2 because each core has 2 readers which get near equal number of output sticks
 
-    experimental::CB in_cb(in_cb_id);
-    experimental::CB out_cb(out_cb_id);
-    experimental::CB config_cb(config_cb_id);
+    DataflowBuffer in_dfb(dfb::in0);
+    DataflowBuffer out_dfb(dfb::out0);
+    DataflowBuffer config_dfb(dfb::config);
     Noc noc;
     UnicastEndpoint remote_ep;
 
-    uint32_t l1_read_addr = in_cb.get_read_ptr();
+    uint32_t l1_read_addr = in_dfb.get_read_ptr();
     uint32_t write_offset = 0;
     if (!is_reader) {
         write_offset = out_nsticks_per_core * stick_nbytes;
     }
 
-    uint32_t config_l1_addr = config_cb.get_read_ptr();
+    uint32_t config_l1_addr = config_dfb.get_read_ptr();
     // Interpreted as a vector of 32bit elements to lessen the number of l1 reads
     volatile tt_l1_ptr uint32_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(config_l1_addr);
 
@@ -62,7 +61,7 @@ void kernel_main() {
             for (uint32_t sw = 0; sw < scale_w; sw++) {
                 noc.async_read(
                     remote_ep,
-                    out_cb,
+                    out_dfb,
                     stick_nbytes,
                     {.noc_x = corex, .noc_y = corey, .addr = src_addr},
                     {.offset_bytes = write_offset});

@@ -52,7 +52,16 @@ All metrics are bounded 0-100% unless noted otherwise.
 """
 
 import pandas as pd
-from loguru import logger
+
+from .perf.schema import (
+    MARKER,
+    MEAN,
+    STD,
+    counter_base,
+    cycles_of,
+    metric_column,
+    stat_column,
+)
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -259,7 +268,7 @@ def export_metrics(
     for zone in zones:
         zone_metrics = [m for m in computed if m["zone"] == zone]
         marker_name = zone_to_marker.get(zone, zone)
-        row = {"marker": marker_name}
+        row = {MARKER: marker_name}
 
         # Only export efficiency percentages to the main CSV
         def _exportable(key: str) -> bool:
@@ -272,13 +281,17 @@ def export_metrics(
                     continue
                 values = metrics_df[col].dropna()
                 if len(values) >= 2:
-                    row[f"{run_type_name}_mean({col})"] = float(values.mean())
-                    row[f"{run_type_name}_std({col})"] = float(values.std())
+                    row[metric_column(run_type_name, stat_column(col, MEAN))] = float(
+                        values.mean()
+                    )
+                    row[metric_column(run_type_name, stat_column(col, STD))] = float(
+                        values.std()
+                    )
         else:
             for k, v in zone_metrics[0].items():
                 if not _exportable(k):
                     continue
-                row[f"{run_type_name}_{k}"] = v
+                row[metric_column(run_type_name, k)] = v
 
         rows.append(row)
 
@@ -324,7 +337,7 @@ def export_counters(
     for zone in zones:
         zone_df = all_counters[all_counters["zone"] == zone]
         marker_name = zone_to_marker.get(zone, zone)
-        row = {"marker": marker_name}
+        row = {MARKER: marker_name}
 
         # Get unique counters in this zone (preserving discovery order)
         counter_keys = (
@@ -333,152 +346,42 @@ def export_counters(
 
         for bank, counter_name in counter_keys:
             mask = (zone_df["bank"] == bank) & (zone_df["counter_name"] == counter_name)
-            col_name = f"{bank}.{counter_name}"
+            col_name = counter_base(bank, counter_name)
 
             if has_runs:
                 per_run = zone_df.loc[mask].groupby("run_index")["count"].mean()
                 if len(per_run) >= 2:
-                    row[f"{run_type_name}_mean({col_name})"] = float(per_run.mean())
-                    row[f"{run_type_name}_std({col_name})"] = float(per_run.std())
+                    row[metric_column(run_type_name, stat_column(col_name, MEAN))] = (
+                        float(per_run.mean())
+                    )
+                    row[metric_column(run_type_name, stat_column(col_name, STD))] = (
+                        float(per_run.std())
+                    )
                 elif len(per_run) == 1:
-                    row[f"{run_type_name}_{col_name}"] = float(per_run.iloc[0])
+                    row[metric_column(run_type_name, col_name)] = float(per_run.iloc[0])
             else:
                 values = zone_df.loc[mask, "count"]
-                row[f"{run_type_name}_{col_name}"] = float(values.mean())
+                row[metric_column(run_type_name, col_name)] = float(values.mean())
 
             # Also export cycles for this counter
-            col_cycles = f"{col_name}.cycles"
+            col_cycles = cycles_of(col_name)
             if has_runs:
                 per_run_cyc = zone_df.loc[mask].groupby("run_index")["cycles"].mean()
                 if len(per_run_cyc) >= 2:
-                    row[f"{run_type_name}_mean({col_cycles})"] = float(
-                        per_run_cyc.mean()
+                    row[metric_column(run_type_name, stat_column(col_cycles, MEAN))] = (
+                        float(per_run_cyc.mean())
                     )
-                    row[f"{run_type_name}_std({col_cycles})"] = float(per_run_cyc.std())
+                    row[metric_column(run_type_name, stat_column(col_cycles, STD))] = (
+                        float(per_run_cyc.std())
+                    )
                 elif len(per_run_cyc) == 1:
-                    row[f"{run_type_name}_{col_cycles}"] = float(per_run_cyc.iloc[0])
+                    row[metric_column(run_type_name, col_cycles)] = float(
+                        per_run_cyc.iloc[0]
+                    )
             else:
                 cyc_values = zone_df.loc[mask, "cycles"]
-                row[f"{run_type_name}_{col_cycles}"] = float(cyc_values.mean())
+                row[metric_column(run_type_name, col_cycles)] = float(cyc_values.mean())
 
         rows.append(row)
 
     return pd.DataFrame(rows)
-
-
-# ── Print ────────────────────────────────────────────────────────────
-
-
-def _print_detail(metrics: dict) -> None:
-    """Log detailed efficiency metrics for a single (zone, run) result."""
-
-    def fmt(value, decimals=2):
-        if value is None:
-            return "N/A"
-        return f"{value:.{decimals}f}%"
-
-    m = metrics
-    sep = "─" * 70
-
-    lines = [
-        f"\n{sep}",
-        "  COMPUTE UTILIZATION",
-        sep,
-        f"  {'FPU Utilization:':<40} {fmt(m.get('fpu_utilization_pct')):>12}",
-        f"  {'Compute (FPU+SFPU) Utilization:':<40} {fmt(m.get('compute_utilization_pct')):>12}",
-        f"\n{sep}",
-        "  THREAD STALL RATES",
-        sep,
-        f"  {'Unpack Thread (T0) Stall:':<40} {fmt(m.get('unpack_thread_stall_pct')):>12}",
-        f"  {'Math Thread (T1) Stall:':<40} {fmt(m.get('math_thread_stall_pct')):>12}",
-        f"  {'Pack Thread (T2) Stall:':<40} {fmt(m.get('pack_thread_stall_pct')):>12}",
-        f"\n{sep}",
-        "  SEMAPHORE WAIT RATES",
-        sep,
-        f"  {'Math Semaphore Wait:':<40} {fmt(m.get('math_sem_wait_pct')):>12}",
-        f"  {'Pack Semaphore Wait:':<40} {fmt(m.get('pack_sem_wait_pct')):>12}",
-        f"\n{sep}",
-        "  UNPACKER WRITE EFFICIENCY",
-        sep,
-        f"  {'Unpacker0 (srcA):':<40} {fmt(m.get('unpack0_write_eff_pct')):>12}",
-        f"  {'Unpacker1 (srcB):':<40} {fmt(m.get('unpack1_write_eff_pct')):>12}",
-        f"  {'Combined:':<40} {fmt(m.get('unpack_write_eff_pct')):>12}",
-        f"\n{sep}",
-        "  UNPACKER-TO-MATH DATA FLOW",
-        sep,
-        f"  {'srcA Buffer Availability:':<40} {fmt(m.get('unpack_to_math_flow0_pct')):>12}",
-        f"  {'srcB Buffer Availability:':<40} {fmt(m.get('unpack_to_math_flow1_pct')):>12}",
-        f"  {'Combined:':<40} {fmt(m.get('unpack_to_math_flow_pct')):>12}",
-        f"\n{sep}",
-        "  PACKER METRICS",
-        sep,
-        f"  {'Pack Utilization:':<40} {fmt(m.get('pack_utilization_pct')):>12}",
-        f"  {'Pack Dest Data Efficiency:':<40} {fmt(m.get('pack_dest_eff_pct')):>12}",
-        f"\n{sep}",
-        "  MATH PIPELINE STALLS",
-        sep,
-        f"  {'Fidelity Phase Stall:':<40} {fmt(m.get('fidelity_stall_pct')):>12}",
-        f"  {'Math Src Data Stall:':<40} {fmt(m.get('math_src_stall_pct')):>12}",
-    ]
-    logger.info("\n".join(lines))
-
-
-def _print_stability(zone_metrics: list[dict]) -> None:
-    """Log mean/std summary for multiple runs of the same zone."""
-    if len(zone_metrics) < 2:
-        return
-
-    metrics_df = pd.DataFrame(zone_metrics)
-
-    pct_cols = [c for c in metrics_df.columns if c.endswith("_pct")]
-
-    lines = [
-        f"\n  STABILITY ACROSS {len(zone_metrics)} RUNS (mean +/- std)",
-        f"  {'─' * 66}",
-        f"  {'Metric':<40} {'Mean':>12} {'Std':>12}",
-        f"  {'─' * 40} {'─' * 12} {'─' * 12}",
-    ]
-
-    for col in pct_cols:
-        values = metrics_df[col].dropna()
-        if len(values) >= 2:
-            mean_val = float(values.mean())
-            std_val = float(values.std())
-            label = col.replace("_pct", "").replace("_", " ")
-            lines.append(f"  {label:<40} {mean_val:>11.2f}% {std_val:>11.2f}%")
-
-    logger.info("\n".join(lines))
-
-
-def print_metrics(df_or_computed) -> None:
-    """
-    Log performance metrics, grouped by zone.
-    If multiple runs, also logs mean/std stability summary per zone.
-
-    Accepts either:
-    - A raw counter DataFrame (computes metrics automatically)
-    - A list of dicts from compute_metrics()
-    """
-    if isinstance(df_or_computed, pd.DataFrame):
-        computed = compute_metrics(df_or_computed)
-    else:
-        computed = df_or_computed
-
-    if not computed:
-        logger.info("No metrics to display.")
-        return
-
-    logger.info("\n{}\nPERFORMANCE METRICS\n{}", "=" * 70, "=" * 70)
-
-    zones = sorted(set(m["zone"] for m in computed))
-
-    for zone in zones:
-        zone_metrics = [m for m in computed if m["zone"] == zone]
-
-        logger.info("\n{}\nZONE: {}\n{}", "═" * 70, zone, "═" * 70)
-
-        # Print detailed metrics for the last run (most representative, after warmup)
-        _print_detail(zone_metrics[-1])
-
-        # Print stability summary if multiple runs
-        _print_stability(zone_metrics)

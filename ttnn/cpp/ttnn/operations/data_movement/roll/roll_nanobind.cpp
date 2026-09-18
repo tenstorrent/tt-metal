@@ -19,7 +19,7 @@ void bind_roll(nb::module_& mod) {
         Performs circular shifting of elements along the specified dimension(s).
 
         Args:
-            input_tensor: A tensor whose elements will be rolled.
+            input_tensor: A tensor whose elements will be rolled. A TILE layout tensor must use the standard 32x32 tile.
             shifts: The number of places by which elements are shifted. Can be an integer or a list of integers (one per dimension).
             dim: The dimension(s) along which to roll. If shifts is a list, then dim must be a list of the same length as shifts.
         )doc";
@@ -30,8 +30,8 @@ void bind_roll(nb::module_& mod) {
         ttnn::overload_t(
             nb::overload_cast<
                 const ttnn::Tensor&,
-                const ttnn::SmallVector<int>&,
-                const ttnn::SmallVector<int>&,
+                const ttsl::SmallVector<int>&,
+                const ttsl::SmallVector<int>&,
                 const std::optional<MemoryConfig>&>(&ttnn::roll),
             nb::arg("input_tensor"),
             nb::arg("shifts"),

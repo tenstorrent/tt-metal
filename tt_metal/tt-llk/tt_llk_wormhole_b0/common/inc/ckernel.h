@@ -141,14 +141,14 @@ inline volatile void *memcpy_blocking(volatile void *dst, const volatile void *s
 
 /**
  * @brief Issues a load transaction that will block the core until the transaction is completed.
- * @tparam T 32-bit type to load
+ * @tparam T 16-bit or 32-bit type to load
  * @param ptr address to read from
  * @return value read from the address
  */
 template <typename T, typename = std::enable_if_t<std::is_trivially_copyable_v<T>>>
 inline T load_blocking(volatile T *ptr)
 {
-    static_assert(sizeof(T) == sizeof(std::uint32_t), "load_blocking: operand must be 32-bit");
+    static_assert(sizeof(T) == sizeof(std::uint16_t) || sizeof(T) == sizeof(std::uint32_t), "load_blocking: operand must be 16-bit or 32-bit");
 
     // https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md
 
@@ -156,7 +156,7 @@ inline T load_blocking(volatile T *ptr)
     //
     // this code provides a blocking load by doing the following:
     // - issue a LOAD transaction to the address
-    //     - actual load that was requested
+    //     - actual load that was requested (lw for 32-bit, lhu for 16-bit)
     // - issue an instruction that requires the data from the LOAD transaction
     //     - block the pipeline until the LOAD transaction completes
     // - memory clobber
@@ -164,12 +164,24 @@ inline T load_blocking(volatile T *ptr)
 
     std::uint32_t raw;
 
-    asm volatile(
-        "lw %[raw], (%[ptr])\n\t"
-        "and %[raw], %[raw], %[raw]"
-        : [raw] "=r"(raw)
-        : [ptr] "r"(ptr)
-        : "memory");
+    if constexpr (sizeof(T) == sizeof(std::uint16_t))
+    {
+        asm volatile(
+            "lhu %[raw], (%[ptr])\n\t"
+            "and %[raw], %[raw], %[raw]"
+            : [raw] "=r"(raw)
+            : [ptr] "r"(ptr)
+            : "memory");
+    }
+    else
+    {
+        asm volatile(
+            "lw %[raw], (%[ptr])\n\t"
+            "and %[raw], %[raw], %[raw]"
+            : [raw] "=r"(raw)
+            : [ptr] "r"(ptr)
+            : "memory");
+    }
 
     T val;
     std::memcpy(&val, &raw, sizeof(T)); // trickery to return T loaded into register
@@ -646,6 +658,22 @@ constexpr std::uint32_t get_dest_max_tiles()
 }
 
 /**
+ * @brief Runtime variant of get_dest_max_tiles for assert sites. Reads dest
+ *        accumulation mode from ALU_ACC_CTRL_Fp32_enabled rather than a
+ *        template parameter. Only ever evaluated inside LLK_ASSERT (compiled
+ *        out in production via sizeof).
+ */
+template <DstSync SYNC_MODE, DstTileShape TILE_SHAPE>
+inline std::uint32_t get_dest_max_tiles_rt()
+{
+    const bool accum_mode = (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0;
+    const std::uint32_t dest_register_size =
+        SYNC_MODE == DstSync::SyncHalf ? (accum_mode ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                       : (accum_mode ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+    return dest_register_size >> DstTileSizeLog2[static_cast<int>(TILE_SHAPE)];
+}
+
+/**
  * @brief Returns the maximum number of tiles that fit in the packer's dest region
  *        based on the currently configured W-stride (read from the hardware config register).
  *
@@ -654,11 +682,11 @@ constexpr std::uint32_t get_dest_max_tiles()
  * even when kernels reconfigure the stride for non-standard tile dimensions (e.g. 8x32).
  *
  * Byte capacity of the dest sync region (DEST_REGISTER_{HALF,FULL}_SIZE_BYTES) is constant
- * regardless of ACCUM_MODE because FP32 halves the row count but doubles the datum size,
+ * regardless of dest accumulation mode because FP32 halves the row count but doubles the datum size,
  * which cancels out against the doubled x_stride already baked into the configured W-stride.
  * W-stride from the packer config is in the same byte-oriented addressing units.
  */
-template <DstSync SYNC_MODE, bool ACCUM_MODE>
+template <DstSync SYNC_MODE>
 __attribute__((noinline)) std::uint32_t get_pack_dest_max_tiles()
 {
     constexpr std::uint32_t dest_sync_region_size_bytes = SYNC_MODE == DstSync::SyncHalf ? DEST_REGISTER_HALF_SIZE_BYTES : DEST_REGISTER_FULL_SIZE_BYTES;

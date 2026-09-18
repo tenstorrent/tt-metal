@@ -657,3 +657,24 @@ def test_graph_capture_inactive_with_open_device(device):
     assert (
         not ttnn.graph.is_graph_capture_active()
     ), "is_graph_capture_active() should be False after end_graph_capture()"
+
+
+def test_graph_capture_records_program_factory(device):
+    torch_input = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+    _ = ttnn.relu(tt_input)
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    factory_nodes = [
+        node
+        for node in captured_graph
+        if node.get("node_type") == "function_start" and "program_factory_type" in node.get("params", {})
+    ]
+    assert factory_nodes, "Expected a device-op function_start with program_factory_type"
+    for node in factory_nodes:
+        params = node["params"]
+        assert "::" in params["program_factory_type"]
+        assert isinstance(params["program_factory_index"], int)
+        assert isinstance(params["program_cache_hit"], bool)

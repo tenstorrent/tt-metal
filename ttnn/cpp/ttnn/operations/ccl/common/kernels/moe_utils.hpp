@@ -9,10 +9,32 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "api/dataflow/noc.h"
 #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 namespace ttnn::operations::ccl::common {
+
+// Multicast a Semaphore<>'s local value to a rectangle with proper coordinate ordering for
+// NOC 0 vs NOC 1 (same policy as get_safe_multicast_noc_addr applies to raw addresses).
+// NOC 0: start = (min_x, min_y), end = (max_x, max_y)
+// NOC 1: start = (max_x, max_y), end = (min_x, min_y) - coordinates need to be swapped
+template <NocOptions opts = NocOptions::DEFAULT, typename SemaphoreT>
+FORCE_INLINE void set_multicast_safe(
+    SemaphoreT& sem,
+    const Noc& noc,
+    uint32_t noc_x_start,
+    uint32_t noc_y_start,
+    uint32_t noc_x_end,
+    uint32_t noc_y_end,
+    uint32_t num_dests,
+    bool linked = false) {
+    if (noc.get_noc_id() == 0) {
+        sem.template set_multicast<opts>(noc, noc_x_start, noc_y_start, noc_x_end, noc_y_end, num_dests, linked);
+    } else {
+        sem.template set_multicast<opts>(noc, noc_x_end, noc_y_end, noc_x_start, noc_y_start, num_dests, linked);
+    }
+}
 
 enum class Polarity : uint8_t {
     NEGATIVE,
@@ -1053,6 +1075,48 @@ inline void fabric_send_chip_sparse_multicast_noc_unicast_1d_in_direction(
         size_bytes,
         alignment,
         offset);
+}
+
+// Sparse multicast that delivers one payload to a flat, hop-ordered list of destination pages, grouped
+// per writing chip by counts[]: chip c receives counts[c] pages, so a single chip can be written multiple
+// pages. dest_pages must be ordered by ascending hop distance (nearest first) with each chip's pages
+// contiguous, matching counts[] (num_chips entries, sum == num_dests): the router advances write_idx by
+// counts[chip_idx] and chip_idx by one on each writing hop. Currently supports 1D Ring topology, single
+// direction.
+template <int32_t FabricMaxPacketSzBytes, typename AddrGenType, typename FabricConnectionsArrayType>
+inline void fabric_send_chip_sparse_multicast_noc_scatter_write_1d_in_direction(
+    AddrGenType addrgen,
+    FabricConnectionsArrayType& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint16_t fabric_mcast_hop_mask,
+    uint32_t fabric_direction,  // eth_chan_directions index
+    const uint32_t* dest_pages,
+    uint8_t num_dests,
+    const uint8_t* counts,
+    uint8_t num_chips,
+    uint32_t payload_l1_address,
+    int32_t size_bytes,
+    const uint32_t alignment,
+    uint32_t offset = 0) {
+    fabric_set_sparse_multicast_route((volatile tt_l1_ptr LowLatencyPacketHeader*)packet_header, fabric_mcast_hop_mask);
+
+    auto& fabric_connection = fabric_connections[fabric_direction];
+    while (size_bytes > 0) {
+        uint32_t curr_packet_size = std::min(static_cast<uint32_t>(FabricMaxPacketSzBytes), (uint32_t)size_bytes);
+        tt::tt_fabric::linear::to_noc_sparse_mcast_write(
+            align(curr_packet_size, alignment),
+            packet_header,
+            dest_pages,
+            num_dests,
+            counts,
+            num_chips,
+            addrgen,
+            offset);
+        perform_payload_send<true, true>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+        payload_l1_address += curr_packet_size;
+        offset += curr_packet_size;
+        size_bytes -= curr_packet_size;
+    }
 }
 
 // Calculate the distance between two mesh coordinates, with the packet travelling in a specific direction.

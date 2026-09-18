@@ -5,13 +5,15 @@
 #pragma once
 
 #include <stdint.h>
+#include "hostdev/debug_ring_buffer_common.h"
 
 enum ProgrammableCoreType {
     TENSIX = 0,
     ACTIVE_ETH = 1,
     IDLE_ETH = 2,
     DRAM = 3,
-    COUNT = 4,
+    DISPATCH = 4,
+    COUNT = 5,
 };
 
 enum class TensixProcessorTypes : uint8_t {
@@ -43,6 +45,18 @@ enum class TensixProcessorTypes : uint8_t {
 };
 
 enum class EthProcessorTypes : uint8_t { DM0 = 0, DM1 = 1, COUNT = 2 };
+
+enum class DispatchEngineProcessorTypes : uint8_t {
+    DM0 = 0,
+    DM1 = 1,
+    DM2 = 2,
+    DM3 = 3,
+    DM4 = 4,
+    DM5 = 5,
+    DM6 = 6,
+    DM7 = 7,
+    COUNT = 8
+};
 
 enum class DramProcessorTypes : uint8_t { DM0 = 0, COUNT = 1 };
 
@@ -99,3 +113,5 @@ constexpr uint8_t tensix_harvest_axis = 0x2;
 constexpr uint8_t subordinate_map_size = sizeof(subordinate_map_t);
 #define LOG_BASE_2_OF_DRAM_ALIGNMENT 6  // TODO: verify
 #define LOG_BASE_2_OF_L1_ALIGNMENT 4
+
+constexpr uint32_t debug_ring_buf_size = sizeof(debug_mpsc_ring_buf_msg_quasar_t);

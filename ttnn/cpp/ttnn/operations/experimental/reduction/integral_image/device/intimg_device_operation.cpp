@@ -31,7 +31,8 @@ IntImgDeviceOperation::spec_return_value_t IntImgDeviceOperation::compute_output
     auto output_layout{Layout::TILE};
     const auto& input_tensor = tensor_args;
     const auto& output_shape{input_tensor.logical_shape()};
-    return TensorSpec{output_shape, TensorLayout{input_tensor.dtype(), output_layout, input_tensor.memory_config()}};
+    return tt::tt_metal::TensorSpec{
+        output_shape, TensorLayout{input_tensor.dtype(), output_layout, input_tensor.memory_config()}};
 }
 
 IntImgDeviceOperation::tensor_return_value_t IntImgDeviceOperation::create_output_tensors(

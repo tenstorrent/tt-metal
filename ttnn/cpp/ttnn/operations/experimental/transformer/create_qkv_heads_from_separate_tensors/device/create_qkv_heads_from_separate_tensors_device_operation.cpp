@@ -198,13 +198,13 @@ CreateQKVHeadsSeparateTensorsDeviceOperation::compute_output_specs(
         operation_attributes.output_mem_config.buffer_type(),
         v_spec);
 
-    auto out_tensor_q = TensorSpec(
+    auto out_tensor_q = tt::tt_metal::TensorSpec(
         q_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_q));
-    auto out_tensor_k = TensorSpec(
+    auto out_tensor_k = tt::tt_metal::TensorSpec(
         k_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_k));
-    auto out_tensor_v = TensorSpec(
+    auto out_tensor_v = tt::tt_metal::TensorSpec(
         v_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), mem_config_v));
     return std::make_tuple(out_tensor_q, out_tensor_k, out_tensor_v);

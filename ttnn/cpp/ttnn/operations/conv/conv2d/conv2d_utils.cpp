@@ -132,7 +132,7 @@ CoreCoord get_output_compute_grid_size(
             conv_config.core_grid.has_value(),
             "When override_output_sharding_config is set to true, core_grid must have a value.");
         TT_FATAL(
-            input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::BLOCK_SHARDED,
+            input_parallel_config.shard_scheme == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
             "Output sharding config override is only supported for BLOCK_SHARDED layout.");
         auto override_compute_grid_size = conv_config.core_grid.value().bounding_box().grid_size();
         TT_FATAL(
@@ -245,13 +245,13 @@ ParallelConfig determine_output_parallel_config(
     ParallelConfig output_parallel_config = input_parallel_config;
     if (!is_mm_conv) {
         const uint32_t out_channels_ntiles = tt::div_up(out_channels, tt::constants::TILE_WIDTH);
-        if (input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::WIDTH_SHARDED) {
+        if (input_parallel_config.shard_scheme == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
             uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
             output_parallel_config.grid = tt::tt_metal::num_cores_to_corerangeset(
                 find_closest_largest_divisor_with_num_padding(out_channels_ntiles, max_num_cores),
                 compute_grid_size,
                 true);
-        } else if (input_parallel_config.shard_scheme == ttnn::TensorMemoryLayout::BLOCK_SHARDED) {
+        } else if (input_parallel_config.shard_scheme == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
             const uint32_t start_divisor_c =
                 block_shard_orientation == ShardOrientation::COL_MAJOR ? compute_grid_size.y : compute_grid_size.x;
             uint32_t num_cores_c = find_closest_largest_divisor_with_num_padding(out_channels_ntiles, start_divisor_c);
@@ -661,7 +661,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_an
     uint32_t out_channels,
     bool is_mm_conv) {
     const ttnn::Tensor& input_tensor = input_tensor_;  // tensor to return
-    bool input_tensor_on_device = tt::tt_metal::is_device_tensor(input_tensor_);
+    bool input_tensor_on_device = ttnn::is_device_tensor(input_tensor_);
     bool needs_shard_or_reshard = false;
     if (conv_config.override_sharding_config && conv_config.reshard_if_not_optimal) {
         TT_ASSERT(
@@ -817,7 +817,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     bool is_mm_conv,
     bool auto_shard) {
     ttnn::Tensor input_tensor = input_tensor_;  // tensor to return
-    bool input_tensor_on_device = tt::tt_metal::is_device_tensor(input_tensor_);
+    bool input_tensor_on_device = ttnn::is_device_tensor(input_tensor_);
     auto compute_grid_size = device->compute_with_storage_grid_size();
 
     auto [input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard] =
@@ -842,16 +842,6 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     if (needs_shard_or_reshard) {
         uint32_t tensor_height = input_shape[2];
         uint32_t tensor_width = input_shape[3];
-        if (!input_tensor_on_device) {
-            if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
-                input_tensor = ttnn::pad(
-                    input_tensor,
-                    tt::tt_metal::Array4D(
-                        {input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
-                    tt::tt_metal::Array4D({0, 0, 0, 0}),
-                    0);
-            }
-        }
 
         // In case we are in auto sharded codepath and convolution maps to matmul
         // Skip sharding of the input tensor and run the matmul out of interleaved tensor.
@@ -880,8 +870,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                         tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
                     alignment = tt::tt_metal::Alignment{shard_spec.shape[0], shard_spec.shape[1]};
                 }
-                Tensor resharded_input_tensor = tt::tt_metal::create_device_tensor(
-                    TensorSpec(
+                Tensor resharded_input_tensor = ttnn::create_device_tensor(
+                    tt::tt_metal::TensorSpec(
                         input_tensor.logical_shape(),
                         tt::tt_metal::TensorLayout(
                             input_tensor.dtype(),
@@ -898,10 +888,78 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 input_tensor = resharded_input_tensor;
             }
         } else {
-            input_tensor = ttnn::to_device(
-                input_tensor, device, (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
+            auto pad_tensor = [&]() {
+                if (input_padded_shape[-2] != tensor_height || input_padded_shape[-1] != tensor_width) {
+                    input_tensor = ttnn::pad(
+                        input_tensor,
+                        ttnn::Array4D({input_shape[0], input_shape[1], input_padded_shape[-2], input_padded_shape[-1]}),
+                        ttnn::Array4D({0, 0, 0, 0}),
+                        0);
+                }
+            };
+
+            // if the input is row-major and the shard configuration is width/block sharded AND the physical shape of
+            // the tensor is not aligned with the shard shape, it is necessary to create an on-device tensor with the
+            // target alignment on-device. This edge case is required because
+            //
+            // - Using `ttnn::pad` changes the alignment on the tensor to its physical size, and the tensor spec
+            //   validation requires that `physical_shard_width % width_alignment == 0`
+            // - `physical_size.width() % page_shape.width() == 0`
+            if (input_tensor.logical_shape()[-1] % input_tensor_sharded_memory_config.shard_spec()->shape[1] != 0 &&
+                input_tensor.layout() == Layout::ROW_MAJOR &&
+                input_tensor_sharded_memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+                const auto& shard_spec = input_tensor_sharded_memory_config.shard_spec().value();
+                ttnn::MemoryConfig input_tensor_sharded_memory_config_to_layout = input_tensor_sharded_memory_config;
+                tt::tt_metal::Alignment alignment{shard_spec.shape[0], shard_spec.shape[1]};
+
+                input_tensor_sharded_memory_config_to_layout = tt::tt_metal::MemoryConfig(
+                    input_tensor_sharded_memory_config_to_layout.memory_layout(),
+                    input_tensor_sharded_memory_config_to_layout.buffer_type(),
+                    tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
+                alignment = tt::tt_metal::Alignment{shard_spec.shape[0], shard_spec.shape[1]};
+
+                Tensor resharded_input_tensor = ttnn::create_device_tensor(
+                    tt::tt_metal::TensorSpec(
+                        input_tensor.logical_shape(),
+                        tt::tt_metal::TensorLayout(
+                            input_tensor.dtype(),
+                            tt::tt_metal::PageConfig(input_tensor.layout()),
+                            input_tensor_sharded_memory_config_to_layout,
+                            alignment)),
+                    device);
+
+                input_tensor = ttnn::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
+
+                ttnn::to_memory_config(
+                    input_tensor, input_tensor_sharded_memory_config_to_layout, std::nullopt, resharded_input_tensor);
+                input_tensor = resharded_input_tensor;
+            } else {
+                // if the result is height-sharded it is safe to perform the padding before the
+                // sharding operation
+                //
+                // if the result is width/block-sharded, the padding operation must be performed after --
+                // otherwise the padding might change alignment for row-major tensors, which would've caused
+                // the sharding failure, due to assertion in `RowMajorPageConfig::validate_alignment`
+                const bool can_pre_pad =
+                    input_tensor_sharded_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+                    input_tensor.layout() == Layout::TILE;
+
+                if (can_pre_pad) {
+                    pad_tensor();
+                }
+
+                input_tensor = ttnn::to_device(
+                    input_tensor,
+                    device,
+                    (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
+
+                if (!can_pre_pad) {
+                    pad_tensor();
+                }
+            }
         }
     }
+
     return {input_tensor, parallel_config, output_parallel_config};
 }
 
@@ -1424,7 +1482,7 @@ ttnn::Tensor fold_tensor(
 
     // Move to device if needed
     ttnn::Tensor tensor_on_device = tensor;
-    if (!tt::tt_metal::is_device_tensor(tensor_on_device)) {
+    if (!ttnn::is_device_tensor(tensor_on_device)) {
         tensor_on_device = ttnn::to_device(tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
     }
 

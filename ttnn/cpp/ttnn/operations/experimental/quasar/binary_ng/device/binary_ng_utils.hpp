@@ -129,15 +129,36 @@ struct AllShardVolumes {
 };
 
 std::optional<AllShardVolumes> get_shard_volumes(
-    const TensorSpec& a, const std::optional<TensorSpec>& b, const TensorSpec& c);
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c);
 
-const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec);
+const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);
 
-bool is_uneven(const TensorSpec& t);
+bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
-bool is_native_L1_sharding(const TensorSpec& a, const std::optional<TensorSpec>& b, const MemoryConfig& c);
+bool is_native_L1_sharding(
+    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c);
 
 ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b);
 
 MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const ttnn::Shape& shape_b);
+
+// Env-driven tuning for ProgramFactoryQuasarNative, read once per process. R/C/W set KernelSpec
+// num_threads AND gate admission: matches_quasar_native_slice rejects shapes whose per-core tile count
+// does not divide by lcm(R,C,W), because the kernels' strided share assumes an exact split.
+struct NativeTuning {
+    bool implicit_sync = false;       // parsed and logged; NOT consumed -- the factory hardcodes
+                                      // explicit sync, so setting the env var changes nothing
+    uint32_t entries_per_thread = 2;  // per-thread ring depth; num_entries = this x max(producers, consumers)
+    uint32_t reader_threads = 1;      // R
+    uint32_t compute_threads = 1;     // C -- must be 1, 2 or 4
+    uint32_t writer_threads = 1;      // W
+    bool enabled = false;             // TTNN_QSR_NATIVE; 0 and unset both mean OFF
+};
+
+// Parsed once into a function-local static. Knobs are TTNN_QSR_{NATIVE, IMPLICIT_SYNC,
+// ENTRIES_PER_THREAD, READER_THREADS, COMPUTE_THREADS, WRITER_THREADS}. Topology invariants are
+// asserted only when `enabled`, so a bad knob cannot take down the fallback reference arm.
+const NativeTuning& native_tuning();
 }  // namespace ttnn::operations::experimental::quasar::binary_ng

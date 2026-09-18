@@ -32,10 +32,27 @@ on:
         description: "Enable LLK asserts"
         default: false
         type: boolean
+      per-test-timeout:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Max allowed timeout (minutes) for any individual test SKU entry in the
+          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
+          Empty skips the per-test ceiling check.
+      summary-scope:
+        required: false
+        type: string
+        default: ""
+        description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+    outputs:
+      matrix:
+        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)"
+        value: ${{ jobs.load-test-matrix.outputs.matrix }}
 
 jobs:
   load-test-matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.prepare.outputs.matrix }}
     env:
@@ -53,19 +70,25 @@ jobs:
         run: pip3 install PyYAML
       - name: Verify test timeouts against budget
         run: |
-          set -e
+          set -euo pipefail
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
+          extra=()
+          if [ -n "${{ inputs.per-test-timeout }}" ]; then
+            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
+          fi
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}"
+            "${{ inputs.test-category }}" \
+            "${extra[@]}"
       - name: Build unified test matrix based on enabled SKUs
         id: prepare
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            --event "${{ github.event_name }}"
 
   triage-tests:
     needs: load-test-matrix
@@ -114,11 +137,14 @@ jobs:
           auto-triage: false # Disable auto-triage because we need to run triage tests explicitly
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_reports
-          uv pip install -r tools/triage/requirements.txt
-          echo "${{ matrix.test-group.cmd }}"
-          ${{ matrix.test-group.cmd }}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            mkdir -p generated/test_reports
+            uv pip install -r tools/triage/requirements.txt
+            echo "${{ matrix.test-group.cmd }}"
+            ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -127,3 +153,20 @@ jobs:
       - name: Generate test annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
+      - name: 🤖 AI job summary
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries",
+              "scope": "${{ inputs.summary-scope }}",
+              "authoritative_job_status": ${{ matrix.test-group.authoritative_job_status }}
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}

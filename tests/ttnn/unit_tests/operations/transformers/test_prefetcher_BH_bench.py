@@ -54,6 +54,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
     ring_grid_cols as _ring_grid_cols,
     make_recv_contig_weight as _make_recv_contig_weight,
+    require_tensor_prefetcher,
 )
 
 
@@ -62,11 +63,7 @@ pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 @pytest.fixture(autouse=True)
 def _require_tensor_prefetcher(device):
-    """Skip unless programmable DRAM cores are available on this device."""
-    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
-        pytest.skip(
-            "programmable DRAM cores unavailable (need Blackhole, firmware >= 19.12.0.0, and either no harvested DRAM channels or a single device)"
-        )
+    require_tensor_prefetcher(device)
 
 
 def _select_num_dram_banks(available_banks: int) -> int:
@@ -509,9 +506,9 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
         ring positions [b, b+num_banks, b+2*num_banks, ...]. Under BDS round-robin,
         bank b's slab s == shard (b + s*num_banks), so this delivers shard r to ring
         position r (PCC-verified below).
-      - GCB built via create_global_circular_buffer_with_dram_senders (the _for_matmul_1d
-        wrapper asserts a K-row-major single-wide-shard-per-bank layout, which recv-contig
-        is not; the underlying GCB object is identical).
+      - GCB built via create_global_circular_buffer_for_matmul_1d, which auto-detects the
+        weight's DRAM layout (here receiver-contiguous NdShardSpec) and sizes/builds the GCB
+        accordingly.
     """
     _apply_shape(shape)
 
@@ -628,13 +625,13 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     # Centralized recv-contig GCB builder: validates the (program_config, weight, bank_to_receivers)
     # triple (num_shards == ring_size, K % ring_size == 0, per_core_N == per-receiver N) and sizes/builds
     # the GCB in one place.
-    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d_recv_contig(
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
         device,
         [cc_program_config],
         [tt_weight],
         bank_to_receivers,
         gcb_size,
-        dual_senders_per_bank=dual_senders,
+        support_multi_receiver_shards=not dual_senders,
     )
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=(_M, _N // ring_size),
@@ -676,7 +673,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     # Centralized recv-contig param + cross-check: returns the validated block_count
     # (== ring_size) and TT_FATALs on a weight/program_config/gcb mismatch.
     block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(cc_program_config, tt_weight, gcb)
-    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.start_tensor_prefetcher(device)
     ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(tt_weight, block_count)] * num_prefetch_layers,

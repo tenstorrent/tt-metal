@@ -47,20 +47,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.num_faces_A,     // in0
         params.PARTIAL_FACE_B,  // in1
         params.PARTIAL_FACE_A); // in0
-    for (std::uint32_t j = 0; j < params.KT_DIM; j++)
+    for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
-        _llk_unpack_AB_matmul_<>(
-            L1_ADDRESS(params.buffer_A[0]),
-            L1_ADDRESS(params.buffer_B[0]),
-            j,
-            j * params.CT_DIM,
-            params.TILE_SIZE_UNPACK_B,
-            params.TILE_SIZE_UNPACK_A,
-            params.PARTIAL_FACE_B, // in1
-            params.PARTIAL_FACE_A, // in0
-            params.CT_DIM,
-            params.RT_DIM,
-            params.KT_DIM);
+        for (std::uint32_t j = 0; j < params.KT_DIM; j++)
+        {
+            _llk_unpack_AB_matmul_<>(
+                L1_ADDRESS(params.buffer_A[0]),
+                L1_ADDRESS(params.buffer_B[0]),
+                j,
+                j * params.CT_DIM,
+                params.TILE_SIZE_UNPACK_B,
+                params.TILE_SIZE_UNPACK_A,
+                params.PARTIAL_FACE_B,
+                params.PARTIAL_FACE_A,
+                params.CT_DIM,
+                params.RT_DIM,
+                params.KT_DIM);
+        }
     }
 }
 
@@ -88,17 +91,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.RT_DIM);
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_wait_for_dest_available_<dest_sync>();
-    LLK_ASSERT(
-        (get_dest_max_matmul_tiles(params.DST_INDEX, params.CT_DIM, params.RT_DIM) <
-         get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-        "Block tile index exceeds maximum destination tiles for matmul");
-    for (std::uint32_t j = 0; j < params.KT_DIM; j++)
+    for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
-        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(params.DST_INDEX, params.CT_DIM, params.RT_DIM);
-    }
+        _llk_math_wait_for_dest_available_<dest_sync>();
+        LLK_ASSERT(
+            (params.NUM_TILES_IN_BLOCK <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+            "Matmul block exceeds destination capacity");
+        for (std::uint32_t j = 0; j < params.KT_DIM; j++)
+        {
+            _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(params.DST_INDEX, params.CT_DIM, params.RT_DIM);
+        }
 
-    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif
@@ -125,14 +130,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
         formats.pack_dst, params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_packer_wait_for_math_done_();
-    for (std::uint32_t i = 0; i < params.TILE_CNT; i++)
+    for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
-        const std::uint32_t tile_index = params.DST_INDEX + i;
-        LLK_ASSERT((tile_index < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "tile_index exceeds max dest tiles");
-        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, L1_ADDRESS(params.buffer_Res[i]));
+        _llk_packer_wait_for_math_done_();
+        for (std::uint32_t tile = 0; tile < params.NUM_TILES_IN_BLOCK; ++tile)
+        {
+            const std::uint32_t result_tile = block * params.NUM_TILES_IN_BLOCK + tile;
+            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(params.DST_INDEX + tile, L1_ADDRESS(params.buffer_Res[result_tile]));
+        }
+        _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
-    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 
 #endif

@@ -39,7 +39,9 @@ void bind_all_to_all_async_generic(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for buffers.
             topology (ttnn.Topology, optional): Network topology to use. Defaults to ttnn.Topology.Ring.
             subdevice_id (SubDeviceId, optional): Target specific subdevice for the operation.
-            cluster_axis (int, optional): The axis along which to cluster the communication.
+            cluster_axis (int, optional): The axis along which to cluster the communication. Required on a
+                FABRIC_2D mesh, where packets are injected through the routing-table-selected compass
+                connection along this axis (a logical row or column on LoudBox / Galaxy).
 
         Returns:
             ttnn.Tensor: Output tensor containing redistributed data.

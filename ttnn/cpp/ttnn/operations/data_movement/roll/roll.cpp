@@ -17,8 +17,8 @@ namespace ttnn {
 
 ttnn::Tensor roll(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int>& shifts,
-    const ttnn::SmallVector<int>& input_dims,
+    const ttsl::SmallVector<int>& shifts,
+    const ttsl::SmallVector<int>& input_dims,
     const std::optional<MemoryConfig>& memory_config) {
     ttnn::Tensor result = input_tensor;
     auto size = result.logical_shape();
@@ -49,7 +49,7 @@ ttnn::Tensor roll(
         adjusted_shifts[i] = ((shift % shift_size) + shift_size) % shift_size;
     }
 
-    const ttnn::SmallVector<int> stride_vector(num_dims, 1);
+    const ttsl::SmallVector<int> stride_vector(num_dims, 1);
 
     // Sharded inputs use the native sharded roll device op, applied one dim at a time. A
     // tilized roll is native only when shifts on the last two dims are tile-aligned (a
@@ -70,6 +70,22 @@ ttnn::Tensor roll(
                     dim += num_dims;
                 }
                 if ((dim == num_dims - 1 || dim == num_dims - 2) && (adjusted_shifts[i] % tile_dim) != 0) {
+                    native_ok = false;
+                    break;
+                }
+            }
+        } else {
+            // DRAM RM reader stages sources in `src_base[2]`; higher-dim rolls whose shard band
+            // straddles an outer-dim period can need 3+ sources → route via interleaved.
+            for (size_t i = 0; i < adjusted_shifts.size(); ++i) {
+                int dim = input_dims[i];
+                if (dim < 0) {
+                    dim += num_dims;
+                }
+                if (ttnn::prim::dram_rm_roll_needs_extra_source_shards(
+                        input_tensor,
+                        static_cast<uint32_t>(adjusted_shifts[i]),
+                        static_cast<int32_t>(dim))) {
                     native_ok = false;
                     break;
                 }
@@ -97,15 +113,23 @@ ttnn::Tensor roll(
             return result;
         }
 
-        // Sub-tile rotation must move elements inside tiles: untilize, roll, tilize, all
-        // staying sharded in L1.
-        ttnn::Tensor rm = ttnn::untilize(input_tensor, native_mem_config);
-        ttnn::Tensor rolled = roll(rm, shifts, input_dims);
-        ttnn::Tensor retiled = ttnn::tilize(rolled, native_mem_config, input_tensor.dtype());
-        if (output_mem_config != native_mem_config) {
-            return ttnn::to_memory_config(retiled, output_mem_config, std::nullopt);
+        ttnn::Tensor rolled;
+        if (is_tile) {
+            // Sub-tile rotation must move elements inside tiles: untilize, roll, tilize, all
+            // staying sharded in L1.
+            ttnn::Tensor rm = ttnn::untilize(input_tensor, native_mem_config);
+            ttnn::Tensor rolled_rm = roll(rm, shifts, input_dims);
+            rolled = ttnn::tilize(rolled_rm, native_mem_config, input_tensor.dtype());
+        } else {
+            // RM sharded fallback: interleaved DRAM round-trip. Recurses into the interleaved
+            // slice+concat branch below, then reshards back to the caller's requested config.
+            ttnn::Tensor interleaved = ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG, std::nullopt);
+            rolled = roll(interleaved, shifts, input_dims);
         }
-        return retiled;
+        if (output_mem_config != rolled.memory_config()) {
+            return ttnn::to_memory_config(rolled, output_mem_config, std::nullopt);
+        }
+        return rolled;
     }
 
     for (size_t i = 0; i < adjusted_shifts.size(); ++i) {
@@ -121,8 +145,8 @@ ttnn::Tensor roll(
             continue;
         }
 
-        ttnn::SmallVector<int> start_left(num_dims, 0), end_left;
-        ttnn::SmallVector<int> start_right(num_dims, 0), end_right;
+        ttsl::SmallVector<int> start_left(num_dims, 0), end_left;
+        ttsl::SmallVector<int> start_right(num_dims, 0), end_right;
 
         for (int j = 0; j < num_dims; ++j) {
             end_left.push_back(size[j]);
@@ -152,8 +176,8 @@ ttnn::Tensor roll(const ttnn::Tensor& input_tensor, const int shift, const std::
         !input_tensor.is_sharded(),
         "ttnn::roll without dims does not support sharded inputs. Convert to interleaved first.");
 
-    ttnn::SmallVector<int> shifts = {shift};
-    ttnn::SmallVector<int> dims = {1};  // Rolling will happen on dimension 1 after flattening
+    ttsl::SmallVector<int> shifts = {shift};
+    ttsl::SmallVector<int> dims = {1};  // Rolling will happen on dimension 1 after flattening
 
     auto original_shape = input_tensor.logical_shape();
 
@@ -178,8 +202,8 @@ ttnn::Tensor roll(
     const int shift,
     const int dim,
     const std::optional<MemoryConfig>& memory_config) {
-    ttnn::SmallVector<int> shifts = {shift};
-    ttnn::SmallVector<int> dims = {dim};
+    ttsl::SmallVector<int> shifts = {shift};
+    ttsl::SmallVector<int> dims = {dim};
 
     return roll(input_tensor, shifts, dims, memory_config);
 }

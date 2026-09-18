@@ -57,7 +57,7 @@ on:
 
 jobs:
   determine-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     outputs:
       run-galaxy: ${{ steps.logic.outputs.run-galaxy }}
       run-t3k: ${{ steps.logic.outputs.run-t3k }}
@@ -117,7 +117,7 @@ jobs:
     secrets: inherit
     with:
       tracy: true
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}

@@ -1,0 +1,314 @@
+name: "[internal] LLK ttsim weekly impl"
+
+# Runs the LLK Python test suite against the ttsim functional simulator on hardware-less
+# runners, one leg per simulator arch (tests/pipeline_reorg/llk_ttsim_weekly.yaml, budgets
+# under llk.weekly). Simulator only — there is no silicon leg.
+#
+# ttsim is still under active development so many tests are expected to fail: this pipeline is
+# strictly *informational*. The regression step is continue-on-error, so a leg never surfaces a
+# failed job status, and no GitHub check is published (a pass/fail check would mislead either
+# way while ttsim ISA coverage grows in). The uploaded HTML report is the deliverable; the job
+# summary carries the current pass/fail/skip counts.
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+        description: "LLK CI image to run the suite in"
+      enabled-skus:
+        required: false
+        type: string
+        default: "ALL_SKUS_IN_TESTS"
+        description: "Comma-separated SKUs (see .github/sku_config.yaml), or ALL_SKUS_IN_TESTS"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test (default: HEAD)"
+
+# No `checks: write` — see the informational note above.
+permissions:
+  contents: read
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_ttsim_weekly.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Verify test timeouts against budget
+        run: |
+          set -e
+          python3 .github/scripts/utils/verify_time_budget.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            ./.github/time_budget.yaml \
+            "weekly"
+      - name: Build test matrix based on enabled SKUs
+        id: build-matrix
+        run: |
+          python3 .github/scripts/utils/prepare_test_matrix.py \
+            ${{ env.TESTS_YAML_PATH }} \
+            "${{ inputs.enabled-skus }}" \
+            ./.github/sku_config.yaml
+
+  fetch-ttsim:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.sim-libs != '[]' }}
+    runs-on: ubuntu-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        lib: ${{ fromJson(needs.load-test-matrix.outputs.sim-libs) }}
+    concurrency:
+      group: ttsim-lib-${{ github.run_id }}-${{ matrix.lib }}
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout fetch-ttsim action and pinned ttsim version
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github/actions/fetch-ttsim
+            tt_metal/ttsim-version
+          sparse-checkout-cone-mode: false
+          ref: ${{ inputs.ref || github.sha }}
+      - name: ⬇️  Fetch ttsim
+        uses: ./.github/actions/fetch-ttsim
+        timeout-minutes: 10
+        with:
+          lib: ${{ matrix.lib }}
+
+  llk-ttsim-weekly:
+    needs: [load-test-matrix, fetch-ttsim]
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' && needs.fetch-ttsim.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      options: "--label runner-mode=sim"
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      # The LLK arch name (wormhole / blackhole / quasar) follows from the SKU's simulator
+      # binary, which prepare_test_matrix.py copies into every matrix entry — so the test YAML
+      # does not carry an arch field of its own. It names the report artifact too.
+      - name: Resolve ttsim arch
+        id: arch
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.test-group.ttsim_lib }}" in
+            libttsim_wh*)  arch=wormhole ;;
+            libttsim_bh*)  arch=blackhole ;;
+            libttsim_qsr*) arch=quasar ;;
+            *) echo "::error::Cannot derive an LLK arch from ttsim_lib '${{ matrix.test-group.ttsim_lib }}'."; exit 1 ;;
+          esac
+          echo "Resolved ${{ matrix.test-group.sku }} -> $arch"
+          echo "name=$arch" >> "$GITHUB_OUTPUT"
+
+      # Required to compile LLK ELFs even under the simulator.
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests
+        run: ./setup_testing_env.sh
+
+      # `${{ github.workspace }}` is resolved by the runner on the *host* before this
+      # containerized job starts, so it evaluates to the host bind-mount source
+      # (/home/runner/work/tt-metal/tt-metal) rather than the path the container actually
+      # sees it at (/__w/tt-metal/tt-metal). Only the $GITHUB_WORKSPACE env var, read at
+      # runtime by a step executing inside the container, gets the translated path — so
+      # capture it here instead of passing the github.workspace expression straight through.
+      - name: Resolve in-container workspace path
+        id: workspace
+        shell: bash
+        run: echo "path=$GITHUB_WORKSPACE" >> "$GITHUB_OUTPUT"
+
+      # Installs <root>/sim/libttsim.so + soc_descriptor.yaml and exports TT_METAL_SIMULATOR.
+      # run_ttsim_regression.sh trusts a pre-exported TT_METAL_SIMULATOR and skips its own
+      # download, so the simulator comes from tt_metal/ttsim-version like every other sim
+      # pipeline rather than from tt_metal/tt-llk/tests/ttsim-version.
+      - name: ⬇️  Setup TTSim
+        uses: ./.github/actions/setup-ttsim
+        timeout-minutes: 5
+        with:
+          sku: ${{ matrix.test-group.sku }}
+          root: ${{ steps.workspace.outputs.path }}
+
+      # continue-on-error: ttsim is WIP and many tests are expected to fail; the HTML report is
+      # the deliverable, not a green check.
+      - name: ${{ matrix.test-group.name }}
+        id: regression
+        shell: bash
+        continue-on-error: true
+        # CHIP_ARCH has no script flag: helpers/chip_architecture.py reads it from the
+        # environment at import so the suite does not probe for real silicon.
+        env:
+          CHIP_ARCH: ${{ steps.arch.outputs.name }}
+        run: |
+          ${{ matrix.test-group.cmd }} --architecture ${{ steps.arch.outputs.name }}
+
+      # Rename the timestamped outputs to stable per-arch names so the artifact has predictable
+      # filenames (the script writes ttsim_<timestamp>.{xml,html} plus latest.* symlinks, which
+      # don't survive artifact upload cleanly). The ttsim-version pin is copied alongside so the
+      # report records which simulator produced it.
+      - name: Stage report artifact
+        if: always()
+        shell: bash
+        env:
+          ARCH: ${{ steps.arch.outputs.name }}
+        run: |
+          set -euo pipefail
+          RESULTS_DIR="${GITHUB_WORKSPACE}/${{ env.LLK_PATH }}/tests/python_tests/ttsim_results"
+          ARTIFACT_DIR="${GITHUB_WORKSPACE}/ttsim-report-${ARCH}"
+          mkdir -p "${ARTIFACT_DIR}"
+          if [[ -f "${RESULTS_DIR}/latest.xml" ]]; then
+            cp -L "${RESULTS_DIR}/latest.xml"  "${ARTIFACT_DIR}/ttsim-${ARCH}.xml"
+          fi
+          if [[ -f "${RESULTS_DIR}/latest.html" ]]; then
+            cp -L "${RESULTS_DIR}/latest.html" "${ARTIFACT_DIR}/ttsim-${ARCH}.html"
+          fi
+          # Record how many tests were *enumerated* (collected) so downstream jobs can compute
+          # crashed = enumerated − finished without re-running collection. A tiny count file
+          # keeps the artifact lean (the full node-id list can be tens of thousands of lines).
+          if [[ -f "${RESULTS_DIR}/latest.collected.txt" ]]; then
+            wc -l < "${RESULTS_DIR}/latest.collected.txt" | tr -d ' ' \
+              > "${ARTIFACT_DIR}/ttsim-${ARCH}.enumerated"
+          fi
+          cp "${GITHUB_WORKSPACE}/tt_metal/ttsim-version" "${ARTIFACT_DIR}/ttsim-version"
+          ls -la "${ARTIFACT_DIR}/"
+
+      - name: Upload ttsim report
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ttsim-report-${{ steps.arch.outputs.name }}
+          path: ttsim-report-${{ steps.arch.outputs.name }}/
+          if-no-files-found: warn
+
+      # Neutral summary: an informational markdown table into $GITHUB_STEP_SUMMARY rather than a
+      # pass/fail check, plus the same counts as step outputs.
+      - name: Summarize ttsim results
+        id: summarize
+        if: always()
+        shell: bash
+        env:
+          ARCH: ${{ steps.arch.outputs.name }}
+          XML_PATH: ttsim-report-${{ steps.arch.outputs.name }}/ttsim-${{ steps.arch.outputs.name }}.xml
+          ENUM_PATH: ttsim-report-${{ steps.arch.outputs.name }}/ttsim-${{ steps.arch.outputs.name }}.enumerated
+        run: |
+          set -euo pipefail
+
+          TTSIM_VERSION="$(tr -d '[:space:]' < "${GITHUB_WORKSPACE}/tt_metal/ttsim-version")"
+
+          if [[ ! -f "$XML_PATH" ]]; then
+            echo "No JUnit XML found at $XML_PATH — the regression likely never produced a report." >> "$GITHUB_STEP_SUMMARY"
+            for k in total ran passed failed errored skipped pass_pct enumerated finished crashed; do
+              echo "${k}=0" >> "$GITHUB_OUTPUT"
+            done
+            echo "status=no-report" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Pure-stdlib parse: the LLK CI image ships junitparser, but this step deliberately
+          # avoids the dependency so it also works from a slimmer image.
+          python3 - <<'PY' > /tmp/ttsim-summary.env
+          import os
+          import xml.etree.ElementTree as ET
+
+          path = os.environ["XML_PATH"]
+          root = ET.parse(path).getroot()
+          suites = root.iter("testsuite") if root.tag == "testsuites" else [root]
+
+          total = failed = skipped = 0
+          for s in suites:
+              total   += int(s.attrib.get("tests",    0) or 0)
+              failed  += int(s.attrib.get("failures", 0) or 0) + int(s.attrib.get("errors", 0) or 0)
+              skipped += int(s.attrib.get("skipped",  0) or 0)
+          ran = max(total - skipped, 0)
+          passed = max(ran - failed, 0)
+          pass_pct = (100.0 * passed / ran) if ran else 0.0
+
+          # "finished" = tests that produced a JUnit testcase (== total here); "crashed" =
+          # enumerated − finished, i.e. tests collected but whose worker died before recording a
+          # result. If enumerated is missing we leave both blank so the summary shows "n/a"
+          # rather than a wrong 0.
+          enumerated = None
+          enum_path = os.environ.get("ENUM_PATH", "")
+          if enum_path and os.path.isfile(enum_path):
+              try:
+                  enumerated = int(open(enum_path).read().strip())
+              except (ValueError, OSError):
+                  enumerated = None
+          finished = total
+          crashed = max(enumerated - finished, 0) if enumerated is not None else None
+
+          print(f"total={total}")
+          print(f"ran={ran}")
+          print(f"passed={passed}")
+          print(f"failed={failed}")
+          print(f"skipped={skipped}")
+          print(f"pass_pct={pass_pct:.1f}")
+          print(f"enumerated={'' if enumerated is None else enumerated}")
+          print(f"finished={finished}")
+          print(f"crashed={'' if crashed is None else crashed}")
+          print("status=parsed")
+          PY
+
+          cat /tmp/ttsim-summary.env >> "$GITHUB_OUTPUT"
+
+          # shellcheck source=/dev/null
+          source /tmp/ttsim-summary.env
+
+          enumerated_disp="${enumerated:-}"; [[ -z "$enumerated_disp" ]] && enumerated_disp="n/a"
+          crashed_disp="${crashed:-}";       [[ -z "$crashed_disp" ]] && crashed_disp="n/a"
+
+          {
+            echo "## ttsim regression: ${ARCH}"
+            echo ""
+            echo "Informational run. ttsim is under active development; failures here reflect simulator gaps, not tt-metal regressions."
+            echo ""
+            echo "| Metric | Value |"
+            echo "|---|---:|"
+            echo "| 🏷️ ttsim version | ${TTSIM_VERSION} |"
+            echo "| 🧮 Enumerated | ${enumerated_disp} |"
+            echo "| 🏁 Finished | ${finished} |"
+            echo "| ▶️ Ran | ${ran} |"
+            echo "| ✅ Passed | ${passed} |"
+            echo "| ❌ Failed | ${failed} |"
+            echo "| ⏩ Skipped | ${skipped} |"
+            echo "| 💥 Crashed | ${crashed_disp} |"
+            echo "| 📈 Pass rate | ${pass_pct}% |"
+            echo ""
+            echo "HTML report: available in the \`ttsim-report-${ARCH}\` artifact of this run."
+          } >> "$GITHUB_STEP_SUMMARY"

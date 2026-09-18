@@ -156,6 +156,10 @@
 #include "api/compute/eltwise_unary/where.h"
 #endif
 
+#if SFPU_OP_MAC_INCLUDE
+#include "api/compute/eltwise_unary/mac.h"
+#endif
+
 #if SFPU_OP_CLAMP_INCLUDE
 #include "api/compute/eltwise_unary/clamp.h"
 #endif
@@ -170,6 +174,10 @@
 
 #if SFPU_OP_HARDMISH_INCLUDE
 #include "api/compute/eltwise_unary/hardmish.h"
+#endif
+
+#if SFPU_OP_SOFTCAP_INCLUDE
+#include "api/compute/eltwise_unary/softcap.h"
 #endif
 
 #if SFPU_OP_LGAMMA_INCLUDE
@@ -198,6 +206,10 @@
 
 #if SFPU_OP_BINARY_DIV_INCLUDE
 #include "api/compute/eltwise_binary_sfpu.h"
+#endif
+
+#if SFPU_OP_BINARY_ATAN2_INCLUDE
+#include "api/compute/atan2.h"
 #endif
 
 #if SFPU_OP_BINARY_ADD_INT_INCLUDE

@@ -17,6 +17,7 @@ CharTokenizer::CharTokenizer(Vocabulary vocabulary) : m_vocabulary(std::move(voc
 
 std::vector<uint32_t> CharTokenizer::encode(const std::string& text) const {
     std::vector<uint32_t> tokens;
+    tokens.reserve(text.size());
     for (char chr : text) {
         auto chr_str = std::string(1, chr);
         auto it = m_vocabulary.find(chr_str);

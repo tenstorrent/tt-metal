@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_argmax_interleaved_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and this file is
+// retired, changes here likely belong in the fork too.
+
 #include "argmax_common.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"

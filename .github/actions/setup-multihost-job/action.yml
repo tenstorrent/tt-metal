@@ -1,0 +1,254 @@
+name: Setup Multihost Job
+description: >
+  Shared exabox multihost setup: download build/wheel artifacts into GITHUB_WORKSPACE,
+  rsync the entire workspace to all workers, extract the build archive and install the
+  wheel on every node via mpirun --pernode, run ttop-recovery (runner ConfigMap) to
+  IPMI-reset + validate the cluster, and sanity-check ttnn (and optionally /mnt/models).
+
+inputs:
+  build-artifact-name:
+    description: Name of the build artifact (.tar.zst)
+    required: true
+  wheel-artifact-name:
+    description: Name of the ttnn wheel artifact
+    required: true
+  artifacts-path:
+    description: "Deprecated: ignored (artifacts are now downloaded into GITHUB_WORKSPACE)"
+    required: false
+    default: ""
+  extra-pip-packages:
+    description: >
+      Extra packages to install alongside the ttnn wheel on every worker
+      (space-separated). Models e2e/unit pass pytest + pytest-timeout.
+    required: false
+    default: ""
+  check-mnt-models:
+    description: Verify /mnt/models is readable on every worker
+    required: false
+    default: "true"
+  cluster-validation-bin:
+    description: >
+      Path to run_cluster_validation (arg 1 to ttop-recovery). Must exist on
+      workers after unpack (default matches the ConfigMap script default).
+    required: false
+    default: build/tools/scaleout/run_cluster_validation
+  cabling-descriptor-path:
+    description: >
+      Cabling descriptor for ttop-recovery (arg 3). Defaults match the runner
+      ConfigMap script (/scaleout_configs/..., not /data/scaleout_configs/...).
+    required: false
+    default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto
+  deployment-descriptor-path:
+    description: Deployment descriptor for ttop-recovery (arg 4)
+    required: false
+    default: /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto
+  max-recovery-attempts:
+    description: Max ttop-ipmi-reset + validation attempts (arg 2 to ttop-recovery)
+    required: false
+    default: "10"
+  prefer-wheel-libs:
+    description: >
+      Prepend the wheel's ttnn/build/lib onto LD_LIBRARY_PATH before the tarball's
+      build/lib. True for a manylinux wheel (P&R); false for an inplace wheel (T1).
+    required: false
+    default: "false"
+  auto-triage:
+    description: >
+      Enable hang detection and tt-triage on workers. Off by default so
+      ttop-recovery is never armed unless a caller opts in after this action
+      (or via this input, which runs after recovery).
+    required: false
+    default: "false"
+  hang-detection-timeout:
+    description: Seconds without dispatch progress before tt-triage fires on the hung rank(s)
+    required: false
+    default: "5.0"
+  triage-output-dir:
+    description: >
+      NFS directory for per-host triage dumps (must be writable on workers).
+      Empty uses TRIAGE_OUTPUT_DIR from the job env, or
+      /ci/triage_output/<run>-<attempt>/<job>.
+    required: false
+    default: ""
+  triage-job-info:
+    description: Identity string written into each host's triage report dir when triage fires
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Download Build Artifact
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ${{ inputs.build-artifact-name }}
+        path: ${{ github.workspace }}
+
+    - name: Download Python Wheel
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ${{ inputs.wheel-artifact-name }}
+        path: ${{ github.workspace }}
+
+    - name: Install rsync
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt update && sudo apt-get install -y --no-install-recommends rsync
+        mpirun --pernode bash -c 'command -v rsync || sudo apt update && sudo apt-get install -y --no-install-recommends rsync'
+
+    - name: Create /home/user/tt-metal symlink on runner and workers
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Runner (local)
+        sudo mkdir -p /home/user
+        sudo ln -sfn "$GITHUB_WORKSPACE" /home/user/tt-metal
+        # Workers
+        mpirun --pernode bash -c '
+          sudo mkdir -p "$GITHUB_WORKSPACE" && sudo chown user "$GITHUB_WORKSPACE"
+          sudo mkdir -p /home/user
+          ln -sfn "$GITHUB_WORKSPACE" /home/user/tt-metal
+        '
+
+    - name: Rsync GITHUB_WORKSPACE to workers
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        mapfile -t workers < <(mpirun --pernode hostname | grep -v "$(hostname)" | sort -u)
+        echo "Syncing to workers: ${workers[*]}"
+
+        printf '%s\n' "${workers[@]}" | xargs -P 0 -I{} \
+          rsync -rltW --omit-dir-times --inplace --partial --chmod=777 -e 'ssh -l user -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' "$GITHUB_WORKSPACE/" "{}:${GITHUB_WORKSPACE}/"
+
+    - name: Update submodules on all workers
+      shell: bash
+      run: |
+        set -euo pipefail
+        mpirun --pernode git -C "$GITHUB_WORKSPACE" submodule update --init --recursive
+
+    - name: Extract build and install wheel on all nodes
+      shell: bash
+      env:
+        EXTRA_PIP_PACKAGES: ${{ inputs.extra-pip-packages }}
+      run: |
+        set -euo pipefail
+
+        BUILD_ARCHIVE="$GITHUB_WORKSPACE/ttm_any.tar.zst"
+        WHEEL=$(ls "$GITHUB_WORKSPACE"/ttnn-*.whl)
+
+        # Workspace (including artifacts) already on every node via rsync
+        tar --zstd -xf "$BUILD_ARCHIVE" -C "$GITHUB_WORKSPACE"
+        mpirun --pernode tar --zstd -xf "$BUILD_ARCHIVE" -C "$GITHUB_WORKSPACE"
+        mpirun --pernode uv pip install "$WHEEL" ${EXTRA_PIP_PACKAGES}
+
+    - name: Put the installed wheel's native libs first on LD_LIBRARY_PATH
+      if: ${{ inputs.prefer-wheel-libs == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        wheel_lib=$(mpirun --pernode bash -lc \
+          'ls -d /opt/venv/lib/python*/site-packages/ttnn/build/lib' | tr -d '\r' | sort -u) || true
+        if [ "$(printf '%s' "$wheel_lib" | grep -c '^')" -ne 1 ]; then
+          echo "::error::Expected one ttnn/build/lib under /opt/venv on the workers, got: ${wheel_lib:-none}"
+          exit 1
+        fi
+        echo "LD_LIBRARY_PATH=${wheel_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" >> "$GITHUB_ENV"
+
+    - name: Reset cards and validate cluster
+      shell: bash
+      working-directory: /tmp
+      env:
+        CLUSTER_VALIDATION: ${{ inputs.cluster-validation-bin }}
+        MAX_RECOVERY_ATTEMPTS: ${{ inputs.max-recovery-attempts }}
+        CABLING_DESCRIPTOR_PATH: ${{ inputs.cabling-descriptor-path }}
+        DEPLOYMENT_DESCRIPTOR_PATH: ${{ inputs.deployment-descriptor-path }}
+        # Pinned to the tarball alone: the validation binary is a cmake build-tree
+        # executable, so it must not pick up the wheel's separately-compiled copies that
+        # the previous step puts ahead of it for the test itself.
+        LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+      run: |
+        set -euo pipefail
+        [[ "$CLUSTER_VALIDATION" != /* ]] && CLUSTER_VALIDATION="$GITHUB_WORKSPACE/$CLUSTER_VALIDATION"
+        if ! command -v ttop-recovery >/dev/null 2>&1; then
+          echo "ERROR: ttop-recovery not on PATH (expected from multihost-ci runner ConfigMap)"
+          exit 1
+        fi
+        if [ ! -x "$CLUSTER_VALIDATION" ]; then
+          echo "ERROR: run_cluster_validation not found/executable at: $CLUSTER_VALIDATION"
+          echo "Did unpack/install finish before recovery?"
+          ls -la "$(dirname "$CLUSTER_VALIDATION")" 2>/dev/null || true
+          exit 1
+        fi
+        echo "Running ttop-recovery with cluster validation: $CLUSTER_VALIDATION"
+        ttop-recovery \
+          "$CLUSTER_VALIDATION" \
+          "$MAX_RECOVERY_ATTEMPTS" \
+          "$CABLING_DESCRIPTOR_PATH" \
+          "$DEPLOYMENT_DESCRIPTOR_PATH"
+
+    - name: Verify ttnn imports on workers
+      shell: bash
+      working-directory: /tmp
+      run: |
+        mpirun --pernode --tag-output bash -lc '
+          python3 -c "import ttnn; print(\"ttnn import: OK\")"
+          python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
+        '
+
+    - name: Check /mnt/models access on workers
+      if: ${{ inputs.check-mnt-models == 'true' }}
+      shell: bash
+      working-directory: /tmp
+      run: |
+        mpirun --pernode --tag-output bash -lc '
+          test -r /mnt/models
+        '
+
+    - name: Set up env vars for auto-triage
+      if: ${{ inputs.auto-triage == 'true' }}
+      shell: bash
+      env:
+        TRIAGE_JOB_INFO_INPUT: ${{ inputs.triage-job-info }}
+        TRIAGE_OUTPUT_DIR_INPUT: ${{ inputs.triage-output-dir }}
+        HANG_DETECTION_TIMEOUT: ${{ inputs.hang-detection-timeout }}
+      run: |
+        echo "Enabling detection of timeout on fast dispatch and automatically call tt-triage"
+        if [ -z "${TRIAGE_OUTPUT_DIR:-}" ]; then
+          if [ -n "$TRIAGE_OUTPUT_DIR_INPUT" ]; then
+            TRIAGE_OUTPUT_DIR="$TRIAGE_OUTPUT_DIR_INPUT"
+          else
+            TRIAGE_OUTPUT_DIR="/ci/triage_output/${{ github.run_id }}-${{ github.run_attempt }}/${{ github.job }}"
+          fi
+        fi
+        mkdir -p "$TRIAGE_OUTPUT_DIR"
+        echo "TRIAGE_OUTPUT_DIR=$TRIAGE_OUTPUT_DIR" >> "$GITHUB_ENV"
+
+        if [ -n "$TRIAGE_JOB_INFO_INPUT" ]; then
+          TRIAGE_JOB_INFO="$TRIAGE_JOB_INFO_INPUT"
+        else
+          TRIAGE_JOB_INFO="job: ${{ github.job }}"
+        fi
+        echo "TT_TRIAGE_JOB_INFO=$TRIAGE_JOB_INFO | runner: ${RUNNER_NAME:-unknown} | run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}" >> "$GITHUB_ENV"
+
+        TRIAGE_CMD='D="${TRIAGE_OUTPUT_DIR:-/tmp/tt_triage}/$(hostname)"; mkdir -p "$D" || D=/tmp; if [ -e "$D/.tt_triage_already_ran" ]; then echo "[auto-triage] triage already ran on $(hostname); skipping (cards are not reset between tests, so a second triage is unreliable)" >&2; else touch "$D/.tt_triage_already_ran"; printf "%s\n" "${TT_TRIAGE_JOB_INFO:-unknown leg}" > "$D/job_info.txt"; /opt/venv/bin/python3 "${TT_METAL_HOME:-/home/user/tt-metal}/tools/tt-triage.py" --disable-progress --path="$D/debug_bus_signal_groups.json" --triage-summary-path="$D/triage_summary.txt" --llm-output-path="$D/triage_llm_output.txt" 2>&1 | tee "$D/triage_output.txt" 1>&2; fi'
+
+        {
+          echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=$TRIAGE_CMD"
+          echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=$HANG_DETECTION_TIMEOUT"
+          echo "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1"
+          echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1"
+        } >> "$GITHUB_ENV"
+
+        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="$TRIAGE_CMD"
+        export TRIAGE_OUTPUT_DIR
+        mpirun --bind-to none --pernode --tag-output bash -lc '
+          ok=1
+          [ -n "$TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE" ] || { echo "triage hook not forwarded to this rank"; ok=0; }
+          [ -w "${TRIAGE_OUTPUT_DIR:-/nonexistent}" ] || { echo "TRIAGE_OUTPUT_DIR not writable here: ${TRIAGE_OUTPUT_DIR:-<unset>}"; ok=0; }
+          /opt/venv/bin/python3 -c "import ttexalens" 2>/dev/null || { echo "ttexalens missing from /opt/venv"; ok=0; }
+          [ "$ok" = 1 ] && echo "triage armed"
+        ' || echo "::warning::Could not verify triage arming on all hosts; a hang here may not produce triage output"
+
+        echo "Triage fires after ${HANG_DETECTION_TIMEOUT}s without dispatch progress"

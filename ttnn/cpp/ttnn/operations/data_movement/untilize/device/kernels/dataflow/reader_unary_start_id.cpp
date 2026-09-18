@@ -2,12 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_unary_start_id_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and this file is
+// retired, changes here likely belong in the fork too.
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
     // run-time args
@@ -24,13 +28,13 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    CircularBuffer cb_in(cb_id_in0);
+    DataflowBuffer dfb_in(cb_id_in0);
 
     uint32_t end_page_id = start_page_id + num_tiles;
     for (uint32_t page_id = start_page_id; page_id < end_page_id; ++page_id) {
-        cb_in.reserve_back(1);
-        noc.async_read(s, cb_in, tile_bytes, {.page_id = page_id, .offset_bytes = 0}, {.offset_bytes = 0});
+        dfb_in.reserve_back(1);
+        noc.async_read(s, dfb_in, tile_bytes, {.page_id = page_id, .offset_bytes = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_in.push_back(1);
+        dfb_in.push_back(1);
     }
 }

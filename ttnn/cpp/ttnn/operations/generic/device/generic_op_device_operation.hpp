@@ -17,6 +17,10 @@
 namespace ttnn::operations::generic {
 
 struct GenericOpDeviceOperation {
+    // This op never derives an address from a tensor: create_descriptor returns the caller's
+    // ProgramDescriptor verbatim, so resolving per-core addresses is the caller's job
+    static constexpr bool supports_per_core_allocation = true;
+
     using operation_attributes_t = generic::operation_attributes_t;
     using tensor_args_t = generic::tensor_args_t;
     using spec_return_value_t = generic::spec_return_value_t;

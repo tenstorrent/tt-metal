@@ -25,14 +25,14 @@ namespace {
 
 ttnn::Tensor slice_small_vector_wrapper(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int>& slice_start,
-    const ttnn::SmallVector<int>& slice_end,
-    const std::optional<ttnn::SmallVector<int>>& step,
+    const ttsl::SmallVector<int>& slice_start,
+    const ttsl::SmallVector<int>& slice_end,
+    const std::optional<ttsl::SmallVector<int>>& step,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value,
     const std::optional<CoreRangeSet>&& sub_core_grids) {
-    const auto step_value = step.value_or(ttnn::SmallVector<int>(slice_end.size(), 1));
+    const auto step_value = step.value_or(ttsl::SmallVector<int>(slice_end.size(), 1));
     return ttnn::slice(
         input_tensor,
         slice_start,
@@ -65,6 +65,9 @@ void bind_slice(nb::module_& mod) {
         Note:
             Strided slicing (``slice_step != 1``) is not supported for ``bfloat8_b`` tensors.
 
+            TILE layout tensors must use the standard 32x32 tile, and a pre-allocated ``output_tensor`` must
+            carry the same tile as the input.
+
         Returns:
             ttnn.Tensor: the output tensor.
     )doc";
@@ -80,7 +83,7 @@ void bind_slice(nb::module_& mod) {
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
-                const std::optional<ttnn::SmallVector<uint32_t>>&,
+                const std::optional<ttsl::SmallVector<uint32_t>>&,
                 const std::optional<MemoryConfig>&,
                 const std::optional<Tensor>&,
                 const std::optional<float>&,
@@ -118,7 +121,7 @@ void bind_slice(nb::module_& mod) {
             nb::arg("output_tensor") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()),
-        // Overload 3: SmallVector<int> version (int32_t template parameter)
+        // Overload 3: ttsl::SmallVector<int> version (int32_t template parameter)
         ttnn::overload_t(
             &slice_small_vector_wrapper,
             nb::arg("input_tensor"),

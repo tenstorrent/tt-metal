@@ -15,7 +15,6 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_workload.hpp>
@@ -333,7 +332,7 @@ int main(int argc, char** argv) {
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             1 /* num_command_queues */,
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+            tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config());
 
         const std::shared_ptr<tt_metal::distributed::MeshDevice>& device = mesh_device_map.at(pci_express_slot);
         uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);

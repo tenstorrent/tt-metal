@@ -83,7 +83,7 @@ void DropoutDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-TensorSpec DropoutDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec DropoutDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
@@ -95,7 +95,8 @@ TensorSpec DropoutDeviceOperation::compute_output_specs(
     }
 
     const auto output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+    return tt::tt_metal::TensorSpec(
+        output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
 }
 
 Tensor DropoutDeviceOperation::create_output_tensors(

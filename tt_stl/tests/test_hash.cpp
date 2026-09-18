@@ -40,14 +40,14 @@ std::string canonical_dims(const std::array<uint32_t, N>& dims) {
 
 // --- Regression: the exact collision from issue #45821 -------------------------------------
 
-TEST(HashCollisionTest, Issue45821_ShapesDoNotCollide) {
+TEST(HashCollisionTest, CPU_Issue45821_ShapesDoNotCollide) {
     // These two shapes flow through the same ttnn::permute path inside batch_norm; under the
     // old combiner they produced an identical 64-bit hash, so the second op wrongly hit the
     // first op's cached program.
     EXPECT_NE(hash_shape({3, 17, 1, 1}), hash_shape({1, 152, 1, 1}));
 }
 
-TEST(HashCollisionTest, Issue45821_TruncatedPrefixDoesNotCollide) {
+TEST(HashCollisionTest, CPU_Issue45821_TruncatedPrefixDoesNotCollide) {
     // The collision is already present at the 2-element prefix [3,17] vs [1,152] -- the trailing
     // [1, 1] is incidental. Pin the prefix too so a future regression is localized.
     EXPECT_NE(hash_shape({3, 17}), hash_shape({1, 152}));
@@ -55,7 +55,7 @@ TEST(HashCollisionTest, Issue45821_TruncatedPrefixDoesNotCollide) {
 
 // --- Order sensitivity ---------------------------------------------------------------------
 
-TEST(HashCollisionTest, OrderMatters) {
+TEST(HashCollisionTest, CPU_OrderMatters) {
     // A hash used as a cache key must distinguish permutations of the same multiset of dims;
     // otherwise e.g. a [2, 3] tensor and a [3, 2] tensor would share a program.
     EXPECT_NE(hash_shape({2, 3, 5}), hash_shape({5, 3, 2}));
@@ -64,7 +64,7 @@ TEST(HashCollisionTest, OrderMatters) {
 
 // --- Determinism ---------------------------------------------------------------------------
 
-TEST(HashCollisionTest, Deterministic) {
+TEST(HashCollisionTest, CPU_Deterministic) {
     // The same input must hash identically across calls (cache hits depend on it).
     EXPECT_EQ(hash_shape({3, 17, 1, 1}), hash_shape({3, 17, 1, 1}));
     EXPECT_EQ(
@@ -74,7 +74,7 @@ TEST(HashCollisionTest, Deterministic) {
 
 // --- Quality sweep: no collisions over realistic small 4-D shapes --------------------------
 
-TEST(HashCollisionTest, NoCollisionsOverSmall4DShapes) {
+TEST(HashCollisionTest, CPU_NoCollisionsOverSmall4DShapes) {
     // Sweep all 4-D shapes with each dim in [0, 40). The old combiner collided ~94k times over
     // this set; the splitmix64-based combiner must be collision-free here.
     constexpr uint32_t kMax = 40;
@@ -97,7 +97,7 @@ TEST(HashCollisionTest, NoCollisionsOverSmall4DShapes) {
 
 // --- Quality sweep: scalar pairs (the smallest structured keys) ----------------------------
 
-TEST(HashCollisionTest, NoCollisionsOverScalarPairs) {
+TEST(HashCollisionTest, CPU_NoCollisionsOverScalarPairs) {
     constexpr uint32_t kMax = 256;
     std::unordered_set<hash_t> seen;
     seen.reserve(kMax * kMax);
@@ -114,7 +114,7 @@ TEST(HashCollisionTest, NoCollisionsOverScalarPairs) {
 
 // Adversarial values: powers of two and values that differ only in high bits are exactly the
 // inputs that defeat shift-and-add combiners (the high bits never propagate down).
-TEST(HashCollisionTest, NoCollisionsOverHighBitAndPowerOfTwoShapes) {
+TEST(HashCollisionTest, CPU_NoCollisionsOverHighBitAndPowerOfTwoShapes) {
     std::unordered_set<uint32_t> unique_vals;
     for (uint32_t shift = 0; shift < 32; ++shift) {
         unique_vals.insert(1u << shift);          // powers of two
@@ -140,7 +140,7 @@ TEST(HashCollisionTest, NoCollisionsOverHighBitAndPowerOfTwoShapes) {
 
 // 64-bit keys (e.g. addresses, sizes) sharing low words but differing in the high word must not
 // collapse -- the old 32-bit-constant combiner under-mixed the high half.
-TEST(HashCollisionTest, DistinguishesHighWordOf64BitValues) {
+TEST(HashCollisionTest, CPU_DistinguishesHighWordOf64BitValues) {
     EXPECT_NE(
         hash_objects_with_default_seed(uint64_t{0x0000'0001'0000'0000ULL}),
         hash_objects_with_default_seed(uint64_t{0x0000'0002'0000'0000ULL}));
@@ -152,7 +152,7 @@ TEST(HashCollisionTest, DistinguishesHighWordOf64BitValues) {
 // leaves long runs of output bits untouched. We require every single-bit input flip to change
 // at least a quarter of the output bits (16/64) -- a loose bound a good mixer clears easily and
 // a shift-and-add combiner fails on the high input bits.
-TEST(HashCollisionTest, SingleBitFlipAvalanche) {
+TEST(HashCollisionTest, CPU_SingleBitFlipAvalanche) {
     const uint64_t base = 0x0123456789abcdefULL;
     const hash_t base_hash = hash_objects_with_default_seed(base);
     int worst = 64;
@@ -170,7 +170,7 @@ TEST(HashCollisionTest, SingleBitFlipAvalanche) {
 // The mixer must spread bits across the whole 64-bit space, not cluster small keys in a corner.
 // Hash a run of consecutive small integers and require the OR of all results to light up every
 // bit -- a combiner that only touches low bits (the old one, for small inputs) fails this.
-TEST(HashCollisionTest, SmallKeysCoverAllOutputBits) {
+TEST(HashCollisionTest, CPU_SmallKeysCoverAllOutputBits) {
     hash_t or_all = 0;
     hash_t and_all = ~hash_t{0};
     for (uint32_t i = 0; i < 4096; ++i) {
@@ -190,26 +190,26 @@ std::string canonical_shape(const std::vector<uint32_t>& dims) {
     return canonical_key(ttsl::Span<const uint32_t>(dims.data(), dims.size()));
 }
 
-TEST(CanonicalKeyTest, DistinguishesShapes) {
+TEST(CanonicalKeyTest, CPU_DistinguishesShapes) {
     // The shapes that collided under the old 64-bit hash (issue #45821) must be distinct as exact
     // keys regardless of the hash, so a collision can always be resolved to a correct (rebuild) miss.
     EXPECT_NE(canonical_shape({3, 17, 1, 1}), canonical_shape({1, 152, 1, 1}));
     EXPECT_NE(canonical_shape({3, 17}), canonical_shape({1, 152}));
 }
 
-TEST(CanonicalKeyTest, EqualForEqualInputs) {
+TEST(CanonicalKeyTest, CPU_EqualForEqualInputs) {
     EXPECT_EQ(canonical_shape({3, 17, 1, 1}), canonical_shape({3, 17, 1, 1}));
     EXPECT_EQ(canonical_key(uint32_t{42}, uint32_t{7}), canonical_key(uint32_t{42}, uint32_t{7}));
 }
 
-TEST(CanonicalKeyTest, OrderAndLengthSensitive) {
+TEST(CanonicalKeyTest, CPU_OrderAndLengthSensitive) {
     EXPECT_NE(canonical_shape({2, 3}), canonical_shape({3, 2}));
     // Length-prefixing prevents [1,2],[3] from encoding the same as [1],[2,3] etc.
     EXPECT_NE(canonical_shape({1, 2, 3}), canonical_shape({1, 2}));
     EXPECT_NE(canonical_shape({1, 1}), canonical_shape({1}));
 }
 
-TEST(CanonicalKeyTest, DistinguishesScalarsEnumsOptionals) {
+TEST(CanonicalKeyTest, CPU_DistinguishesScalarsEnumsOptionals) {
     EXPECT_NE(canonical_key(uint32_t{1}, uint32_t{2}), canonical_key(uint32_t{2}, uint32_t{1}));
     enum class E : int { A, B };
     EXPECT_NE(canonical_key(E::A), canonical_key(E::B));
@@ -220,7 +220,7 @@ TEST(CanonicalKeyTest, DistinguishesScalarsEnumsOptionals) {
 
 // std::vector<bool> is bit-packed: its iterator yields a proxy reference, not bool&, so it needs a
 // dedicated encoding branch (the generic vector branch fails to compile).
-TEST(CanonicalKeyTest, DistinguishesVectorBool) {
+TEST(CanonicalKeyTest, CPU_DistinguishesVectorBool) {
     EXPECT_EQ(
         canonical_key(std::vector<bool>{true, false, false}), canonical_key(std::vector<bool>{true, false, false}));
     EXPECT_NE(
@@ -230,7 +230,9 @@ TEST(CanonicalKeyTest, DistinguishesVectorBool) {
     // For each length 1..10, an all-true vector and an all-false vector (opposite at every index)
     // must encode differently.
     std::vector<bool> mixed_left;
+    mixed_left.reserve(10);
     std::vector<bool> mixed_right;
+    mixed_right.reserve(10);
     for (std::size_t len = 1; len <= 10; ++len) {
         const std::vector<bool> all_true(len, true);
         const std::vector<bool> all_false(len, false);
@@ -242,9 +244,31 @@ TEST(CanonicalKeyTest, DistinguishesVectorBool) {
     }
 }
 
+TEST(CanonicalKeyTest, CPU_ToHashTakesPrecedenceOverReflection) {
+    struct ReflectableWithToHash {
+        uint32_t reflected_value;
+        uint32_t hash_key;
+
+        hash_t to_hash() const { return hash_objects_with_default_seed(hash_key); }
+    };
+
+    static_assert(ttsl::concepts::Reflectable<ReflectableWithToHash>);
+    static_assert(ttsl::reflection::detail::supports_to_hash_v<ReflectableWithToHash>);
+
+    const ReflectableWithToHash same_hash_left{.reflected_value = 1, .hash_key = 7};
+    const ReflectableWithToHash same_hash_right{.reflected_value = 2, .hash_key = 7};
+    const ReflectableWithToHash different_hash{.reflected_value = 1, .hash_key = 8};
+
+    EXPECT_EQ(hash_objects_with_default_seed(same_hash_left), hash_objects_with_default_seed(same_hash_right));
+    EXPECT_EQ(canonical_key(same_hash_left), canonical_key(same_hash_right));
+
+    EXPECT_NE(hash_objects_with_default_seed(same_hash_left), hash_objects_with_default_seed(different_hash));
+    EXPECT_NE(canonical_key(same_hash_left), canonical_key(different_hash));
+}
+
 // Coverage over the same adversarial set used for the hash: the exact key must be injective here
 // (it is by construction, but pin it so a future encoding change can't silently regress).
-TEST(CanonicalKeyTest, NoCollisionsOverSmall4DShapes) {
+TEST(CanonicalKeyTest, CPU_NoCollisionsOverSmall4DShapes) {
     constexpr uint32_t kMax = 40;
     std::unordered_set<std::string> seen;
     size_t count = 0;
@@ -269,7 +293,7 @@ TEST(CanonicalKeyTest, NoCollisionsOverSmall4DShapes) {
 // free of tt_metal dependencies.
 // =============================================================================================
 
-TEST(ProgramCacheKeyTest, HashCollisionResolvedByCanonicalKey) {
+TEST(ProgramCacheKeyTest, CPU_HashCollisionResolvedByCanonicalKey) {
     struct Key {
         uint64_t hash;
         std::string canonical;
@@ -315,7 +339,7 @@ struct CostAttrs {
     auto attribute_values() const { return std::forward_as_tuple(a, b, c, e, f); }
 };
 
-TEST(CanonicalKeyTest, RelativeCostVsHash) {
+TEST(CanonicalKeyTest, CPU_RelativeCostVsHash) {
     const CostAttrs attrs{1, 2, 3, 4, 5.0f};
     const std::vector<uint32_t> shape{1, 152, 24, 32};
     constexpr int N = 1'000'000;

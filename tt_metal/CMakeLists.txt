@@ -58,7 +58,11 @@ set_target_properties(
 )
 
 file(GLOB_RECURSE COMPUTE_KERNEL_API include/*)
-file(GLOB_RECURSE FABRIC_HW_INC fabric/hw/inc/*)
+file(
+    GLOB_RECURSE FABRIC_HW_INC
+    fabric/hw/inc/*.hpp
+    fabric/hw/inc/*.h
+)
 file(
     GLOB_RECURSE TT_LLK_HEADERS
     tt-llk/common/*.h
@@ -141,7 +145,7 @@ set_target_properties(
     tt_metal
     PROPERTIES
         INSTALL_RPATH
-            "/opt/openmpi-v5.0.7-ulfm/lib;${PROJECT_BINARY_DIR}/lib;$ORIGIN"
+            "/opt/openmpi-v5.0.7-ulfm/lib;$ORIGIN"
         ADDITIONAL_CLEAN_FILES
             "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
 )

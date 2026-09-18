@@ -345,7 +345,7 @@ SoftmaxDeviceOperation::spec_return_value_t SoftmaxDeviceOperation::compute_outp
         attributes.inplace) {
         return tensor_args.input_tensor.tensor_spec();
     }
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         tensor_args.input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             tensor_args.input_tensor.dtype(),

@@ -65,6 +65,7 @@ EXIT_CODE_WORKLOAD_TIMEOUT = 9
 EXIT_CODE_ARC_TIMEOUT = 10
 EXIT_CODE_AICLK_TIMEOUT = 11
 EXIT_CODE_NETWORK_ERROR = 12
+EXIT_CODE_MISSING_DEVICES = 13
 EXIT_CODE_INCONCLUSIVE = 50
 EXIT_CODE_INPUT_ERROR = 66
 
@@ -80,15 +81,10 @@ CATEGORIES = {
     # Link health (traffic/data tests)
     "unhealthy": (r"Found Unhealthy Links|FAULTY LINKS REPORT", "RED", "Unhealthy links"),
     # Connectivity issues
-    "missing_ports": (
-        r"missing port/cable connections",
+    "missing_connections": (
+        r"missing port/cable connections|missing channel connections",
         "BLUE",
-        "Missing port connections",
-    ),
-    "missing_channels": (
-        r"missing channel connections",
-        "BLUE",
-        "Missing channel connections",
+        "Missing connections",
     ),
     "recovered_connections": (
         r"Rediscovering ethernet links after successful link retraining",
@@ -129,6 +125,12 @@ CATEGORIES = {
         "YELLOW",
         "SSH error",
     ),
+    # Hardware device errors
+    "missing_devices": (
+        r"Read 0xffffffff over PCIe|PcieHangError|ArcStartupError",
+        "RED",
+        "Device init error",
+    ),
     # Configuration errors (FSD/MGD) - treated as connections mismatch
     "fsd_error": (r"Hostname not found in FSD", "RED", "FSD configuration error"),
     "mgd_error": (
@@ -150,6 +152,10 @@ def get_category_label(cat: str) -> str:
         return CATEGORIES[cat][2]
     if cat == "inconclusive":
         return "Inconclusive"
+    if cat == "retrain_success":
+        return "Successful retrain"
+    if cat == "failed_retrain":
+        return "Missing connections"
     return cat
 
 
@@ -170,13 +176,21 @@ DETECTION_PATTERNS = {
 PATTERNS = {k: re.compile(v[0], re.IGNORECASE if (len(v) > 3 and v[3]) else 0) for k, v in CATEGORIES.items()}
 DETECTION_PATTERNS_COMPILED = {k: re.compile(v) for k, v in DETECTION_PATTERNS.items()}
 
-# Patterns for parsing structured data
-PORT_PATTERN = re.compile(
+# Pair patterns for content-wide extraction (tolerates whitespace between endpoints)
+PORT_PAIR_PATTERN = re.compile(
+    r"PhysicalPortEndpoint\{hostname='([^']+)',[^}]*tray_id=(\d+), port_type=(\w+), port_id=(\d+)\}"
+    r"\s*<->\s*"
     r"PhysicalPortEndpoint\{hostname='([^']+)',[^}]*tray_id=(\d+), port_type=(\w+), port_id=(\d+)\}"
 )
-CHANNEL_PATTERN = re.compile(
+CHANNEL_PAIR_PATTERN = re.compile(
+    r"PhysicalChannelEndpoint\{hostname='([^']+)', tray_id=(\d+), asic_channel=AsicChannel\{asic_location=(\d+), channel_id=(\d+)\}\}"
+    r"\s*<->\s*"
     r"PhysicalChannelEndpoint\{hostname='([^']+)', tray_id=(\d+), asic_channel=AsicChannel\{asic_location=(\d+), channel_id=(\d+)\}\}"
 )
+# Strip per-line host/time prefixes from consolidated validation logs, e.g. [bh-glx-...][16:18:23]
+HOST_TIME_PREFIX_PATTERN = re.compile(r"^\[[^\]]+\](?:\[[^\]]+\])?\s*")
+# Collapse mid-token line wraps seen in interleaved multi-host logs
+ENDPOINT_WRAP_PATTERN = re.compile(r"Physical\s*\n\s*(Channel|Port)Endpoint")
 
 # CSV field definitions
 SUMMARY_CSV_FIELDS = [
@@ -288,7 +302,7 @@ def parse_int(s: str) -> int:
 def _has_qsfp_connections(analyses: list[LogAnalysis]) -> bool:
     """Check if any missing port connections are QSFP."""
     for a in analyses:
-        if "missing_ports" not in a.categories:
+        if "missing_connections" not in a.categories:
             continue
         for conn in a.missing_connections:
             if conn[0] == "port":
@@ -403,30 +417,122 @@ def parse_faulty_links(content: str) -> list[FaultyLink]:
     return links
 
 
-def parse_missing_connections(content: str) -> list[tuple[str, tuple, tuple]]:
-    """Parse missing port/channel connections."""
-    connections = []
-    mode = None
-    lines = content.split("\n")
+def _normalize_discovery_text(content: str) -> str:
+    """Normalize validation log text for endpoint-pair extraction.
 
-    for line in lines:
-        c = clean_mpi_line(line)
-        if "missing port/cable" in c or "Port Connections found in FSD" in c:
-            mode = "port"
-        elif "missing channel" in c or "Channel Connections found in FSD" in c:
-            mode = "channel"
-        elif mode == "port" and "PhysicalPortEndpoint" in c:
-            matches = PORT_PATTERN.findall(c)
-            if len(matches) == 2:
-                connections.append(("port", matches[0], matches[1]))
-        elif mode == "channel" and "PhysicalChannelEndpoint" in c:
-            matches = CHANNEL_PATTERN.findall(c)
-            if len(matches) == 2:
-                connections.append(("channel", matches[0], matches[1]))
-        elif mode and c and not c.startswith("-") and "Physical" not in c:
-            if "Connections" not in c and "Total" not in c:
-                mode = None
+    Strips MPI/host-time prefixes and collapses mid-token wraps so interleaved
+    multi-host logs still yield complete Physical*Endpoint pairs.
+    """
+    lines = []
+    for line in content.splitlines():
+        line = clean_mpi_line(line)
+        line = HOST_TIME_PREFIX_PATTERN.sub("", line)
+        lines.append(line)
+    text = "\n".join(lines)
+    return ENDPOINT_WRAP_PATTERN.sub(r"Physical\1Endpoint", text)
+
+
+def parse_missing_connections(content: str) -> list[tuple[str, tuple, tuple]]:
+    """Parse missing port/channel connections from validation log content.
+
+    Uses content-wide pair matching so interleaved host logs between missing
+    connection lines do not drop entries (unlike a line-mode state machine).
+    """
+    text = _normalize_discovery_text(content)
+    connections: list[tuple[str, tuple, tuple]] = []
+
+    for match in PORT_PAIR_PATTERN.finditer(text):
+        groups = match.groups()
+        connections.append(("port", groups[0:4], groups[4:8]))
+    for match in CHANNEL_PAIR_PATTERN.finditer(text):
+        groups = match.groups()
+        connections.append(("channel", groups[0:4], groups[4:8]))
     return connections
+
+
+def _format_port_endpoint(ep: tuple) -> str:
+    """Format a port endpoint for human-readable missing-link output."""
+    host, tray, _port_type, port_id = ep
+    return f"{host} tray {tray} port {port_id}"
+
+
+def _format_port_connection(ep1: tuple, ep2: tuple) -> str:
+    """Format a port connection with type once as the leading field."""
+    port_type = ep1[2] if ep1[2] == ep2[2] else f"{ep1[2]}/{ep2[2]}"
+    return f"{port_type} | {_format_port_endpoint(ep1)}  <->  {_format_port_endpoint(ep2)}"
+
+
+def _format_channel_endpoint(ep: tuple) -> str:
+    """Format a channel endpoint for human-readable missing-link output."""
+    host, tray, asic, channel = ep
+    return f"{host} tray {tray} ASIC {asic} ch {channel}"
+
+
+def unique_missing_connections(analyses: list[LogAnalysis]) -> list[tuple[str, tuple, tuple]]:
+    """Return unique missing connections across analyses, ports first then channels."""
+    seen: set[tuple] = set()
+    unique: list[tuple[str, tuple, tuple]] = []
+
+    for analysis in analyses:
+        for conn_type, ep1, ep2 in analysis.missing_connections:
+            canonical = tuple(sorted((ep1, ep2)))
+            key = (conn_type, canonical)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append((conn_type, canonical[0], canonical[1]))
+
+    unique.sort(
+        key=lambda c: (
+            0 if c[0] == "port" else 1,
+            c[1][2] if c[0] == "port" else "",  # port_type first for readability
+            c[1],
+            c[2],
+        )
+    )
+    return unique
+
+
+def print_missing_links_summary(analyses: list[LogAnalysis]) -> None:
+    """Print concise unique missing port/cable and channel connections."""
+    unique = unique_missing_connections(analyses)
+    if not unique:
+        return
+
+    print_section_header("Missing Links")
+
+    ports = [c for c in unique if c[0] == "port"]
+    channels = [c for c in unique if c[0] == "channel"]
+
+    if ports:
+        print(f"Port/cable ({len(ports)} unique):")
+        for _, ep1, ep2 in ports:
+            print(f"  {_format_port_connection(ep1, ep2)}")
+        print()
+
+    if channels:
+        print(f"Channel ({len(channels)} unique):")
+        for _, ep1, ep2 in channels:
+            print(f"  {_format_channel_endpoint(ep1)}  <->  {_format_channel_endpoint(ep2)}")
+        print()
+
+    host_pairs: dict[tuple[str, str], dict[str, int]] = {}
+    for conn_type, ep1, ep2 in unique:
+        pair = tuple(sorted((ep1[0], ep2[0])))
+        host_pairs.setdefault(pair, {"port": 0, "channel": 0})
+        host_pairs[pair][conn_type] += 1
+
+    if host_pairs:
+        print("Affected host pairs:")
+        for (h1, h2), counts in sorted(host_pairs.items(), key=lambda x: (x[0][0], x[0][1])):
+            parts = []
+            if counts["port"]:
+                parts.append(f"{counts['port']} ports")
+            if counts["channel"]:
+                parts.append(f"{counts['channel']} channels")
+            label = h1 if h1 == h2 else f"{h1} <-> {h2}"
+            print(f"  {label}  ({', '.join(parts)})")
+        print()
 
 
 def parse_metadata(content: str, filepath: str) -> LogMetadata:
@@ -498,8 +604,19 @@ def analyze_log_file(filepath: str) -> LogAnalysis:
 
     if "unhealthy" in result.categories:
         result.faulty_links = parse_faulty_links(content)
-    if "missing_ports" in result.categories or "missing_channels" in result.categories:
+    if "missing_connections" in result.categories:
         result.missing_connections = parse_missing_connections(content)
+        # Classify the retrain outcome based on whether traffic eventually passed
+        if "healthy" in result.categories:
+            result.categories.append("retrain_success")
+        else:
+            result.categories.append("failed_retrain")
+        result.categories = [c for c in result.categories if c not in ("missing_connections", "recovered_connections")]
+
+    # AICLK timeout warnings appear even on successful runs - only count as failure if not healthy
+    if "aiclk_timeout" in result.categories and "healthy" in result.categories:
+        result.categories.remove("aiclk_timeout")
+        del result.matched_lines["aiclk_timeout"]
 
     if not result.categories:
         if any(pattern.search(line) for pattern in DETECTION_PATTERNS_COMPILED.values() for line in lines):
@@ -553,6 +670,9 @@ def calculate_metrics(analyses: list[LogAnalysis]) -> dict:
     timeout_count = len(cat_counts.get("workload_timeout", []))
     timeout_rate = (timeout_count / total * 100) if total > 0 else 0
 
+    retrain_count = len(cat_counts.get("retrain_success", []))
+    failed_retrain_count = len(cat_counts.get("failed_retrain", []))
+
     return {
         "total": total,
         "cat_counts": cat_counts,
@@ -560,6 +680,8 @@ def calculate_metrics(analyses: list[LogAnalysis]) -> dict:
         "success_rate": success_rate,
         "timeout_count": timeout_count,
         "timeout_rate": timeout_rate,
+        "retrain_count": retrain_count,
+        "failed_retrain_count": failed_retrain_count,
     }
 
 
@@ -592,13 +714,22 @@ def print_summary(analyses: list[LogAnalysis], metrics: dict, show_files: bool =
         print(f"{Colors.YELLOW}Warning: Expected {EXPECTED_ITERATIONS} iterations, found {total}{Colors.NC}")
     print()
 
+    # Print healthy count, noting how many were successful retrains
+    retrain_count = metrics.get("retrain_count", 0)
+    healthy_files = cat_counts.get("healthy", [])
+    healthy_count_display = len(healthy_files)
+    retrain_suffix = f" (retrains: {retrain_count})" if retrain_count > 0 else ""
+    healthy_color = get_color(CATEGORIES["healthy"][1])
+    print(f"{healthy_color}Healthy links:{Colors.NC} {healthy_count_display}{retrain_suffix} / {total}")
+    if show_files and 0 < healthy_count_display <= MAX_DISPLAY_FILES:
+        for f in healthy_files:
+            print(f"    {os.path.basename(f)}")
+
     display_order = [
-        "healthy",
         "unhealthy",
-        "missing_ports",
-        "missing_channels",
-        "recovered_connections",
+        "failed_retrain",
         "extra_connections",
+        "missing_devices",
         "workload_timeout",
         "dram_failure",
         "arc_timeout",
@@ -610,18 +741,22 @@ def print_summary(analyses: list[LogAnalysis], metrics: dict, show_files: bool =
         "inconclusive",
     ]
     for cat in display_order:
-        if cat not in CATEGORIES and cat != "inconclusive":
+        if cat not in CATEGORIES and cat not in ("inconclusive", "failed_retrain"):
             continue
         if cat == "inconclusive":
             color = Colors.CYAN
             label = "Inconclusive"
+        elif cat == "failed_retrain":
+            color = Colors.RED
+            label = "Missing connections"
         else:
             color = get_color(CATEGORIES[cat][1])
             label = CATEGORIES[cat][2]
-        count = len(cat_counts.get(cat, []))
+        files = cat_counts.get(cat, [])
+        count = len(files)
         print(f"{color}{label}:{Colors.NC} {count} / {total}")
         if show_files and 0 < count <= MAX_DISPLAY_FILES:
-            for f in cat_counts[cat]:
+            for f in files:
                 print(f"    {os.path.basename(f)}")
     print()
 
@@ -635,6 +770,8 @@ def print_summary(analyses: list[LogAnalysis], metrics: dict, show_files: bool =
             else Colors.RED
         )
         print(f"{Colors.BOLD}Success Rate:{Colors.NC} {color}{rate:.1f}%{Colors.NC}\n")
+
+    print_missing_links_summary(analyses)
 
 
 def print_details(analyses: list[LogAnalysis]) -> None:
@@ -676,44 +813,8 @@ def print_details(analyses: list[LogAnalysis]) -> None:
                 print(f"  {count:>3}x  {ftype}")
             print()
 
-    # Missing connections grouped by type
-    all_missing = [(os.path.basename(a.filepath), c) for a in analyses for c in a.missing_connections]
-    if all_missing:
-        print("=" * 100)
-        print("Missing Connections")
-        print("=" * 100 + "\n")
-
-        # Group by connection type
-        port_conns = [(log, c) for log, c in all_missing if c[0] == "port"]
-        chan_conns = [(log, c) for log, c in all_missing if c[0] == "channel"]
-
-        if port_conns:
-            print(f"Port/Cable Connections ({len(port_conns)}):")
-            for log, (_, ep1, ep2) in port_conns:
-                short = _shorten_log_name(log)
-                print(f"  {short}: {ep1[0]} tray {ep1[1]} {ep1[2]} <-> {ep2[0]} tray {ep2[1]} {ep2[2]}")
-            print()
-
-        if chan_conns:
-            print(f"Channel Connections ({len(chan_conns)}):")
-            for log, (_, ep1, ep2) in chan_conns:
-                short = _shorten_log_name(log)
-                print(
-                    f"  {short}: {ep1[0]} tray {ep1[1]} ASIC {ep1[2]} ch {ep1[3]} <-> "
-                    f"{ep2[0]} tray {ep2[1]} ASIC {ep2[2]} ch {ep2[3]}"
-                )
-            print()
-
-        # Host pair summary
-        host_pairs: dict[tuple, int] = {}
-        for _, (_, ep1, ep2) in all_missing:
-            pair = tuple(sorted([ep1[0], ep2[0]]))
-            host_pairs[pair] = host_pairs.get(pair, 0) + 1
-        if host_pairs:
-            print("Affected Host Pairs:")
-            for (h1, h2), count in sorted(host_pairs.items(), key=lambda x: -x[1]):
-                print(f"  {count:>3}x  {h1} <-> {h2}")
-            print()
+    # Missing connections: concise unique list (same formatter as default summary)
+    print_missing_links_summary(analyses)
 
 
 def print_link_histogram(analyses: list[LogAnalysis]) -> None:
@@ -806,39 +907,42 @@ def register_recommendation(category: str):
     return decorator
 
 
-@register_recommendation("missing_ports")
-@register_recommendation("missing_channels")
-def _recommend_missing_connections(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
-    if not (cats.get("missing_ports") or cats.get("missing_channels")):
+@register_recommendation("failed_retrain")
+def _recommend_failed_retrain(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
+    if not cats.get("failed_retrain"):
         return []
 
-    port_count, chan_count = cats.get("missing_ports", 0), cats.get("missing_channels", 0)
-    logs_with_missing = sum(
-        1 for a in analyses if "missing_ports" in a.categories or "missing_channels" in a.categories
-    )
-    is_transient = logs_with_missing < total
+    count = cats["failed_retrain"]
+    is_transient = count < total
     has_qsfp = _has_qsfp_connections(analyses)
 
-    msg_parts = [f"- {Colors.BLUE}Missing connections:{Colors.NC}"]
-
-    if port_count and chan_count:
-        msg_parts.append(f"Port ({port_count} logs) + Channel ({chan_count} logs).")
-    elif port_count:
-        msg_parts.append(f"Port connections ({port_count} logs).")
-    elif chan_count:
-        msg_parts.append(f"Channel connections ({chan_count} logs).")
+    msg_parts = [f"- {Colors.RED}Missing connections:{Colors.NC}"]
 
     if is_transient:
         msg_parts.append(
-            "Missing connections are transient (tests fail some of the time) - " "Factory System Descriptor is correct."
+            f"Links failed to retrain in {count}/{total} iterations (transient) - "
+            "Factory System Descriptor is correct."
         )
+    else:
+        msg_parts.append(f"Links failed to retrain in all {count}/{total} iterations.")
 
     if has_qsfp:
-        msg_parts.append("If missing connections are over QSFP, check cable seating.")
+        msg_parts.append("If missing connections are over QSFP, report for cable reseating.")
 
-    msg_parts.append("Report to cluster installation team/Syseng for triage.")
+    msg_parts.append("Report to DC Deployment / Syseng for triage.")
 
     return [" ".join(msg_parts)]
+
+
+@register_recommendation("missing_devices")
+def _recommend_missing_devices(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
+    if not cats.get("missing_devices"):
+        return []
+    count = cats["missing_devices"]
+    return [
+        f"- {Colors.RED}Device init error:{Colors.NC} Board failed to initialize in {count} occurrence(s) "
+        f"(PCIe hang or ARC startup failure). Try resetting the board. If problem persists, escalate to Syseng."
+    ]
 
 
 @register_recommendation("extra_connections")
@@ -857,7 +961,7 @@ def _recommend_workload_timeout(cats: dict, total: int, analyses: list[LogAnalys
     timeout_rate = cats["workload_timeout"] / total * 100
     msg = (
         f"- {Colors.YELLOW}Workload timeout:{Colors.NC} Traffic tests timed out ({cats['workload_timeout']} "
-        f"occurrence(s), {timeout_rate:.1f}% of runs). This indicates an ethernet issue. "
+        f"occurrence(s), {timeout_rate:.1f}% of runs). Make sure no other processes are running in the cluster. "
         "Document timeout occurrences. "
     )
     if timeout_rate >= TIMEOUT_ESCALATION_THRESHOLD:
@@ -888,7 +992,7 @@ def _recommend_aiclk_timeout(cats: dict, total: int, analyses: list[LogAnalysis]
     count = cats["aiclk_timeout"]
     return [
         f"- {Colors.RED}AICLK timeout:{Colors.NC} AICLK failed to settle ({count} occurrence(s)). "
-        f"Could indicate bad Firmware or Hardware state. Escalate to Systems Engineering."
+        f"Could indicate bad Firmware or Hardware state. Power cycle the machine and if problem persists, escalate to Syseng."
     ]
 
 
@@ -897,7 +1001,9 @@ def _recommend_mpi_error(cats: dict, total: int, analyses: list[LogAnalysis]) ->
     """Generate recommendations for MPI errors."""
     if not cats.get("mpi_error"):
         return []
-    return [f"- {Colors.RED}MPI error:{Colors.NC} Lost connection between hosts. Check SSH agent and network."]
+    return [
+        f"- {Colors.RED}MPI error:{Colors.NC} Lost connection between hosts. Confirm SSH access to all nodes, ssh-agent running, network and mpi interface settings."
+    ]
 
 
 @register_recommendation("ssh_error")
@@ -943,9 +1049,9 @@ def print_recommendations(analyses: list[LogAnalysis]) -> None:
 
     processed_generators = set()
     category_order = [
-        "missing_ports",
-        "missing_channels",
+        "failed_retrain",
         "extra_connections",
+        "missing_devices",
         "workload_timeout",
         "dram_failure",
         "arc_timeout",
@@ -971,7 +1077,7 @@ def print_recommendations(analyses: list[LogAnalysis]) -> None:
     if discovery_failed_count > 0:
         recs.append(
             f"- {Colors.RED}Discovery failed:{Colors.NC} Physical discovery found no chips ({discovery_failed_count} "
-            f"occurrence(s)). This is a critical red flag. Notify Syseng immediately."
+            f"occurrence(s)). This is critical. Escalate to Syseng."
         )
 
     if total > 0:
@@ -1019,10 +1125,10 @@ def print_timeline(analyses: list[LogAnalysis]) -> None:
             icons.append(("F", Colors.RED))
         elif "mgd_error" in a.categories:
             icons.append(("G", Colors.RED))
-        elif "missing_ports" in a.categories:
+        elif "failed_retrain" in a.categories:
             icons.append(("○", Colors.BLUE))
-        elif "missing_channels" in a.categories:
-            icons.append(("○", Colors.BLUE))
+        elif "missing_devices" in a.categories:
+            icons.append(("P", Colors.RED))
         elif "extra_connections" in a.categories:
             icons.append(("+", Colors.YELLOW))
         elif "inconclusive" in a.categories:
@@ -1040,7 +1146,7 @@ def print_timeline(analyses: list[LogAnalysis]) -> None:
     print(
         f"Legend: {Colors.GREEN}✓{Colors.NC}=healthy "
         f"{Colors.RED}✗{Colors.NC}=unhealthy "
-        f"{Colors.BLUE}○{Colors.NC}=missing "
+        f"{Colors.BLUE}○{Colors.NC}=missing connections "
         f"{Colors.YELLOW}+{Colors.NC}=extra "
         f"{Colors.YELLOW}⏱{Colors.NC}=timeout "
         f"{Colors.RED}!{Colors.NC}=dram "
@@ -1050,6 +1156,7 @@ def print_timeline(analyses: list[LogAnalysis]) -> None:
         f"{Colors.YELLOW}S{Colors.NC}=ssh "
         f"{Colors.RED}F{Colors.NC}=fsd "
         f"{Colors.RED}G{Colors.NC}=mgd "
+        f"{Colors.RED}P{Colors.NC}=pcie "
         f"{Colors.CYAN}?{Colors.NC}=inconclusive "
         f"{Colors.YELLOW}~{Colors.NC}=other\n"
     )
@@ -1398,15 +1505,13 @@ def count_validation_issues(analyses: list[LogAnalysis]) -> dict[str, dict]:
                 "priority": 3,
             }
 
-    # Count missing connections (missing ports/channels)
-    missing_connections_count = len(
-        [a for a in analyses if "missing_ports" in a.categories or "missing_channels" in a.categories]
-    )
-    if missing_connections_count > 0:
-        issue_counts["missing_connections"] = {
-            "count": missing_connections_count,
+    # Count failed retrains (missing connections that could not be recovered)
+    failed_retrain_count = len([a for a in analyses if "failed_retrain" in a.categories])
+    if failed_retrain_count > 0:
+        issue_counts["failed_retrain"] = {
+            "count": failed_retrain_count,
             "exit_code": EXIT_CODE_MISSING_CONNECTIONS,
-            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} MISSING CONNECTIONS detected in {missing_connections_count}/{total} runs.",
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} FAILED LINK RETRAINS detected in {failed_retrain_count}/{total} runs.",
             "priority": 10,
         }
 
@@ -1476,6 +1581,16 @@ def count_validation_issues(analyses: list[LogAnalysis]) -> dict[str, dict]:
             "exit_code": EXIT_CODE_AICLK_TIMEOUT,
             "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} AICLK TIMEOUT detected in {aiclk_timeout_count}/{total} runs.",
             "priority": 8,
+        }
+
+    # Count device init errors (PCIe hang or ARC startup failure)
+    missing_devices_count = len([a for a in analyses if "missing_devices" in a.categories])
+    if missing_devices_count > 0:
+        issue_counts["missing_devices"] = {
+            "count": missing_devices_count,
+            "exit_code": EXIT_CODE_MISSING_DEVICES,
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} DEVICE INIT ERROR (PCIe hang or ARC startup failure) detected in {missing_devices_count}/{total} runs.",
+            "priority": 2,
         }
 
     # Count network errors (combined MPI and SSH)

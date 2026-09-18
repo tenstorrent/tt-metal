@@ -220,11 +220,11 @@ void kernel_main() {
             /*kt_dim=*/1);
     }
 
-    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2);
+    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2);
 
     // Wait for the partial to come, add it
     cb_w2c_in2.wait_front(1);
-    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb_w2c_in2_id, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
     cb_w2c_in2.pop_front(1);
 
@@ -246,7 +246,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Add bias
     //-------------------------------------------------------------------------
-    copy_tile_init(cb_r2c_w_id);
+    copy_init(cb_r2c_w_id);
     copy_tile(cb_r2c_w_id, bias_tile_index, 2);
     add_bias_init();
     add_bias(0);
@@ -308,7 +308,7 @@ void kernel_main() {
         cb_s2c_out.pop_front(1);
 
         // Get the group masks
-        copy_tile_init(cb_w2c_in5_id);
+        copy_init(cb_w2c_in5_id);
         copy_tile(cb_w2c_in5_id, 0, 2);
 
         // Get top 8 from adjusted scores, and mask them
@@ -333,7 +333,7 @@ void kernel_main() {
         cb_w2c_in4.wait_front(1);
 
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(cb_w2c_in4_id);
+        copy_init(cb_w2c_in4_id);
 
         // Copy the group scores
         copy_tile(cb_w2c_in4_id, 0, 0);
@@ -358,7 +358,7 @@ void kernel_main() {
         transpose_tile(cb_s2c_out_id, 0, 0);
         cb_s2c_out.pop_front(1);
 
-        copy_tile_init(cb_w2c_in5_id);
+        copy_init(cb_w2c_in5_id);
         copy_tile(cb_w2c_in5_id, 0, 2);
 
         top8_tile_init();
@@ -369,7 +369,7 @@ void kernel_main() {
         // Wait for sorted top-8 from all other cores
         cb_w2c_in6.wait_front(4);
 
-        copy_tile_init(cb_w2c_in6_id);
+        copy_init(cb_w2c_in6_id);
         // Tile ID 0 has my own data, so we copy to 1-4
         copy_tile(cb_w2c_in6_id, 0, 1);
         copy_tile(cb_w2c_in6_id, 1, 2);

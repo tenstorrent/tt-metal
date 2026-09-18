@@ -654,18 +654,47 @@ MemoryBlockTable BankManager::get_memory_block_table(
 
 void BankManager::shrink_size(
     DeviceAddr shrink_size, bool bottom_up, BankManager::AllocatorDependencies::AllocatorID allocator_id) {
-    TT_FATAL(allocator_dependencies_.num_allocators() == 1, "Expected single allocator!");
-    auto* alloc = this->get_allocator_from_id(allocator_id);
-    if (alloc) {
+    if (allocator_dependencies_.num_allocators() == 1 || allocator_id.get() != 0) {
+        auto* alloc = this->get_allocator_from_id(allocator_id);
+        if (alloc) {
+            alloc->shrink_size(shrink_size, bottom_up);
+            this->invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
+        }
+        return;
+    }
+
+    const auto allocator_ids = allocator_dependencies_.allocator_ids();
+    for (const auto current_allocator_id : allocator_ids) {
+        const auto* alloc = this->get_allocator_from_id(current_allocator_id);
+        TT_FATAL(alloc != nullptr, "Allocator {} is not initialized", current_allocator_id.get());
+        alloc->validate_shrink_size(shrink_size, bottom_up);
+    }
+    for (const auto current_allocator_id : allocator_ids) {
+        auto* alloc = this->get_allocator_from_id(current_allocator_id);
+        TT_FATAL(alloc != nullptr, "Allocator {} is not initialized", current_allocator_id.get());
         alloc->shrink_size(shrink_size, bottom_up);
+    }
+    for (const auto current_allocator_id : allocator_ids) {
+        this->invalidate_allocated_ranges_cache_for_dependent_allocators(current_allocator_id);
     }
 }
 
 void BankManager::reset_size(BankManager::AllocatorDependencies::AllocatorID allocator_id) {
-    TT_FATAL(allocator_dependencies_.num_allocators() == 1, "Expected single allocator!");
-    auto* alloc = this->get_allocator_from_id(allocator_id);
-    if (alloc) {
-        alloc->reset_size();
+    if (allocator_dependencies_.num_allocators() == 1 || allocator_id.get() != 0) {
+        auto* alloc = this->get_allocator_from_id(allocator_id);
+        if (alloc) {
+            alloc->reset_size();
+            this->invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
+        }
+        return;
+    }
+
+    for (const auto current_allocator_id : allocator_dependencies_.allocator_ids()) {
+        auto* alloc = this->get_allocator_from_id(current_allocator_id);
+        if (alloc) {
+            alloc->reset_size();
+            this->invalidate_allocated_ranges_cache_for_dependent_allocators(current_allocator_id);
+        }
     }
 }
 

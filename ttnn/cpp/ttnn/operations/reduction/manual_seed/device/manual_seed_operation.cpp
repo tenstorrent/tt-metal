@@ -104,7 +104,7 @@ void ManualSeedDeviceOperation::validate_on_program_cache_miss(
 ManualSeedDeviceOperation::spec_return_value_t ManualSeedDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
     // NOTE: This OP does not return anything, but the device operation framework does not handle void return types.
-    const TensorSpec tensor_spec(
+    const tt::tt_metal::TensorSpec tensor_spec(
         ttnn::Shape{1}, TensorLayout{DataType::UINT32, PageConfig{Layout::ROW_MAJOR}, MemoryConfig()});
     return tensor_spec;
 }

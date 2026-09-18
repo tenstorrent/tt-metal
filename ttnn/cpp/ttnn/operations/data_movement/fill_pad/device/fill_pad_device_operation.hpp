@@ -14,7 +14,7 @@ namespace ttnn::prim {
 struct FillPadDeviceOperation {
     using operation_attributes_t = FillPadParams;
     using tensor_args_t = FillPadInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<FillPadProgramFactory, FillPadL1ShardedProgramFactory>;
 
@@ -27,6 +27,6 @@ struct FillPadDeviceOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t& args, const tensor_args_t&);
 };
 
-ttnn::Tensor fill_pad(const Tensor& input, tt::tt_metal::PadValue fill_value, const MemoryConfig& output_memory_config);
+ttnn::Tensor fill_pad(const Tensor& input, ttnn::PadValue fill_value, const MemoryConfig& output_memory_config);
 
 }  // namespace ttnn::prim

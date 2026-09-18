@@ -81,6 +81,7 @@ The trace records:
 - **Memory events**: Buffer allocations/deallocations, circular buffers
 - **Timing**: Operation durations (wall-clock time)
 - **Call hierarchy**: Nested operations (e.g., `ttnn::add` → `ttnn::prim::binary`)
+- **Program factories**: Fully qualified factory type, variant index, and `program_cache_hit` on each device-op `function_start` (always recorded while capture is active)
 - **Stack traces**: C++ call stacks for each operation (enabled by default); Python call stacks (`full_graph_capture` always records them via `enable_python_stack_traces()`; for `begin_graph_capture` set `ttnn.CONFIG.enable_graph_python_stack_traces` to true to auto-enable)
 - **Deallocations**: `Tensor::deallocate` is tracked at the C++ level when a device buffer is actually freed (both explicit via `ttnn.deallocate()` and implicit via destructor)
 - **Python I/O**: Function arguments, input tensor IDs, and output tensor IDs recorded by the Python decorators (only when Python I/O recording is enabled — see [Capture Overhead](#reducing-capture-overhead))
@@ -216,7 +217,7 @@ The report file contains:
 - `version`: Report format version
 - `graph`: Full graph trace (list of nodes)
 - `devices`: Device information (architecture, grid size, memory)
-- `metadata`: Capture timestamp
+- `metadata`: Capture timestamp, distributed rank, capture-time git identity (`git_sha` is the full commit SHA, including `git archive` builds; `git_sha_short`; `version`; `dirty` is true only when the capturing worktree had local modifications), and the capturing binary's CMake configuration (`build_type`, from `$<CONFIG>`)
 - `python_io`: Python-level I/O records (arguments, input/output tensor IDs per operation); present only when Python I/O recording is enabled
 - `per_operation_buffers`: Real buffer snapshots per operation (from `get_buffers()`); present only when `enable_detailed_buffer_tracing()` is active
 - `buffer_pages_by_address`: Compact per-address page data; present only when `enable_detailed_buffer_tracing()` is active
@@ -372,6 +373,7 @@ Graph capture overhead has several independently controllable layers:
 | Layer | Default | Enable/Disable |
 |---|---|---|
 | **C++ graph processor** | Always on when capture is active | Inherent to `begin_graph_capture` |
+| **Program factory identity** | Always on when capture is active | Written onto device-op `function_start` params at `function_end`; git identity is always written in file `metadata` |
 | **Python I/O recording** | Auto-enabled by Python `begin_graph_capture()`, off for C++-initiated capture | `enable_python_io_recording()` / `disable_python_io_recording()` |
 | **Python stack traces** | Off; auto-enabled for the outermost Python-started `begin_graph_capture()` when `ttnn.CONFIG.enable_graph_python_stack_traces` is true | `TTNN_CONFIG_OVERRIDES`, or `enable_python_stack_traces()` / `disable_python_stack_traces()` |
 | Per-op buffer snapshots | Off | `enable_detailed_buffer_tracing()` / `disable_detailed_buffer_tracing()` |
@@ -603,6 +605,23 @@ Operation boundaries.
 **function_start params:**
 - `name`: Operation name (e.g., `"ttnn::add"`)
 - `inputs`: Number of input parameters
+- `program_factory_type`: Fully qualified C++ type of the active program factory (device ops only)
+- `program_factory_index`: 0-based index of that factory in the op's `program_factory_t` variant (device ops only; JSON number)
+- `program_cache_hit`: Whether this launch reused a cached program (device ops only; JSON boolean)
+
+These three factory fields are written at `function_end` onto the matching `function_start` params. They are absent on Python wrappers, `create_device_tensor`, and inactive-mesh short-circuits that never select a factory.
+
+Example device-op `function_start` params:
+
+```json
+{
+  "name": "ttnn::prim::PadDeviceOperation",
+  "inputs": "2",
+  "program_factory_type": "ttnn::prim::PadRmReaderWriterMultiCoreProgramFactory",
+  "program_factory_index": 0,
+  "program_cache_hit": false
+}
+```
 
 **function_start fields:**
 - `arguments`: Serialized operation arguments

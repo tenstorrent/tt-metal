@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/kernel_args.h"
 
 #include "common_dataflow.hpp"
 
@@ -59,9 +60,8 @@ FORCE_INLINE void output_block(
 }  // namespace
 
 void kernel_main() {
-    const uint32_t output_base_addr = get_arg_val<uint32_t>(0);
     constexpr auto ctas = get_ctas();
-    const auto output_addr_gtor = TensorAccessor(ctas.output_args, output_base_addr);
+    const auto output_addr_gtor = TensorAccessor(tensor::output);
     constexpr uint32_t num_slices_along_channels = ceil(ctas.num_channels, ctas.tile_width);
     constexpr uint32_t num_blocks_in_row = ceil(ctas.input_depth, ctas.block_depth);
     constexpr uint32_t num_blocks_in_column = ceil(ctas.input_height, ctas.tile_height);
@@ -81,7 +81,7 @@ void kernel_main() {
                     const uint32_t previous_row_chunk_i = row_chunk_i - 1;
                     receive_upper_block(
                         output_addr_gtor,
-                        ctas.axis_3_buffer_cb,
+                        dfb::axis_3_buffer,
                         my_channel,
                         column_block_i,
                         previous_row_chunk_i,
@@ -92,7 +92,7 @@ void kernel_main() {
                 }
                 output_block(
                     output_addr_gtor,
-                    ctas.output_cb,
+                    dfb::output,
                     my_channel,
                     column_block_i,
                     row_chunk_i,

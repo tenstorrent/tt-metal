@@ -16,6 +16,7 @@ __ldm_start = DEFINED(__fw_export_ldm_end) ? __fw_export_ldm_end : ORIGIN(REGION
  */
 __device_print_strings_vma      = 0x6400000;
 __device_print_strings_info_vma = 0x6500000;
+__profiler_meta_vma = 0x6600000;
 
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
        "elf32-littleriscv")
@@ -128,13 +129,6 @@ SECTIONS
     *(.scommon)
     . = ALIGN(4);
     *(.dynbss)
-    /* `.bss.perf_counters` (zone_hashes[], next_zone_id in counters.h) is
-       NOBITS like any other `.bss.*` and is absorbed by this catch-all, so it
-       lives inside [__ldm_bss_start, __ldm_bss_end) and is zero-initialized
-       by do_crt0(). Its position within `.bss.*` is input-file-order
-       dependent; in practice the perf-test object files link last so the
-       perf-counter symbols end up at the end and don't shift the gp-relative
-       offsets of other globals between NC and WC. */
     *(.bss .bss.* .gnu.linkonce.b.*)
     *(COMMON)
     . = ALIGN(4);
@@ -187,7 +181,7 @@ SECTIONS
     __device_print_strings_info_end = .;
     . = ALIGN(4);
   }
-  .profiler_meta 0 : { *(.profiler_meta) }
+  .profiler_meta __profiler_meta_vma : { *(.profiler_meta) }
   .stab 0 : { *(.stab) }
   .stabstr 0 : { *(.stabstr) }
   .stab.excl 0 : { *(.stab.excl) }

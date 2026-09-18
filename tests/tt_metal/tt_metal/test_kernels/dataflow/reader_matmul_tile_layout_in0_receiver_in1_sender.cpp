@@ -85,7 +85,7 @@ void kernel_main() {
 
     constexpr auto in0_args = TensorAccessorArgs<0>();
     constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
+    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, single_tile_size_bytes);
 
     for (uint32_t b = 0; b < num_blocks; b++) {
         // Operand 0
@@ -135,8 +135,8 @@ void kernel_main() {
         // Now we have the block in the CB address, we can mcast to dests!
         // num_dests must not include source, since we are NOT really doing a local copy!
         noc.async_write_multicast(
-            use<CircularBuffer::AddrSel::WRITE_PTR>(cb_in1),
-            use<CircularBuffer::AddrSel::WRITE_PTR>(cb_in1),
+            use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_in1),
+            use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_in1),
             in1_block_size_bytes,
             in1_mcast_num_dests,
             {},

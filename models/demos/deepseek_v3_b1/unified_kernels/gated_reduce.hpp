@@ -15,7 +15,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/tile_move_copy.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/eltwise_mul_scalar.h"
+#include "api/compute/experimental/eltwise_mul_scalar.h"
 #endif
 
 namespace deepseek_b1_ops {
@@ -126,12 +126,12 @@ struct GatedReduce {
             // Init once before the loop
             // Assumes all input cbs are configured the same, and the intermediate cb is configured the same as the
             // output cb
-            reconfig_data_format<false, true>(args.group1_cb, args.group1_cb);
+            reconfig_full_operand(args.group1_cb, args.group1_cb);
             pack_reconfig_data_format<true>(args.out_cb);
             silu_tile_init();
             for (uint32_t k = 0; k < k_num_tiles; k++) {
                 // Group 1: reduce + SiLU
-                add_tiles_init(args.group1_cb, args.group1_cb, true /* acc_to_dest */);
+                add_init(args.group1_cb, args.group1_cb, true /* acc_to_dest */);
 
                 cb_wait_front(args.group1_cb, tiles_per_k);
                 cb_reserve_back(args.intermed_cb, 1);
@@ -178,7 +178,7 @@ struct GatedReduce {
 
                     tile_regs_acquire();
                     // DST[0] = silu(g1) * scale[0]
-                    deepseek_mul_tiles_bcast_scalar_init_short(args.intermed_cb, args.scalar_cb);
+                    deepseek_mul_bcast_scalar_init(args.intermed_cb, args.scalar_cb);
                     deepseek_mul_tiles_bcast_scalar(args.intermed_cb, args.scalar_cb, 0, 0, 0);
                     // DST[0] *= sum(g2)
                     deepseek_binary_dest_reuse_tiles_init(args.intermed_cb);
@@ -190,7 +190,7 @@ struct GatedReduce {
 
                     cb_pop_front(args.scalar_cb, 1);
                 } else {
-                    mul_tiles_init(args.intermed_cb, args.intermed_cb);
+                    mul_init(args.intermed_cb, args.intermed_cb);
                     tile_regs_acquire();
                     mul_tiles(args.intermed_cb, args.intermed_cb, 0, 1, 0);
                     tile_regs_commit();

@@ -22,9 +22,9 @@ void RandnDeviceOperation::validate_on_program_cache_miss(
     validate_inputs(operation_attributes, tensor_args);
 }
 
-TensorSpec RandnDeviceOperation::compute_output_specs(
+tt::tt_metal::TensorSpec RandnDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, [[maybe_unused]] const tensor_args_t& tensor_args) {
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         operation_attributes.shape,
         tt::tt_metal::TensorLayout(
             operation_attributes.dtype,
@@ -35,7 +35,7 @@ TensorSpec RandnDeviceOperation::compute_output_specs(
 RandnDeviceOperation::tensor_return_value_t RandnDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, [[maybe_unused]] const tensor_args_t& tensor_args) {
     return create_device_tensor(
-        ttnn::TensorSpec(
+        tt::tt_metal::TensorSpec(
             operation_attributes.shape,
             tt::tt_metal::TensorLayout(
                 operation_attributes.dtype,
