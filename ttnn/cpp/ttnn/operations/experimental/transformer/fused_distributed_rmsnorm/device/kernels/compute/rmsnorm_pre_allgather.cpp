@@ -17,6 +17,7 @@
 #include "api/debug/dprint_pages.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
@@ -35,51 +36,41 @@ void kernel_main() {
 
     compute_kernel_hw_startup(input_cb, input_cb, intermediate_cb);
 
-    for (uint32_t tile_row_num = 0; tile_row_num < num_tile_rows_to_process; tile_row_num++) {
-        /*
-         * x**2
-         */
-        reconfig_data_format(input_cb, input_cb);
-        pack_reconfig_data_format(intermediate_cb);
+    constexpr uint32_t call_count = get_compile_time_arg_val(6);
+    using First = ttnn::kernel_lib::ReduceCallAtT<7, 0>;
+    using Middle = ttnn::kernel_lib::ReduceCallAtT<7, (call_count > 1 ? 1 : 0)>;
+    using Last = ttnn::kernel_lib::ReduceCallAtT<7, call_count - 1>;
 
-        // Disable L1 accumulation when starting a new row
-        PACK((llk_pack_reconfig_l1_acc(0)));
-
-        mul_init(input_cb, input_cb);
-        cb_intermediate.reserve_back(onetile);
+    for (uint32_t tile_row_num = 0; tile_row_num < num_tile_rows_to_process; ++tile_row_num) {
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+            const uint32_t tiles = (num_tile_cols - col_tile < block_size) ? num_tile_cols - col_tile : block_size;
+            reconfig_data_format(input_cb, input_cb);
+            pack_reconfig_data_format(intermediate_cb);
+            mul_init(input_cb, input_cb);
             cb_input.wait_front(block_size);
-
+            cb_intermediate.reserve_back(block_size);
             tile_regs_acquire();
-            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+            for (uint32_t i = 0; i < tiles; ++i) {
                 mul_tiles(input_cb, input_cb, i, i, i);
             }
             tile_regs_commit();
-
             tile_regs_wait();
-            for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                // Pack tiles onto each other in the intermediate_cb
-                pack_tile<true>(i /*index into DST*/, intermediate_cb, 0 /*index into intermediate CB*/);
-
-                if (col_tile == 0 && i == 0) {
-                    // After packing the first tile in this row, enable L1 accumulation
-                    PACK((llk_pack_reconfig_l1_acc(1)));
-                }
+            for (uint32_t i = 0; i < tiles; ++i) {
+                pack_tile(i, intermediate_cb);
             }
             tile_regs_release();
-
             cb_input.pop_front(block_size);
+            cb_intermediate.push_back(block_size);
+            cb_intermediate.wait_front(block_size);
+            if (col_tile + block_size >= num_tile_cols) {
+                compute_kernel_lib::reduce<Last>();
+            } else if (col_tile == 0) {
+                compute_kernel_lib::reduce<First>();
+            } else {
+                compute_kernel_lib::reduce<Middle>();
+            }
+            cb_intermediate.pop_front(block_size);
         }
-        cb_intermediate.push_back(onetile);
-
-        // Disable L1 accumulation
-        PACK((llk_pack_reconfig_l1_acc(0)));
-
-        /*
-         * sum(x**2)
-         */
-        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, intermediate_cb, reduce_scalar_cb, output_cb>(
-            compute_kernel_lib::ReduceInputBlockShape::single());
     }
-    cb_reduce_scalar.pop_front(onetile);
+    cb_reduce_scalar.pop_front(get_named_compile_time_arg_val("reduce_auxiliary_tiles"));
 }

@@ -60,10 +60,13 @@ void kernel_main() {
 
 #ifndef USE_WELFORD
     {
-        const uint32_t scalar_w_bits = get_arg(args::scalar_w);
-        const float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
-        dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
-            scalar_w_f);
+        using LocalArgs = ttnn::kernel_lib::ReduceAuxiliaryArgs<0>;
+        using ScaledArgs = ttnn::kernel_lib::ReduceAuxiliaryArgs<LocalArgs::next_compile_time_args_offset()>;
+        using IdentityArgs = ttnn::kernel_lib::ReduceAuxiliaryArgs<ScaledArgs::next_compile_time_args_offset()>;
+        using LocalAuxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
+            LocalArgs,
+            ttnn::kernel_lib::optional_auxiliary_cb(dfb::get_token_if_present<"scaler">())>;
+        dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<LocalAuxiliary>();
 
         const uint32_t eps = get_arg(args::eps);
         DataflowBuffer dfb_eps_obj(dfb::eps);
@@ -74,11 +77,14 @@ void kernel_main() {
 #endif
 
         if constexpr (is_all_to_all_worker) {
-            const uint32_t scalar_c_bits = get_arg(args::scalar_c);
-            const float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
-            dataflow_kernel_lib::
-                prepare_reduce_scaler<dfb::scaler_global, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW>(
-                    scalar_c_f);
+            // The host marks workers whose input statistics already include the global scale.
+            if (get_arg(args::skip_global_scale) != 0) {
+                using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<IdentityArgs, dfb::scaler_global>;
+                dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+            } else {
+                using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ScaledArgs, dfb::scaler_global>;
+                dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+            }
         }
     }
 #endif

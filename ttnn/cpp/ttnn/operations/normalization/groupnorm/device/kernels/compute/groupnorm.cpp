@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <type_traits>
 
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
@@ -17,8 +18,39 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
+#include "api/compute/eltwise_unary/fill.h"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+
+template <uint32_t Input, uint32_t Output, uint32_t RuntimeArgsOffset>
+ALWI void reduce_local_group(uint32_t rows) {
+    using Call =
+        ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0, RuntimeArgsOffset>, Input, 2, Output>;
+    if (rows == 0) {
+        DataflowBuffer output(Output);
+        output.reserve_back(1);
+        pack_reconfig_data_format(Output);
+        tile_regs_acquire();
+        fill_tile_init();
+        fill_tile(0, 0.0F);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, Output);
+        tile_regs_release();
+        output.push_back(1);
+    } else {
+        compute_kernel_lib::reduce<Call>();
+    }
+}
+
+template <uint32_t Output>
+ALWI void reduce_global_group() {
+    using Local = ttnn::kernel_lib::ReduceCallArgs<0>;
+    using Call = ttnn::kernel_lib::
+        BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<Local::next_compile_time_args_offset()>, 10, 4, Output>;
+    compute_kernel_lib::reduce<Call>();
+}
 
 void kernel_main() {
     // clang-format off
@@ -277,13 +309,6 @@ void kernel_main() {
         out_block_h_last = residual % out_block_h_normal;
         out_block_hw_last = out_block_h_last * block_w;
     }
-    std::uint32_t dfb_ex_external_tiles_required =
-        num_out_blocks_padded * num_cores_per_mcast_group * dfb_ex_external_slot_pitch_bytes / single_tile_size_bytes;
-    if (((num_out_blocks_padded * num_cores_per_mcast_group * dfb_ex_external_slot_pitch_bytes) %
-         single_tile_size_bytes) != 0) {
-        dfb_ex_external_tiles_required++;
-    }
-
     // Start Batch Loop
     for (std::uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
@@ -298,7 +323,7 @@ void kernel_main() {
             // Start Average Calc
             // Start Local Reduce
             dfb_input_mask.wait_front(mask_tiles_per_group);
-            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+            auto average_block = [&](auto runtime_offset, uint32_t out_block_index) {
                 uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
@@ -380,31 +405,21 @@ void kernel_main() {
 
                 // Partial/E[x]
                 dfb_x.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_x_id,
-                    dfb_scaler_id,
-                    dfb_ex_partial_id,
-                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
+                reduce_local_group<dfb_x_id, dfb_ex_partial_id, decltype(runtime_offset)::value>(out_block_h_actual);
                 dfb_x.pop_front(static_cast<uint16_t>(out_block_hw_normal));
 
                 dfb_ex_partial.wait_front(1);
+            };
+            // Each call site supplies its runtime-record offset as a template
+            // argument. reduce<Call>() alone interprets the record's shape.
+            for (uint32_t out_block_index = 0; out_block_index + 1 < num_out_blocks_padded; ++out_block_index) {
+                average_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
             }
+            average_block(std::integral_constant<uint32_t, 3>{}, num_out_blocks_padded - 1);
             // End Local Redcue
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_ex_external_id,
-                    dfb_scaler_global_id,
-                    dfb_ex_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required));
+                reduce_global_group<dfb_ex_global_id>();
                 if (num_cores_per_mcast_group > 1) {
                     dfb_ex.reserve_back(1);
                     dfb_ex.push_back(1);
@@ -415,7 +430,7 @@ void kernel_main() {
 
             // Start Variance Calc
             // Start Local Reduce
-            for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+            auto variance_block = [&](auto runtime_offset, uint32_t out_block_index) {
                 uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
@@ -544,29 +559,17 @@ void kernel_main() {
 
                 // Partial-Var(x)
                 dfb_xmm.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_xmm_id,
-                    dfb_scaler_id,
-                    dfb_ex2_partial_id,
-                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
+                reduce_local_group<dfb_xmm_id, dfb_ex2_partial_id, decltype(runtime_offset)::value>(out_block_h_actual);
                 dfb_xmm.pop_front(static_cast<uint16_t>(out_block_hw_normal));
+            };
+            for (uint32_t out_block_index = 0; out_block_index + 1 < num_out_blocks_padded; ++out_block_index) {
+                variance_block(std::integral_constant<uint32_t, 0>{}, out_block_index);
             }
+            variance_block(std::integral_constant<uint32_t, 3>{}, num_out_blocks_padded - 1);
             // End Local Reduce
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                compute_kernel_lib::reduce<
-                    PoolType::SUM,
-                    ReduceDim::REDUCE_SCALAR,
-                    dfb_ex_external_id,
-                    dfb_scaler_global_id,
-                    dfb_ex2_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required));
+                reduce_global_group<dfb_ex2_global_id>();
                 if (num_cores_per_mcast_group > 1) {
                     dfb_ex2.reserve_back(1);
                     dfb_ex2.push_back(1);

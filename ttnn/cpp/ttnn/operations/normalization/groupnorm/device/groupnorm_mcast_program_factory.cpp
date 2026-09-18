@@ -4,6 +4,7 @@
 
 #include "groupnorm_device_operation.hpp"
 #include "groupnorm_program_utils.hpp"
+#include "groupnorm_reduce_plans.hpp"
 #include "kernels/groupnorm_constants.hpp"
 
 #include <bit>
@@ -562,6 +563,27 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         .noc = reader_noc,
     };
 
+    const ttnn::kernel_lib::host::ReduceHardwareConfig reduce_hardware{
+        device->arch(), fp32_dest_acc_en, dst_full_sync_en};
+    const auto make_group_plan = [&](uint32_t rows, uint32_t factor) {
+        return use_welford ? GroupNormReducePlans{}
+                           : make_interleaved_groupnorm_reduce_plans(
+                                 rows,
+                                 block_wt,
+                                 num_out_blocks,
+                                 num_cores_per_mcast_group,
+                                 single_tile_size,
+                                 factor,
+                                 pad,
+                                 im_data_format,
+                                 reduce_hardware);
+    };
+    const auto reduce_group_1 =
+        make_group_plan(block_ht_group_1, num_rows_per_batch_per_core_group_1 * num_channels_per_group);
+    if (!use_welford) {
+        in2_CB_size = single_tile_size * reduce_group_1.local_auxiliary.tiles.size();
+    }
+
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {};
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args_group_1 = {
         {"is_mcast_sender", 1},
@@ -614,6 +636,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         .append_to(writer_mcast_sender_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
         .append_to(writer_mcast_sender_compile_time_args_group_1);
+    if (!use_welford) {
+        reduce_group_1.append_auxiliary_to(writer_mcast_sender_compile_time_args_group_1);
+    }
 
     std::string writer_kernel =
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
@@ -656,7 +681,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         eltwise_binary_defines["UNTILIZE_OUT"] = "1";
     }
 
-    std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_1 = {};
+    std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_1 = reduce_group_1.calls;
     std::unordered_map<std::string, uint32_t> mcast_sender_compute_named_compile_time_args = {
         {"is_mcast_sender", 1},
         {"do_gamma", static_cast<uint32_t>(gamma.has_value())},
@@ -693,7 +718,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"has_row_mask", static_cast<uint32_t>(pad.active)},
     };
 
-    std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {};
+    std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = reduce_group_1.calls;
     std::unordered_map<std::string, uint32_t> mcast_receiver_compute_named_compile_time_args = {
         {"is_mcast_sender", 0},
         {"do_gamma", static_cast<uint32_t>(gamma.has_value())},
@@ -1165,6 +1190,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         for (size_t j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
             CoreCoord virtual_core = virtual_group[j];
+            if (!reduce_group_1.local_runtime_args.empty()) {
+                auto& compute = j == 0 ? compute_sender_desc : compute_receiver_desc;
+                compute.runtime_args.emplace_back(core, reduce_group_1.local_runtime_args);
+            }
             uint32_t in0_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
             uint32_t out_tile_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
 
@@ -1277,8 +1306,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             }
             if (input_mask.has_value()) {
                 // Wrap on the set size, not the whole tensor: the row-masked set is an offset off this.
-                input_mask_tile_start_id =
-                    (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
+                input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
             }
         }
 

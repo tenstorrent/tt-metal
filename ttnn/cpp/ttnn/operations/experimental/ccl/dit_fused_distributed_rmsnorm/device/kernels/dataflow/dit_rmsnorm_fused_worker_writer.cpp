@@ -115,12 +115,13 @@ void kernel_main() {
     const uint32_t stat_tile_bytes = cb_stats_local.get_tile_size();
 
     // Populate compute's scalar/eps/trans_mat CBs before anything else.
+    using SumAuxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<w_transmat_args.next_compile_time_args_offset()>;
+    using AvgAuxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<SumAuxiliary::next_compile_time_args_offset()>;
     dit_rmsnorm_generate_scalars_and_transmat<
-        w_sum_cb,
-        w_avg_cb,
+        SumAuxiliary,
+        AvgAuxiliary,
         w_eps_cb,
         w_transmat_cb,
-        w_reduce_factor,
         static_cast<bool>(w_fuse_rope)>(w_eps_bits, TensorAccessor(w_transmat_args, transformation_mat_addr));
 
     uint32_t go_target = 0;

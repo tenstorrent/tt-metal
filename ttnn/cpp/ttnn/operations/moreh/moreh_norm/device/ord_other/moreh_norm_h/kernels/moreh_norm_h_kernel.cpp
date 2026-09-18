@@ -1,158 +1,77 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+constexpr uint32_t reduce_call_count = get_compile_time_arg_val(0);
+template <uint32_t I>
+using ReduceCall =
+    ttnn::kernel_lib::BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallAtT<1, I>, dfb::val, dfb::one, dfb::y, dfb::cal>;
+
 void kernel_main() {
-    const auto num_cols_per_core = get_arg(args::num_cols_per_core);
-    const auto Ht = get_arg(args::Ht);
-    const auto origin_h = get_arg(args::origin_h);
-
-    DataflowBuffer dfb_x_obj(dfb::x);            // input
-    DataflowBuffer dfb_one_obj(dfb::one);        // one
-    DataflowBuffer dfb_mask_h_obj(dfb::mask_h);  // mask_h
-
-    DataflowBuffer dfb_y_obj(dfb::y);  // output
-
-    // Compute-private intermediates: this kernel is their only toucher, so each is self-looped on the
-    // host (bound PRODUCER and CONSUMER under one accessor name) and one object drives both directions.
-    DataflowBuffer dfb_val_obj(dfb::val);        // f(x)
-    DataflowBuffer dfb_cal_obj(dfb::cal);        // calculate f(x) over dimension
-    DataflowBuffer dfb_reduce_obj(dfb::reduce);  // reduce f(x)
-
-    constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
-
+    const auto num_outputs = get_arg(args::num_cols_per_core);
+    const auto axis_tiles = get_arg(args::Ht);
+    constexpr uint32_t block_tiles = get_arg(args::reduce_block_tiles);
+    constexpr uint32_t buffer_tiles = get_arg(args::reduce_buffer_tiles);
+    const auto num_blocks = axis_tiles < block_tiles ? 1 : axis_tiles / block_tiles;
+    DataflowBuffer input(dfb::x);
+    DataflowBuffer values(dfb::val);
     compute_kernel_hw_startup(dfb::x, dfb::x, dfb::y);
 
-    dfb_one_obj.wait_front(onetile);  // comes from the reader
-
-    constexpr uint32_t TILE_H = 32;
-    const bool do_mask_h = (origin_h % TILE_H) != 0;
-    const auto mask_h = do_mask_h ? (origin_h % TILE_H) : TILE_H;
-
-    if (do_mask_h) {
-        dfb_mask_h_obj.wait_front(onetile);  // comes from the reader
-    }
-    for (uint32_t col_idx = 0; col_idx < num_cols_per_core; ++col_idx) {
-        for (uint32_t row_idx = 0; row_idx < Ht; ++row_idx) {
-            // f(x)
-            tile_regs_acquire();
-            dfb_x_obj.wait_front(onetile);  // comes from the reader
-            dfb_val_obj.reserve_back(onetile);
-
-            copy_tile_init_with_dt(dfb_x_obj);
-            copy_tile(dfb::x, 0, dst0);
-
-            if (do_mask_h && (row_idx == Ht - 1)) {
-                copy_tile_init_with_dt(dfb_mask_h_obj);
-                copy_tile(dfb::mask_h, 0, dst1);
-
-                mask_tile_init();
-#ifdef MINUS_INF
-                mask_posinf_tile(dst0, dst1);
-#else
-                mask_tile(dst0, dst1);
-#endif
-            }
-#ifdef IS_ZERO
-            unary_ne_tile_init();
-            unary_ne_tile(dst0, 0);
-#else
-            abs_tile_init();
-            abs_tile(dst0);
-#endif
-
-#ifdef MINUS_INF
-            negative_tile_init();
-            negative_tile(dst0);
-#endif
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, dfb_val_obj);
-            tile_regs_release();
-
-            dfb_x_obj.pop_front(onetile);
-            dfb_val_obj.push_back(onetile);
-
-            // calculate f(x) over dimension
-            if (row_idx == 0) {
-                tile_regs_acquire();
-                dfb_val_obj.wait_front(onetile);
-                dfb_cal_obj.reserve_back(onetile);
-
-                copy_tile_init_with_dt(dfb_val_obj);
-                copy_tile(dfb::val, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, dfb_cal_obj);
-                tile_regs_release();
-
-                dfb_val_obj.pop_front(onetile);
-                dfb_cal_obj.push_back(onetile);
-
-            } else {
-                tile_regs_acquire();
-                dfb_val_obj.wait_front(onetile);
-                dfb_cal_obj.wait_front(onetile);
-                dfb_cal_obj.reserve_back(onetile);
-#ifdef IS_ZERO
-                add_tiles_init_with_dt(dfb_val_obj, dfb_cal_obj);
-                add_tiles(dfb::val, dfb::cal, 0, 0, dst0);
-#else
-                copy_tile_init_with_dt(dfb_val_obj);
-                copy_tile(dfb::val, 0, dst0);
-
-                copy_tile_init_with_dt(dfb_cal_obj);
-                copy_tile(dfb::cal, 0, dst1);
-
-                binary_max_tile_init();
-                binary_max_tile(dst0, dst1, dst0);
-#endif
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, dfb_cal_obj);
-                tile_regs_release();
-
-                dfb_val_obj.pop_front(onetile);
-                dfb_cal_obj.pop_front(onetile);
-                dfb_cal_obj.push_back(onetile);
-            }
-        }
-        // reduce f(x)
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::cal, dfb::one, dfb::reduce>(
-            compute_kernel_lib::ReduceInputBlockShape::single());
-
-        tile_regs_acquire();
-
-        dfb_reduce_obj.wait_front(onetile);
-        dfb_y_obj.reserve_back(onetile);
-
-        copy_tile_init_with_dt(dfb_reduce_obj);
-        copy_tile(dfb::reduce, 0, dst0);
+    const auto post_reduce = [](uint32_t dst) {
 #ifdef MINUS_INF
         negative_tile_init();
-        negative_tile(dst0);
+        negative_tile(dst);
 #endif
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, dfb_y_obj);
-        tile_regs_release();
-
-        dfb_reduce_obj.pop_front(onetile);
-        dfb_y_obj.push_back(onetile);
+    };
+    for (uint32_t output = 0; output < num_outputs; ++output) {
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+            const auto remaining = axis_tiles - block * block_tiles;
+            const auto current_tiles = block + 1 == num_blocks ? remaining : block_tiles;
+            values.reserve_back(buffer_tiles);
+            for (uint32_t tile = 0; tile < current_tiles; ++tile) {
+                input.wait_front(1);
+                tile_regs_acquire();
+                reconfig_data_format_srca(dfb::x);
+                copy_init(dfb::x);
+                copy_tile(dfb::x, 0, 0);
+#ifdef IS_ZERO
+                unary_ne_tile_init();
+                unary_ne_tile(0, 0);
+#else
+                abs_tile_init();
+                abs_tile(0);
+#endif
+#ifdef MINUS_INF
+                negative_tile_init();
+                negative_tile(0);
+#endif
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_reconfig_data_format(dfb::val);
+                pack_tile<true>(0, dfb::val, tile);
+                tile_regs_release();
+                input.pop_front(1);
+            }
+            // Keep the resident block aligned across outputs. Only the logical
+            // tiles in the host call are read; unused tail entries need no data.
+            values.push_back(buffer_tiles);
+            if (block == 0) {
+                compute_kernel_lib::reduce<ReduceCall<0>>(post_reduce);
+            } else if constexpr (reduce_call_count > 1) {
+                if (block + 1 == num_blocks) {
+                    compute_kernel_lib::reduce<ReduceCall<reduce_call_count - 1>>(post_reduce);
+                } else {
+                    compute_kernel_lib::reduce<ReduceCall<1>>(post_reduce);
+                }
+            }
+            values.pop_front(buffer_tiles);
+        }
     }
-
-    dfb_one_obj.pop_front(onetile);
-    if (do_mask_h) {
-        dfb_mask_h_obj.pop_front(onetile);
-    }
+    DataflowBuffer(dfb::one).pop_front(get_arg(args::reduce_auxiliary_tiles));
 }

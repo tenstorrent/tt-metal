@@ -13,6 +13,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 void square(uint32_t n, DataflowBuffer& tmp) {
     tmp.reserve_back(n);
@@ -132,9 +133,9 @@ TT_KERNEL void compute(uint32_t wi_count) {
         x.wait_front(Vt);
         gate.wait_front(Vt);
         square(Vt, tmp);
-        compute_kernel_lib::
-            reduce<ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW, dfb::tmp, dfb::scaler, dfb::stats>(
-                compute_kernel_lib::ReduceInputBlockShape::of(1, Vt));
+        using Call = ttnn::kernel_lib::
+            BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, dfb::tmp, dfb::scaler, dfb::stats>;
+        compute_kernel_lib::reduce<Call>();
         stats.wait_front(1);
         inverse_rms(inv);
         inv.wait_front(1);

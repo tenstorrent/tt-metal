@@ -17,6 +17,99 @@
 #include <ttnn/tensor/layout/page_config.hpp>
 
 namespace ttnn::prim {
+ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
+    const tt::tt_metal::TensorSpec& input,
+    const tt::tt_metal::TensorSpec& output,
+    tt::tt_metal::ReduceOpMath math,
+    tt::tt_metal::ReduceOpDim dim,
+    float scalar,
+    ReduceFp32Mode fp32_mode,
+    const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware,
+    uint32_t Ht,
+    uint32_t Wt,
+    uint32_t NC,
+    bool identity_padded,
+    const RmPlan* row_major) {
+    using namespace tt::tt_metal;
+    namespace rh = ttnn::kernel_lib::host;
+    const auto tile = input.tile();
+    const uint32_t tile_h = tile.get_height();
+    const uint32_t tile_w = tile.get_width();
+    const uint32_t axis_tiles = dim == ReduceOpDim::W ? Wt : Ht;
+    const uint32_t chunk_tiles =
+        row_major ? (dim == ReduceOpDim::W ? row_major->wt_tiles_per_chunk : row_major->ht_tiles_per_chunk)
+                  : axis_tiles;
+    const uint32_t num_chunks = row_major ? tt::div_up(axis_tiles, chunk_tiles) : 1;
+    const uint32_t descriptors = std::min(num_chunks, 3U);
+    const uint32_t input_cb_tiles =
+        row_major ? std::max(2U, row_major->wt_tiles_per_chunk * row_major->ht_tiles_per_chunk) : 2U;
+    const auto input_cb_bytes =
+        row_major ? input_cb_tiles * tile.get_tile_size(datatype_to_dataformat_converter(input.data_type()))
+                  : 2 * tt::tt_metal::tile_size(input.data_type());
+    std::vector<rh::ReduceCbConfig> calls;
+    for (uint32_t i = 0; i < descriptors; ++i) {
+        uint32_t h = Ht * tile_h;
+        uint32_t w = Wt * tile_w;
+        uint32_t batches = NC;
+        if (row_major) {
+            // W staging pads every chunk to the same width; H's final chunk is shorter.
+            h = dim == ReduceOpDim::W
+                    ? tile_h
+                    : (i + 1 == descriptors ? axis_tiles - (num_chunks - 1) * chunk_tiles : chunk_tiles) * tile_h;
+            w = dim == ReduceOpDim::W ? chunk_tiles * tile_w : tile_w;
+            batches = 1;
+        } else if (dim == ReduceOpDim::H) {
+            if (!identity_padded) {
+                h = input.logical_shape()[input.logical_shape().rank() - 2];
+            }
+        } else if (dim == ReduceOpDim::W && !identity_padded) {
+            w = input.logical_shape()[input.logical_shape().rank() - 1];
+        }
+        auto block = rh::ReduceBlockSpec::tiled(h, w, input.data_type(), output.data_type(), batches, tile);
+        block.output_tile = output.tile();
+        calls.emplace_back(
+            0,
+            rh::ReduceCallConfig{
+                block,
+                math,
+                dim,
+                scalar,
+                fp32_mode,
+                (row_major && dim == ReduceOpDim::H ? compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop
+                                                    : compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile)});
+    }
+    auto sequence = rh::make_reduce_sequence_plan(calls, {1, 3, 2}, hardware);
+    for (auto& call : sequence.calls) {
+        // The kernel starts with its output format configured. Row-major mixed
+        // output formats must also restore the packer after tilize.
+        call.plan.reconfig_mode = input.data_type() == output.data_type()
+                                      ? compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT
+                                      : compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
+    }
+    if (row_major) {
+        for (auto& call : sequence.calls) {
+            auto& plan = call.plan;
+            if (dim == ReduceOpDim::H) {
+                // The producer emits one column in fixed packets of up to eight
+                // rows. The helper owns wait/pop, including unused tail slots.
+                plan.chunk = {.reduce_axis_tiles = chunk_tiles, .output_tiles = 1, .buffers = 1, .padded = true};
+                for (auto& cb : plan.cb_requirements) {
+                    if (cb.role == rh::ReduceCbRole::Input) {
+                        plan.total_owned_l1_bytes -= cb.total_size_bytes;
+                        cb.page_count = input_cb_tiles;
+                        cb.total_size_bytes = input_cb_bytes;
+                        plan.total_owned_l1_bytes += cb.total_size_bytes;
+                    }
+                }
+            }
+        }
+        if (num_chunks > 1) {
+            sequence.calls.back().accumulation_index = num_chunks - 1;
+        }
+    }
+    return sequence;
+}
+
 RmPlan make_rm_plan(
     const tt::tt_metal::Shape& padded_shape,
     const tt::tt_metal::Shape& logical_shape,

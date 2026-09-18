@@ -46,8 +46,11 @@ from ttnn.operations.toy_reduce_partial import toy_reduce_partial
         pytest.param((1, 1, 32, 32), -2, id="reduce_h__H=32_single_tile"),
     ],
 )
-def test_toy_reduce_partial(device, shape, dim):
+@pytest.mark.parametrize("negative_only", [False, True])
+def test_toy_reduce_partial(device, shape, dim, negative_only):
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    if negative_only:
+        torch_input = -torch_input.abs() - 1
 
     # PyTorch reference: max over the target dimension
     torch_expected = torch.max(torch_input.float(), dim=dim, keepdim=True).values

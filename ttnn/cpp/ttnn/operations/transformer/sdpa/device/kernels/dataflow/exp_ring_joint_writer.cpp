@@ -98,8 +98,10 @@ void kernel_main() {
     // The MUX CT args start after stats_args.
     constexpr auto stats_args_skip = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
+    using ReduceAuxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<stats_args_skip.next_compile_time_args_offset()>;
+
 #ifdef USE_MUX
-    constexpr uint32_t mux_ct_base = stats_args_skip.next_compile_time_args_offset();
+    constexpr uint32_t mux_ct_base = ReduceAuxiliary::next_compile_time_args_offset();
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(mux_ct_base + 0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(mux_ct_base + 1);
     constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(mux_ct_base + 2);
@@ -291,11 +293,8 @@ void kernel_main() {
 
     generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_identity_scale_in,
-        ckernel::PoolType::MAX,
-        ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<stats_args_skip.next_compile_time_args_offset()>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     // Lightweight mask: generate all mask tiles once into single CB before the ring loop.
     // Only needed when any K/joint dimension has padding that doesn't fill a chunk.

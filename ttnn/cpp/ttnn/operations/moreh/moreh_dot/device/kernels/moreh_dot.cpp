@@ -6,8 +6,14 @@
 
 #include "api/compute/eltwise_binary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+
+constexpr uint32_t reduce_call_count = get_compile_time_arg_val(0);
+template <uint32_t I>
+using ReduceCall = ttnn::kernel_lib::
+    BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallAtT<1, I>, dfb::im0, dfb::scaler, dfb::out, dfb::im1>;
 
 void kernel_main() {
     constexpr int onetile = 1;
@@ -26,6 +32,8 @@ void kernel_main() {
         dfb_c1.wait_front(onetile);
 
         tile_regs_acquire();
+        reconfig_data_format(dfb::in0, dfb::in1);
+        pack_reconfig_data_format(dfb::im0);
         mul_init(dfb::in0, dfb::in1);
         mul_tiles(dfb::in0, dfb::in1, 0, 0, 0);
         tile_regs_commit();
@@ -41,34 +49,17 @@ void kernel_main() {
 
         dfb_c24.push_back(onetile);
 
-        // reduce-w
-        if (last_out) {
-            compute_kernel_lib::reduce<
-                REDUCE_OP,
-                REDUCE_DIM,
-                dfb::im0,
-                dfb::scaler,
-                dfb::out,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                compute_kernel_lib::ReduceInputBlockShape::single(),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(dfb::im1, block));
+        if (block == 0) {
+            compute_kernel_lib::reduce<ReduceCall<0>>();
         } else {
-            compute_kernel_lib::reduce<
-                REDUCE_OP,
-                REDUCE_DIM,
-                dfb::im0,
-                dfb::scaler,
-                dfb::im1,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                compute_kernel_lib::ReduceInputBlockShape::single(),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(dfb::im1, block));
+            if constexpr (reduce_call_count > 1) {
+                if (last_out) {
+                    compute_kernel_lib::reduce<ReduceCall<reduce_call_count - 1>>();
+                } else {
+                    compute_kernel_lib::reduce<ReduceCall<1>>();
+                }
+            }
         }
     }
-    // The reduce helper waits on the scaler DFB (scaler) each block but never pops it; the single
-    // scaler tile is reused across all blocks. Pop it once at the end to balance the DFB.
-    dfb_c2.pop_front(onetile);
+    dfb_c2.pop_front(get_arg(args::reduce_auxiliary_tiles));
 }

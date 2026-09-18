@@ -10,6 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
 #include "api/dataflow/noc.h"
@@ -70,7 +71,6 @@ void kernel_main() {
     constexpr auto beta_is_row_major = get_arg(args::beta_is_row_major);
     constexpr auto dfb_length = get_arg(args::dfb_length);
     constexpr auto Wt = get_arg(args::Wt);  // Width in tiles
-    constexpr auto reduce_factor = get_arg(args::reduce_factor);
 
     const auto src_a = TensorAccessor(tensor::src);
     const auto src_stats = TensorAccessor(tensor::stats_src);
@@ -98,11 +98,10 @@ void kernel_main() {
 #endif
 
     // Generate constant tiles for layernorm compute
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        dfb::reduce,
-        ckernel::PoolType::AVG,
-        ckernel::ReduceDim::REDUCE_ROW,
-        reduce_factor>();
+#ifndef USE_WELFORD
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::reduce>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
+#endif
     const auto eps = get_arg(args::eps);
     // generate_bcast_col_scalar is a shared kernel-pool helper that still takes a CircularBuffer by
     // value, so the handle is wrapped here at the call site rather than passed as a DataflowBuffer.

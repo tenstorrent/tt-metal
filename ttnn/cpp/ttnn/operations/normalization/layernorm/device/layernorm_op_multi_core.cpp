@@ -12,6 +12,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -647,6 +648,17 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "Wt", "reader_start", "eps"}},
         .hw_config = create_reader_datamovement_config(device->arch()),
     };
+    if (!use_welford) {
+        // The raw compute kernels consume a full-tile scaler followed by a
+        // partial-width scaler, independently of the host planner's algorithm.
+        namespace rh = ttnn::kernel_lib::host;
+        rh::ReduceAuxiliaryPlan auxiliary{
+            0, {{1.0F, rh::ReduceAuxiliaryTileType::FirstRow, tt::constants::TILE_WIDTH}}};
+        if (W % tt::constants::TILE_WIDTH != 0) {
+            auxiliary.tiles.push_back({1.0F, rh::ReduceAuxiliaryTileType::FirstRow, W % tt::constants::TILE_WIDTH});
+        }
+        reader.advanced_options.compile_time_varargs = rh::ReduceAuxiliaryArgs(auxiliary).get_compile_time_args();
+    }
     if (input_is_row_major) {
         // Element size of the input tensor, for the row-major reader's address stride arithmetic.
         reader.compile_time_args.emplace("elem_size_bytes", static_cast<uint32_t>(a.element_size()));

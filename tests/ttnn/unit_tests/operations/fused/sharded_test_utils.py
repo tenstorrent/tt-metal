@@ -553,8 +553,17 @@ _LOGICAL_WIDTH_NORM_PAD_POISON = 1000.0  # poison the implicit tile padding so a
 #     final core holds a partially-valid tile followed by a fully-padding tile. E.g. 72 over 2 gives
 #     the final core one partially-valid tile (8 of its 32 columns valid) and one fully-padding tile.
 # In both, the op must normalize over the logical width, not the padded per-core width.
-UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES = [(96, 2), (224, 3), (72, 2), (200, 3)]
-UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS = ["w96_c2", "w224_c3", "w72_c2_nonaligned", "w200_c3_nonaligned"]
+# Widths 320 and 319 give four valid tiles on full cores and two on the final core:
+# the additive full-shard plan needs no scaler, while the native tail plan does.
+UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES = [(96, 2), (224, 3), (72, 2), (200, 3), (320, 3), (319, 3)]
+UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS = [
+    "w96_c2",
+    "w224_c3",
+    "w72_c2_nonaligned",
+    "w200_c3_nonaligned",
+    "w320_c3",
+    "w319_c3_nonaligned",
+]
 
 
 def run_sharded_norm_logical_width_multicore(
