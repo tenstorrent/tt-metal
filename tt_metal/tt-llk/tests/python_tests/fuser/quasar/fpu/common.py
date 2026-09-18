@@ -12,9 +12,17 @@ if TYPE_CHECKING:
     from fuser.l1_operation import L1Operation
 
 
+def _dest_format_config(dest_acc: str, math_fmt: DataFormat) -> tuple[str, str]:
+    int32_dest = dest_acc == "true" and math_fmt.needs_int8_math_config()
+    fp32_dest = dest_acc == "true" and not int32_dest
+    return str(fp32_dest).lower(), str(int32_dest).lower()
+
+
 def hw_configure_math(dest_acc: str, math_fmt: DataFormat) -> str:
+    fp32_dest, int32_dest = _dest_format_config(dest_acc, math_fmt)
+    implied_math_format = "false" if int32_dest == "true" else "true"
     return (
-        f"_llk_math_srcAB_hw_configure_<true, {dest_acc}, false>(\n"
+        f"_llk_math_srcAB_hw_configure_<{implied_math_format}, {fp32_dest}, {int32_dest}>(\n"
         f"    {math_fmt.cpp_enum_value}, {math_fmt.cpp_enum_value}\n"
         f");\n"
     )
@@ -25,8 +33,9 @@ def configure_math(
     old_math: DataFormat,
     new_math: DataFormat,
 ) -> str:
+    fp32_dest, int32_dest = _dest_format_config(dest_acc, new_math)
     return (
-        f"_llk_math_srcAB_hw_configure_<false, {dest_acc}, false>(\n"
+        f"_llk_math_srcAB_hw_configure_<false, {fp32_dest}, {int32_dest}>(\n"
         f"    {new_math.cpp_enum_value}, {new_math.cpp_enum_value}\n"
         f");\n"
     )
