@@ -110,7 +110,7 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 
     if (!operation_attributes.is_causal) {
         if (tensor_args.attn_mask.has_value()) {
-            // Causal attention verification
+            // Non-causal: an explicit mask is permitted, so validate its shape and dtype
             const auto& mask_tensor = tensor_args.attn_mask.value();
             const auto mask_shape = mask_tensor.padded_shape();
             const auto mask_shape_unpadded = mask_tensor.logical_shape();
@@ -147,8 +147,10 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
                 mask_tensor.dtype());
         }
     } else {
-        // Uncausal attention verification
-        TT_FATAL(not tensor_args.attn_mask.has_value(), "Must not have attn_mask tensor for non-causal attention");
+        // Causal: causality is applied from cur_pos on device, so an explicit mask is rejected
+        TT_FATAL(
+            not tensor_args.attn_mask.has_value(),
+            "attn_mask must not be provided when is_causal=True. Pass is_causal=False to use an explicit mask.");
     }
 
     const auto& paged_geo = operation_attributes.paged_cache_geometry;

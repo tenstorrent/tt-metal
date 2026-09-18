@@ -206,7 +206,12 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                 TT_FATAL(mask.padded_shape() == expected_shape, "Non-sharded mask shape must match expected shape");
             }
             for (uint32_t i = 1; i < tensors_args.input_tensor.padded_shape().rank() - 2; i++) {
-                TT_FATAL(mask.padded_shape()[i] == 1, "Non-sharded mask intermediate dimensions must be 1");
+                TT_FATAL(
+                    mask.padded_shape()[i] == 1,
+                    "Non-sharded mask intermediate dimensions must be 1, got {} at dimension {}. This path requires "
+                    "head-uniform masks; apply a per-head bias with a separate ttnn::add before ttnn::softmax.",
+                    mask.padded_shape()[i],
+                    i);
             }
             std::visit(
                 [&](const auto& program_config) {
@@ -503,12 +508,15 @@ Tensor scale_mask_softmax(
         TT_FATAL(
             mask.value().padded_shape()[-2] == 1 or
                 mask.value().padded_shape()[-2] == input_tensor.tensor_spec().tile().get_height(),
-            "Mask height must be 1 or input tensor tile height, got: {}",
+            "Mask height must be 1 or input tensor tile height ({}), got: {}. A full causal mask is not accepted "
+            "here; for causal attention use ttnn::transformer::scaled_dot_product_attention with is_causal=true.",
+            input_tensor.tensor_spec().tile().get_height(),
             mask.value().padded_shape()[-2]);
         for (uint32_t i = 1; i < input_tensor.padded_shape().rank() - 2; i++) {
             TT_FATAL(
                 mask.value().padded_shape()[i] == 1,
-                "Mask intermediate dimension {} must be 1, got: {}",
+                "Mask intermediate dimension {} must be 1, got: {}. This path requires head-uniform masks; apply a "
+                "per-head bias with a separate ttnn::add before ttnn::softmax.",
                 i,
                 mask.value().padded_shape()[i]);
         }
