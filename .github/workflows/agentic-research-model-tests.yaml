@@ -11,7 +11,7 @@ on:
         default: all
         options:
           - all
-          - llama3.1-8b-qb2
+          - AR-llama-3.1-8b
       sku:
         description: Hardware to test
         type: choice

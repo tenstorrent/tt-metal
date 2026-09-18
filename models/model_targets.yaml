@@ -6,7 +6,7 @@ description: Centralized perf/accuracy targets for models CI.
 # - TODO: explicit gap placeholder; excluded from normal target resolution and treated as missing/TODO by validator.
 # `prefill_time_to_first_token` values are in milliseconds (ms).
 targets:
-  llama3.1-8b-qb2:
+  AR-llama-3.1-8b:
     skus:
       p300x2:
         entries:
