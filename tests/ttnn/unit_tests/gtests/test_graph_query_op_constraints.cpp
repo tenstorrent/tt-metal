@@ -1310,10 +1310,11 @@ TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
     //   - block_w * tile_width(32) == shard_spec.shape[1]
     //   - Kt(=N/32) / num_cores == block_w
     //   - weight: ROW_MAJOR, padded_shape[-1]==32, volume == N
-    //   - stats: required by program factory unconditionally (must be TILE + WIDTH_SHARDED)
+    //   - stats: TILE + WIDTH_SHARDED, exactly ring_size tiles wide (or omitted, letting the op
+    //     allocate its own scratch)
     //   - output_mem_config: sharded ROW_MAJOR matching input
     // 8 cores × 2 tiles each: N=512, Kt=16, block_w=2, Kt/cores=2
-    // Stats on 1 core: stats_cb_size = Kt*tile_size = bank_size (no overflow).
+    // Stats on 1 core: stats_cb_size = ring_size*tile_size = bank_size (no overflow).
     static constexpr uint32_t kNumCores = 8;
     static constexpr uint32_t kTilesPerCore = 2;
     static constexpr uint32_t kTileWidth = 32;
@@ -1348,15 +1349,19 @@ TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
             ttnn::L1_MEMORY_CONFIG));
 
     // Stats: pre-allocated buffer for intermediate RMS stats gathered across devices.
-    // Must be TILE to avoid buffer->page_size() call in the program factory.
+    // Must be TILE to avoid buffer->page_size() call in the program factory, and exactly one tile per
+    // device on cluster_axis 1 so the op averages over the right device count.
     // Stats lives on 1 core (the aggregation point for multicast from all input cores).
-    // stats_cb_size = Kt * tile_size; bank_size = total_stats / 1 core = Kt * tile_size → equal
-    // If spread across kNumCores: bank_size = Kt*tile_size/kNumCores < stats_cb_size → FATAL.
+    // stats_cb_size = ring_size * tile_size; bank_size = total_stats / 1 core → equal.
+    // If spread across kNumCores: bank_size = stats_cb_size/kNumCores < stats_cb_size → FATAL.
+    const uint32_t stats_width = mesh_shape[1] * kTileWidth;
     const tt::tt_metal::ShardSpec stats_shard_spec{
-        CoreRangeSet{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}}, {kTileHeight, kN}, ShardOrientation::ROW_MAJOR};
+        CoreRangeSet{CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}}},
+        {kTileHeight, stats_width},
+        ShardOrientation::ROW_MAJOR};
     const tt::tt_metal::MemoryConfig stats_mem_cfg{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, stats_shard_spec};
     const auto stats_spec = tt::tt_metal::TensorSpec(
-        ttnn::Shape(ttnn::Array4D{1, 1, kTileHeight, kN}),
+        ttnn::Shape(ttnn::Array4D{1, 1, kTileHeight, stats_width}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), stats_mem_cfg));
 
