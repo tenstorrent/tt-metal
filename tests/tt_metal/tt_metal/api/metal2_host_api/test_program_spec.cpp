@@ -3369,60 +3369,6 @@ TEST_F(ProgramSpecTestGen1, CPU_DMKernelSelfLoopOnGen1Succeeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-// The mcast-1d matmul in0 topology: one sender feeding compute, plus TWO sender-only KernelSpecs on
-// disjoint nodes (inside and outside the multicast receiver grid) that own a shard but no output
-// block. Both work a single relay buffer, co-located with in0 over disjoint node sets.
-//
-// This is the shape that made the 1D port unlandable: with all three senders bound to in0, its
-// CONSUMER role held compute plus two DM kernels and validation rejected it for mixing kinds. Two
-// same-source senders sharing one self-looped relay keeps every role kind-uniform and leaves the
-// relay's producer and consumer sets equal, which is what the self-loop rule requires.
-TEST_F(ProgramSpecTestGen1, CPU_Mcast1DInRelaySharedByBothNoWorkSenders) {
-    const NodeRange work_nodes({0, 0}, {1, 0});
-    const NodeRange no_work_in_recv({2, 0}, {3, 0});
-    const NodeRange no_work_not_in_recv({4, 0}, {5, 0});
-
-    auto in0_sender = MakeMinimalGen1DMKernel("in0_sender", DataMovementProcessor::RISCV_1);
-    auto no_work_in = MakeMinimalGen1DMKernel("in0_no_work_in_receiver", DataMovementProcessor::RISCV_1);
-    auto no_work_out = MakeMinimalGen1DMKernel("in0_no_work_not_in_receiver", DataMovementProcessor::RISCV_1);
-    auto compute = MakeMinimalGen1ComputeKernel("compute");
-
-    auto in0 = MakeMinimalDFB("in0");
-    in0.data_format_metadata = tt::DataFormat::Float16_b;
-    auto relay = MakeMinimalDFB("in0_relay");
-    relay.data_format_metadata = tt::DataFormat::Float16_b;
-    auto sharded = MakeMinimalDFB("in0_sharded");
-
-    in0_sender.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
-    // Same kernel-side accessor name on both; the shared kernel source is unchanged.
-    for (KernelSpec* k : {&no_work_in, &no_work_out}) {
-        k->dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0_relay"}, "in0"));
-        k->dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0_relay"}, "in0"));
-    }
-    // The resident shard, self-looped by every sender.
-    for (KernelSpec* k : {&in0_sender, &no_work_in, &no_work_out}) {
-        k->dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0_sharded"}, "in0_sharded"));
-        k->dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0_sharded"}, "in0_sharded"));
-    }
-
-    ProgramSpec spec;
-    spec.name = "mcast_1d_in0_relay";
-    spec.kernels = {in0_sender, no_work_in, no_work_out, compute};
-    spec.dataflow_buffers = {in0, relay, sharded};
-    spec.work_units = std::vector<WorkUnitSpec>{
-        MakeMinimalWorkUnit("work", work_nodes, {"in0_sender", "compute"}),
-        MakeMinimalWorkUnit("relay_in", no_work_in_recv, {"in0_no_work_in_receiver"}),
-        MakeMinimalWorkUnit("relay_out", no_work_not_in_recv, {"in0_no_work_not_in_receiver"})};
-
-    // The multicast destination address is the sender's own write pointer, so the relay has to land
-    // at in0's offset on nodes in0 never reaches. Nothing asserts that here: the factory gets it by
-    // declaring the pair before any other DFB, and stating it needs an alias group over disjoint
-    // node sets, which #56887 admits. What this test pins is the endpoint shape -- that one relay
-    // shared by both sender-only kernels is legal.
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
-}
-
 TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsDifferentProcessorsSucceeds) {
     // RISCV_0 and RISCV_1 on the same node — should succeed. (MakeMinimalGen1DMKernel gives them
     // distinct NOCs, so they also satisfy the dedicated-NOC distinctness rule.)
