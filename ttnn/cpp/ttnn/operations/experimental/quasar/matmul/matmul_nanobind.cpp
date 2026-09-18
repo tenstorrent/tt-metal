@@ -668,7 +668,7 @@ void py_module(nb::module_& mod) {
             nb::arg("cores"),
             nb::arg("MN_chunk_M_tiles").noconvert(),
             nb::arg("MN_chunk_N_tiles").noconvert(),
-            nb::arg("K_iteration_tiles").noconvert() = 0,
+            nb::arg("K_chunk_tiles").noconvert() = 0,
             nb::arg("subblock_M_tiles").noconvert() = 0,
             nb::arg("subblock_N_tiles").noconvert() = 0,
             nb::arg("row_major_cores") = true)
@@ -681,8 +681,8 @@ void py_module(nb::module_& mod) {
         .def_rw("MN_chunk_N_tiles", &MatmulUnifiedProgramConfig::MN_chunk_N_tiles, R"doc(
             Width of the MN chunk of C each core produces, in tiles.
         )doc")
-        .def_rw("K_iteration_tiles", &MatmulUnifiedProgramConfig::K_iteration_tiles, R"doc(
-            K tiles accumulated per K iteration (one A slice and one B slice resident at a time); must
+        .def_rw("K_chunk_tiles", &MatmulUnifiedProgramConfig::K_chunk_tiles, R"doc(
+            K tiles accumulated per K chunk (one A slice and one B slice resident at a time); must
             divide K in tiles. 0 = auto (largest divisor <= 8 whose rings fit L1).
         )doc")
         .def_rw("subblock_M_tiles", &MatmulUnifiedProgramConfig::subblock_M_tiles, R"doc(
@@ -698,12 +698,12 @@ void py_module(nb::module_& mod) {
         )doc")
         .def("__repr__", [](const MatmulUnifiedProgramConfig& config) {
             return fmt::format(
-                "MatmulUnifiedProgramConfig(cores={}, MN_chunk_M_tiles={}, MN_chunk_N_tiles={}, K_iteration_tiles={}, "
+                "MatmulUnifiedProgramConfig(cores={}, MN_chunk_M_tiles={}, MN_chunk_N_tiles={}, K_chunk_tiles={}, "
                 "subblock_M_tiles={}, subblock_N_tiles={}, row_major_cores={})",
                 config.cores.str(),
                 config.MN_chunk_M_tiles,
                 config.MN_chunk_N_tiles,
-                config.K_iteration_tiles,
+                config.K_chunk_tiles,
                 config.subblock_M_tiles,
                 config.subblock_N_tiles,
                 config.row_major_cores);

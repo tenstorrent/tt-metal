@@ -27,7 +27,7 @@ namespace ttnn::prim::qsr {
 //                produces its chunks for every batch
 //   subblock     the subblock_M_tiles x subblock_N_tiles tiles of a chunk accumulated in DST at once (one
 //                matmul_block call per K tile); "block" means this and nothing else
-//   K iteration  K_iteration_tiles of the inner dimension; one A slice + one B slice per iteration
+//   K chunk  K_chunk_tiles of the inner dimension; one A slice + one B slice per K chunk
 struct UnifiedMatmulPlan {
     uint32_t M_tiles = 0;
     uint32_t K_tiles = 0;
@@ -38,8 +38,8 @@ struct UnifiedMatmulPlan {
     // Blocking, after the config's auto fields are resolved.
     uint32_t MN_chunk_M_tiles = 0;
     uint32_t MN_chunk_N_tiles = 0;
-    uint32_t K_iteration_tiles = 0;
-    uint32_t num_K_iterations = 0;  // K_tiles / K_iteration_tiles
+    uint32_t K_chunk_tiles = 0;
+    uint32_t num_K_chunks = 0;  // K_tiles / K_chunk_tiles
     uint32_t subblock_M_tiles = 0;
     uint32_t subblock_N_tiles = 0;
 

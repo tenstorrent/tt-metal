@@ -56,7 +56,7 @@ constexpr const char* KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/quasar
 // validate_ring_extent in dataflow_buffer.cpp). Enforced on every arch so a config that is legal on
 // Wormhole never becomes a program-creation FATAL on Quasar.
 constexpr uint64_t MAX_DFB_RING_BYTES = 65535ull * 16ull;
-constexpr uint32_t MAX_AUTO_K_ITERATION_TILES = 8;
+constexpr uint32_t MAX_AUTO_K_CHUNK_TILES = 8;
 
 uint64_t l1_budget_bytes(tt::tt_metal::IDevice* device) {
     const uint32_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -67,14 +67,14 @@ uint64_t l1_budget_bytes(tt::tt_metal::IDevice* device) {
     return l1_ceiling - l1_base;
 }
 
-// Fills the ring sizing of `plan` for a given K iteration. Returns the total footprint in bytes.
-uint64_t size_rings(UnifiedMatmulPlan& plan, uint32_t K_iteration_tiles, bool fp32_dest_acc_en, bool packer_l1_acc) {
-    plan.K_iteration_tiles = K_iteration_tiles;
-    plan.num_K_iterations = plan.K_tiles / K_iteration_tiles;
+// Fills the ring sizing of `plan` for a given K chunk. Returns the total footprint in bytes.
+uint64_t size_rings(UnifiedMatmulPlan& plan, uint32_t K_chunk_tiles, bool fp32_dest_acc_en, bool packer_l1_acc) {
+    plan.K_chunk_tiles = K_chunk_tiles;
+    plan.num_K_chunks = plan.K_tiles / K_chunk_tiles;
 
-    // The packer accumulates partials in L1 only when there are enough K iterations for the reconfig overhead
+    // The packer accumulates partials in L1 only when there are enough K chunks for the reconfig overhead
     // to pay off (the last step spills and reloads either way, so more than two).
-    plan.packer_l1_acc_en = packer_l1_acc && plan.num_K_iterations > 2;
+    plan.packer_l1_acc_en = packer_l1_acc && plan.num_K_chunks > 2;
     plan.C_partials_format = plan.packer_l1_acc_en
                                  ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                  : (fp32_dest_acc_en ? tt::DataFormat::Float32 : plan.C_format);
@@ -87,12 +87,11 @@ uint64_t size_rings(UnifiedMatmulPlan& plan, uint32_t K_iteration_tiles, bool fp
     plan.C_slot_bytes = tt::tile_size(plan.C_format);
     plan.C_partials_slot_bytes = tt::tile_size(plan.C_partials_format);
 
-    const uint32_t A_slice_tiles = plan.MN_chunk_M_tiles * K_iteration_tiles;
-    const uint32_t B_slice_tiles = K_iteration_tiles * plan.MN_chunk_N_tiles;
+    const uint32_t A_slice_tiles = plan.MN_chunk_M_tiles * K_chunk_tiles;
+    const uint32_t B_slice_tiles = K_chunk_tiles * plan.MN_chunk_N_tiles;
     const uint32_t MN_chunk_tiles = plan.MN_chunk_M_tiles * plan.MN_chunk_N_tiles;
     // Double-buffer the slices whenever more than one slice passes through the ring.
-    const bool more_than_one_slice =
-        (uint64_t)plan.batch_size * plan.max_MN_chunks_per_core * plan.num_K_iterations > 1;
+    const bool more_than_one_slice = (uint64_t)plan.batch_size * plan.max_MN_chunks_per_core * plan.num_K_chunks > 1;
     const uint32_t slice_ring_depth = more_than_one_slice ? 2 : 1;
     plan.A_slice_ring_slots = A_slice_tiles * slice_ring_depth;
     plan.B_slice_ring_slots = B_slice_tiles * slice_ring_depth;
@@ -102,8 +101,8 @@ uint64_t size_rings(UnifiedMatmulPlan& plan, uint32_t K_iteration_tiles, bool fp
     // Aliasing C_partials onto MN_chunk when a core produces more than one MN chunk (counting batches) is a race: the
     // writer may still be draining MN chunk i from MN_chunk while the compute packs MN chunk i+1's first partials into
     // the same bytes. Alias only when the partials can never be live while MN_chunk holds unread data: a single MN
-    // chunk per core, or no partials at all (one K iteration).
-    const bool partials_ever_written = plan.num_K_iterations > 1;
+    // chunk per core, or no partials at all (one K chunk).
+    const bool partials_ever_written = plan.num_K_chunks > 1;
     const bool one_MN_chunk_per_core = plan.batch_size == 1 && plan.max_MN_chunks_per_core == 1;
     plan.alias_C_partials_onto_MN_chunk =
         (plan.C_partials_format == plan.C_format) && (!partials_ever_written || one_MN_chunk_per_core);
@@ -265,29 +264,28 @@ UnifiedMatmulPlan plan_unified_matmul(
         dst_capacity_tiles,
         fp32_dest_acc_en);
 
-    // ---- Formats, K iteration and ring sizing ----
+    // ---- Formats, K chunk and ring sizing ----
     plan.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
     plan.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
     plan.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
     const uint64_t l1_budget = l1_budget_bytes(A.device());
-    if (config.K_iteration_tiles == 0) {
+    if (config.K_chunk_tiles == 0) {
         // Largest divisor of K_tiles (capped) whose rings fit; 1 is the floor and must fit.
         uint32_t chosen = 0;
-        for (uint32_t K_iteration_tiles = std::min<uint32_t>(plan.K_tiles, MAX_AUTO_K_ITERATION_TILES);
-             K_iteration_tiles >= 1;
-             --K_iteration_tiles) {
-            if (plan.K_tiles % K_iteration_tiles != 0) {
+        for (uint32_t K_chunk_tiles = std::min<uint32_t>(plan.K_tiles, MAX_AUTO_K_CHUNK_TILES); K_chunk_tiles >= 1;
+             --K_chunk_tiles) {
+            if (plan.K_tiles % K_chunk_tiles != 0) {
                 continue;
             }
-            size_rings(plan, K_iteration_tiles, fp32_dest_acc_en, packer_l1_acc);
+            size_rings(plan, K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc);
             if (rings_fit(plan, l1_budget)) {
-                chosen = K_iteration_tiles;
+                chosen = K_chunk_tiles;
                 break;
             }
         }
         TT_FATAL(
             chosen > 0,
-            "MatmulUnifiedProgramConfig: a {}x{}-tile MN chunk does not fit L1 even with K_iteration_tiles=1 "
+            "MatmulUnifiedProgramConfig: a {}x{}-tile MN chunk does not fit L1 even with K_chunk_tiles=1 "
             "(needs {} B, budget {} B, max ring {} B); shrink MN_chunk_M_tiles / MN_chunk_N_tiles",
             plan.MN_chunk_M_tiles,
             plan.MN_chunk_N_tiles,
@@ -296,18 +294,18 @@ UnifiedMatmulPlan plan_unified_matmul(
             MAX_DFB_RING_BYTES);
     } else {
         TT_FATAL(
-            plan.K_tiles % config.K_iteration_tiles == 0,
-            "K_iteration_tiles ({}) must divide K_tiles ({})",
-            config.K_iteration_tiles,
+            plan.K_tiles % config.K_chunk_tiles == 0,
+            "K_chunk_tiles ({}) must divide K_tiles ({})",
+            config.K_chunk_tiles,
             plan.K_tiles);
-        size_rings(plan, config.K_iteration_tiles, fp32_dest_acc_en, packer_l1_acc);
+        size_rings(plan, config.K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc);
         TT_FATAL(
             rings_fit(plan, l1_budget),
-            "MatmulUnifiedProgramConfig: rings for a {}x{}-tile MN chunk with K_iteration_tiles={} do not fit "
+            "MatmulUnifiedProgramConfig: rings for a {}x{}-tile MN chunk with K_chunk_tiles={} do not fit "
             "(needs {} B, budget {} B, max ring {} B: A slice {} B, B slice {} B, MN chunk {} B, C partials {} B)",
             plan.MN_chunk_M_tiles,
             plan.MN_chunk_N_tiles,
-            plan.K_iteration_tiles,
+            plan.K_chunk_tiles,
             plan.l1_bytes,
             l1_budget,
             MAX_DFB_RING_BYTES,
@@ -438,8 +436,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"broadcast_B_over_batch", plan.broadcast_B_over_batch ? 1u : 0u},
                 {"MN_chunk_M_tiles", plan.MN_chunk_M_tiles},
                 {"MN_chunk_N_tiles", plan.MN_chunk_N_tiles},
-                {"K_iteration_tiles", plan.K_iteration_tiles},
-                {"num_K_iterations", plan.num_K_iterations},
+                {"K_chunk_tiles", plan.K_chunk_tiles},
+                {"num_K_chunks", plan.num_K_chunks},
                 {"A_last_K_tile_valid_columns", A_last_K_tile_valid_columns},
             },
         .runtime_arg_schema =
@@ -525,8 +523,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .compile_time_args =
             {
                 {"batch_size", plan.batch_size},
-                {"K_iteration_tiles", plan.K_iteration_tiles},
-                {"num_K_iterations", plan.num_K_iterations},
+                {"K_chunk_tiles", plan.K_chunk_tiles},
+                {"num_K_chunks", plan.num_K_chunks},
                 {"MN_chunk_M_tiles", plan.MN_chunk_M_tiles},
                 {"MN_chunk_N_tiles", plan.MN_chunk_N_tiles},
                 {"subblock_M_tiles", plan.subblock_M_tiles},
