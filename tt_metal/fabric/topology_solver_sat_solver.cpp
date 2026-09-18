@@ -4,7 +4,9 @@
 
 #include "topology_solver_sat_solver.hpp"
 
+#include <chrono>
 #include <climits>
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <string_view>
@@ -187,8 +189,31 @@ static std::unique_ptr<SatEngine> make_engine() {
     return std::make_unique<CadicalSatEngine>();
 }
 
+// ── Optional API profiler (TT_TOPO_SAT_PROFILE=1) ────────────────────────────────────────────────────────
+// Counts SAT-engine API calls, times solves, and tracks how many solver instances a mapping creates — used to
+// find API-usage hotspots (like the O(N^2) reserve). Zero cost when the env var is unset.
+namespace {
+struct SatProfile {
+    bool on = std::getenv("TT_TOPO_SAT_PROFILE") != nullptr;
+    long long adds = 0, vars = 0, assumes = 0, solves = 0, vals = 0, blocks_end = 0;
+    double solve_seconds = 0.0;
+};
+long long g_sat_instances = 0;  // total TopologySatSolver instances created this process
+}  // namespace
+
 struct TopologySatSolver::Impl {
     std::unique_ptr<SatEngine> engine = make_engine();
+    SatProfile prof;
+    Impl() { ++g_sat_instances; }
+    ~Impl() {
+        if (prof.on) {
+            std::fprintf(
+                stderr,
+                "[sat-profile] instance#%lld: vars=%lld adds=%lld assumes=%lld solves=%lld vals=%lld "
+                "solve_time=%.3fs\n",
+                g_sat_instances, prof.vars, prof.adds, prof.assumes, prof.solves, prof.vals, prof.solve_seconds);
+        }
+    }
 };
 
 TopologySatSolver::TopologySatSolver() : impl_(std::make_unique<Impl>()) {}
@@ -207,19 +232,47 @@ TopologySatSolver& TopologySatSolver::operator=(TopologySatSolver&&) noexcept = 
 int TopologySatSolver::declare_one_more_variable() {
     ++next_var_;
     impl_->engine->reserve(next_var_);
+    ++impl_->prof.vars;
     return next_var_;
 }
 
 void TopologySatSolver::protect_variable(int var) { impl_->engine->protect_variable(var); }
 
-void TopologySatSolver::add(int lit) { impl_->engine->add(lit); }
+void TopologySatSolver::add(int lit) {
+    impl_->engine->add(lit);
+    ++impl_->prof.adds;
+}
 
-void TopologySatSolver::assume(int lit) { impl_->engine->assume(lit); }
+void TopologySatSolver::assume(int lit) {
+    impl_->engine->assume(lit);
+    ++impl_->prof.assumes;
+}
 
-int TopologySatSolver::solve() { return impl_->engine->solve(); }
+int TopologySatSolver::solve() {
+    ++impl_->prof.solves;
+    if (!impl_->prof.on) {
+        return impl_->engine->solve();
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    const int r = impl_->engine->solve();
+    impl_->prof.solve_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    return r;
+}
 
-int TopologySatSolver::solve_limited(int max_conflicts) { return impl_->engine->solve_limited(max_conflicts); }
+int TopologySatSolver::solve_limited(int max_conflicts) {
+    ++impl_->prof.solves;
+    if (!impl_->prof.on) {
+        return impl_->engine->solve_limited(max_conflicts);
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    const int r = impl_->engine->solve_limited(max_conflicts);
+    impl_->prof.solve_seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    return r;
+}
 
-int TopologySatSolver::val(int lit) const { return impl_->engine->val(lit); }
+int TopologySatSolver::val(int lit) const {
+    ++impl_->prof.vals;
+    return impl_->engine->val(lit);
+}
 
 }  // namespace tt::tt_fabric::detail
