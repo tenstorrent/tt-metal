@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compile_time_args.h"
+#include "dev_mem_map.h"
 
 // A CCE reaches GDDR through its remapper at a flat 64-bit address, not over the NOC, so the two
 // GDDR addresses arrive as low/high pairs of 32-bit compile-time args.
@@ -11,7 +12,7 @@ constexpr uint64_t join_addr(uint32_t low, uint32_t high) { return (static_cast<
 void kernel_main() {
     constexpr uint64_t src_gddr_addr = join_addr(get_compile_time_arg_val(0), get_compile_time_arg_val(1));
     constexpr uint64_t dst_gddr_addr = join_addr(get_compile_time_arg_val(2), get_compile_time_arg_val(3));
-    constexpr uint32_t staging_addr = get_compile_time_arg_val(4);
+    constexpr uint32_t staging_addr = get_compile_time_arg_val(4) + MEM_L1_UNCACHED_BASE;
     constexpr uint32_t num_words = get_compile_time_arg_val(5);
 
     volatile uint32_t* src = reinterpret_cast<volatile uint32_t*>(src_gddr_addr);
