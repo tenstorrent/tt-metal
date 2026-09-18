@@ -48,6 +48,10 @@ _PRESETS: dict[tuple[int, ...], dict] = {
     (2, 2): {"cfg": (1, 0), "sp": (2, 0), "tp": (2, 1), "num_links": 2},
     (2, 4): {"cfg": (2, 1), "sp": (2, 0), "tp": (2, 1), "num_links": 1},
     (4, 8): {"cfg": (2, 1), "sp": (4, 0), "tp": (4, 1), "num_links": 4},
+    # Four chips in a line (a Galaxy column / row or a QuietBox relabeled): tensor parallel x4, CFG as
+    # batch 2, no sequence parallelism. The fastest 4-chip layout measured (0.233 s/step bf16).
+    (4, 1): {"cfg": (1, 0), "sp": (1, 1), "tp": (4, 0), "num_links": 2},
+    (1, 4): {"cfg": (1, 0), "sp": (1, 0), "tp": (4, 1), "num_links": 2},
 }
 
 
@@ -71,7 +75,7 @@ class StableDiffusion3PipelineConfig:
     # Spatial-parallel VAE decoder on the shared VAE library (vae_sd35_spatial.py): the image is split
     # across the VAE submesh by width/height with halo exchange, unpatchify and uint8 conversion run on
     # device, and the decode traces. Off: the channel-TP decoder on the reshaped 1x4 mesh.
-    vae_spatial: bool = False
+    vae_spatial: bool = True
     vae_use_conv3d: bool = True
 
     @classmethod
@@ -79,7 +83,7 @@ class StableDiffusion3PipelineConfig:
         cls,
         *,
         mesh_shape: ttnn.MeshShape,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: ttnn.Topology = ttnn.Topology.Ring,
         num_links: int | None = None,
         dit_parallel_config: DiTParallelConfig | None = None,
         encoder_parallel_config: EncoderParallelConfig | None = None,
@@ -90,7 +94,7 @@ class StableDiffusion3PipelineConfig:
         cfg_enabled: bool = True,
         max_t5_sequence_length: int = 256,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
-        vae_spatial: bool = False,
+        vae_spatial: bool = True,
         vae_use_conv3d: bool = True,
     ) -> StableDiffusion3PipelineConfig:
         preset = _PRESETS.get(tuple(mesh_shape), {})
@@ -279,7 +283,7 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         guidance_scale: float = 3.5,
         traced: bool = False,
         # currently defaults to off due to ttnn.synchronize_device inside vae_all_gather
-        vae_traced: bool | None = False,
+        vae_traced: bool | None = None,
         encoder_traced: bool | None = None,
         clip_skip: int | None = None,
         on_event: PipelineEventCallback | None = None,
@@ -291,7 +295,8 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         negative_prompts_2 = negative_prompts_2 if negative_prompts_2 is not None else negative_prompts
         negative_prompts_3 = negative_prompts_3 if negative_prompts_3 is not None else negative_prompts
 
-        vae_traced = vae_traced if vae_traced is not None else traced
+        # The spatial VAE traces; the legacy decoder synchronizes the host inside its all-gathers and cannot.
+        vae_traced = vae_traced if vae_traced is not None else (traced and self._vae_spatial)
         encoder_traced = encoder_traced if encoder_traced is not None else traced
         if guidance_scale > 1 and not self._cfg_enabled:
             msg = "guidance_scale > 1 requires CFG to be enabled"

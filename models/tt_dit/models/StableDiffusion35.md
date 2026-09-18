@@ -77,6 +77,28 @@ To change the step count, edit `num_inference_steps` (the last field) in the par
 ```
 
 
+### Blackhole, four chips in a line (tp4)
+
+On a 4x1 or 1x4 mesh (a Galaxy column, or a QuietBox relabeled) the pipeline defaults to tensor
+parallel x4 with the CFG pair as batch 2, Ring fabric with the fused all-gather-matmul /
+matmul-reduce-scatter path, the streaming joint SDPA kernel, and the spatial-parallel VAE decoder
+(`vae_sd35_spatial.py`, traced). Open the mesh with `fabric_config=FABRIC_1D_RING` and
+`l1_small_size=65536`; nothing else needs to be passed:
+
+```python
+pipeline = StableDiffusion3Pipeline(
+    device=mesh_device,  # shape (4, 1) or (1, 4)
+    config=StableDiffusion3PipelineConfig.default(mesh_shape=mesh_device.shape),
+)
+```
+
+Measured on a Galaxy column, bf16, CFG on, 1024x1024: 0.233 s per step, 5.0 s at 20 steps,
+2.7 s at 10 steps (VAE 0.20 s). Before these changes the same column ran 0.338 s per step
+with a 0.80 s VAE (7.7 s at 20 steps). Env switches for A/B runs: `SD35_FUSED_TP=0`,
+`SD35_FF2_MMRS=0`, `SD35_MM_DEFAULT_BLOCKING=1`, `SD35_SDPA_LEGACY=1`,
+`TT_JOINT_SDPA_NO_STREAMING=1`, `TT_JOINT_SDPA_NO_KV_CHAIN=1`, and
+`StableDiffusion3PipelineConfig.default(..., vae_spatial=False, topology=ttnn.Topology.Linear)`.
+
 ## Scalability
 
 SD3.5-Large has been implemented to support execution on 8-chip (LoudBox and QuietBox) as well as 32-chip (Galaxy) systems.
