@@ -169,9 +169,7 @@ auto launch_mux_workers(
         "l1_small_size > 0 (16384 is sufficient) so semaphores are placed in L1_SMALL, above the mux.",
         mux_core_range_set.str());
 
-    // Static: the L1_SMALL slice is flush with the top of worker L1, so its floor is the end of the regular
-    // L1 bank. Unlike the occupancy reading this cannot change as buffers come and go, so a mux map built
-    // against it never goes stale and stays valid for the lifetime of the cached program.
+    // Base + the L1 bank size is the floor of the L1_SMALL region, which the mux stays below (#56769).
     const size_t l1_small_floor_address = l1_unreserved_base_address +
                                           mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
 

@@ -729,8 +729,7 @@ AllToAllAsyncGenericProgram::create_at(
 
     constexpr uint8_t num_mux_buffers_per_channel = 2;
     const uint32_t mux_config_clients = std::max(1u, workers_per_direction);
-    // Pin the mux below the L1_SMALL slice so its map can never overlap a GlobalSemaphore (#56769). Static
-    // bound, so it cannot go stale in the program cache; equals the physical L1 end when l1_small_size = 0.
+    // Base + the L1 bank size is the floor of the L1_SMALL region, which the mux stays below (#56769).
     const size_t mux_l1_base_address = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_l1_small_floor_address =
         mux_l1_base_address + device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);

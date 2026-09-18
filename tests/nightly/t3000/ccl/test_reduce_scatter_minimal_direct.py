@@ -232,11 +232,7 @@ RS_DIRECT_SHAPE_IDS = ["dim3_w256", "dim2_h256"]
 RS_DIRECT_TRACE_CASES = [(True, 3), (False, 2)]
 RS_DIRECT_TRACE_IDS = ["trace", "no_trace"]
 
-# The shape ttnn.reduce_scatter's auto-dispatch actually hands this op in DeepSeek-V3's TG MoE decode
-# block: 7168 wide bf16 per device = 458,752 B, just under the 512 KB dispatch gate. Unlike the small
-# shapes above it has chunks to spare -- 56 tiles/slice over 7 chunks on a 4-ring -- so it is also the
-# only case here that a multi-link run does not clamp straight back to one link. Shared with the tg
-# module, which runs it on the whole 8x4 mesh.
+# Exercises 8x4 mesh in the tests/nighty/ccl/tg/test_minimal_reduce_scatter_direct.py
 RS_DIRECT_DEEPSEEK_SHAPES = [([1, 1, 32, 7168], 3)]
 RS_DIRECT_DEEPSEEK_SHAPE_IDS = ["deepseek_dim3_w7168"]
 
