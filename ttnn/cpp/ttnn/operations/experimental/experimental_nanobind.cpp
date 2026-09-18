@@ -50,6 +50,7 @@
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/matmul_decode/matmul_decode_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/fabric_mux/fabric_mux_nanobind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
 #include "ttnn/operations/experimental/fft/fft_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/quasar_nanobind.hpp"
@@ -194,6 +195,7 @@ void py_module(nb::module_& mod) {
     bind_tensor_prefetcher(mod);
 
     // CCL ops
+    fabric_mux::bind_fabric_mux(mod);
     auto m_experimental_ccl = mod.def_submodule("ccl_experimental", "experimental collective communication operations");
     ccl::py_module(m_experimental_ccl);
 
