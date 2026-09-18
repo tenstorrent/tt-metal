@@ -1,17 +1,38 @@
 # Plan 2 — Incremental inter-mesh solving + stronger rejection
 
-**Priority: 3 (lowest of the three).** Needs a fix inside the solver's SAT session before it is safe.
+**Status: core done.** The session no longer silently ignores constraint changes, and the inter-mesh
+loop uses a live SAT session.
 
-Tracking issue: [#54623 — \[Auto-mapper\] Verify inter-mesh connectivity in heterogeneous placements via
-SAT-based joint planning](https://github.com/tenstorrent/tt-metal/issues/54623)
-Related: #40640 (SAT engine), #50510 (epic).
-Sibling plans: [Plan 1 — PGD-shape-aware inter-mesh constraints](TOPOLOGY_MAPPER_PLAN_1_PGD_SHAPE_INTERMESH_CONSTRAINTS.md),
-[Plan 3 — connectivity-aware PGD placement](TOPOLOGY_MAPPER_PLAN_3_CONNECTIVITY_AWARE_PGD_PLACEMENT.md).
+| Item | Status |
+| --- | --- |
+| Ctor snapshots the problem; `next()` has no restart args | **Done** |
+| No `start()`; destroy-and-construct to change graphs/mode/engine/host cap | **Done** |
+| Session immovable; callers hold `unique_ptr` | **Done** |
+| `MappingConstraints` reject-before-mutate (`commit_trial`) | **Done** |
+| Live `add_forbidden` / `add_required` → in-place `ConstraintIndexData` → `refresh_constraints()` | **Done** |
+| SAT adds units from the existing encode; DFS re-reads the same index pointer | **Done** |
+| `exclude_mapping` / `exclude_mappings` block now | **Done** |
+| `MultiMeshSolutionEnumerator` live-forbids intra-mesh failing pairs (no reconstruct fallback) | **Done** |
+| Host-cap loosening via destroy-and-construct (cannot retract clauses) | **Done** (intentional) |
+| Public `excluded()` / `already_enumerated()` | **Not done** (explicitly deferred) |
+| Shape-class forbidden generalization / capacity precheck / intra-mesh verdict cache (§5) | **Not done** (optional) |
 
-> **Goal.** Replace the stateless `solve_topology_mapping` in the inter-mesh retry loop with the
-> already-declared `inter_mesh_session` (`topology_mapper_utils.cpp:3433`), so the hard CNF is encoded
-> once and each retry only appends clauses. Then generalize the rejections so each failure prunes more
-> than one pair.
+The old "next() takes full args and ignores new constraints" bug is gone. Do **not** re-add
+`topology_sat_session_add_forbidden_pair` as a separate bridge — `SatSearchBackend::refresh_constraints`
+is that API.
+
+**Priority:** remaining §5 items are optional. [Plan 5](TOPOLOGY_MAPPER_PLAN_5_PLACEMENT_AS_TOPOLOGY_SOLVER_API.md)
+and [Plan 6](TOPOLOGY_MAPPER_PLAN_6_COLLAPSE_INTERMESH_SAT.md) are the next architecture, not more MeshId
+rejection heuristics.
+
+Tracking issue: [#54623](https://github.com/tenstorrent/tt-metal/issues/54623)
+Sibling plans: [index](TOPOLOGY_MAPPER_HETEROGENEOUS_PLACEMENT_PLAN.md),
+[Plan 1](TOPOLOGY_MAPPER_PLAN_1_PGD_SHAPE_INTERMESH_CONSTRAINTS.md),
+[Plan 5](TOPOLOGY_MAPPER_PLAN_5_PLACEMENT_AS_TOPOLOGY_SOLVER_API.md).
+
+> **Goal (original).** Replace the stateless `solve_topology_mapping` in the inter-mesh retry loop with
+> a live session so the hard CNF is encoded once and each retry only appends clauses. Then generalize
+> the rejections so each failure prunes more than one pair.
 
 ---
 
