@@ -361,8 +361,8 @@ class MiniMaxH3Vae:
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
-        if stitch_exchange not in ("gather", "neighbor"):
-            raise ValueError(f"stitch_exchange must be 'gather' or 'neighbor', got {stitch_exchange!r}")
+        if stitch_exchange not in ("gather", "strips", "neighbor"):
+            raise ValueError(f"stitch_exchange must be 'gather', 'strips' or 'neighbor', got {stitch_exchange!r}")
         self.config = config
         self.task = task
         self.mesh_device = mesh_device
@@ -907,6 +907,8 @@ class MiniMaxH3Vae:
     def _decode_clips_device_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
         if self.stitch_exchange == "neighbor":
             return self._decode_clips_neighbor_stitched(chunk_latents, output_type)
+        if self.stitch_exchange == "strips":
+            return self._decode_clips_strip_stitched(chunk_latents, output_type)
         return self._decode_clips_gather_stitched(chunk_latents, output_type)
 
     def _decode_clips_gather_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
@@ -1059,6 +1061,193 @@ class MiniMaxH3Vae:
             ttnn.deallocate(gathered)
         if pending:
             # Whatever is left had no wave behind it to hide under.
+            mark = time.perf_counter()
+            canvases.extend(future.result() for future in pending)
+            pending.clear()
+            profile["readback_join"] += time.perf_counter() - mark
+        return canvases
+
+    def _decode_clips_strip_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+        """The gather stitch factored along the mesh: each device blends only what it reads back.
+
+        Same wave packing and grid-aligned placement as the neighbour form -- tile ``(chunk k, r, c)``
+        on device ``(r, k * grid_cols + c)`` -- so a mesh column holds a tile column and a mesh row
+        holds the tile rows of every chunk in the wave. Then, per `StripTileStitcher`: an axis-0
+        gather brings each device its column, it H-blends and trims the column and keeps the
+        ``1/mesh_rows`` of the rows it will read back; an axis-1 gather brings each device every
+        column's row strip, it W-blends and trims them into its rows of the canvas, and the
+        readback keeps the ``1/mesh_cols`` of the columns it will read back. Against the gather
+        form that is ~1/4 of the gather bytes (one column and one row of strips instead of the
+        whole wave) and ~1/4 of the programs, for the same bits.
+        """
+        from .stitch_device_minimax_h3 import StripTileStitcher, unpatchify_device
+
+        (y_starts, y_lengths, y_overlaps), (x_starts, x_lengths, x_overlaps) = self._decode_tile_grid(
+            chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
+        )
+        grid_rows, grid_cols = len(y_lengths), len(x_lengths)
+        tiles_per_chunk = grid_rows * grid_cols
+
+        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
+        wave_size = self.mesh_device.get_num_devices()
+        assert grid_rows <= mesh_rows and grid_cols <= mesh_cols, (
+            f"the strip stitch needs the {grid_rows}x{grid_cols} grid to fit the "
+            f"{mesh_rows}x{mesh_cols} mesh with rows and columns aligned"
+        )
+        chunks_per_wave = mesh_cols // grid_cols
+        canvas_h = y_starts[-1] + y_lengths[-1]
+        assert canvas_h % mesh_rows == 0, f"canvas height {canvas_h} does not split over {mesh_rows} mesh rows"
+        # The W-blend to the right of a column reads the last `edge_width` columns of its ORIGINAL
+        # tiles; one uniform width covers every seam, the blend takes the tail it needs.
+        edge_width = max(x_overlaps) if x_overlaps else 0
+
+        if self._stitcher is None or not isinstance(self._stitcher, StripTileStitcher):
+            self._stitcher = StripTileStitcher(self.mesh_device)
+        stitcher = self._stitcher
+        decoder = self.decoder
+        profile = self._profile
+
+        canvases = []
+        pending: list = []
+        for group_start in range(0, len(chunk_latents), chunks_per_wave):
+            group = chunk_latents[group_start : group_start + chunks_per_wave]
+
+            mark = time.perf_counter()
+            units_by_chunk = [self._latent_tiles(latents) for latents in group]
+            profile["tiling"] += time.perf_counter() - mark
+
+            _, _, num_frames, height, width = units_by_chunk[0][0].shape
+            assert decoder.latent_shape == (
+                num_frames,
+                height,
+                width,
+            ), f"unit shape {(num_frames, height, width)} != decoder {decoder.latent_shape}"
+
+            mark = time.perf_counter()
+            # Grid-aligned slots (the neighbour form's placement); idle slots carry a filler tile
+            # whose blended output is never read.
+            slots: list[torch.Tensor | None] = [None] * wave_size
+            for k, units in enumerate(units_by_chunk):
+                assert len(units) == tiles_per_chunk
+                for index, unit in enumerate(units):
+                    r, c = divmod(index, grid_cols)
+                    slots[r * mesh_cols + k * grid_cols + c] = unit
+            filler = units_by_chunk[0][0]
+            wave = [
+                (unit if unit is not None else filler)
+                .permute(0, 2, 3, 4, 1)
+                .reshape(1, num_frames * height * width, -1)
+                for unit in slots
+            ]
+            batch = torch.cat(wave, dim=0)
+            profile["host_prep"] += time.perf_counter() - mark
+
+            mark = time.perf_counter()
+            tokens = ttnn.from_torch(
+                batch,
+                dtype=ttnn.bfloat16,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            )
+            profile["upload"] += time.perf_counter() - mark
+
+            mark = time.perf_counter()
+            decoded = decoder(tokens)
+            if self.profile:
+                ttnn.synchronize_device(self.mesh_device)
+                elapsed = time.perf_counter() - mark
+                profile["decoder"] += elapsed
+                profile["device"] += elapsed
+                mark = time.perf_counter()
+            # Same cast and layout choices as the gather form, for the same reasons (see there).
+            if self._blend_dtype == ttnn.float32:
+                decoded = ttnn.typecast(decoded, ttnn.float32)
+            decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
+            pixels = unpatchify_device(
+                decoded,
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                out_channels=self.config.out_channels,
+                patch_size=self.config.spatial_compression_ratio,
+                patch_size_t=self.config.temporal_compression_ratio,
+            )
+            # Stage 1: the column. A one-axis gather keeps mesh order, so gathered index r is tile
+            # row r of this device's column.
+            column = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
+            column_shape = list(column.shape)
+            tiles = [ttnn.slice(column, [r, 0, 0, 0, 0], [r + 1, *column_shape[1:]]) for r in range(grid_rows)]
+            strip, edge = stitcher.column(tiles, y_overlaps, edge_width)
+            ttnn.deallocate(column)
+            strip = ttnn.mesh_partition(strip, dim=-2, cluster_axis=0)
+            edge = ttnn.mesh_partition(edge, dim=-2, cluster_axis=0)
+            # Stage 2: the row. Every column's strip and edge for this device's rows.
+            strips = ttnn.all_gather(strip, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
+            edges = ttnn.all_gather(edge, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
+            ttnn.deallocate(strip)
+            ttnn.deallocate(edge)
+            if self.profile:
+                ttnn.synchronize_device(self.mesh_device)
+                profile["assemble"] += time.perf_counter() - mark
+            elapsed = time.perf_counter() - mark
+            profile["device"] += elapsed
+            profile["waves"] += 1
+            profile["units"] += sum(len(units) for units in units_by_chunk)
+
+            strips_shape, edges_shape = list(strips.shape), list(edges.shape)
+
+            def strip_at(index: int) -> ttnn.Tensor:
+                return ttnn.slice(strips, [index, 0, 0, 0, 0], [index + 1, *strips_shape[1:]])
+
+            def edge_at(index: int) -> ttnn.Tensor:
+                return ttnn.slice(edges, [index, 0, 0, 0, 0], [index + 1, *edges_shape[1:]])
+
+            for chunk_index in range(len(group)):
+                mark = time.perf_counter()
+                first = chunk_index * grid_cols
+                canvas_rows = stitcher.row(
+                    [strip_at(first + j) for j in range(grid_cols)],
+                    [edge_at(first + j) for j in range(grid_cols - 1)],
+                    x_overlaps,
+                )
+                if self.profile:
+                    ttnn.synchronize_device(self.mesh_device)
+                elapsed = time.perf_counter() - mark
+                profile["device"] += elapsed
+                profile["stitch_blend"] += elapsed
+                profile["device_each"].append(elapsed)
+
+                mark = time.perf_counter()
+                rows_shape = tuple(canvas_rows.shape)
+                canvas_shape = (*rows_shape[:-2], canvas_h, rows_shape[-1])
+                if output_type == "yuv420":
+                    finish = self._read_canvas_yuv(canvas_rows, defer=True, rows_partitioned=True)
+                    ttnn.deallocate(canvas_rows)
+                    read_bytes = canvas_shape[-3] * canvas_shape[-2] * canvas_shape[-1] * 3 // 2
+                    pending.append(self._yuv_finish_pool.submit(finish))
+                else:
+                    # Each device holds its rows of every column; split the columns too and let the
+                    # 2-D reassembly put the canvas back together.
+                    patch = ttnn.mesh_partition(canvas_rows, dim=-1, cluster_axis=1)
+                    out = fast_device_to_host(patch, self.mesh_device, [3, 4], ccl_manager=self.ccl_manager).float()
+                    ttnn.deallocate(patch)
+                    ttnn.deallocate(canvas_rows)
+                    read_bytes = out.numel() * out.element_size()
+                    canvases.append(out)
+                elapsed = time.perf_counter() - mark
+                profile["readback"] += elapsed
+                profile["readback_each"].append(elapsed)
+                profile["shape"] = canvas_shape
+                profile["dtype"] = str(pixels.dtype)
+                profile["readback_mb"] += read_bytes / 1e6
+                if len(pending) > 1:
+                    mark = time.perf_counter()
+                    canvases.append(pending.pop(0).result())
+                    profile["readback_join"] += time.perf_counter() - mark
+            ttnn.deallocate(strips)
+            ttnn.deallocate(edges)
+        if pending:
             mark = time.perf_counter()
             canvases.extend(future.result() for future in pending)
             pending.clear()
@@ -1281,7 +1470,7 @@ class MiniMaxH3Vae:
             self._yuv_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3_yuv_finish")
         return self._yuv_pool
 
-    def _read_canvas_yuv(self, canvas: ttnn.Tensor, *, defer: bool = False):
+    def _read_canvas_yuv(self, canvas: ttnn.Tensor, *, defer: bool = False, rows_partitioned: bool = False):
         """Convert the replicated canvas to YUV 4:2:0 on device and read it back as planar uint8.
 
         Two things earn their keep here. The `clamp` is the reference's post-stitch `clamp(0, 1)`,
@@ -1290,13 +1479,15 @@ class MiniMaxH3Vae:
         device already holds an identical copy of, so the DMA that follows runs across every PCIe
         link instead of one -- the same repeat/partition trick `fast_device_to_host` uses to spread
         a multi-host read.
-        """
-        canvas = ttnn.clamp(canvas, min=-1.0, max=1.0)
-        canvas = ttnn.typecast(canvas, ttnn.bfloat16)
-        canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
 
+        ``rows_partitioned`` is the strip stitch's case: each device already holds its
+        ``1/mesh_rows`` of the rows (of every column), so only the columns are split here, and the
+        clamp and cast run after the split, on the patch a device keeps rather than on a canvas it
+        mostly discards. Both are elementwise, so the bytes are the same either way.
+        """
         mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
-        height, width = int(canvas.shape[-2]), int(canvas.shape[-1])
+        rows, width = int(canvas.shape[-2]), int(canvas.shape[-1])
+        height = rows * mesh_rows if rows_partitioned else rows
         # `fast_device_to_host_yuv` reconstructs H and W as `per_shard * mesh_extent`, so an uneven
         # split would silently assemble a canvas of the wrong size rather than fail.
         assert height % mesh_rows == 0, f"canvas height {height} does not split over {mesh_rows} mesh rows"
@@ -1305,8 +1496,17 @@ class MiniMaxH3Vae:
             width // mesh_cols
         ) % 2 == 0, "4:2:0 needs an even per-shard height and width"
 
-        canvas = ttnn.mesh_partition(canvas, dim=-2, cluster_axis=0)
-        canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
+        if rows_partitioned:
+            canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
+            canvas = ttnn.clamp(canvas, min=-1.0, max=1.0)
+            canvas = ttnn.typecast(canvas, ttnn.bfloat16)
+            canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
+        else:
+            canvas = ttnn.clamp(canvas, min=-1.0, max=1.0)
+            canvas = ttnn.typecast(canvas, ttnn.bfloat16)
+            canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
+            canvas = ttnn.mesh_partition(canvas, dim=-2, cluster_axis=0)
+            canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
 
         planar = fast_device_to_host_yuv(
             canvas, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=False, defer=defer

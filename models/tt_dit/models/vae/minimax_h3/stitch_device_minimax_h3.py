@@ -88,7 +88,10 @@ class DeviceTileStitcher:
         axis = dim % rank
         blend_extent = min(a.shape[axis], b.shape[axis], blend_extent)
 
-        tail_a = self._slice(a, axis, a.shape[axis] - blend_extent, a.shape[axis])
+        # An operand the extent covers whole is used as is; slicing it would only copy it.
+        tail_a = (
+            a if blend_extent == a.shape[axis] else self._slice(a, axis, a.shape[axis] - blend_extent, a.shape[axis])
+        )
         head_b = self._slice(b, axis, 0, blend_extent)
         weight_a = self._ramp((head_b.shape[-2], head_b.shape[-1]), rank, axis)
         blended = ttnn.add(head_b, ttnn.multiply(ttnn.subtract(tail_a, head_b), weight_a))
@@ -124,6 +127,65 @@ class DeviceTileStitcher:
                 result_row.append(tile)
             result_rows.append(ttnn.concat(result_row, dim=-1))
         return ttnn.concat(result_rows, dim=-2)
+
+
+class StripTileStitcher(DeviceTileStitcher):
+    """`stitch` split along the mesh, so no device blends canvas it will never read back.
+
+    `stitch` needs every tile on every device, and every device then blends the whole canvas: on a
+    4x8 mesh that is 32 identical copies of ~400 programs to keep 1/32 of the result each. The
+    reference order factors along the grid axes -- the H-blend of tile (i, j) reads tiles (i-1, j)
+    and (i, j), its own column; the W-blend reads the ORIGINAL tile (i, j-1) and the H-blended
+    (i, j), its own row. So: gather a column, H-blend and trim it, keep only the rows this device
+    reads back; gather those row strips across the mesh row, W-blend and trim, keep only the
+    columns it reads back. The W-blend's left operand is an un-blended edge strip that travels with
+    the H-blended one, so the reference's asymmetry survives. Every output pixel meets the same
+    fp32 mul, mul, add on the same operands as `stitch`, so the two agree bit for bit
+    (`test_strip_stitch_matches_gather_stitch_bitwise`).
+    """
+
+    @staticmethod
+    def _corner(tile: ttnn.Tensor, rows: int, cols: int) -> ttnn.Tensor:
+        """The top `rows` rows of the last `cols` columns."""
+        rank = len(tile.shape)
+        starts = [0] * rank
+        stops = list(tile.shape)
+        starts[-1] = tile.shape[-1] - cols
+        stops[-2] = rows
+        return ttnn.slice(tile, starts, stops)
+
+    def column(
+        self, tiles: list[ttnn.Tensor], height_overlaps: list[int], edge_width: int
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """H-blend one tile column and trim it as `stitch` would; returns `(strip, edge)`.
+
+        `strip` is the column at canvas height. `edge` is the last `edge_width` columns of the
+        ORIGINAL tiles at the same rows -- what the W-blend of the column to the right reads in
+        place of `strip` (`stitch` blends against `row[j - 1]`, never the blended tile).
+        """
+        strips, edges = [], []
+        last = len(tiles) - 1
+        for i, tile in enumerate(tiles):
+            blended = self.blend(tiles[i - 1], tile, height_overlaps[i - 1], dim=-2) if i > 0 else tile
+            keep = tile.shape[-2] - (height_overlaps[i] if i < last else 0)
+            if keep < tile.shape[-2]:
+                blended = self._slice(blended, -2, 0, keep)
+            strips.append(blended)
+            edges.append(self._corner(tile, rows=keep, cols=edge_width))
+        if last == 0:
+            return strips[0], edges[0]
+        return ttnn.concat(strips, dim=-2), ttnn.concat(edges, dim=-2)
+
+    def row(self, strips: list[ttnn.Tensor], edges: list[ttnn.Tensor], width_overlaps: list[int]) -> ttnn.Tensor:
+        """W-blend the row strips left to right and trim, as `stitch` would."""
+        out = []
+        last = len(strips) - 1
+        for j, strip in enumerate(strips):
+            blended = self.blend(edges[j - 1], strip, width_overlaps[j - 1], dim=-1) if j > 0 else strip
+            if j < last:
+                blended = self._slice(blended, -1, 0, strip.shape[-1] - width_overlaps[j])
+            out.append(blended)
+        return out[0] if last == 0 else ttnn.concat(out, dim=-1)
 
 
 class NeighborTileBlender:
