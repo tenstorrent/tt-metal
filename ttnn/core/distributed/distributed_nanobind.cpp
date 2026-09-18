@@ -1158,6 +1158,7 @@ void py_module(nb::module_& mod) {
             if (!DistributedContext::is_initialized()) {
                 throw std::runtime_error("Distributed context not initialized. Call init_distributed_context() first.");
             }
+            nb::gil_scoped_release release;
             DistributedContext::get_current_world()->barrier();
         },
         R"doc(
@@ -1212,7 +1213,11 @@ void py_module(nb::module_& mod) {
             const auto& ctx = DistributedContext::get_current_world();
             // MPI send does not modify the buffer; const_cast is safe here.
             auto* ptr = const_cast<std::byte*>(reinterpret_cast<const std::byte*>(data.c_str()));
-            ctx->send(ttsl::Span<std::byte>(ptr, data.size()), Rank(dest), Tag(tag));
+            const auto size = data.size();
+            {
+                nb::gil_scoped_release release;
+                ctx->send(ttsl::Span<std::byte>(ptr, size), Rank(dest), Tag(tag));
+            }
         },
         nb::arg("data"),
         nb::arg("dest"),
@@ -1238,8 +1243,13 @@ void py_module(nb::module_& mod) {
             }
             std::vector<char> buf(size);
             const auto& ctx = DistributedContext::get_current_world();
-            ctx->recv(
-                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(buf.data()), buf.size()), Rank(source), Tag(tag));
+            {
+                nb::gil_scoped_release release;
+                ctx->recv(
+                    ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(buf.data()), buf.size()),
+                    Rank(source),
+                    Tag(tag));
+            }
             return nb::bytes(buf.data(), buf.size());
         },
         nb::arg("size"),
