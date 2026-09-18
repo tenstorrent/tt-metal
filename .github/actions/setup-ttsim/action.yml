@@ -8,7 +8,8 @@ description: |
   ttsim-lib-<library> artifact (see the fetch-ttsim job pattern in
   ttsim-sanity-tests-impl.yaml). Which binary a SKU gets is declared by that SKU's
   ttsim_lib in .github/sku_config.yaml, so callers pass only the SKU and this
-  action downloads the single artifact holding that library.
+  action downloads the single artifact holding that library. Pass `local-lib` to
+  install a .so already on disk instead of downloading an artifact.
 
 inputs:
   sku:
@@ -26,6 +27,12 @@ inputs:
       ubuntu-latest runner with a plain checkout), pass the workspace path.
     required: false
     default: '/work'
+  local-lib:
+    description: |
+      Absolute path to a libttsim.so already on the runner. When set, the
+      artifact download is skipped and this file is copied to <root>/sim/.
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -92,6 +99,7 @@ runs:
         } >> "$GITHUB_ENV"
 
     - name: Download ttsim binaries artifact
+      if: ${{ inputs.local-lib == '' }}
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
         name: ${{ steps.ttsim-info.outputs.artifact_name }}
@@ -101,12 +109,20 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        asset="/tmp/ttsim/${{ steps.ttsim-info.outputs.asset_name }}"
-        if [[ ! -f "$asset" ]]; then
-          echo "::error::${{ steps.ttsim-info.outputs.asset_name }} is not in the '${{ steps.ttsim-info.outputs.artifact_name }}' artifact. Available:"
-          ls -1 /tmp/ttsim
-          exit 1
+        if [[ -n "${{ inputs.local-lib }}" ]]; then
+          asset="${{ inputs.local-lib }}"
+          if [[ ! -f "$asset" ]]; then
+            echo "::error::local-lib '$asset' does not exist."
+            exit 1
+          fi
+        else
+          asset="/tmp/ttsim/${{ steps.ttsim-info.outputs.asset_name }}"
+          if [[ ! -f "$asset" ]]; then
+            echo "::error::${{ steps.ttsim-info.outputs.asset_name }} is not in the '${{ steps.ttsim-info.outputs.artifact_name }}' artifact. Available:"
+            ls -1 /tmp/ttsim
+            exit 1
+          fi
         fi
         mkdir -p "${{ inputs.root }}/sim"
-        mv "$asset" "${{ inputs.root }}/sim/libttsim.so"
+        cp "$asset" "${{ inputs.root }}/sim/libttsim.so"
         cp "${{ inputs.root }}/tt_metal/soc_descriptors/${{ steps.ttsim-info.outputs.soc_desc }}" "${{ inputs.root }}/sim/soc_descriptor.yaml"
