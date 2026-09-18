@@ -13,6 +13,8 @@
   skus:
     wh_n300_civ2:
       timeout: 15
+      # Issue: https://github.com/tenstorrent/tt-metal/issues/55429
+      cmd: /usr/bin/tt-metalium-validation-smoke --gtest_filter='-*CPU_*:DispatchTelemetryHostL1WaitTest.ReadInfoFromSeparateProcessWhileDeviceInUse:DispatchTelemetryHostL1WaitTest.DispatchCoreEfficiencyAndUtilization'
     wh_llmbox_civ2_viommu:
       timeout: 15
     bh_p150b_civ2_viommu:
