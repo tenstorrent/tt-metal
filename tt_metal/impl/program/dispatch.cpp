@@ -3041,8 +3041,6 @@ void update_program_dispatch_commands(
     cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
         program_host_id_offset, &runtime_id, sizeof(runtime_id));
 
-    RecordProgramMetadata(program.get_context_id(), program);
-
     if (hal.get_programmable_core_type_count() >= 2) {
         cached_program_command_sequence.preamble_command_sequence.update_cmd_sequence(
             eth_l1_write_offset_offset,
@@ -3613,8 +3611,6 @@ TraceNode create_trace_node(
             update.size);
         cross_node_config_pages.push_back(page);
     }
-
-    RecordProgramMetadata(program.get_context_id(), program);
 
     return TraceNode{
         program.shared_from_this(),

@@ -357,13 +357,15 @@ void RealtimeProfilerManager::publish_pages(
         if (!is_record(rp)) {
             continue;
         }
+        const auto metadata = data_collector->GetProgramRealtimeMetadata(chip_id, static_cast<uint16_t>(rp[2]));
         records.emplace_back(
             rp[2],
             chip_id,
             (static_cast<uint64_t>(rp[0]) << 32) | rp[1],
             (static_cast<uint64_t>(rp[4]) << 32) | rp[5],
             sync_frequency,
-            data_collector->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(rp[2])));
+            metadata.kernel_sources,
+            metadata.core_count);
     }
     if (records.empty()) {
         return;

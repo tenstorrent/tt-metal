@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <atomic>
 #include <cstdint>
 #include <map>
@@ -57,7 +56,9 @@ public:
         tt_metal::HalProgrammableCoreType core_type,
         const tt_metal::KernelGroup& kernel_group);
     void RecordProgramRun(uint64_t program_id);
-    void RecordProgramMetadata(tt_metal::detail::ProgramImpl& program);
+    // Record per-program metadata for the profiler, for a dispatch of `program` onto `device_ids`.
+    // Must be called once runtime_id is set.
+    void RecordProgramMetadata(tt_metal::detail::ProgramImpl& program, std::span<const tt::ChipId> device_ids);
     void RecordProgramSubDevice(
         tt::ChipId device_id,
         uint64_t sub_device_manager_id,
@@ -65,12 +66,18 @@ public:
         SubDeviceId sub_device_id,
         uint32_t num_available_worker_cores = 0);
     std::optional<tt::ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id) const;
-    // Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
-    // The returned span is valid until MetalContext teardown or reinitialization.
-    std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id) const noexcept {
-        const auto* sources = runtime_id_to_kernel_sources_[runtime_id].load(std::memory_order_acquire);
-        return sources != nullptr ? std::span<const std::string_view>(*sources) : std::span<const std::string_view>{};
-    }
+    // Per-program metadata the real-time profiler attaches to each record. Looked up by the physical
+    // device the record came from plus the program's runtime_id, because a MeshWorkload stamps every
+    // program it contains with one runtime_id and heterogeneous workloads run different programs on
+    // different devices.
+    struct ProgramRealtimeMetadata {
+        // Valid until MetalContext teardown or reinitialization.
+        std::span<const std::string_view> kernel_sources;
+        // Distinct programmable cores the program dispatches to.
+        uint32_t core_count = 0;
+    };
+    // Empty metadata (no sources, core_count 0) if the (device, runtime_id) pair is unknown.
+    ProgramRealtimeMetadata GetProgramRealtimeMetadata(tt::ChipId device_id, uint16_t runtime_id) const;
     // Register a callback to be invoked when real-time profiler data arrives.
     // Returns a handle that can be used to unregister the callback.
     tt::ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
@@ -99,8 +106,6 @@ public:
     void DumpData();
 
 private:
-    static constexpr size_t kRuntimeIdSlots = 1u << 16;
-
     struct RealtimeCallbackRegistration {
         tt::ProgramRealtimeProfilerCallbackHandle handle;
         tt::ProgramRealtimeProfilerCallback callback;
@@ -119,12 +124,18 @@ private:
     std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
     std::map<uint64_t, std::map<HalProgrammableCoreType, std::vector<KernelGroupData>>> program_id_to_kernel_groups;
     std::map<uint64_t, int> program_id_to_call_count;
-    // Kernel source bookkeeping for the real-time profiler. Guarded because the dispatch thread writes and
-    // the real-time profiler receiver thread reads.
-    mutable std::mutex kernel_source_mutex_;
+    // Per-program metadata bookkeeping for the real-time profiler. Guarded because the dispatch thread
+    // writes and the real-time profiler receiver thread reads.
+    mutable std::mutex program_metadata_mutex_;
     std::unordered_set<std::string> unique_kernel_sources_;
-    std::unordered_map<uint64_t, std::vector<std::string_view>> program_id_to_kernel_sources_;
-    std::array<std::atomic<const std::vector<std::string_view>*>, kRuntimeIdSlots> runtime_id_to_kernel_sources_{};
+    struct ProgramMetadataEntry {
+        std::vector<std::string_view> kernel_sources;
+        uint32_t core_count = 0;
+    };
+    // Computed once per program; the map below points into it. Node-based, so pointers stay valid.
+    std::unordered_map<uint64_t, ProgramMetadataEntry> program_id_to_metadata_;
+    // Keyed by (device, runtime_id truncated to 16 bits) to match what the device-side record carries.
+    std::map<std::pair<tt::ChipId, uint16_t>, const ProgramMetadataEntry*> runtime_id_to_metadata_;
     std::map<std::pair<tt::ChipId, uint64_t>, tt::ProgramSubDeviceInfo> runtime_id_to_sub_device;
     mutable std::mutex runtime_id_to_sub_device_mutex_;
     mutable std::mutex program_realtime_profiler_callbacks_mutex_;
