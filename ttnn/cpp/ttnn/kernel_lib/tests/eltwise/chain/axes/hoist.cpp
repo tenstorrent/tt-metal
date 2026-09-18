@@ -31,7 +31,7 @@ void kernel_main() {
             eltwise_chain(IterationShape::one_tile(), CopyTile<input(cb_in)>{}, Exp<>{}, PackTile<output(cb_out)>{});
         }
     } else {
-        copy_tile_init(cb_in);
+        copy_init(cb_in);
         exp_tile_init();
         eltwise_chain<InitReconfigOwner::Caller>(
             IterationShape::tiles(n),

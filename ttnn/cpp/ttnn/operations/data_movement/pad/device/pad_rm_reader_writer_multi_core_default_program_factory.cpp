@@ -321,7 +321,16 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
     }
 
     uint32_t dfb_npages = get_num_stick_per_barrier(stick_size_padded_aligned);
-    const uint32_t buffer_reader_writer_async_factor = 16;
+    // Depth 16 is a pipelining choice; use fewer barriers when 16 would overflow L1.
+    const uint32_t barrier_bytes = dfb_npages * stick_size_padded_aligned;
+    const uint32_t l1_budget =
+        (device->l1_size_per_core() / 2) - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    TT_FATAL(
+        barrier_bytes <= l1_budget,
+        "ttnn.pad: padded row of {} B does not fit in the per-core L1 budget ({} B)",
+        stick_size_padded_aligned,
+        l1_budget);
+    const uint32_t buffer_reader_writer_async_factor = std::clamp(l1_budget / barrier_bytes, 1u, 16u);
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = RM_DEF_IN0,
         .entry_size = stick_size_padded_aligned,

@@ -25,9 +25,9 @@
  * --------------------
  * The chain never issues engine-wide ("BIG") init. The caller owns `compute_kernel_hw_startup`
  * (plus `compute_kernel_hw_startup` / `mm_init` / `reduce_init` when the kernel mixes those
- * primitives). The chain owns only per-element init — `*_tile_init`, `init_bcast`,
- * `copy_tile_init` / `copy_tile_to_dst_init_short`, the `reconfig_data_format_*` fold, and the
- * dst-sync lifecycle. Do not add a `*_with_init` wrapper that folds `compute_kernel_hw_startup`
+ * primitives). The chain owns only per-element init — `*_tile_init`, `init_bcast`, `copy_init`,
+ * and the `reconfig_data_format_*` fold and dst-sync lifecycle.
+ * Do not add a `*_with_init` wrapper that folds `compute_kernel_hw_startup`
  * into the chain: it is only correct for single-stage kernels and breaks multi-stage / mid-loop
  * ones.
  *
@@ -198,7 +198,9 @@ enum class InitReconfigOwner {
 /// `PerTile + Col` denotes a streamed column: the chain waits for one tile at each grid-row boundary,
 /// reuses the current front tile across that row, then pops it. `Upfront + Col` instead stages an
 /// Ht-tile window and indexes it by row. Output `PerTile` remains literal: one output tile is reserved
-/// and pushed per grid cell. `PerOuter` exists only for output DEST-row accumulation.
+/// and pushed per grid cell. `PerOuter` opens one output window per grid row: direct pack reserves
+/// and pushes Wt tiles, while PerRow DEST accumulation publishes its single reduced tile. WholeShape
+/// DEST accumulation instead uses the one-tile `OneUpfront` / `OneAtEnd` lifecycle.
 /// On a partial final block, `BlockTailSync` selects whether synchronization covers the valid
 /// remainder or the full `block_size`.
 

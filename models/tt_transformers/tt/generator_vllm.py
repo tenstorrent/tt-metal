@@ -1029,6 +1029,113 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
+class Exaone4_5_ForConditionalGeneration(HybridAttentionForCausalLM):
+    """EXAONE-4.5 (text decoder) for vLLM integration.
+
+    Named after the HF architecture string. Note that the vLLM TT plugin
+    does NOT pick this class up automatically: the plugin prepends ``TT``
+    to the checkpoint architecture and its built-in registry has no EXAONE
+    entry, so serving requires registering
+    ``TTExaone4_5_ForConditionalGeneration`` -> this class in the vLLM
+    ``ModelRegistry`` of the engine-core process. tt-inference-server does
+    this via an ``EXTRA_MODELS_DIR`` plugin bundle (see
+    tenstorrent/tt-inference-server#5023); direct plugin users must supply
+    an equivalent registration and set ``--max-model-len 131072``: the
+    checkpoint advertises 262144 tokens, but prefill above 131072 needs
+    sliding-window chunked prefill, which is not supported yet.
+
+    The checkpoint is multimodal, but ModelArgs runs its text decoder only
+    (``force_text_only``): hybrid LLLG sliding/full attention (via
+    :class:`HybridAttentionForCausalLM`), post-norm decoder, NoPE
+    full-attention layers. Vision inputs are not yet wired through vLLM —
+    this serves text-only requests.
+    """
+
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": False,  # Sliding window => no prefix caching
+        "supports_async_decode": True,
+        "supports_sample_on_device": True,
+    }
+
+    # One prefill chunk on P150x8 (MAX_PREFILL_CHUNK_SIZES["EXAONE-4.5-33B"]).
+    MAX_SUPPORTED_SEQ_LEN = 128 * 1024
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        # Prompts longer than one prefill chunk take the chunked path, where
+        # the sliding-window attention layers raise NotImplementedError, so
+        # reject the checkpoint's 262144-token default up front.
+        if max_seq_len > cls.MAX_SUPPORTED_SEQ_LEN:
+            raise ValueError(
+                f"EXAONE-4.5 currently supports max_seq_len <= {cls.MAX_SUPPORTED_SEQ_LEN}; "
+                f"got {max_seq_len}. Sliding-window chunked prefill is not supported; "
+                "pass --max-model-len 131072 to vLLM."
+            )
+        tt_model, model_args = initialize_vllm_text_transformer(
+            hf_config,
+            tt_data_parallel,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=max_seq_len,
+            n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
+        )
+        return cls(tt_model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # While hybrid KV cache groups are disabled upstream (every layer is
+        # one full-attention group), skip the per-layer page-table routing
+        # and let the legacy single page_table flow through
+        # ``Generator.prefill_forward_text`` — same rationale as
+        # ``GptOssForCausalLM.prefill_forward``.
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super().prefill_forward_text(*args, **kwargs)
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
+            return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # See prefill_forward note above.
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
+        page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
+        per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
+        if per_submesh is not None:
+            for m, pt_for_submesh in zip(self.model, per_submesh):
+                m.update_persistent_per_layer_page_tables(pt_for_submesh)
+        with self._route_per_layer_page_tables(per_submesh):
+            # ``HybridAttentionForCausalLM.decode_forward`` is a placeholder;
+            # route to ``Generator``'s actual decode implementation.
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
 class GptOssForCausalLM(HybridAttentionForCausalLM):
     """GPT-OSS model for vLLM integration.
 

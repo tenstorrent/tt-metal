@@ -537,8 +537,8 @@ inline constexpr bool is_fpu_kind_op_v =
     is_binary_fpu_op_v<T> || is_dest_reuse_binary_op_v<T> || is_unary_bcast_op_v<T>;
 
 /// MATH-MOP-touching element predicate. Groups every element whose init
-/// programs the MATH MOP / ADDR_MOD_0..3 lane: `CopyTile` (via
-/// `copy_tile_to_dst_init_short`) and the FPU-kind ops (`BinaryFpu`,
+/// programs the MATH MOP / ADDR_MOD_0..3 lane: `CopyTile` (via `copy_init`)
+/// and the FPU-kind ops (`BinaryFpu`,
 /// `DestReuseBinary`, `UnaryBcast`). The hoist gate requires all such
 /// elements in a chain (including the CopyTile-versus-FPU init clash) to be
 /// the same instantiated type — otherwise the boot-time fold leaves only the
@@ -913,7 +913,7 @@ struct detail::CopyTileImpl : InputStream, CopyTileTag {
     constexpr explicit CopyTileImpl(StridedTileRange range) noexcept : Base(range) {}
 
     // ---- chain pipeline hooks ----
-    static ALWI void init() { copy_tile_init(Cb); }
+    static ALWI void init() { copy_init(Cb); }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
         const uint32_t in_idx = tile_base_value<Addressing>(tile_base) +
@@ -947,8 +947,14 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
     using Base::tile_base;
     // Walk vs pinned output addressing is derived from reserve policy: upfront-reserve
     // policies and caller-pre-reserved windows write distinct tiles; front-advancing policies stay pinned.
-    static constexpr bool walk = L1AccumulationMode == L1Accumulation::Disabled &&
-                                 (Reserve == ReservePolicy::Upfront || Reserve == ReservePolicy::None);
+    // `walk` emits `base + i_flat`, and out-of-order pack adds that to `fifo_wr_ptr` — the start of the
+    // window that is currently open. So it is only correct for policies that never push mid-walk, leaving
+    // the window start fixed for the whole shape. Front-advancing policies (PerOuter above all) push per
+    // outer iteration, so the window start already carries the row while the shape-global `i_flat` would
+    // add it a second time; they stay pinned and let the packer's own in-window counter address the tile.
+    static constexpr bool walk =
+        L1AccumulationMode == L1Accumulation::Disabled &&
+        (Reserve == ReservePolicy::Upfront || Reserve == ReservePolicy::None);
 
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT, "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
     static_assert(is_legal_output_policy(Reserve, Push), "PackTile: output reserve/push policy pair is invalid");
@@ -959,17 +965,21 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
         "PackTile: L1 accumulation requires (OneUpfront, OneAtEnd) or caller-managed (None, None)");
     static_assert(
         !((Reserve == ReservePolicy::OneUpfront) && (Push == PushPolicy::OneAtEnd)) ||
-            L1AccumulationMode != L1Accumulation::Disabled,
-        "PackTile: (OneUpfront, OneAtEnd) requires L1 accumulation");
+            L1AccumulationMode != L1Accumulation::Disabled || DestAccumulationMode == DestAccumulation::WholeShape,
+        "PackTile: (OneUpfront, OneAtEnd) requires L1 or whole-shape DEST accumulation");
     static_assert(
         DestAccumulationMode == DestAccumulation::Disabled ||
-            ((Reserve == ReservePolicy::PerOuter) && (Push == PushPolicy::PerOuter)) ||
+            ((DestAccumulationMode == DestAccumulation::PerRow) && (Reserve == ReservePolicy::PerOuter) &&
+             (Push == PushPolicy::PerOuter)) ||
+            ((DestAccumulationMode == DestAccumulation::WholeShape) && (Reserve == ReservePolicy::OneUpfront) &&
+             (Push == PushPolicy::OneAtEnd)) ||
             ((Reserve == ReservePolicy::None) && (Push == PushPolicy::None)),
-        "PackTile: DEST accumulation requires (PerOuter, PerOuter) or caller-managed (None, None)");
+        "PackTile: PerRow DEST accumulation requires (PerOuter, PerOuter); WholeShape requires "
+        "(OneUpfront, OneAtEnd); caller-managed uses (None, None)");
     static_assert(
         !((Reserve == ReservePolicy::PerOuter) && (Push == PushPolicy::PerOuter)) ||
-            DestAccumulationMode != DestAccumulation::Disabled,
-        "PackTile: (PerOuter, PerOuter) requires DEST accumulation");
+            DestAccumulationMode != DestAccumulation::WholeShape,
+        "PackTile: whole-shape DEST accumulation cannot use the per-outer output lifecycle");
     static_assert(
         L1AccumulationMode == L1Accumulation::Disabled || DestAccumulationMode == DestAccumulation::Disabled,
         "PackTile: L1 and DEST accumulation cannot be combined");
@@ -996,7 +1006,10 @@ struct detail::PackTileImpl : OutputStream, PackTileTag {
         ((Reserve == ReservePolicy::OneUpfront) && (Push == PushPolicy::OneAtEnd));
     static constexpr bool uses_dest_accumulation_lifecycle = DestAccumulationMode != DestAccumulation::Disabled;
     static constexpr bool manages_dest_accumulation_lifecycle =
-        ((Reserve == ReservePolicy::PerOuter) && (Push == PushPolicy::PerOuter));
+        (DestAccumulationMode == DestAccumulation::PerRow && (Reserve == ReservePolicy::PerOuter) &&
+         (Push == PushPolicy::PerOuter)) ||
+        (DestAccumulationMode == DestAccumulation::WholeShape && (Reserve == ReservePolicy::OneUpfront) &&
+         (Push == PushPolicy::OneAtEnd));
     static constexpr bool uses_pack_relu = Relu != PackRelu::Disabled;
     static constexpr bool uses_per_block_pack =
         ((Reserve == ReservePolicy::PerBlockSize) && (Push == PushPolicy::PerBlockSize));
@@ -2605,7 +2618,7 @@ ALWI void hoist_compute_init_one(SelectedElement<E, TransitionFacts<PrevA, PrevB
 //   - Helper does NOT wrap any "BIG init" (`compute_kernel_hw_startup`,
 //     `compute_kernel_hw_startup`, `mm_init`, `reduce_init`).
 //   - Helper owns per-element init only — `add_init`, `*_tile_init`,
-//     `init_bcast`, `copy_tile_to_dst_init_short`, `reconfig_data_format_*`,
+//     `init_bcast`, `copy_init`, `reconfig_data_format_*`,
 //     `tile_regs_*` lifecycle.
 //   - Per `compute_kernel_hw_startup.h:26-30`, mid-`MAIN()` boot is undefined.
 //     Multi-stage kernels are the only exception (one boot per stage,
@@ -2919,13 +2932,13 @@ ALWI void emit_pop_per_row(uint32_t cb_a, uint32_t cb_b) {
 }
 
 template <bool Reserve>
-ALWI void emit_reserve_per_row(uint32_t cb) {
-    emit_reserve<Reserve>(cb, 1);
+ALWI void emit_reserve_per_outer(uint32_t cb, uint32_t count) {
+    emit_reserve<Reserve>(cb, count);
 }
 
 template <bool Push>
-ALWI void emit_push_per_row(uint32_t cb) {
-    emit_push<Push>(cb, 1);
+ALWI void emit_push_per_outer(uint32_t cb, uint32_t count) {
+    emit_push<Push>(cb, count);
 }
 
 }  // namespace detail
@@ -3069,13 +3082,8 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
     constexpr uint32_t chain_lane_w = detail::ChainTraits<Es...>::any_dest_accumulation
                                           ? chain_transient_lane_width_v<Chain>
                                           : chain_lane_width_v<Chain>;
-    // Assertions are intentionally absent in normal kernels.  Keep the debug
-    // contract, but normalize a malformed zero block size so the outer walk
-    // still makes forward progress in a release kernel.
+    // Normalize a zero block size so the outer walk makes forward progress.
     uint32_t block_size = shape.block_tiles == 0 ? 1 : shape.block_tiles;
-    ASSERT(shape.Ht > 0);
-    ASSERT(shape.Wt > 0);
-    ASSERT(shape.block_tiles > 0);
     const bool synchronize_full_blocks = shape.tail_sync == BlockTailSync::FullBlock;
     if constexpr (!chain_supports_block_v<Chain>) {
         ASSERT(!synchronize_full_blocks || block_size == 1);
@@ -3102,9 +3110,6 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
         pack_reconfig_l1_acc(detail::ChainTraits<Es...>::any_seed_first_l1_accumulation ? 0 : 1);
     }
     if constexpr (whole_shape_dest_accumulation) {
-        (detail::emit_reserve_per_row<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(
-             detail::ChainTraits<Es...>::d[Is].pack_dfb),
-         ...);
         tile_regs_acquire();
     }
     for (uint32_t ht = 0; ht < Ht; ++ht) {
@@ -3116,10 +3121,14 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
              detail::ChainTraits<Es...>::d[Is].row_stream_input_b_cb),
          ...);
         if constexpr (per_row_dest_accumulation) {
-            (detail::emit_reserve_per_row<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(
-                 detail::ChainTraits<Es...>::d[Is].pack_dfb),
+            (detail::emit_reserve_per_outer<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(
+                 detail::ChainTraits<Es...>::d[Is].pack_dfb, 1),
              ...);
             tile_regs_acquire();
+        } else if constexpr (!dest_accumulation) {
+            (detail::emit_reserve_per_outer<detail::ChainTraits<Es...>::d[Is].reserve_per_outer>(
+                 detail::ChainTraits<Es...>::d[Is].pack_dfb, Wt),
+             ...);
         }
         for (uint32_t wt_base = 0; wt_base < Wt;) {
             const uint32_t inner_count = (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
@@ -3206,8 +3215,12 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
                  Wt),
              ...);
             tile_regs_release();
-            (detail::emit_push_per_row<detail::ChainTraits<Es...>::d[Is].push_per_outer>(
-                 detail::ChainTraits<Es...>::d[Is].pack_dfb),
+            (detail::emit_push_per_outer<detail::ChainTraits<Es...>::d[Is].push_per_outer>(
+                 detail::ChainTraits<Es...>::d[Is].pack_dfb, 1),
+             ...);
+        } else if constexpr (!dest_accumulation) {
+            (detail::emit_push_per_outer<detail::ChainTraits<Es...>::d[Is].push_per_outer>(
+                 detail::ChainTraits<Es...>::d[Is].pack_dfb, Wt),
              ...);
         }
         (detail::emit_pop_per_row<
@@ -3238,9 +3251,6 @@ ALWI void eltwise_chain_impl([[maybe_unused]] std::index_sequence<Is...> indices
              Wt),
          ...);
         tile_regs_release();
-        (detail::emit_push_per_row<detail::ChainTraits<Es...>::d[Is].push_per_outer>(
-             detail::ChainTraits<Es...>::d[Is].pack_dfb),
-         ...);
     }
     if constexpr (detail::ChainTraits<Es...>::any_l1_accumulation && !detail::eltwise_chain_skip_compute_v) {
         pack_reconfig_l1_acc(0);

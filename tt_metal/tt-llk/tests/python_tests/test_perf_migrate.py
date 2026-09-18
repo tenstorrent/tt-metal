@@ -218,7 +218,7 @@ def test_discover_runs_parses_arch_and_sidecar(tmp_path):
                 "arch": "quasar",
                 "commit_sha": "deadbeef",
                 "timestamp": "T",
-                "pipeline": "PR",
+                "pipeline": "pr",
             }
         )
     )
@@ -231,4 +231,4 @@ def test_discover_runs_parses_arch_and_sidecar(tmp_path):
     # sidecar overrides provenance
     assert runs["nightly_777"].arch == "quasar"
     assert runs["nightly_777"].commit_sha == "deadbeef"
-    assert runs["nightly_777"].pipeline == "PR"
+    assert runs["nightly_777"].pipeline == "pr"

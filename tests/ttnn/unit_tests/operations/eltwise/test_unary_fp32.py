@@ -7,6 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import (
+    assert_equal,
     assert_with_pcc,
     assert_with_ulp,
     flush_subnormal_values_to_zero,
@@ -139,7 +140,7 @@ def run_unary_fp32_test_with_ulp(device, ttnn_function, torch_function, max_ulp,
 
     # The input covers both signs of NaN and infinity. With NaN-preserving transfer enabled,
     # allow_nonfinite still requires matching NaN/Inf positions and exact signed infinities.
-    assert_with_ulp(y_torch, tt_out, max_ulp, allow_nonfinite=True)
+    assert_with_ulp(expected_result=y_torch, actual_result=tt_out, ulp_threshold=max_ulp, allow_nonfinite=True)
 
 
 def test_atan_fp32(device):
@@ -193,7 +194,12 @@ def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False, pc
     if pcc_check:
         assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp, allow_nonfinite=allow_nonfinite)
+        assert_with_ulp(
+            expected_result=torch_output_tensor,
+            actual_result=output_tensor,
+            ulp_threshold=ulp,
+            allow_nonfinite=allow_nonfinite,
+        )
 
 
 @pytest.mark.parametrize("h", [64])
@@ -294,3 +300,26 @@ def test_atanh(device, h, w):
     # The log1p reformulation makes the fp32 path stable on (-1, 1); the default
     # [0, 1) input exercises the small-x stable region.
     run_unary_test(device, h, w, ttnn.atanh, ulp=2)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_sign_signed_zero(device, dtype):
+    # sign(-0.0) is 0, not -1. SFPSETCC is unspecified for -0.0 (VectorUnit.md), so the
+    # kernel's (v < 0.0f) captured it; the zero test has to mask the sign bit first.
+    x_torch = torch.tensor([[-0.0, 0.0, -1.0, 1.0, -5.5, 5.5, -1e-30, 1e-30]], dtype=torch.float32)
+    y_torch = torch.sign(x_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    assert_equal(y_torch, ttnn.to_torch(ttnn.sign(x_tt)))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_heaviside_signed_zero(device, dtype):
+    # heaviside(-0.0, s) is s, not 0, because -0.0 == 0. Same SFPSETCC cause as sign above,
+    # and the two are asserted to move together in the tt-llk edge table.
+    value = 0.5
+    x_torch = torch.tensor([[-0.0, 0.0, -1.0, 1.0, -5.5, 5.5]], dtype=torch.float32)
+    y_torch = torch.heaviside(x_torch, torch.tensor(value, dtype=torch.float32))
+
+    x_tt = ttnn.from_torch(x_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    assert_equal(y_torch, ttnn.to_torch(ttnn.heaviside(x_tt, value)))

@@ -177,7 +177,7 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
     // -------------------------------------------------------
     // Dispatch
     // -------------------------------------------------------
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     // -------------------------------------------------------
     // Verify
@@ -319,7 +319,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     }
     distributed::EnqueueWriteMeshBuffer(cq, input_buffer, input_data, /*blocking=*/true);
 
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> output_data;
     distributed::EnqueueReadMeshBuffer(cq, output_data, output_buffer, /*blocking=*/true);
@@ -399,7 +399,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     std::vector<uint32_t> zero_report(1, 0u);
     detail::WriteToDeviceL1(device, node, report_addr, zero_report);
 
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
     detail::ReadFromDeviceL1(device, node, report_addr, sizeof(uint32_t), reported);
@@ -489,7 +489,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopback) {
     }
     distributed::EnqueueWriteMeshBuffer(cq, input_buffer, input_data, /*blocking=*/true);
 
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> output_data;
     distributed::EnqueueReadMeshBuffer(cq, output_data, output_buffer, /*blocking=*/true);
@@ -553,7 +553,7 @@ TEST_F(ProgramSpecHWTest, TtKernelNamedArgsLoopbackCompute) {
     std::vector<uint32_t> zero_report(1, 0u);
     detail::WriteToDeviceL1(device, node, report_addr, zero_report);
 
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
     detail::ReadFromDeviceL1(device, node, report_addr, sizeof(uint32_t), reported);
@@ -632,7 +632,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
     };
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
     // If we got here, both kernels resolved their sem accessors to the same ID.
 }
 
@@ -758,7 +758,7 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     // -------------------------------------------------------
     // Dispatch
     // -------------------------------------------------------
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     // -------------------------------------------------------
     // Verify
@@ -832,7 +832,7 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
     std::vector<uint32_t> zero_report(kNumReportWords, 0u);
     detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
 
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
     detail::ReadFromDeviceL1(device, node, kReportAddr, kNumReportWords * sizeof(uint32_t), reported);
@@ -952,7 +952,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     detail::WriteToDeviceL1(device, node, kReportAddr, zero_report);
 
     // Dispatch via the slow-dispatch path (blocking — wait_until_cores_done defaults to true).
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
     detail::ReadFromDeviceL1(device, node, kReportAddr, sizeof(uint32_t), reported);
