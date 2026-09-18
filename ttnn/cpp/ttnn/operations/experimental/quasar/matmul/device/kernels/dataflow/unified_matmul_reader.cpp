@@ -48,6 +48,9 @@ void kernel_main() {
     constexpr uint32_t num_K_chunks = get_arg(args::num_K_chunks);
     // Valid element columns in A's last K tile; 0 when K is a multiple of the tile dim.
     constexpr uint32_t A_last_K_tile_valid_columns = get_arg(args::A_last_K_tile_valid_columns);
+    // Borrowed operands are resident L1 shards bound as the rings; nothing is read for them.
+    constexpr bool A_borrowed = get_arg(args::A_borrowed) != 0;
+    constexpr bool B_borrowed = get_arg(args::B_borrowed) != 0;
 
     constexpr uint32_t A_slice_tiles = MN_chunk_M_tiles * K_chunk_tiles;
     constexpr uint32_t B_slice_tiles = K_chunk_tiles * MN_chunk_N_tiles;
@@ -58,20 +61,19 @@ void kernel_main() {
     DataflowBuffer A_slice(dfb::A_slice);
     DataflowBuffer B_slice(dfb::B_slice);
 
+    [[maybe_unused]] const auto A = TensorAccessor(tensor::A);
+    [[maybe_unused]] const auto B = TensorAccessor(tensor::B);
+
     // A borrowed operand's ring IS its resident L1 shard: hand the whole ring to the compute once and never
     // read it. (A: the single K chunk covers all of K; B: the compute consumes it one K chunk at a time.)
-#ifdef A_BORROWED
-    A_slice.reserve_back(A_slice_tiles);
-    A_slice.push_back(A_slice_tiles);
-#else
-    const auto A = TensorAccessor(tensor::A);
-#endif
-#ifdef B_BORROWED
-    B_slice.reserve_back(K_tiles * MN_chunk_N_tiles);
-    B_slice.push_back(K_tiles * MN_chunk_N_tiles);
-#else
-    const auto B = TensorAccessor(tensor::B);
-#endif
+    if constexpr (A_borrowed) {
+        A_slice.reserve_back(A_slice_tiles);
+        A_slice.push_back(A_slice_tiles);
+    }
+    if constexpr (B_borrowed) {
+        B_slice.reserve_back(K_tiles * MN_chunk_N_tiles);
+        B_slice.push_back(K_tiles * MN_chunk_N_tiles);
+    }
 
     const uint32_t A_tile_bytes = get_tile_size(dfb::A_slice);
     const uint32_t B_tile_bytes = get_tile_size(dfb::B_slice);
@@ -96,54 +98,57 @@ void kernel_main() {
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
                 const uint32_t first_K_tile = K_chunk * K_chunk_tiles;
 
-#ifndef A_BORROWED
-                // A slice: rows MN_chunk_M_tile.., columns first_K_tile.. (invalid rows trail, so they are
-                // simply not written).
-                A_slice.reserve_back(A_slice_tiles);
-                uint32_t A_slot_offset = 0;
-                for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
-                    uint32_t A_tile_index = A_batch_first_tile + (MN_chunk_M_tile + m_tile) * K_tiles + first_K_tile;
-                    for (uint32_t k_tile = 0; k_tile < K_chunk_tiles;
-                         ++k_tile, ++A_tile_index, A_slot_offset += A_slot_bytes) {
-                        noc.async_read(
-                            A, A_slice, A_tile_bytes, {.page_id = A_tile_index}, {.offset_bytes = A_slot_offset});
-                    }
-                }
-
-#endif
-#ifndef B_BORROWED
-                // B slice: rows first_K_tile.., columns MN_chunk_N_tile.. (invalid columns keep their slot).
-                B_slice.reserve_back(B_slice_tiles);
-                uint32_t B_slot_offset = 0;
-                for (uint32_t k_tile = 0; k_tile < K_chunk_tiles; ++k_tile) {
-                    uint32_t B_tile_index = B_batch_first_tile + (first_K_tile + k_tile) * N_tiles + MN_chunk_N_tile;
-                    for (uint32_t n_tile = 0; n_tile < MN_chunk_N_tiles;
-                         ++n_tile, ++B_tile_index, B_slot_offset += B_slot_bytes) {
-                        if (n_tile < valid_N_tiles) {
+                if constexpr (!A_borrowed) {
+                    // A slice: rows MN_chunk_M_tile.., columns first_K_tile.. (invalid rows trail, so they are
+                    // simply not written).
+                    A_slice.reserve_back(A_slice_tiles);
+                    uint32_t A_slot_offset = 0;
+                    for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
+                        uint32_t A_tile_index =
+                            A_batch_first_tile + (MN_chunk_M_tile + m_tile) * K_tiles + first_K_tile;
+                        for (uint32_t k_tile = 0; k_tile < K_chunk_tiles;
+                             ++k_tile, ++A_tile_index, A_slot_offset += A_slot_bytes) {
                             noc.async_read(
-                                B, B_slice, B_tile_bytes, {.page_id = B_tile_index}, {.offset_bytes = B_slot_offset});
+                                A, A_slice, A_tile_bytes, {.page_id = A_tile_index}, {.offset_bytes = A_slot_offset});
                         }
                     }
                 }
-
-#endif
+                if constexpr (!B_borrowed) {
+                    // B slice: rows first_K_tile.., columns MN_chunk_N_tile.. (invalid columns keep their slot).
+                    B_slice.reserve_back(B_slice_tiles);
+                    uint32_t B_slot_offset = 0;
+                    for (uint32_t k_tile = 0; k_tile < K_chunk_tiles; ++k_tile) {
+                        uint32_t B_tile_index =
+                            B_batch_first_tile + (first_K_tile + k_tile) * N_tiles + MN_chunk_N_tile;
+                        for (uint32_t n_tile = 0; n_tile < MN_chunk_N_tiles;
+                             ++n_tile, ++B_tile_index, B_slot_offset += B_slot_bytes) {
+                            if (n_tile < valid_N_tiles) {
+                                noc.async_read(
+                                    B,
+                                    B_slice,
+                                    B_tile_bytes,
+                                    {.page_id = B_tile_index},
+                                    {.offset_bytes = B_slot_offset});
+                            }
+                        }
+                    }
+                }
                 noc.async_read_barrier();
 
-#ifndef A_BORROWED
-                if constexpr (A_last_K_tile_valid_columns > 0) {
-                    // Zero the padding columns of the last K tile in every valid row (reads have landed).
-                    if (K_chunk == num_K_chunks - 1) {
-                        constexpr DataFormat A_format = get_dataformat(dfb::A_slice);
-                        const uint32_t last_K_tile_of_row_0 =
-                            A_slice.get_write_ptr() + (K_chunk_tiles - 1) * A_slot_bytes;
-                        for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
-                            pad_last_ktile<A_format, A_last_K_tile_valid_columns>(
-                                last_K_tile_of_row_0 + m_tile * K_chunk_tiles * A_slot_bytes);
+                if constexpr (!A_borrowed) {
+                    if constexpr (A_last_K_tile_valid_columns > 0) {
+                        // Zero the padding columns of the last K tile in every valid row (reads have landed).
+                        if (K_chunk == num_K_chunks - 1) {
+                            constexpr DataFormat A_format = get_dataformat(dfb::A_slice);
+                            const uint32_t last_K_tile_of_row_0 =
+                                A_slice.get_write_ptr() + (K_chunk_tiles - 1) * A_slot_bytes;
+                            for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
+                                pad_last_ktile<A_format, A_last_K_tile_valid_columns>(
+                                    last_K_tile_of_row_0 + m_tile * K_chunk_tiles * A_slot_bytes);
+                            }
                         }
                     }
                 }
-
-#endif
                 A_slice.push_back(A_slice_tiles);
                 B_slice.push_back(B_slice_tiles);
             }
