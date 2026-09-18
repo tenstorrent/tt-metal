@@ -287,9 +287,11 @@ class Qwen3TTSTalkerCodePredictorConfig(PretrainedConfig):
         self.layer_types = layer_types
         if self.layer_types is None:
             self.layer_types = [
-                "sliding_attention"
-                if self.sliding_window is not None and i >= self.max_window_layers
-                else "full_attention"
+                (
+                    "sliding_attention"
+                    if self.sliding_window is not None and i >= self.max_window_layers
+                    else "full_attention"
+                )
                 for i in range(self.num_hidden_layers)
             ]
         layer_type_validation(self.layer_types)

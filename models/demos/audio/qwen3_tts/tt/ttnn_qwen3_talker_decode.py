@@ -54,45 +54,14 @@ DECODE_IN0_BLOCK_W = 4
 
 DECODE_MAX_SUBBLOCK = 4
 
-# Output tiles per core the row count aims for, which is what decides how many grid rows
-# each matmul gets. Scanned end to end on both decoders, as whole traced steps rather than
-# per matmul:
-#
-#   target        3      4      5      6      9     12
-#   talker    11.63  11.39  11.32  11.32  11.52  12.01 ms
-#   predictor  1.084  1.080  1.080  1.122  1.136  1.137 ms
-#
-# Flat from 4 to 6 and worse outside on both, so one number serves all eight shapes. See
-# `decode_matmul_config` for why the optimum sits at a couple of grid rows and not the
-# whole grid.
+# Output tiles per core, which sets each matmul's row count. Flat from 4 to 6, worse outside.
 TARGET_PER_CORE_N = 5
 
-# The MLP's three matmuls in block float, everything else in bf16. They are 53% of the
-# step's time and 60% of its weight bytes, and a single-position decode is bandwidth bound
-# on weights, so halving theirs took the step from 12.5 to 10.0 ms: a fifth off the frame.
-#
-# What it costs, measured three ways against bf16:
-#
-#   * Against the fp32 reference over a 26-position prompt, PCC 0.99529 against 0.99539,
-#     and the sampling distribution moved 0.0991 against 0.0981. Both inside what
-#     perturbing the prompt by a quarter of a bf16 step does.
-#   * Run to completion over eight seeds and two sentences, the frames per word this model
-#     spends came out no worse and mostly better: worst 10.0 and 10.6 against bf16's 17.0
-#     and 15.1. `tests/pcc/test_generation_stops.py` carries that table, including how
-#     badly the same measurement scatters between seeds, which is why it takes eight of
-#     them and not one.
-#
-# Two groups that are not worth it. **Attention's two matmuls as well** takes the step to
-# 9.2 ms but moves the sampling distribution to 0.1455, outside the noise band. **Norm
-# weights** in block float are ruinous: every value clusters around 1 and a shared-exponent
-# block of 16 quantises that to almost nothing, giving PCC 0.9751 and three times the
-# distance. That is why `dtype` and `mlp_dtype` are separate arguments rather than one
-# precision for the whole checkpoint.
+# The MLP's matmuls only: a fifth off the step at no measurable cost. README has the rest.
 MLP_WEIGHT_DTYPE = ttnn.bfloat8_b
 
-# Rows in the step's rotary tables. The fused rotation pairs row i of `cos` with row i of
-# its input, so the table needs at least as many rows as the widest tensor it rotates has
-# heads. A tile's worth covers every head count this model uses.
+# Rows in the step's rotary tables: the fused rotation pairs row i of `cos` with row i of
+# its input, so one tile's worth covers every head count here.
 ROPE_ROWS = 32
 
 
@@ -134,8 +103,7 @@ def decode_matmul_config(device, in_features, out_features, fused_activation=Non
     k_tiles, n_tiles = in_features // 32, out_features // 32
     grid = device.compute_with_storage_grid_size()
 
-    # A long reduction pipelines better in bigger chunks: down_proj reads 192 K-tiles and
-    # measured 69.6 us at 8 against 74.3 at 4. Shorter ones do not care.
+    # A long reduction pipelines better in bigger chunks: down_proj, 69.6 us at 8 against 74.3.
     in0_block_w = 8 if k_tiles % 8 == 0 and k_tiles > 64 else DECODE_IN0_BLOCK_W
     if k_tiles % in0_block_w:
         return None

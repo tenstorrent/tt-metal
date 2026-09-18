@@ -218,8 +218,7 @@ def main():
                         instruct=instruct,
                     )
                 else:
-                    # Nothing else is reachable: the flags and the REPL both require one of
-                    # a reference, a speaker or an instruction before a line is spoken.
+                    # Unreachable otherwise: a line needs a reference, a speaker or an instruction.
                     waveform, codes = pipeline.generate_design(
                         line, instruct, language=language or "Auto", streaming=args.streaming
                     )

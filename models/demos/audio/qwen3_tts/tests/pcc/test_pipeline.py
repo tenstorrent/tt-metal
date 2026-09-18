@@ -321,8 +321,7 @@ def test_an_instruction_changes_what_a_named_speaker_does(device):
     assert counts["plain"] != counts["angry"], "the instruction did not reach the decode loop"
 
 
-# One sentence per language the checkpoint claims, with a speaker whose own language
-# matches where the nine offer one. Both dialect speakers are covered by the prompt tests.
+# One sentence per language, with a matching speaker where the nine offer one.
 LANGUAGE_CASES = (
     ("Chinese", "水壶已经烧开了，雨一直没有停。", "vivian"),
     ("Japanese", "やかんが沸いていて、雨はまだ止んでいません。", "ono_anna"),

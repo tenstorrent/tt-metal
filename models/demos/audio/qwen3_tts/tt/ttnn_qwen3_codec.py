@@ -367,9 +367,7 @@ class TtCodecDecoder:
             torch.tensor(self.config["upsample_rates"] + self.config["upsampling_ratios"], dtype=torch.long).prod()
         )
         self._prepared = {}
-        # Lengths whose convolution programs are on the device. Cleared by
-        # `forget_programs` when the caller drops the device's program cache.
-        self._compiled = set()
+        self._compiled = set()  # lengths whose programs are resident; see `forget_programs`
 
     # ── program room ────────────────────────────────────────────────────────
 

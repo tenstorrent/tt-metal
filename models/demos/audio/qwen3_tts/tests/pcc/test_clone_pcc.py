@@ -189,8 +189,7 @@ def test_the_x_vector_prompt_is_the_custom_voice_prompt_with_a_measured_voice(ta
     n_text = len(frontend.text_ids(TEXT)) - ROLE_IDS - TAIL_IDS
     assert prompt.shape[1] == n_text + 10, "the clip's length must not reach this prompt"
     assert prompt.shape[1] < icl.shape[1]
-    # Position 6 with `Auto`: three role positions, a three-token think block, then the
-    # speaker. Every head position sums the two tracks, and the text track there is a pad.
+    # Position 6 with `Auto`: three role, three think, then the speaker, on a pad as always.
     voice_position = tables.tts_pad + reference.speaker_embedding.reshape(1, 1, -1)
     assert torch.equal(prompt[:, 6:7], voice_position), "the voice sits in one position, against tts_pad"
     print(f"x-vector {prompt.shape[1]} positions against ICL's {icl.shape[1]} for the same clip and text")

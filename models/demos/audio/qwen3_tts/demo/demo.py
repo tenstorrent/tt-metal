@@ -95,17 +95,13 @@ def report_timings(timings, elapsed, duration, reference=None):
         f"({timings['frames']} frames at {timings['ms_per_frame']:.0f} ms each)"
     )
     codec_frames = timings.get("codec_frames", timings["frames"])
-    # Only in-context cloning puts the clip's frames through the decoder; cloning from the
-    # voice alone has none to send, so the count matching `frames` is the tell.
+    # Only in-context cloning sends the clip's frames through the decoder.
     trailer = ", the reference rides along and is cut" if codec_frames > timings["frames"] else ""
     print(f"  codec decoder    {timings['codec_s']:8.2f} s   ({codec_frames} frames{trailer})")
-    # Audio over wall clock, so above 1 is faster than real time. Printed this way round
-    # because the other one reads like a speedup when it is the opposite.
+    # Audio over wall clock, so above 1 is faster than real time.
     print(f"  total            {elapsed:8.2f} s   ({duration / elapsed:.2f}x faster than real time)")
 
-    # Warm, decode costs about 44 ms a frame and the codec about 23. Well above either and
-    # the stage was compiling, which is worth saying rather than leaving the reader to
-    # wonder why the numbers do not match the README.
+    # Warm, a frame is about 32 ms and a codec frame about 2. Well above either was a compile.
     slow = []
     if timings["ms_per_frame"] > 100:
         slow.append("the decode loop")
@@ -145,11 +141,8 @@ def run(
 
     if ckpt:
         os.environ["QWEN3_TTS_CKPT"] = os.path.abspath(ckpt)
-    # Where the voice comes from: a clip, a named speaker, or a description. Exactly one,
-    # since they all occupy the same prompt position. `--instruct` is the odd one: alone it
-    # designs a voice, with `--speaker` it directs one, and with `--x-vector` it directs a
-    # cloned one. Only in-context cloning cannot take it, because upstream's ICL prompt has
-    # nowhere to put it.
+    # One source of voice, since they share a prompt position. `--instruct` designs one alone
+    # and directs one otherwise; in-context cloning has no room for it.
     voices = [name for name, value in (("--ref", ref), ("--speaker", speaker)) if value]
     if len(voices) > 1:
         raise ValueError(f"pass one of --ref or --speaker, not both: got {', '.join(voices)}")

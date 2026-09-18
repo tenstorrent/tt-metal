@@ -104,27 +104,13 @@ REFERENCE_TAIL_IDS = 2
 # this is 32 s of speech.
 DEFAULT_MAX_FRAMES = 400
 
-# Prompt lengths the prefill rounds up to. Every distinct length compiles its own programs,
-# and that is the whole of the cold prefill: 1.41 s the first time a length is seen against
-# 0.02 s once it is compiled. A server sees a new length per sentence, so without this it
-# pays that second and a half on nearly every first utterance of a text.
-#
-# Padding a prompt is safe because attention is causal. The filler positions sit after the
-# last real one, so no real position attends to them, and the hidden state the decode starts
-# from is sliced at the true last position. Their keys and values do land in the cache, at
-# the slots decode is about to write: slot `prompt` is overwritten by the first frame before
-# anything reads it, and each later slot the same way. The filler is `tts_pad`, the
-# embedding the model already sees at every codec-track position, rather than zeros.
+# Prompt lengths the prefill rounds up to: each compiles its own programs, 1.41 s cold.
 PROMPT_BUCKET = 32
 
-# How many of the talker's top ids are control tokens rather than codes: upstream suppresses
-# `vocab_size - 1024` upward, sparing end-of-speech. The codec's codebooks hold 2048 entries
-# and the talker's vocabulary is 3072, so this is exactly the gap between them.
+# The gap between the talker's 3072 ids and the codec's 2048, which upstream suppresses.
 CONTROL_ID_COUNT = 1024
 
-# Frames an utterance must reach before end-of-speech is allowed, upstream's
-# `min_new_tokens=2`. One frame is 80 ms.
-MIN_FRAMES = 2
+MIN_FRAMES = 2  # upstream's `min_new_tokens=2`; one frame is 80 ms
 
 
 class Stopwatch:
@@ -215,9 +201,8 @@ class CloneReference:
     """
 
     def __init__(self, codes, speaker_embedding, text=None):
-        # A reference with codes is for in-context cloning, and that prompt carries the
-        # transcript beside them, so it is not optional there. A reference with no codes is
-        # the `x_vector_only` kind, which carries the voice and nothing else to describe.
+        # In-context cloning carries the transcript beside the codes, so it is required there.
+        # A reference with no codes is the `x_vector_only` kind, which has nothing to describe.
         if codes is not None and not str(text or "").strip():
             raise ValueError("a clone reference needs the clip's transcript; upstream calls this ICL mode")
 
@@ -675,22 +660,16 @@ def build_streaming_clone_prefill(text, reference, language="Auto", tables=None)
     codec_track = torch.cat([codec_bos, tables.frames(reference.codes)], dim=1)
     codec_lens = codec_track.shape[1]
 
-    # Reference transcript and text to speak projected in one call, as upstream does, then
-    # `tts_eos`. One call rather than two because the projection's accumulation order shows
-    # at 1e-7 and the point of this comparison is that nothing shows at all.
+    # Transcript and text projected in one call, as upstream does: two calls show at 1e-7.
     ids = list(reference_ids) + feed.take_ids(codec_lens)
     text_track = torch.cat([tables.text(ids), feed.take_eos()], dim=1)
 
     if text_track.shape[1] > codec_lens:
-        # A text longer than the clip. The prompt takes what the codec track covers and the
-        # rest is fed per frame, so the surplus goes back to the feed rather than being
-        # projected a second time.
+        # A text longer than the clip: the surplus goes back rather than being projected again.
         feed.push_front(text_track[:, codec_lens:])
         text_track = text_track[:, :codec_lens]
     elif text_track.shape[1] < codec_lens:
-        # A clip longer than the text, which is the usual way round: the text track pads
-        # out to the clip and there is nothing left to stream. Decode then adds `tts_pad`
-        # at every frame, exactly as non-streaming does, over a shorter prompt.
+        # A clip longer than the text, the usual way: nothing left to stream, so decode pads.
         text_track = torch.cat([text_track, tables.tts_pad.expand(-1, codec_lens - text_track.shape[1], -1)], dim=1)
 
     return torch.cat([head, text_track + codec_track], dim=1), feed
@@ -731,13 +710,11 @@ def build_voice_clone_prefill(text, reference, language="Auto", tables=None):
         tables, prompt_ids[:ROLE_IDS], resolve_language(language), reference.speaker_embedding
     )
 
-    # Text track: the reference transcript, the text to speak, then tts_eos, all against
-    # codec_pad. The reference transcript comes first, which is the whole point of ICL.
+    # Text track: transcript first, which is the point of ICL, then the text and tts_eos.
     spoken = torch.cat([tables.text(list(reference_ids) + list(text_ids)), tables.tts_eos], dim=1)
     body = spoken + tables.codec([talker_config["codec_pad_id"]] * spoken.shape[1])
 
-    # Codec track: codec_bos, then the reference clip frame by frame, against tts_pad. This
-    # replaces `_prompt_body`'s single `codec_bos` tail, since the clip rides behind it.
+    # Codec track: codec_bos, then the clip frame by frame, in place of `_prompt_body`'s tail.
     voice = torch.cat([codec_bos, tables.frames(reference.codes)], dim=1) + tables.tts_pad
 
     return torch.cat([head, body, voice], dim=1), prompt_ids
@@ -778,8 +755,7 @@ class Qwen3TTSPipeline:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Ids the talker may never emit as a code, and the same set plus end-of-speech for
-        # the first frames. Built once: they depend only on the checkpoint.
+        # What the talker may not emit: control ids always, end-of-speech for the first frames.
         vocab = self.talker_config["vocab_size"]
         control = [index for index in range(vocab - CONTROL_ID_COUNT, vocab) if index != self.eos]
         self._control_ids = torch.tensor(control, dtype=torch.long)

@@ -114,11 +114,7 @@ def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloa
         "lm_head": [linear(f"lm_head.{index}") for index in range(heads)],
         "talker_codec_embedding": talker_table,
         "codec_embedding": predictor_tables,
-        # The same tables on device, for the lookup the step does between positions. A row
-        # is 2048 values, and `ttnn.from_torch` of one costs 76 us against 4.5 for a copy
-        # of a tensor already on the device, so 15 lookups a frame are worth 1.1 ms. The
-        # embedding op reads a row for 10 us instead. bf16 because `ttnn.embedding`
-        # requires it.
+        # On device too, so a lookup costs an index write rather than 76 us of `from_torch`.
         "talker_codec_embedding_device": lookup_table(talker_table),
         "codec_embedding_device": [lookup_table(table) for table in predictor_tables],
     }
@@ -185,10 +181,8 @@ class TtCodePredictorCachedDecoder:
                 layer["post_attention_layernorm_wide"] = expand(f"model.layers.{index}.post_attention_layernorm.weight")
             self._final_norm_wide = expand("model.norm.weight")
 
-        # One index for every codebook lookup the step does, and the host tensors each
-        # position's rotary tables need. Positions here are always 0 to 15, so the tables
-        # are built once and copied after that: `ttnn.from_torch` of a rotary row costs
-        # 10 us and the copy 4.5, and the step does three per position.
+        # An index for the step's codebook lookups, and per-position rotary tables built once:
+        # the predictor's positions are always 0 to 15, so nothing here changes per frame.
         self._index = ttnn.from_torch(
             torch.zeros(1, 1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )

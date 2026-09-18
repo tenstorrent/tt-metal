@@ -68,8 +68,7 @@ LANGUAGE = "English"
 TEXT = "The kettle is on."
 LONGER = "The kettle is on, and the rain has not let up since yesterday morning."
 
-# Ten positions: three role, the think block, the speaker, codec_pad, and the first text
-# token against codec_bos. Nine with `Auto`, which drops the language id from the block.
+# Role, think block, speaker, codec_pad, first text token. One fewer with `Auto`.
 STREAMING_PROMPT = 10
 STREAMING_PROMPT_AUTO = 9
 

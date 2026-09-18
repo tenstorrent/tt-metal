@@ -62,10 +62,7 @@ SEED = 0
 
 MAX_MS_PER_FRAME = 60.0
 MAX_PREFILL_S = 4.0
-# Per frame the decoder actually ran, padding included, rather than per second of audio
-# kept: a 13-frame utterance decodes a 32-frame bucket and throws the rest away, so the
-# per-second figure is three times the per-frame one. Measured 4.7 ms a frame at 32 frames
-# and 1.7 at 160, the difference being how well a longer decode parallelises.
+# Per frame decoded, padding included: a short utterance throws most of its bucket away.
 MAX_CODEC_MS_PER_FRAME = 8.0
 
 

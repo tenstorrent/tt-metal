@@ -53,24 +53,10 @@ LAYER_PCC = 0.999
 # End to end through 28 layers of bf16. Measured 0.9949 and deterministic.
 STACK_PCC = 0.99
 
-# Codec top-1 agreement, kept as a diagnostic rather than the verdict. The prompt sits in a
-# flat distribution (the reference's own top-1 probability is under 0.1 at several
-# positions), so which near-tie falls which way is decided by the last bits. Measured: a
-# perturbation of the prompt 4x smaller than one bf16 rounding step moves agreement over
-# 22/26 to 24/26 and puts the device's pick as far down as the reference's 8th choice. The
-# floor is set below that spread on purpose; the distribution check below is the verdict.
+# A diagnostic, not the verdict: a sub-ulp perturbation moves it over 22/26 to 24/26.
 MIN_TOKEN_AGREEMENT = 0.80
 
-# What the model actually does with those logits: sample at the shipped temperature. Total
-# variation distance between the reference's distribution and the device's, per position.
-# It moves with the whole vector rather than with whichever two tokens are tied at the top,
-# which is what makes it usable as a verdict.
-#
-# Measured over the sub-ulp perturbations described above, and over both spellings of the
-# rotation (the fused kernel and the seven ops it replaced): mean 0.076 to 0.098, worst
-# 0.23 to 0.52. The ceilings sit above that spread. For scale, a wiring error rather than
-# rounding puts these near 1.0, since softmax over 3072 tokens shares almost no mass with
-# a distribution built from the wrong hidden state.
+# The verdict: distance between the two sampling distributions, 0.076 to 0.098 when right.
 SAMPLER_TEMPERATURE = 0.9
 MAX_MEAN_DISTRIBUTION_DISTANCE = 0.13
 MAX_DISTRIBUTION_DISTANCE = 0.60

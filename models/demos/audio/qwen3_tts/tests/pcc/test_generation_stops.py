@@ -62,9 +62,7 @@ CASES = (
 # Frames per word past which a run has stopped reading the text.
 MAX_FRAMES_PER_WORD = 12.0
 
-# Seeds per sentence allowed over that, from the table above: two at worst, and a build
-# where most seeds wander is a different animal from one where one does. No seed may reach
-# the cap, which is the unambiguous failure: a run still talking when the budget ends.
+# Seeds per sentence allowed over that ceiling. Reaching the frame cap is never allowed.
 MAX_WANDERING_SEEDS = 2
 
 

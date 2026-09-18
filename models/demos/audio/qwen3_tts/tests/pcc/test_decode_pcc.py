@@ -58,21 +58,7 @@ STEPS = 8
 TALKER_STEP_PCC = 0.99
 PREDICTOR_STEP_PCC = 0.99
 
-# Where the two graphs are judged: the distribution the sampler draws from, at the
-# temperature the checkpoint ships. Not on whether they pick the same token.
-#
-# **Why not picks.** Neither graph is bit-identical to the other and neither is meant to
-# be: the cached step reads a KV cache and runs matmuls under program configs the uncached
-# pass does not use, so the two round differently in the last bits. On this prompt that
-# decides picks, because the reference's own top-1 probability sits under 0.1 at several
-# positions. `test_talker_pcc.py` has the measurement: perturbing the prompt by a quarter
-# of a bf16 rounding step moves top-1 agreement over 22 to 24 of 26 and lands the device
-# on the reference's 8th choice. A test that asserts pick equality there is asserting luck,
-# and it duly broke on a fused rotation and again on a matmul config, both of which left
-# PCC where it was or better.
-#
-# Measured worst over these 8 steps: 0.28 for the talker, and the codebooks below sit far
-# under their own ceiling.
+# Judged on the distribution, not pick equality, which here is luck. Worst measured: 0.28.
 SAMPLER_TEMPERATURE = 0.9
 MAX_STEP_DISTANCE = 0.45
 
@@ -84,14 +70,7 @@ def sampler_distance(reference_logits, device_logits):
     return float(0.5 * (reference - device).abs().sum())
 
 
-# The same rule `test_code_predictor_pcc.py` uses: a disagreement counts against the port
-# only when the uncached graph actually prefers its own pick. These heads sit on near-ties
-# constantly, and which side of one a bf16 graph lands is not a correctness question.
-#
-# Both sets of logits are bf16, so the gaps are quantized to that grid and come out as
-# 0.0, 0.125 or 0.25 at this magnitude. Measured: 11 of 15 codebooks identical, the four
-# others at 0.0, 0.25, 0.125 and 0.125, which is one or two ticks. A gap of 0.0 means the
-# two ids are indistinguishable at bf16, so the flip is a tie broken either way.
+# A disagreement counts only where the uncached graph prefers its pick by more than this.
 MAX_PREFERENCE_GAP = 0.25
 
 
@@ -288,8 +267,7 @@ def test_cached_predictor_tracks_the_uncached_graph(device):
         elif gap > MAX_PREFERENCE_GAP:
             wide.append(f"codebook {step + 1} gap {gap:.4f}")
         if step < groups - 2:
-            # Forced along the uncached path's codes, and through the device-side lookup
-            # the frame loop uses rather than a host copy of the same row.
+            # The uncached path's codes, through the device-side lookup the frame loop uses.
             cached._fill_from_table(cached.p["codec_embedding_device"][step], reference)
             hidden = cached._run(2 + step)
 
