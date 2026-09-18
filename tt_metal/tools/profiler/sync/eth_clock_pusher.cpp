@@ -105,7 +105,8 @@ inline volatile tt_l1_ptr uint32_t* rec(uint32_t i) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         kSyncRingAddr + (i % kp::kSyncRingRecords) * kp::kSyncRecordWords * 4u);
 }
-inline void write(uint32_t kind, uint32_t role, uint32_t round, uint64_t value, uint64_t wall) {
+// `resid8`: the largest residual, in eighths of a wall tick, of the samples behind this point against its line.
+inline void write(uint32_t kind, uint32_t role, uint32_t round, uint64_t value, uint64_t wall, uint32_t resid8) {
     if (g_tail - g_head == kp::kSyncRingRecords) {
         return;
     }
@@ -116,6 +117,8 @@ inline void write(uint32_t kind, uint32_t role, uint32_t round, uint64_t value, 
     r[kp::SYNC_VALUE_HI] = static_cast<uint32_t>(value >> 32);
     r[kp::SYNC_WALL_LO] = static_cast<uint32_t>(wall);
     r[kp::SYNC_WALL_HI] = static_cast<uint32_t>(wall >> 32);
+    r[kp::SYNC_REF_LO] = resid8;
+    r[kp::SYNC_REF_HI] = 0;
     g_tail++;
 }
 }  // namespace sync
@@ -163,6 +166,7 @@ struct Model {
     uint32_t acq_count = 0;
     uint64_t r_lock = 0;  // where the segment's line begins: the oldest sample of the window that locked it
     uint64_t r_last_point = 0;
+    uint32_t max_d8 = 0;  // the largest |residual| of an on-line sample since the last point, in eighths
     uint32_t ring_n = 0;  // ring entries written; the newest is ring()[(ring_n - 1) & (kRingSamples - 1)]
     // Acquisition's raw points: the anchor (the last point sent), the previous sample, and the cone of chord slopes
     // from the anchor that keep every sample since within kRawEpsTicks, as fractions n/d with d > 0.
@@ -191,13 +195,14 @@ inline void write_point(Model& m, uint64_t r, uint32_t role) {
     m.r_last_point = r;
     const uint64_t w = static_cast<uint64_t>((line_w8(m, r) + 4) >> 3);
     const uint32_t n = m.n < kCountMax ? m.n : kCountMax - 1;
-    sync::write(kp::kSyncKindLocal, role, m.k8 | (n << 8), r, w);
+    sync::write(kp::kSyncKindLocal, role, m.k8 | (n << 8), r, w, m.max_d8);
+    m.max_d8 = 0;
 }
 
 // A sample as a point: k8 0 tells the host it is an instant of the wall clock, on no line.
 inline void write_raw_point(Model& m, uint64_t r, uint64_t w) {
     m.r_last_point = r;
-    sync::write(kp::kSyncKindLocal, kp::kSyncLocalPoint, 0, r, w);
+    sync::write(kp::kSyncKindLocal, kp::kSyncLocalPoint, 0, r, w, 8u * static_cast<uint32_t>(kRawEpsTicks));
 }
 // One acquisition sample: the seam's first becomes a point and the anchor; then the cone narrows with each sample,
 // and the sample that empties it makes the previous one the next point and anchor.
@@ -330,6 +335,8 @@ inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w
     }
     m.off = 0;
     m.r_last_on = r;
+    const uint32_t ad = static_cast<uint32_t>(d < 0 ? -d : d);
+    m.max_d8 = ad > m.max_d8 ? ad : m.max_d8;
     if (m.n < kCountMax) {
         m.sum += static_cast<int32_t>(e);
         m.n++;

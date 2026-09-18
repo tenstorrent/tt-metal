@@ -66,6 +66,23 @@ public:
     };
 
     std::vector<Run> runs;  // in time order, disjoint in refclk
+    // The pusher's own check of each line against its samples: the largest residual any point reported, in wall
+    // ticks, and how many points reported one beyond kResidWarnTicks.
+    static constexpr double kResidWarnTicks = 8.0;
+    double max_resid_ticks = 0.0;
+    uint64_t resid_warn_points = 0;
+    // Each line point's residual as (refclk, wall ticks): the model's error bound over the samples between the
+    // previous point and it, in refclk order.
+    std::vector<std::pair<double, double>> resid;
+    // The bound in force at refclk r: the first point at or after it, the last point's past the end.
+    double resid_at(double r) const {
+        if (resid.empty()) {
+            return 0.0;
+        }
+        const auto it = std::lower_bound(
+            resid.begin(), resid.end(), r, [](const std::pair<double, double>& p, double x) { return p.first < x; });
+        return it == resid.end() ? resid.back().second : it->second;
+    }
     // Instants of the wall clock on no line (k8 0): the pusher's own samples while it acquires a slope across a
     // glide, in refclk order. They bend the map through the seam they fall in.
     std::vector<std::pair<double, double>> raw;  // (refclk, wall)
@@ -73,9 +90,15 @@ public:
     uint64_t transitions = 0;  // segments after the first
 
     // A point of the open segment's line, or the segment's close. An older point than the newest is superseded.
-    void add_point(uint64_t refclk, uint64_t wall, uint32_t k8, uint32_t n, bool close) {
+    void add_point(uint64_t refclk, uint64_t wall, uint32_t k8, uint32_t n, bool close, uint32_t resid8 = 0) {
         points++;
         const double r = static_cast<double>(refclk), w = static_cast<double>(wall);
+        const double resid = resid8 / 8.0;
+        max_resid_ticks = std::max(max_resid_ticks, resid);
+        resid_warn_points += resid > kResidWarnTicks;
+        if (k8 != 0 && (this->resid.empty() || r > this->resid.back().first)) {
+            this->resid.emplace_back(r, resid);
+        }
         if (k8 == 0) {
             if (raw.empty() || r > raw.back().first) {
                 raw.emplace_back(r, w);
@@ -107,6 +130,18 @@ public:
             }
         }
         return out;
+    }
+    // The newest instant the samples reach when the model ends inside a transition (the last segment closed, or raw
+    // instants past it): nothing later is measured. No value while the last segment is open: its line stands on.
+    std::optional<double> modelled_until() const {
+        if (runs.empty()) {
+            return 0.0;
+        }
+        const double raw_r = raw.empty() ? 0.0 : raw.back().first;
+        if (!runs.back().closed && runs.back().r_last >= raw_r) {
+            return std::nullopt;
+        }
+        return std::max(runs.back().r_last, raw_r);
     }
     // The segment holding refclk r: the last one starting at or before it (the first, for anything earlier).
     const Run& run_at(double r) const {
@@ -476,7 +511,7 @@ private:
     // One link's rounds placed through the final map: per round the error (as a plot point), the placement's terms,
     // the raw offset, the stamps' own residual and the path figures.
     struct LinkErrors;
-    LinkErrors link_errors(size_t li) const;
+    LinkErrors link_errors(size_t li, bool anchored) const;
     static void stamp_residuals(LinkErrors& e);
     void log_link_stats(const CaptureContext::Link& L, const LinkErrors& e, size_t rounds) const;
     void log_worst_rounds(const CaptureContext::Link& L, const LinkErrors& e) const;
@@ -489,8 +524,15 @@ private:
         double res_a = 0, res_b = 0;  // each end's recorded pair against its chip's model, ns
         uint32_t spins_a = 0, spins_b = 0;
     };
+    // `anchored`: each end's wall from the (wall, refclk) pair its record carries, the wall clock at one refclk
+    // update; otherwise from the local model, which then cancels and the error is the links' and the map's.
     bool round_error(
-        const CaptureContext::Link& L, const Round& r, int64_t& tsc_a, double& err, RoundTerms* terms = nullptr) const;
+        const CaptureContext::Link& L,
+        const Round& r,
+        bool anchored,
+        int64_t& tsc_a,
+        double& err,
+        RoundTerms* terms = nullptr) const;
     // A (host TSC tick, value) series as a Tracy plot (each chip's AICLK, the sync error per link); the TSC is the
     // timer stamp Tracy places it by. Emitted whenever Tracy is compiled in: the record sink is what an env var
     // turns on, the plots ride with the profiler.

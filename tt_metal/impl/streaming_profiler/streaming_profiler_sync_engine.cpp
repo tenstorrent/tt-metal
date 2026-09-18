@@ -341,7 +341,13 @@ void SyncEngine::on_clock(const ClockSample& s) {
         links_.on_stamp(s);
         return;
     }
-    local_[s.dev].add_point(s.value, s.ts, s.round & 0xFFu, s.round >> 8, s.role == kernel_profiler::kSyncLocalClose);
+    local_[s.dev].add_point(
+        s.value,
+        s.ts,
+        s.round & 0xFFu,
+        s.round >> 8,
+        s.role == kernel_profiler::kSyncLocalClose,
+        static_cast<uint32_t>(s.ref));
     if (publish_dev(s.dev)) {
         service().wake_consumers();
     }
@@ -895,7 +901,8 @@ void SyncEngine::log_clock_models() const {
             tt::LogMetal,
             "[streaming profiler] d2d sync chip {}: local clock {} points in {} segments ({} steps); applied AICLK "
             "mean {:.5f} GHz (segment min {:.5f}, max {:.5f}; boot anchor {:.5f}), spread {:.1f} ppm; {} correction "
-            "nodes, the tangent extended {} times",
+            "nodes, the tangent extended {} times; samples within {:.2f} ns of their line at worst, {} points over "
+            "{:.1f} ns",
             chip,
             l.points,
             nb,
@@ -906,7 +913,40 @@ void SyncEngine::log_clock_models() const {
             anchor_ghz,
             mean > 0.0 ? (smax - smin) / mean * 1e6 : 0.0,
             series_.series(dev) != nullptr ? series_.series(dev)->nodes.size() : 0,
-            series_.series(dev) != nullptr ? series_.series(dev)->extended : 0);
+            series_.series(dev) != nullptr ? series_.series(dev)->extended : 0,
+            l.max_resid_ticks / (mean * to_ghz),
+            l.resid_warn_points,
+            LocalClockModel::kResidWarnTicks / (mean * to_ghz));
+        // The transitions, where no line holds: how many the map crosses at a knot and how many through the raw
+        // instants, and how far the map's path through each seam sits from the samples the pusher took inside it,
+        // both placed by the same map so no link transform enters.
+        size_t steps = 0;
+        for (size_t i = 0; i + 1 < l.runs.size(); i++) {
+            steps += l.knot(l.runs[i], l.runs[i + 1]).has_value();
+        }
+        if (!l.raw.empty() && series_.has_nodes(dev)) {
+            std::vector<double> e;
+            e.reserve(l.raw.size());
+            for (const auto& [r, w] : l.raw) {
+                const double at_sample = map_.lookup_root(chip, std::llround(w));
+                const double at_path = map_.lookup_root(chip, std::llround(l.wall_at(r)));
+                e.push_back(std::abs(at_sample - at_path) * kNsPerRefclk);
+            }
+            const double worst = *std::max_element(e.begin(), e.end());
+            std::nth_element(e.begin(), e.begin() + e.size() / 2, e.end());
+            log_info(
+                tt::LogMetal,
+                "[streaming profiler] d2d sync chip {}: {} transitions, {} crossed at a knot, {} placed through their "
+                "raw instants; the map's path through them within {:.2f} ns of the {} samples taken inside at worst "
+                "(median {:.2f} ns)",
+                chip,
+                l.transitions,
+                steps,
+                l.transitions - steps,
+                worst,
+                e.size(),
+                e[e.size() / 2]);
+        }
         if (const auto* ps = series_.series(dev); ps != nullptr && ps->dropped != 0) {
             log_warning(
                 tt::LogMetal,
@@ -1086,7 +1126,8 @@ bool LinkSolver::solve_link(const CaptureContext::Link& L, std::vector<RoundPoin
 }
 
 bool SyncEngine::round_error(
-    const CaptureContext::Link& L, const Round& r, int64_t& tsc_a, double& err, RoundTerms* terms) const {
+    const CaptureContext::Link& L, const Round& r, bool anchored, int64_t& tsc_a, double& err, RoundTerms* terms)
+    const {
     if (L.dev_a >= ctx_.devices.size() || L.dev_b >= ctx_.devices.size()) {
         return false;
     }
@@ -1098,12 +1139,11 @@ bool SyncEngine::round_error(
     if (!series_.has_nodes(L.dev_a) || !series_.has_nodes(L.dev_b)) {
         return false;
     }
-    // Each end's wall clock at the round's midpoint, from the (wall, refclk) pair it read together when it recorded
-    // the stamp, moved to the midpoint by the model's slope over that ~1 ms: a measured AICLK instant, so the error
-    // below is AICLK to AICLK and the model enters only through that millisecond's slope. A record without the
-    // refclk falls back to the model's wall, which cancels the model out of the error.
+    // Anchored: each end's wall clock at the round's midpoint from the (wall, refclk) pair it read together when it
+    // recorded the stamp, moved to the midpoint by the model's slope over that ~1 ms, a measured AICLK instant.
+    // Otherwise the model's wall for the midpoint, which cancels the model out of the error.
     const double mid_a = LinkSolver::mid_a_refclk(r), mid_b = LinkSolver::mid_b_refclk(r);
-    const bool anchored = r.t0.ref != 0 && r.t1.ref != 0;
+    anchored = anchored && r.t0.ref != 0 && r.t1.ref != 0;
     const double wa = anchored ? static_cast<double>(r.t0.wall) + la->second.wall_at(mid_a) -
                                      la->second.wall_at(static_cast<double>(r.t0.ref))
                                : la->second.wall_at(mid_a);
@@ -1116,6 +1156,17 @@ bool SyncEngine::round_error(
     RoundTerms t;
     t.wall_a = wa;
     t.wall_b = wb;
+    if (anchored) {
+        const auto res_ns = [](const LocalClockModel& m, const LinkSolver::Stamp& st) {
+            const double ref = static_cast<double>(st.ref);
+            const double ghz = (m.wall_at(ref + 1.0) - m.wall_at(ref)) / kNsPerRefclk;
+            return (static_cast<double>(st.wall) - m.wall_at(ref)) / std::max(ghz, 0.1);
+        };
+        t.res_a = res_ns(la->second, r.t0);
+        t.res_b = res_ns(lb->second, r.t1);
+        t.spins_a = r.t0.spins;
+        t.spins_b = r.t1.spins;
+    }
     t.root_a = map_.lookup_root(ctx_.devices[L.dev_a].chip_id, std::llround(wa));
     t.root_b = map_.lookup_root(ctx_.devices[L.dev_b].chip_id, std::llround(wb));
     tsc_a = std::llround(map_.host_tsc(t.root_a));
@@ -1133,28 +1184,41 @@ struct SyncEngine::LinkErrors {
     std::vector<double> rtt, turn, path, resid;
     double path_med = 0.0, rtt_median = 0.0;
     size_t off_path = 0;
+    size_t past_model = 0;  // rounds after an end's clock model stopped, in a transition the capture cut short
+    size_t unbracketed = 0;  // rounds an end recorded with a plain (wall, refclk) pair: read_bracketed gave up
 };
 
 // The rounds inside the path band, placed through the final map. Next to the placement error: the sender's round
 // trip and the one way and turnaround inside the stamps.
-SyncEngine::LinkErrors SyncEngine::link_errors(size_t li) const {
+SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
     const CaptureContext::Link& L = ctx_.links[li];
     const std::vector<Round>& rounds = links_.rounds(li);
     LinkErrors e;
     e.path_med = LinkSolver::path_median(rounds, 0, rounds.size());
+    const auto until = [&](uint32_t dev) {
+        const auto it = local_.find(dev);
+        return it == local_.end() ? std::optional<double>{0.0} : it->second.modelled_until();
+    };
+    const std::optional<double> until_a = until(L.dev_a), until_b = until(L.dev_b);
     for (const Round& r : rounds) {
         if (std::abs(LinkSolver::path_ns(r) - e.path_med) > LinkSolver::kPathDevNs) {
             e.off_path++;
             continue;
         }
+        if ((until_a && LinkSolver::mid_a_refclk(r) > *until_a) ||
+            (until_b && LinkSolver::mid_b_refclk(r) > *until_b)) {
+            e.past_model++;
+            continue;
+        }
         int64_t H = 0;
         double err = 0.0;
         RoundTerms t;
-        if (!round_error(L, r, H, err, &t)) {
+        if (!round_error(L, r, anchored, H, err, &t)) {
             continue;
         }
         e.pts.push_back(PlotPoint{H, err});
         e.terms.push_back(t);
+        e.unbracketed += anchored && (r.t0.spins == 0 || r.t1.spins == 0);
         e.raw_x.push_back(LinkSolver::mid_a_refclk(r));
         e.raw_y.push_back(LinkSolver::mid_b_refclk(r) - e.raw_x.back());
         e.rtt.push_back(LinkSolver::rtt_ns(r));
@@ -1209,7 +1273,8 @@ void SyncEngine::log_link_stats(const CaptureContext::Link& L, const LinkErrors&
         tt::LogMetal,
         "[streaming profiler] d2d sync link chip {} -> chip {}: one way inside the stamps {:.1f} ns (p10 {:.1f}, p90 "
         "{:.1f}); receiver's stamped turnaround {:.1f} ns (p10 {:.1f}, p90 {:.1f}); sender's round trip {:.1f} ns "
-        "(p10 {:.1f}, p90 {:.1f}); {} rounds, {} off the path band dropped",
+        "(p10 {:.1f}, p90 {:.1f}); {} rounds, {} off the path band dropped, {} past a chip's clock model, {} read "
+        "unbracketed",
         L.chip_a,
         L.chip_b,
         pct(e.path, 0.5),
@@ -1222,7 +1287,9 @@ void SyncEngine::log_link_stats(const CaptureContext::Link& L, const LinkErrors&
         pct(e.rtt, 0.1),
         pct(e.rtt, 0.9),
         rounds,
-        e.off_path);
+        e.off_path,
+        e.past_model,
+        e.unbracketed);
     long double se = 0, ss = 0, srr = 0;
     for (size_t i = 0; i < e.pts.size(); i++) {
         se += e.pts[i].value;
@@ -1232,9 +1299,11 @@ void SyncEngine::log_link_stats(const CaptureContext::Link& L, const LinkErrors&
     const double nn = static_cast<double>(e.pts.size());
     log_info(
         tt::LogMetal,
-        "[streaming profiler] d2d sync error chip {} vs chip {}: {} rounds, mean {:+.1f} ns, rms {:.1f} ns{}",
+        "[streaming profiler] d2d sync check chip {} vs chip {} (AICLK-anchored{}): {} rounds, mean {:+.1f} ns, rms "
+        "{:.1f} ns{}",
         L.chip_b,
         L.chip_a,
+        e.unbracketed != 0 ? fmt::format(", {} of them from plain reads, ~30 ns each", e.unbracketed) : "",
         e.pts.size(),
         static_cast<double>(se) / nn,
         std::sqrt(static_cast<double>(ss) / nn),
@@ -1296,7 +1365,7 @@ void SyncEngine::log_worst_rounds(const CaptureContext::Link& L, const LinkError
     }
     log_info(
         tt::LogMetal,
-        "[streaming profiler] d2d sync error chip {} vs chip {}: worst rounds{}",
+        "[streaming profiler] d2d sync check chip {} vs chip {}: worst rounds{}",
         L.chip_b,
         L.chip_a,
         worst);
@@ -1315,12 +1384,12 @@ void SyncEngine::write_err_csv(const CaptureContext::Link& L, const LinkErrors& 
     std::fprintf(
         ef,
         "host_ns,err_ns,stamp_resid_ns,rtt_dev_ns,mid_a_refclk,r1_b_refclk,wall_a,wall_b,root_a,root_b,rtt_ns,"
-        "turn_ns,path_ns\n");
+        "turn_ns,path_ns,res_a_ns,res_b_ns,spins_a,spins_b\n");
     for (size_t i = 0; i < e.pts.size(); i++) {
         const RoundTerms& t = e.terms[i];
         std::fprintf(
             ef,
-            "%lld,%.2f,%.2f,%.1f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.1f,%.1f,%.1f\n",
+            "%lld,%.2f,%.2f,%.1f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.1f,%.1f,%.1f,%.2f,%.2f,%u,%u\n",
             static_cast<long long>(SteadyView::mono_ns(e.pts[i].tsc)),
             e.pts[i].value,
             e.resid[i],
@@ -1333,7 +1402,11 @@ void SyncEngine::write_err_csv(const CaptureContext::Link& L, const LinkErrors& 
             t.root_b,
             e.rtt[i],
             e.turn[i],
-            e.path[i]);
+            e.path[i],
+            t.res_a,
+            t.res_b,
+            t.spins_a,
+            t.spins_b);
     }
     std::fclose(ef);
 }
@@ -1347,7 +1420,7 @@ void SyncEngine::publish_error_plots() {
         if (rounds == 0) {
             continue;
         }
-        LinkErrors e = link_errors(li);
+        LinkErrors e = link_errors(li, /*anchored=*/true);
         if (e.pts.empty()) {
             continue;
         }
@@ -1355,7 +1428,85 @@ void SyncEngine::publish_error_plots() {
         log_link_stats(L, e, rounds);
         log_worst_rounds(L, e);
         write_err_csv(L, e);
-        plot(fmt::format("d2d sync error chip{} vs chip{} (ns)", L.chip_b, L.chip_a), e.pts);
+        // The anchored check reads the wall clock to a cycle only where the link end brackets its reads; a router's
+        // plain pair puts the refclk register's 80 ns step into every round, so it is not plotted as an error.
+        if (e.unbracketed == 0) {
+            plot(fmt::format("d2d sync check chip{} vs chip{}, AICLK-anchored (ns)", L.chip_b, L.chip_a), e.pts);
+        }
+        // The same rounds with the model cancelled: the links' and the map's own error, at the stamps' 0.3 ns. With
+        // each chip's model bound added, the worst a record of either chip can be off the other's. That series is
+        // drawn at every point of either chip's model, each carrying the worst residual over all the samples since
+        // the previous point, with the cross-chip error taken from the nearest round: crystals and nodes move slowly,
+        // the models do not. The signed cross-chip error stays in the log and the CSV.
+        const LinkErrors em = link_errors(li, /*anchored=*/false);
+        if (em.pts.empty()) {
+            continue;
+        }
+        const auto la = local_.find(L.dev_a), lb = local_.find(L.dev_b);
+        const auto xa = to_root_.find(L.dev_a), xb = to_root_.find(L.dev_b);
+        if (la == local_.end() || lb == local_.end() || xa == to_root_.end() || xb == to_root_.end()) {
+            continue;
+        }
+        const double ghz_a = std::max(ctx_.devices[L.dev_a].frequency_ghz, 0.1);
+        const double ghz_b = std::max(ctx_.devices[L.dev_b].frequency_ghz, 0.1);
+        double se = 0, ss = 0, worst = 0;
+        for (const PlotPoint& p : em.pts) {
+            se += p.value;
+            ss += p.value * p.value;
+            worst = std::max(worst, std::abs(p.value));
+        }
+        const double nn = static_cast<double>(em.pts.size());
+        // Both chips' point instants on the root, in order; the round nearest each carries the cross-chip term.
+        struct At {
+            int64_t tsc;
+            double root;
+            bool a;
+            double resid_ns;
+        };
+        std::vector<At> at;
+        at.reserve(la->second.resid.size() + lb->second.resid.size());
+        for (const auto& [r, ticks] : la->second.resid) {
+            const double root = xa->second.scale * r + xa->second.shift;
+            at.push_back(At{std::llround(map_.host_tsc(root)), root, true, ticks / ghz_a});
+        }
+        for (const auto& [r, ticks] : lb->second.resid) {
+            const double root = xb->second.scale * r + xb->second.shift;
+            at.push_back(At{std::llround(map_.host_tsc(root)), root, false, ticks / ghz_b});
+        }
+        std::sort(at.begin(), at.end(), [](const At& x, const At& y) { return x.tsc < y.tsc; });
+        std::vector<PlotPoint> bound;
+        bound.reserve(at.size());
+        std::vector<double> bounds;
+        bounds.reserve(at.size());
+        size_t ri = 0;
+        double other_a = 0.0, other_b = 0.0;  // each chip's newest residual, in force until its next point
+        for (const At& x : at) {
+            while (ri + 1 < em.pts.size() && em.pts[ri + 1].tsc <= x.tsc) {
+                ri++;
+            }
+            (x.a ? other_a : other_b) = x.resid_ns;
+            bound.push_back(PlotPoint{x.tsc, std::abs(em.pts[ri].value) + other_a + other_b});
+            bounds.push_back(bound.back().value);
+        }
+        if (bounds.empty()) {
+            continue;
+        }
+        std::nth_element(bounds.begin(), bounds.begin() + bounds.size() / 2, bounds.end());
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] d2d sync error chip {} vs chip {} (links and map, model cancelled): {} rounds, mean "
+            "{:+.2f} ns, rms {:.2f} ns, worst {:.2f} ns; with both chips' model bounds at their {} points: median "
+            "{:.2f} ns, worst {:.2f} ns",
+            L.chip_b,
+            L.chip_a,
+            em.pts.size(),
+            se / nn,
+            std::sqrt(ss / nn),
+            worst,
+            bounds.size(),
+            bounds[bounds.size() / 2],
+            *std::max_element(bounds.begin(), bounds.end()));
+        plot(fmt::format("d2d sync error chip{} vs chip{} (ns)", L.chip_b, L.chip_a), bound);
     }
 }
 
