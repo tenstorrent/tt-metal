@@ -4,8 +4,9 @@
 """
 MoE MLP: Router + Experts with minimal abstraction
 """
+
 import ttnn
-from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
+from models.demos.gpt_oss.tt.expert_configs import gpt_oss_program_config
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
@@ -46,9 +47,12 @@ class MLP:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "router"),
         )
 
-        # Throughput experts rely on all_to_all_dispatch/combine across a mesh axis,
-        # which has no meaning on a single device and would require fabric.
-        if use_throughput_experts and mesh_device.get_num_devices() == 1:
+        # Throughput experts rely on all_to_all_dispatch/combine across mesh axis 0 (EP over
+        # rows). That has no meaning on a single device, and on a single-row mesh the dispatch
+        # axis has one device (get_neighbors would return self / no neighbours). Multi-user
+        # decode on single-row meshes goes through the low-latency experts instead (see
+        # experts/decode.py, which handles up to 32 users per step with TP-only sharding).
+        if use_throughput_experts and (mesh_device.get_num_devices() == 1 or mesh_device.shape[0] == 1):
             use_throughput_experts = False
 
         self.use_throughput_experts = use_throughput_experts
@@ -139,8 +143,8 @@ class MLP:
                 swiglu_limit=hf_config.swiglu_limit,
             )
 
-            # Use GPT-OSS specific program config
-            program_config = GPTOSSProgramConfig()
+            # Use GPT-OSS specific program config (core grids tuned for the device's compute grid)
+            program_config = gpt_oss_program_config(mesh_device)
 
             # Create experts with new modular implementation
             self.experts = Experts(
@@ -154,7 +158,7 @@ class MLP:
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
             )
 
-    def __call__(self, hidden_states, is_decode):
+    def __call__(self, hidden_states, is_decode, routing_mask=None):
         """Forward pass: route -> experts
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
@@ -162,6 +166,15 @@ class MLP:
             Expert output tensor [batch, seq_len, hidden_size]
         """
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
+        if routing_mask is not None and not self.use_throughput_experts:
+            # Rows a server pads a decode step with (position -1) still route: their hidden states are meaningless
+            # after the skipped attention, so their top-k lands on arbitrary experts and the union of experts the
+            # batched decode runs grows towards all of them (measured on P150x8: a single user in a 32-slot server
+            # paid the full batch-32 step time). Zero their routing weights: they leave the union and contribute 0.
+            mask_shape = tuple(int(d) for d in expert_weights.shape)[:-1] + (1,)  # ttnn.Shape has no slicing
+            expert_weights = ttnn.mul(
+                expert_weights, ttnn.reshape(routing_mask, mask_shape), output_tensor=expert_weights
+            )
         expert_output = self.experts(
             hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=is_decode
         )

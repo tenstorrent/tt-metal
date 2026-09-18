@@ -42,6 +42,14 @@ class ModelArgs:
         self.dummy_weights = dummy_weights
         self.max_batch_size = max_batch_size
         if self.max_batch_size > 32:
+            # More than 32 users needs users_row_sharded: each mesh row decodes its own 32-user
+            # slice (nlp_create_qkv_heads_decode / nlp_concat_heads_decode / on-device sampling all
+            # cap at 32 users per device).
+            if self.mesh_device.shape[0] == 1:
+                raise ValueError(
+                    f"max_batch_size={self.max_batch_size} exceeds the 32 users a single mesh row can decode; "
+                    "single-row meshes (e.g. 1x8) support batch sizes up to 32."
+                )
             assert (
                 self.max_batch_size % self.mesh_device.shape[0] == 0
             ), "max_batch_size must be divisible by the number of device rows"
@@ -114,7 +122,12 @@ class ModelArgs:
             self.processor = None  # GPT-OSS doesn't use vision processor
 
         self.disable_batched_prefill = True
-        self.capped_warmup_seq_len = 2048
+        # Prefill lengths up to this are compiled during warm-up, BEFORE the decode/prefill traces are captured. A
+        # length first used after that compiles its programs next to live traces, which can corrupt them
+        # (tenstorrent/tt-metal#55588: garbage or a hang on the first such request). tt_transformers' default is
+        # 2048; GPT-OSS serves 4K/8K prompts routinely, so warm those too (~30-40 s each for the 20B on P150x8).
+        # Servers with a larger max_model_len should raise this further.
+        self.capped_warmup_seq_len = 8192
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
     def get_warmup_prefill_supported_seq_lens(self):
@@ -181,16 +194,30 @@ class ModelArgs:
             "gpt-oss-120b": {
                 "T3K": [128],
                 "TG": [128],
+                "P150x8": [128],
             },
             "gpt-oss-20b": {
                 "T3K": [128],
                 "TG": [128],
-            }
+                "P150x8": [128],
+            },
             # exmaple : #base_model_name : {device_name : [sequence_lengths]}
         }
 
         model_name = self.model_name
         device_name = determine_device_name(self.mesh_device)
+        # The EP=1 expert prefill plans its expert-sorted path on the host from a device->host read of the routed
+        # token counts, which must never be captured in a trace; that path only exists above this many tokens per
+        # device, so every traced length has to stay at or below it (sp > 1 only shortens the per-device split).
+        from models.demos.gpt_oss.tt.experts.prefill import MAX_TRACEABLE_PREFILL_TOKENS
+
+        for per_device_lens in model_specific_supported_seq_lens.values():
+            for lens in per_device_lens.values():
+                if any(seq_len > MAX_TRACEABLE_PREFILL_TOKENS for seq_len in lens):
+                    raise ValueError(
+                        f"traced prefill lengths {lens} exceed the experts' traceable bound "
+                        f"{MAX_TRACEABLE_PREFILL_TOKENS} tokens"
+                    )
 
         # If there is no entry for a model in model_specific_supported_seq_lens, use the entry in default_supported_seq_lens
         result = model_specific_supported_seq_lens.get(model_name, {}).get(
@@ -319,7 +346,8 @@ class ModelArgs:
     # older format is then rejected -> the run cold-loads and regenerates the cache, rather than
     # skipping the load and hard-failing in ttnn.as_tensor(None, ...) on a missing .tensorbin.
     # (Mirrors DeepSeek's WEIGHT_CACHE_FORMAT_VERSION in deepseek_v3/utils/weight_config.py.)
-    WEIGHT_CACHE_FORMAT_VERSION = 1
+    # v3: expert gate/up projections cached fused (experts/weights.py gate_up_proj_fused_tp*).
+    WEIGHT_CACHE_FORMAT_VERSION = 3
 
     def weight_cache_is_complete(self, dtype):
         """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was

@@ -99,6 +99,7 @@ class DecoderLayer:
         is_decode=True,
         user_id=0,
         batch_size=1,
+        routing_mask=None,
     ):
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
@@ -131,7 +132,9 @@ class DecoderLayer:
         hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
         # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
 
-        hidden_states = self.mlp(hidden_states_post_norm, is_decode=is_decode)  # diff with llama: router scores
+        hidden_states = self.mlp(
+            hidden_states_post_norm, is_decode=is_decode, routing_mask=routing_mask
+        )  # diff with llama: router scores
         hidden_states_post_norm.deallocate(True)
 
         # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]

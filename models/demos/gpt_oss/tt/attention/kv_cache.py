@@ -95,15 +95,16 @@ def get_kv_memory_config(mesh_device, max_local_batch_size: int, num_local_kv_he
     Returns:
         Sharded memory config for KV tensors
     """
-    grid_size = ttnn.CoreCoord(8, 8)
+    from .config import ProgramConfig
 
-    # KV tensors should be [local_batch_size, num_local_kv_heads, 1, head_dim] for decode
+    # KV tensors are [1, local_batch_size, num_local_kv_heads, head_dim] for decode: one user per core,
+    # on the same per-user grid nlp_create_qkv_heads_decode / RoPE use (ProgramConfig.get_decode_user_grid),
+    # so the to_memory_config before paged_update_cache is a no-op on every arch and batch size.
     kv_shape = (1, max_local_batch_size, num_local_kv_heads, head_dim)
-    kv_shard_height = nearest_y(kv_shape[1], ttnn.TILE_SIZE)  # height = num_local_kv_heads
+    kv_shard_height = nearest_y(num_local_kv_heads, ttnn.TILE_SIZE)  # kv heads padded to a tile
     kv_shard_width = kv_shape[3]  # width = head_dim
-    kv_num_cores = kv_shape[1]  # cores = 1 (sequence length for decode)
 
-    kv_core_grid = ttnn.num_cores_to_corerangeset(kv_num_cores, grid_size, row_wise=True)
+    kv_core_grid, _ = ProgramConfig.get_decode_user_grid(mesh_device, max_local_batch_size)
 
     return ttnn.create_sharded_memory_config(
         shape=(kv_shard_height, kv_shard_width),

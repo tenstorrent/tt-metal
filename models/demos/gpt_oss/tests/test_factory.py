@@ -174,12 +174,17 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
             )
         ]
     else:
+        # GPT_OSS_TRACE_REGION_SIZE (bytes) overrides the YAML-resolved trace region size (debug knob).
+        trace_override = os.getenv("GPT_OSS_TRACE_REGION_SIZE")
+        trace_param = (
+            {"trace_region_size": int(trace_override)} if trace_override else {TRACE_MODEL_KEY_PARAM: "gpt-oss-120b"}
+        )
         params = [
             pytest.param(
                 shape,
                 {
                     "fabric_config": (None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D_RING),
-                    TRACE_MODEL_KEY_PARAM: "gpt-oss-120b",
+                    **trace_param,
                 },
                 id=f"{shape[0]}x{shape[1]}",
             )
@@ -196,9 +201,11 @@ def parametrize_batch_seq(configs=None, ids=None):
     """Universal batch/seq parametrization"""
     configs = configs or [(1, 1), (1, 32)]
     ids = ids or [
-        f"prefill_{seq_len//1024 if seq_len > 1024 else seq_len}" + ("k" if seq_len > 1024 else "")
-        if seq_len > 1
-        else "decode_mode"
+        (
+            f"prefill_{seq_len//1024 if seq_len > 1024 else seq_len}" + ("k" if seq_len > 1024 else "")
+            if seq_len > 1
+            else "decode_mode"
+        )
         for batch_size, seq_len in configs
     ]
     return pytest.mark.parametrize("batch_size, seq_len", configs, ids=ids)

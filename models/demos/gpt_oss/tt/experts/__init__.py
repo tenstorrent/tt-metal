@@ -32,7 +32,7 @@ from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 
 from .config import ExpertConfig, ProgramConfig
 from .decode import decode_forward
-from .prefill import prefill_forward
+from .prefill import prefill_forward, warmup_prefill_programs
 from .weights import load_expert_weights
 
 __all__ = ["Experts", "ExpertConfig", "ProgramConfig"]
@@ -119,6 +119,13 @@ class Experts:
             ),
         )
 
+    def warmup_prefill_programs(self, seq_lens):
+        """Compile the prompt-data-dependent prefill programs now (see experts/prefill.py warmup_prefill_programs);
+        call once per model before any trace is captured."""
+        warmup_prefill_programs(
+            self.weights, self.config, self.program_config, self.mesh_config, self.mesh_device, seq_lens
+        )
+
     def __call__(
         self,
         hidden_states,
@@ -130,13 +137,14 @@ class Experts:
         Forward pass - automatically dispatches to decode or prefill.
 
         Args:
-            hidden_states: Input tensor [batch, seq_len, hidden_size]
-            topk_expert_weights: Sparse router scores output [seq_len, num_experts]
+            hidden_states: Input tensor [1, 1, tokens, hidden_size] (decode: one token per user,
+                1 <= users <= 32; prefill: tokens = seq_len, a multiple of 32)
+            topk_expert_weights: Dense router scores [tokens, num_experts] (0 for unselected experts)
             is_decode: Decode mode
             topk_expert_indices: Top-k expert indices per token (unused in this version of experts)
 
         Returns:
-            Expert output tensor [1, batch, seq_len, hidden_size]
+            Expert output tensor [1, 1, tokens, hidden_size]
         """
         # Determine mode based on sequence length
         if is_decode:

@@ -2,17 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
-from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs, rope_scaling_model_factory
-from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
-from models.tt_transformers.tt.rope import RotarySetup
 
+# The expert-sorted prefill program warm-up (Model.__init__, experts/prefill.py) exists for servers that capture
+# traces; unit tests never trace, so skip its ~20-60 s per Model construction unless the caller opted in.
+os.environ.setdefault("GPT_OSS_PREFILL_PROGRAM_WARMUP", "0")
+from models.common.utility_functions import is_blackhole
+from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs
+from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
+
+from ...tt.attention.config import ProgramConfig as AttentionProgramConfig
 from ...tt.layer import DecoderLayer
+from ...tt.model import create_rope_setup
 from ...utils.general_utils import throughput_experts_supported_on_arch
 from ..test_factory import TestFactory, compare_tensors, parametrize_batch_seq, parametrize_mesh_with_fabric
 
@@ -153,6 +160,13 @@ def run_rms_norm_component(
         assert passing, f"RMS Norm test failed. Output: {output}"
 
 
+# Reference logits (fp32) closer than this to the top-k boundary count as a near-tie: the TT router computes bf16
+# logits from bf16 hidden states, so it may legitimately rank the other expert first there. With the unit tests' random
+# router weights the logits are O(1) and the observed flips sit up to ~0.1 from the boundary; a genuinely wrong expert
+# (a routing or layout bug) is O(1) away.
+ROUTER_TIE_TOLERANCE = 0.25
+
+
 def run_topk_router_component(
     mesh_device, hidden_shape, reference_layer, decoder_layer, is_decode, is_row_sharded, pcc_threshold
 ):
@@ -172,10 +186,11 @@ def run_topk_router_component(
     # sparse [num_tokens, top_k] weight tensor aligned to router_indices.
     _router_out = reference_router(hidden_states.reshape(-1, hidden_size))
     if len(_router_out) == 3:
-        router_scores, router_indices = _router_out[1], _router_out[2]
+        router_logits, router_scores, router_indices = _router_out
     else:
         router_scores_dense, router_indices = _router_out
         router_scores = torch.gather(router_scores_dense, 1, router_indices)
+        router_logits = None
 
     # Convert to TTNN tensors
     mesh_mapper = (
@@ -208,30 +223,57 @@ def run_topk_router_component(
         # [batch, top_k] aligned to their indices. Reading [:, :top_k] here would grab unselected experts.
         tt_router_weights_torch = torch.gather(tt_router_weights_full, 1, tt_router_indices_torch.long())
 
-    # Compare outputs
-    # We will sort the indices here as the order of the indices is not guaranteed to be the same in the reference and TT implementation.
-    sorted_tt_indices, sorted_tt_indices_order = torch.sort(tt_router_indices_torch, dim=-1)
-    sorted_ref_indices, sorted_ref_indices_order = torch.sort(router_indices, dim=-1)
-    indices_passing, indices_output = compare_tensors(
-        sorted_tt_indices, sorted_ref_indices, mesh_device, pcc_threshold=pcc_threshold
+    # Indices: per-token top-k SET agreement (expert ids are nominal, so a PCC over sorted ids means little). An expert
+    # may differ between the TT and the reference sets of a token only if its reference logit is within
+    # ROUTER_TIE_TOLERANCE of the reference k-th logit, i.e. it sits at the top-k boundary where the TT router (bf16
+    # logits from bf16 inputs) may legitimately rank it the other way; this also covers 3-way near-ties. Without the
+    # reference logits (transformers < 5) every token must at least share k-1 experts.
+    tt_sets = [set(row.tolist()) for row in tt_router_indices_torch.long()]
+    ref_sets = [set(row.tolist()) for row in router_indices[:batch].long()]
+    overlap = torch.tensor([len(a & b) for a, b in zip(tt_sets, ref_sets)])
+    if router_logits is not None:
+        ref_logits = router_logits[:batch].float()
+        kth_logit = ref_logits.topk(top_k, dim=-1).values[:, -1]
+        boundary_distance = [
+            max((abs(ref_logits[tok, e] - kth_logit[tok]).item() for e in a ^ b), default=0.0)
+            for tok, (a, b) in enumerate(zip(tt_sets, ref_sets))
+        ]  # per token: how far from the top-k boundary the experts that differ are (0 when the sets agree)
+        far_tokens = [tok for tok, d in enumerate(boundary_distance) if d > ROUTER_TIE_TOLERANCE]
+        indices_passing = not far_tokens
+        indices_output = (
+            f"exact on {int((overlap == top_k).sum())}/{batch} tokens; differing experts at most "
+            f"{max(boundary_distance):.3f} from the reference top-k boundary (tolerance {ROUTER_TIE_TOLERANCE}); "
+            f"{len(far_tokens)} tokens beyond it"
+        )
+    else:
+        indices_passing = bool((overlap >= top_k - 1).all())
+        indices_output = (
+            f"min overlap {int(overlap.min())}/{top_k}, exact on {int((overlap == top_k).sum())}/{batch} tokens"
+        )
+    # Compare the weights as DENSE [tokens, num_experts] tensors, each side scattered at its own expert ids. This
+    # lines the two sides up without assuming the same top-k order, and it is robust to bf16 near-ties: when the
+    # 4th/5th router logits of a token are within bf16 resolution TT may pick a different 4th expert than the fp32
+    # reference, which shows up as two small entries differing (not as a whole misaligned row), so an exact router
+    # still passes while a routing/layout bug (wrong experts or weights for many tokens) still fails.
+    num_experts = reference_layer.mlp.experts.num_experts
+    tt_dense = torch.zeros(batch, num_experts).scatter(
+        1, tt_router_indices_torch.long(), tt_router_weights_torch.float()
     )
-    # Reorder each token's weights into ascending-expert-id order so the two sides line up even when
-    # TT (bf16) and the reference (fp32) emit the same top-k experts in a different (value-sorted) order.
-    # gather along the top_k axis is the correct reorder; `weights.squeeze()[order]` indexes dim 0 and
-    # mangles the comparison for batch > 1.
-    weights_passing, weights_output = compare_tensors(
-        torch.gather(tt_router_weights_torch, -1, sorted_tt_indices_order),
-        torch.gather(router_scores, -1, sorted_ref_indices_order),
-        mesh_device,
-        pcc_threshold=pcc_threshold,
-    )
+    ref_dense = torch.zeros(batch, num_experts).scatter(1, router_indices[:batch].long(), router_scores[:batch].float())
+    weights_passing, weights_output = compare_tensors(tt_dense, ref_dense, mesh_device, pcc_threshold=pcc_threshold)
+    num_tie_break = int((overlap < top_k).sum())
     if not (indices_passing and weights_passing):
-        assert (
-            False
-        ), f"\nTopK Router test (indices) {indices_passing}. Output: {indices_output}\nTopK Router test (weights) {weights_passing}. Output: {weights_output}"
+        assert False, (
+            f"\nTopK Router test (indices) {indices_passing}. Output: {indices_output}"
+            f"\nTopK Router test (dense weights) {weights_passing}. Output: {weights_output}"
+            f"\nTopK Router tokens with a different top-k set: {num_tie_break}/{batch}"
+        )
     else:
         logger.info(f"TopK Router indices test passed. Output: {indices_output}")
-        logger.info(f"TopK Router weights test passed. Output: {weights_output}")
+        logger.info(
+            f"TopK Router dense weights test passed ({num_tie_break}/{batch} bf16 tie-break tokens). "
+            f"Output: {weights_output}"
+        )
 
 
 def run_throughput_experts_component(
@@ -503,9 +545,10 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
         hidden_states.reshape(-1, hidden_size), router_indices=router_indices, routing_weights=routing_weights_topk
     )
 
-    # Convert to TTNN tensors
+    # Convert to TTNN tensors. The experts consume the decoder-layer contract [1, 1, tokens, hidden]
+    # (tokens = batch * seq; one token per user in decode) with dense [tokens, num_experts] weights.
     tt_hidden_states = ttnn.from_torch(
-        hidden_states.unsqueeze(0),
+        hidden_states.reshape(1, 1, -1, hidden_size),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
@@ -555,8 +598,9 @@ def run_full_mlp_pipeline(
         else None
     )
     tt_hidden_states = ttnn.from_torch(
-        # hidden_states.reshape(-1, 1, 2880),
-        hidden_states.unsqueeze(1),
+        # Row-sharded: [batch, 1, seq, hidden] split across rows. Otherwise the decoder-layer
+        # contract [1, 1, tokens, hidden] (tokens = batch * seq).
+        hidden_states.unsqueeze(1) if is_row_sharded else hidden_states.reshape(1, 1, -1, hidden_size),
         device=mesh_device,
         mesh_mapper=mesh_mapper,
         layout=ttnn.TILE_LAYOUT,
@@ -607,17 +651,19 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     config = setup["config"]
     # Convert HF QKV weights to Meta format for RoPE compatibility
     reference_state_swizzled = convert_hf_qkv_to_meta_format(reference_state, config.head_dim)
-    max_seq_len = getattr(config, "max_position_embeddings", 131072)
-    rope_scaling = rope_scaling_model_factory(config.rope_scaling)
-    rope_theta = getattr(config, "rope_theta", None) or getattr(config, "default_theta", 10000.0)
-    rope_setup = RotarySetup(
-        device=setup["mesh_device"],
-        batch_size=1,
-        head_dim=config.head_dim,
-        max_seq_len=max_seq_len,
-        rope_theta=rope_theta,
-        rope_scaling=rope_scaling,
+    # Build the rope setup exactly like production (Model.__init__ -> create_rope_setup): the decode
+    # transformation matrix is height-sharded one tile per user core and rotary_embedding_llama reads it
+    # from the local core's L1, so its batch (and the row-sharding / mesh-dim handling on multi-row
+    # meshes) must match the decode batch. A batch_size=1 setup leaves 31 of 32 cores reading
+    # unallocated memory at local batch 32.
+    users_row_sharded = setup["mesh_device"].shape[0] > 1 and local_batch_size > 1
+    rope_setup = create_rope_setup(
+        mesh_device=setup["mesh_device"],
+        hf_config=config,
+        max_local_batch_size=local_batch_size,
+        users_row_sharded=users_row_sharded,
         datatype=ttnn.bfloat16,
+        shard_batch_to_mesh_dim=0,
     )
     transformation_mats = rope_setup.get_both_trans_mats()
     decoder_layer = DecoderLayer(
@@ -655,6 +701,11 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     [
         (1, 1),  # decode
         (128, 1),  # decode
+        (32, 1),  # decode, 32 users on one mesh row (TP only, low-latency experts on the whole tile)
+        (
+            22,
+            1,
+        ),  # decode, 22 users: device-grid (13-wide on Blackhole) per-user placement, 13 + 9 cores (no <= 8x8 rectangle)
         (1, 128),  # prefill
         (1, 1024),  # prefill 1k
         (1, 4096),  # prefill 4k
@@ -662,6 +713,8 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     ids=[
         "decode_low_latency",
         "decode_high_throughput",
+        "decode_b32",
+        "decode_b22",
         "prefill_128",
         "prefill_1024",
         "prefill_4096",
@@ -719,12 +772,26 @@ def test_decoder(
         )
 
     mesh_shape = tuple(mesh_device.shape)
-    if mesh_shape[0] == 1 and batch_size > 1:
+    if mesh_shape[0] == 1 and batch_size > 32:
         pytest.skip(
             f"Skipping batch size {batch_size} for mesh shape {tuple(mesh_device.shape)}. "
-            "Only batch size 1 is supported for mesh shape without row-sharding."
+            "A single mesh row decodes at most 32 users; larger batches need row-sharding."
+        )
+    if mesh_shape == (1, 1) and batch_size > 1:
+        pytest.skip(
+            f"Skipping batch size {batch_size} on a single device (TP=1): multi-user decode is only "
+            "validated with TP>1 (e.g. 1x8)."
+        )
+    if mesh_shape[0] > 1 and 1 < batch_size <= 32:
+        pytest.skip(
+            f"Skipping batch size {batch_size} for mesh shape {mesh_shape}: multi-row meshes batch users "
+            "across rows (row-sharded, batch > 32); the single-row multi-user path is covered on 1xN."
         )
 
+    if seq_len == 1 and batch_size > 1 and not paged:
+        pytest.skip("multi-user decode is served with paged attention; the unpaged variant is legacy-only")
+    if batch_size == 22 and not is_blackhole():
+        pytest.skip("22 users exercises Blackhole's 13-wide compute grid; on an 8-wide grid it is the batch-32 layout")
     if is_blackhole() and mesh_device.shape[0] > 1 and batch_size * seq_len > 1:
         pytest.skip(
             f"Skipping batch={batch_size} seq_len={seq_len} on Blackhole {tuple(mesh_device.shape)}: "
@@ -853,10 +920,12 @@ def test_decoder(
         sin_meta, device=setup["mesh_device"], mesh_mapper=mesh_mapper, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    # For decode mode, convert cos/sin to HEIGHT_SHARDED to match Q/K/V from nlp_create_qkv_heads_decode
+    # For decode mode, convert cos/sin to HEIGHT_SHARDED on the per-user grid Q/K/V use (the same rule
+    # RotarySetup and attention/decode.py follow; rotary_embedding_llama reads cos/sin from the core that
+    # holds the user's Q shard, so the grids must agree — 8 wide for batches <= 8 or multiples of 32,
+    # the device compute grid otherwise, e.g. 13 wide for 16 users on Blackhole).
     if mode == "decode":
-        grid_size = ttnn.CoreCoord(8, 8)  # Safe limit: max 8 per dimension to avoid Galaxy hangs
-        batch_grid = ttnn.num_cores_to_corerangeset(local_batch_size, grid_size, row_wise=True)
+        batch_grid, _ = AttentionProgramConfig.get_decode_user_grid(setup["mesh_device"], local_batch_size)
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, config.head_dim),
             core_grid=batch_grid,
@@ -1190,10 +1259,12 @@ def run_model_forward_test(
     [
         (1, 128, "prefill"),
         (128, 1, "decode"),
+        (32, 1, "decode"),
     ],
     ids=[
         "prefill_b1_s128",
         "decode_b128_s1",
+        "decode_b32_s1",
     ],
 )
 @pytest.mark.parametrize(
@@ -1226,9 +1297,16 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, num_layers
 
     mesh_shape = tuple(mesh_device.shape)
 
-    if mesh_shape[0] == 1 and batch_size > 1:
+    if mesh_shape[0] == 1 and batch_size > 32:
         pytest.skip(
-            f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported when mesh rows = 1."
+            f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. A single mesh row decodes at most 32 users."
+        )
+    if mesh_shape == (1, 1) and batch_size > 1:
+        pytest.skip(f"Skipping batch size {batch_size} on a single device (TP=1): multi-user decode needs TP>1.")
+    if mesh_shape[0] > 1 and 1 < batch_size <= 32:
+        pytest.skip(
+            f"Skipping batch size {batch_size} for mesh shape {mesh_shape}: multi-row meshes batch users across "
+            "rows (row-sharded, batch > 32)."
         )
 
     if is_blackhole() and batch_size > 32 and mesh_device.shape[0] > 1:
