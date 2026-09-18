@@ -108,9 +108,9 @@ struct MatmulUnifiedProgramConfig {
     CoreRangeSet cores;
     std::size_t MN_chunk_M_tiles{};
     std::size_t MN_chunk_N_tiles{};
-    // K tiles accumulated per K iteration (one A slice + one B slice in L1 at a time); must divide K_tiles.
+    // K tiles accumulated per K chunk (one A slice + one B slice in L1 at a time); must divide K_tiles.
     // 0 = auto: the largest divisor of K_tiles <= 8 whose rings fit L1.
-    std::size_t K_iteration_tiles = 0;
+    std::size_t K_chunk_tiles = 0;
     // Subblock: the MN chunk's tiles accumulated in DST at once; must divide MN_chunk_M_tiles / MN_chunk_N_tiles and
     // hold
     // <= 8 tiles (4 with fp32 accumulation). 0 for both = auto.
