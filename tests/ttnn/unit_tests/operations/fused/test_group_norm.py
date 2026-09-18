@@ -265,6 +265,65 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welf
     )
 
 
+def test_group_norm_welford_multi_batch_per_core_sub_tile_groups(device):
+    # Regression test for the Welford sharded kernel striding batches by block_ht * block_wt
+    # (the tile span of a single group) instead of block_ht * per_core_Nt (the actual per-batch tile
+    # count), which only coincide when a core holds exactly one group. With >=2 batches per core and
+    # >1 group per core (block_wt < per_core_Nt), batch b>0 started reading/writing inside batch b-1's
+    # tiles. The legacy (use_welford=False) path already uses the correct stride and is included here
+    # as a same-input cross-check.
+    #
+    # Shape (N=2, C=1, H=32, W=64) single-core height-sharded, num_groups=2: num_batches_per_core=2,
+    # per_core_Mt=2, block_ht=1, per_core_Nt=2, group_size=32 tiles to block_wt=1 (< per_core_Nt=2),
+    # so batch 1 should start at tile block_ht*per_core_Nt=2 but the bug started it at tile
+    # block_ht*block_wt=1 -- inside batch 0's second group.
+    torch.manual_seed(0)
+    N, C, H, W, num_groups = 2, 1, 32, 64, 2
+    grid_size = ttnn.CoreGrid(y=1, x=1)
+
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.group_norm(torch_input_tensor, num_groups)
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    input_tensor = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y, ttnn.DataType.BFLOAT8_B)
+    input_mask_tensor = ttnn.to_device(input_mask_tensor, device)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    shard_shape = N * H * W, C
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+
+    outputs = {}
+    for use_welford in (True, False):
+        output_tensor = ttnn.group_norm(
+            input_tensor,
+            num_groups=num_groups,
+            input_mask=input_mask_tensor,
+            memory_config=sharded_mem_config,
+            core_grid=grid_size,
+            use_welford=use_welford,
+        )
+        output_tensor = ttnn.to_memory_config(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
+        outputs[use_welford] = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    # Batch 0 was already correct even with the bug (it starts at tile 0 regardless of stride), so the
+    # defect is only visible in batch 1; check both to pin the full contract.
+    assert_numeric_metrics(torch_output_tensor, outputs[True], atol=0.09, frobenius_threshold=0.03)
+    assert_numeric_metrics(outputs[False], outputs[True], atol=0.09, frobenius_threshold=0.03)
+
+
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", HEIGHT_SHARDED_NON_TILE_ALIGNED_SHAPES)
 def test_group_norm_height_sharded_non_tile_aligned(device, N, C, H, W, num_groups):
