@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KDA direct ND-sharded cache report</title>
+  <style>
+    :root { color-scheme: light dark; --ok:#15803d; --warn:#b45309; --bad:#b91c1c; --muted:#64748b; --card:#f8fafc; --line:#cbd5e1; }
+    @media (prefers-color-scheme: dark) { :root { --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --muted:#94a3b8; --card:#172033; --line:#475569; } }
+    body { max-width: 1120px; margin: 0 auto; padding: 2rem; font: 16px/1.55 system-ui, sans-serif; }
+    h1,h2 { line-height:1.2; } h2 { margin-top:2rem; border-bottom:1px solid var(--line); padding-bottom:.35rem; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:.9em; }
+    .verdict { background:var(--card); border-left:.4rem solid var(--warn); padding:1rem 1.25rem; }
+    .ok { color:var(--ok); font-weight:700; } .warn { color:var(--warn); font-weight:700; } .bad { color:var(--bad); font-weight:700; }
+    table { width:100%; border-collapse:collapse; margin:1rem 0; } th,td { text-align:left; vertical-align:top; padding:.55rem; border:1px solid var(--line); } th { background:var(--card); }
+    pre { overflow:auto; padding:1rem; background:var(--card); border:1px solid var(--line); }
+    .small { color:var(--muted); font-size:.9rem; }
+  </style>
+</head>
+<body>
+<h1>KDA direct ND-sharded cache</h1>
+<p class="small">Final report · 2026-09-10 · bead <code>tt-metal_tracker-s91</code> · base <code>3f254861838</code> · branch <code>momcilo/kda-nd-cache</code></p>
+
+<div class="verdict">
+  <strong>Verdict:</strong> KDA now accepts and returns recurrent and convolution state directly in the migration-ready ND-sharded DRAM layouts, with no KDA cache adapter. Real Kimi-K3 accuracy matches main across SP1×TP8, SP2×TP4, and SP4×TP2. Performance is neutral at SP1, +2.49% at SP2, and <span class="warn">+4.59% at SP4</span>; SP4 exceeds the existing LoudBox gate by 0.129 ms.
+</div>
+
+<h2>Delivered behavior</h2>
+<table>
+<thead><tr><th>State</th><th>Logical shape per device</th><th>Storage</th><th>ND shard</th><th>Semantics</th></tr></thead>
+<tbody>
+<tr><td>Recurrent</td><td><code>[1,Hlocal,128,128]</code></td><td>FP32 tile, DRAM</td><td><code>[1,128,32]</code></td><td>TP-local, replicated across SP</td></tr>
+<tr><td>Convolution</td><td><code>[1,3,Qlocal+Klocal+Vlocal]</code></td><td>BF16 row-major, DRAM</td><td><code>[1,3,64]</code></td><td>Channel-sharded across TP, replicated across SP</td></tr>
+</tbody>
+</table>
+<p>The layer derives both layouts from the runtime DRAM grid, allocates them canonically, validates the exact ND contract at entry, and returns independent replacement buffers. Persistent-state payloads are 16,384 bytes per recurrent shard and 384 bytes per convolution shard.</p>
+
+<h2>Implementation and blast radius</h2>
+<table>
+<thead><tr><th>Concern</th><th>Key evidence</th><th>Impact</th></tr></thead>
+<tbody>
+<tr><td>Canonical layer state</td><td><code>models/demos/deepseek_v3_d_p/tt/kda/config.py:28</code><br><code>models/demos/deepseek_v3_d_p/tt/kda/kda.py:128</code><br><code>kda.py:188</code></td><td>Runtime ND configs, allocation, and exact physical validation.</td></tr>
+<tr><td>Recurrent state</td><td><code>models/demos/deepseek_v3_d_p/tt/kda/recurrence.py:205</code><br><code>ttnn/.../recurrent_chunk_scan_device_operation.cpp:126</code><br><code>ttnn/.../writer_recurrent_chunk_scan.cpp:70</code></td><td>The scan reads ND state and writes selected final groups directly to independently configured ND output. Distributed prefix materializes the replicated final result in ND through the SP collective because generic elementwise ND output is invalid on the harvested DRAM grid.</td></tr>
+<tr><td>Convolution state</td><td><code>models/demos/deepseek_v3_d_p/tt/kda/kda.py:274</code><br><code>ttnn/.../qkv_causal_conv1d_silu_device_operation.cpp:116</code><br><code>ttnn/.../writer_qkv_causal_conv1d_silu.cpp:41</code></td><td>The fused QKV convolution receives the final-tail source and its existing writer emits the fourth, ND-sharded state output directly.</td></tr>
+<tr><td>Tests/specification</td><td><code>specs/kda-nd-cache-design.md</code><br><code>specs/kda-nd-cache-dev-spec.md</code><br><code>models/.../tests/kda</code><br><code>tests/ttnn/.../experimental/kda</code></td><td>Physical-layout, operation, component, layer-contract, accuracy, and performance coverage.</td></tr>
+</tbody>
+</table>
+<p>Diff impact: 30 files, 648 insertions, 114 deletions. Changes are restricted to KDA Python, KDA kernels/API, KDA tests, specifications, and this report; no generic TTNN data movement or collective implementation changed.</p>
+
+<h2>Accuracy and hardware validation</h2>
+<p>Hardware: eight Blackhole devices, firmware 19.5.0, FABRIC_1D. Production geometry: Kimi-K3 layer 1, batch 1, sequence 5120, pinned checkpoint <code>9f62e4e9…</code>. The oracle is the independent pure-Torch FP32 CPU reference.</p>
+<table>
+<thead><tr><th>Layout</th><th>Output PCC</th><th>Recurrent PCC</th><th>Convolution PCC</th><th>Accuracy</th></tr></thead>
+<tbody>
+<tr><td>SP1×TP8</td><td>0.999893585</td><td>0.999794844</td><td>0.999999437</td><td class="ok">PASS</td></tr>
+<tr><td>SP2×TP4</td><td>0.999894588</td><td>0.999920869</td><td>0.999999437</td><td class="ok">PASS on both SP ranks</td></tr>
+<tr><td>SP4×TP2</td><td>0.999896542</td><td>0.999921593</td><td>0.999999437</td><td class="ok">PASS on all four SP ranks</td></tr>
+</tbody>
+</table>
+<p>These PCC values are identical to the latest-main baseline. Focused hardware evidence also includes:</p>
+<ul>
+  <li><code>test_exchange_convolution_carry_preserves_causal_carries</code>: 2 passed, both SP/TP axis arrangements, <code>SAFE_PYTEST_RESULT: PASS</code>.</li>
+  <li>Distributed recurrence: 2 passed when selected independently; direct and grouped component paths passed with their existing PCC/determinism criteria.</li>
+  <li>ND recurrent operation and ND convolution operation tests passed, including direct state I/O and program-cache/trace coverage.</li>
+  <li>Release build and focused <code>ttnn</code> build/install passed; commit hooks, including Black, isort, and clang-format, passed.</li>
+</ul>
+
+<h2>Performance versus latest main</h2>
+<p>Metric: median of five synchronized warm trace-wall samples, 10 repetitions per sample, same checkpoint/test/topology. Lower is better.</p>
+<table>
+<thead><tr><th>Layout</th><th>Main (ms)</th><th>Direct ND (ms)</th><th>Delta</th><th>Existing ±3% gate</th></tr></thead>
+<tbody>
+<tr><td>SP1×TP8</td><td>9.600972</td><td>9.595328</td><td class="ok">−0.06%</td><td class="ok">PASS</td></tr>
+<tr><td>SP2×TP4</td><td>9.547209</td><td>9.785333</td><td>+2.49%</td><td class="ok">PASS</td></tr>
+<tr><td>SP4×TP2</td><td>9.962375</td><td>10.419397</td><td class="warn">+4.59%</td><td class="bad">FAIL: max 10.290730 ms</td></tr>
+</tbody>
+</table>
+<p>The production pytest result is therefore 2 passed / 1 failed: all three accuracy checks complete successfully, and the sole failure is the SP4 performance assertion. Profiling identifies the added SP recurrent-state broadcast at about 172 µs. It is required because direct generic <code>ttnn.add</code> output to this ND DRAM grid resolves an invalid ninth bank on the harvested device. A KDA-native distributed-prefix final-state writer is the clearest follow-up if SP4 performance must return inside the current gate.</p>
+
+<h2>Exact commands and artifacts</h2>
+<pre><code>cmake --build build --target ttnn -j 16 &amp;&amp; cmake --install build
+
+PYTHONPATH=/tmp scripts/run_safe_pytest.sh --run-all \
+  models/demos/deepseek_v3_d_p/tests/kda/components/test_convolution.py \
+  --tt-arch blackhole -p kda_force_blackhole -q -s
+
+KIMI_K3_CKPT=/localdev/mvasilijevic/.cache/Kimi-K3/9f62e4e9fffbd0a83ddd60e1c209d828994b3569 \
+KDA_PERF_SKU=bh_loudbox PYTHONPATH=/tmp scripts/run_safe_pytest.sh --run-all \
+  models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_kimi_k3_layer_1_perf \
+  --tt-arch blackhole -p kda_force_blackhole -q -s</code></pre>
+<p>Raw baseline: <code>artifacts/kda-nd-cache/main-perf.log</code>. Raw final measurement: <code>artifacts/kda-nd-cache/nd-perf-final.log</code>. Autonomous-work proposal: <code>artifacts/kda-nd-cache/autonomous-execution-proposal.md</code>.</p>
+
+<h2>Commit ledger</h2>
+<ol>
+  <li><code>9c92119af90</code> — specify direct ND cache state</li>
+  <li><code>b7d04c57ead</code> — store recurrent state in ND DRAM</li>
+  <li><code>922f2787d1d</code> — preallocate distributed ND state</li>
+  <li><code>40f03bd11b4</code> — preserve recurrent ND layout through reshape</li>
+  <li><code>0e3f955f838</code> — store convolution state in ND DRAM</li>
+  <li><code>d40eda98727</code> — write final convolution state through mesh ops</li>
+  <li><code>3b8b9b91f89</code> — preserve ND state rank through recurrence</li>
+  <li><code>5b7bb71d4ce</code> — materialize distributed recurrent state via SP</li>
+  <li><code>4c525b9a654</code> — write convolution state directly to ND DRAM</li>
+</ol>
+
+<h2>Residual risk and recommendation</h2>
+<p><span class="ok">Accuracy and state-contract goals are complete.</span> The known residual is SP-scaled latency from recurrent final-state replication. Do not relax the benchmark threshold. If the +4.59% SP4 result is unacceptable, extend a KDA-owned affine-prefix operation to emit the already-identical local carry directly through a layout-aware ND writer, then repeat this exact matrix.</p>
+</body>
+</html>

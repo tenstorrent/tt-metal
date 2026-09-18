@@ -215,6 +215,7 @@ ttnn::device_operation::ProgramArtifacts RecurrentChunkScanProgramFactory::creat
              {"Kt", Kt},
              {"Vt", Vt},
              {"Vt_full", Vt_full},
+             {"state_group_count", attrs.state_group_count},
              {"summary_pair", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),

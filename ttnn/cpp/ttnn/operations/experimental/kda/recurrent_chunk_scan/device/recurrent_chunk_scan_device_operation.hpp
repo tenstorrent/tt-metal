@@ -36,7 +36,9 @@ std::vector<Tensor> recurrent_chunk_scan(
     const Tensor& t_inv,
     const std::optional<Tensor>& initial_state,
     RecurrentChunkScanMode mode,
+    uint32_t state_group_count,
     const tt::tt_metal::MemoryConfig& output_mem_config,
+    const tt::tt_metal::MemoryConfig& state_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config);
 
 }  // namespace ttnn::experimental::prim

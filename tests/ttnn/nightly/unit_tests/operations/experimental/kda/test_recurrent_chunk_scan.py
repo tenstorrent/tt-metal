@@ -215,6 +215,39 @@ def test_recurrent_chunk_scan_contract_and_trace(
     )
 
 
+def test_recurrent_chunk_scan_reads_and_writes_nd_sharded_state(device: ttnn.Device) -> None:
+    batch_heads, num_chunks, key_dim, value_dim = 1, 2, 128, 128
+    dram_grid = device.dram_grid_size()
+    bank_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(dram_grid.x)]
+    )
+    state_memory = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, key_dim, ttnn.TILE_SIZE],
+            grid=bank_grid,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+    host_inputs = host_protocol(batch_heads, num_chunks, key_dim, value_dim)
+    host_state = initial_state(batch_heads, key_dim, value_dim)
+    inputs = device_protocol(host_inputs, device)
+    state = to_device(host_state, device, memory_config=state_memory)
+
+    outputs = run_recurrent(inputs, state, state_memory_config=state_memory)
+
+    assert outputs[0].memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    assert outputs[1].memory_config().buffer_type == ttnn.BufferType.DRAM
+    assert outputs[1].memory_config().nd_shard_spec == state_memory.nd_shard_spec
+    assert_outputs_accurate(
+        recurrent_oracle(host_inputs, host_state),
+        outputs,
+        names=("token_output", "final_state"),
+        context="ND-sharded recurrent state",
+    )
+
+
 def _regression_inputs(
     device: ttnn.Device,
     *,
