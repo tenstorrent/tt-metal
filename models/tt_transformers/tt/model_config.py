@@ -909,6 +909,17 @@ class ModelArgs:
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             self.prefill_rows = 8
             self.attn_input_grid = self.dram_shard_core_grid_for_k(self.dim)
+            if self.base_model_name == "Llama-3.1-8B" and self.device_name == "P150x4":
+                # Phase-specific working shard for the attention input. The generic
+                # dram_shard_core_grid_for_k picks 32 cores, which leaves each core only
+                # 4096/32/32 = 4 K-tiles and therefore caps the QKV DRAM-sharded matmul at
+                # in0_block_w=4. Halving the grid doubles the shard to 8 K-tiles and
+                # unlocks in0_block_w=8. Isolated traced sweep of 32x4096x1536 BFP8/LoFi:
+                #   32 cores, in0_block_w=4 -> 27.4 us
+                #   16 cores, in0_block_w=8 -> 22.5 us
+                # The same grid also carries the attention RMSNorm, which is not grid
+                # sensitive at this width (the FF norm already runs on 16 cores).
+                self.attn_input_grid = ttnn.CoreGrid(y=2, x=8)
             self.mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
@@ -930,6 +941,11 @@ class ModelArgs:
                 if self.is_galaxy
                 else self.dram_shard_core_grid_for_k_and_n(self.hidden_dim // self.num_devices, self.dim)
             )
+            if self.base_model_name == "Llama-3.1-8B" and self.device_name == "P150x4":
+                # Same phase-specific working-shard argument as attn_input_grid: the generic
+                # k/n grid picks 16 cores for FF1/FF3; 8 cores keeps in0_block_w=8 and widens
+                # per_core_N to 14, which the 2-reader DRAM path prefers (isolated 31.3 -> 29.2 us).
+                self.mlp_core_grid = ttnn.CoreGrid(y=1, x=8)
 
             # ============================================================================
             # Compute kernels Configs
