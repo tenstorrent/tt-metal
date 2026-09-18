@@ -291,3 +291,56 @@ def test_bitwise_not(device):
     result = ttnn.to_torch(tt_result)
 
     assert torch.equal(result, golden)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unary ops without an integer SFPU kernel must reject INT32 input rather than
+# silently reinterpreting its bit pattern as float (see #56938).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
+        ttnn.sqrt,
+        ttnn.sigmoid,
+        ttnn.exp,
+        ttnn.log,
+        ttnn.sign,
+        ttnn.reciprocal,
+        ttnn.rsqrt,
+        ttnn.sin,
+        ttnn.cos,
+        ttnn.tanh,
+        ttnn.erf,
+        ttnn.erfc,
+        ttnn.silu,
+        ttnn.softplus,
+        ttnn.gelu,
+        ttnn.hardsigmoid,
+        ttnn.hardswish,
+        ttnn.hardtanh,
+        ttnn.softsign,
+        ttnn.softshrink,
+        ttnn.tanhshrink,
+        ttnn.isnan,
+        ttnn.atan,
+        ttnn.celu,
+        ttnn.elu,
+        ttnn.selu,
+        ttnn.frac,
+        ttnn.ceil,
+    ],
+)
+def test_unary_float_only_ops_reject_int32(device, ttnn_function):
+    input_tensor = torch.tensor([[-3, -1, 0, 1, 3, 7]], dtype=torch.int32)
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    with pytest.raises(RuntimeError):
+        ttnn_function(tt_in)

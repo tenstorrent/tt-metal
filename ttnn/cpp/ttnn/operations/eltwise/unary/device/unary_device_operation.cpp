@@ -59,6 +59,52 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
+    // These op types have no integer SFPU kernel: get_op_init_and_func_default falls through to a
+    // plain float tile function for all of them, which reads/writes Dest as float regardless of the
+    // tensor's declared dtype. On INT32 input that silently reinterprets the integer bit pattern as a
+    // float and writes the float result's bit pattern back into an INT32-labelled tensor (see #56938).
+    // Reject up front, mirroring the binary_ng policy for its float-only op types
+    // (binary_ng_device_operation.cpp) and the existing mac_tss / addcdiv int32 rejections.
+    for (const auto& op : args.op_chain) {
+        switch (op.type()) {
+            case operations::unary::UnaryOpType::ATAN:
+            case operations::unary::UnaryOpType::CEIL:
+            case operations::unary::UnaryOpType::CELU:
+            case operations::unary::UnaryOpType::COS:
+            case operations::unary::UnaryOpType::ELU:
+            case operations::unary::UnaryOpType::ERF:
+            case operations::unary::UnaryOpType::ERFC:
+            case operations::unary::UnaryOpType::EXP:
+            case operations::unary::UnaryOpType::FRAC:
+            case operations::unary::UnaryOpType::GELU:
+            case operations::unary::UnaryOpType::HARDSIGMOID:
+            case operations::unary::UnaryOpType::HARDSWISH:
+            case operations::unary::UnaryOpType::HARDTANH:
+            case operations::unary::UnaryOpType::ISNAN:
+            case operations::unary::UnaryOpType::LOG:
+            case operations::unary::UnaryOpType::RECIP:
+            case operations::unary::UnaryOpType::RSQRT:
+            case operations::unary::UnaryOpType::SELU:
+            case operations::unary::UnaryOpType::SIGMOID:
+            case operations::unary::UnaryOpType::SIGN:
+            case operations::unary::UnaryOpType::SILU:
+            case operations::unary::UnaryOpType::SIN:
+            case operations::unary::UnaryOpType::SOFTPLUS:
+            case operations::unary::UnaryOpType::SOFTSHRINK:
+            case operations::unary::UnaryOpType::SOFTSIGN:
+            case operations::unary::UnaryOpType::SQRT:
+            case operations::unary::UnaryOpType::TANH:
+            case operations::unary::UnaryOpType::TANHSHRINK:
+                TT_FATAL(
+                    input_tensor.dtype() != DataType::INT32,
+                    "Unary: op type {} has no integer SFPU kernel and would silently reinterpret INT32 input as "
+                    "float; cast the input to a float dtype first.",
+                    static_cast<int>(op.type()));
+                break;
+            default: break;
+        }
+    }
+
     // No early exit: beta is per-op, so every SOFTCAP entry in the chain has to be checked.
     for (const auto& op : args.op_chain) {
         if (op.type() == operations::unary::UnaryOpType::SOFTCAP) {
