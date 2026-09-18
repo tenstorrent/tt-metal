@@ -6,6 +6,7 @@ add_subdirectory(combine)
 add_subdirectory(combine_fabric2d)
 add_subdirectory(dispatch)
 add_subdirectory(extract)
+add_subdirectory(hybrid_routed_expert_ffn)
 add_subdirectory(inbound_socket_service_sync)
 add_subdirectory(insert)
 add_subdirectory(masked_bincount)
@@ -80,6 +81,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Extract>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::HybridRoutedExpertFfn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Insert>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MhcSplitSinkhorn>
