@@ -60,57 +60,57 @@ _KNEE_TOKENS = 512
 
 # Device duration in ns per (model, active), x_rm layout: the MIDPOINT of three sweeps on a BH
 # p150b (2026-09-18), each case a median of _ITERS dispatches. Three, not one, because the
-# active=256 cases carry up to 8.2% of cross-sweep spread -- a single sweep can land at either
-# end of that and no margin then holds. Recalibrate on the perf runner (DDR-speed dependent):
-# each case logs an "RT-CAL" line in this dict's format.
+# low counts carry real cross-sweep spread -- up to 4.0% at active=256 -- and a single sweep can
+# land at either end of it, which no margin then holds. Recalibrate on the perf runner (it is
+# DDR-speed dependent): each case logs an "RT-CAL" line in this dict's format.
 #
 # Every entry is above the best-of-both number the two ops this one replaces reach on the same
 # case in test_routed_expert_crossover_perf.py -- by ~8-15 us across the sweep, and by 8.0 us at
 # active=0, where no expert does any work at all and the whole difference is the second pass plus
 # the grid barrier.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 11_004,
-    ("kimi_k2_7", 128): 104_558,
-    ("kimi_k2_7", 256): 128_670,
-    ("kimi_k2_7", 512): 171_418,
-    ("kimi_k2_7", 768): 234_703,
-    ("kimi_k2_7", 1024): 304_176,
-    ("kimi_k2_7", 2048): 591_161,
-    ("kimi_k2_7", 4096): 1_165_262,
-    ("kimi_k2_7", 5120): 1_456_424,
-    ("glm_51", 0): 11_065,
-    ("glm_51", 128): 93_562,
-    ("glm_51", 256): 120_840,
-    ("glm_51", 512): 152_873,
-    ("glm_51", 768): 207_488,
-    ("glm_51", 1024): 267_191,
-    ("glm_51", 2048): 517_407,
-    ("glm_51", 4096): 1_019_685,
-    ("glm_51", 5120): 1_271_806,
+    ("kimi_k2_7", 0): 11_039,
+    ("kimi_k2_7", 128): 104_367,
+    ("kimi_k2_7", 256): 126_942,
+    ("kimi_k2_7", 512): 171_510,
+    ("kimi_k2_7", 768): 235_003,
+    ("kimi_k2_7", 1024): 304_004,
+    ("kimi_k2_7", 2048): 590_696,
+    ("kimi_k2_7", 4096): 1_166_144,
+    ("kimi_k2_7", 5120): 1_453_411,
+    ("glm_51", 0): 11_034,
+    ("glm_51", 128): 93_162,
+    ("glm_51", 256): 120_377,
+    ("glm_51", 512): 152_494,
+    ("glm_51", 768): 207_245,
+    ("glm_51", 1024): 267_217,
+    ("glm_51", 2048): 518_599,
+    ("glm_51", 4096): 1_022_134,
+    ("glm_51", 5120): 1_269_726,
 }
 
 # Same measurement and key with the weights DRAM ND-sharded. Its own table because the placement
 # moves the op: a core fetches its whole K-row weight slice in one NoC request instead of one per
 # tile, which the op is only bound by at the low counts.
 _NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 11_084,
-    ("kimi_k2_7", 128): 94_359,
-    ("kimi_k2_7", 256): 121_220,
-    ("kimi_k2_7", 512): 166_457,
-    ("kimi_k2_7", 768): 234_413,
-    ("kimi_k2_7", 1024): 304_175,
-    ("kimi_k2_7", 2048): 592_412,
-    ("kimi_k2_7", 4096): 1_169_314,
-    ("kimi_k2_7", 5120): 1_455_616,
-    ("glm_51", 0): 11_035,
-    ("glm_51", 128): 85_998,
-    ("glm_51", 256): 104_623,
-    ("glm_51", 512): 148_164,
-    ("glm_51", 768): 206_788,
-    ("glm_51", 1024): 266_988,
-    ("glm_51", 2048): 518_698,
-    ("glm_51", 4096): 1_019_886,
-    ("glm_51", 5120): 1_273_919,
+    ("kimi_k2_7", 0): 11_123,
+    ("kimi_k2_7", 128): 94_706,
+    ("kimi_k2_7", 256): 120_486,
+    ("kimi_k2_7", 512): 166_315,
+    ("kimi_k2_7", 768): 234_897,
+    ("kimi_k2_7", 1024): 304_249,
+    ("kimi_k2_7", 2048): 591_246,
+    ("kimi_k2_7", 4096): 1_167_110,
+    ("kimi_k2_7", 5120): 1_459_315,
+    ("glm_51", 0): 11_103,
+    ("glm_51", 128): 85_575,
+    ("glm_51", 256): 104_698,
+    ("glm_51", 512): 148_123,
+    ("glm_51", 768): 206_711,
+    ("glm_51", 1024): 266_964,
+    ("glm_51", 2048): 516_896,
+    ("glm_51", 4096): 1_020_632,
+    ("glm_51", 5120): 1_274_889,
 }
 
 
