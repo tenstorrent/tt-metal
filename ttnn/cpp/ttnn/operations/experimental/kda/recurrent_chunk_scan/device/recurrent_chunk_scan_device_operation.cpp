@@ -104,13 +104,11 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         // The wrap needs no extra entry slot. The head seed is this chip's own entry
         // state; the tail seed is the prefix's final carry, which every chip already
         // derives identically from the gathered summaries.
-        if (in.tail_entry_states.has_value()) {
-            check_protocol_tensor(*in.tail_entry_states, "tail_entry_states", false, operation_name);
-            check_same_device(in.v_beta, *in.tail_entry_states, operation_name, "tail_entry_states");
-            check_shape(
-                *in.tail_entry_states, Shape({BH / attrs.groups_per_head, K, V}), "tail_entry_states", operation_name);
-        }
         TT_FATAL(in.tail_entry_states.has_value(), "{}: tail_entry_states is required", operation_name);
+        check_protocol_tensor(*in.tail_entry_states, "tail_entry_states", false, operation_name);
+        check_same_device(in.v_beta, *in.tail_entry_states, operation_name, "tail_entry_states");
+        check_shape(
+            *in.tail_entry_states, Shape({BH / attrs.groups_per_head, K, V}), "tail_entry_states", operation_name);
     } else {
         TT_FATAL(!in.group_entry_states.has_value(), "{}: group_entry_states is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);

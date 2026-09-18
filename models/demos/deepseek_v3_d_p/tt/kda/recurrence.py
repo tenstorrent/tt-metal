@@ -446,19 +446,20 @@ def _scan_sp_grouped_chunks(
         memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
         compute_kernel_config=compute_config.affine_prefix,
     )
-    output, final_states = ttnn.experimental.kda.recurrent_chunk_scan(
-        *grouped.as_kernel_args(),
+    scan = _scan_chunks(
+        grouped,
         group_entry_states,
+        tail_entry_states,
         groups_per_head=groups,
-        tail_entry_states=tail_entry_states,
         actual_start=actual_start,
         sequence_parallel_axis=sequence_parallel_axis,
-        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-        compute_kernel_config=compute_config.scan,
+        compute_config=compute_config.scan,
     )
-    output = ttnn.reshape(output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim))
+    output = ttnn.reshape(
+        scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
+    )
     gathered = ttnn.all_gather(
-        _last_group_state(final_states, geometry, groups),
+        _last_group_state(scan.final_state, geometry, groups),
         dim=0,
         cluster_axis=sequence_parallel_axis,
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
