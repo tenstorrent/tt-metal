@@ -43,7 +43,6 @@ void SingleHostContext::abort(int error_code) const { std::exit(error_code); }
 
 void SingleHostContext::barrier() const { return; }
 
-  /* Remaining methods throw for single-host context */
 void SingleHostContext::send(
     ttsl::Span<std::byte> buf [[maybe_unused]], Rank dest [[maybe_unused]], Tag tag [[maybe_unused]]) const {
     TT_THROW("method send is unsupported for single-host distributed contexts.");
@@ -74,11 +73,19 @@ void SingleHostContext::broadcast(ttsl::Span<std::byte> buf [[maybe_unused]], Ra
 }
 
 void SingleHostContext::all_reduce(
-    ttsl::Span<std::byte> send_buf [[maybe_unused]],
-    ttsl::Span<std::byte> recv_buf [[maybe_unused]],
+    ttsl::Span<std::byte> send_buf,
+    ttsl::Span<std::byte> recv_buf,
     ReduceOp op [[maybe_unused]],
     DType dtype [[maybe_unused]]) const {
-    TT_THROW("method all_reduce is unsupported for single-host distributed contexts.");
+    TT_FATAL(
+        recv_buf.size() == send_buf.size(),
+        "all_reduce: recv buffer {} bytes, expected {}",
+        recv_buf.size(),
+        send_buf.size());
+
+    if (send_buf.data() != recv_buf.data()) {
+        std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
+    }
 }
 
 void SingleHostContext::reduce(

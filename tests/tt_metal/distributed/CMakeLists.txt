@@ -24,6 +24,8 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
 # MPI sub-context tests require the MPI distributed build (matches tt_metal/distributed USE_MPI).
 if(ENABLE_DISTRIBUTED)
     list(APPEND DISTRIBUTED_UNIT_TEST_SOURCES test_mpi_subcontext.cpp)
+else()
+    list(APPEND DISTRIBUTED_UNIT_TEST_SOURCES test_single_host_context.cpp)
 endif()
 
 add_executable(distributed_unit_tests)
