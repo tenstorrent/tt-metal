@@ -38,6 +38,9 @@
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/tensor/spec/layout/page_config.hpp>
 
+#include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
+
 #include "command_queue_fixture.hpp"
 
 namespace tt::tt_metal {
@@ -239,6 +242,38 @@ bool skip_if_not_gen1(IDevice* device) {
     return device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE;
 }
 
+// Confirm a kernel's ELF buffer-R/W info (op-to-op R/W inference). This reads what the loader harvested
+// from the compiled .tt.BUF_RW section (see Kernel::query_buf_rw), keyed off the KernelSpec name, so it
+// must run after the kernels are compiled (i.e. after warmup_and_replay). The expected R/W set is a
+// property of each kernel source + its tensor-binding order, so it is encoded once here per kernel:
+//   writer     -> WRITES tensor::dst (slot 0)
+//   reader     -> READS tensor::src (slot 0), WRITES tensor::dst (slot 1)
+//   raw_writer -> OPAQUE (raw NoC, no binding -> a detector must keep the barrier)
+void expect_buf_rw(
+    distributed::MeshWorkload& wl,
+    const distributed::MeshCoordinateRange& range,
+    distributed::MeshDevice& md,
+    const std::string& kernel_name) {
+    auto kernel = wl.get_programs()[range].impl().get_kernel_by_spec_name(kernel_name);
+    ASSERT_NE(kernel, nullptr) << "no kernel '" << kernel_name << "' in workload";
+    const ll_api::BufRwInfo rw = kernel->query_buf_rw(*md.get_devices()[0]);
+    if (kernel_name == "writer") {
+        EXPECT_TRUE(rw.reads.empty()) << "writer reads";
+        EXPECT_EQ(rw.writes, (std::set<uint32_t>{0})) << "writer writes tensor::dst";
+        EXPECT_FALSE(rw.opaque) << "writer is analyzable";
+    } else if (kernel_name == "reader") {
+        EXPECT_EQ(rw.reads, (std::set<uint32_t>{0})) << "reader reads tensor::src";
+        EXPECT_EQ(rw.writes, (std::set<uint32_t>{1})) << "reader writes tensor::dst";
+        EXPECT_FALSE(rw.opaque) << "reader is analyzable";
+    } else if (kernel_name == "raw_writer") {
+        EXPECT_TRUE(rw.reads.empty()) << "raw_writer reads";
+        EXPECT_TRUE(rw.writes.empty()) << "raw_writer writes";
+        EXPECT_TRUE(rw.opaque) << "raw_writer is un-analyzable (bail)";
+    } else {
+        FAIL() << "unexpected kernel name '" << kernel_name << "'";
+    }
+}
+
 }  // namespace
 
 // RAW hazard, DRAM: producer writes W to DRAM X (stalled); consumer reads X -> Y; barrier => Y == W.
@@ -259,6 +294,8 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardDram) {
         dope(y, kDoped);
     });
     expect_all(readback(cq, y), kWritten);
+    expect_buf_rw(wwl, range, *md, "writer");
+    expect_buf_rw(rwl, range, *md, "reader");
     md->release_mesh_trace(tid);
 }
 
@@ -280,6 +317,8 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardL1) {
         dope(y, kDoped);
     });
     expect_all(readback(cq, y), kWritten);
+    expect_buf_rw(wwl, range, *md, "writer");
+    expect_buf_rw(rwl, range, *md, "reader");
     md->release_mesh_trace(tid);
 }
 
@@ -305,6 +344,8 @@ TEST_F(UnitMeshCQSingleCardFixture, RawFreeDisjointAndOverlapProbe) {
         dope(y, kDoped);
     });
     expect_all(readback(cq, y), kWritten);
+    expect_buf_rw(wwl, range, *md, "writer");
+    expect_buf_rw(rwl, range, *md, "reader");
     md->release_mesh_trace(tid);
     // TODO(op2op): once relaxation lands, add an overlap assertion (trace replay should overlap the two).
 }
@@ -329,6 +370,8 @@ TEST_F(UnitMeshCQSingleCardFixture, WarHazard) {
         dope(y, kDoped);
     });
     expect_all(readback(cq, y), kDoped);
+    expect_buf_rw(rwl, range, *md, "reader");
+    expect_buf_rw(wwl, range, *md, "writer");
     md->release_mesh_trace(tid);
 }
 
@@ -352,6 +395,8 @@ TEST_F(UnitMeshCQSingleCardFixture, WarFreeDisjoint) {
         dope(y, kDoped);
     });
     expect_all(readback(cq, y), kWritten);
+    expect_buf_rw(rwl, range, *md, "reader");
+    expect_buf_rw(wwl, range, *md, "writer");
     md->release_mesh_trace(tid);
 }
 
@@ -372,6 +417,8 @@ TEST_F(UnitMeshCQSingleCardFixture, WawLastWriteWins) {
     w2.add_program(range, build_writer(*md, rNode, x, kWritten2, 0));
     auto tid = warmup_and_replay(*md, cq, {&w1, &w2}, [&] { dope(x, kDoped); });
     expect_all(readback(cq, x), kWritten2);
+    expect_buf_rw(w1, range, *md, "writer");
+    expect_buf_rw(w2, range, *md, "writer");
     md->release_mesh_trace(tid);
 }
 
@@ -397,6 +444,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TransitiveSkipDependency) {
         dope(z, kDoped);
     });
     expect_all(readback(cq, z), kWritten);
+    expect_buf_rw(nwl, range, *md, "writer");
+    expect_buf_rw(midwl, range, *md, "writer");
+    expect_buf_rw(rwl, range, *md, "reader");
     md->release_mesh_trace(tid);
 }
 
@@ -422,6 +472,8 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardFreeFunctionKernelBail) {
         dope(y, kDoped);
     });
     expect_all(readback(cq, y), kWritten);
+    expect_buf_rw(wwl, range, *md, "raw_writer");
+    expect_buf_rw(rwl, range, *md, "reader");
     md->release_mesh_trace(tid);
 }
 
