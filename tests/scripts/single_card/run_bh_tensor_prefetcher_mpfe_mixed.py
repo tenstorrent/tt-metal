@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare static and dynamic MPFE policies on mixed Llama-8B traffic."""
+"""Sweep static and dynamic MPFE policies on mixed Llama-8B traffic."""
 
 from __future__ import annotations
 
@@ -43,16 +43,43 @@ MPFE_ENV_NAMES = (
 class Policy:
     label: str
     active: tuple[int, int, int]
+    mode: str
     idle: tuple[int, int, int] | None = None
     synchronize_senders: bool = True
 
 
-POLICIES = (
-    Policy("static-000-no-sync", (0, 0, 0), synchronize_senders=False),
-    Policy("static-015-no-sync", (0, 1, 5), synchronize_senders=False),
-    Policy("static-015-sync", (0, 1, 5)),
-    Policy("dynamic-000-to-015-sync", (0, 1, 5), (0, 0, 0)),
+ACTIVE_WEIGHTS = tuple(
+    (0, medium, high)
+    for medium in range(8)
+    for high in range(medium, 8)
 )
+
+
+def weight_label(weights: tuple[int, int, int]) -> str:
+    return "".join(str(weight) for weight in weights)
+
+
+def policies_for_weights(weights: tuple[int, int, int]) -> tuple[Policy, ...]:
+    label = weight_label(weights)
+    return (
+        Policy(
+            label=f"static-{label}-no-sync",
+            active=weights,
+            mode="static-no-sync",
+            synchronize_senders=False,
+        ),
+        Policy(label=f"static-{label}-sync", active=weights, mode="static-sync"),
+        Policy(
+            label=f"dynamic-000-to-{label}-sync",
+            active=weights,
+            mode="dynamic-sync",
+            idle=(0, 0, 0),
+        ),
+    )
+
+
+POLICIES_BY_WEIGHTS = {weights: policies_for_weights(weights) for weights in ACTIVE_WEIGHTS}
+POLICIES = tuple(policy for weights in ACTIVE_WEIGHTS for policy in POLICIES_BY_WEIGHTS[weights])
 
 
 def env_int(name: str, default: int, minimum: int = 1) -> int:
@@ -65,7 +92,7 @@ def env_int(name: str, default: int, minimum: int = 1) -> int:
 def parse_contexts() -> tuple[int, ...]:
     contexts = tuple(
         int(value.strip())
-        for value in os.environ.get("MPFE_MIXED_CONTEXTS", "512,1024,2048,4096").split(",")
+        for value in os.environ.get("MPFE_MIXED_CONTEXTS", "128,256,384,512,640,768,896,1024").split(",")
     )
     if not contexts or any(context < 128 or context % 128 != 0 for context in contexts):
         raise ValueError("MPFE_MIXED_CONTEXTS must contain comma-separated multiples of 128")
@@ -122,7 +149,7 @@ class MixedRunner:
         self.trace_repeats = env_int("BENCH_TRACE_REPEATS", 20)
         self.seed = env_int("MPFE_RANDOM_SEED", 0x4D495845, minimum=0)
         self.manifest = {
-            "schema_version": 2,
+            "schema_version": 3,
             "git_revision": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=TT_METAL_HOME, text=True
             ).strip(),
@@ -136,6 +163,7 @@ class MixedRunner:
                 {
                     "label": policy.label,
                     "active": list(policy.active),
+                    "mode": policy.mode,
                     "idle": list(policy.idle) if policy.idle is not None else None,
                     "synchronize_senders": policy.synchronize_senders,
                 }
@@ -178,6 +206,7 @@ class MixedRunner:
             policy is None
             or record.get("active_weights") != list(policy.active)
             or record.get("idle_weights") != list(expected_idle)
+            or record.get("policy_mode") != policy.mode
             or record.get("synchronize_senders") != policy.synchronize_senders
         ):
             raise RuntimeError(f"{self.results_path} contains mismatched policy metadata")
@@ -265,6 +294,7 @@ class MixedRunner:
                 "run_sequence": sequence,
                 "active_weights": list(policy.active),
                 "idle_weights": list(policy.idle if policy.idle is not None else policy.active),
+                "policy_mode": policy.mode,
                 "synchronize_senders": policy.synchronize_senders,
             }
         )
@@ -288,22 +318,31 @@ class MixedRunner:
     def run(self) -> list[dict]:
         for context_index, context in enumerate(self.contexts):
             for iteration in range(self.iterations):
-                policies = list(POLICIES)
-                random.Random(self.seed + context_index * 1009 + iteration).shuffle(policies)
-                for sequence, policy in enumerate(policies):
-                    self.run_policy(context, iteration, sequence, policy)
+                rng = random.Random(self.seed + context_index * 1009 + iteration)
+                weights_in_order = list(ACTIVE_WEIGHTS)
+                rng.shuffle(weights_in_order)
+                sequence = 0
+                for weights in weights_in_order:
+                    policies = list(POLICIES_BY_WEIGHTS[weights])
+                    rng.shuffle(policies)
+                    for policy in policies:
+                        self.run_policy(context, iteration, sequence, policy)
+                        sequence += 1
         return list(self.existing.values())
 
 
 def write_reports(output_dir: Path, records: list[dict], contexts: tuple[int, ...]) -> None:
     summary_path = output_dir / "summary.csv"
     comparison_path = output_dir / "paired-comparisons.csv"
+    ranking_path = output_dir / "rankings.csv"
     with summary_path.open("w", newline="", encoding="utf-8") as output:
         writer = csv.writer(output)
         writer.writerow(
             [
                 "context",
                 "policy",
+                "mode",
+                "active_weights",
                 "mean_step_us",
                 "stdev_step_us",
                 "mean_ff1_tflops",
@@ -323,6 +362,8 @@ def write_reports(output_dir: Path, records: list[dict], contexts: tuple[int, ..
                     [
                         context,
                         policy.label,
+                        policy.mode,
+                        weight_label(policy.active),
                         f"{mean(step_values):.6f}",
                         f"{statistics.stdev(step_values):.6f}" if len(step_values) > 1 else "0.000000",
                         f"{mean([record['ff1_tflops'] for record in group]):.6f}",
@@ -331,16 +372,12 @@ def write_reports(output_dir: Path, records: list[dict], contexts: tuple[int, ..
                     ]
                 )
 
-    comparisons = (
-        ("active-priority", "static-015-no-sync", "static-000-no-sync"),
-        ("sender-sync", "static-015-sync", "static-015-no-sync"),
-        ("dynamic-restoration", "dynamic-000-to-015-sync", "static-015-sync"),
-    )
     with comparison_path.open("w", newline="", encoding="utf-8") as output:
         writer = csv.writer(output)
         writer.writerow(
             [
                 "context",
+                "active_weights",
                 "comparison",
                 "candidate",
                 "baseline",
@@ -355,37 +392,104 @@ def write_reports(output_dir: Path, records: list[dict], contexts: tuple[int, ..
             by_key = {
                 (record["suite_iteration"], record["run_label"]): record for record in context_records
             }
-            for comparison, candidate, baseline in comparisons:
-                deltas = [
-                    percent_change(
-                        by_key[(iteration, baseline)]["per_step_us"],
-                        by_key[(iteration, candidate)]["per_step_us"],
-                    )
-                    for iteration in range(max(record["suite_iteration"] for record in context_records) + 1)
-                    if (iteration, candidate) in by_key and (iteration, baseline) in by_key
-                ]
-                delta_mean = mean(deltas)
-                margin = (
-                    student_t_critical_95(len(deltas)) * statistics.stdev(deltas) / math.sqrt(len(deltas))
-                    if len(deltas) > 1
-                    else 0.0
+            for weights in ACTIVE_WEIGHTS:
+                label = weight_label(weights)
+                comparisons = (
+                    ("active-priority", f"static-{label}-no-sync", "static-000-no-sync"),
+                    ("sender-sync", f"static-{label}-sync", f"static-{label}-no-sync"),
+                    (
+                        "dynamic-restoration",
+                        f"dynamic-000-to-{label}-sync",
+                        f"static-{label}-sync",
+                    ),
                 )
-                writer.writerow(
-                    [
-                        context,
-                        comparison,
-                        candidate,
-                        baseline,
-                        f"{delta_mean:.6f}",
-                        f"{delta_mean - margin:.6f}",
-                        f"{delta_mean + margin:.6f}",
-                        len(deltas),
+                for comparison, candidate, baseline in comparisons:
+                    deltas = [
+                        percent_change(
+                            by_key[(iteration, baseline)]["per_step_us"],
+                            by_key[(iteration, candidate)]["per_step_us"],
+                        )
+                        for iteration in range(max(record["suite_iteration"] for record in context_records) + 1)
+                        if (iteration, candidate) in by_key and (iteration, baseline) in by_key
                     ]
-                )
+                    delta_mean = mean(deltas)
+                    margin = (
+                        student_t_critical_95(len(deltas))
+                        * statistics.stdev(deltas)
+                        / math.sqrt(len(deltas))
+                        if len(deltas) > 1
+                        else 0.0
+                    )
+                    writer.writerow(
+                        [
+                            context,
+                            label,
+                            comparison,
+                            candidate,
+                            baseline,
+                            f"{delta_mean:.6f}",
+                            f"{delta_mean - margin:.6f}",
+                            f"{delta_mean + margin:.6f}",
+                            len(deltas),
+                        ]
+                    )
+
+    with ranking_path.open("w", newline="", encoding="utf-8") as output:
+        writer = csv.writer(output)
+        writer.writerow(
+            [
+                "context",
+                "mode",
+                "rank",
+                "active_weights",
+                "policy",
+                "mean_step_us",
+                "speedup_vs_static_000_no_sync_pct",
+                "n",
+            ]
+        )
+        for context in contexts:
+            context_records = [record for record in records if record["sdpa_context"] == context]
+            baseline = mean(
+                [
+                    record["per_step_us"]
+                    for record in context_records
+                    if record["run_label"] == "static-000-no-sync"
+                ]
+            )
+            for mode in ("static-no-sync", "static-sync", "dynamic-sync"):
+                ranked = []
+                for weights in ACTIVE_WEIGHTS:
+                    policy = next(
+                        policy
+                        for policy in POLICIES_BY_WEIGHTS[weights]
+                        if policy.mode == mode
+                    )
+                    group = [
+                        record
+                        for record in context_records
+                        if record["run_label"] == policy.label
+                    ]
+                    ranked.append((mean([record["per_step_us"] for record in group]), policy, len(group)))
+                ranked.sort(key=lambda item: item[0])
+                for rank, (step_us, policy, sample_count) in enumerate(ranked, start=1):
+                    writer.writerow(
+                        [
+                            context,
+                            mode,
+                            rank,
+                            weight_label(policy.active),
+                            policy.label,
+                            f"{step_us:.6f}",
+                            f"{percent_change(baseline, step_us):.6f}",
+                            sample_count,
+                        ]
+                    )
 
     print(f"Results: {output_dir}")
     print(f"Summary: {summary_path}")
     print(f"Paired comparisons: {comparison_path}")
+    print(f"Rankings: {ranking_path}")
 
 
 def main() -> None:
