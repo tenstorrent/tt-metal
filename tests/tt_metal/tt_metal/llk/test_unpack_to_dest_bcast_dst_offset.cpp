@@ -42,16 +42,22 @@
 //
 // Every other in-tree caller broadcasts into dst_index 0 right after an op that also targeted
 // tile 0, so the leftover offset happens to be correct and the bug stays latent. This test is the
-// minimal sequence that breaks the coincidence: copy_tile to DST[1], then unary_bcast into DST[0],
-// one acquire, one core, one tile pair (see the compute kernel for the full walkthrough). All
-// three broadcast dimensions (ROW / COL / SCALAR) run, since all three sequences in that branch
-// share the same Dst addressing.
+// minimal sequence that breaks the coincidence: copy_tile to DST[1], then a 32-bit unpack-to-dest
+// op into DST[0], one core, one tile pair per acquire (see the compute kernel for the full
+// walkthrough). Four modes run: the ROW / COL / SCALAR broadcasts (all three sequences in that
+// branch share the same Dst addressing) and NONE, a plain 32-bit unpack-to-dest copy_tile. NONE
+// guards the Blackhole-only exposure: BH's budabackend/#2730 ZEROACC zero-flag-clear loop runs in
+// this branch for plain copies too and consumes the same offset -- a displaced clear leaves the
+// fresh tile's rows flagged zero (packs as zeros). On Wormhole NONE issues no math-side Dst access
+// and passes with or without the fix. Each mode repeats the sequence over several acquires so it
+// visits both dest banks and, from a bank's second visit on, rows the packer has already drained
+// and re-flagged -- the state the displaced BH flag-clear corrupts.
 //
 //   c_0 (Float16_b): a[r][c] = r + 1               -> copied to DST[1]
-//   c_1 (Float32)  : b[r][c] = 100 + r + 41*c      -> broadcast into DST[0]
-//   out (Float32)  : tile 0 = DST[0], tile 1 = DST[1]
+//   c_1 (Float32)  : b[r][c] = 100 + r + 41*c      -> broadcast/copied into DST[0]
+//   out (Float32)  : per iteration, tile 0 = DST[0], tile 1 = DST[1]
 //
-//   expected: out0 = broadcast of b (ROW: b[0][c]; COL: b[r][0]; SCALAR: b[0][0]),
+//   expected: out0 = broadcast of b (ROW: b[0][c]; COL: b[r][0]; SCALAR: b[0][0]; NONE: b itself),
 //             out1[r][c] = r + 1 (copy untouched)
 //   bug:      out0 = raw b tile (never broadcast), out1 = broadcast of the COPIED tile over itself
 //
@@ -63,6 +69,9 @@ namespace tt::tt_metal {
 namespace unit_tests::compute::unpack_to_dest_bcast {
 
 constexpr uint32_t kTileHW = 32 * 32;
+// Acquire/pack iterations per run: enough to visit both dest banks twice, so every mode also runs
+// against rows the packer already drained and zero-flagged (see the header note on Blackhole).
+constexpr uint32_t kIters = 4;
 
 std::vector<uint32_t> reinterpret_fp32_as_u32(const std::vector<float>& in) {
     std::vector<uint32_t> out(in.size());
@@ -79,14 +88,15 @@ std::vector<uint32_t> pack_bf16_as_u32(const std::vector<float>& in) {
     return out;
 }
 
-// Matches BCAST_DIM_VAL in the compute kernel.
-enum class BcastDim : uint32_t { ROW = 0, COL = 1, SCALAR = 2 };
+// Matches BCAST_DIM_VAL in the compute kernel. NONE = plain 32-bit unpack-to-dest copy_tile.
+enum class BcastDim : uint32_t { ROW = 0, COL = 1, SCALAR = 2, NONE = 3 };
 
 const char* bcast_dim_name(BcastDim dim) {
     switch (dim) {
         case BcastDim::ROW: return "ROW";
         case BcastDim::COL: return "COL";
         case BcastDim::SCALAR: return "SCALAR";
+        case BcastDim::NONE: return "NONE (plain copy)";
     }
     return "?";
 }
@@ -112,9 +122,9 @@ bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::Mesh
                 .page_size = bytes, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false},
             mesh_device.get());
     };
-    auto src_copy_buffer = make_dram(bf16_tile_bytes);   // c_0: one Float16_b tile
-    auto src_bcast_buffer = make_dram(fp32_tile_bytes);  // c_1: one Float32 tile
-    auto dst_buffer = make_dram(2 * fp32_tile_bytes);    // c_16: two Float32 tiles (DST[0], DST[1])
+    auto src_copy_buffer = make_dram(kIters * bf16_tile_bytes);   // c_0: one Float16_b tile per iteration
+    auto src_bcast_buffer = make_dram(kIters * fp32_tile_bytes);  // c_1: one Float32 tile per iteration
+    auto dst_buffer = make_dram(kIters * 2 * fp32_tile_bytes);    // c_16: (DST[0], DST[1]) per iteration
 
     tt_metal::CreateCircularBuffer(
         program_,
@@ -151,7 +161,7 @@ bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::Mesh
     unpack_to_dest_mode[tt::CBIndex::c_1] = UnpackToDestMode::UnpackToDestFp32;
 
     std::map<std::string, std::string> compute_defines = {
-        {"BCAST_DIM_VAL", std::to_string(static_cast<uint32_t>(dim))}};
+        {"BCAST_DIM_VAL", std::to_string(static_cast<uint32_t>(dim))}, {"NUM_ITERS_VAL", std::to_string(kIters)}};
     tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/unpack_to_dest_row_bcast_after_copy.cpp",
@@ -172,11 +182,14 @@ bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::Mesh
             b_rm[r * 32 + c] = static_cast<float>(100 + r + 41 * c);
         }
     }
-    std::vector<float> golden0_rm(kTileHW);  // b broadcast along `dim`
+    std::vector<float> golden0_rm(kTileHW);  // b broadcast along `dim` (NONE: b copied verbatim)
     std::vector<float> golden1_rm(kTileHW);  // the copied a tile
     for (uint32_t r = 0; r < 32; ++r) {
         for (uint32_t c = 0; c < 32; ++c) {
-            const uint32_t src = (dim == BcastDim::ROW) ? (0 * 32 + c) : (dim == BcastDim::COL) ? (r * 32 + 0) : 0;
+            const uint32_t src = (dim == BcastDim::ROW)    ? (0 * 32 + c)
+                                 : (dim == BcastDim::COL)  ? (r * 32 + 0)
+                                 : (dim == BcastDim::NONE) ? (r * 32 + c)
+                                                           : 0;
             golden0_rm[r * 32 + c] = b_rm[src];
             golden1_rm[r * 32 + c] = static_cast<float>(r + 1);
         }
@@ -189,11 +202,24 @@ bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::Mesh
     auto b_tiled = ::unit_tests::compute::gold_standard_tilize(reinterpret_fp32_as_u32(b_rm), fp32_cfg);
     auto golden0_tiled = ::unit_tests::compute::gold_standard_tilize(reinterpret_fp32_as_u32(golden0_rm), fp32_cfg);
     auto golden1_tiled = ::unit_tests::compute::gold_standard_tilize(reinterpret_fp32_as_u32(golden1_rm), fp32_cfg);
-    std::vector<uint32_t> golden_tiled = golden0_tiled;
-    golden_tiled.insert(golden_tiled.end(), golden1_tiled.begin(), golden1_tiled.end());
 
-    distributed::WriteShard(cq, src_copy_buffer, a_tiled, zero_coord);
-    distributed::WriteShard(cq, src_bcast_buffer, b_tiled, zero_coord);
+    // Same tile pair every iteration; inputs and goldens are repeated kIters times.
+    auto repeat = [&](const std::vector<uint32_t>& v) {
+        std::vector<uint32_t> out;
+        out.reserve(v.size() * kIters);
+        for (uint32_t i = 0; i < kIters; ++i) {
+            out.insert(out.end(), v.begin(), v.end());
+        }
+        return out;
+    };
+    std::vector<uint32_t> golden_pair = golden0_tiled;
+    golden_pair.insert(golden_pair.end(), golden1_tiled.begin(), golden1_tiled.end());
+    const auto golden_tiled = repeat(golden_pair);
+    auto a_all = repeat(a_tiled);
+    auto b_all = repeat(b_tiled);
+
+    distributed::WriteShard(cq, src_copy_buffer, a_all, zero_coord);
+    distributed::WriteShard(cq, src_bcast_buffer, b_all, zero_coord);
 
     tt_metal::SetRuntimeArgs(
         program_,
@@ -203,8 +229,9 @@ bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::Mesh
          0u,
          static_cast<uint32_t>(src_bcast_buffer->address()),
          0u,
-         1u});
-    tt_metal::SetRuntimeArgs(program_, writer_kernel, core, {static_cast<uint32_t>(dst_buffer->address()), 0u, 2u});
+         kIters});
+    tt_metal::SetRuntimeArgs(
+        program_, writer_kernel, core, {static_cast<uint32_t>(dst_buffer->address()), 0u, 2 * kIters});
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
@@ -222,10 +249,12 @@ bool run_unpack_to_dest_bcast_dst_offset(const std::shared_ptr<distributed::Mesh
     for (size_t i = 0; i < device_tiled.size(); ++i) {
         if (device_tiled[i] != golden_tiled[i]) {
             if (num_mismatches < max_report) {
+                const size_t tile = i / kTileHW;
                 log_error(
                     tt::LogTest,
-                    "Mismatch in out tile {} at tiled idx {}: golden={} device={}",
-                    i / kTileHW,
+                    "Mismatch: iteration {} DST[{}] tiled idx {}: golden={} device={}",
+                    tile / 2,
+                    tile % 2,
                     i % kTileHW,
                     std::bit_cast<float>(golden_tiled[i]),
                     std::bit_cast<float>(device_tiled[i]));
@@ -253,10 +282,10 @@ TEST_F(LLKMeshDeviceFixture, TensixUnpackToDestRowBcastNonzeroDstOffset) {
         GTEST_SKIP() << "32-bit unpack-to-dest broadcast path exists on Wormhole B0 and Blackhole only";
     }
     for (auto& device : this->devices_) {
-        for (BcastDim dim : {BcastDim::ROW, BcastDim::COL, BcastDim::SCALAR}) {
+        for (BcastDim dim : {BcastDim::ROW, BcastDim::COL, BcastDim::SCALAR, BcastDim::NONE}) {
             log_info(
                 tt::LogTest,
-                "unpack-to-dest {} broadcast into dst 0 after copy_tile into dst 1",
+                "unpack-to-dest {} into dst 0 after copy_tile into dst 1",
                 unit_tests::compute::unpack_to_dest_bcast::bcast_dim_name(dim));
             EXPECT_TRUE(unit_tests::compute::unpack_to_dest_bcast::run_unpack_to_dest_bcast_dst_offset(device, dim))
                 << "bcast dim " << unit_tests::compute::unpack_to_dest_bcast::bcast_dim_name(dim);
