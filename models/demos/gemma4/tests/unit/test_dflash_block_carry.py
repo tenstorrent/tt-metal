@@ -1,0 +1,247 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""A dFlash block step must not DROP the tokens it produced past its width.
+
+One fused iteration commits an accepted prefix plus a bonus, up to V+1 tokens,
+so the block loop can pass ``_SPEC_BLOCK`` mid-iteration. Truncating with
+``block[:K]`` desyncs the stream from the session: the dropped tokens' KV is
+already written and ``dec.start`` has advanced past them, so the model keeps
+conditioning on tokens the caller never received. In prose that is an invisible
+gap, not an error -- which is why it needs a test rather than a warning.
+
+The excess is carried to the next step instead. Review finding on
+vllm-tt-plugin#118: "The current dFlash fill/truncate behavior needs resolution
+before the combined serving path is treated as correct."
+
+Host-only: the fused decoder is a stub, no device.
+"""
+
+import pytest
+import torch
+
+# The gemma4 vLLM generator imports vllm at module scope (through
+# tt_transformers.generator_vllm), so COLLECTING this file fails outright on a
+# runner without vLLM installed -- which is the tt-metal unit-test job. Skip
+# before the import rather than inside the tests: the failure is at import.
+pytest.importorskip("vllm")
+from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashForCausalLM as DF
+
+
+class _Dec:
+    """Scripted fused decoder: each step() yields one iteration's commit."""
+
+    def __init__(self, script, start=100):
+        self.script = list(script)
+        self.start = start
+        self.anchor = 11
+        self.calls = 0
+
+        class _D:
+            vocab = 32000
+
+        self.drafter = _D()
+
+    def step(self, first=False):
+        self.calls += 1
+        committed = self.script.pop(0)
+        self.start += len(committed)
+        return committed[:-1], committed[-1], len(committed)
+
+    def select_width(self, pos):
+        return 4096
+
+    def refresh_page_tables(self, row):
+        pass
+
+
+def _model(monkeypatch, script, block=8, carry=None, budget=10**9):
+    from types import SimpleNamespace
+
+    from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
+
+    monkeypatch.setattr(Gemma4ForCausalLM, "decode_forward", lambda self, *a, **k: "baseline")
+    m = DF.__new__(DF)
+    m._SPEC_BLOCK = block
+    m._spec_decoder = _Dec(script)
+    m._spec_active = True
+    m._spec_active_owner = None
+    m._spec_pending = None
+    m._spec_pending_owner = None
+    m._spec_first_step = False
+    m._spec_width_set = True
+    m._spec_width_ladder = [4096]
+    m._spec_budget_end = budget
+    m._spec_carry = list(carry or [])
+    m._spec_horizon = 2048
+    m._spec_decoder_bucket = None
+    m._spec_last_pt = None
+    m._bounded_sliding_kv_cache = False
+    m.model = [SimpleNamespace(hf_config=SimpleNamespace(eos_token_id=1))]
+    return m
+
+
+def _bootstrap_via_width_set(m, anchor=11, start=100):
+    """Arm a session through the REAL _spec_bootstrap width-set branch.
+
+    That branch returns early, which is why it needs its own coverage: a reset
+    placed only on the capture path never ran for it.
+    """
+    m._spec_decoder.width_for = lambda pos: 4096
+    m._spec_decoder.prefill_ingest = lambda taps, n: None
+    m._spec_decoder.reseed = lambda a, s: None
+    m._spec_pending = (object(), int(start))
+    m._spec_pending_owner = None
+    DF._spec_bootstrap(
+        m,
+        anchor,
+        start,
+        torch.zeros((1, 8), dtype=torch.int32),
+        None,
+        page_tables_per_layer=None,
+    )
+
+
+def _run(m, pos=100):
+    return m.decode_forward(
+        tokens=torch.tensor([[11]], dtype=torch.int32),
+        start_pos=torch.tensor([pos], dtype=torch.int32),
+    )
+
+
+def test_overshoot_is_carried_not_dropped(monkeypatch):
+    """Three 3-token iterations fill a width-8 block to 9. The 9th token must
+    survive into the next step, because its KV is already written."""
+    m = _model(monkeypatch, [[21, 22, 23], [24, 25, 26], [27, 28, 29]], block=8)
+    out = _run(m)
+    assert out[0].tolist() == [21, 22, 23, 24, 25, 26, 27, 28]
+    assert m._spec_carry == [29]
+
+
+def test_carry_is_delivered_first_on_the_next_step(monkeypatch):
+    m = _model(monkeypatch, [[30, 31, 32], [33, 34, 35]], block=8, carry=[28, 29])
+    out = _run(m)
+    # carry first, then this step's iterations, in order
+    assert out[0].tolist() == [28, 29, 30, 31, 32, 33, 34, 35]
+    assert m._spec_carry == []
+
+
+def test_carry_counts_toward_the_width(monkeypatch):
+    """A carry large enough to fill the block must emit ZERO iterations: the
+    session is already that far ahead."""
+    m = _model(monkeypatch, [[99] * 3], block=4, carry=[41, 42, 43, 44])
+    out = _run(m)
+    assert out[0].tolist() == [41, 42, 43, 44]
+    assert m._spec_decoder.calls == 0
+
+
+def test_exact_fit_leaves_no_carry(monkeypatch):
+    m = _model(monkeypatch, [[21, 22, 23, 24], [25, 26, 27, 28]], block=8)
+    out = _run(m)
+    assert out[0].tolist() == [21, 22, 23, 24, 25, 26, 27, 28]
+    assert m._spec_carry == []
+
+
+def test_eos_still_stops_and_fills_the_tail(monkeypatch):
+    """EOS ends the request, so the tail is EOS-filled and any carry behind it
+    is moot -- the scheduler trims at the first stop token."""
+    m = _model(monkeypatch, [[21, 1], [99, 99]], block=8)
+    out = _run(m)
+    row = out[0].tolist()
+    assert row[:2] == [21, 1]
+    assert set(row[2:]) == {1}
+    assert m._spec_decoder.calls == 1
+
+
+def test_release_request_drops_a_carry(monkeypatch):
+    """Teardown must drop it: the retained decoder outlives the request.
+
+    The decoder is deliberately kept alive across requests for reuse, so
+    anything request-scoped has to die in release_request. A carry left behind
+    is emitted as the NEXT request's first tokens.
+    """
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
+    assert m._spec_carry == [77]
+    DF.release_request(m, 0)
+    assert m._spec_carry == []
+
+
+def test_a_carry_never_crosses_a_session(monkeypatch):
+    """Through the REAL release and bootstrap, with no manual reset.
+
+    Both paths matter: release_request ends request A, and the width-set
+    branch of _spec_bootstrap arms request B and returns early -- a reset
+    placed only on the capture path left that branch leaking A's tokens into
+    B's first block.
+    """
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
+    assert m._spec_carry == [77]
+    DF.release_request(m, 0)
+    _bootstrap_via_width_set(m)
+    out = _run(m)
+    assert m._spec_carry == [] or 77 not in m._spec_carry
+    assert 77 not in out[0].tolist()
+
+
+def test_the_width_set_bootstrap_branch_clears_the_carry(monkeypatch):
+    """The early-returning branch specifically, since it is the one that leaked."""
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
+    _bootstrap_via_width_set(m)
+    assert m._spec_carry == []
+
+
+@pytest.mark.parametrize("width", [2, 4, 16, 64])
+def test_emitted_width_is_always_the_block_width(monkeypatch, width):
+    m = _model(monkeypatch, [[21, 22, 23]] * 128, block=width)
+    out = _run(m)
+    assert out.shape == (1, width)
+
+
+def test_releasing_another_request_preserves_the_owner_session(monkeypatch):
+    """Adaptive serving admits several live requests; this adapter keeps one
+    session. Aborting A must not tear down a session B owns.
+
+    The sequence that broke: A and B prefill separately, the client aborts A,
+    the runner calls release_request(A_slot), and release_request cleared the
+    GLOBAL session -- B's. B then decoded one baseline token against the full
+    block the scheduler had reserved for it, and the scheduler rejected the
+    width.
+    """
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8)
+    m._spec_owner_slot = 3  # B owns the session, parked at state slot 3
+    m._spec_active = True
+    m._spec_pending = ("taps", 10)
+
+    DF.release_request(m, 1)  # A finishes at a different slot
+
+    assert m._spec_active is True, "B's live session must survive A's release"
+    assert m._spec_pending == ("taps", 10)
+    assert m._spec_owner_slot == 3
+
+
+def test_releasing_the_owner_still_tears_the_session_down(monkeypatch):
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
+    m._spec_owner_slot = 3
+    m._spec_active = True
+    m._spec_pending = ("taps", 10)
+
+    DF.release_request(m, 3)
+
+    assert m._spec_active is False
+    assert m._spec_pending is None
+    assert m._spec_carry == []
+    assert m._spec_owner_slot is None
+
+
+def test_an_unknown_owner_slot_keeps_the_old_unconditional_behaviour(monkeypatch):
+    """The runner may supply no empty_slots; that is the pre-existing
+    single-session case and must not start leaking sessions."""
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8, carry=[77])
+    m._spec_owner_slot = None
+    m._spec_active = True
+    m._spec_pending = ("taps", 10)
+
+    DF.release_request(m, 7)
+
+    assert m._spec_active is False
+    assert m._spec_carry == []
