@@ -437,6 +437,39 @@ void Kernel::set_precompiled_config(experimental::PrecompiledKernelConfig config
     precompiled_config_ = std::move(config);
 }
 
+ll_api::BufRwInfo Kernel::query_buf_rw(const IDevice& device) const {
+    ll_api::BufRwInfo info;
+    const auto context_id = extract_context_id(&device);
+    const auto& hal = MetalContext::instance(context_id).hal();
+    const uint32_t core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
+    const uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
+    const std::string binary_root = BuildEnvManager::get_instance(context_id)
+                                        .get_device_build_env(device.build_id())
+                                        .build_env.get_out_kernel_root_path();
+    // Resolve each binary's (path, load_type) exactly as read_binaries did when the loader loaded it, so
+    // llrt::get_binary_metadata is a cache read against the same entry -- no ELF handling here. buf_rw
+    // records are emitted only by data-movement binaries (compute's 3 TRISC and eth binaries carry none),
+    // so unioning across a kernel's binaries is naturally correct: a DM kernel's one binary is what
+    // matters; others contribute nothing.
+    for (int i = 0; i < this->expected_num_binaries(); ++i) {
+        const uint32_t processor_type = this->get_kernel_processor_type(i);
+        const auto load_type = hal.get_jit_build_config(core_type, processor_class, processor_type).memory_load;
+        const std::string path = BuildEnvManager::get_instance(context_id)
+                                     .get_kernel_binary_path(
+                                         device.build_id(),
+                                         core_type,
+                                         processor_class,
+                                         processor_type,
+                                         binary_root,
+                                         this->kernel_full_name_);
+        const ll_api::BinaryMetadata& md = llrt::get_binary_metadata(path, load_type);
+        info.reads.insert(md.buf_rw.reads.begin(), md.buf_rw.reads.end());
+        info.writes.insert(md.buf_rw.writes.begin(), md.buf_rw.writes.end());
+        info.opaque = info.opaque || md.buf_rw.opaque;
+    }
+    return info;
+}
+
 std::vector<std::string> Kernel::elf_paths_by_processor_index(
     const IDevice& device, const std::string& binary_root) const {
     const auto paths = this->file_paths(device, binary_root);

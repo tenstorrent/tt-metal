@@ -23,6 +23,7 @@
 #include "jit_build/jit_build_settings.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel_source.hpp"
+#include "binary_metadata.hpp"  // ll_api::BufRwInfo (op-to-op R/W inference)
 #include <enchantum/enchantum.hpp>
 #include "tt_cluster.hpp"
 
@@ -325,6 +326,12 @@ public:
 
     // Returns the ELF file paths indexed by processor index. Processor indices not used by this kernel are left empty.
     std::vector<std::string> elf_paths_by_processor_index(const IDevice& device, const std::string& binary_root) const;
+
+    // Op-to-op R/W inference (POC): return the decoded per-binding read/write sets for this kernel (see
+    // ll_api::BufRwInfo), unioned across its binaries. The metadata is harvested by the loader when the
+    // binary is loaded (llrt::get_binary_metadata), so this does no ELF parsing itself; the kernel must
+    // already be compiled -- call after a warm-up enqueue. binary_root is derived internally from `device`.
+    ll_api::BufRwInfo query_buf_rw(const IDevice& device) const;
 
     void set_precompiled_config(experimental::PrecompiledKernelConfig config);
     const std::optional<experimental::PrecompiledKernelConfig>& precompiled_config() const {
