@@ -101,11 +101,7 @@ def assistant_prompt(text):
 
 
 def role_ids():
-    """The three ids every prompt opens with, without tokenising any text.
-
-    Streaming input needs them before it has the text, since its prompt carries one token
-    and the rest arrives per frame.
-    """
+    """The three ids every prompt opens with, without tokenising any text."""
     return encode(ROLE_PREFIX)
 
 

@@ -4,42 +4,14 @@
 
 """Streaming text input: the second regime this model was trained in.
 
-Upstream calls it `non_streaming_mode=False` and it is the default there. The difference is
-when each text token reaches the model:
+Upstream's `non_streaming_mode=False`, and its default. The difference is when each text
+token reaches the model: the prompt carries the first and every frame brings the next, so
+a CustomVoice prompt is ten positions whatever the text against `n_text + 11`.
 
-| | non-streaming | streaming |
-|---|---|---|
-| prompt, CustomVoice | `n_text + 11` positions | **10**, whatever the text |
-| text during decode | a constant `tts_pad` | the next text token, one a frame |
-| text needed to start | all of it | the first token |
-
-So the prompt stops growing with the text, and a caller can hand text over while frames are
-coming out. Upstream's own docstring is careful here: its flag "only simulates streaming
-text input", because it knows the whole string up front and changes nothing but the
-schedule. The schedule is the regime, and this directory adds the part upstream leaves out
-by accepting text in pieces.
-
-**Verified against upstream, position by position.** Prompts and text tracks were captured
-at the talker's own door under transformers 4.57.3 with the genuine `qwen_tts` package, and
-diffed: max absolute difference **0.0** across twelve comparisons, four CustomVoice cases
-(short, longer, `Auto`, a dialect speaker) and two clone cases (a text shorter than the
-reference clip and one longer), each in both regimes. That comparison needs two transformers
-versions in one process, so it cannot live here; what lives here is everything that can be
-checked against the tables the prompt is built from.
-
-Two failures that comparison caught, both of which these tests now pin:
-
-  * A second `tts_eos`. The clone prompt closes the text track itself, and the feed was
-    synthesising another one at the first decode position: 0.068 away from upstream, the
-    size of an embedding rather than of rounding.
-  * A projection split. Upstream projects the reference transcript and the text to speak in
-    one matmul; projecting them separately left 7.5e-08, which is nothing numerically and
-    is still a different arithmetic than the reference.
-
-Needs the CustomVoice checkpoint for the speaker paths, like `test_pipeline.py`.
-
-Run:
-    pytest -svv models/demos/audio/qwen3_tts/tests/pcc/test_streaming_pcc.py
+Prompts and text tracks were diffed against upstream under transformers 4.57.3 at 0.0,
+twelve comparisons, which needs two transformers versions and cannot live here. It caught
+a second `tts_eos` after the prompt had closed the text track, and a projection split
+worth 7.5e-08; both are pinned below.
 """
 
 import os
@@ -134,12 +106,7 @@ def test_auto_drops_a_position(tables):
 
 
 def test_the_prompt_is_the_non_streaming_head_plus_one_text_token(tables):
-    """Everything up to the speaker is shared; the tenth position is where they part.
-
-    Non-streaming puts the whole text against `codec_pad` and ends with `codec_bos` alone.
-    Streaming ends at `codec_bos` summed with the first text token, and the rest of the
-    text becomes the feed.
-    """
+    """Everything up to the speaker is shared; the tenth position is where they part."""
     streaming, feed = build_streaming_prefill(TEXT, SPEAKER, LANGUAGE, tables)
     plain, prompt_ids = build_custom_voice_prefill(TEXT, SPEAKER, LANGUAGE, tables)
     shared = STREAMING_PROMPT - 1
@@ -156,11 +123,7 @@ def test_the_prompt_is_the_non_streaming_head_plus_one_text_token(tables):
 
 
 def test_the_feed_sends_eos_once_and_then_pads(tables):
-    """`tts_eos` closes the text, and nothing sends it twice.
-
-    The ordering is upstream's: tokens, then one `tts_eos`, then `tts_pad` for as long as
-    the model keeps going. A second `tts_eos` is the bug this pins.
-    """
+    """Tokens, then one `tts_eos`, then pads. A second `tts_eos` is the bug this pins."""
     _, feed = build_streaming_prefill(TEXT, SPEAKER, LANGUAGE, tables)
     n_text = len(frontend.text_ids(TEXT)) - ROLE_IDS - TAIL_IDS
 
@@ -173,11 +136,7 @@ def test_the_feed_sends_eos_once_and_then_pads(tables):
 
 
 def test_text_in_pieces_matches_the_same_text_whole(tables):
-    """Feeding "a b" as ["a ", "b"] must give the same positions, when the split is clean.
-
-    Each piece is tokenised on its own, so a split inside a word can change the ids. This
-    checks a split on a word boundary, which is what the docstring asks callers for.
-    """
+    """Feeding "a b" as ["a ", "b"] must give the same positions, when the split is clean."""
     whole, whole_feed = build_streaming_prefill(
         "The kettle is on, and the rain has not let up.", SPEAKER, LANGUAGE, tables
     )
@@ -191,12 +150,7 @@ def test_text_in_pieces_matches_the_same_text_whole(tables):
 
 
 def test_a_split_inside_a_word_is_a_different_tokenisation(tables):
-    """The caveat, pinned rather than hidden.
-
-    Tokenisation is greedy over the string it is given, so a boundary inside a word forces
-    a token boundary that would not otherwise be there. This is why `StreamingText` asks
-    for whole words.
-    """
+    """The caveat, pinned rather than hidden: tokenisation is greedy over what it is given."""
     clean = frontend.encode("kettle")
     split = frontend.encode("ket") + frontend.encode("tle")
     assert clean != split, "if these ever agree, this test has stopped measuring anything"

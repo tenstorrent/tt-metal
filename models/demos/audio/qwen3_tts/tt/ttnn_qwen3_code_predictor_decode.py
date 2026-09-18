@@ -39,10 +39,7 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import (
 
 
 def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloat16, mlp_dtype=MLP_WEIGHT_DTYPE):
-    """Predictor weights with Q, K and V fused, mirroring the talker's repacking.
-
-    `mlp_dtype` mirrors the talker's split precision; the constant carries the trade.
-    """
+    """Predictor weights with Q, K and V fused, mirroring the talker's repacking."""
     talker_cfg = dict(config or checkpoint.talker_config())
     cfg = dict(talker_cfg["code_predictor_config"])
     state = checkpoint.load_prefixed(CODE_PREDICTOR_PREFIX)
@@ -57,11 +54,7 @@ def preprocess_cached_predictor_parameters(device, config=None, dtype=ttnn.bfloa
         )
 
     def lookup_table(tensor):
-        """A codebook for `ttnn.embedding`: row major, bf16, which the op requires.
-
-        Tiled costs more than it saves. Measured for one row: 38 us row major against 81
-        tiled, and 81 is what the host round trip it replaces costs.
-        """
+        """A codebook for `ttnn.embedding`: row major and bf16, which the op requires."""
         return ttnn.from_torch(
             tensor.contiguous(),
             dtype=ttnn.bfloat16,
@@ -218,12 +211,7 @@ class TtCodePredictorCachedDecoder:
         return ttnn.sharded_to_interleaved(out)
 
     def _rotate(self, x, cos, sin):
-        """The same fused rotation the talker uses, for the same reason.
-
-        15 steps a frame over five layers means 150 rotations per frame, and spelled out
-        each cost seven ops. See `TtTalkerCachedDecoder._rotate` for why prefill mode
-        serves the step and why `cos` carries a row per head.
-        """
+        """The same fused rotation the talker uses, over 150 rotations a frame."""
         return ttnn.experimental.rotary_embedding_hf(
             x, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_config
         )
@@ -441,9 +429,7 @@ class TtCodePredictorCachedDecoder:
     def _fill_from_table(self, table, code):
         """`_in` <- row `code` of a device codebook, without the row touching the host.
 
-        The old way was `from_torch` on a 2048-value row, 81 us, fifteen times a frame.
-        Writing one index and letting the device read its own table is 38, so this is 0.6
-        ms a frame. The values are identical: the table is the same bf16 the copy produced.
+        One index write instead of 76 us of `from_torch`, for identical values.
         """
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(torch.tensor([[int(code)]], dtype=torch.int32), dtype=ttnn.uint32), self._index
@@ -455,19 +441,11 @@ class TtCodePredictorCachedDecoder:
     def generate(self, talker_hidden, first_code, pick=None, watch=None):
         """Codebooks 1 to 15, from the talker's hidden state and codebook 0.
 
-        `talker_hidden` may be the device tensor the talker's step returned, which is what
-        the pipeline passes: it saves a round trip of 2048 values through the host for
-        every frame. A torch tensor still works, which is what the PCC tests hand it.
-
-        `pick` maps one row of logits to an id, and defaults to argmax. Upstream samples
-        here (temperature 0.9, top_k 50), so pass `sampling.sample` to match it; greedy
-        sends this model into a silence code that it never leaves.
-
-        The two prompt positions go through the same traced step as the rest rather than
-        through a separate prefill. A per-frame prefill allocated a device buffer for every
-        intermediate of five eager layers, and buffers allocated while a trace is live are
-        corrupt once it runs unless released first. Priming this way leaves exactly one
-        allocation per step, the output head's, which is released immediately.
+        `talker_hidden` may be the device tensor the talker returned, which is what the pipeline
+        passes. `pick` defaults to argmax, but greedy sends this model into a silence code it
+        never leaves. The two prompt positions go through the traced step like the rest: a
+        per-frame prefill allocated buffers, and buffers allocated under a live trace are corrupt
+        once it runs.
         """
         charge = watch.split if watch is not None else (lambda name: None)
         self.reset()

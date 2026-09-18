@@ -124,9 +124,7 @@ def test_suppressed_ids_are_never_drawn(logits):
 def test_suppression_happens_before_the_top_k_floor(logits):
     """Order matters: suppressed ids must not occupy places in the top k.
 
-    `transformers` puts `SuppressTokensLogitsProcessor` ahead of the warpers, so a
-    suppressed id is at `-inf` before top-k counts anything. Suppressing the whole top 8
-    and asking for k=4 must therefore leave the 9th to 12th most likely ids, not nothing.
+    Suppressing the whole top 8 with k=4 must leave the 9th to 12th, not nothing.
     """
     ordered = torch.topk(logits, 12).indices.tolist()
     survivors = set(ordered[8:12])

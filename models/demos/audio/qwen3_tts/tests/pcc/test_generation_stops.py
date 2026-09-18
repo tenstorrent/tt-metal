@@ -4,40 +4,16 @@
 
 """Do utterances stop, over enough seeds to mean something?
 
-The failure no per-position measurement catches. In non-streaming mode the talker gets no
-text signal after the prefill, so a run that loses its place keeps emitting rather than
-reaching `codec_eos_token_id`: upstream's own package, on CPU, greedy, spent 699 frames of
-a 700-frame budget on a four-sentence prompt and spoke about half of it. `sampling` records
-that. Anything that blurs the logits can push the device the same way, and PCC will not
-show it.
+The failure no per-position measurement catches: in non-streaming mode the talker gets no
+text signal after the prefill, so a run that loses its place keeps emitting.
 
-**One seed proves nothing, which this test exists to stop anyone learning the hard way.**
-Frames per word, eight seeds, two sentences, three builds of the same model:
+**One seed proves nothing.** Frames per word for a four-word sentence, eight seeds, three
+builds of this model: 32.8 38.0 4.0 6.0 4.8 4.8 9.2 3.5 before tuning, 17.0 8.5 3.8 5.0
+4.0 4.5 8.0 4.0 after, 10.0 8.5 5.2 5.2 4.5 4.2 6.5 3.8 with block-float MLP weights.
+Most seeds stop promptly and which ones wander moves with the last bits, so this counts
+wandering seeds rather than judging one.
 
-    build                      4 words                             worst
-    bf16 MLP, before tuning    32.8 38.0 4.0 6.0 4.8 4.8 9.2 3.5    38.0
-    bf16 MLP, tuned            17.0  8.5 3.8 5.0 4.0 4.5 8.0 4.0    17.0
-    bfloat8_b MLP, tuned       10.0  8.5 5.2 5.2 4.5 4.2 6.5 3.8    10.0
-
-    build                      14 words                            worst
-    bf16 MLP, before tuning     4.3  5.1 3.6 7.0 5.4 4.1 7.1 3.0     7.1
-    bf16 MLP, tuned            15.1  5.0 3.5 6.7 4.2 3.9 6.5 3.8    15.1
-    bfloat8_b MLP, tuned        5.1  6.1 3.6 7.2 4.8 4.1 7.1 10.6   10.6
-
-Read down the first column and every build looks broken or fine depending on which one you
-picked. Read across and the shape is clear: most seeds stop promptly, a minority wander,
-and which seeds wander moves with the last bits. So the test asks how many seeds wander,
-not whether a particular one did.
-
-The per-word ceiling is loose on purpose. 12.5 frames is a second of speech and English at
-a natural pace runs about 2.5 words a second, so 12 frames a word is twice what the text
-needs: a slow, expressive reading passes, a run that stopped reading the text does not.
-
-Needs the CustomVoice checkpoint, like `test_pipeline.py`, and for the same reason: it
-speaks without a reference clip.
-
-Run:
-    pytest -svv models/demos/audio/qwen3_tts/tests/pcc/test_generation_stops.py
+Needs the CustomVoice checkpoint, like `test_pipeline.py`.
 """
 
 import os

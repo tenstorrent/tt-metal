@@ -192,11 +192,8 @@ class TtTalkerAttention:
     def _apply_rotation(self, x, cos, sin):
         """Upstream's rotation in one kernel: `x * cos + rotate_half(x) * sin`.
 
-        The HF layout, which `rotary_tables` already builds: cos and sin duplicated across
-        the two halves. Spelled out it took a slice per half, a negate, a concatenation and
-        three elementwise ops; it measured the same to seven digits and cost three times as
-        much. The cached decoder rotates through the same op, which is what keeps the two
-        graphs comparable in `test_decode_pcc.py`.
+        The HF layout `rotary_tables` already builds. The cached decoder rotates through the same
+        op, which is what keeps the two graphs comparable in `test_decode_pcc.py`.
         """
         return ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False, compute_kernel_config=self.cc)
 

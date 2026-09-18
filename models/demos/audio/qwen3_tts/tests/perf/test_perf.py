@@ -4,31 +4,14 @@
 
 """Where an utterance spends its time, block by block, warm.
 
-Warm means the second utterance onward: the first compiles kernels at whatever shapes it
-sees and captures both traces, and those costs land wherever they happen to fall. So this
-runs one utterance to warm the process and reports the next ones.
+Warm is the second utterance onward, so the first compiles kernels and captures traces,
+and each case runs twice off one seed because the codec compiles per frame count.
 
-The frame loop is charged per block, and the blocks are the ones a change can move:
-
-| block            | what it covers                                                      |
-|---|---|
-| `codec_head`     | the [2048, 3072] projection, plus the read that waits for the talker |
-| `sample`         | host sampling for codebook 0, with the repetition penalty            |
-| `predictor`      | the predictor's 15 traced steps and their 15 output heads            |
-| `predictor_sample` | host sampling for codebooks 1 to 15                               |
-| `embed`          | summing 16 codebook embeddings on host into the next prompt position  |
-| `talker`         | the talker's 28-layer traced step                                   |
-
-The last column is audio over wall clock, so above 1 is faster than real time. The demos
-print it the same way round.
-
-`profile=True` syncs the device at every split, so each block is charged for its own device
-work rather than for whatever the next read waited on. The syncs cost a few percent of the
-frame, which is the price of knowing where the time goes; `decode_s` is the honest total.
-
-Ceilings are per block and deliberately loose. This runs on a shared card, so anything
-tight enough to catch a few percent would fail on load instead. What the table is for is
-the shape of the split: if one block moves, it says which.
+The frame loop is charged per block. `profile=True` syncs the device at every split so
+each block is charged for its own work, which costs a few percent: `decode_s` is the
+honest total. The last column is audio over wall clock, so above 1 is faster than real
+time. Ceilings are loose because the card is shared; the table's job is to say which
+block moved.
 
 Run:
     pytest -svv models/demos/audio/qwen3_tts/tests/perf/test_perf.py
@@ -113,10 +96,8 @@ def _row(name, timings, seconds):
 def test_perf(device):
     """One warmup utterance, then a table of the warm ones.
 
-    Every utterance runs twice off the same seed and the second one is reported. The
-    codec decoder compiles a program per frame-count bucket and holds it for the life of
-    the device, so a length nothing has decoded yet pays a build of tens of seconds that
-    lands in `codec`. Same seed, same frames, same bucket: the second run is the warm one.
+    Each case runs twice off the same seed: same frames, same bucket, so the second run pays
+    no kernel build.
     """
     pipeline = Qwen3TTSPipeline(device, max_frames=400, seed=SEED, profile=True)
     pipeline.generate(WARMUP, speaker=SPEAKER, language=LANGUAGE)

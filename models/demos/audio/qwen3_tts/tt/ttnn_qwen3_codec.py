@@ -378,27 +378,13 @@ class TtCodecDecoder:
     def program_room_needed(self, frames, bucket=LENGTH_BUCKET):
         """Does this decode need the device's program cache dropped before it runs?
 
-        True when the length is one the decoder has not compiled since the last drop.
-        Every distinct frame count compiles its own convolution programs and tt-metal holds
-        each one's L1_SMALL scratch until the cache goes, so a process that speaks many
-        lengths runs the 64 KB region out however coarse the buckets are: measured 16 KB,
-        32 KB, 50 KB and 58 KB after four lengths, then a failed allocation on the fifth.
+        True when the length is one the decoder has not compiled since the last drop. Each frame
+        count holds its own L1_SMALL scratch until then: 16, 32, 50, 58 KB after four lengths,
+        then a failed allocation. A new length gets an empty region rather than a spare-capacity
+        check, since the footprint is neither constant nor proportional to the length.
 
-        **Why a new length gets an empty region rather than a spare-capacity check.** The
-        footprint is neither constant nor proportional to the length: the four lengths
-        above cost 16, 15, 19 and 8 KB, while a 288-frame decode failed with 33 KB free.
-        Nothing here can predict the next one, so the rule is the one that cannot be wrong,
-        and it is cheap: the kernels stay built on the host, so the utterance after a drop
-        measured 2.71 s against 2.59 s warm. Buckets are what keep it rare, since a drop
-        only happens on a frame count no utterance has landed in since the last one.
-
-        The caller drops the cache rather than this object, because no captured trace may
-        be live when the programs it was built from go away:
-
-            if pipeline.codec.program_room_needed(frames):
-                pipeline.release()
-                device.clear_program_cache()
-                pipeline.codec.forget_programs()
+        The caller drops the cache, not this object: no captured trace may be live when the
+        programs it was built from go away.
         """
         return bool(self._compiled) and self.padded_frames(frames, bucket) not in self._compiled
 

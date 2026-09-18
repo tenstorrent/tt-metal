@@ -200,17 +200,13 @@ def test_full_stack_matches_the_reference(device, prompt, reference_outputs):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_codec_tokens_agree_with_the_reference(device, prompt, reference_outputs):
-    """What PCC is a proxy for: would the sampler draw the same codec tokens?
+    """What PCC is a proxy for: would the sampler draw from the same distribution?
 
-    Judged on the distribution, not on the argmax. The model samples at temperature 0.9,
-    and on this prompt the reference is often barely committed to its own top choice, so
-    argmax agreement is decided by rounding: perturbing the prompt by a quarter of a bf16
-    step scatters it across 22/26 to 24/26 and lands the device on the reference's 8th
-    choice at one position. Total variation distance between the two distributions moves
-    with the whole vector instead, so it separates a wiring error from last-bit noise.
-
-    Agreement is still printed and still floored, because a distribution that matches while
-    every pick differs would be strange enough to want to see.
+    Judged on the distribution, not the argmax. On this prompt the reference's own top-1
+    probability is under 0.1 at several positions, so a quarter-ulp perturbation scatters
+    agreement over 22 to 24 of 26 and lands the device on its 8th choice. Agreement is still
+    printed and floored, since a matching distribution with every pick different would be
+    worth seeing.
     """
     embeddings, positions = prompt
     gold, _ = reference_outputs

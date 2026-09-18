@@ -2,74 +2,31 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end Qwen3-TTS on device: text in, waveform out, in a named voice or a cloned one.
+"""End-to-end Qwen3-TTS on device: text in, waveform out, in the voice you ask for.
 
-Joins the device blocks with the two host pieces that were missing: the dual-track prompt
-assembly and the autoregressive loop that drives them.
+Joins the device blocks to the two host pieces: dual-track prompt assembly and the
+autoregressive loop. Five ways to choose a voice, each in either text regime, and the
+README's tables say what they cost and how they were verified against upstream:
 
-Two entry points, and which one works depends on the checkpoint:
+    generate(text, speaker=...)                   a named CustomVoice speaker
+    generate(text, speaker=..., instruct=...)      that speaker, directed
+    generate_design(text, instruction)            VoiceDesign, a voice in words
+    generate_clone(text, reference)                Base, a clip in context
+    generate_clone(..., x_vector_only=True)        Base, the clip's voice alone
 
-    generate(text, speaker=...)          CustomVoice: one of nine named speakers
-    generate_clone(text, reference)      Base: a voice taken from a reference clip
-    generate_design(text, instruction)   VoiceDesign: a voice described in a sentence
+`streaming=True` on any of them moves the text to one token per frame, upstream's
+`non_streaming_mode=False`; `StreamingText` has that schedule.
 
-`build_clone_reference` turns a clip into the `CloneReference` the second takes, running the
-codec encoder and the speaker encoder once each.
+Per frame the loop runs the talker over the prompt, the code predictor over its hidden
+state for codebooks 1 to 15, and sums the 16 embeddings into the next position. When
+codebook 0 comes back as `codec_eos_token_id` the frames go to the codec decoder.
 
-Per frame the loop does:
+Prompt layouts, the part that has to be exactly right, are in the builders below; each
+was diffed against upstream's own assembly under transformers 4.57.3 at 0.0.
 
-    talker(prompt so far)      -> hidden state, then codec_head -> codebook 0
-    code predictor(hidden, cb0) -> codebooks 1..15               (15 inner steps)
-    sum the 16 codebook embeddings + tts_pad -> one new prompt position
-
-and when codebook 0 comes back as `codec_eos_token_id` the utterance is over and the
-collected frames go to the codec decoder.
-
-**The prefill, which is the part that has to be exactly right.** For CustomVoice in
-non-streaming mode it is `n_text + 11` positions, each the sum of a text-track and a
-codec-track embedding:
-
-    3          role, `<|im_start|>assistant\\n`, text track only
-    4          codec think / think_bos / language / think_eos, against tts_pad
-    1          the speaker id, against tts_pad
-    1          codec_pad, against tts_bos
-    n_text + 1 the text tokens then tts_eos, each against codec_pad
-    1          codec_bos, against tts_pad
-
-Language and speaker both enter as single codec-vocabulary tokens, which is why neither
-appears in the text stream. In non-streaming mode `trailing_text_hidden` is a constant
-`tts_pad_embed`, so after the prefill the model gets no further text signal; that is
-upstream's design and the regime where its sampler is known to wander.
-
-**Both regimes are here.** `streaming=True` on any of the three entry points switches to
-upstream's `non_streaming_mode=False`: the prompt carries one text token, ten positions
-whatever the text, and every frame brings the next token in. `StreamingText` has the
-schedule and the README the measurements.
-
-A clone prompt is the same head followed by a different body: the reference transcript goes
-into the text track ahead of the text to speak, and the clip itself follows on the codec
-track, one summed 16-codebook embedding per frame. `build_voice_clone_prefill` has the
-layout. It was checked against upstream's own assembly, max absolute difference 0.0 across
-all 72 positions.
-
-**What runs where.** On device: the 28-layer talker, the 5-layer code predictor, the codec
-decoder, the `codec_head` projection, and for a clone the codec encoder and speaker encoder
-too. On host: tokenisation, the embedding gathers, the small `text_projection` MLP over the
-prompt, the mel front-end, sampling, and the quantizer's table lookup. That is 2.03B of the
-parameters on device and a few million of lookups on host.
-
-**Sampling, not greedy.** The checkpoint ships `do_sample: true` and this follows it, with
-its own temperature, top_k and `repetition_penalty`. Greedy is not the conservative
-choice: upstream's package, on CPU, greedy, runs past the end of the text and spends the
-rest of its budget on a silence code. Measured 699 frames of a 700 frame budget against
-414 frames and a clean stop when sampling. `sampling` carries the details.
-
-**Both decoders carry a KV cache and run from a captured trace.** One 28-layer step and
-one 5-layer step, replayed per frame, which puts a sentence at roughly 44 ms per frame, or
-half of real time. Two rules the traces impose, each of which cost a board reset to learn:
-capture every trace before executing any of them, and allocate nothing new once one is
-live. Both are why `_capture` warms both decoders before it captures either, and why the
-loop below releases the one buffer it allocates per frame.
+On device: the talker, the code predictor, the codec decoder, `codec_head`, and for a
+clone the codec and speaker encoders. On host: tokenising, embedding gathers, the small
+`text_projection`, the mel front-end, sampling and the quantizer's lookup.
 """
 
 import time
@@ -116,11 +73,9 @@ MIN_FRAMES = 2  # upstream's `min_new_tokens=2`; one frame is 80 ms
 class Stopwatch:
     """Wall clock split across the blocks of one utterance.
 
-    `split(name)` charges everything since the last split to `name`, so the loop reads as a
-    sequence of named blocks. Device work is asynchronous, so a block that ends without a
-    read would be charged to whichever later block waits for it; `strict` syncs the device
-    at every split to stop that. The loop already reads logits per frame, so the unstrict
-    numbers are close, and the perf test uses `strict` to be sure.
+    `split(name)` charges everything since the last split to `name`. Device work is
+    asynchronous, so `strict` syncs at every split to stop a block being charged for
+    another's work; the perf test uses it.
     """
 
     def __init__(self, device=None, strict=False):
@@ -230,18 +185,9 @@ class CloneReference:
 def build_clone_reference(device, audio, text=None, sample_rate=None, x_vector_only=False):
     """A reference clip -> `CloneReference`, running the encoders it needs on device.
 
-    The codec encoder turns the clip into codes and the speaker encoder turns it into one
-    2048-wide vector; the ICL prompt carries the first on its codec track and the second
-    in a single position. Both sets of weights are loaded here and dropped on return, so a
-    server that clones one voice many times should keep the result, not call this again.
-
-    `x_vector_only=True` builds a reference for the mode of the same name: the codec
-    encoder is skipped along with the codes it produces, and `text` is not needed, because
-    that prompt carries neither. It is the cheaper half of the work, and the mode to use
-    when a clip's transcript is unknown.
-
-    **Call this before a pipeline captures its traces**, or release them first: this is
-    eager device work, and eager work beside a live trace hangs the card.
+    `x_vector_only=True` skips the codec encoder and needs no transcript. Call this before
+    a pipeline captures its traces, or release them first: eager work beside a live trace
+    hangs the card.
     """
     audio = torch.as_tensor(audio, dtype=torch.float32).reshape(-1)
     expected = checkpoint.codec_config()["input_sample_rate"]
@@ -325,25 +271,11 @@ def _prompt_body(tables, text_ids, codec_bos):
 
 
 class StreamingText:
-    """The text track during streaming-input decode: one embedding per frame, on demand.
+    """The text track during streaming input: one embedding per frame, on demand.
 
-    In this regime the prompt carries only the **first** text token and every generated
-    frame adds the next one, against the codes the model just emitted. Upstream calls it
-    `non_streaming_mode=False` and its own docstring is careful about what the flag does:
-    it "only simulates streaming text input", since it knows the whole string up front and
-    changes nothing but when each token reaches the model.
-
-    The schedule is the whole of the regime, so this also takes text that arrives in
-    pieces: any chunk that lands before the frame that needs it is indistinguishable from
-    having had the string all along. That is the part upstream leaves to the caller.
-
-    **The caveat with pieces is tokenisation.** Each chunk is tokenised on its own, so a
-    merge that would have spanned a boundary does not happen and the ids differ from the
-    same text given whole. Feed whole words, and prefer whole clauses.
-
-    After the last text token comes `tts_eos`, once, and then `tts_pad` for as long as the
-    model keeps going. That ordering is upstream's and it is what tells the model the text
-    has ended, so a caller that never closes the iterator never sends it.
+    The prompt carries the first text token and every frame adds the next, then `tts_eos`
+    once, then `tts_pad`. `text` may arrive in pieces, which upstream leaves to the caller;
+    each piece is tokenised on its own, so feed whole words.
     """
 
     def __init__(self, tables, text):
@@ -367,14 +299,7 @@ class StreamingText:
         return bool(self.ids)
 
     def _project(self):
-        """Project whatever ids are waiting, in one call, and keep them by position.
-
-        One call rather than one per token because that is what upstream does, and the
-        projection is a matmul whose accumulation order shows: projecting token by token
-        left a difference of 1.2e-7 against upstream's tensor, and projecting the group
-        leaves none. A chunk boundary is therefore a boundary in the arithmetic too, which
-        is the second reason to prefer whole clauses.
-        """
+        """Project the waiting ids in one call, as upstream does: token by token shows at 1e-7."""
         projected = self.tables.text(self.ids)
         self.embeddings = [projected[:, index : index + 1] for index in range(projected.shape[1])]
         self.ids = []
@@ -395,13 +320,9 @@ class StreamingText:
         return self.tables.tts_pad
 
     def take_ids(self, limit):
-        """Up to `limit` text ids, unprojected, for a caller that will project them itself.
+        """Up to `limit` ids, unprojected, for a caller that projects them itself.
 
-        The clone prompt sums the two tracks, so its text track has to be projected
-        alongside the reference transcript in one call to match upstream bit for bit. That
-        means handing the ids over rather than the embeddings. Pulls chunks until it has
-        `limit` of them or the text ends, which is what the prompt needs before it can
-        close: the clip's frame count fixes how much text the prompt swallows.
+        The clone prompt projects its text alongside the reference transcript, so it needs ids.
         """
         taken = []
         while len(taken) < limit and self._ids():
@@ -409,23 +330,12 @@ class StreamingText:
         return taken
 
     def take_eos(self):
-        """The `tts_eos` that closes the text track, and the note that it has gone.
-
-        A prompt that swallows the whole text closes the track itself, and the feed must
-        then not synthesise a second `tts_eos` during decode. Getting that wrong left the
-        clone prompt's first decode position 0.068 away from upstream's, which is the size
-        of an embedding rather than the size of rounding.
-        """
+        """The `tts_eos` closing the text track, marked sent so decode does not repeat it."""
         self.sent_eos = True
         return self.tables.tts_eos
 
     def push_front(self, embeddings):
-        """Put positions back, for a prompt that took more of the text than it needed.
-
-        The clone prompt sums the two tracks and cuts to the shorter, which it cannot do
-        until it has seen how long the text is. Handing the surplus back beats projecting
-        those tokens twice, and keeps `next` the only place positions come from.
-        """
+        """Put positions back, for a prompt that took more of the text than it needed."""
         self.embeddings[:0] = [embeddings[:, index : index + 1] for index in range(embeddings.shape[1])]
 
     @property
@@ -435,11 +345,7 @@ class StreamingText:
 
 
 def speaker_row(speaker, tables):
-    """A named speaker's codec-table row, or a clear refusal.
-
-    The nine CustomVoice speakers are codec-vocabulary ids, so a speaker is one table row
-    and occupies one prompt position. Base and VoiceDesign leave `spk_id` empty.
-    """
+    """A named speaker's codec-table row, or a refusal naming the ones this checkpoint has."""
     speakers = checkpoint.talker_config()["spk_id"]
     if not speakers:
         raise ValueError("this checkpoint defines no speakers; CustomVoice needs the CustomVoice weights")
@@ -452,11 +358,8 @@ def speaker_row(speaker, tables):
 def instruction_block(instruction, tables):
     """An instruction as prompt positions, or nothing.
 
-    `<|im_start|>user\n{instruction}<|im_end|>\n` on the text track with nothing opposite
-    it, ahead of everything else. Upstream disables instructions on the 0.6B checkpoints
-    (`if self.model.tts_model_size in "0b6"` drops them), where it drops them silently;
-    this refuses instead, on the same reasoning as the VoiceDesign guard: speaking in a
-    voice the instruction had no part in choosing is worse than saying so.
+    Text track only, ahead of everything. Refused on the 0.6B checkpoints, which upstream
+    silently drops it for.
     """
     if not str(instruction or "").strip():
         return []
@@ -467,15 +370,9 @@ def instruction_block(instruction, tables):
 
 
 def build_streaming_prefill(text, speaker, language, tables=None, instruction=None):
-    """The dual-track prompt for streaming text input: ten positions, whatever the text.
+    """The CustomVoice prompt with streaming text input: ten positions, whatever the text.
 
-    Returns (embeddings [1, 10, 2048], `StreamingText`). The head is the same nine
-    positions every prompt opens with, and the tenth is the first text token against
-    `codec_bos`. Everything after that arrives during decode, one token per frame, which
-    is why the length does not depend on the text: a sentence and a paragraph both prefill
-    ten positions. Non-streaming spends `n_text + 11`.
-
-    `text` is a string, or an iterable of pieces. See `StreamingText`.
+    Returns (embeddings, `StreamingText`). Non-streaming spends `n_text + 11`.
     """
     tables = tables or HostEmbeddings()
     key, speaker_embed = speaker_row(speaker, tables)
@@ -486,17 +383,10 @@ def build_streaming_prefill(text, speaker, language, tables=None, instruction=No
 
 
 def build_custom_voice_prefill(text, speaker, language, tables=None, instruction=None):
-    """The dual-track prompt for CustomVoice, non-streaming.
+    """The dual-track prompt for CustomVoice, non-streaming: `n_text + 11` positions.
 
-    Returns (embeddings [1, P, 2048], prompt_ids) where P is `n_text + 11`, plus one
-    position per instruction token when there is an instruction.
-
-    `instruction` is upstream's `generate_custom_voice(..., instruct=...)`: a named speaker
-    and a description of how to say it, which the CustomVoice card documents together
-    (`speaker='Vivian', instruct='用特别愤怒的语气说'`). The instruction reads the same way it
-    does on VoiceDesign, as a user turn ahead of the prompt; what differs is that a speaker
-    still occupies its position, so the voice is the speaker's and the instruction shapes
-    the delivery rather than inventing the voice.
+    `instruction` is upstream's `generate_custom_voice(..., instruct=...)`: the voice stays
+    the speaker's and the instruction shapes the delivery.
     """
     tables = tables or HostEmbeddings()
     key, speaker_embed = speaker_row(speaker, tables)
@@ -509,30 +399,10 @@ def build_custom_voice_prefill(text, speaker, language, tables=None, instruction
 
 
 def build_x_vector_prefill(text, reference, language="Auto", tables=None, instruction=None):
-    """The clone prompt that carries only the voice, not the clip: `x_vector_only_mode`.
+    """The clone prompt carrying only the voice, upstream's `x_vector_only_mode`.
 
-    Upstream's other cloning mode. The speaker encoder's 2048-wide vector goes in the
-    speaker position and the reference's codes and transcript are not used at all, so the
-    prompt is CustomVoice-shaped with a measured voice where a named speaker would sit.
-
-    What that trades, measured on a 7.28 s clip and a nine-word line:
-
-    | | ICL | x-vector only |
-    |---|---|---|
-    | prompt | 132 positions | 23 |
-    | reference, once per clip | 4.39 s, both encoders | 3.38 s, speaker encoder alone |
-    | codec decode | the clip's frames ride along | only what was generated |
-    | speaker similarity | 0.9940 | 0.9925 |
-
-    Read that last row carefully. The metric is the speaker encoder's own cosine, and this
-    mode hands the model exactly the vector the metric is computed from, so it flatters
-    this mode by construction. ICL carries the clip itself, which is timbre and prosody the
-    encoder does not necessarily measure. Judge between them by ear, not by that number.
-
-    What is not in doubt: this mode needs no transcript, which is the usual state of a
-    clip, and its prompt does not grow with the clip's length.
-
-    Returns (embeddings [1, P, 2048], prompt_ids).
+    The speaker vector sits where a named speaker would and the clip's codes and transcript
+    go unused, so no transcript is needed. The README compares it with in-context cloning.
     """
     tables = tables or HostEmbeddings()
     prompt_ids = frontend.text_ids(text)
@@ -545,11 +415,7 @@ def build_x_vector_prefill(text, reference, language="Auto", tables=None, instru
 
 
 def build_streaming_x_vector_prefill(text, reference, language="Auto", tables=None, instruction=None):
-    """`build_x_vector_prefill` with the text on the per-frame schedule.
-
-    Ten positions and a `StreamingText`, like `build_streaming_prefill`, since without the
-    clip on the codec track there is nothing for the text track to be summed against.
-    """
+    """`build_x_vector_prefill` with the text on the per-frame schedule."""
     tables = tables or HostEmbeddings()
     feed = StreamingText(tables, text)
     head, codec_bos = _prompt_head(tables, frontend.role_ids(), resolve_language(language), reference.speaker_embedding)
@@ -568,25 +434,12 @@ def is_voice_design_checkpoint():
 
 
 def build_voice_design_prefill(text, instruction, language="Auto", tables=None):
-    """The dual-track prompt for VoiceDesign, non-streaming.
+    """The dual-track prompt for VoiceDesign, non-streaming: `n_instruction + n_text + 10`.
 
-    Returns (embeddings [1, P, 2048], prompt_ids) where P is
-    `n_instruction + n_text + 10`, or two less when the language tag is off and the
-    instruction is empty.
-
-    A third checkpoint release, `tts_model_type: voice_design`. Its architecture is Base's
-    exactly, so every ported block runs on it unchanged; the voice comes from a sentence of
-    English rather than a clip or a speaker id.
-
-    The instruction goes **first, whole, and on the text track alone**: no slicing off its
-    role tokens the way the text to speak gets sliced, and nothing added from the codec
-    track. Then the usual head, which has no speaker position here, then the text.
-
-    An empty instruction is allowed and upstream treats it as no instruction at all, which
-    leaves the model to invent a voice.
-
-    Refuses the other two releases. They were never shown an instruction, so they would
-    speak in some voice the description had no part in choosing rather than fail.
+    The instruction goes first, whole, on the text track alone, with no role tokens sliced
+    off and nothing opposite it. Then the head, which has no speaker position here. An empty
+    instruction is allowed and leaves the model to invent a voice; the other two releases are
+    refused, since they were never shown one and would speak in an unrelated voice instead.
     """
     if not is_voice_design_checkpoint():
         raise ValueError(
@@ -606,12 +459,7 @@ def build_voice_design_prefill(text, instruction, language="Auto", tables=None):
 def build_streaming_design_prefill(text, instruction, language="Auto", tables=None):
     """The VoiceDesign prompt with streaming text input.
 
-    The instruction still goes in whole, ahead of everything: it describes the voice rather
-    than being spoken, so there is nothing to stream about it. Only the text to speak moves
-    to the per-frame schedule, which is why this is the CustomVoice change with the
-    instruction block in front and no speaker position.
-
-    Returns (embeddings [1, n_instruction + 9, 2048], `StreamingText`).
+    The instruction still goes in whole: it describes the voice rather than being spoken.
     """
     if not is_voice_design_checkpoint():
         raise ValueError(
@@ -628,24 +476,11 @@ def build_streaming_design_prefill(text, instruction, language="Auto", tables=No
 
 
 def build_streaming_clone_prefill(text, reference, language="Auto", tables=None):
-    """The voice-clone prompt with streaming text input, which is a different shape again.
+    """The clone prompt with streaming text input, which sums the two tracks.
 
-    Upstream's `generate_icl_prompt` with `non_streaming_mode=False` does not put the two
-    tracks one after the other. It **sums them position by position** and cuts to the
-    shorter:
-
-        text track   the reference transcript, the text to speak, then `tts_eos`
-        codec track  `codec_bos`, then one summed embedding per reference frame
-
-    Whichever runs out first decides. A clip longer than the text (the usual case, since a
-    second of audio is 12.5 frames and a second of speech is a few words) pads the text
-    track with `tts_pad` and leaves nothing to stream, so the text track is spent inside
-    the prompt and decode adds pads: the same arithmetic as non-streaming, over a shorter
-    prompt. A text longer than the clip is the interesting case, and there the leftover
-    text becomes the per-frame track.
-
-    Returns (embeddings [1, 9 + max(T_text, T_codec), 2048], `StreamingText`), where the
-    feed is already positioned at whatever the prompt did not consume.
+    Upstream's `generate_icl_prompt` with `non_streaming_mode=False` adds the text track to
+    the codec track position by position and cuts to the shorter, so a clip longer than the
+    text leaves nothing to stream and a longer text leaves the surplus to the feed.
     """
     if reference.codes is None:
         raise ValueError(
@@ -676,24 +511,10 @@ def build_streaming_clone_prefill(text, reference, language="Auto", tables=None)
 
 
 def build_voice_clone_prefill(text, reference, language="Auto", tables=None):
-    """The dual-track prompt for voice cloning, non-streaming.
+    """The dual-track prompt for voice cloning in context, non-streaming.
 
-    `reference` is a `CloneReference`: the reference clip's codes, its speaker embedding
-    and its transcript. Returns (embeddings [1, P, 2048], prompt_ids) where P is
-    `9 + (n_ref + n_text + 1) + (1 + T_ref)`.
-
-    Mirrors `Qwen3TTSForConditionalGeneration.generate_icl_prompt` with
-    `non_streaming_mode=True`. Two things differ from CustomVoice beyond the speaker
-    embedding's source:
-
-      * the text track carries the reference transcript before the text to speak, so the
-        model sees what the reference clip said,
-      * a codec block follows the text: `codec_bos` and then one summed embedding per
-        reference frame, each against `tts_pad`. That block is what actually carries the
-        voice.
-
-    `build_streaming_clone_prefill` is the other regime, which sums the two tracks instead
-    of placing one after the other.
+    The text track carries the reference transcript before the text to speak, then the codec
+    track carries the clip frame by frame. The transcript is what makes it in-context.
     """
     if reference.codes is None:
         raise ValueError(
@@ -782,18 +603,8 @@ class Qwen3TTSPipeline:
         self.predictor.capture()
 
     def _suppressed(self, emitted):
-        """Codebook-0 ids this step may not draw.
-
-        Two rules, both upstream's. **Control ids never leave the talker**: it suppresses
-        its top 1024 ids, everything from `vocab_size - 1024` up, sparing only
-        end-of-speech, so a code that reaches the codec is always a real code. Measured
-        exposure before this existed: 1.4e-09 of the probability mass on average and never
-        once inside the top 50 over 84 positions, so this changes no draw anyone has seen.
-        It closes the case where one does.
-
-        And **end-of-speech is off the table until `MIN_FRAMES` frames exist**, which is
-        `min_new_tokens=2` in upstream's talker arguments. A run that stops at its first
-        step produces an utterance of one frame, 80 ms, which is not speech.
+        """Codebook-0 ids this step may not draw: control ids always, end-of-speech until
+        `MIN_FRAMES` frames exist. Both are upstream's.
         """
         if emitted >= MIN_FRAMES:
             return self._control_ids
@@ -833,10 +644,8 @@ class Qwen3TTSPipeline:
     def _frame_embedding(self, frame, feed=None):
         """The 16 codebooks of one frame, summed against the text track's next position.
 
-        With no `feed` the text track is a constant `tts_pad`, which is what non-streaming
-        mode sends after its prompt. With one, it is the next text embedding: streaming
-        input differs from non-streaming in exactly this line and in how much of the text
-        the prompt carried.
+        `tts_pad` without a feed, the next text embedding with one: that is the whole of what
+        streaming input changes during decode.
         """
         text = self.tables.tts_pad if feed is None else feed.next()
         return self.tables.frames(frame) + text
@@ -863,14 +672,9 @@ class Qwen3TTSPipeline:
     def _decode_waveform(self, codes):
         """Codes [1, 16, T] -> waveform, making room for the decode's programs first.
 
-        A length the decoder has not compiled yet needs L1_SMALL scratch that the device
-        holds until its program cache is dropped, so a process speaking many lengths runs
-        the region out. Dropping the cache costs about a tenth of a second and this is the
-        one point in an utterance where it is safe: the frames are in, and both traces come
-        down anyway before the next prefill.
-
-        Releasing first is not optional. A trace built from programs that have been dropped
-        is a hang, and `clear_program_cache` drops every program on the device.
+        A length the decoder has not compiled holds L1_SMALL scratch until the program cache is
+        dropped, so this drops it, which costs about 0.1 s. Both traces come down first: a trace
+        built from dropped programs hangs.
         """
         frames = codes.shape[-1]
         if self.codec.program_room_needed(frames):
@@ -968,10 +772,7 @@ class Qwen3TTSPipeline:
     ):
         """The frames for `text` without decoding them, [frames, 16].
 
-        `generate` is this plus the codec. Separate because the codec is the one block that
-        compiles per length, so anything measuring the frame loop over many utterances
-        wants to skip it: `tests/pcc/test_generation_stops.py` does, and a caller feeding
-        the codes to something other than this codec can use it too.
+        `generate` is this plus the codec, which is the one block that compiles per length.
         """
         limit = min(max_frames or self.max_frames, self.max_frames)
         if streaming:
@@ -993,35 +794,18 @@ class Qwen3TTSPipeline:
     ):
         """text -> (waveform [1, N] at 24 kHz, codes [frames, 16]).
 
-        Sampled with the checkpoint's own settings. Pass `seed` to the constructor for a
-        reproducible run; the same seed and text give the same waveform.
-
-        `streaming=True` switches to the other regime this model was trained in: the prompt
-        carries one text token and the rest arrives a token per frame, so `text` may be an
-        iterable of pieces rather than a string. `StreamingText` has the schedule.
-
-        `instruct` describes how the speaker should say it, as upstream's
-        `generate_custom_voice(..., instruct=...)` does: the voice stays the named
-        speaker's and the instruction shapes the delivery. `generate_design` is the other
-        way round, a voice with no speaker behind it.
+        Sampled with the checkpoint's own settings; pass `seed` to the constructor to repeat a
+        run. `instruct` directs the named speaker, `streaming=True` feeds the text a token per
+        frame and then accepts an iterable of pieces.
         """
         codes = self.codes(text, speaker, language, max_frames, on_frame, streaming, instruct)
         waveform = self._decode_waveform(codes.t().unsqueeze(0)).reshape(1, -1)
         return waveform, codes
 
     def generate_design(self, text, instruction, language="Auto", max_frames=None, on_frame=None, streaming=False):
-        """text spoken in a voice described in words -> (waveform [1, N], codes [frames, 16]).
+        """text spoken in a voice described in words -> (waveform, codes). VoiceDesign only.
 
-        Needs the **VoiceDesign** checkpoint, the third release: `tts_model_type` reads
-        `voice_design`, and neither Base nor CustomVoice answers to an instruction. Its
-        architecture is Base's, so nothing else about the pipeline changes.
-
-        `instruction` is a sentence of English describing the voice, such as "A calm older
-        man speaking slowly, with a slight rasp." An empty one is allowed, and leaves the
-        model to invent a voice. `build_voice_design_prefill` refuses the other releases.
-
-        `streaming=True` moves the text to the per-frame schedule. The instruction still
-        goes in whole: it describes the voice rather than being spoken.
+        An empty instruction is allowed and leaves the model to invent a voice.
         """
         limit = min(max_frames or self.max_frames, self.max_frames)
         if streaming:
@@ -1043,27 +827,12 @@ class Qwen3TTSPipeline:
         x_vector_only=False,
         instruct=None,
     ):
-        """text spoken in a reference clip's voice -> (waveform [1, N], codes [frames, 16]).
+        """text spoken in a reference clip's voice -> (waveform, codes). Base only.
 
-        `reference` comes from `build_clone_reference`, which needs the **Base** checkpoint:
-        CustomVoice ships the nine speakers and no speaker encoder, Base the other way round.
-
-        The reference frames are decoded together with the generated ones and then cut off
-        the front of the waveform. That is upstream's arrangement and it is not cosmetic:
-        the codec decoder is causal, so the first generated frames read the reference's
-        codes as context, and decoding them alone gives a different and worse onset. Each
-        frame is exactly 1920 samples, so the cut is exact.
-
-        `streaming=True` sums the two tracks instead of placing one after the other, which
-        `build_streaming_clone_prefill` explains. It shortens the prompt and it does not
-        make the clip optional: the prompt still swallows as much text as the clip has
-        frames before it can close.
-
-        `x_vector_only=True` is upstream's other cloning mode: the speaker vector goes in
-        and the clip's codes and transcript stay out, so the reference needs no transcript
-        and the prompt is CustomVoice-shaped. It carries less of the voice than ICL does;
-        `build_x_vector_prefill` has the trade. An `instruct` is accepted in that mode,
-        since the prompt has room for one.
+        In context by default: the clip's frames decode with the generated ones and are cut off
+        the front, which is upstream's arrangement and not cosmetic, since the codec decoder is
+        causal and reads them as context. `x_vector_only=True` clones from the voice alone, with
+        no transcript and nothing to cut.
         """
         limit = min(max_frames or self.max_frames, self.max_frames)
         if x_vector_only and streaming:

@@ -275,15 +275,8 @@ def test_generate_produces_audio_of_the_right_length(device):
 def test_an_instruction_joins_a_named_speaker(tables):
     """Upstream's `generate_custom_voice(..., instruct=...)`: a speaker and a delivery.
 
-    The CustomVoice card documents the pair (`speaker='Vivian', instruct='用特别愤怒的语气
-    说'`), and it is a different thing from VoiceDesign: the voice is still the named
-    speaker's and the instruction shapes how they say it, rather than inventing a voice
-    from nothing.
-
-    Checked against upstream's own assembly under transformers 4.57.3, max absolute
-    difference 0.0 for both regimes; what is checked here is that the instruction goes in
-    ahead of everything, on the text track alone, and that the rest of the prompt is
-    unchanged by it.
+    Diffed against upstream at 0.0 in both regimes. Checked here: the instruction leads the
+    prompt on the text track alone and changes nothing after it.
     """
     plain, _ = build_custom_voice_prefill(TEXT, SPEAKER, LANGUAGE, tables)
     instructed, _ = build_custom_voice_prefill(TEXT, SPEAKER, LANGUAGE, tables, INSTRUCTION)
@@ -305,12 +298,7 @@ def test_an_empty_instruction_is_no_instruction(tables):
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_an_instruction_changes_what_a_named_speaker_does(device):
-    """The instruction must reach the speech, not just the prompt.
-
-    At a fixed seed, two instructions against no instruction. Judged on the frames
-    differing rather than on the audio being better, which is not a test's business:
-    measured 42 frames for an angry reading and 111 for a whispered one, against 53 plain.
-    """
+    """The instruction must reach the speech, not just the prompt."""
     pipeline = Qwen3TTSPipeline(device, max_frames=160, seed=4)
     counts = {}
     for label, instruct in (("plain", None), ("angry", "Say it in a very angry tone.")):
@@ -339,20 +327,11 @@ LANGUAGE_CASES = (
 def test_every_language_decodes_and_stops(device):
     """Nine languages besides English, through the frame loop.
 
-    The language reaches the model as one codec-vocabulary id in the think block and
-    nothing else about the prompt changes, which the prompt tests already pin. What this
-    adds is that each one decodes: the run stops on its own, every code lands inside the
-    codec's codebook, and the length is in the range speech occupies rather than a budget
-    spent on silence.
-
-    **Whether the speech is right is not something this can judge**, so it was measured
-    separately: Whisper-small transcribed all ten, character error rate 0.000 for eight of
-    them, 0.050 for Japanese (a homophone spelling) and 0.385 for Chinese (Whisper answered
-    in Traditional characters). The README carries that table. A second model in this leg
-    would cost a 970 MB download and bring its own failure modes for no more certainty
-    about this one.
-
-    Codes only, no codec: ten frame counts would compile ten sets of convolution programs.
+    A language is one codec-vocabulary id and nothing else about the prompt changes, which
+    the prompt tests pin. This adds that each one decodes: stops on its own, codes inside the
+    codebook, a length that is speech. Whether the speech is right was measured with Whisper
+    instead, and the README has that table. Codes only, since ten frame counts would compile
+    ten sets of convolution programs.
     """
     pipeline = Qwen3TTSPipeline(device, max_frames=200, seed=1)
     codebook = weights.codec_decoder_config()["codebook_size"]
@@ -371,11 +350,7 @@ def test_every_language_decodes_and_stops(device):
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_no_utterance_is_shorter_than_two_frames(device):
-    """`min_new_tokens=2` upstream: end-of-speech is suppressed until two frames exist.
-
-    One frame is 80 ms, which is not speech, and the sampler can reach end-of-speech at
-    the first step. Ten seeds on the shortest text in this file.
-    """
+    """`min_new_tokens=2` upstream: one frame is 80 ms, and the sampler can reach eos at once."""
     pipeline = Qwen3TTSPipeline(device, max_frames=48)
     shortest = 10**6
     for seed in range(10):
@@ -386,12 +361,7 @@ def test_no_utterance_is_shorter_than_two_frames(device):
 
 
 def test_control_ids_are_suppressed_and_end_of_speech_only_at_first(tables):
-    """What the talker may draw: real codes, plus end-of-speech once two frames exist.
-
-    A code that reaches the codec must be inside the codebook, and the codec's codebooks
-    hold 2048 entries against the talker's 3072-entry vocabulary. Upstream suppresses that
-    gap, sparing end-of-speech; this checks the two sets this port builds from it.
-    """
+    """What the talker may draw: real codes, plus end-of-speech once two frames exist."""
     talker = weights.talker_config()
     vocab, eos = talker["vocab_size"], talker["codec_eos_token_id"]
     codebook = weights.codec_decoder_config()["codebook_size"]
@@ -413,12 +383,8 @@ def test_control_ids_are_suppressed_and_end_of_speech_only_at_first(tables):
 def test_the_prompt_bucket_changes_nothing_it_keeps(device):
     """Padding the prompt up to a bucket must give the same frames as not padding.
 
-    The bucket is there because every distinct prompt length compiles its own prefill
-    programs: four lengths cost 3.72 s of prefill unbucketed against 1.11 s bucketed, and
-    the second utterance at a length costs 0.015 s either way. This test is the other half
-    of that argument. Attention is causal, so the filler positions cannot reach a real one,
-    and their cache slots are the ones decode overwrites before reading. If either claim
-    were wrong the codes would differ here.
+    Attention is causal, so the filler cannot reach a real position and its cache slots are
+    the ones decode overwrites before reading. If either claim were wrong these would differ.
     """
     from models.demos.audio.qwen3_tts.tt import ttnn_qwen3_pipeline as module
 

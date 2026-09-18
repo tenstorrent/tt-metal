@@ -173,14 +173,9 @@ def test_a_reference_without_a_transcript_is_refused(expect_error):
 def test_the_x_vector_prompt_is_the_custom_voice_prompt_with_a_measured_voice(tables, reference):
     """Upstream's other cloning mode, and the shape it takes.
 
-    `x_vector_only_mode` puts the speaker encoder's 2048-wide vector where a named speaker
-    would sit and uses neither the clip's codes nor its transcript, so the prompt is the
-    CustomVoice one: `n_text + 10` positions here, `Auto` having no language id, against
-    the ICL prompt's extra position per reference frame.
-
-    Checked against upstream's own assembly under transformers 4.57.3, max absolute
-    difference 0.0 in both regimes. What this pins is the shape and that only the speaker
-    position differs from a named-speaker prompt, which is the whole claim of the mode.
+    `x_vector_only_mode` puts the speaker vector where a named speaker would sit and uses
+    neither the codes nor the transcript, so the prompt is the CustomVoice one. Diffed
+    against upstream at 0.0 in both regimes.
     """
     voice_only = CloneReference(None, reference.speaker_embedding)
     prompt, _ = build_x_vector_prefill(TEXT, voice_only, "Auto", tables)
@@ -211,11 +206,7 @@ def test_an_icl_prompt_refuses_a_voice_only_reference(tables, expect_error):
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_a_voice_only_reference_skips_the_codec_encoder(device):
-    """Half the work of a full reference, because the codes are not needed.
-
-    Measured on a 7.28 s clip: 3.38 s against 4.39 s for both encoders, and the saving
-    grows with the clip since the codec encoder's convolutions run over every sample.
-    """
+    """Half the work of a full reference: 3.38 s against 4.39 on a 7.28 s clip."""
     clip = synthetic_voiced_clip(seconds=CLIP_SECONDS, voice="low")
     voice_only = build_clone_reference(device, clip, x_vector_only=True)
     full = build_clone_reference(device, clip, REFERENCE_TEXT)
@@ -227,12 +218,7 @@ def test_a_voice_only_reference_skips_the_codec_encoder(device):
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_x_vector_cloning_produces_audio_of_the_right_length(device):
-    """End to end in the voice-only mode: nothing is prepended, so nothing is cut.
-
-    ICL decodes the reference frames alongside the generated ones and trims them off the
-    front. This mode has no reference frames, so the waveform is exactly the frames it
-    generated, which is the arithmetic to get wrong.
-    """
+    """No reference frames in the prompt, so none to decode alongside and none to cut."""
     clip = synthetic_voiced_clip(seconds=CLIP_SECONDS, voice="low")
     voice_only = build_clone_reference(device, clip, x_vector_only=True)
     pipeline = Qwen3TTSPipeline(device, max_frames=32, seed=0)

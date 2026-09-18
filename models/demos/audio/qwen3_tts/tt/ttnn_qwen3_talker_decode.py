@@ -68,37 +68,14 @@ ROPE_ROWS = 32
 def decode_matmul_config(device, in_features, out_features, fused_activation=None):
     """1D-multicast matmul config for a single-position (M=1) decode linear.
 
-    A few full grid rows, each core holding a wide slice of the output. Returns None when
-    the reduction will not chunk, leaving ttnn's own heuristic in place. `per_core_M=1`
-    makes these decode-only; prefill shares the same weights and passes nothing.
+    A few full grid rows, each core holding a wide slice of the output; None when the
+    reduction will not chunk. Swept across all eight decode shapes: every winner spends 11 to
+    22 cores, not the 64 an exact-division search picks, because at M=1 the multicast
+    dominates. `down_proj` went 112.8 to 69.6 us. Dropping divisibility is what makes the
+    11-wide grid reachable, since no width here divides by 11.
 
-    **More cores is not better here, and exact division is the wrong constraint.** Swept
-    every rectangle of Blackhole's 11 x 10 grid against every decode shape in this model,
-    in a trace so dispatch does not hide in the numbers:
-
-    | matmul              | ttnn default | swept best              |
-    |---|---|---|
-    | talker QKV, 2048 x 4096   |  46.0 us | 46.0 (the default)      |
-    | talker o_proj, 2048 x 2048 |  39.7 us | 26.3 at 11x2, N=3      |
-    | talker gate/up, 2048 x 6144 | 71.8 us | 70.7 at 11x2, N=9     |
-    | talker down, 6144 x 2048   | 112.8 us | 69.6 at 11x1, N=6      |
-    | predictor o_proj, 1024 x 1024 | 17.4 us | 9.4 at 8x4, N=1     |
-    | predictor down, 3072 x 1024 | 47.0 us | 22.0 at 11x1, N=3     |
-
-    Every winner spends 11 to 22 cores, not the 64 the old search picked by insisting the
-    output tiles divide evenly across them. At M=1 each core does almost no arithmetic, so
-    the multicast and per-core setup dominate and a wider spread costs more than it buys.
-    Dropping the divisibility rule is what makes the 11-wide grid reachable at all: no
-    width in this model divides by 11, and `per_core_N` rounds up instead, leaving the last
-    core with less to do rather than leaving 47 cores idle.
-
-    `TARGET_PER_CORE_N` picks the row count and carries its own scan. Every candidate
-    within a couple of rows of it measured inside 5% of its shape's best, a plateau rather
-    than a peak, which is what lets one number serve every shape here.
-
-    `fused_activation` folds an elementwise op into the matmul. Passing `activation=` to
-    `ttnn.linear` alongside an explicit program_config does NOT fuse, it runs a second
-    kernel, so the activation has to travel in the config.
+    `fused_activation` must travel in the config: `activation=` beside a program config runs
+    a second kernel instead of fusing.
     """
     k_tiles, n_tiles = in_features // 32, out_features // 32
     grid = device.compute_with_storage_grid_size()
@@ -129,13 +106,8 @@ def preprocess_cached_talker_parameters(
 ):
     """Weights for the cached decoder, with Q, K and V fused into one matmul.
 
-    The checkpoint stores `q_proj`, `k_proj` and `v_proj` separately. Concatenating them
-    here turns three matmuls into one per layer and streams one weight instead of three.
-    Purely a repacking: the outputs are the same columns in the same order, which is what
-    lets the head split recover them.
-
-    `mlp_dtype` is the one place the two precisions meet; see `MLP_WEIGHT_DTYPE`. Pass
-    `mlp_dtype=ttnn.bfloat16` to measure against a uniform-precision model.
+    Purely a repacking: three matmuls become one per layer and one weight streams instead of
+    three. `mlp_dtype` is the split precision; pass bf16 to measure against a uniform model.
     """
     cfg = dict(config or checkpoint.talker_config())
     if num_layers is not None:
@@ -330,18 +302,10 @@ class TtTalkerCachedDecoder:
     # ── shared pieces ───────────────────────────────────────────────────────
 
     def _rotate(self, x, cos, sin):
-        """RoPE in one kernel, where the arithmetic spelled out took seven.
+        """RoPE in one kernel, where the arithmetic spelled out took seven ops: 7.8 us against 26.7.
 
-        `rotary_embedding_hf` is the HF-layout rotation: cos and sin duplicated across the
-        two halves, `rotate_half` inside. That is what `rotary_tables` already builds, so
-        this is the same rotation the slice-neg-concat version did, measured at 7.8 us
-        against 26.7 for eight heads.
-
-        `is_decode_mode=False` despite this serving the step. Decode mode wants the tensor
-        height-sharded with one row per batch slot, and at batch 1 the step's rows are
-        heads, not batch. Prefill mode reads the rows as a sequence and broadcasts nothing,
-        which is the same elementwise work: what it costs is that `cos` needs as many rows
-        as the tensor has heads, hence the replicated table `set_position` writes.
+        `is_decode_mode=False` despite serving the step. Decode mode wants one row per batch slot
+        and at batch 1 the step's rows are heads, so `cos` carries a row per head instead.
         """
         return ttnn.experimental.rotary_embedding_hf(
             x, cos, sin, is_decode_mode=False, compute_kernel_config=self.compute_config
