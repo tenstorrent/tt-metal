@@ -789,8 +789,14 @@ class Attention(LightweightModule):
         else:
             # bfloat16 is required by nlp_create_qkv_heads_decode
             if self.prefetcher is None:
-                xqkv_fused = ttnn.sharded_to_interleaved(xqkv_fused_sharded, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16)
-                ttnn.deallocate(xqkv_fused_sharded)
+                # nlp_create_qkv_heads_decode requires a sharded input; keep the fused QKV
+                # activation width-sharded in L1 instead of round-tripping through an
+                # interleaved L1 buffer.
+                if xqkv_fused_sharded.dtype == ttnn.bfloat16:
+                    xqkv_fused = xqkv_fused_sharded
+                else:
+                    xqkv_fused = ttnn.typecast(xqkv_fused_sharded, ttnn.bfloat16)
+                    ttnn.deallocate(xqkv_fused_sharded)
             else:
                 xqkv_fused = xqkv_fused_sharded
         # Reshape such that true unpadded batch is tracked in shape
