@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[3] / "models/demos/deepseek_v3_d_p/scripts/run_kimi_prefill_ci.py"
+SLOW_COPY_DRIVER = Path(__file__).resolve().parent / "fixtures/kimi_slow_copy.py"
 spec = importlib.util.spec_from_file_location("kimi_ci", SCRIPT)
 ci = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ci)
@@ -114,26 +115,13 @@ def test_staging_contents_exit_status_and_cleanup(cache, tmp_path, exit_code):
 
 def test_sigterm_stops_active_copy_threads_before_cleanup(cache, tmp_path):
     source, weights, local = cache
-    # Spawn reimports this driver in the copy process, so both copy threads really
+    # Spawn reimports the fixture in the copy process, so both copy threads really
     # block inside copyfile. Cancelling only queued futures would hang this test.
-    driver = tmp_path / "slow_copy.py"
-    driver.write_text(
-        "import os, sys, time\nfrom pathlib import Path\n"
-        f"sys.path.insert(0, {str(SCRIPT.parent)!r})\n"
-        "import run_kimi_prefill_ci as ci\n"
-        "def slow_copy(source, target):\n"
-        "    Path(target).write_bytes(b'partial')\n"
-        "    (Path(os.environ['MARKERS']) / Path(source).name).write_text(str(os.getpid()))\n"
-        "    time.sleep(60)\n"
-        "ci.shutil.copyfile = slow_copy\n"
-        "if __name__ == '__main__':\n"
-        "    sys.exit(ci.main())\n"
-    )
     markers = tmp_path / "markers"
     markers.mkdir()
     env = dict(os.environ, TT_KIMI_PREFILL_TTNN_CACHE=str(source), MARKERS=str(markers))
     process = subprocess.Popen(
-        [sys.executable, str(driver), "--workers", "2", "--cache-dir", str(local), "--", "must_not_run.py"],
+        [sys.executable, str(SLOW_COPY_DRIVER), "--workers", "2", "--cache-dir", str(local), "--", "must_not_run.py"],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
