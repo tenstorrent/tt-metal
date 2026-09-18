@@ -138,16 +138,59 @@ def patch_maxschedchunk(body, value):
 
 
 def patch_stable_groups(sha, count, env):
-    """Group every test by a stable hash of its node id, for --dist loadgroup."""
-    body = git("show", f"{sha}:{LLK_PLUGIN}")
-    old = "def pytest_collection_modifyitems(config, items):"
-    if old not in body:
-        raise RuntimeError("llk_pytest_plugin: collection hook not found")
-    body = body.replace(
-        old,
-        'def _stable_xdist_groups(config, items):\n    """Assign every test to a group from a stable hash of its node id.\n\n    With --dist loadgroup, a group is scheduled as a unit, so every test in it\n    has the same predecessors in every run. crc32 rather than hash(): each xdist\n    worker is its own process and Python randomises str hashing per process, so\n    hash() would give the workers different assignments and no determinism at\n    all. The count matches the worker count, so each worker takes exactly one\n    group and its sequence is fixed end to end.\n    """\n    import zlib\n\n    count = int(os.environ.get("PERF_STABLE_GROUPS", "0"))\n    if count <= 0:\n        return\n    for item in items:\n        bucket = zlib.crc32(item.nodeid.encode()) % count\n        item.add_marker(pytest.mark.xdist_group(f"perfgrp{bucket}"))\n\n\ndef pytest_collection_modifyitems(config, items):',
-        1,
+    """Group every test by a stable hash of its node id, for --dist loadgroup.
+
+    The anchor is the hook's first body line, not its signature, so the call
+    lands INSIDE the function. An earlier version anchored on the signature and
+    inserted the helper above it — defined, never called, no markers applied,
+    and --dist loadgroup silently scheduled one test at a time instead.
+    """
+    helper = (
+        "def _stable_xdist_groups(config, items):\n"
+        '    """Assign every test to a group from a stable hash of its node id.\n'
+        "\n"
+        "    With --dist loadgroup a group is scheduled as one unit to one worker,\n"
+        "    so every test in it has the same predecessors in every run. crc32 and\n"
+        "    not hash(): each xdist worker is its own process and Python randomises\n"
+        "    str hashing per process, so hash() would give the workers different\n"
+        "    assignments and no determinism at all. The count matches the worker\n"
+        "    count, so each worker takes exactly one group.\n"
+        '    """\n'
+        "    import zlib\n"
+        "\n"
+        '    count = int(os.environ.get("PERF_STABLE_GROUPS", "0"))\n'
+        "    if count <= 0:\n"
+        "        return\n"
+        "    for item in items:\n"
+        "        bucket = zlib.crc32(item.nodeid.encode()) % count\n"
+        '        item.add_marker(pytest.mark.xdist_group(f"perfgrp{bucket}"))\n'
+        "\n"
+        "\n"
+        "def pytest_collection_modifyitems(config, items):\n"
+        "    _stable_xdist_groups(config, items)\n"
+        "    _select_tests_by_op(config, items)"
     )
+
+    anchor = (
+        "def pytest_collection_modifyitems(config, items):\n"
+        "    _select_tests_by_op(config, items)"
+    )
+
+    body = git("show", f"{sha}:{LLK_PLUGIN}")
+    if anchor not in body:
+        raise RuntimeError("llk_pytest_plugin: collection hook body not found")
+    body = body.replace(anchor, helper, 1)
+
+    # The defect this replaces was a definition with no call, which fails
+    # silently. Check both halves, and that the marker is really applied.
+    for needed in (
+        "def _stable_xdist_groups(config, items):",
+        "    _stable_xdist_groups(config, items)",
+        "item.add_marker(pytest.mark.xdist_group(",
+    ):
+        if needed not in body:
+            raise RuntimeError(f"stable-groups patch incomplete: missing {needed!r}")
+
     blob = subprocess.run(
         ["git", "hash-object", "-w", "--stdin"],
         input=body,
@@ -162,7 +205,7 @@ def patch_stable_groups(sha, count, env):
         check=True,
         capture_output=True,
     )
-    return f"stable_groups={count}"
+    return f"stable_groups={count} (helper defined AND called)"
 
 
 def patch_run_count(sha, count, env):
