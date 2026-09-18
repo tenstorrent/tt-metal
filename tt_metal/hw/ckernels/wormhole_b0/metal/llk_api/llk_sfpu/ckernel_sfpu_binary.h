@@ -124,7 +124,11 @@ inline void calculate_sfpu_binary(
         } else if constexpr (BINOP == BinaryOp::POW) {
             result = calculate_sfpu_binary_power(in0, in1);
         } else if constexpr (BINOP == BinaryOp::XLOGY) {
-            v_if((in1 < 0.0f) || (in1 == nan)) { result = nan; }
+            // IEEE-754: `in1 == nan` is always false (NaN != NaN), so the old guard never
+            // caught positive NaNs and xlogy(x, NaN) returned ~log(NaN) instead of NaN.
+            // A NaN has exponent 0xFF (unbiased 128) and a non-zero mantissa; ±inf has
+            // mantissa 0, so it keeps flowing to the log path (pattern: digamma).
+            v_if((in1 < 0.0f) || (sfpi::exexp(in1) == 128 && sfpi::exman(in1) != 0)) { result = nan; }
             v_else {
                 sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
                 _calculate_log_body_<false>(0, dst_index_out);
