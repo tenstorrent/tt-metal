@@ -31,7 +31,6 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
-#include <cstdint>
 #include <filesystem>
 #include <numeric>
 #include <optional>
@@ -53,6 +52,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
+#include <cstdint>
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 
 #include "test_helpers.hpp"
@@ -687,7 +687,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_LocalDFBAllGridConsumerWithPerGroupProducersSu
 
     std::vector<KernelSpec> kernels;
     std::vector<WorkUnitSpec> work_units;
-    for (uint32_t i = 0; i < 4; ++i) {
+    for (std::uint32_t i = 0; i < 4; ++i) {
         const std::string dm_name = "dm" + std::to_string(i);
         auto dm = MakeMinimalGen2DMKernel(dm_name);
         dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
@@ -910,13 +910,13 @@ TEST_F(ProgramSpecTestQuasar, CPU_DisableImplicitSyncForAllDisablesProducerSide)
     // Default: the producer side has a DM kernel, so implicit sync is on.
     {
         auto program = MakeProgramFromSpec(*mesh_device_, make_spec(/*disable_all=*/false));
-        const uint32_t dfb_id = program.impl().get_dfb_handle("dfb_0");
+        const std::uint32_t dfb_id = program.impl().get_dfb_handle("dfb_0");
         EXPECT_TRUE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
     }
     // disable_dfb_implicit_sync_for_all turns it off for every DFB the kernel binds.
     {
         auto program = MakeProgramFromSpec(*mesh_device_, make_spec(/*disable_all=*/true));
-        const uint32_t dfb_id = program.impl().get_dfb_handle("dfb_0");
+        const std::uint32_t dfb_id = program.impl().get_dfb_handle("dfb_0");
         EXPECT_FALSE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
     }
 }
@@ -992,7 +992,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DisableImplicitSyncForAllAgreesWithExplicitLis
     };
 
     auto program = MakeProgramFromSpec(*mesh_device_, spec);
-    const uint32_t dfb_id = program.impl().get_dfb_handle("dfb");
+    const std::uint32_t dfb_id = program.impl().get_dfb_handle("dfb");
     EXPECT_FALSE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
 }
 
@@ -1159,8 +1159,8 @@ TEST_F(ProgramSpecTestQuasar, CPU_CrossNodeDFBNotYetSupportedAtRuntime) {
 inline ProgramSpec MakeBorrowedDFBProgramSpec(
     const std::string& tensor_param_name = "borrowed_tensor",
     tt::tt_metal::BufferType tensor_buffer_type = tt::tt_metal::BufferType::L1,
-    uint32_t dfb_entry_size = 16,
-    uint32_t dfb_num_entries = 2,
+    std::uint32_t dfb_entry_size = 16,
+    std::uint32_t dfb_num_entries = 2,
     bool bind_backing_to_kernel = true) {
     NodeCoord node{0, 0};
 
@@ -1686,7 +1686,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DifferentScratchpadSizeProducesDifferentKernel
     // Same kernel source and accessor name; the two scratchpads differ only in size_per_node, which
     // flows into the ScratchpadBindingHandle's size (and the generated scratch:: token), so the
     // hashes must differ.
-    auto make_spec = [](uint32_t size_per_node) {
+    auto make_spec = [](std::uint32_t size_per_node) {
         ProgramSpec spec;
         spec.name = "scratchpad_hash_size";
         auto dm_kernel = MakeMinimalGen2DMKernel("dm_kernel");
@@ -2069,8 +2069,8 @@ TEST_F(ProgramSpecTestQuasar, CPU_TooManyDFBsFailsValidation) {
     auto producer = MakeMinimalGen2DMKernel("producer");
     auto consumer = MakeMinimalGen2ComputeKernel("consumer");
 
-    const uint32_t too_many = static_cast<uint32_t>(::dfb::NUM_DFBS) + 1;
-    for (uint32_t i = 0; i < too_many; ++i) {
+    const std::uint32_t too_many = static_cast<std::uint32_t>(::dfb::NUM_DFBS) + 1;
+    for (std::uint32_t i = 0; i < too_many; ++i) {
         std::string name = "dfb_" + std::to_string(i);
         auto dfb = MakeMinimalDFB(name);
         dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -2485,7 +2485,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_VarargPerNodeOverlapFails) {
     spec.name = "vararg_overlap_test";
     auto kernel = MakeMinimalGen2DMKernel("dm_kernel");
     kernel.advanced_options = KernelAdvancedOptions{
-        .num_runtime_varargs_per_node = Table<Nodes, uint32_t>{{both, 3}, {node_a, 3}},  // node_a listed twice
+        .num_runtime_varargs_per_node = Table<Nodes, std::uint32_t>{{both, 3}, {node_a, 3}},  // node_a listed twice
     };
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", both, {"dm_kernel"})};
@@ -2640,8 +2640,8 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeGen2ConfigDefaultsMapToInternalDefaults
     const auto& built = std::get<experimental::quasar::QuasarComputeConfig>(built_variant);
     EXPECT_EQ(built.math_fidelity, MathFidelity::HiFi4);
     EXPECT_FALSE(built.fp32_dest_acc_en);
-    EXPECT_FALSE(built.dst_full_sync_en);      // double_buffer_dest defaults true -> !true
-    EXPECT_FALSE(built.math_approx_mode);      // sfpu_precision_mode defaults Precise
+    EXPECT_FALSE(built.dst_full_sync_en);  // double_buffer_dest defaults true -> !true
+    EXPECT_FALSE(built.math_approx_mode);  // sfpu_precision_mode defaults Precise
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ComputeGen2ConfigInversionAndEnumMapToInternal) {
@@ -3060,7 +3060,7 @@ TEST(AggregateSpecTypes, CPU_VarargCountsOnAdvancedOptions) {
 
 TEST(AggregateSpecTypes, CPU_VarargPerNodeOverrideOnAdvancedOptions) {
     // Per-node override path (advanced): ensure designated-init works.
-    using NumVarargsPerNode = Table<Nodes, uint32_t>;
+    using NumVarargsPerNode = Table<Nodes, std::uint32_t>;
     KernelAdvancedOptions adv{
         .num_runtime_varargs_per_node = NumVarargsPerNode{{NodeCoord{0, 0}, 4}, {NodeCoord{1, 0}, 7}},
     };
@@ -3247,14 +3247,14 @@ TEST_F(ProgramSpecTestGen1, CPU_MinimalValidProgramSpecSucceeds) {
 // get_arch_num_circular_buffers() when each core hosts at most one. This is the Metal 2.0
 // path that issue #51409 needs — previously ValidateProgramSpec rejected on total count.
 TEST_F(ProgramSpecTestGen1, CPU_DisjointNodeDFBsExceedSlotCountSucceeds) {
-    const uint32_t max_slots = tt::tt_metal::hal::get_arch_num_circular_buffers();
-    const uint32_t num_dfbs = max_slots + 1;
-    constexpr uint32_t grid_x = 8;  // WH mock worker grid width
+    const std::uint32_t max_slots = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    const std::uint32_t num_dfbs = max_slots + 1;
+    constexpr std::uint32_t grid_x = 8;  // WH mock worker grid width
     ASSERT_GE(grid_x * 9u, num_dfbs) << "mock WH grid too small for this packing check";
 
     ProgramSpec spec;
     spec.name = "disjoint_dfb_slot_reuse";
-    for (uint32_t i = 0; i < num_dfbs; ++i) {
+    for (std::uint32_t i = 0; i < num_dfbs; ++i) {
         const NodeCoord node{i % grid_x, i / grid_x};
         const std::string pname = "prod_" + std::to_string(i);
         const std::string cname = "cons_" + std::to_string(i);
@@ -3274,7 +3274,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DisjointNodeDFBsExceedSlotCountSucceeds) {
     }
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    for (uint32_t i = 0; i < num_dfbs; ++i) {
+    for (std::uint32_t i = 0; i < num_dfbs; ++i) {
         const std::string dname = "dfb_" + std::to_string(i);
         EXPECT_EQ(program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(dname))->device_slot, 0u)
             << dname << " is alone on its node and should reuse device slot 0";
@@ -3290,8 +3290,8 @@ TEST_F(ProgramSpecTestGen1, CPU_TooManyDFBsOnSameNodeFails) {
     auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
 
-    const uint32_t too_many = tt::tt_metal::hal::get_arch_num_circular_buffers() + 1;
-    for (uint32_t i = 0; i < too_many; ++i) {
+    const std::uint32_t too_many = tt::tt_metal::hal::get_arch_num_circular_buffers() + 1;
+    for (std::uint32_t i = 0; i < too_many; ++i) {
         const std::string name = "dfb_" + std::to_string(i);
         auto dfb = MakeMinimalDFB(name);
         dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -3368,292 +3368,6 @@ TEST_F(ProgramSpecTestGen1, CPU_DMKernelSelfLoopOnGen1Succeeds) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
-}
-
-// ============================================================================
-// SCRATCH EXPERIMENT (not for merge): matmul 2D mcast, in0 BLOCK_SHARDED, in0
-// shard grid wider along the mcast axis than the output's column blocks.
-//
-// 4x2 node grid. Output needs one column of blocks, so work lives on x=0.
-// in0's K-slices also live on x=1..3; those nodes relay their slice into the
-// receiver grid and compute nothing.
-// ============================================================================
-namespace mm_relay {
-
-inline NodeRange WorkNodes() { return NodeRange({0, 0}, {0, 1}); }
-inline NodeRange RelayNodes() { return NodeRange({1, 0}, {3, 1}); }
-
-// Both in0 senders are the same source with different compile-time flags; the factory
-// puts them on RISCV_1. The relay drain in the "blank compute" shape is a compute kernel.
-inline KernelSpec Sender(const std::string& name) {
-    return MakeMinimalGen1DMKernel(name, DataMovementProcessor::RISCV_1);
-}
-
-// The resident in0 shard, self-looped by both senders. Present in every shape below;
-// included to confirm it is not itself a problem.
-inline void AddShardedDFB(ProgramSpec& spec, std::vector<KernelSpec*> senders) {
-    auto sharded = MakeMinimalDFB("in0_sharded");
-    for (KernelSpec* k : senders) {
-        k->dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0_sharded"}, "in0_sharded"));
-        k->dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0_sharded"}, "in0_sharded"));
-    }
-    spec.dataflow_buffers.push_back(std::move(sharded));
-}
-
-}  // namespace mm_relay
-
-// Shape A -- what the port builds today: one in0 DFB spanning both node sets.
-TEST_F(ProgramSpecTestGen1, CPU_ScratchMatmulRelay_A_SingleDFB) {
-    using namespace mm_relay;
-    ProgramSpec spec;
-    spec.name = "mm_relay_a";
-
-    auto in0_sender = Sender("in0_sender");
-    auto no_work = Sender("in0_mcast_no_work");
-    auto compute = MakeMinimalGen1ComputeKernel("compute");
-
-    auto in0 = MakeMinimalDFB("in0");
-    in0.data_format_metadata = tt::DataFormat::Float16_b;
-    in0_sender.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
-    no_work.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
-    no_work.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
-
-    spec.dataflow_buffers = {in0};
-    AddShardedDFB(spec, {&in0_sender, &no_work});
-    spec.kernels = {in0_sender, no_work, compute};
-    spec.work_units = std::vector<WorkUnitSpec>{
-        MakeMinimalWorkUnit("work", WorkNodes(), {"in0_sender", "compute"}),
-        MakeMinimalWorkUnit("relay", RelayNodes(), {"in0_mcast_no_work"})};
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mixing compute and data-movement kinds")));
-}
-
-// Shape B -- split: in0 is DM->compute on the work nodes; a second DFB carries the
-// relay nodes' self-loop. Legal under today's rules. Addresses are printed, because
-// the multicast destination address is derived from the relay's local write pointer.
-TEST_F(ProgramSpecTestGen1, CPU_ScratchMatmulRelay_B_SplitDFB) {
-    using namespace mm_relay;
-    ProgramSpec spec;
-    spec.name = "mm_relay_b";
-
-    auto in0_sender = Sender("in0_sender");
-    auto no_work = Sender("in0_mcast_no_work");
-    auto compute = MakeMinimalGen1ComputeKernel("compute");
-
-    auto in0 = MakeMinimalDFB("in0");
-    in0.data_format_metadata = tt::DataFormat::Float16_b;
-    auto relay = MakeMinimalDFB("in0_relay");
-    relay.data_format_metadata = tt::DataFormat::Float16_b;
-
-    in0_sender.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
-    // Same kernel-side accessor name; different DFB. Kernel source is unchanged.
-    no_work.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0_relay"}, "in0"));
-    no_work.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0_relay"}, "in0"));
-
-    spec.dataflow_buffers = {in0, relay};
-    AddShardedDFB(spec, {&in0_sender, &no_work});
-    spec.kernels = {in0_sender, no_work, compute};
-    spec.work_units = std::vector<WorkUnitSpec>{
-        MakeMinimalWorkUnit("work", WorkNodes(), {"in0_sender", "compute"}),
-        MakeMinimalWorkUnit("relay", RelayNodes(), {"in0_mcast_no_work"})};
-
-    ASSERT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
-
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    auto& impl = program.impl();
-    const auto& dfbs = impl.dataflow_buffers();
-    const std::uint32_t in0_addr = dfbs[impl.get_dfb_handle("in0")]->uniform_alloc_addr();
-    const std::uint32_t relay_addr = dfbs[impl.get_dfb_handle("in0_relay")]->uniform_alloc_addr();
-    const std::uint32_t in0_slot = dfbs[impl.get_dfb_handle("in0")]->device_slot;
-    const std::uint32_t relay_slot = dfbs[impl.get_dfb_handle("in0_relay")]->device_slot;
-    std::cout << "[SCRATCH] in0 @ " << in0_addr << ", in0_relay @ " << relay_addr
-              << (in0_addr == relay_addr ? "  -> MATCH" : "  -> MISMATCH") << "; device slots " << in0_slot << " / "
-              << relay_slot << (in0_slot == relay_slot ? "  -> SHARED" : "  -> DISTINCT") << std::endl;
-}
-
-// Shape B2 -- as B, but with one more DFB allocated on the work nodes ahead of in0
-// (the real factory has in1 / out / intermed0 there). The relay nodes carry no such
-// DFB, so the two stacks diverge and the addresses no longer coincide.
-TEST_F(ProgramSpecTestGen1, CPU_ScratchMatmulRelay_B2_SplitDFBAddressIsOrderDependent) {
-    using namespace mm_relay;
-    ProgramSpec spec;
-    spec.name = "mm_relay_b2";
-
-    auto in0_sender = Sender("in0_sender");
-    auto no_work = Sender("in0_mcast_no_work");
-    auto compute = MakeMinimalGen1ComputeKernel("compute");
-    auto in1_writer = MakeMinimalGen1DMKernel("in1_sender_writer", DataMovementProcessor::RISCV_0);
-
-    auto in0 = MakeMinimalDFB("in0");
-    in0.data_format_metadata = tt::DataFormat::Float16_b;
-    auto relay = MakeMinimalDFB("in0_relay");
-    relay.data_format_metadata = tt::DataFormat::Float16_b;
-    auto in1 = MakeMinimalDFB("in1");
-    in1.data_format_metadata = tt::DataFormat::Float16_b;
-
-    in0_sender.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
-    no_work.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0_relay"}, "in0"));
-    no_work.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0_relay"}, "in0"));
-    in1_writer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in1"}, "in1"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in1"}, "in1"));
-
-    // in1 declared ahead of in0, as a stand-in for any DFB that stacks on the work nodes.
-    spec.dataflow_buffers = {in1, in0, relay};
-    AddShardedDFB(spec, {&in0_sender, &no_work});
-    spec.kernels = {in0_sender, no_work, compute, in1_writer};
-    spec.work_units = std::vector<WorkUnitSpec>{
-        MakeMinimalWorkUnit("work", WorkNodes(), {"in0_sender", "compute", "in1_sender_writer"}),
-        MakeMinimalWorkUnit("relay", RelayNodes(), {"in0_mcast_no_work"})};
-
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    auto& impl = program.impl();
-    const auto& dfbs = impl.dataflow_buffers();
-    const std::uint32_t in0_addr = dfbs[impl.get_dfb_handle("in0")]->uniform_alloc_addr();
-    const std::uint32_t relay_addr = dfbs[impl.get_dfb_handle("in0_relay")]->uniform_alloc_addr();
-    std::cout << "[SCRATCH] with in1 declared first: in0 @ " << in0_addr << ", in0_relay @ " << relay_addr
-              << (in0_addr == relay_addr ? "  -> MATCH" : "  -> MISMATCH (multicast would corrupt)") << std::endl;
-}
-
-// Shape B' -- as B, but asking for the two to share an address via alias_with.
-TEST_F(ProgramSpecTestGen1, CPU_ScratchMatmulRelay_Bprime_SplitDFBAliased) {
-    using namespace mm_relay;
-    ProgramSpec spec;
-    spec.name = "mm_relay_b_alias";
-
-    auto in0_sender = Sender("in0_sender");
-    auto no_work = Sender("in0_mcast_no_work");
-    auto compute = MakeMinimalGen1ComputeKernel("compute");
-
-    auto in0 = MakeMinimalDFB("in0");
-    in0.data_format_metadata = tt::DataFormat::Float16_b;
-    in0.advanced_options.alias_with = {DFBSpecName{"in0_relay"}};
-    auto relay = MakeMinimalDFB("in0_relay");
-    relay.data_format_metadata = tt::DataFormat::Float16_b;
-    relay.advanced_options.alias_with = {DFBSpecName{"in0"}};
-
-    in0_sender.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
-    no_work.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0_relay"}, "in0"));
-    no_work.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0_relay"}, "in0"));
-
-    spec.dataflow_buffers = {in0, relay};
-    AddShardedDFB(spec, {&in0_sender, &no_work});
-    spec.kernels = {in0_sender, no_work, compute};
-    spec.work_units = std::vector<WorkUnitSpec>{
-        MakeMinimalWorkUnit("work", WorkNodes(), {"in0_sender", "compute"}),
-        MakeMinimalWorkUnit("relay", RelayNodes(), {"in0_mcast_no_work"})};
-
-    try {
-        MakeProgramFromSpec(*mesh_device_, spec);
-        std::cout << "[SCRATCH] alias across disjoint node sets: ACCEPTED" << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "[SCRATCH] alias across disjoint node sets REJECTED: " << e.what() << std::endl;
-    }
-}
-
-// Shape B3 -- the B2 layout (in1 stacked on the work nodes ahead of in0) with the alias
-// declared. The address must now be pinned across the two disjoint node sets, and a DFB
-// declared afterwards on the relay nodes must stack above the reserved region rather than
-// landing on top of it.
-TEST_F(ProgramSpecTestGen1, CPU_ScratchMatmulRelay_B3_ColocatedSplitDFB) {
-    using namespace mm_relay;
-    ProgramSpec spec;
-    spec.name = "mm_relay_b3";
-
-    auto in0_sender = Sender("in0_sender");
-    auto no_work = Sender("in0_mcast_no_work");
-    auto compute = MakeMinimalGen1ComputeKernel("compute");
-    auto in1_writer = MakeMinimalGen1DMKernel("in1_sender_writer", DataMovementProcessor::RISCV_0);
-    // A second DM kernel on the relay nodes, carrying a DFB declared after the alias group.
-    auto relay_extra = MakeMinimalGen1DMKernel("relay_extra", DataMovementProcessor::RISCV_0);
-
-    auto in0 = MakeMinimalDFB("in0");
-    in0.data_format_metadata = tt::DataFormat::Float16_b;
-    in0.advanced_options.alias_with = {DFBSpecName{"in0_relay"}};
-    auto relay = MakeMinimalDFB("in0_relay");
-    relay.data_format_metadata = tt::DataFormat::Float16_b;
-    relay.advanced_options.alias_with = {DFBSpecName{"in0"}};
-    auto in1 = MakeMinimalDFB("in1");
-    in1.data_format_metadata = tt::DataFormat::Float16_b;
-    auto after = MakeMinimalDFB("declared_after_on_relay_nodes");
-
-    in0_sender.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
-    no_work.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0_relay"}, "in0"));
-    no_work.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0_relay"}, "in0"));
-    in1_writer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in1"}, "in1"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in1"}, "in1"));
-    relay_extra.dfb_bindings.push_back(ProducerOf(DFBSpecName{"declared_after_on_relay_nodes"}, "x"));
-    relay_extra.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"declared_after_on_relay_nodes"}, "x"));
-
-    spec.dataflow_buffers = {in1, in0, relay, after};
-    AddShardedDFB(spec, {&in0_sender, &no_work});
-    spec.kernels = {in0_sender, no_work, compute, in1_writer, relay_extra};
-    spec.work_units = std::vector<WorkUnitSpec>{
-        MakeMinimalWorkUnit("work", WorkNodes(), {"in0_sender", "compute", "in1_sender_writer"}),
-        MakeMinimalWorkUnit("relay", RelayNodes(), {"in0_mcast_no_work", "relay_extra"})};
-
-    // Needs the step-two prototype (alias_with relaxed to identical-or-disjoint node coverage).
-    // Without it the spec is rejected at program_spec.cpp:1705, which is the stock behaviour --
-    // report rather than fail, so this file is runnable on either build.
-    try {
-        Program program = MakeProgramFromSpec(*mesh_device_, spec);
-        auto& impl = program.impl();
-        const auto& dfbs = impl.dataflow_buffers();
-        const std::uint32_t in0_addr = dfbs[impl.get_dfb_handle("in0")]->uniform_alloc_addr();
-        const std::uint32_t relay_addr = dfbs[impl.get_dfb_handle("in0_relay")]->uniform_alloc_addr();
-        const std::uint32_t after_addr = dfbs[impl.get_dfb_handle("declared_after_on_relay_nodes")]->uniform_alloc_addr();
-        const std::uint32_t relay_size = 1024 * 2;
-        std::cout << "[SCRATCH] co-located: in0 @ " << in0_addr << ", in0_relay @ " << relay_addr
-                  << (in0_addr == relay_addr ? "  -> MATCH" : "  -> MISMATCH") << "; later relay-node DFB @ "
-                  << after_addr
-                  << (after_addr >= relay_addr + relay_size ? "  -> clears the reserved region"
-                                                            : "  -> OVERLAPS the reserved region")
-                  << std::endl;
-        EXPECT_EQ(in0_addr, relay_addr);
-        EXPECT_GE(after_addr, relay_addr + relay_size);
-    } catch (const std::exception& e) {
-        std::cout << "[SCRATCH] co-located shape REJECTED (step-two patch not applied): " << e.what() << std::endl;
-    }
-}
-
-// Shape C -- keep one in0 DFB, and give the relay nodes a compute kernel whose only job
-// is to drain it, so both roles are kind-uniform. No Metal 2.0 change needed.
-TEST_F(ProgramSpecTestGen1, CPU_ScratchMatmulRelay_C_BlankComputeDrain) {
-    using namespace mm_relay;
-    ProgramSpec spec;
-    spec.name = "mm_relay_c";
-
-    auto in0_sender = Sender("in0_sender");
-    auto no_work = Sender("in0_mcast_no_work");
-    auto compute = MakeMinimalGen1ComputeKernel("compute");
-    auto drain = MakeMinimalGen1ComputeKernel("in0_drain");
-
-    auto in0 = MakeMinimalDFB("in0");
-    in0.data_format_metadata = tt::DataFormat::Float16_b;
-    in0_sender.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
-    compute.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
-    no_work.dfb_bindings.push_back(ProducerOf(DFBSpecName{"in0"}, "in0"));
-    drain.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"in0"}, "in0"));
-
-    spec.dataflow_buffers = {in0};
-    AddShardedDFB(spec, {&in0_sender, &no_work});
-    spec.kernels = {in0_sender, no_work, compute, drain};
-    spec.work_units = std::vector<WorkUnitSpec>{
-        MakeMinimalWorkUnit("work", WorkNodes(), {"in0_sender", "compute"}),
-        MakeMinimalWorkUnit("relay", RelayNodes(), {"in0_mcast_no_work", "in0_drain"})};
-
-    try {
-        Program program = MakeProgramFromSpec(*mesh_device_, spec);
-        std::cout << "[SCRATCH] blank-compute-drain shape: ACCEPTED" << std::endl;
-    } catch (const std::exception& e) {
-        std::cout << "[SCRATCH] blank-compute-drain shape REJECTED: " << e.what() << std::endl;
-    }
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsDifferentProcessorsSucceeds) {
@@ -5178,7 +4892,7 @@ static_assert(dfb::get_token_if_present<"not_a_dfb">() == nullptr);
 
 TEST_F(ProgramSpecTestGen1, CPU_TtKernelComputeShimCompiles) {
     const NodeCoord node{0, 0};
-    constexpr uint32_t entry_size = 1024;
+    constexpr std::uint32_t entry_size = 1024;
 
     // Compute kernel authored in TT_KERNEL form, producing into a DFB drained by a trivial consumer.
     auto compute = MakeMinimalGen1ComputeKernel("compute");
@@ -5214,7 +4928,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TtKernelComputeShimCompiles) {
 
 TEST_F(ProgramSpecTestGen1, CPU_CompileTimeVarargsReadableFromKernel) {
     NodeCoord node{0, 0};
-    const std::vector<uint32_t> cta_varargs = {0xCAFEBABEu, 0xDEADBEEFu, 0x11112222u};
+    const std::vector<std::uint32_t> cta_varargs = {0xCAFEBABEu, 0xDEADBEEFu, 0x11112222u};
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
@@ -5285,8 +4999,8 @@ void kernel_main() {
 // Stress: bake 1024 iota words and constexpr-walk them on the kernel side.
 TEST_F(ProgramSpecTestGen1, CPU_CompileTimeVarargsIota1024ReadableFromKernel) {
     NodeCoord node{0, 0};
-    constexpr uint32_t kNumVarargs = 1024u;
-    std::vector<uint32_t> cta_varargs(kNumVarargs);
+    constexpr std::uint32_t kNumVarargs = 1024u;
+    std::vector<std::uint32_t> cta_varargs(kNumVarargs);
     std::iota(cta_varargs.begin(), cta_varargs.end(), 0u);
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
@@ -5321,8 +5035,8 @@ void kernel_main() {}
 // Same stress as above, on a compute (TRISC) kernel — CTA varargs are available on DM and compute.
 TEST_F(ProgramSpecTestGen1, CPU_CompileTimeVarargsIota1024ReadableFromComputeKernel) {
     NodeCoord node{0, 0};
-    constexpr uint32_t kNumVarargs = 1024u;
-    std::vector<uint32_t> cta_varargs(kNumVarargs);
+    constexpr std::uint32_t kNumVarargs = 1024u;
+    std::vector<std::uint32_t> cta_varargs(kNumVarargs);
     std::iota(cta_varargs.begin(), cta_varargs.end(), 0u);
 
     auto compute_kernel = MakeMinimalGen1ComputeKernel("compute_kernel");
@@ -5357,10 +5071,10 @@ void kernel_main() {}
 // CTA varargs are a positional prefix ahead of TensorBinding CTA payloads.
 TEST_F(ProgramSpecTestGen1, CPU_CompileTimeVarargsPrefixBeforeTensorBindingCTAs) {
     NodeCoord node{0, 0};
-    constexpr uint32_t kVararg0 = 0xCAFEBABEu;
-    constexpr uint32_t kVararg1 = 0xDEADBEEFu;
-    const std::vector<uint32_t> cta_varargs = {kVararg0, kVararg1};
-    const uint32_t n = static_cast<uint32_t>(cta_varargs.size());
+    constexpr std::uint32_t kVararg0 = 0xCAFEBABEu;
+    constexpr std::uint32_t kVararg1 = 0xDEADBEEFu;
+    const std::vector<std::uint32_t> cta_varargs = {kVararg0, kVararg1};
+    const std::uint32_t n = static_cast<std::uint32_t>(cta_varargs.size());
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
@@ -5395,7 +5109,7 @@ void kernel_main() {
     const auto compile_args = kernel->compile_time_args();
     ASSERT_GE(compile_args.size(), n + 1u) << "positional CTAs should hold varargs then binding args_config";
     EXPECT_THAT(
-        std::vector<uint32_t>(compile_args.begin(), compile_args.begin() + n),
+        std::vector<std::uint32_t>(compile_args.begin(), compile_args.begin() + n),
         ::testing::ElementsAreArray(cta_varargs));
     const auto args_config =
         tensor_accessor::ArgsConfig(static_cast<tensor_accessor::ArgsConfig::Underlying>(compile_args[n]));
@@ -5406,7 +5120,7 @@ void kernel_main() {
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_DifferentCompileTimeVarargsProducesDifferentKernelHash) {
-    auto make_program = [this](std::vector<uint32_t> varargs) {
+    auto make_program = [this](std::vector<std::uint32_t> varargs) {
         NodeCoord node{0, 0};
         auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
         dm_kernel.advanced_options.compile_time_varargs = std::move(varargs);
@@ -5630,7 +5344,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DynamicTensorShape_InterleavedRowMajorKernelHash
     // page size baked into a binary that gets reused on a cache hit: the exact bug this feature
     // fixes. WITH dynamic_tensor_shape the page size moves to a CRTA, the CTAs become width-
     // independent, and the two widths hash identically -- one cached binary, refreshed per-dispatch.
-    auto make_spec = [](uint32_t width, bool dynamic) {
+    auto make_spec = [](std::uint32_t width, bool dynamic) {
         ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
         auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
         auto memory_config =
@@ -5722,7 +5436,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DynamicTensorShape_ShardedBindingTracksShapeCRTA
     ASSERT_TRUE(bds.has_value());
     const auto expected_rank = bds->tensor_shape_in_pages().rank();
     EXPECT_GT(expected_rank, 0u);
-    EXPECT_EQ(handles[0].num_runtime_field_crta_words, static_cast<uint32_t>(expected_rank))
+    EXPECT_EQ(handles[0].num_runtime_field_crta_words, static_cast<std::uint32_t>(expected_rank))
         << "Sharded + dynamic_tensor_shape: runtime-field CRTA words should equal BDS shape rank.";
 }
 
@@ -5751,7 +5465,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DynamicTensorShape_InterleavedRowMajorBindingTra
         << "The runtime field must be tagged as the page-size kind (not the sharded-shape kind).";
 
     // The binding's args_config CTA word carries the RuntimePageSize bit.
-    const std::vector<uint32_t> dyn_ctas = kernel->compile_time_args();
+    const std::vector<std::uint32_t> dyn_ctas = kernel->compile_time_args();
     ASSERT_LT(handles[0].cta_offset, dyn_ctas.size());
     const auto dyn_cfg = tensor_accessor::ArgsConfig(
         static_cast<tensor_accessor::ArgsConfig::Underlying>(dyn_ctas[handles[0].cta_offset]));
@@ -5762,7 +5476,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DynamicTensorShape_InterleavedRowMajorBindingTra
     // carries, so the whole-kernel CTA count is exactly one shorter. The two specs are identical
     // apart from the flag, so the size delta is precisely the dropped page-size slot.
     Program prog_static = MakeProgramFromSpec(*mesh_device_, make_spec(/*dynamic=*/false));
-    const std::vector<uint32_t> static_ctas =
+    const std::vector<std::uint32_t> static_ctas =
         prog_static.impl().get_kernel_by_spec_name("dm_kernel")->compile_time_args();
     EXPECT_EQ(static_ctas.size(), dyn_ctas.size() + 1u)
         << "Static binding keeps the page-size CTA; the dynamic binding drops it (A-collapse).";
@@ -5836,12 +5550,12 @@ TEST_F(ProgramSpecTestGen1, CPU_KernelCrtaLayout_AllThreeSectionsConsistent) {
     const KernelCrtaLayout layout = kernel->get_crta_layout();
 
     // Reference values, re-derived independently of the layout struct.
-    const uint32_t expected_named_words = 2u;  // "foo", "bar"
-    uint32_t expected_binding_words = 0;
+    const std::uint32_t expected_named_words = 2u;  // "foo", "bar"
+    std::uint32_t expected_binding_words = 0;
     for (const auto& handle : kernel->tensor_binding_handles()) {
         expected_binding_words += 1u + handle.num_runtime_field_crta_words;
     }
-    const uint32_t expected_vararg_offset = expected_named_words + expected_binding_words;
+    const std::uint32_t expected_vararg_offset = expected_named_words + expected_binding_words;
 
     EXPECT_EQ(layout.num_named_words, expected_named_words);
     EXPECT_EQ(layout.binding_section_words, expected_binding_words);
@@ -5907,9 +5621,7 @@ TEST_F(ProgramSpecTestGen1, CPU_CompilerIncludePathsForwardedToKernelConfig) {
 // bound to the same producer/consumer kernels in a single WorkUnit on a single node.
 namespace {
 ProgramSpec MakeAliasProgramSpec(
-    const NodeCoord& node,
-    const DataflowBufferSpec& dfb_a,
-    const DataflowBufferSpec& dfb_b) {
+    const NodeCoord& node, const DataflowBufferSpec& dfb_a, const DataflowBufferSpec& dfb_b) {
     ProgramSpec spec;
 
     KernelSpec producer = MakeMinimalGen2DMKernel("producer_kernel");
@@ -5940,8 +5652,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnMismatchedTotalSize) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("different total sizes")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different total sizes")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnAsymmetricDeclaration) {
@@ -5968,7 +5679,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBMatmulStyleSucceeds) {
     // This looks unspeakably evil and I'd like to forbid it. But, it does work.
     // All kernels run on the same node set, so they all have the same L1.
     // And (presumably) the DFB is used in a temporally disjoint way.
-    // So, nothing stops them from re-using the DFB memory.
+    // So, nothing stops them from reusing the DFB memory.
 
     const NodeCoord node{0, 0};
 
@@ -5989,8 +5700,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBMatmulStyleSucceeds) {
     ProgramSpec spec;
     spec.kernels = {producer, consumer, other};
     spec.dataflow_buffers = {dfb_a, dfb_b};
-    spec.work_units = {
-        MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel", "other_kernel"})};
+    spec.work_units = {MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel", "other_kernel"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -6198,9 +5908,13 @@ void CheckAccessorsFollowTheHeldAlternative() {
     EXPECT_EQ(std::get<ToConfig>(config).fpu_math_fidelity, kAccessorFidelity);
 }
 
-TEST(ComputeHardwareConfigAccessors, CPU_Gen1DefaultsReadThrough) { CheckAccessorDefaultsReadThrough<ComputeGen1Config>(); }
+TEST(ComputeHardwareConfigAccessors, CPU_Gen1DefaultsReadThrough) {
+    CheckAccessorDefaultsReadThrough<ComputeGen1Config>();
+}
 
-TEST(ComputeHardwareConfigAccessors, CPU_Gen2DefaultsReadThrough) { CheckAccessorDefaultsReadThrough<ComputeGen2Config>(); }
+TEST(ComputeHardwareConfigAccessors, CPU_Gen2DefaultsReadThrough) {
+    CheckAccessorDefaultsReadThrough<ComputeGen2Config>();
+}
 
 TEST(ComputeHardwareConfigAccessors, CPU_Gen1WritesLandOnHeldAlternative) {
     CheckAccessorWritesLandOnHeldAlternative<ComputeGen1Config>();
