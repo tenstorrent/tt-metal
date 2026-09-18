@@ -15,17 +15,18 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::create(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
     FabricNodeId local_node,
-    const RouterLocation& location) {
+    const RouterLocation& location,
+    const ChipRoutingFacts& chip_facts) {
     // Query fabric context to determine router type
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
     bool is_switch_mesh = fabric_context.is_switch_mesh(local_node.mesh_id);
 
     if (is_switch_mesh) {
-        return SwitchMeshRouterBuilder::build(device, program, local_node, location);
+        return SwitchMeshRouterBuilder::build(device, program, local_node, location, chip_facts);
     }
 
     // Create compute mesh router - it handles its own config lookup
-    return ComputeMeshRouterBuilder::build(device, program, local_node, location);
+    return ComputeMeshRouterBuilder::build(device, program, local_node, location, chip_facts);
 }
 
 }  // namespace tt::tt_fabric
