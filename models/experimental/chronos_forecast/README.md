@@ -38,15 +38,38 @@ pytest models/experimental/chronos_forecast/tests/test_reference_vs_upstream.py 
 pytest models/experimental/chronos_forecast/tests/test_submodule_import.py -v
 ```
 
-`test_reference_vs_upstream.py` locks each Chronos-2 layer (and one `Chronos2Model.forward`) against the submodule using the dummy checkpoint at `third_party/chronos-forecasting/test/dummy-chronos2-model/`.
+`test_reference_vs_upstream.py` locks each Chronos-2 layer against the submodule (dummy checkpoint). `test_model_forward_pretrained` runs a full forward on the downloaded `amazon/chronos-2` weights.
+
+Accuracy test (needs `weights/chronos-2`):
+
+```bash
+PYTHONPATH=. python -m pytest --confcutdir=models/experimental/chronos_forecast \
+  models/experimental/chronos_forecast/tests/test_reference_vs_upstream.py::test_model_forward_pretrained -v
+```
+
+## Weights
+
+Real Chronos-2 weights are **not** committed. They live under `weights/` (gitignored). Download:
+
+```bash
+hf download amazon/chronos-2 --local-dir models/experimental/chronos_forecast/weights/chronos-2
+```
 
 ## Demo
+
+Single `Chronos2Model.forward` (CPU):
 
 ```bash
 PYTHONPATH=. python models/experimental/chronos_forecast/demo/demo.py
 ```
 
-Chronos-1 tokenizer smoke demo. TTNN forward is not implemented.
+Chronos-1 tokenizer only:
+
+```bash
+PYTHONPATH=. python models/experimental/chronos_forecast/demo/demo.py --tokenizer-only --context-length 16
+```
+
+TTNN forward is not implemented.
 
 ## References
 

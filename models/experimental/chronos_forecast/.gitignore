@@ -1,0 +1,5 @@
+# Downloaded checkpoints (amazon/chronos-2, etc.)
+weights/
+checkpoints/
+*.safetensors
+*.pth

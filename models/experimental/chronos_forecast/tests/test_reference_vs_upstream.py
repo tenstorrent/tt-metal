@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import torch
 
 from models.experimental.chronos_forecast.common.chronos_src import (
@@ -69,6 +70,7 @@ SEED = 0
 B, S = 2, 8
 PATCH_SIZE = 16
 DUMMY_MODEL_PATH = CHRONOS_SUBMODULE_ROOT / "test" / "dummy-chronos2-model"
+REAL_WEIGHTS_PATH = Path(__file__).resolve().parents[1] / "weights" / "chronos-2"
 REF_MODEL_FILE = Path(ref_model_module.__file__).resolve()
 
 
@@ -276,4 +278,27 @@ def test_model_forward():
     up_out = up(context=context, num_output_patches=1)
     ref_out = ref(context=context, num_output_patches=1)
     assert up_out.quantile_preds is not None and ref_out.quantile_preds is not None
+    _assert_same(ref_out.quantile_preds, up_out.quantile_preds)
+
+
+def test_model_forward_pretrained():
+    """Accuracy lock: vendored Chronos2Model vs submodule on amazon/chronos-2 weights."""
+    if not (REAL_WEIGHTS_PATH / "model.safetensors").is_file():
+        pytest.skip(
+            f"Missing {REAL_WEIGHTS_PATH}. Download with: "
+            "hf download amazon/chronos-2 --local-dir "
+            "models/experimental/chronos_forecast/weights/chronos-2"
+        )
+    up = UpModel.from_pretrained(REAL_WEIGHTS_PATH).eval()
+    ref = RefModel.from_pretrained(REAL_WEIGHTS_PATH).eval()
+    up.config._attn_implementation = "eager"
+    ref.config._attn_implementation = "eager"
+    _sync_eval(up, ref)
+    torch.manual_seed(SEED)
+    context = torch.randn(2, 64)
+    with torch.no_grad():
+        up_out = up(context=context, num_output_patches=1)
+        ref_out = ref(context=context, num_output_patches=1)
+    assert up_out.quantile_preds is not None and ref_out.quantile_preds is not None
+    assert torch.isfinite(ref_out.quantile_preds).all()
     _assert_same(ref_out.quantile_preds, up_out.quantile_preds)
