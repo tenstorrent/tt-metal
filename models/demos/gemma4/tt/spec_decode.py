@@ -172,8 +172,6 @@ class SpeculativeDecoder:
         self._pv_ready = False
         self._pv_a_prev = -1  # last hot block index (-1 ⇒ staging unseeded)
         self._pv_traces = {}  # (P, S_k) -> persistent trace inputs/outputs
-        self._verify_time_s = 0.0
-        self._draft_time_s = 0.0
 
     def _fused_shift_seed_row(self, accepted, K):
         if self._fused_shift_seed == "current":
@@ -1077,7 +1075,6 @@ class SpeculativeDecoder:
         tok_tt = anchor_tok_tt
         h = anchor_hidden
         owns_h = False
-        _t0 = time.perf_counter()
         for _ in range(K):
             idx, h_next = self._greedy_draft_idx(tok_tt, h, page_tables, d_pu, d_pi, rows=1)
             if owns_h:
@@ -1087,22 +1084,19 @@ class SpeculativeDecoder:
             draft_id_tts.append(tok_tt)
         if owns_h:
             h.deallocate(True)
-        # Force the drafter chain to drain before starting the verify clock:
-        # the loop above enqueues K steps without a host readback in between.
+        # Force the drafter chain to drain before verify: the loop above enqueues
+        # K steps without a host readback in between.
         ttnn.synchronize_device(self.mesh_device)
-        self._draft_time_s += time.perf_counter() - _t0
 
         # Verify input = [anchor, d0..d_{K-1}] at positions p..p+K. Packed
         # query-head verify: one batch=1 forward + loop-free staging KV write
         # (not K+1 pseudo-users with sequential paged_update_cache).
-        _t0 = time.perf_counter()
         verify_x = ttnn.concat([anchor_tok_tt] + draft_id_tts, dim=1)  # [1, K+1] uint32 RM
         vlogits, vhidden = self._fused_packed_verify(verify_x, anchor_pos, K + 1)
         vidx = self._argmax_last(vlogits, rows=K + 1)  # [1,1,K+1] uint32 RM (fast multicore argmax)
 
         drafts = [self._id_to_host(t) for t in draft_id_tts]
         target_ids = self._ids_to_host(vidx, K + 1)
-        self._verify_time_s += time.perf_counter() - _t0
 
         for t in draft_id_tts:
             t.deallocate(True)
@@ -1908,19 +1902,15 @@ class SpeculativeDecoder:
         _draft_mode = os.environ.get("GEMMA4_SPEC_DRAFT_MODE", "batched")
 
         while not all(done):
-            _t0 = time.perf_counter()
             if _draft_mode == "loop":
                 drafts_b = [self._draft(toks[b], anchor_h[b], pos[b], temperature=0.0, user_idx=b)[0] for b in range(B)]
             else:
                 anchor_hb = ttnn.concat(anchor_h, dim=2)  # [1,1,B,backbone]
                 drafts_b = self._draft_batched(toks, anchor_hb, pos)
                 anchor_hb.deallocate(True)
-            self._draft_time_s += time.perf_counter() - _t0
 
             tokens_b = [[toks[b]] + drafts_b[b] for b in range(B)]
-            _t0 = time.perf_counter()
             vlogits, vhidden = self._verify_packed_batched(tokens_b, [pos[b] for b in range(B)])
-            self._verify_time_s += time.perf_counter() - _t0
 
             for b in range(B):
                 row_logits = [vlogits[b * P + j] for j in range(P)]
@@ -2014,17 +2004,13 @@ class SpeculativeDecoder:
             anchor_hidden = self.seed(anchor_token, anchor_pos)
         draft_fn = self._draft_traced if self._use_trace else self._draft
         while len(out) < max_new_tokens:
-            _t0 = time.perf_counter()
             drafts, draft_logits = draft_fn(
                 anchor_token, anchor_hidden, anchor_pos, temperature=temperature, top_p=top_p, top_k=top_k
             )
-            self._draft_time_s += time.perf_counter() - _t0
 
             verify_tokens = [anchor_token] + drafts
             verify_pos = [anchor_pos + j for j in range(len(verify_tokens))]
-            _t0 = time.perf_counter()
             verify_logits, hidden = self._verify(verify_tokens, verify_pos)
-            self._verify_time_s += time.perf_counter() - _t0
 
             if greedy:
                 m, committed = self._accept_greedy(drafts, verify_logits)

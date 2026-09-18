@@ -815,3 +815,39 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     )
     out3_torch = _from_device(out3, mesh_device)
     assert out3_torch.shape[-2] == short_cont, "short continuation with seq < hist failed"
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
+@pytest.mark.parametrize("batch", [11, 13, 17], ids=lambda b: f"batch{b}")
+def test_concat_heads_decode_unfactorable_batch(batch, mesh_device, reset_seeds, request):
+    """Regression: packed-verify batch sizes that do not factor on an 8-wide grid.
+
+    K=10/12/16 verify runs at batch=B*(K+1), e.g. 11/13/17 for B=1. Those batches
+    used to crash in concat_heads with "max() arg is an empty sequence"; the decode
+    path now falls back to transpose + nlp_concat_heads.
+    """
+    from models.demos.gemma4.tt.attention.operations import concat_heads
+
+    hf_config = TestFactory.create_hf_config()
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    num_heads = hf_config.num_attention_heads // tp
+    head_dim = hf_config.head_dim
+
+    torch_in = torch.arange(batch * num_heads * head_dim, dtype=torch.bfloat16).reshape(1, batch, num_heads, head_dim)
+    tt_in = _to_device(torch_in, mesh_device)
+    out = concat_heads(
+        tt_in,
+        is_decode_mode=True,
+        num_heads=num_heads,
+        head_dim=head_dim,
+        mesh_device=mesh_device,
+    )
+    out_torch = _from_device(out, mesh_device)
+    if out_torch.ndim == 4 and out_torch.shape[1] == 1:
+        out_torch = out_torch[:, :, :batch, :]
+    ref = torch_in.reshape(1, batch, num_heads * head_dim)
+    out_flat = out_torch.reshape(1, batch, num_heads * head_dim)
+    passing, pcc_msg = compare_tensors(out_flat, ref, pcc_threshold=get_pcc_threshold(request))
+    assert passing, f"batch={batch} concat_heads fallback: {pcc_msg}"
+    out.deallocate(True)
+    tt_in.deallocate(True)
