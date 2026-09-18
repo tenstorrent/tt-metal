@@ -148,7 +148,7 @@ void kernel_main() {
                     ckl::Dst::D0,
                     ckl::DestAccumulation::WholeShape>{0, N},
                 ckl::PackTile<
-                    ckl::output(cb_out, ckl::ReservePolicy::PerOuter, ckl::PushPolicy::PerOuter,
+                    ckl::output(cb_out, ckl::ReservePolicy::OneUpfront, ckl::PushPolicy::OneAtEnd,
                                 ckl::DataFormatReconfig::Disabled, ckl::TileAddressing::Direct,
                                 ckl::DestAccumulation::WholeShape, ckl::L1Accumulation::Disabled),
                     ckl::Dst::D0>{});
