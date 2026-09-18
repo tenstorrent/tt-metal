@@ -3354,13 +3354,13 @@ class UnarySFPUGolden:
 
     @staticmethod
     def _reduce_extremum(x, dim: int, want_max: bool):
-        """Fold *x* along *dim* the way the reduce kernel's SFPSWAP chain does.
+        """Fold *x* along *dim* with the comparator the reduce kernel actually uses.
 
-        SFPSWAP does not swap when either operand is NaN, and treats -0 and +0 as equal, so the
-        running value - seeded from element 0 - is kept in both cases (measured on the Quasar
-        emulator: a NaN or a zero's sign survives only from row 0 of a column / column 0 of a
-        row). torch.max would propagate NaN instead, hence the explicit fold. Integer formats keep
-        torch: there is no NaN on that axis.
+        The MAX/MIN reduce is a bare SFPSWAP with no NaN guard, so the SFPU total order reaches
+        the result: +NaN outranks every finite value and -NaN is below -inf, where torch's
+        max/min would propagate the NaN instead. A fold rather than one vectorised compare,
+        since that order is not expressible as torch.max. Integer formats keep torch: they
+        arrive with an integer dtype, and there is no NaN on that axis.
         """
         if not torch.is_floating_point(x):
             return (
@@ -3370,16 +3370,13 @@ class UnarySFPUGolden:
             )
 
         moved = x.movedim(dim, 0)
-        result = moved[0].clone()
+        result = moved[0]
         for i in range(1, moved.shape[0]):
-            other = moved[i]
-            keep = torch.isnan(result) | torch.isnan(other) | (result == other)
-            better = (
-                torch.maximum(result, other)
+            result = (
+                sfpu_max_elementwise(result, moved[i])
                 if want_max
-                else torch.minimum(result, other)
+                else sfpu_min_elementwise(result, moved[i])
             )
-            result = torch.where(keep, result, better)
         return result
 
     def _reduce_columns(self, x, reduce_pool: ReducePool):

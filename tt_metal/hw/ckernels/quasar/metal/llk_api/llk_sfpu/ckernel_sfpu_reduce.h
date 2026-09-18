@@ -112,9 +112,8 @@ constexpr bool is_supported_reduce_format(DataFormat format) {
  * @tparam SRC: LREG holding the incoming value; clobbered
  * @note MAX/MIN end in an SFPNOP: SFPSWAP takes 2 cycles and the next instruction must not read
  *       its result (SFPSWAP -> SFPSTORE auto-stall bug).
- * @note SFPSWAP does not swap when either operand is NaN, and treats -0 and +0 as equal. A NaN or a
- *       zero's sign therefore survives a reduce only from the position that starts the fold chain
- *       (row 0 of a column, column 0 of a row) and is dropped elsewhere. NaN input is unspecified.
+ * @note Floating-point MAX/MIN follows SFPSWAP's total order, so +NaN can win MAX and -NaN can
+ *       win MIN. This differs from the NaN propagation of IEEE-style max/min helpers.
  */
 template <PoolType POOL_TYPE, bool IS_INT, std::uint32_t DST, std::uint32_t SRC>
 inline void reduce_combine() {
