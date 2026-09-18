@@ -15,9 +15,23 @@ def device_params(request, galaxy_type):
     # to trace_region_size using the logical submesh SKU.
     params = getattr(request, "param", {}).copy()
 
-    mesh_device = {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4), "P150x8": (1, 8)}.get(
-        os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-    )
+    # Keep the Blackhole SKUs in step with the map in demo/simple_text_demo.py. A name
+    # missing here falls through to the physical device count, so a single-chip request
+    # such as MESH_DEVICE=P150 on a multi-chip host is read as multi-device and fabric
+    # is started across the whole cluster for a 1x1 mesh, which then times out in
+    # fabric router sync.
+    mesh_device = {
+        "N150": (1, 1),
+        "N300": (1, 2),
+        "N150x4": (1, 4),
+        "T3K": (1, 8),
+        "TG": (8, 4),
+        "P150": (1, 1),
+        "P300": (1, 2),
+        "P150x4": (1, 4),
+        "P150x8": (1, 8),
+        "BHGLX": (8, 4),
+    }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     is_single_device = (mesh_device == (1, 1)) if isinstance(mesh_device, tuple) else (mesh_device == 1)
 
     if "fabric_config" in params:
