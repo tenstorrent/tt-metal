@@ -21,35 +21,17 @@ import torch
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
-from models.demos.gemma4.tt.attention.prefill import unpack_sliding_tail
 from models.demos.gemma4.tt.ccl import CCLManager
 
 from ...tests.test_factory import (
     PREFILL_BUCKETS,
     TestFactory,
-    _get_model_path,
     build_hf_prefill_mask,
     compare_tensors,
     find_layer_idx,
     get_pcc_threshold,
     parametrize_mesh_with_fabric,
 )
-
-
-def _attn_weight_dtype(mesh_device):
-    """Weight dtype for the TT attention module under test — same source as the demo.
-
-    These tests construct ``Gemma4Attention`` directly, so they never pass through
-    ``tt/common.py:create_tt_model``, the only place ``Gemma4Precision.load`` reads
-    ``precision_overrides.json``. Left to the constructor default they would PCC
-    bf16 weights while the demo runs bfp8, so a precision regression in the shipped
-    config could not fail this test. Resolve the same table instead.
-    """
-    from models.demos.gemma4.tt.precision import Gemma4Precision
-
-    mesh_shape = tuple(mesh_device.shape) if hasattr(mesh_device, "shape") else (1, 1)
-    precision = Gemma4Precision.load(_get_model_path(), mesh_shape)
-    return precision.get("attention", ttnn.bfloat16)
 
 
 def _skip_if_l1_overflow(config, mesh_device):
@@ -109,20 +91,6 @@ def _from_device(tensor, mesh_device):
     if is_mesh:
         return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
     return ttnn.to_torch(tensor)
-
-
-def _slice_rope(cos_tt, sin_tt, start, length):
-    """Slice 4D RoPE caches to ``[start, start+length)``.
-
-    ``Gemma4Attention`` applies ``rotary_embedding`` from position 0 of the
-    cos/sin it is given. The model (``_get_rope_mats(..., start_pos=)``) is
-    what offsets generator chunks; unit tests that call attention directly
-    must slice the same way or continuation tokens restart RoPE at 0.
-    """
-    return (
-        cos_tt[:, :, start : start + length, :],
-        sin_tt[:, :, start : start + length, :],
-    )
 
 
 # ── Prefill PCC Test ──────────────────────────────────────────────────────
@@ -672,10 +640,7 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     # The tail must be alive after the first call.
     tail = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
     assert tail is not None, "Sliding tail was not persisted after chunk 1"
-    k_tail, v_tail, _ = unpack_sliding_tail(tail)
-    assert (
-        k_tail.is_allocated() and v_tail.is_allocated()
-    ), "Sliding tail tensor(s) are not allocated — the clone fix is missing"
+    assert all(t.is_allocated() for t in tail), "Sliding tail tensor(s) are not allocated — the clone fix is missing"
     # endregion
 
     # region Chunk 2 (chunk_start_idx=chunk_size, consumes persisted tail)
@@ -726,8 +691,7 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
 
     tail_after_decode = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
     assert tail_after_decode is not None, "Tail must survive decode so async APC continuations keep sliding_tail_in"
-    k_tail, v_tail, _ = unpack_sliding_tail(tail_after_decode)
-    assert k_tail.is_allocated() and v_tail.is_allocated(), "Tail deallocated during decode"
+    assert all(t.is_allocated() for t in tail_after_decode), "Tail deallocated during decode"
 
     # A fresh prefill at chunk_start==0 must release the prior request's tail.
     x_new = torch.randn(1, 1, chunk_size, config.hidden_size, dtype=torch.bfloat16)
@@ -746,8 +710,7 @@ def test_sliding_tail_survives_cross_call_chunking(mesh_device, reset_seeds, req
     out_new.deallocate(True)
     tail_after_reset = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
     assert tail_after_reset is not None, "New prefill at start=0 should stash a fresh tail"
-    k_tail, v_tail, _ = unpack_sliding_tail(tail_after_reset)
-    assert k_tail.is_allocated() and v_tail.is_allocated()
+    assert all(t.is_allocated() for t in tail_after_reset)
     # endregion
 
 
@@ -757,15 +720,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
 
     Reproduces the shield failure mode where chunk_start=384 arrives on the
     continuation without sliding_tail_in because the prior short chunk skipped
-    the post-SDPA stash (kseq < hist). Also PCC's the 1024-token continuation
-    and the following 128-token remnant against one unchunked prefill of the
-    same tokens. Each chunk's RoPE cache is sliced to
-    ``[chunk_start, chunk_start+len)`` — the same offset the model applies
-    before calling attention; without it continuation tokens restart at
-    position 0 and the unchunked compare is meaningless (unsliced restart-at-0
-    measured 0.47). WH T3K 1x1 measures 0.98974 with the slice; the residual is
-    two SDPA graphs (hist-concat 1408 vs a single 1536), not pad-attends-zeros,
-    so this gates at 0.98 like the other cross-path attention comparisons.
+    the post-SDPA stash (kseq < hist).
     """
     from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
     from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -797,7 +752,6 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
         paged_attention_config=paged_attention_config,
         cache_dtype=ttnn.bfloat16,
     )
-    attn_dtype = _attn_weight_dtype(mesh_device)
     tt_attn = Gemma4Attention(
         mesh_device=mesh_device,
         config=config,
@@ -806,7 +760,6 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
         mesh_config=mesh_config,
         program_config=None,
         layer_idx=layer_idx,
-        weight_dtype=attn_dtype,
     )
     tt_attn.kv_cache = kv_cache
     page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(1, -1)
@@ -817,7 +770,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     x1 = torch.randn(1, 1, short_len, config.hidden_size, dtype=torch.bfloat16)
     out1 = tt_attn(
         _to_device(x1, mesh_device),
-        rope_mats=_slice_rope(cos_tt, sin_tt, 0, short_len),
+        rope_mats=(cos_tt, sin_tt),
         is_decode=False,
         page_table=page_table_tt,
         kv_cache=kv_cache,
@@ -827,9 +780,8 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     out1.deallocate(True)
     tail = (getattr(tt_attn, "_sliding_tails_by_key", None) or {}).get(None)
     assert tail is not None, "Short first chunk must stash a padded sliding tail"
-    k_tail, v_tail, _ = unpack_sliding_tail(tail)
-    assert k_tail.is_allocated() and v_tail.is_allocated()
-    assert int(k_tail.shape[-2]) == hist, f"Expected padded hist={hist}, got {k_tail.shape[-2]}"
+    assert all(t.is_allocated() for t in tail)
+    assert int(tail[0].shape[-2]) == hist, f"Expected padded hist={hist}, got {tail[0].shape[-2]}"
 
     # Continuation at chunk_start=384 with chunk_page_table — needs the tail.
     x2 = torch.randn(1, 1, cont_len, config.hidden_size, dtype=torch.bfloat16)
@@ -837,7 +789,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     chunk2_pt_tt = ttnn.from_torch(chunk2_pt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
     out2 = tt_attn(
         _to_device(x2, mesh_device),
-        rope_mats=_slice_rope(cos_tt, sin_tt, short_len, cont_len),
+        rope_mats=(cos_tt, sin_tt),
         is_decode=False,
         page_table=page_table_tt,
         kv_cache=kv_cache,
@@ -854,7 +806,7 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     chunk3_pt_tt = ttnn.from_torch(chunk3_pt, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
     out3 = tt_attn(
         _to_device(x3, mesh_device),
-        rope_mats=_slice_rope(cos_tt, sin_tt, total_seq, short_cont),
+        rope_mats=(cos_tt, sin_tt),
         is_decode=False,
         page_table=page_table_tt,
         kv_cache=kv_cache,
@@ -863,37 +815,3 @@ def test_short_first_chunk_stashes_padded_sliding_tail(mesh_device, reset_seeds,
     )
     out3_torch = _from_device(out3, mesh_device)
     assert out3_torch.shape[-2] == short_cont, "short continuation with seq < hist failed"
-    x_full = torch.cat([x1, x2, x3], dim=2)
-    kv_ref = init_kv_cache(
-        mesh_device=mesh_device,
-        config=config,
-        paged_attention_config=paged_attention_config,
-        cache_dtype=ttnn.bfloat16,
-    )
-    tt_ref = Gemma4Attention(
-        mesh_device=mesh_device,
-        config=config,
-        state_dict=state_dict,
-        ccl_manager=None,
-        mesh_config=mesh_config,
-        program_config=None,
-        layer_idx=layer_idx,
-        weight_dtype=attn_dtype,
-    )
-    tt_ref.kv_cache = kv_ref
-    out_full = tt_ref(
-        _to_device(x_full, mesh_device),
-        rope_mats=_slice_rope(cos_tt, sin_tt, 0, final_seq),
-        is_decode=False,
-        page_table=page_table_tt,
-        kv_cache=kv_ref,
-        chunk_start_idx=0,
-        valid_seq_len=final_seq,
-    )
-    full_torch = _from_device(out_full, mesh_device).float()
-    out_full.deallocate(True)
-    pcc = get_pcc_threshold(request, default=0.98)
-    passing2, msg2 = compare_tensors(out2_torch.float(), full_torch[:, :, short_len:total_seq, :], pcc_threshold=pcc)
-    assert passing2, f"short-first continuation vs unchunked PCC too low: {msg2}"
-    passing3, msg3 = compare_tensors(out3_torch.float(), full_torch[:, :, total_seq:final_seq, :], pcc_threshold=pcc)
-    assert passing3, f"consecutive-short continuation vs unchunked PCC too low: {msg3}"

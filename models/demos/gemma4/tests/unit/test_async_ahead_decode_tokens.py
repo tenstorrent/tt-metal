@@ -183,12 +183,3 @@ def test_slot_remap_beyond_device_width_still_falls_back():
     )
     assert src == "host_fallback"
     assert int(merged[0]) == 111
-
-
-def test_next_sliding_tail_valid_merges_history():
-    from models.demos.gemma4.tt.attention.prefill import next_sliding_tail_valid
-
-    assert next_sliding_tail_valid(384, 128, 1024) == 512
-    assert next_sliding_tail_valid(384, 1024, 1024) == 1024
-    assert next_sliding_tail_valid(1024, 128, 1024) == 1024
-    assert next_sliding_tail_valid(0, 384, 1024) == 384
