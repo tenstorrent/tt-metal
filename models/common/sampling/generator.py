@@ -428,21 +428,17 @@ class SamplingGenerator:
             if id(tensor) in seen or id(tensor) in protected:
                 continue
             seen.add(id(tensor))
-            try:
-                if tensor.is_allocated():
-                    ttnn.deallocate(tensor)
-            except RuntimeError:
-                # Public views can use distinct Python wrappers for one device
-                # allocation. Identity dedup is not an allocation-level proof;
-                # tolerate an already-released alias while keeping borrowed
-                # inputs explicitly protected.
-                pass
+            if tensor.is_allocated():
+                ttnn.deallocate(tensor)
 
     def _run_mixed_full_vocab_sampling(self, logits, *, contract, tt_out_tok):
         if tt_out_tok is not None:
             raise RuntimeError("full-vocabulary mixed routing does not yet support a preallocated token output")
 
         native_tokens, native_log_probs = self.tt_sampling(logits, tt_out_tok=None)
+        preparation_owned = ()
+        categorical = None
+        merged = None
         params = self._full_vocab_params
         unrestricted = set(contract.unrestricted_slots)
         draws = [1 if slot in unrestricted else 0 for slot in range(self.tt_sampling.max_batch_size)]
@@ -463,38 +459,57 @@ class SamplingGenerator:
         )
         ttnn.copy_host_to_device_tensor(selector_update, self._full_vocab_selector)
 
-        full_logits, preparation_owned = self.tt_sampling.gather_full_vocab_logits(logits)
-        inverse_temperature = ttnn.reshape(
-            self.tt_sampling.temp_tensor, (1, 1, self.tt_sampling.max_batch_size, 1)
-        )
-        categorical = sample_unrestricted_top_p_one(
-            full_logits,
-            inverse_temperature=inverse_temperature,
-            row_scratch=self._full_vocab_row_scratch,
-            seed_values=seed_plan.seeds_by_subdraw[0],
-            active_rows=[slot in unrestricted for slot in range(self.tt_sampling.max_batch_size)],
-            vocab_size=self.tt_sampling.vocab_size,
-            ops=ttnn,
-        )
-        merged = merge_unrestricted_rows(
-            categorical,
-            native_tokens,
-            unrestricted_selector=self._full_vocab_selector,
-            invalid_token_ids=self._full_vocab_invalid_tokens,
-            ops=ttnn,
-        )
-        self._deallocate_tensors(
-            (*merged.owned_tensors, *preparation_owned, native_tokens),
-            protect=(
-                merged.token_ids,
-                logits,
-                inverse_temperature,
-                self.tt_sampling.temp_tensor,
-                self._full_vocab_selector,
-                self._full_vocab_invalid_tokens,
-            ),
-        )
-        return merged.token_ids, native_log_probs
+        try:
+            full_logits, preparation_owned = self.tt_sampling.gather_full_vocab_logits(logits)
+            inverse_temperature = ttnn.reshape(
+                self.tt_sampling.temp_tensor, (1, 1, self.tt_sampling.max_batch_size, 1)
+            )
+            categorical = sample_unrestricted_top_p_one(
+                full_logits,
+                inverse_temperature=inverse_temperature,
+                row_scratch=self._full_vocab_row_scratch,
+                seed_values=seed_plan.seeds_by_subdraw[0],
+                active_rows=[slot in unrestricted for slot in range(self.tt_sampling.max_batch_size)],
+                vocab_size=self.tt_sampling.vocab_size,
+                ops=ttnn,
+            )
+            merged = merge_unrestricted_rows(
+                categorical,
+                native_tokens,
+                unrestricted_selector=self._full_vocab_selector,
+                invalid_token_ids=self._full_vocab_invalid_tokens,
+                ops=ttnn,
+            )
+            self._deallocate_tensors(
+                (*merged.owned_tensors, *preparation_owned, native_tokens),
+                protect=(
+                    merged.token_ids,
+                    logits,
+                    inverse_temperature,
+                    self.tt_sampling.temp_tensor,
+                    self._full_vocab_selector,
+                    self._full_vocab_invalid_tokens,
+                ),
+            )
+            return merged.token_ids, native_log_probs
+        except Exception:
+            scratch = []
+            if merged is not None:
+                scratch.extend(merged.owned_tensors)
+            elif categorical is not None:
+                scratch.extend(categorical.owned_tensors)
+            scratch.extend(preparation_owned)
+            scratch.append(native_tokens)
+            self._deallocate_tensors(
+                scratch,
+                protect=(
+                    logits,
+                    self.tt_sampling.temp_tensor,
+                    self._full_vocab_selector,
+                    self._full_vocab_invalid_tokens,
+                ),
+            )
+            raise
 
     def reset_penalty_counts(self):
         """Zero the output-token penalty counters, if penalties are active.

@@ -3,7 +3,11 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.common.sampling.full_vocab_device import merge_unrestricted_rows, sample_unrestricted_top_p_one
+from models.common.sampling.full_vocab_device import (
+    _release_owned,
+    merge_unrestricted_rows,
+    sample_unrestricted_top_p_one,
+)
 
 
 class TorchOps:
@@ -213,13 +217,41 @@ def test_active_uniform_scratch_is_borrowed_and_reusable_across_steps():
     assert first.valid_distribution.all() and second.valid_distribution.all()
 
 
+def test_release_owned_is_exact_and_does_not_suppress_release_errors():
+    class Allocation:
+        def __init__(self, allocated=True):
+            self.allocated = allocated
+
+        def is_allocated(self):
+            return self.allocated
+
+    released = []
+
+    def deallocate(tensor):
+        released.append(tensor)
+        tensor.allocated = False
+
+    ops = SimpleNamespace(deallocate=deallocate)
+    first = Allocation()
+    already_free = Allocation(allocated=False)
+    _release_owned([first, first, already_free], ops=ops)
+    assert released == [first]
+
+    def failing_deallocate(_tensor):
+        raise RuntimeError("ownership failure")
+
+    with pytest.raises(RuntimeError, match="ownership failure"):
+        _release_owned([Allocation()], ops=SimpleNamespace(deallocate=failing_deallocate))
+
+
 def test_mixed_merge_preserves_native_rows_and_uses_invalid_sentinel():
     categorical = _run(torch.zeros(1, 1, 4, 32), seeds=[7, 8, 9, 10])
     # Inject one invalid unrestricted row to exercise the device sentinel.
+    injected_valid = torch.tensor([[[[True], [False], [True], [True]]]])
     categorical = type(categorical)(
         categorical.token_ids,
-        torch.tensor([[[[True], [False], [True], [True]]]]),
-        categorical.owned_tensors,
+        injected_valid,
+        (*categorical.owned_tensors, injected_valid),
     )
     native = torch.tensor([[[[10, 11, 12, 13]]]], dtype=torch.int64)
     merged = merge_unrestricted_rows(
@@ -230,6 +262,9 @@ def test_mixed_merge_preserves_native_rows_and_uses_invalid_sentinel():
         ops=TorchOps,
     )
     assert merged.token_ids.tolist() == [[[[10, 32, int(categorical.token_ids[0, 0, 2, 0]), 13]]]]
+    # reshape views are not recorded as independent allocation owners.
+    assert sum(tensor is categorical.token_ids for tensor in merged.owned_tensors) == 1
+    assert sum(tensor is categorical.valid_distribution for tensor in merged.owned_tensors) == 1
 
 
 @pytest.mark.parametrize(

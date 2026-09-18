@@ -611,6 +611,11 @@ class TTSampling(LightweightModule):
         allocations created by this preparation step.
         """
 
+        if callable(self._line_all_gather):
+            raise RuntimeError(
+                "full-vocabulary sampling does not yet declare ownership for persistent CCL gather buffers"
+            )
+
         owned = []
         masked = self._mask_invalid_vocab_logits(logits)
         if masked is not logits:
