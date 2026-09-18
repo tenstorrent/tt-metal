@@ -436,3 +436,292 @@ def test_fused_experts_bf16_indices(device, hidden, intermediate, num_experts, t
         ref = ref + weights[:, e : e + 1] * (act @ down[e])
     passing, pcc_msg = comp_pcc(ref, got, pcc=0.98)
     assert passing, f"bf16-id routing vs torch golden: {pcc_msg} | {comp_allclose(ref, got)}"
+
+
+def _replicated_row(device, x_row: torch.Tensor, grid: ttnn.CoreRangeSet) -> ttnn.Tensor:
+    """Replicate one ROW_MAJOR token row onto ``grid`` in the layout ``matmul_decode`` consumes in
+    place: L1 HEIGHT_SHARDED, ROW_MAJOR orientation, shard == the whole ``[1, H]`` row.
+
+    The row starts life on a single core (the only sharded input ``all_gather_for_matmul`` accepts
+    for the multicast path) and is replicated from there.
+    """
+    height, width = x_row.shape[-2], x_row.shape[-1]
+    assert height == 1, "the replicated ROW_MAJOR path is the single-token 1x32 decode form"
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    shard_spec = ttnn.ShardSpec(one_core, (height, width), ttnn.ShardOrientation.ROW_MAJOR)
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    single = ttnn.from_torch(
+        x_row,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=memory_config,
+    )
+    return ttnn.experimental.deepseek.all_gather_for_matmul(single, grid)
+
+
+@pytest.mark.parametrize("hidden, intermediate, num_experts, top_k", [(4096, 2048, 8, 2)])
+def test_fused_experts_replicated_input(device, hidden, intermediate, num_experts, top_k):
+    """A ROW_MAJOR HEIGHT_SHARDED L1 replica is consumed in place, like matmul_decode's replicated A.
+
+    Every core already holds the row, so the op neither reads it from DRAM nor runs its input
+    broadcast -- cb_input is aliased over the local shard. The result must be the same as the DRAM
+    TILE row (which does go through the broadcast) and must match the torch golden, and the op has
+    to take its token count from the shard height, since dim -2 of the replica carries
+    ``num_cores * B``.
+    """
+    torch.manual_seed(0)
+    limit = 7.0
+    scaling = 2.5
+    eps = 1e-20
+    tokens = 1  # ROW_MAJOR is the 1x32 decode path: one token row per call.
+
+    # Two distinct ids for the one token -> num_active == 2, so the op stays on the 8x8 grid (the
+    # 6-expert / 96-core path would need a 12x8 replica).
+    ids = torch.tensor([[0, 1]], dtype=torch.int64)
+    hit_ids = sorted(set(ids.flatten().tolist()))
+    scores = torch.rand((tokens, num_experts), dtype=torch.bfloat16).float() + 0.5
+    x = (torch.rand((1, 1, tokens, hidden), dtype=torch.bfloat16) - 0.5).float()
+
+    gate_up, down, gate_up_tt, down_tt = _expert_weights(device, hidden, intermediate, num_experts)
+    ids_tt = ttnn.from_torch(
+        ids.to(torch.int32).reshape(1, 1, tokens, top_k),
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    scores_tt = ttnn.from_torch(
+        scores.reshape(1, 1, tokens, num_experts),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(FUSED_EXPERTS_GRID - 1, FUSED_EXPERTS_GRID - 1))]
+    )
+
+    def run(x_tt):
+        return (
+            ttnn.to_torch(
+                ttnn.experimental.deepseek.moe.fused_experts(
+                    x_tt,
+                    routing_indices=ids_tt,
+                    routing_scores=scores_tt,
+                    gate_up_weights=gate_up_tt,
+                    down_weights=down_tt,
+                    num_experts=len(hit_ids),
+                    intermediate_size=intermediate,
+                    swiglu_limit=limit,
+                    top_k=top_k,
+                    routed_scaling_factor=scaling,
+                    routing_eps=eps,
+                )
+            )
+            .float()
+            .reshape(tokens, hidden)
+        )
+
+    x_tile = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((1, 32)),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    x_repl = _replicated_row(device, x, grid)
+    # The replica is what the op expects: ROW_MAJOR, L1, HEIGHT_SHARDED, shard == the full row, and
+    # the logical height carrying the core count.
+    assert x_repl.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert x_repl.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert tuple(x_repl.memory_config().shard_spec.shape) == (tokens, hidden)
+    # dim -2 carries the replica factor, so the op has to take the row count from the shard height.
+    assert list(x_repl.shape) == [1, 1, tokens * grid.num_cores(), hidden]
+
+    got_repl = run(x_repl)
+    got_tile = run(x_tile)
+    # The two input paths (broadcast from DRAM vs read locally) must agree, and both have to match
+    # the torch golden -- a shared bug would not survive the second check.
+    passing, pcc_msg = comp_pcc(got_tile, got_repl, pcc=0.999)
+    assert (
+        passing
+    ), f"replicated input differs from the DRAM TILE input: {pcc_msg} | {comp_allclose(got_tile, got_repl)}"
+
+    scores_dev = ttnn.to_torch(scores_tt).float().reshape(tokens, num_experts)
+    selected_dev = torch.gather(scores_dev, -1, ids)
+    rw_dev = torch.zeros((tokens, num_experts), dtype=torch.float32)
+    rw_dev.scatter_(-1, ids, scaling * selected_dev / (selected_dev.sum(dim=-1, keepdim=True) + eps))
+    x_dev = ttnn.to_torch(x_tile).float().reshape(tokens, hidden)
+    ref = torch.zeros((tokens, hidden), dtype=torch.float32)
+    for e in hit_ids:
+        act = _swiglu((x_dev @ gate_up[e]).reshape(tokens, 2 * intermediate), intermediate, limit)
+        ref = ref + rw_dev[:, e : e + 1] * (act @ down[e])
+    passing, pcc_msg = comp_pcc(ref, got_repl, pcc=0.98)
+    assert passing, f"replicated input vs torch golden: {pcc_msg} | {comp_allclose(ref, got_repl)}"
+
+
+def _gather_reference(x_dev, scores_dev, ids, gate_up, down, intermediate, limit, scaling, eps):
+    """Torch golden for the routing-weighted expert sum: the op's own normalize-and-scale tail over
+    the selected scores, then every hit expert evaluated for every token (one matmul per expert,
+    shared by all tokens) and masked by that token's weight. Returns (reference, hit_ids)."""
+    tokens = x_dev.shape[0]
+    selected = torch.gather(scores_dev, -1, ids)
+    weights = torch.zeros_like(scores_dev, dtype=torch.float32)
+    weights.scatter_(-1, ids, scaling * selected / (selected.sum(dim=-1, keepdim=True) + eps))
+    hit_ids = sorted(set(ids.flatten().tolist()))
+    ref = torch.zeros((tokens, x_dev.shape[-1]), dtype=torch.float32)
+    for e in hit_ids:
+        act = _swiglu((x_dev @ gate_up[e]).reshape(tokens, 2 * intermediate), intermediate, limit)
+        ref = ref + weights[:, e : e + 1] * (act @ down[e])
+    return ref, hit_ids
+
+
+def _run_both_gather_shapes(device, hidden, intermediate, num_experts, top_k, experts_block_size):
+    """Build one case and run it through ``fused_experts`` twice -- a two-hub gather and the
+    single-hub fallback -- returning ``(torch golden, two-hub output, single-hub output)``.
+
+    One token row is enough: the gather accounting is per expert block, not per token, so ``top_k``
+    (the number of distinct experts) is what sets the hub work -- and choosing it above
+    ``experts_block_size`` is what puts the op into its multi-block path.
+    """
+    torch.manual_seed(0)
+    limit = 7.0
+    scaling = 2.5
+    eps = 1e-20
+    tokens = 1
+
+    # Distinct ids, so the union is exactly top_k and every core's chunk of every expert is gathered.
+    ids = torch.arange(top_k, dtype=torch.int64).reshape(tokens, top_k)
+    scores = torch.rand((tokens, num_experts), dtype=torch.bfloat16).float() + 0.5
+    x = (torch.rand((tokens, hidden), dtype=torch.bfloat16) - 0.5).float()
+
+    gate_up, down, gate_up_tt, down_tt = _expert_weights(device, hidden, intermediate, num_experts)
+    ref, hit_ids = _gather_reference(x, scores, ids, gate_up, down, intermediate, limit, scaling, eps)
+    assert len(hit_ids) == top_k, "the ids must name distinct experts for the union to be top_k"
+
+    x_tt = ttnn.from_torch(
+        x.reshape(1, 1, tokens, hidden),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((1, 32)),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ids_tt = ttnn.from_torch(
+        ids.to(torch.int32).reshape(1, 1, tokens, top_k),
+        dtype=ttnn.uint16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    scores_tt = ttnn.from_torch(
+        scores.reshape(1, 1, tokens, num_experts),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def run(two_hub_gather):
+        return (
+            ttnn.to_torch(
+                ttnn.experimental.deepseek.moe.fused_experts(
+                    x_tt,
+                    routing_indices=ids_tt,
+                    routing_scores=scores_tt,
+                    gate_up_weights=gate_up_tt,
+                    down_weights=down_tt,
+                    num_experts=len(hit_ids),
+                    intermediate_size=intermediate,
+                    swiglu_limit=limit,
+                    top_k=top_k,
+                    routed_scaling_factor=scaling,
+                    routing_eps=eps,
+                    experts_block_size=experts_block_size,
+                    two_hub_gather=two_hub_gather,
+                )
+            )
+            .float()
+            .reshape(tokens, hidden)
+        )
+
+    return ref, run(True), run(False)
+
+
+def _assert_gather_shapes_agree(ref, got_two, got_one):
+    """Both gather shapes must agree with each other and with the golden.
+
+    They cannot differ in arithmetic -- same fetch set, same matmuls, same accumulation order; only
+    the set of cores that gather half the activation and multicast it changes -- so agreement is the
+    whole contract of the split. Checking each against the torch golden as well stops an error the
+    two paths share from hiding behind the comparison.
+    """
+    passing, pcc_msg = comp_pcc(got_one, got_two, pcc=0.999)
+    assert passing, f"two-hub and single-hub gathers disagree: {pcc_msg} | {comp_allclose(got_one, got_two)}"
+    for name, got in (("two_hub", got_two), ("one_hub", got_one)):
+        passing, pcc_msg = comp_pcc(ref, got, pcc=0.98)
+        assert passing, f"{name} gather vs torch golden: {pcc_msg} | {comp_allclose(ref, got)}"
+
+
+@pytest.mark.parametrize(
+    "hidden, intermediate",
+    [
+        # I == 2048: all 64 cores own a SwiGLU slice, so both hubs gather only from producers and no
+        # core ever sends a slot-free ack. The I split lands at tile 32, so each hub multicasts half
+        # of every expert of the block.
+        (4096, 2048),
+        # TP-sized I: only 16 of the 64 cores own a slice. hub1 -- the grid's far corner, core 63 --
+        # therefore owns none, so it owes its peer a per-block ack and must not wait on its own.
+        (4096, 512),
+    ],
+    ids=("i2048", "i512_hub1_owns_no_slice"),
+)
+@pytest.mark.parametrize("experts_block_size", (0, 2), ids=("one_block", "two_blocks"))
+def test_fused_experts_gather_hubs(device, hidden, intermediate, experts_block_size):
+    """The two-hub activation gather/broadcast must be invisible in the result.
+
+    ``fused_experts`` splits each expert block's I dim across two hubs -- the opposite corners of the
+    multicast rectangle -- each gathering its half onto itself and multicasting it back on its own
+    NoC (hub0 on NoC 0, hub1 on NoC 1, because two multicast senders into one rectangle on one NoC
+    circular-wait on overlapping path reservations). Every core then waits for both halves before
+    publishing the slot to its compute. This runs each configuration through both the two-hub path
+    and the single-hub fallback (``two_hub_gather=False``) and requires them to agree.
+
+    The cases are chosen for the code they reach:
+
+    * ``i512_hub1_owns_no_slice`` is the one that matters most. At I == 512 only 16 of the 64 cores
+      own a SwiGLU slice, so hub1 owns no chunk at all: it must still ack its peer each block, or the
+      peer's gather target is never reached. This is the accounting that hangs when it is wrong.
+    * ``two_blocks`` runs 4 hit experts in blocks of 2, which is what exercises the deferred
+      ``push_back`` into the double-buffered ``cb_act``, the ``reserve_back(current + next)`` that
+      replaces the single-hub pipeline's push-then-reserve order, and the per-block accumulation of
+      each hub's gather target.
+    * ``i2048`` is the all-producers case, where the two halves are cut mid-I and each hub
+      multicasts a strict sub-range of every expert.
+
+    NOTE: a liveness bug in the gather shows up as a hang, not as a wrong number -- the op will sit
+    in a semaphore wait. The single-hub run is the control: if it hangs too, the fault is in the
+    shared machinery rather than the split.
+    """
+    ref, got_two, got_one = _run_both_gather_shapes(device, hidden, intermediate, 8, 4, experts_block_size)
+    _assert_gather_shapes_agree(ref, got_two, got_one)
+
+
+@pytest.mark.parametrize("hidden, intermediate, num_experts, top_k", [(4096, 2048, 64, 6)])
+def test_fused_experts_gather_hubs_grouped(device, hidden, intermediate, num_experts, top_k):
+    """The 6-expert / 96-core path gives every expert its own 16-core group, and therefore its own
+    hub pair: the two corners of that group's 2x8 multicast rectangle, not the whole grid's.
+
+    That path carries hub coordinates, a destination count and a gather target per group, all of
+    them runtime args (a single kernel instance covers all six groups), and all of them different
+    from the whole-grid case above -- so it needs its own coverage rather than riding on it.
+    """
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 12 or grid.y < 8:
+        pytest.skip(f"the 6-expert / 96-core path needs a 12x8 compute grid, got {grid.x}x{grid.y}")
+
+    # Six distinct experts on one token is exactly what selects the 96-core path.
+    ref, got_two, got_one = _run_both_gather_shapes(device, hidden, intermediate, num_experts, top_k, 0)
+    _assert_gather_shapes_agree(ref, got_two, got_one)

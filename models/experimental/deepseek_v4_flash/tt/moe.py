@@ -481,12 +481,32 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
 # The tile is a hardware invariant, unlike the core count and bank count, which are
 # ``moe.fused_num_cores`` / ``moe.fused_dram_banks`` in the system profile.
 _FUSED_TILE = 32
+# Compute-grid geometry from ``fused_experts_program_factory``: 6 selected experts run on
+# 12x8 (16 cores each); anything else stays on the original 8x8, including when the device
+# cannot host 12x8.
+_FUSED_PARALLEL_EXPERTS = 6
+_FUSED_GRID_Y = 8
+_FUSED_PARALLEL_GRID_X = _FUSED_PARALLEL_EXPERTS * 2
+_FUSED_SERIAL_GRID_X = 8
 
 
 def _fused_hidden(num_cores: int) -> int:
     """The only hidden size the op accepts: each of ``num_cores`` cores owns exactly
     2 output tiles of the H row (4096 on a 64-core grid)."""
     return num_cores * 2 * _FUSED_TILE
+
+
+def _fused_compute_core_range_set(top_k: int, device) -> ttnn.CoreRangeSet:
+    """Cores ``fused_experts`` occupies for ``top_k`` selected experts.
+
+    The replica ``all_gather_for_matmul`` multicasts has to cover every one of these:
+    the op aliases ``cb_input`` over each core's shard and will not broadcast a row
+    that is already supposed to be local.
+    """
+    grid = device.compute_with_storage_grid_size()
+    parallel = top_k == _FUSED_PARALLEL_EXPERTS and grid.x >= _FUSED_PARALLEL_GRID_X and grid.y >= _FUSED_GRID_Y
+    gx = _FUSED_PARALLEL_GRID_X if parallel else _FUSED_SERIAL_GRID_X
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, _FUSED_GRID_Y - 1))})
 
 
 def _swiglu_cols_per_core(intermediate: int, num_cores: Optional[int] = None) -> int:
@@ -670,6 +690,7 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         self.tp_size = tp_size
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
+        self._core_grid = _fused_compute_core_range_set(self.top_k, device)
         intermediate_full = config.moe_intermediate_size
         if intermediate_full % tp_size:
             raise ValueError(f"moe_intermediate_size {intermediate_full} is not divisible by tp_size {tp_size}")
@@ -757,6 +778,14 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
                 )
             )
 
+    def core_grid(self) -> ttnn.CoreRangeSet:
+        """Compute cores the fused_experts op occupies for this layer's ``top_k``.
+
+        ``all_gather_for_matmul`` has to multicast onto (at least) this set so every
+        compute core already holds the activation replica.
+        """
+        return self._core_grid
+
     def _run_fused(self, x_tok: ttnn.Tensor, routing: SparseRouting) -> ttnn.Tensor:
         """Run ``fused_experts`` for one token. ``x_tok`` is ``[1,1,1,H]`` (TILE) and
         ``routing`` that token's slice of the router's output; returns ``[1,1,1,H]``.
@@ -806,7 +835,9 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         """
         t = x_flat.shape[2]
         _profile(self.device)
-
+        if x_flat.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            t = x_flat.memory_config().shard_spec.shape[0]
+        assert t == 1, "TODO: Implement batching for MoE"
         if t == 1:
             out = self._run_fused(x_flat, routing)
             _profile(self.device)
@@ -925,11 +956,15 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             routing = self.gate.forward_static(x_flat, hash_token)
         else:
             routing = self.gate(x_flat)
+        # Replica onto the fused_experts compute cores (12x8 at top_k == 6). Shared-expert
+        # LinearDecode reuses it: its B grid is a subset of that rectangle.
+        x_flat = ttnn.experimental.deepseek.all_gather_for_matmul(x_flat, self.experts.core_grid())
         routed = self.experts.decode_static(x_flat, routing)  # [1, 1, B, H]
         shared = self.shared_experts(x_flat)  # [1, 1, B, H]
         if self.packed_weights is not None:
             shared = ttnn.to_memory_config(shared, routed.memory_config())
         combined = ttnn.add(routed, shared)
+        combined = ttnn.to_memory_config(combined, ttnn.DRAM_MEMORY_CONFIG)
         if self.tp_size > 1:
             combined = _tp_all_reduce(combined, self.device)
         return ttnn.reshape(combined, [b, 1, 1, h])
