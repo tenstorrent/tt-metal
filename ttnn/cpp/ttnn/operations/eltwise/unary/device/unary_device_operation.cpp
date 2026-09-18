@@ -299,23 +299,15 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
-    // tensor_layout contains dtype, layout, memory_config, page config and alignment. A Metal 2.0
-    // TensorParameter relaxation requires tensor_layout to be exactly equal and no relaxation flag
-    // reaches inside it, so any component left out here is a cache collision that fails validation on
-    // hit instead of rebuilding.
-    //
-    // Shape is not a member of tensor_layout, but it is not fully excluded by hashing one either. For
-    // an interleaved TILE tensor overpadded past its tile boundary, legacyShapeToAlignment returns
-    // {padded_h, padded_w} and not tile dims. Unary builds its output through fromPaddedShape. Chaining
-    // unaries over an overpadded tensor keys the next one on that padded shape and such tensors fragment
-    // per padded H/W. Tile-aligned tensors take the branch that returns the tile dims, so the common case
-    // still shares one entry across shapes.
-    //
-    // The output needs its own term rather than riding on the input's. A preallocated output carries a
-    // caller-chosen spec that compute_output_specs returns verbatim, and the only cross-check against
-    // the input is its Layout enum -- so its tile and alignment are otherwise unconstrained. The work
-    // split is derived from the OUTPUT tile (unary_program_factory.cpp), so a collision on that slot
-    // mis-sizes the split as well as failing the binding.
+    // On cache hit, the dispatched tensor_layout must equal the one built by cached program and no relaxation
+    // reaches it. Anything omitted here collides and fails validation. Preallocated output's spec is returned with
+    // only its Layout enum cross-checked against the input. However, an overpadded TILE tensor keys on {padded_h,
+    // padded_w} (legacyShapeToAlignment) and fragments them per padded H/W.
+
+    // ND_SHARDED needs shape even on the TILE path (two shapes sharing one nd_shard_spec can resolve to different
+    // geometry.
+    const bool nd_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+                            output_spec.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED;
 
     return operation::hash_operation<UnaryDeviceOperation>(
         attributes,
@@ -324,7 +316,8 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         // TODO: For ROW_MAJOR, page size depends on width. Hashing padded_shape ensures
         // different widths get separate cache entries. Consider hashing only the last
         // dimension to allow cache reuse when only height differs
-        input_tensor.layout() == Layout::ROW_MAJOR ? std::optional{input_tensor.padded_shape()} : std::nullopt,
+        input_tensor.layout() == Layout::ROW_MAJOR || nd_sharded ? std::optional{input_tensor.padded_shape()}
+                                                                 : std::nullopt,
         src_shard_vol,
         dst_shard_vol);
 }
