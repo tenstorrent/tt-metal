@@ -239,7 +239,14 @@ def run_demo_inference(
 )
 @pytest.mark.parametrize(
     "prompt",
-    (("An astronaut riding a green horse"),),
+    (
+        (
+            "An epic, high-definition cinematic shot of a rustic snowy cabin glowing "
+            "warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle "
+            "snow-covered pines and delicate falling snowflakes - captured in a rich, "
+            "atmospheric, wide-angle scene with deep cinematic depth and warmth."
+        ),
+    ),
 )
 @pytest.mark.parametrize(
     "negative_prompt",
