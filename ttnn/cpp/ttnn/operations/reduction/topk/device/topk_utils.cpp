@@ -151,8 +151,9 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
                                      2 * index_tile_size;                                   // c_9 local-index out
         const uint32_t final_core_cost =  // + c_8 value, c_6/c_7 workspace
             shared_cost + 2 * value_tile_size + Wt_final * (transposed_tile_size + index_tile_size);
-        const uint32_t local_core_cost =  // + c_2/c_3 transposed, c_8 value
-            shared_cost + Wt_local * (transposed_tile_size + index_tile_size) + 2 * transposed_tile_size;
+        const uint32_t local_core_cost =  // + c_2/c_3 transposed, c_8 value, c_10..c_13 tree-merge landing/workspace
+            shared_cost + Wt_local * (transposed_tile_size + index_tile_size) + 2 * transposed_tile_size +
+            4 * Kt * (transposed_tile_size + index_tile_size);
         const uint32_t per_core_cost = std::max(final_core_cost, local_core_cost);
 
         // Quick check: skip this configuration if it needs more cores than available
