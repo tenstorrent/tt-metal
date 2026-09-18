@@ -124,20 +124,30 @@ def run_exp_ring_joint_sdpa(
         for _ in range(n_iters)
     ]
 
+    # TT_EXP_SDPA_TEST_EXP_APPROX=1: approximate SFPU exp in the softmax. The model runs exact exp
+    # ("False is more correct"); the phase-zone split shows exp is ~18% of the pack thread's step, so
+    # this is the A/B for that lever. Default exact.
+    exp_approx_mode = os.environ.get("TT_EXP_SDPA_TEST_EXP_APPROX") is not None
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_compute_grid,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
-        exp_approx_mode=False,
+        exp_approx_mode=exp_approx_mode,
     )
+    logger.info(f"exp ring SDPA exp_approx_mode={exp_approx_mode}")
 
+    # TT_EXP_SDPA_TEST_DST_FULL_SYNC=1: 16-tile DST (full sync) instead of the 8-tile half-sync
+    # default, which lets the factory's subblock search pick (4,4)/(2,8) QK subblocks. A/B knob.
+    dst_full_sync_en = os.environ.get("TT_EXP_SDPA_TEST_DST_FULL_SYNC") is not None
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         submesh.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
+        dst_full_sync_en=dst_full_sync_en,
     )
+    logger.info(f"exp ring SDPA compute config: HiFi2, dst_full_sync_en={dst_full_sync_en}")
 
     Q = fa_rand(b, nh, base_seq_len, d).bfloat16().float()
     K = fa_rand(b, nh, base_seq_len, d).bfloat16().float()

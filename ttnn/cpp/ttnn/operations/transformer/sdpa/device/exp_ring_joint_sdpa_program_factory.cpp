@@ -701,6 +701,12 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    // EXPERIMENT (TT_EXP_SDPA_PROFILE_INNER): per-phase device zones inside sdpa_inner_loop_step
+    // (QK matmul, reduce max, softmax exp, PV matmul, row norm, correction). Only the first few
+    // hundred steps per core fit the L1 profiler buffer, which is enough for a steady-state split.
+    if (std::getenv("TT_EXP_SDPA_PROFILE_INNER") != nullptr) {
+        defines["SDPA_PROFILE_INNER"] = "1";
+    }
     if (seq_passes) {
         defines["EXP_SEQ_PASSES"] = "1";
         defines["EXP_Q_GROUPS"] = std::to_string(q_groups);
@@ -1616,6 +1622,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        // Forwarded so dst_size (get_dest_reg_count above) and the kernel's DST sync mode agree:
+        // full sync doubles the tile capacity the subblock search may use.
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
 
