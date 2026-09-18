@@ -26,6 +26,7 @@ from helpers.llk_params import (
     MathOpType,
 )
 from helpers.sfpu_accuracy_budget import (
+    _BUDGET_KEY_TYPES,
     _SFPU_ACCURACY_BUDGET,
     BFP8_B_EXACT_INTEGER_DOMAIN,
     DEFAULT,
@@ -37,6 +38,7 @@ from helpers.sfpu_accuracy_budget import (
     accuracy_contract,
     budget_table,
     enrolled_ops,
+    registry,
     resolve_contract,
     validate_registry,
 )
@@ -136,8 +138,12 @@ def test_a_negative_budget_is_rejected():
 
 
 def test_the_metric_is_a_closed_set():
-    """Replaces a test for a rejected unknown metric: ``Metric`` is an enum, so an
-    unknown value is unrepresentable rather than caught by a hand-rolled check."""
+    """Two members and no third gate to fall through to.
+
+    Not a substitute for ``test_a_metric_that_is_not_a_metric_member_is_refused`` further
+    down: a bare ``Enum`` does not stop ``metric="ulp"`` from being *constructed*, only
+    from being one of these. The closed set is what makes the ``__post_init__`` check a
+    complete one."""
     assert set(Metric) == {Metric.ULP, Metric.TOLERANCE}
     assert AccuracyContract(max_ulp=1).metric is Metric.ULP
     assert TOLERANCE_CONTRACT.metric is Metric.TOLERANCE
@@ -422,20 +428,104 @@ def test_a_variant_specific_tolerance_needs_no_driver_override():
     assert broad.atol == 0.13
 
 
-#: The budget each enrolled op must resolve to on a Float32 output at the standard
-#: variant, so this pins behaviour rather than restating what __post_init__ guarantees.
-#: A retune changes the number here in the same diff that changes the registry.
-_EXPECTED_FLOAT32_BUDGET = {
-    MathOperation.Abs: 0,
-    MathOperation.Neg: 0,
-    MathOperation.Identity: 0,
-    MathOperation.Floor: 0,
-    MathOperation.Ceil: 0,
-    MathOperation.Trunc: 0,
-    MathOperation.Square: None,  # tolerance: 65536 steps measured, deliberately unenrolled
-    MathOperation.SigmoidAppx: None,
-    MathOperation.GeluAppx: None,
+#: Every enrolled op's resolved budget on every gateable output format, at the standard
+#: variant -- so this pins behaviour rather than restating what __post_init__ guarantees,
+#: and pins it on the formats a Float32-only table leaves unbounded. ``None`` is the
+#: tolerance metric. A retune changes the number here in the same diff that changes the
+#: registry.
+#:
+#: Float32 alone was not enough: ``Square`` resolves to tolerance there, so the only
+#: assertion it received was ``metric is Metric.TOLERANCE``, and it is deliberately
+#: outside ``EXACT_BY_CONSTRUCTION``, so the ``<= 1`` canary skipped it too. Its
+#: ``DEFAULT`` 4 and its ``Float16_b`` 1 were bounded only by ``MAX_MEANINGFUL_ULP`` --
+#: 128 for bf16 and 1024 for fp16 -- and widening either to 100 passed the whole suite.
+_EXPECTED_BUDGET = {
+    # op: {output format: max_ulp, or None for the tolerance metric}
+    MathOperation.Abs: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: 1,
+    },
+    MathOperation.Neg: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: 1,
+    },
+    MathOperation.Identity: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 1,
+        # Never measured: Identity was not in BROAD_SWEEP_OPS, so no sweep reached a
+        # Float16 output for it. An unmeasured format falls back to tolerance.
+        DataFormat.Float16: None,
+    },
+    MathOperation.Floor: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: 0,
+    },
+    MathOperation.Ceil: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: 0,
+    },
+    MathOperation.Trunc: {
+        DataFormat.Float32: 0,
+        DataFormat.Float16_b: 0,
+        DataFormat.Float16: 0,
+    },
+    MathOperation.Square: {
+        # 65536 steps measured on Float32, deliberately unenrolled.
+        DataFormat.Float32: None,
+        DataFormat.Float16_b: 1,
+        DataFormat.Float16: 4,  # via DEFAULT
+    },
+    MathOperation.SigmoidAppx: {
+        DataFormat.Float32: None,
+        DataFormat.Float16_b: None,
+        DataFormat.Float16: None,
+    },
+    MathOperation.GeluAppx: {
+        DataFormat.Float32: None,
+        DataFormat.Float16_b: None,
+        DataFormat.Float16: None,
+    },
 }
+
+#: The Float32 column of the above. Derived, not a second hand-written copy, so the two
+#: cannot disagree about the same op.
+_EXPECTED_FLOAT32_BUDGET = {
+    op: per_format[DataFormat.Float32] for op, per_format in _EXPECTED_BUDGET.items()
+}
+
+
+def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_every_format():
+    """The Float32 column below bounds only one format per op. This pins all three.
+
+    Without it, ``Square``'s ``DEFAULT`` ``max_ulp=4`` and its ``Float16_b`` 1 -- the two
+    numeric entries no other test reaches -- were bounded only by ``MAX_MEANINGFUL_ULP``,
+    so widening either to 100 passed the whole suite. That is the "raise the budget until
+    it stops failing" drift the registry's docstrings warn against, on exactly the
+    entries nothing else held.
+    """
+    assert set(_EXPECTED_BUDGET) == set(
+        enrolled_ops()
+    ), "an op was enrolled or removed without updating the expected budgets"
+    for op, per_format in sorted(_EXPECTED_BUDGET.items(), key=lambda kv: kv[0].name):
+        assert set(per_format) == set(ULP_FORMATS), op.name
+        for fmt, expected in per_format.items():
+            contract = accuracy_contract(
+                op,
+                output_format=fmt,
+                approx_mode=ApproximationMode.No,
+                dest_acc=DestAccumulation.No,
+                arch=MEASURED_ARCH,
+            )
+            where = f"{op.name} on {fmt.name}"
+            if expected is None:
+                assert contract.metric is Metric.TOLERANCE, where
+            else:
+                assert contract.metric is Metric.ULP, where
+                assert contract.max_ulp == expected, where
 
 
 def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_float32():
@@ -701,6 +791,74 @@ def test_a_metric_that_is_not_a_metric_member_is_refused(bogus):
         ValueError, match="must be a Metric member"
     ):
         AccuracyContract(metric=bogus, max_ulp=1)
+
+
+@pytest.mark.parametrize(
+    "field, bogus",
+    [
+        ("approx_mode", True),
+        ("output_format", "Float32"),
+        ("dest_acc", True),
+        ("dest_acc", False),
+        ("arch", "wormhole"),
+    ],
+    ids=lambda v: str(v),
+)
+def test_a_budget_key_dimension_that_is_not_an_enum_member_is_refused(field, bogus):
+    """The same rule as ``AccuracyContract.metric``, on the four dimensions that had no
+    check. All of them are bare ``Enum``s, so ``DestAccumulation.No.value is False`` and
+    ``ChipArchitecture.WORMHOLE.value == "wormhole"`` never compare equal to their
+    members -- and the failure mode is silence, not an exception: such a key is counted
+    as set by ``specificity``, matched by nothing in ``matches()``, seen as no duplicate
+    by ``budget_table()`` and as no tie by ``validate_registry()``, and rendered
+    identically to the correct key by ``describe()``, since ``ChipArchitecture.__str__``
+    returns ``.value``. The budget it declares would gate nothing at all.
+    """
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match=f"BudgetKey.{field} must be a"
+    ):
+        BudgetKey(**{field: bogus})
+
+
+def test_every_budget_key_field_is_guarded():
+    """``_BUDGET_KEY_TYPES`` is hand-maintained beside the dataclass, so a dimension
+    added to one and not the other would be unguarded and silently inert."""
+    from dataclasses import fields
+
+    assert {f.name for f in fields(BudgetKey)} == set(_BUDGET_KEY_TYPES)
+    # ...and the declared member of each really is accepted.
+    assert BudgetKey(
+        approx_mode=ApproximationMode.No,
+        output_format=DataFormat.Float32,
+        dest_acc=DestAccumulation.Yes,
+        arch=ChipArchitecture.WORMHOLE,
+    ).specificity == len(_BUDGET_KEY_TYPES)
+
+
+def test_a_repeated_op_in_the_registry_is_refused():
+    """The same hazard ``budget_table`` closes, one level up and harder to see: the ops
+    sit 10-20 lines apart across three comment-delimited sections, and a dict literal
+    keeps only the later table. Nothing downstream can catch it -- ``validate_registry``
+    iterates the already-deduplicated dict, the ``len(set(ops)) == len(ops)`` check below
+    is tautological over dict keys, and pylint runs with ``--disable=all`` in pre-commit
+    so ``duplicate-key`` is off.
+    """
+    exact = budget_table((DEFAULT, AccuracyContract(max_ulp=0)))
+    loose = budget_table((DEFAULT, AccuracyContract(max_ulp=99)))
+    assert (
+        registry((MathOperation.Abs, exact), (MathOperation.Neg, loose))[
+            MathOperation.Abs
+        ]
+        is exact
+    )
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="duplicate registry entry for Square"
+    ):
+        registry(
+            (MathOperation.Square, exact),
+            (MathOperation.Abs, exact),
+            (MathOperation.Square, loose),
+        )
 
 
 @pytest.mark.parametrize("field", ["atol", "rtol", "near_zero_atol"], ids=str)
