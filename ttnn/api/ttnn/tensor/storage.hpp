@@ -21,6 +21,13 @@
 
 namespace ttnn {
 
+class Tensor;
+
+namespace experimental {
+Tensor create_sharded_tensor_view(
+    const Tensor& owner, const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::DeviceAddr shard_offset);
+}  // namespace experimental
+
 class HostStorage {
 public:
     // Creates HostStorage from a HostTensor.
@@ -166,9 +173,6 @@ struct DeviceStorage {
     // This is  internal functionality: it is not part of the public API.
     // TODO(#38093): implement a more robust mechanism for Tensor reinterpretation
     DeviceStorage(const DeviceStorage& owning_storage, tt::tt_metal::MeshTensor reinterpreted_mesh_tensor);
-
-    static DeviceStorage create_retained_view(
-        const DeviceStorage& owning_storage, tt::tt_metal::MeshTensor reinterpreted_mesh_tensor);
     // End internal functions.
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -205,8 +209,14 @@ private:
     DeviceStorage(
         std::shared_ptr<MeshTensorHolder> mesh_tensor_holder,
         std::vector<tt::tt_metal::distributed::MeshCoordinate> coords,
-        std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder,
-        bool deallocateRoot);
+        std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder);
+
+    // Constructs a view whose holder retains the root allocation of owning_storage. Deallocating the view
+    // releases that retention without deallocating the owner; deallocating the owner invalidates the view.
+    static DeviceStorage create_retained_view(
+        const DeviceStorage& owning_storage, tt::tt_metal::MeshTensor reinterpreted_mesh_tensor);
+    friend Tensor experimental::create_sharded_tensor_view(
+        const Tensor& owner, const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::DeviceAddr shard_offset);
 
     // Invariant: should never be nullptr.
     std::shared_ptr<MeshTensorHolder> mesh_tensor_holder_;
@@ -216,7 +226,6 @@ private:
     // Experimental features for viewing an existing DeviceStorage
     const std::shared_ptr<MeshTensorHolder>& get_root_mesh_tensor() const;
     std::shared_ptr<MeshTensorHolder> root_mesh_tensor_holder_;
-    bool deallocate_root_ = true;
     // End experimental features
 };
 

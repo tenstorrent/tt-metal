@@ -346,6 +346,10 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create_retained_sharded_view(
     const auto& view_shard_spec = device_local_config.sharding_args.shard_spec();
     TT_FATAL(owner_shard_spec.has_value(), "A sharded MeshBuffer view requires a sharded owner");
     TT_FATAL(view_shard_spec.has_value(), "A sharded MeshBuffer view requires a shard spec");
+    TT_FATAL(
+        owner_shard_spec->grid().num_cores() > 0, "A sharded MeshBuffer view requires a non-empty owner shard grid");
+    TT_FATAL(
+        view_shard_spec->grid().num_cores() > 0, "A sharded MeshBuffer view requires a non-empty view shard grid");
     for (const CoreCoord& core : corerange_to_cores(view_shard_spec->grid())) {
         TT_FATAL(
             owner_shard_spec->grid().contains(core),
