@@ -36,6 +36,8 @@ DEFAULT_WORKER_CORES = 64  # WH default when CSV lacks AVAILABLE WORKER CORE COU
 RANK_COUNT_MIN_CALLS = 32
 RANK_COUNT_MAX_US_PER_CALL = 5.0
 
+_last_device_ms_source_msg: str | None = None
+
 _FIDELITY_TOKENS = {"lofi": "lofi", "hifi2": "hifi2", "hifi3": "hifi3", "hifi4": "hifi4"}
 
 
@@ -626,11 +628,14 @@ def build_buckets(
     out.sort(key=lambda x: x["device_ms"], reverse=True)
     _srcs = {b.get("device_time_source") for b in out}
     if _srcs:
-        print(
-            "  [tracy] device_ms from %s" % ("+".join(sorted(s for s in _srcs if s)) or "unknown"),
-            file=sys.stderr,
-            flush=True,
-        )
+        _msg = "  [tracy] device_ms from %s" % ("+".join(sorted(s for s in _srcs if s)) or "unknown")
+        # build_buckets runs several times per baseline (discovery, coverage probe, real
+        # measurement) against the SAME report, so the message is identical every time -- print
+        # it once per distinct value, not once per call.
+        global _last_device_ms_source_msg
+        if _msg != _last_device_ms_source_msg:
+            _last_device_ms_source_msg = _msg
+            print(_msg, file=sys.stderr, flush=True)
     return out
 
 

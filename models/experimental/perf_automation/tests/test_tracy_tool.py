@@ -61,6 +61,22 @@ def test_tracy_parse_real_schema(tmp_path):
     assert abs(sum(b["pct"] for b in buckets) - 100.0) < 1e-6
 
 
+def test_device_ms_source_line_prints_once_not_once_per_call(tmp_path, capsys):
+    # build_buckets runs several times per baseline (discovery, coverage probe, real
+    # measurement) against the SAME report -- the source message is identical every
+    # time, so a call after the first must not print it again. The suite may load
+    # tracy_tool under more than one module identity (run.py is loaded by path
+    # elsewhere), so this asserts the delta after priming rather than an absolute
+    # count from a fresh global.
+    report = _refine_fixture(tmp_path)
+    build_buckets(report, FIXTURE)  # prime: may or may not print, depending on prior state
+    capsys.readouterr()
+    build_buckets(report, FIXTURE)
+    build_buckets(report, FIXTURE)
+    err = capsys.readouterr().err
+    assert err.count("[tracy] device_ms from") == 0
+
+
 def test_attributes_join(tmp_path):
     # Unit: lever_state parsed straight from a real ATTRIBUTES string.
     lev = parse_lever_state(ATTRS)
@@ -79,7 +95,7 @@ def test_attributes_join(tmp_path):
 def test_tracy_median_of_n():
     assert median([10.0, 12.0, 11.0]) == 11.0
     assert median([10.0, 12.0]) == 11.0
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # allow-pytest.raises: no expect_error fixture
         median([])
 
 
@@ -120,7 +136,7 @@ def test_tracy_tool_orchestrates_runs_and_median(tmp_path):
 
 
 def test_tracy_tool_requires_stage1(tmp_path):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError):  # allow-pytest.raises: no expect_error fixture
         tracy_tool("p", 1, 1, 1, tmp_path)
 
 

@@ -3563,10 +3563,17 @@ def _wait_for_memory_headroom_before_device_work(label: str = "") -> None:
 _THERMAL_WATCH_REPORT_S = 300.0
 _THERMAL_ABORTED = [False]
 _THERMAL_ABORT_RETRIES = 2
+# Shared across every _run_device_proc call in this process, not per-call: a build, a coverage
+# probe and an agent round each get their OWN state dict (a fresh "last_report": 0.0), so a board
+# that stays hot across many short subprocess launches was printing once per launch instead of
+# once per _THERMAL_WATCH_REPORT_S -- the per-call dict never knew another launch had just reported.
+_THERMAL_WATCH_LAST_REPORT = [0.0]
 
 
 def _thermal_watch_new() -> dict:
-    """Fresh state for _thermal_watch_sample: when it last reported a crossing."""
+    """Fresh per-call state for _thermal_watch_sample; the rate limit itself is process-global
+    (_THERMAL_WATCH_LAST_REPORT) so it survives across the many short-lived subprocesses one run
+    launches."""
     return {"last_report": 0.0}
 
 
@@ -3585,10 +3592,11 @@ def _thermal_watch_sample(state: dict, label: str = "") -> None:
     subprocess exits by the post-run call at the end of _run_device_proc.
     """
     now = time.monotonic()
-    if now - float(state.get("last_report") or 0.0) < _THERMAL_WATCH_REPORT_S:
+    if now - _THERMAL_WATCH_LAST_REPORT[0] < _THERMAL_WATCH_REPORT_S:
         return
     try:
         if _perf_mcp().report_board_over_clamp(label):
+            _THERMAL_WATCH_LAST_REPORT[0] = now
             state["last_report"] = now
     except Exception:  # noqa: BLE001 -- a watcher that cannot run must not stop the work
         return

@@ -157,3 +157,30 @@ def test_the_safety_ceiling_ignores_an_ordinarily_warm_board():
     finally:
         mcp._read_die_temp_c = saved
     assert not fired and buf.getvalue() == "", "the ceiling fired on a normally warm board"
+
+
+def test_the_watch_coalesces_across_separate_subprocess_launches():
+    """_run_device_proc creates a FRESH state dict per launch (build, coverage probe, agent round
+    -- many per run), so a naive per-state rate limit resets to "never reported" on every one of
+    them. A board that stays hot across several short launches inside one _THERMAL_WATCH_REPORT_S
+    window must still print once, not once per launch."""
+    mod = _load_run_by_path()
+    mcp = mod._perf_mcp()
+    saved_read, saved_thresh = mcp._read_die_temp_c, mcp._clamp_threshold_c
+    saved_last = mod._THERMAL_WATCH_LAST_REPORT[0]
+    try:
+        mcp._read_die_temp_c = lambda: 99.5
+        mcp._clamp_threshold_c = lambda: 65.0
+        mod._THERMAL_WATCH_LAST_REPORT[0] = 0.0
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
+            # Three separate launches, each with its OWN fresh state -- exactly what
+            # _run_device_proc does for a build, a probe and an agent round.
+            mod._thermal_watch_sample(mod._thermal_watch_new(), "launch 1")
+            mod._thermal_watch_sample(mod._thermal_watch_new(), "launch 2")
+            mod._thermal_watch_sample(mod._thermal_watch_new(), "launch 3")
+        out = buf.getvalue()
+    finally:
+        mcp._read_die_temp_c, mcp._clamp_threshold_c = saved_read, saved_thresh
+        mod._THERMAL_WATCH_LAST_REPORT[0] = saved_last
+    assert out.count("thermal-watch") == 1, "each fresh per-launch state got its own 300s allowance"

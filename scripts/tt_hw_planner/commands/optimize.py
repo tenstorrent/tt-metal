@@ -710,8 +710,12 @@ def cmd_optimize(args) -> int:
         return 2
     _sep = "=" * 78
     _hitl = " · HITL" if getattr(args, "hitl", False) else ""
+    try:
+        _demo_disp = demo_dir.relative_to(repo_root)
+    except ValueError:
+        _demo_disp = demo_dir
     print(f"\n{_sep}\n  Optimize (perf) — {target}{_hitl}\n{_sep}")
-    print(f"  model    : {demo_dir} ({kind})")
+    print(f"  model    : {_demo_disp} ({kind})")
     print(f"  engine   : {engine} · devices {args.devices} · mesh {args.mesh or '-'} · metric {args.metric}")
     if pcc_test:
         print(f"  pcc gate : {pcc_test} (perf test auto-generated from it)")
@@ -737,7 +741,7 @@ def cmd_optimize(args) -> int:
                 )
                 return 1
             run_root, run_demo = iso["wt"], iso["demo_in_wt"]
-            print(f"  [optimize/cc] existing demo -> isolated on branch '{iso['branch']}' (working tree untouched)")
+            print(f"  isolation : existing demo -> branch '{iso['branch']}' (working tree untouched)")
         dash_url = None
         if getattr(args, "dashboard", False):
             # The run directory does not exist until the engine creates it, so the collector
@@ -772,9 +776,9 @@ def cmd_optimize(args) -> int:
                     _dash_collect,
                     decision_fn=_dash_decision,
                 )
-                print(f"  [optimize/cc] dashboard: {dash_url} (levers shown live as they land)")
+                print(f"  dashboard : {dash_url} (levers shown live as they land)")
             except Exception as exc:  # noqa: BLE001
-                print(f"  [optimize/cc] dashboard unavailable ({exc}); the run continues without it")
+                print(f"  dashboard : unavailable ({exc}); the run continues without it")
         if getattr(args, "module_level", False):
             from .module_optimize import run_module_level_optimize
 
@@ -826,12 +830,12 @@ def cmd_optimize(args) -> int:
 
                     for _f in _legacy.iterdir():
                         (_shutil.copytree if _f.is_dir() else _shutil.copy2)(_f, _persist_dir / _f.name)
-                    print(f"  [optimize/cc] --persist: carried {_slug}'s existing memory over from {_legacy}")
+                    print(f"  --persist : carried {_slug}'s existing memory over from {_legacy}")
             except Exception as _exc:  # noqa: BLE001 -- a failed carry-forward is a fresh start, not a failed run
-                print(f"  [optimize/cc] --persist: WARN could not carry over {_legacy}: {_exc}")
+                print(f"  --persist : WARN could not carry over {_legacy}: {_exc}")
             os.environ.setdefault("PERF_MCP_STATE_DIR", str(_persist_dir))
             os.environ.setdefault("PERF_MCP_LEDGER_DIR", str(_persist_dir))
-            print(f"  [optimize/cc] --persist: run memory in {_persist_dir} (survives reboots; /tmp does not)")
+            print(f"  --persist : run memory in {_persist_dir} (survives reboots; /tmp does not)")
         # --fresh: FORGET, then run. State is carried forward on purpose -- a baseline is expensive, a
         # coverage window costs device probes, and the ceiling anchor is write-once so the report and
         # the stop gate cannot score one run against two ceilings. That is right while the tool is
@@ -856,7 +860,7 @@ def cmd_optimize(args) -> int:
                     tool_root=Path(run_root) / "models" / "experimental" / "perf_automation",
                     model_dir=run_demo,
                 )
-                print("  [optimize/cc] --fresh: %s" % _fresh_describe(_removed))
+                print("  --fresh   : %s" % _fresh_describe(_removed))
                 # AND THE MODEL, back to the state it was published in. The wins are committed to the
                 # model tree and survive a restart; the baseline and the ceiling they are measured
                 # against live in the state just cleared above. Keeping the first while resetting the
@@ -875,14 +879,11 @@ def cmd_optimize(args) -> int:
 
                 _mr = _fresh_reset(run_demo)
                 if _mr.get("changed"):
-                    print(
-                        "  [optimize/cc] --fresh: model %s (baseline and ceiling now describe the same tree)"
-                        % _mr["why"]
-                    )
+                    print("  --fresh   : model %s (baseline and ceiling now describe the same tree)" % _mr["why"])
                 else:
-                    print("  [optimize/cc] --fresh: model NOT reset -- %s" % _mr.get("why"))
+                    print("  --fresh   : model NOT reset -- %s" % _mr.get("why"))
             except Exception as _fe:  # noqa: BLE001 -- a clear that cannot run must not take the run down
-                print("  [optimize/cc] --fresh skipped: %s" % str(_fe)[:160])
+                print("  --fresh   : skipped: %s" % str(_fe)[:160])
         result = run_cc(
             run_demo,
             run_root,
