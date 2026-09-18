@@ -1858,15 +1858,6 @@ def _add_model_args(p: argparse.ArgumentParser, sys_cfg) -> None:
         default=decode.traced,
         help="eager decode instead of traced decode",
     )
-    p.add_argument(
-        "--no-prefetcher",
-        dest="prefetcher",
-        action="store_const",
-        const=False,
-        default=sys_cfg.prefetcher.enabled,
-        help="feed the attention projections with a DRAM->L1 copy per call instead of the "
-        "DRISC tensor prefetcher (default: use it wherever the device supports it)",
-    )
     p.add_argument("--quiet", action="store_true", help="only warnings and above from the model logs")
 
 

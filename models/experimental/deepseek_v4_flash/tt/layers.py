@@ -392,23 +392,14 @@ class LinearDecode(DeepSeekV4Module):
     *not* K-block-folded: the DRAM ND shard already enumerates the ``(K_blocks x N_blocks)``
     grid row-major, which is the receiver order the op consumes slabs in.
 
-    ``keep_weights_in_l1=True`` copies the weight into its width-sharded L1 layout once, in
-    the constructor, and leaves it there: ``forward`` then neither copies it in nor frees it
-    afterwards, so a decode step pays no DRAM->L1 transfer for this weight at all. The
-    DRAM-interleaved copy is released, since nothing reads it again.
+    ``fetch_weights`` stages this layer's weights ahead of the call that needs them: on the
+    prefetched path it queues the prefetch request rather than copying into L1, so the transfer
+    overlaps whatever the workers are still doing. Calling it is optional; ``forward`` queues
+    the request itself if nobody did.
 
-    That is a permanent L1 allocation of the whole weight (``K * N`` bytes at the weight's
-    dtype, spread over the B cores), so it only fits a few small projections: L1 also has to
-    hold every activation, every op's circular buffers and any GCB on the device. A weight
-    left resident that does not fit shows up as a later op failing to build, not as an error
-    here. Mutually exclusive with ``use_prefetcher``, whose whole point is that the weight
-    never lands in L1 as a tensor.
-
-    ``fetch_weights`` keeps its meaning across both paths -- stage this layer's weights ahead
-    of the call that needs them -- but here it queues the prefetch request rather than
-    copying into L1, so the transfer overlaps whatever the workers are still doing. Calling
-    it is optional; ``forward`` queues the request itself if nobody did. With
-    ``keep_weights_in_l1`` there is nothing left to stage and it is a no-op.
+    Without the prefetcher (a projection whose receiver count the shared GCB cannot serve)
+    the weight stays DRAM-interleaved and ``forward`` copies it into L1 width-sharded form
+    for the call, freeing it again afterwards.
 
     The caller owns the prefetcher session: wrap the forward passes in
     ``ttnn.experimental.start_tensor_prefetcher`` / ``stop_tensor_prefetcher`` (plus a
@@ -434,11 +425,7 @@ class LinearDecode(DeepSeekV4Module):
         num_prefetch_slabs: Optional[int] = None,
         global_cb=None,
         global_cb_page_bytes: Optional[int] = None,
-        keep_weights_in_l1: bool = False,
         mesh_mapper=None,
-        packed_weight_tensor: Optional[ttnn.Tensor] = None,
-        packed_weight_spec=None,
-        ring_gather: bool = False,
         tile_height: int = ttnn.TILE_SIZE,
         rectangle_b_grid: bool = False,
         use_rm_hs: bool = False,
@@ -450,27 +437,17 @@ class LinearDecode(DeepSeekV4Module):
         self.device = device
         self.l1_weights = None
         self.use_prefetcher = use_prefetcher
-        self.keep_weights_in_l1 = keep_weights_in_l1
         self.global_cb = None
         self.tile_height = tile_height
         self.mesh_mapper = mesh_mapper
         self.gcb_k_blocks = 1
         self.prefetch_queued = False
-        self.packed_weight_tensor = packed_weight_tensor
-        self.packed_weight_spec = packed_weight_spec
-        self.ring_gather = ring_gather
         self.weights_memory_config = None
         self.fused_rms_norm_eps = None
         self.fused_rms_norm_gamma = None
         self.fused_rms_norm_group_size = 0
         self.output_core_grid = None
         self.cache_file_name = cache_file_name
-
-        if keep_weights_in_l1 and use_prefetcher:
-            raise ValueError(
-                "keep_weights_in_l1 and use_prefetcher are mutually exclusive: the prefetched weight "
-                "is streamed into the matmul's in1 buffer and never held as an L1 tensor"
-            )
 
         assert K != -1 and N != -1, "K and N must be set"
         self.K = K
@@ -483,18 +460,6 @@ class LinearDecode(DeepSeekV4Module):
             K, N, partial_width_sharded, k_blocks, n_blocks
         )
         self.num_inputB_cores = num_inputB_cores
-        if packed_weight_tensor is not None:
-            if use_prefetcher or keep_weights_in_l1 or packed_weight_spec is None:
-                raise ValueError("packed weights require a spec and are mutually exclusive with other weight paths")
-            # The packed placement may deliberately use a different legal cut than
-            # DECODE_LAYOUTS (for example kv_proj is full-width on Z2 rather than
-            # partial-K). The packed spec is the source of truth for this path.
-            self.partial_width_sharded = packed_weight_spec.k_blocks > 1
-            self.k_blocks = packed_weight_spec.k_blocks
-            self.n_blocks = packed_weight_spec.n_blocks
-            self._check_use_rm_hs()
-            return
-
         if use_prefetcher:
             self._init_prefetched_weight(
                 weight,
@@ -552,7 +517,6 @@ class LinearDecode(DeepSeekV4Module):
                 cache_file_name=cache_file_name,
                 mesh_mapper=mesh_mapper,
             )
-            self._make_weights_resident()
             self._check_use_rm_hs()
             return
 
@@ -572,7 +536,6 @@ class LinearDecode(DeepSeekV4Module):
             cache_file_name=cache_file_name,
             mesh_mapper=mesh_mapper,
         )
-        self._make_weights_resident()
         self._check_use_rm_hs()
 
     def _check_use_rm_hs(self):
@@ -583,33 +546,15 @@ class LinearDecode(DeepSeekV4Module):
                 f"but this weight is {'partial-width' if self.partial_width_sharded else 'ring-gathered'}"
             )
 
-    def _make_weights_resident(self):
-        """Move the weight into L1 for good, under ``keep_weights_in_l1``.
-
-        The DRAM-interleaved copy is freed: with the weight resident nothing reads it again,
-        and holding both would pay for the layout twice.
-        """
-        if not self.keep_weights_in_l1:
-            return
-        self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
-        self.weight.deallocate()
-        self.weight = None
-
     def b_core_grid(self) -> ttnn.CoreRangeSet:
-        """Weight B cores: packed spec, GCB receivers, or the L1/DRAM width-shard grid."""
-        if self.packed_weight_spec is not None:
-            return self.packed_weight_spec.cores
+        """Weight B cores: the GCB's receivers, or the L1/DRAM width-shard grid."""
         if self.global_cb is not None:
             return self.global_cb.receiver_cores()
         return self.weights_memory_config.shard_spec.grid
 
     def _can_matmul_decode_rm_hs(self) -> bool:
         """ROW_MAJOR HEIGHT_SHARDED A is full-width hub mode only."""
-        if self.partial_width_sharded or self.ring_gather:
-            return False
-        if self.packed_weight_spec is not None and self.packed_weight_spec.k_blocks > 1:
-            return False
-        return True
+        return not self.partial_width_sharded
 
     def can_fuse_rms_norm(self) -> bool:
         """Whether this matmul can absorb an RMSNorm of its own output.
@@ -949,12 +894,8 @@ class LinearDecode(DeepSeekV4Module):
         self.prefetch_queued = True
 
     def fetch_weights(self):
-        if self.packed_weight_tensor is not None:
-            return
         if self.use_prefetcher:
             self._queue_prefetch()
-            return
-        if self.keep_weights_in_l1:
             return
         print(f"Blocking fetch weights for {self.cache_file_name}")
         self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
@@ -986,32 +927,6 @@ class LinearDecode(DeepSeekV4Module):
             )
         tile_height = 1 if x.layout == ttnn.ROW_MAJOR_LAYOUT else self.tile_height
         m_out = m if self.use_rm_hs else ((m + tile_height - 1) // tile_height) * tile_height
-        if self.packed_weight_tensor is not None:
-            if self.partial_width_sharded:
-                receiver_cores = _receiver_cores_in_order(self.packed_weight_spec.cores)
-                output_cores = _coalesced_core_range_set(receiver_cores[: self.n_blocks])
-                output_num_cores = self.n_blocks
-            else:
-                output_cores = self.packed_weight_spec.cores
-                output_num_cores = self.packed_weight_spec.num_cores
-            output_memory_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    output_cores,
-                    [m_out, self.N // output_num_cores],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            )
-            return ttnn.experimental.matmul_decode(
-                x,
-                self.packed_weight_tensor,
-                partial_width_sharded=self.partial_width_sharded,
-                packed_weight=self.packed_weight_spec,
-                mesh_coords=mesh_coords,
-                ring_gather=self.ring_gather,
-                **self._epilogue_kwargs(output_memory_config),
-            )
         if self.use_prefetcher:
             # Exactly one queued request per matmul: the matmul waits for one page per
             # receiver, so a missing request hangs it and a doubled one desynchronises the
@@ -1027,7 +942,6 @@ class LinearDecode(DeepSeekV4Module):
                     global_cb=self.global_cb,
                     global_cb_k_blocks=self.gcb_k_blocks,
                     mesh_coords=mesh_coords,
-                    ring_gather=self.ring_gather,
                     **self._epilogue_kwargs(self._prefetch_output_memory_config(m_out)),
                 )
             except Exception:
@@ -1041,9 +955,6 @@ class LinearDecode(DeepSeekV4Module):
                 ttnn.experimental.stop_tensor_prefetcher(self.device, force=True)
                 raise
         if self.l1_weights is None or not self.l1_weights.is_allocated():
-            # A resident weight has no DRAM copy left to re-shard from, so losing it is a
-            # bug in whoever freed it rather than something to silently rebuild.
-            assert not self.keep_weights_in_l1, "the resident L1 weight was deallocated by someone else"
             self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         # Single-user decode uses a 1x32 tile. The width-sharded output must
         # use the same physical height as the matmul output, not a full-tile
@@ -1084,12 +995,10 @@ class LinearDecode(DeepSeekV4Module):
             self.l1_weights,
             partial_width_sharded=self.partial_width_sharded,
             mesh_coords=mesh_coords,
-            ring_gather=self.ring_gather,
             **self._epilogue_kwargs(output_memory_config),
         )
-        if not self.keep_weights_in_l1:
-            self.l1_weights.deallocate()
-            self.l1_weights = None
+        self.l1_weights.deallocate()
+        self.l1_weights = None
         return result
 
 
@@ -1142,8 +1051,6 @@ class BatchedLinearDecode(DeepSeekV4Module):
         global_cb_page_bytes: Optional[int] = None,
         mesh_mapper=None,
         global_batch: Optional[int] = None,
-        packed_weight_tensor: Optional[ttnn.Tensor] = None,
-        packed_weight_spec=None,
     ):
         self.device = device
         self.dtype = dtype
@@ -1157,8 +1064,6 @@ class BatchedLinearDecode(DeepSeekV4Module):
         self.global_batch = global_batch if global_batch is not None else batch
         self.gcb_k_blocks = 1
         self.prefetch_queued = False
-        self.packed_weight_tensor = packed_weight_tensor
-        self.packed_weight_spec = packed_weight_spec
         self.output_core_grid = None
 
         # One batch per core row (Bc = 1) by default; widen N across as many cores as the grid
@@ -1180,12 +1085,6 @@ class BatchedLinearDecode(DeepSeekV4Module):
             raise ValueError(f"global_batch {self.global_batch} must be divisible by local batch {self.batch}")
         if self.global_batch != self.batch and mesh_mapper is None:
             raise ValueError("global_batch may differ from batch only when mesh_mapper shards the folded weight")
-        if packed_weight_tensor is not None:
-            if use_prefetcher or mesh_mapper is not None or packed_weight_spec is None:
-                raise ValueError(
-                    "packed weights require a spec and are mutually exclusive with the prefetcher and mesh sharding"
-                )
-            return
 
         def fold(w):
             # The ordinary path folds local ``batch``. A mesh-sharded weight instead
@@ -1262,9 +1161,7 @@ class BatchedLinearDecode(DeepSeekV4Module):
         return kwargs
 
     def b_core_grid(self) -> ttnn.CoreRangeSet:
-        """Weight B cores: packed spec, GCB receivers, or the L1 width-shard grid."""
-        if self.packed_weight_spec is not None:
-            return self.packed_weight_spec.cores
+        """Weight B cores: the GCB's receivers, or the L1 width-shard grid."""
         if self.global_cb is not None:
             return self.global_cb.receiver_cores()
         return self.weights_memory_config.shard_spec.grid
@@ -1356,13 +1253,8 @@ class BatchedLinearDecode(DeepSeekV4Module):
         self.prefetch_queued = True
 
     def fetch_weights(self):
-        if self.packed_weight_tensor is not None:
-            return
         if self.use_prefetcher:
             self._queue_prefetch()
-
-    def deallocate(self):
-        pass
 
     def get_input_memory_config(self, m: int, tile_height: int = ttnn.TILE_SIZE) -> ttnn.MemoryConfig:
         # Activation A is width(K)-sharded: shard [batch * m_padded, K / num_inputA_cores].
@@ -1395,19 +1287,6 @@ class BatchedLinearDecode(DeepSeekV4Module):
             if shard_h % self.batch:
                 raise ValueError(f"ROW_MAJOR HEIGHT_SHARDED A shard height {shard_h} must equal batch {self.batch} * M")
             m = shard_h // self.batch
-        if self.packed_weight_tensor is not None:
-            if not rm_hs:
-                input_memory_config = self.get_input_memory_config(m, x.get_tile().tile_shape[0])
-                same_core_grid = x.is_sharded() and (
-                    x.get_tile().tile_shape[0] < ttnn.TILE_SIZE
-                    or _receiver_cores_in_order(x.memory_config().shard_spec.grid)
-                    == _receiver_cores_in_order(input_memory_config.shard_spec.grid)
-                )
-                if not same_core_grid:
-                    x = ttnn.to_memory_config(x, input_memory_config)
-            return ttnn.experimental.matmul_decode(
-                x, self.packed_weight_tensor, packed_weight=self.packed_weight_spec, **self._epilogue_kwargs()
-            )
         if not rm_hs:
             if not x.is_sharded():
                 x = ttnn.to_memory_config(x, self.get_input_memory_config(m))

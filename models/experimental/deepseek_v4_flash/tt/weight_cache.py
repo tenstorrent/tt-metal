@@ -110,24 +110,6 @@ def _load_weight(
     )
 
 
-def to_ttnn_device(
-    tensor: torch.Tensor,
-    device: ttnn.MeshDevice,
-    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
-    cache_file_name: Optional[str] = None,
-) -> ttnn.Tensor:
-    return _load_weight(tensor, device, cache_file_name=cache_file_name, layout=layout)
-
-
-# ---------------------------------------------------------------------------- #
-# Lazy weight resolution
-#
-# A "weight source" handed to a module may be either an eager ``torch.Tensor``
-# or a zero-arg callable (a *thunk*) that produces one on demand. The thunk lets
-# a populated on-disk cache short-circuit the (expensive) checkpoint read /
-# dequant entirely: when the converted tile already exists for a weight, the
-# source is never touched, so no tensor is pulled from the safetensors shards.
-# ---------------------------------------------------------------------------- #
 def _cache_hit_file(
     cache_file_name: Optional[str],
     dtype: ttnn.DataType,
