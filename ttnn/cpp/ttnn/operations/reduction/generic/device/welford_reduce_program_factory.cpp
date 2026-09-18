@@ -62,14 +62,9 @@ WelfordReducePlan WelfordReduceDeviceOperation::WelfordReduceProgramFactory::sel
     // Compact SFPU combining handles full-width tiles. A partial final tile keeps
     // per-column statistics; the writer accumulates only its valid columns into
     // separate leaves, excluding padding from both the statistics and population.
-    // Blackhole measurements favour compact combining even for one full tile.
-    // Retain Wormhole's existing four-tile crossover until its smaller cases are calibrated.
-    constexpr std::uint64_t min_wormhole_compact_columns = 4 * tt::constants::TILE_WIDTH;
-    plan.use_sfpu_leaf_combine =
-        plan.reduce_hw && (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0) && plan.fp32_dest_acc_en &&
-        plan.W >= plan.tile_width &&
-        (arch == tt::ARCH::BLACKHOLE ||
-         static_cast<std::uint64_t>(plan.W) * plan.reduce_batch_size >= min_wormhole_compact_columns);
+    // Wormhole and Blackhole measurements favour compact combining even for one full tile.
+    plan.use_sfpu_leaf_combine = plan.reduce_hw && (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0) &&
+                                 plan.fp32_dest_acc_en && plan.W >= plan.tile_width;
 
     plan.num_work_units =
         plan.reduce_w ? plan.NC * plan.Ht : (plan.reduce_hw ? plan.NC / plan.reduce_batch_size : plan.NC * plan.Wt);
