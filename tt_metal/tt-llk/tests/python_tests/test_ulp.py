@@ -33,9 +33,13 @@ import torch
 from helpers.accuracy_metrics import local_ulp
 from helpers.format_config import DataFormat
 from helpers.ulp import (
+    _MIN_LANES_FOR_P95,
+    _MIN_LANES_FOR_P99,
+    _ULP_DTYPES,
     MAX_MEANINGFUL_ULP,
     ULP_FORMATS,
     UNMEASURABLE,
+    _value_order_index,
     flushes_subnormals,
     local_step,
     nonfinite_mismatches,
@@ -49,6 +53,17 @@ from helpers.ulp import (
 
 FLOAT_DTYPES = [torch.bfloat16, torch.float16, torch.float32]
 
+# The two bf16 gaps either side of 1.0. Bound once because the whole point of the
+# direction handling is which of the two gets reported, and a -8/-7 transposition in any
+# of the dozen assertions that use them asserts the wrong direction instead of failing.
+BELOW_ONE = 2.0**-8  # 1.0 down to the previous bf16 value
+ABOVE_ONE = 2.0**-7  # 1.0 up to the next one
+assert float(torch.tensor(1.0, dtype=torch.bfloat16)) - BELOW_ONE == float(
+    torch.nextafter(
+        torch.tensor(1.0, dtype=torch.bfloat16), torch.tensor(0.0, dtype=torch.bfloat16)
+    )
+)
+
 # Mantissa bits after the implicit leading 1, i.e. what sets the size of the subnormal
 # band that the flush has to compact away.
 MANTISSA_BITS = {torch.bfloat16: 7, torch.float16: 10, torch.float32: 23}
@@ -58,15 +73,19 @@ def _t(values, dtype):
     return torch.tensor(values, dtype=dtype)
 
 
-def _step_up(value, dtype, steps=1):
-    """*value* moved *steps* representable values toward +inf, in *dtype*."""
+def _step_up(value, dtype, *, steps=1):
+    """*value* moved *steps* representable values toward +inf, in *dtype*.
+
+    *steps* is keyword-only: a bare ``_step_up(1.0, torch.bfloat16, steps=7)`` reads as a third
+    coordinate rather than as a count, and every assertion below is written against the
+    count."""
     out = _t([value], dtype)
     for _ in range(steps):
         out = torch.nextafter(out, _t([float("inf")], dtype))
     return out
 
 
-def _step_down(value, dtype, steps=1):
+def _step_down(value, dtype, *, steps=1):
     out = _t([value], dtype)
     for _ in range(steps):
         out = torch.nextafter(out, _t([float("-inf")], dtype))
@@ -90,7 +109,7 @@ def test_adjacent_representable_values_are_one_step(dtype, value):
 @pytest.mark.parametrize("steps", [2, 3, 17])
 def test_n_representable_steps_read_as_n(dtype, steps):
     golden = _t([1.0], dtype)
-    assert int(ulp_distance(golden, _step_up(1.0, dtype, steps))[0]) == steps
+    assert int(ulp_distance(golden, _step_up(1.0, dtype, steps=steps))[0]) == steps
 
 
 @pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
@@ -145,6 +164,59 @@ def test_bf16_value_order_is_unit_spaced_over_the_whole_format():
     distances = ulp_distance(ordered[:-1], ordered[1:])
     assert int(distances.min()) == 1
     assert int(distances.max()) == 1
+    # The per-step bound alone does not force the walk to be monotonic: `ulp_distance`
+    # takes `.abs()`, so a rank sequence that oscillates (..., 0, 1, 0, 1, ...) satisfies
+    # it. Measuring the two endpoints against each other forces every one of those steps
+    # to be +1 -- the span has to equal the number of values in it.
+    span = int(ulp_distance(ordered[:1], ordered[-1:])[0])
+    assert span == ordered.numel() - 1
+
+
+def test_the_value_order_agrees_with_the_sweep_enumerators_key():
+    """The stimuli and the metric have to mean the same thing by "one representable step".
+
+    ``stimuli_generator.strategies.structured`` walks the float32 line by a twos-complement
+    key (``bits`` for the positive half, ``INT_MIN - bits`` for the negative), which is
+    what ``UlpSweepStrategy`` and ``ulp_sweep_value_count`` are built on. Unflushed, this
+    module's sign-and-magnitude rank is that same total order, including the ``+0``/``-0``
+    collapse -- so a sweep that says it stepped N values and a metric that measures N steps
+    are making one claim, not two. Claimed for the unflushed index only: the compaction is
+    this module's own, and the sweep enumerates the subnormal band.
+    """
+    from helpers.stimuli_generator.strategies.structured import _enumerate_fp32_in_range
+
+    INT_MIN = -(2**31)
+    probes = torch.tensor(
+        [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            2.0**-149,  # smallest subnormal, the band the flush would compact
+            -(2.0**-149),
+            float(torch.finfo(torch.float32).tiny),
+            -float(torch.finfo(torch.float32).tiny),
+            float(torch.finfo(torch.float32).max),
+            -float(torch.finfo(torch.float32).max),
+            float("inf"),
+            float("-inf"),
+            3.14159265,
+            -1e-30,
+        ],
+        dtype=torch.float32,
+    )
+    bits = probes.view(torch.int32).to(torch.int64)
+    sweep_key = torch.where(bits < 0, INT_MIN - bits, bits)
+    spec = _ULP_DTYPES[torch.float32]
+    ours = _value_order_index(probes, spec, flush_subnormals=False)
+    assert ours.tolist() == sweep_key.tolist()
+
+    # ...and end to end: the sweep's own enumeration is unit-spaced under this metric, so
+    # "the Nth value in the sweep" and "N steps away" cannot drift apart.
+    run = _enumerate_fp32_in_range(1.0, 2.0, 64)
+    assert run.numel() == 64
+    assert ulp_distance(run[:-1], run[1:], flush_subnormals=False).tolist() == [1] * 63
+    assert int(ulp_distance(run[:1], run[-1:], flush_subnormals=False)[0]) == 63
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -287,8 +359,10 @@ def test_within_ulp_boundary_is_inclusive(dtype):
     # longer testing the inclusive boundary it is named for.
     budget = 3
     golden = _t([1.0], dtype)
-    assert within_ulp(golden, _step_up(1.0, dtype, budget), budget)[0]
-    assert not within_ulp(golden, _step_up(1.0, dtype, budget + 1), budget)[0]
+    assert within_ulp(golden, _step_up(1.0, dtype, steps=budget), max_ulp=budget)[0]
+    assert not within_ulp(
+        golden, _step_up(1.0, dtype, steps=budget + 1), max_ulp=budget
+    )[0]
 
 
 def test_within_ulp_does_not_pass_on_the_unmeasurable_sentinel():
@@ -298,15 +372,47 @@ def test_within_ulp_does_not_pass_on_the_unmeasurable_sentinel():
     result = torch.tensor([1.0, 2.0], dtype=torch.float32)
     assert ulp_distance(golden, result)[1] == UNMEASURABLE
     assert bool((ulp_distance(golden, result) <= 0).all())  # the naive gate would pass
-    ok, message = within_ulp(golden, result, 0)
+    ok, message = within_ulp(golden, result, max_ulp=0)
     assert not ok
     assert "non-finite disagreement" in message
+
+
+@pytest.mark.parametrize("dtype", FLOAT_DTYPES, ids=str)
+def test_the_verdict_refuses_an_overflow_no_budget_can_buy(dtype):
+    """``finfo.max`` against ``+Inf`` is one step in the value order and still a hard fail.
+
+    The distance and the verdict deliberately part company here.
+    :func:`ulp_distance` ranks ``Inf`` one past the largest finite, which is the honest
+    reading of an overflow at the very top of the range -- but
+    :func:`within_ulp` rejects every finite-against-``Inf`` lane positionally, before any
+    step is counted, so no budget buys it. An overflow is a different kind of answer from
+    an inexact one, and it is the line ``utils.py::_bfp_block_aware_compare`` already
+    takes for the block floats.
+
+    Pinned because neither half of that had a test: no ``within_ulp`` call in this file
+    had an ``Inf`` on either side, which is how the docstring and the gate could have
+    drifted.
+    """
+    largest = float(torch.finfo(dtype).max)
+    golden, result = _t([largest], dtype), _t([float("inf")], dtype)
+    assert int(ulp_distance(golden, result)[0]) == 1  # ...measured, it is one step
+
+    for budget in (0, 1, MAX_MEANINGFUL_ULP[dtype]):
+        ok, message = within_ulp(golden, result, max_ulp=budget, fmt=None)
+        assert not ok, budget
+        assert "non-finite disagreement" in message
+    # ...and the other direction, an Inf golden the kernel answered with a finite.
+    ok, _ = within_ulp(result, golden, max_ulp=1)
+    assert not ok
+    # Same-sign Inf against Inf is the only Inf lane that reaches the distance: 0 steps.
+    ok, _ = within_ulp(result, result.clone(), max_ulp=0)
+    assert ok
 
 
 def test_within_ulp_passes_when_both_sides_are_nan():
     golden = torch.tensor([1.0, float("nan")], dtype=torch.float32)
     result = torch.tensor([1.0, float("nan")], dtype=torch.float32)
-    ok, message = within_ulp(golden, result, 0)
+    ok, message = within_ulp(golden, result, max_ulp=0)
     assert ok
     assert "1 unmeasurable" in message
 
@@ -315,22 +421,26 @@ def test_within_ulp_mask_excludes_lanes_already_settled():
     budget = 1
     golden = torch.tensor([1.0, 1.0], dtype=torch.float32)
     result = torch.tensor([1.0, 1000.0], dtype=torch.float32)
-    assert not within_ulp(golden, result, budget)[0]
+    assert not within_ulp(golden, result, max_ulp=budget)[0]
     mask = torch.tensor([True, False])
-    assert within_ulp(golden, result, budget, mask=mask)[0]
+    assert within_ulp(golden, result, max_ulp=budget, mask=mask)[0]
 
 
 def test_within_ulp_passes_when_every_lane_is_masked_out():
     golden = torch.tensor([1.0, 1.0], dtype=torch.float32)
     result = torch.tensor([5.0, 1000.0], dtype=torch.float32)
-    ok, message = within_ulp(golden, result, 0, mask=torch.tensor([False, False]))
+    ok, message = within_ulp(
+        golden, result, max_ulp=0, mask=torch.tensor([False, False])
+    )
     assert ok
     assert "no measurable lane" in message
 
 
 def test_within_ulp_reports_a_shape_mismatch_instead_of_raising():
     ok, message = within_ulp(
-        torch.zeros(4, dtype=torch.float32), torch.zeros(5, dtype=torch.float32), 1
+        torch.zeros(4, dtype=torch.float32),
+        torch.zeros(5, dtype=torch.float32),
+        max_ulp=1,
     )
     assert not ok
     assert "shape mismatch" in message
@@ -355,7 +465,7 @@ def test_ulp_stats_keeps_unmeasurable_lanes_out_of_the_aggregates():
 def test_ulp_stats_worst_index_is_a_flat_index_into_the_input():
     golden = torch.ones(3, 4, dtype=torch.bfloat16)
     result = golden.clone()
-    result[2, 1] = _step_up(1.0, torch.bfloat16, 5)[0]
+    result[2, 1] = _step_up(1.0, torch.bfloat16, steps=5)[0]
     stats = ulp_stats(ulp_distance(golden, result))
     assert stats["max"] == 5
     assert stats["worst_index"] == 2 * 4 + 1
@@ -376,6 +486,17 @@ def test_ulp_stats_falls_back_to_max_below_the_quantile_thresholds():
     assert stats["p99"] < 9.0
     assert stats["max"] == 9
 
+    # 5 lanes is below both thresholds and 200 is above both, so neither tells the two
+    # constants apart -- collapsing either onto the other keeps them green. 50 lanes sits
+    # between them: p95 is a real quantile, p99 still falls back to the max.
+    assert _MIN_LANES_FOR_P95 < 50 < _MIN_LANES_FOR_P99
+    middle = torch.zeros(50, dtype=torch.int64)
+    middle[-1] = 9
+    stats = ulp_stats(middle)
+    assert stats["max"] == 9
+    assert stats["p95"] == pytest.approx(0.0)
+    assert stats["p99"] == pytest.approx(9.0)
+
 
 def test_ulp_stats_on_an_all_unmeasurable_tensor():
     stats = ulp_stats(torch.full((4,), UNMEASURABLE, dtype=torch.int64))
@@ -387,7 +508,7 @@ def test_ulp_stats_on_an_all_unmeasurable_tensor():
 def test_ulp_failure_message_names_the_point_and_the_step():
     golden = torch.ones(8, dtype=torch.bfloat16)
     result = golden.clone()
-    result[5] = _step_up(1.0, torch.bfloat16, 7)[0]
+    result[5] = _step_up(1.0, torch.bfloat16, steps=7)[0]
     distance = ulp_distance(golden, result)
     message = ulp_failure_message(
         golden, result, distance, DataFormat.Float16_b, max_ulp=3
@@ -510,7 +631,7 @@ def test_identical_tensors_are_zero_steps_apart(dtype):
     torch.manual_seed(0)
     values = torch.randn(64, dtype=torch.float32).to(dtype)
     assert int(ulp_distance(values, values.clone()).max()) == 0
-    ok, message = within_ulp(values, values.clone(), 0)
+    ok, message = within_ulp(values, values.clone(), max_ulp=0)
     assert ok
     assert "100.0% exact" in message
 
@@ -535,7 +656,7 @@ def test_a_non_contiguous_input_is_measured_correctly():
         1,
     )  # a position whose flat index differs before and after transposing
     result = golden.clone()
-    result[position] = _step_up(float(golden[position]), torch.bfloat16, steps)[0]
+    result[position] = _step_up(float(golden[position]), torch.bfloat16, steps=steps)[0]
 
     distance = ulp_distance(golden, result)
     assert int(distance.max()) == steps
@@ -579,14 +700,33 @@ def test_fp16_subnormals_are_measured_not_collapsed():
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32], ids=str)
 def test_flushing_is_a_no_op_for_the_formats_that_already_flush(dtype):
     """Which is why the default is safe: for bf16 and fp32 the golden carries no
-    subnormals, so the two settings agree on any value the harness can produce."""
+    subnormals, so the two settings agree on every *same-sign pair outside the band* --
+    which is every pair the harness can produce for these two formats.
+
+    Deliberately not the wider claim that the settings agree on any value at all. The
+    compaction shifts each magnitude rank by ``2**mantissa_bits - 1``, so it cancels in a
+    same-sign subtraction and survives a sign-crossing one: bf16 ``1.0`` against ``-1.0``
+    is 32258 steps flushed and 32512 unflushed. What the compaction itself is worth is
+    pinned by ``test_flush_makes_smallest_normal_one_step_from_zero``; this test is only
+    about the default being inert where it is on by default.
+    """
     torch.manual_seed(0)
     values = torch.randn(256, dtype=torch.float32).to(dtype)
     other = torch.nextafter(values, torch.full_like(values, float("inf")))
+    assert torch.equal(torch.signbit(values), torch.signbit(other))
+    assert bool((values.abs() >= torch.finfo(dtype).tiny).all())
     assert torch.equal(
         ulp_distance(values, other, flush_subnormals=True),
         ulp_distance(values, other, flush_subnormals=False),
     )
+
+    # ...and the crossing where they do not agree, so the narrowed claim is the tested one
+    # rather than an untested caveat in a docstring.
+    mantissa_bits = MANTISSA_BITS[dtype]
+    one, minus_one = _t([1.0], dtype), _t([-1.0], dtype)
+    flushed = int(ulp_distance(one, minus_one, flush_subnormals=True)[0])
+    unflushed = int(ulp_distance(one, minus_one, flush_subnormals=False)[0])
+    assert unflushed - flushed == 2 * (2**mantissa_bits - 1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -656,14 +796,40 @@ def test_the_reported_step_is_taken_from_the_signed_direction_not_the_magnitude(
     power of two is half the one above it, so that names the wrong side of the boundary.
     """
     # Crossing zero: the path leaves 1.0 heading down, whatever |toward| is.
-    assert local_step(1.0, torch.bfloat16, toward=-2.0) == pytest.approx(2.0**-8)
-    assert local_step(1.0, torch.bfloat16, toward=-0.5) == pytest.approx(2.0**-8)
+    assert local_step(1.0, torch.bfloat16, toward=-2.0) == pytest.approx(BELOW_ONE)
+    assert local_step(1.0, torch.bfloat16, toward=-0.5) == pytest.approx(BELOW_ONE)
     # A negative value is symmetric: "toward zero" means increasing, not decreasing.
-    assert local_step(-1.0, torch.bfloat16, toward=2.0) == pytest.approx(2.0**-8)
-    assert local_step(-1.0, torch.bfloat16, toward=-2.0) == pytest.approx(2.0**-7)
+    assert local_step(-1.0, torch.bfloat16, toward=2.0) == pytest.approx(BELOW_ONE)
+    assert local_step(-1.0, torch.bfloat16, toward=-2.0) == pytest.approx(ABOVE_ONE)
     # Same sign, no crossing: unchanged.
-    assert local_step(1.0, torch.bfloat16, toward=0.5) == pytest.approx(2.0**-8)
-    assert local_step(1.0, torch.bfloat16, toward=2.0) == pytest.approx(2.0**-7)
+    assert local_step(1.0, torch.bfloat16, toward=0.5) == pytest.approx(BELOW_ONE)
+    assert local_step(1.0, torch.bfloat16, toward=2.0) == pytest.approx(ABOVE_ONE)
+
+
+def test_the_step_at_zero_has_no_downward_direction():
+    """``copysign(1.0, 0.0)`` is ``+1.0``, so a bare signed-delta check calls every
+    negative *toward* downward at ``value == 0`` -- and ``nextafter(+0.0, 0.0)`` is
+    ``+0.0``, so the step came back ``0.0`` and the message printed
+    ``1 ULP = 0.000000e+00`` beside a nonzero count, on exactly the zero-crossing lane
+    (``sin``/``tanh``/``erf`` at 0) it exists to explain.
+
+    fp16 is the case that reached it: ranks ``-1`` and ``+1`` both sit at the smallest
+    subnormal, so the step out of rank 0 is ``2**-24`` whichever way *toward* points. The
+    flushing dtypes exit through the band branch above instead, which is why the existing
+    zero coverage did not catch this.
+    """
+    smallest_fp16_subnormal = 2.0**-24
+    for toward in (-1.0, -smallest_fp16_subnormal, 1.0, None, 0.0):
+        step = local_step(0.0, torch.float16, toward=toward)
+        assert step == pytest.approx(smallest_fp16_subnormal, abs=0), toward
+    # -0.0 mirrors it, and the band branch of a flushing dtype is unaffected either way.
+    assert local_step(-0.0, torch.float16, toward=1.0) == pytest.approx(
+        smallest_fp16_subnormal, abs=0
+    )
+    for dtype in (torch.bfloat16, torch.float32):
+        tiny = float(torch.finfo(dtype).tiny)
+        assert local_step(0.0, dtype, toward=-1.0) == pytest.approx(tiny, abs=0)
+        assert local_step(0.0, dtype, toward=1.0) == pytest.approx(tiny, abs=0)
 
 
 @pytest.mark.parametrize(
@@ -694,7 +860,7 @@ def test_the_step_and_the_flush_default_refuse_a_dtype_the_metric_does_not_measu
 def test_a_verdict_at_the_top_of_the_range_reports_a_finite_step():
     golden = _t([float(torch.finfo(torch.bfloat16).max)], torch.bfloat16)
     result = _step_down(float(torch.finfo(torch.bfloat16).max), torch.bfloat16)
-    ok, message = within_ulp(golden, result, 0, fmt=DataFormat.Float16_b)
+    ok, message = within_ulp(golden, result, max_ulp=0, fmt=DataFormat.Float16_b)
     assert not ok
     assert "1 ULP = inf" not in message
 
@@ -708,20 +874,27 @@ def test_the_finfo_max_fixup_carries_its_own_weight(dtype):
     Two cases that need the disjunct, over every dtype rather than bf16 only:
 
     * no ``toward`` at all, where nothing else can choose a direction;
-    * ``+max`` against ``-max``, where the magnitudes are equal so the path does not head
-      toward zero, and the upward branch would report ``1 ULP = inf``.
+    * ``toward=+inf``, which ``math.isfinite`` rejects, so the signed-delta check cannot
+      fire and the disjunct is the only thing keeping the gap to ``Inf`` out of the
+      report.
+
+    ``+max`` against ``-max`` is *not* one of them, and is checked below only end to end:
+    the signed delta there is ``-2 * max``, so ``heads_toward_zero`` already picks the
+    downward gap and deleting the disjunct leaves it green.
     """
     largest = float(torch.finfo(dtype).max)
     assert math.isfinite(local_step(largest, dtype))
+    assert math.isfinite(local_step(largest, dtype, toward=float("inf")))
     assert math.isfinite(local_step(largest, dtype, toward=-largest))
     # Same binade downward, so it is exactly the step below the largest finite.
     expected = largest - float(_step_down(largest, dtype))
     assert local_step(largest, dtype) == pytest.approx(expected)
+    assert local_step(largest, dtype, toward=float("inf")) == pytest.approx(expected)
     assert local_step(largest, dtype, toward=-largest) == pytest.approx(expected)
 
     golden = _t([largest], dtype)
     result = _t([-largest], dtype)
-    ok, message = within_ulp(golden, result, 0)
+    ok, message = within_ulp(golden, result, max_ulp=0)
     assert not ok
     assert "1 ULP = inf" not in message
 
@@ -745,7 +918,7 @@ def test_within_ulp_refuses_a_format_with_no_per_element_ulp(fmt):
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         ValueError, match="no per-element ULP"
     ):
-        within_ulp(values, values.clone(), 1, fmt=fmt)
+        within_ulp(values, values.clone(), max_ulp=1, fmt=fmt)
 
 
 @pytest.mark.parametrize(
@@ -768,7 +941,7 @@ def test_within_ulp_refuses_a_supported_format_that_disagrees_with_the_dtype(
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         ValueError, match="but the tensors are"
     ):
-        within_ulp(values, values.clone(), 1, fmt=fmt)
+        within_ulp(values, values.clone(), max_ulp=1, fmt=fmt)
 
 
 @pytest.mark.parametrize("shape", [(1,), (4,), (3, 4)], ids=str)
@@ -781,7 +954,7 @@ def test_the_verdict_refuses_a_mask_it_would_otherwise_broadcast(shape):
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         ValueError, match="mask shape"
     ):
-        within_ulp(golden, golden.clone(), 1, mask=mask)
+        within_ulp(golden, golden.clone(), max_ulp=1, mask=mask)
     with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
         ValueError, match="mask shape"
     ):
@@ -793,31 +966,31 @@ def test_the_reported_step_below_a_power_of_two_is_the_gap_it_crossed():
     a result that stepped *down* across ``1.0`` would print ``1 ULP = 7.8125e-3`` for a
     step of ``3.90625e-3`` -- the asymmetry the integer count exists to avoid, reappearing
     in the diagnostic that sits next to it."""
-    assert local_step(1.0, torch.bfloat16, toward=0.0) == pytest.approx(2.0**-8)
-    assert local_step(1.0, torch.bfloat16, toward=2.0) == pytest.approx(2.0**-7)
-    assert local_step(1.0, torch.bfloat16) == pytest.approx(2.0**-7)
+    assert local_step(1.0, torch.bfloat16, toward=0.0) == pytest.approx(BELOW_ONE)
+    assert local_step(1.0, torch.bfloat16, toward=2.0) == pytest.approx(ABOVE_ONE)
+    assert local_step(1.0, torch.bfloat16) == pytest.approx(ABOVE_ONE)
 
     golden = _t([1.0], torch.bfloat16)
     result = _step_down(1.0, torch.bfloat16)
-    ok, message = within_ulp(golden, result, 0, fmt=DataFormat.Float16_b)
+    ok, message = within_ulp(golden, result, max_ulp=0, fmt=DataFormat.Float16_b)
     assert not ok
     assert "max 1 ULP" in message
-    assert f"{2.0 ** -8:.6e}" in message
-    assert f"{2.0 ** -7:.6e}" not in message
+    assert f"{BELOW_ONE:.6e}" in message
+    assert f"{ABOVE_ONE:.6e}" not in message
 
 
 def test_the_reported_step_above_a_power_of_two_is_unchanged():
     """The upward gap stays the default, so nothing about an ordinary failure moves."""
     golden = _t([1.0], torch.bfloat16)
-    result = _step_up(1.0, torch.bfloat16, 3)
-    ok, message = within_ulp(golden, result, 0, fmt=DataFormat.Float16_b)
+    result = _step_up(1.0, torch.bfloat16, steps=3)
+    ok, message = within_ulp(golden, result, max_ulp=0, fmt=DataFormat.Float16_b)
     assert not ok
-    assert f"{2.0 ** -7:.6e}" in message
+    assert f"{ABOVE_ONE:.6e}" in message
 
 
 def test_within_ulp_still_works_without_a_format():
     values = torch.ones(4, dtype=torch.bfloat16)
-    ok, message = within_ulp(values, values.clone(), 0)
+    ok, message = within_ulp(values, values.clone(), max_ulp=0)
     assert ok and "bfloat16" in message
 
 
@@ -825,7 +998,7 @@ def test_the_message_builder_can_reuse_stats_it_was_given():
     """The verdict already computed them; building the message must not pay again."""
     golden = torch.ones(8, dtype=torch.bfloat16)
     result = golden.clone()
-    result[3] = _step_up(1.0, torch.bfloat16, 4)[0]
+    result[3] = _step_up(1.0, torch.bfloat16, steps=4)[0]
     distance = ulp_distance(golden, result)
     stats = ulp_stats(distance)
     assert ulp_failure_message(
