@@ -287,3 +287,59 @@ def test_a_warm_capture_with_no_active_request_serves_baseline(monkeypatch):
         page_table=pt,
     )
     assert solo == "baseline-out"
+
+
+# ── Missing drafter must fail at STARTUP, not on the first solo request ──────
+
+
+def _warmup_stub(monkeypatch, tmp_path, assistant_env=None, cache_hit=False):
+    """An MTP instance whose warmup can be driven host-only.
+
+    ``__new__`` skips the device-bound ``__init__``. ``_spec_warmup_session`` is
+    stubbed to succeed, so anything that raises came from the pre-flight and not
+    from a capture failure.
+    """
+    monkeypatch.delenv("GEMMA4_ASSISTANT_MODEL", raising=False)
+    if assistant_env is not None:
+        monkeypatch.setenv("GEMMA4_ASSISTANT_MODEL", assistant_env)
+    # HF_MODEL drives the fallback candidate path f"{HF_MODEL}-assistant".
+    monkeypatch.setenv("HF_MODEL", str(tmp_path / "gemma-4-12B-it"))
+    # This box HAS the assistant in its real HF cache, so without pinning the
+    # resolver the "missing" case silently resolves and the test proves nothing.
+    import models.demos.gemma4.tt.generator_vllm as gv
+
+    monkeypatch.setattr(
+        gv, "_hf_resolve_repo", lambda repo, cache_dir_name: (str(tmp_path / "cached-assistant") if cache_hit else None)
+    )
+    if cache_hit:
+        (tmp_path / "cached-assistant").mkdir(exist_ok=True)
+    h = MTP.__new__(MTP)
+    h._spec = None
+    h._spec_warm = False
+    h._decode_warmup_complete = False
+    h._mtp_warmup_capture = True  # the default path, and the one CI uses
+    monkeypatch.setattr(MTP, "_spec_warmup_session", lambda self, kv, nb: None)
+    monkeypatch.setattr(MTP, "_spec_release_session", lambda self, force=False: None)
+    return h
+
+
+def test_a_missing_assistant_fails_warmup_instead_of_the_first_request(monkeypatch, tmp_path, expect_error):
+    """The batched benchmark never touches the drafter, so a server that boots
+    without one passes every throughput check and then dies on the first SOLO
+    request (EngineDeadError 500 at the coherence guard). Fail while starting."""
+    h = _warmup_stub(monkeypatch, tmp_path)
+    with expect_error(RuntimeError, "snapshot not found -- resolved"):
+        h.warmup_model_decode(kv_cache=[[object()]], num_blocks=8, enable_trace=True)
+
+
+def test_an_operator_supplied_assistant_path_is_left_alone(monkeypatch, tmp_path):
+    """An explicit GEMMA4_ASSISTANT_MODEL is the operator's business: the
+    pre-flight must not second-guess it (it may be a repo id, not a dir)."""
+    h = _warmup_stub(monkeypatch, tmp_path, assistant_env="google/gemma-4-12B-it-assistant")
+    h.warmup_model_decode(kv_cache=[[object()]], num_blocks=8, enable_trace=True)
+
+
+def test_an_existing_assistant_dir_passes_the_preflight(monkeypatch, tmp_path):
+    """The resolver finds a cached snapshot, so warmup proceeds to capture."""
+    h = _warmup_stub(monkeypatch, tmp_path, cache_hit=True)
+    h.warmup_model_decode(kv_cache=[[object()]], num_blocks=8, enable_trace=True)

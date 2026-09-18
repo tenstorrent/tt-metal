@@ -3875,6 +3875,26 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
             del args
             logger.info("Gemma4MTP: decode warmup capture disabled; sessions capture per request")
             return None
+        # A MISSING DRAFTER is not a capture failure and must not be swallowed:
+        # per-request capture would hit the same absent weights and kill the
+        # engine on the first SOLO request, after the server had already
+        # reported ready. That is how the bh_loudbox leg failed -- the batched
+        # benchmark passed (baseline path, no drafter needed) and the
+        # single-request coherence guard then got an EngineDeadError 500.
+        # Fail here instead, while the server is still starting, with the same
+        # actionable message the dFlash twin gives.
+        if os.environ.get("GEMMA4_ASSISTANT_MODEL") is None:
+            _assistant = _assistant_default_snapshot(os.environ.get("HF_MODEL", "google/gemma-4-31B-it"))
+            if not os.path.isdir(str(_assistant)):
+                raise RuntimeError(
+                    "Gemma4MTP: assistant (drafter) snapshot not found -- resolved "
+                    f"{_assistant!r}, which does not exist. The MTP path cannot serve "
+                    "without it, and starting anyway would serve plain baseline until "
+                    "the first solo request killed the engine. Set "
+                    "GEMMA4_ASSISTANT_MODEL to a local snapshot, or make the weights "
+                    "cache writable so google/gemma-4-<size>-it-assistant can be "
+                    "fetched (CI: run with mlperf-read-only false once to populate it)."
+                )
         try:
             self._spec_warmup_session(kwargs.get("kv_cache"), kwargs.get("num_blocks"))
         except Exception as e:
