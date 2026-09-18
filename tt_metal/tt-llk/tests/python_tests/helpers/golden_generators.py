@@ -2926,7 +2926,7 @@ class UnarySFPUGolden:
         return self._torch_unary(x, torch.nn.functional.selu)
 
     def _i0(self, x):
-        # Modified Bessel I0; the kernel uses a poly approx valid on |x| <= 3.75.
+        # Modified Bessel I0; two-region kernel: Maclaurin |x| <= 6, asymptotic beyond.
         # torch.special.i0 returns NaN at +/-inf, which is a torch limitation rather than the
         # mathematics: I0 is even and unbounded, so I0(+/-inf) = +inf, as the kernel returns.
         if math.isnan(x):
