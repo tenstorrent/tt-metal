@@ -1038,17 +1038,22 @@ core_count_and_size calculate_L1_usage_for_conv_op(
                                                         : tt::tt_metal::DataType::BFLOAT16;
     const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
 
-    const bool conv_is_1d_depthwise =
-        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, enable_bias);
-
     const uint32_t input_channels_alignment =
         get_input_channels_alignment(shard_layout, input_layout, false, is_mm_conv, std::nullopt);
     const uint32_t in_channels_aligned = tt::round_up(in_channels, input_channels_alignment);
     const uint32_t output_channels_padded = tt::round_up(out_channels, tt::constants::TILE_WIDTH);
     // Note: These are not exact shapes for weights as prepare_conv_weights will pad the weights depending on the
     // conv2d params, but these are good enough for L1 usage estimation.
-    const ttnn::Shape weights_shape(
-        {1, 1, in_channels_aligned * kernel_size[0] * kernel_size[1], output_channels_padded});
+    // For grouped convolutions (groups > 1), each output channel only sees
+    // in_channels/groups input channels, so the weight tensor is
+    // out_channels * (in_channels/groups) * kh * kw — not the dense
+    // in_channels * kh * kw * out_channels. Without this correction the
+    // estimate overstates depthwise weight memory by a factor of `groups`
+    // (e.g. 838 MB vs 80 KB for C=10240, groups=10240), which guarantees
+    // the DRAM auto-slicer can never find a valid config.
+    const uint32_t weight_spatial_product = kernel_size[0] * kernel_size[1];
+    const uint32_t effective_in_channels = (groups > 1) ? (in_channels_aligned / groups) : in_channels_aligned;
+    const ttnn::Shape weights_shape({1, 1, effective_in_channels * weight_spatial_product, output_channels_padded});
 
     const ParallelConfig input_parallel_config = _halo_input_memory_config.has_value() ? ParallelConfig{
             .grid = _halo_input_memory_config->shard_spec().value().grid,
@@ -1068,6 +1073,20 @@ core_count_and_size calculate_L1_usage_for_conv_op(
         true,
         true,
         conv_config.act_block_h_override);
+
+    // Depthwise L1/CB math must match the program factory that will run this
+    // config: the width sharded factory executes the generic conv path (it
+    // passes is_1d_depthwise_conv=false into get_cb_info), and the sharded
+    // factory runs the depthwise path only for height sharded configs — a
+    // block sharded 1D depthwise conv runs the generic path there too (the
+    // depthwise kernels and the 1D mcast weight-writer kernels are
+    // height-sharded only, and its weights are prepared in the regular
+    // grouped layout). Estimating depthwise sizes for a width or block
+    // sharded config produces a CB_allocation_size that
+    // post_conv2d_op_memory_checks_descriptor rejects.
+    const bool conv_is_1d_depthwise =
+        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, enable_bias) &&
+        input_parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED;
 
     auto output_compute_grid_size = get_output_compute_grid_size(compute_grid_size, conv_config, input_parallel_config);
     const ParallelConfig output_parallel_config = determine_output_parallel_config(
@@ -1212,8 +1231,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         conv_config.shard_layout.has_value()) {
         return conv_config;
     }
-    const bool conv_is_1d_depthwise =
-        is_1d_depthwise_conv(groups, in_channels, out_channels, kernel_size[0], input_height, enable_bias);
 
     auto get_l1_usage_for_sharding = [&](TensorMemoryLayout shard_layout, const Conv2dConfig& conv_config) {
         return calculate_L1_usage_for_conv_op(
@@ -1241,10 +1258,14 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     };
     core_count_and_size height = get_l1_usage_for_sharding(TensorMemoryLayout::HEIGHT_SHARDED, conv_config);
 
-    // 1d depthwise convs support only height sharding
-    if (conv_is_1d_depthwise) {
-        return height.conv_config;
-    }
+    // 1d depthwise convs used to be forced onto height sharding because the
+    // depthwise weight/kernel fast path only supports height sharding. That
+    // layout can exceed L1 for depthwise conv1d shapes with many channels
+    // (in_channels == out_channels == groups much larger than the grid), and
+    // once the depthwise weight layout conversion is skipped for non-height
+    // sharding (see prepare_conv_weights_internal) the generic width/block
+    // sharded paths run these shapes, so depthwise convs compete in the same
+    // min-total-size comparison as every other conv.
 
     const core_count_and_size block = get_l1_usage_for_sharding(TensorMemoryLayout::BLOCK_SHARDED, conv_config);
     const core_count_and_size width = get_l1_usage_for_sharding(TensorMemoryLayout::WIDTH_SHARDED, conv_config);
