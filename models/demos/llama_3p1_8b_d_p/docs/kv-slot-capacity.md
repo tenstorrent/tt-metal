@@ -39,11 +39,12 @@ layers, real checkpoint, bfloat8_b caches, under Slurm jobs 109855, 109875, 1099
 The slot count is inverse-linear in capacity, as the divisor says: 4x the context buys a quarter of
 the slots, and 1681/420 is 4.00.
 
-### The 2K to 32K sweep
+### The 2K to 128K sweep
 
-Every count below was allocated by `num_users="max"` and then used, under Slurm job 110427: a whole
-prompt to capacity prefilled into the top slot, followed by a second prompt in slot 0 while the top
-slot stayed full. One model build per capacity, weights resident before the count is taken.
+Every count below was allocated by `num_users="max"` and then used, under Slurm jobs 110427 (2K to
+32K) and 110506 (64K, 128K): a whole prompt to capacity prefilled into the top slot, followed by a
+second prompt in slot 0 while the top slot stayed full. One model build per capacity, weights
+resident before the count is taken.
 
 | Capacity | Slot cost per chip | Slots | Free left | Prefilled to capacity in |
 | ---: | ---: | ---: | ---: | --- |
@@ -52,12 +53,17 @@ slot stayed full. One model build per capacity, weights resident before the coun
 | 8,192 | 17.0 MiB | 1,681 | 1.19 GiB | slot 1,680 |
 | 16,384 | 34.0 MiB | 840 | 1.20 GiB | slot 839 |
 | 32,768 | 68.0 MiB | 420 | 1.18 GiB | slot 419 |
+| 65,536 | 136.0 MiB | 209 | 1.28 GiB | slot 208 |
+| 131,072 | 272.0 MiB | 104 | 1.35 GiB | slot 103 |
 
-The count halves for every doubling of capacity, to the slot: 6727, 3363, 1681, 840, 420. The same
-divisor gives 105 slots at 131,072, which this sweep did not run. What the count is *not* is a
-serving claim: it is how many slots fit in DRAM, and prefill fills one at a time.
+The count halves for every doubling of capacity: 6727, 3363, 1681, 840, 420, 209, 104. One row breaks
+the pattern by a single slot -- 64K gives 209 where halving 420 would give 210 -- and it is the
+contiguous run, not the byte count, that costs it: 209 slots leave 1.28 GiB/chip, so a 210th slot's
+136 MiB would still clear the 1 GiB reserve, but not in one run per bank. 128K then halves 209
+cleanly. What the count is *not* is a serving claim: it is how many slots fit in DRAM, and prefill
+fills one at a time.
 
-Startup does not vary with the count. Allocation took 157-160 s at every capacity, because what it
+Startup does not vary with the count. Allocation took 157-167 s at every capacity, because what it
 zeroes is the same ~28 GiB per chip either way.
 
 Chunk times inside this probe are cold-path: it visits each chunk index once, so every chunk pays a
