@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 
 import pytest
 import torch
@@ -50,14 +51,33 @@ def run_exp_ring_joint_sdpa(
     # chunk per SDPA column, so size the grid from the chunk count. Rows are split into equal
     # backward/forward MUX-client halves, so the row count must be even: Blackhole's 10 rows are,
     # Wormhole's 9 rows drop to 8.
+    # With TT_EXP_SDPA_MUX_BOTTOM_ROW the MUX kernels take the bottom row instead, so SDPA keeps every
+    # column and the rows above the MUX row (rounded down to even): 8x8 = 64 cores on Wormhole.
+    mux_on_bottom_row = os.environ.get("TT_EXP_SDPA_MUX_BOTTOM_ROW") is not None
     local_padded_N = padded_seq_len // tuple(submesh.shape)[rp_axis]
-    sdpa_rows = full_compute_grid.y - (full_compute_grid.y % 2)
+    if mux_on_bottom_row:
+        sdpa_rows = (full_compute_grid.y - 1) - ((full_compute_grid.y - 1) % 2)
+        max_sdpa_cols = full_compute_grid.x
+    else:
+        sdpa_rows = full_compute_grid.y - (full_compute_grid.y % 2)
+        max_sdpa_cols = full_compute_grid.x - 1
     # A head's Q chunks must fill whole rows (num_q_chunks % columns == 0); more chunks than columns
     # run as head-segments (segs_per_head = chunks / columns). Take the widest column count that
     # fits the device and divides the chunk count.
     num_q_chunks = math.ceil(local_padded_N / q_chunk_size)
-    sdpa_cols = max(c for c in range(min(num_q_chunks, full_compute_grid.x - 1), 0, -1) if num_q_chunks % c == 0)
-    sdpa_compute_grid = (sdpa_cols + 1, sdpa_rows)
+    sdpa_cols = max(c for c in range(min(num_q_chunks, max_sdpa_cols), 0, -1) if num_q_chunks % c == 0)
+    if mux_on_bottom_row:
+        assert sdpa_cols >= 2 * num_links, (
+            f"bottom-row MUX placement needs 2 MUX cores per link on the {sdpa_cols}-wide MUX row; "
+            f"{num_links} links do not fit"
+        )
+        sdpa_compute_grid = (sdpa_cols, sdpa_rows + 1)
+    else:
+        sdpa_compute_grid = (sdpa_cols + 1, sdpa_rows)
+    logger.info(
+        f"exp ring SDPA grid: user {sdpa_compute_grid}, SDPA {sdpa_cols}x{sdpa_rows} "
+        f"({sdpa_cols * sdpa_rows} cores), {num_q_chunks} Q chunks, mux_on_bottom_row={mux_on_bottom_row}"
+    )
     if num_workers_per_link is None:
         num_workers_per_link = sdpa_rows // 2  # one MUX client per SDPA row per direction
 
@@ -434,6 +454,28 @@ _WH_GLX_ONLY = pytest.mark.skipif(is_blackhole(), reason="Wormhole Galaxy shape"
         # Same shard on 4 links (run with TT_EXP_SDPA_Q_GROUPS=2 for segs=4: 7 balanced passes per row,
         # no pair dedup so every row forwards; or Q_GROUPS=4 for the segs=2 layout above on 4 links).
         pytest.param((4, 8), 4, 56, 114688, 1, 8, 0, 4, 256, 512, None, id="4x8_wh_h3_15s_seq_nl4", marks=_WH_GLX_ONLY),
+        # Bottom-row MUX layout (run with TT_EXP_SDPA_MUX_BOTTOM_ROW=1 TT_EXP_SDPA_Q_GROUPS=1): SDPA keeps
+        # all 8 columns and rows 0-7, the 8 MUX kernels of 4 links fill row 8 -> 64 cores. 4096 rows/device
+        # = 16 chunks of q=256 = 8 columns x 2 segments; PCC-checked stand-in for the 15 s shard's 56
+        # chunks (8 columns x 7 segments, G=1), which the 15s_seq_nl4 case above times under the same env.
+        pytest.param((4, 8), 4, 56, 32768, 1, 8, 0, 4, 256, 256, None, id="4x8_wh_h3_4096_bot_nl4", marks=_WH_GLX_ONLY),
+        # 15 s shard at q=128 on the bottom-row layout (G=1): 112 chunks = 8 columns x 14 segments, 196
+        # segments on 8 rows -> 25 half-chunk passes = 12.5 chunk-equivalents per core (q=256: 13). Timing only.
+        pytest.param(
+            (4, 8), 4, 56, 114688, 1, 8, 0, 4, 128, 512, None, id="4x8_wh_h3_15s_q128_nl4", marks=_WH_GLX_ONLY
+        ),
+        # 15 s shard padded to 13824 rows/device (the 13664 real rows + 1.2%) at q=192: 72 chunks = 8 columns
+        # x 9 segments, 126 segments on 8 rows -> 16 passes of 6 tile-rows = 96 tile-rows per core against
+        # 104 for q=256 at 14336 rows, and 3.6% fewer K/V rows. Timing only.
+        pytest.param(
+            (4, 8), 4, 56, 110592, 1, 8, 0, 4, 192, 512, None, id="4x8_wh_h3_15s_q192_nl4", marks=_WH_GLX_ONLY
+        ),
+        # 15 s shard at q=448 on the bottom-row layout (G=1): 32 chunks = 8 columns x 4 segments, 56 segments
+        # on 8 rows -> 7 passes of 14 tile-rows = 98 tile-rows per core. k=256 is the largest K chunk that
+        # fits the single-pass L1 budget at q=448 (k=512 needs 1.71 MB of 1.34 MB). Timing only.
+        pytest.param(
+            (4, 8), 4, 56, 114688, 1, 8, 0, 4, 448, 256, None, id="4x8_wh_h3_15s_q448_nl4", marks=_WH_GLX_ONLY
+        ),
     ],
     indirect=["mesh_device"],
 )
