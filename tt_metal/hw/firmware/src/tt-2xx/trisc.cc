@@ -27,6 +27,18 @@
 
 // clang-format on
 
+// The pack TRISC's firmware is the tightest of the four: it carries the dataflow-buffer init that the
+// other threads do not, and sits at ~93% of MEM_TRISC_FIRMWARE_SIZE (5120 B) before any debug feature
+// is turned on. The watcher and DPRINT each cost it roughly 1.3-3 KB of .text, so either one alone
+// fits but the two together do not -- measured on main: watcher-only 4776 B, DPRINT-only 3180 B,
+// both 6140 B against the 5120 B limit. Enabling both produces a link-time region overflow at device
+// open ("segment[0] ... overflows region:0 limit of 0x1400 bytes"), which is far harder to read than
+// this message. Turn off one of the two: unset TT_METAL_WATCHER, or unset TT_METAL_DPRINT_CORES.
+#if defined(UCK_CHLKC_PACK) && defined(WATCHER_ENABLED) && defined(DEBUG_PRINT_ENABLED)
+#error \
+    "Quasar pack TRISC (trisc2) firmware does not fit with both the watcher and DPRINT enabled: the two together exceed MEM_TRISC_FIRMWARE_SIZE (5120 B). Disable one -- unset TT_METAL_WATCHER, or unset TT_METAL_DPRINT_CORES."
+#endif
+
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
 thread_local std::uint32_t wIndex __attribute__((used));
@@ -144,11 +156,9 @@ extern "C" std::uint32_t _start1() {
     do_thread_crt1(__ldm_tdata_init);
     // .tbss has been zeroed: cache this thread's hw index.
     internal_::init_hw_thread_idx();
-    // WAYPOINT indexes its per-thread slot via get_hw_thread_idx(), so it has to come after the
-    // cache is filled. The same applies to any DEVICE_PRINT added here -- but note that the compute
-    // firmware deliberately makes no DEVICE_PRINT calls: a single formatted call pulls the print
-    // ring and formatting machinery (~1.3 KB) into every TRISC firmware, and pack does not fit in
-    // MEM_TRISC_FIRMWARE_SIZE with it. Print from kernels instead.
+    // DEVICE_PRINT and WAYPOINT index their per-thread slots via get_hw_thread_idx(), so they have to
+    // come after the cache is filled.
+    DEVICE_PRINT("hartid: {}\n", hartid);
     WAYPOINT("I");
 
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
@@ -165,6 +175,7 @@ extern "C" std::uint32_t _start1() {
     setup_isr_csrs();
     enable_cc_stack();
     DeviceProfilerInit();
+    DPRINT("TRISC-FW: initialized\n");
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
@@ -247,8 +258,10 @@ extern "C" std::uint32_t _start1() {
 #endif
 
             // Signal completion
+            DPRINT("SIGNALING COMPLETION {:x}\n", (std::uint32_t)*trisc_run);
             tensix_sync();
         }
         *trisc_run = RUN_SYNC_MSG_DONE;
+        DPRINT("COMPLETION SIGNED OFF {:x}\n", (std::uint32_t)*trisc_run);
     }
 }

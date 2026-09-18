@@ -626,10 +626,15 @@ static bool reader_datacopy_writer(
         DeleteLinesStartingWith(fixture->dprint_file_name, "WARNING: Float32 on Wormhole displays limited precision");
     }
     if (arch == ARCH::QUASAR) {
-        // The Quasar data movement firmware traces its own progress, and every processor on the core
-        // shares this print stream, so drop those lines before comparing the compute output.
+        // The Quasar data movement and compute firmware both trace their own progress, and every
+        // processor on the core shares this print stream, so drop those lines before comparing the
+        // compute output.
         DeleteLinesStartingWith(fixture->dprint_file_name, "DM-FW:");
         DeleteLinesStartingWith(fixture->dprint_file_name, "DM0-FW:");
+        DeleteLinesStartingWith(fixture->dprint_file_name, "hartid:");
+        DeleteLinesStartingWith(fixture->dprint_file_name, "TRISC-FW:");
+        DeleteLinesStartingWith(fixture->dprint_file_name, "SIGNALING COMPLETION");
+        DeleteLinesStartingWith(fixture->dprint_file_name, "COMPLETION SIGNED OFF");
     }
     EXPECT_TRUE(FilesMatchesString(fixture->dprint_file_name, golden_output));
 
