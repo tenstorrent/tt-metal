@@ -127,16 +127,21 @@ sfpi_inline void logsigmoid_residual_bf16_x2(sfpi::vFloat& y0, sfpi::vFloat& y1,
  * log(e^x/(1+e^x)). The exponential is fed -|x|, built in one SFPSETSGN, so no
  * intermediate can overflow and there is no range split.
  *
+ * The inputs are read from DEST twice, once to build -|x| and once for min(x, 0), so
+ * that neither stays live in an LREG across the exponential and the residual; holding
+ * them runs the fp32 path out of LREGs.
+ *
  * @tparam is_fp32_dest_acc_en: If true, DEST is fp32 and the result is not rounded to bfloat16
+ * @param in: DEST offset of the first datum; the second is at in + 1
  * @note For |x| above about 87.3, exp(-|x|) falls below the smallest normal float and
  *       flushes. A positive input there returns +0 rather than a subnormal; torch returns
  *       a negative subnormal up to about 103.97 and +0 beyond. A negative input returns x,
  *       which is the correctly rounded answer.
  */
 template <bool is_fp32_dest_acc_en>
-sfpi_inline void logsigmoid_x2(sfpi::vFloat x0, sfpi::vFloat x1, sfpi::vFloat& result0, sfpi::vFloat& result1) {
-    sfpi::vFloat n0 = sfpi::setsgn(x0, 1);
-    sfpi::vFloat n1 = sfpi::setsgn(x1, 1);
+sfpi_inline void logsigmoid_x2(const std::uint32_t in, sfpi::vFloat& result0, sfpi::vFloat& result1) {
+    sfpi::vFloat n0 = sfpi::setsgn(sfpi::vFloat(sfpi::dst_reg[in]), 1);
+    sfpi::vFloat n1 = sfpi::setsgn(sfpi::vFloat(sfpi::dst_reg[in + 1]), 1);
     sfpi::vFloat residual0;
     sfpi::vFloat residual1;
     if constexpr (logsigmoid_wants_fp32_residual<is_fp32_dest_acc_en>) {
@@ -164,6 +169,8 @@ sfpi_inline void logsigmoid_x2(sfpi::vFloat x0, sfpi::vFloat x1, sfpi::vFloat& r
         sfpi::vFloat t1 = _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(n1);
         logsigmoid_residual_bf16_x2(residual0, residual1, t0, t1);
     }
+    sfpi::vFloat x0 = sfpi::dst_reg[in];
+    sfpi::vFloat x1 = sfpi::dst_reg[in + 1];
     sfpi::vFloat xm0 = sfpi::min(x0, 0.0f);
     sfpi::vFloat xm1 = sfpi::min(x1, 0.0f);
     result0 = xm0 - residual0;
@@ -198,7 +205,7 @@ inline void calculate_logsigmoid() {
     for (int d = 0; d < ITERATIONS / 2; ++d) {
         sfpi::vFloat result0;
         sfpi::vFloat result1;
-        logsigmoid_x2<is_fp32_dest_acc_en>(sfpi::dst_reg[0], sfpi::dst_reg[1], result0, result1);
+        logsigmoid_x2<is_fp32_dest_acc_en>(0, result0, result1);
         sfpi::dst_reg[0] = result0;
         sfpi::dst_reg[1] = result1;
         sfpi::dst_reg += 2;
@@ -222,11 +229,7 @@ inline void calculate_logsigmoid_binary(
     for (int d = 0; d < ITERATIONS / 2; ++d) {
         sfpi::vFloat result0;
         sfpi::vFloat result1;
-        logsigmoid_x2<is_fp32_dest_acc_en>(
-            sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi],
-            sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi + 1],
-            result0,
-            result1);
+        logsigmoid_x2<is_fp32_dest_acc_en>(dst_index_in0 * dst_tile_size_sfpi, result0, result1);
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result0;
         sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi + 1] = result1;
         sfpi::dst_reg += 2;
