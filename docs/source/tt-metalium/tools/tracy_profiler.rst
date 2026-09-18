@@ -70,6 +70,14 @@ By default the HTTP server listens on **8080**. To use a different HTTP port, pa
 
 In addition to the HTTP port, a **WebSocket** is used for live refresh on port *P*\ +1 (one above the chosen HTTP port *P*).
 
+The web viewer is started as a **daemon**, so it keeps listening after the run that started it exits. For headless CI, or for measurement loops that only want the numbers, turn it off with ``--no-web-server``:
+
+.. code-block:: bash
+
+    python -m tracy --no-web-server -m pytest path/to/test.py
+
+The equivalent env var is ``TRACY_NO_WEB_SERVER=1``, which is convenient for switching the UI off across a whole CI job without editing each command. With either one, no HTTP or WebSocket port is bound and no server process is left behind; the capture and any reports are unaffected.
+
 Remote host (SSH)
 ~~~~~~~~~~~~~~~~~
 
