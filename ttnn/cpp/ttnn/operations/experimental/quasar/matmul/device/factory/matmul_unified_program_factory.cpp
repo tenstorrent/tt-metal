@@ -68,7 +68,18 @@ uint64_t l1_budget_bytes(tt::tt_metal::IDevice* device) {
 }
 
 // Fills the ring sizing of `plan` for a given K chunk. Returns the total footprint in bytes.
-uint64_t size_rings(UnifiedMatmulPlan& plan, uint32_t K_chunk_tiles, bool fp32_dest_acc_en, bool packer_l1_acc) {
+struct Borrowable {
+    bool A = false;
+    bool B = false;
+    bool C = false;
+};
+
+uint64_t size_rings(
+    UnifiedMatmulPlan& plan,
+    uint32_t K_chunk_tiles,
+    bool fp32_dest_acc_en,
+    bool packer_l1_acc,
+    const Borrowable& borrowable) {
     plan.K_chunk_tiles = K_chunk_tiles;
     plan.num_K_chunks = plan.K_tiles / K_chunk_tiles;
 
@@ -107,9 +118,35 @@ uint64_t size_rings(UnifiedMatmulPlan& plan, uint32_t K_chunk_tiles, bool fp32_d
     plan.alias_C_partials_onto_MN_chunk =
         (plan.C_partials_format == plan.C_format) && (!partials_ever_written || one_MN_chunk_per_core);
 
+    // Borrowed rings are the shards themselves: natural tile stride, one slot per shard tile, no L1 cost.
+    // A can only be borrowed when the single K chunk covers all of K. A shard too large for a TRISC ring
+    // falls back to the copy path.
+    plan.borrow_A = borrowable.A && plan.num_K_chunks == 1;
+    plan.borrow_B = borrowable.B;
+    plan.borrow_C = borrowable.C;
+    if (plan.borrow_A) {
+        plan.A_slot_bytes = tt::tile_size(plan.A_format);
+        plan.A_slice_ring_slots = plan.MN_chunk_M_tiles * plan.K_tiles;
+        plan.borrow_A = (uint64_t)plan.A_slice_ring_slots * plan.A_slot_bytes <= MAX_DFB_RING_BYTES;
+    }
+    if (plan.borrow_B) {
+        plan.B_slot_bytes = tt::tile_size(plan.B_format);
+        plan.B_slice_ring_slots = plan.K_tiles * plan.MN_chunk_N_tiles;
+        plan.borrow_B = (uint64_t)plan.B_slice_ring_slots * plan.B_slot_bytes <= MAX_DFB_RING_BYTES;
+    }
+    if (!plan.borrow_A) {
+        plan.A_slot_bytes = tt::align(tt::tile_size(plan.A_format), dram_alignment);
+        plan.A_slice_ring_slots = A_slice_tiles * slice_ring_depth;
+    }
+    if (!plan.borrow_B) {
+        plan.B_slot_bytes = tt::align(tt::tile_size(plan.B_format), dram_alignment);
+        plan.B_slice_ring_slots = B_slice_tiles * slice_ring_depth;
+    }
+
     plan.l1_bytes =
-        (uint64_t)plan.A_slice_ring_slots * plan.A_slot_bytes + (uint64_t)plan.B_slice_ring_slots * plan.B_slot_bytes +
-        (uint64_t)plan.MN_chunk_ring_slots * plan.C_slot_bytes +
+        (plan.borrow_A ? 0 : (uint64_t)plan.A_slice_ring_slots * plan.A_slot_bytes) +
+        (plan.borrow_B ? 0 : (uint64_t)plan.B_slice_ring_slots * plan.B_slot_bytes) +
+        (plan.borrow_C ? 0 : (uint64_t)plan.MN_chunk_ring_slots * plan.C_slot_bytes) +
         (plan.alias_C_partials_onto_MN_chunk ? 0 : (uint64_t)plan.C_partials_ring_slots * plan.C_partials_slot_bytes);
     return plan.l1_bytes;
 }
@@ -237,7 +274,14 @@ UnifiedMatmulPlan plan_unified_matmul(
         // The chooser's (h, w) is (M tiles, N tiles) of the subblock.
         const std::tuple<uint32_t, uint32_t> subblock =
             operations::experimental::quasar::matmul::bmm_op_utils_qsr::get_matmul_subblock_params(
-                plan.MN_chunk_M_tiles, plan.MN_chunk_N_tiles, false, false, fp32_dest_acc_en);
+                plan.MN_chunk_M_tiles,
+                plan.MN_chunk_N_tiles,
+                /*per_core_M_equals_subblock_h_constraint=*/false,
+                // A sharded C is packed straight into the shard when subblocks span the chunk width, so ask
+                // for that when it can fit DST; the chooser falls back to 1x1 otherwise.
+                /*per_core_N_equals_subblock_w_constraint=*/attributes.output_mem_config.is_sharded() &&
+                    plan.MN_chunk_N_tiles <= (fp32_dest_acc_en ? 4u : 8u),
+                fp32_dest_acc_en);
         plan.subblock_M_tiles = std::get<0>(subblock);
         plan.subblock_N_tiles = std::get<1>(subblock);
     } else {
@@ -264,23 +308,61 @@ UnifiedMatmulPlan plan_unified_matmul(
         dst_capacity_tiles,
         fp32_dest_acc_en);
 
+    // ---- Borrowing: which operands are already sitting in L1 exactly as the rings would hold them ----
+    // A shard matches when the tensor is L1-sharded with that shard shape and its grid lists the active
+    // cores in assignment order (so shard i lives on the core that produces chunk i).
+    auto shard_matches = [&](const ttnn::Tensor& tensor, uint32_t shard_M_tiles, uint32_t shard_N_tiles) {
+        if (!tensor.is_sharded() || tensor.memory_config().buffer_type() != tt::tt_metal::BufferType::L1) {
+            return false;
+        }
+        const tt::tt_metal::ShardSpec& shard = tensor.shard_spec().value();
+        if (shard.shape[0] != shard_M_tiles * TILE_HEIGHT || shard.shape[1] != shard_N_tiles * TILE_WIDTH) {
+            return false;
+        }
+        const std::vector<CoreCoord> shard_cores =
+            corerange_to_cores(shard.grid, std::nullopt, shard.orientation == ShardOrientation::ROW_MAJOR);
+        return shard_cores == plan.cores;
+    };
+    const bool one_MN_chunk_per_core_no_batch = plan.batch_size == 1 && plan.MN_chunks_per_batch == plan.cores.size();
+    const uint32_t A_last_K_tile_valid_columns = A.logical_shape()[-1] % TILE_WIDTH;
+    Borrowable borrowable;
+    // A: the chunk's rows for all of K; chunks must span N so no two cores need the same rows. The copy path
+    // zeroes A's K padding in the ring; a borrowed shard is never written, so K must be a tile multiple.
+    borrowable.A = one_MN_chunk_per_core_no_batch && MN_chunks_across_N == 1 && A_last_K_tile_valid_columns == 0 &&
+                   shard_matches(A, plan.MN_chunk_M_tiles, plan.K_tiles);
+    // B: the chunk's columns for all of K; chunks must span M.
+    borrowable.B = one_MN_chunk_per_core_no_batch && MN_chunks_down_M == 1 &&
+                   shard_matches(B, plan.K_tiles, plan.MN_chunk_N_tiles);
+    // C: packed straight into the shard when subblock-major pack order equals the shard's row-major order.
+    borrowable.C = attributes.output_mem_config.is_sharded() &&
+                   attributes.output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1 &&
+                   one_MN_chunk_per_core_no_batch && plan.subblock_N_tiles == plan.MN_chunk_N_tiles;
+
     // ---- Formats, K chunk and ring sizing ----
     plan.A_format = tt::tt_metal::datatype_to_dataformat_converter(A.dtype());
     plan.B_format = tt::tt_metal::datatype_to_dataformat_converter(B.dtype());
     plan.C_format = tt::tt_metal::datatype_to_dataformat_converter(attributes.output_dtype.value());
     const uint64_t l1_budget = l1_budget_bytes(A.device());
     if (config.K_chunk_tiles == 0) {
-        // Largest divisor of K_tiles (capped) whose rings fit; 1 is the floor and must fit.
         uint32_t chosen = 0;
-        for (uint32_t K_chunk_tiles = std::min<uint32_t>(plan.K_tiles, MAX_AUTO_K_CHUNK_TILES); K_chunk_tiles >= 1;
+        // A resident A shard is only borrowable with a single K chunk, so try that first (main pins
+        // in0_block_w == K for height-sharded in0 for the same reason).
+        if (borrowable.A) {
+            size_rings(plan, plan.K_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
+            if (plan.borrow_A && rings_fit(plan, l1_budget)) {
+                chosen = plan.K_tiles;
+            }
+        }
+        // Otherwise the largest divisor of K_tiles (capped) whose rings fit; 1 is the floor and must fit.
+        for (uint32_t K_chunk_tiles = std::min<uint32_t>(plan.K_tiles, MAX_AUTO_K_CHUNK_TILES);
+             chosen == 0 && K_chunk_tiles >= 1;
              --K_chunk_tiles) {
             if (plan.K_tiles % K_chunk_tiles != 0) {
                 continue;
             }
-            size_rings(plan, K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc);
+            size_rings(plan, K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
             if (rings_fit(plan, l1_budget)) {
                 chosen = K_chunk_tiles;
-                break;
             }
         }
         TT_FATAL(
@@ -298,7 +380,7 @@ UnifiedMatmulPlan plan_unified_matmul(
             "K_chunk_tiles ({}) must divide K_tiles ({})",
             config.K_chunk_tiles,
             plan.K_tiles);
-        size_rings(plan, config.K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc);
+        size_rings(plan, config.K_chunk_tiles, fp32_dest_acc_en, packer_l1_acc, borrowable);
         TT_FATAL(
             rings_fit(plan, l1_budget),
             "MatmulUnifiedProgramConfig: rings for a {}x{}-tile MN chunk with K_chunk_tiles={} do not fit "
@@ -376,23 +458,61 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
 
     // ---- Dataflow-buffer rings ----
     const tt::tt_metal::Tile C_tile = C.tensor_spec().tile();
-    Group<DataflowBufferSpec> dataflow_buffers = {
-        DataflowBufferSpec{
+    // The C tensor handed in may be a caller-provided output whose shard grid differs from the plan's; only
+    // pack in place when it really is laid out as the plan assumed.
+    const bool borrow_C = plan.borrow_C && C.is_sharded() &&
+                          C.memory_config().buffer_type() == tt::tt_metal::BufferType::L1 &&
+                          corerange_to_cores(
+                              C.shard_spec().value().grid,
+                              std::nullopt,
+                              C.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR) == plan.cores &&
+                          C.shard_spec().value().shape[0] == plan.MN_chunk_M_tiles * TILE_HEIGHT &&
+                          C.shard_spec().value().shape[1] == plan.MN_chunk_N_tiles * TILE_WIDTH;
+    log_debug(
+        tt::LogOp,
+        "MatmulUnifiedProgramConfig: borrow A={} B={} C={} (MN chunk {}x{}, subblock {}x{}, K chunk {} of {} tiles)",
+        plan.borrow_A,
+        plan.borrow_B,
+        borrow_C,
+        plan.MN_chunk_M_tiles,
+        plan.MN_chunk_N_tiles,
+        plan.subblock_M_tiles,
+        plan.subblock_N_tiles,
+        plan.K_chunk_tiles,
+        plan.K_tiles);
+    if (C.is_sharded() && !borrow_C) {
+        log_warning(
+            tt::LogOp,
+            "MatmulUnifiedProgramConfig: sharded C is copied by the writer instead of packed in place. Packing in "
+            "place needs an L1 shard grid equal to the active cores, batch 1, one MN chunk per core and "
+            "subblock_N_tiles == MN_chunk_N_tiles (subblock {}x{} for a {}x{} chunk).",
+            plan.subblock_M_tiles,
+            plan.subblock_N_tiles,
+            plan.MN_chunk_M_tiles,
+            plan.MN_chunk_N_tiles);
+    }
+    Group<DataflowBufferSpec> dataflow_buffers;
+    {
+        DataflowBufferSpec A_slice_dfb{
             .unique_id = A_SLICE_DFB,
             .entry_size = plan.A_slot_bytes,
             .num_entries = plan.A_slice_ring_slots,
             .data_format_metadata = plan.A_format,
             .tile_format_metadata = A.tensor_spec().tile(),
-        },
-        DataflowBufferSpec{
+        };
+        if (plan.borrow_A) {
+            A_slice_dfb.borrowed_from = A_TENSOR;  // the resident A shard is the ring
+        }
+        DataflowBufferSpec B_slice_dfb{
             .unique_id = B_SLICE_DFB,
             .entry_size = plan.B_slot_bytes,
             .num_entries = plan.B_slice_ring_slots,
             .data_format_metadata = plan.B_format,
             .tile_format_metadata = B.tensor_spec().tile(),
-        },
-    };
-    {
+        };
+        if (plan.borrow_B) {
+            B_slice_dfb.borrowed_from = B_TENSOR;  // the resident B shard is the ring
+        }
         DataflowBufferSpec MN_chunk_dfb{
             .unique_id = MN_CHUNK_DFB,
             .entry_size = plan.C_slot_bytes,
@@ -400,6 +520,9 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             .data_format_metadata = plan.C_format,
             .tile_format_metadata = C_tile,
         };
+        if (borrow_C) {
+            MN_chunk_dfb.borrowed_from = C_TENSOR;  // finished tiles are packed straight into the C shard
+        }
         DataflowBufferSpec C_partials_dfb{
             .unique_id = C_PARTIALS_DFB,
             .entry_size = plan.C_partials_slot_bytes,
@@ -410,17 +533,30 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         if (plan.alias_C_partials_onto_MN_chunk) {
             MN_chunk_dfb.advanced_options.alias_with = {C_PARTIALS_DFB};
             C_partials_dfb.advanced_options.alias_with = {MN_CHUNK_DFB};
+            if (borrow_C) {
+                C_partials_dfb.borrowed_from = C_TENSOR;  // partials accumulate in the shard too
+            }
         }
+        dataflow_buffers.push_back(std::move(A_slice_dfb));
+        dataflow_buffers.push_back(std::move(B_slice_dfb));
         dataflow_buffers.push_back(std::move(MN_chunk_dfb));
         dataflow_buffers.push_back(std::move(C_partials_dfb));
     }
 
     // ---- Reader ----
     const uint32_t A_last_K_tile_valid_columns = A.logical_shape()[-1] % TILE_WIDTH;
+    std::map<std::string, std::string> reader_defines_map;
+    if (plan.borrow_A) {
+        reader_defines_map["A_BORROWED"] = "1";
+    }
+    if (plan.borrow_B) {
+        reader_defines_map["B_BORROWED"] = "1";
+    }
+    KernelSpec::CompilerOptions::Defines reader_defines(reader_defines_map);
     KernelSpec reader{
         .unique_id = READER_KERNEL,
         .source = std::filesystem::path(std::string(KERNEL_DIR) + "dataflow/unified_matmul_reader.cpp"),
-        .compiler_options = {},
+        .compiler_options = {.defines = reader_defines},
         .dfb_bindings = {ProducerOf(A_SLICE_DFB, "A_slice"), ProducerOf(B_SLICE_DFB, "B_slice")},
         .tensor_bindings =
             {
@@ -447,10 +583,15 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     };
 
     // ---- Writer ----
+    std::map<std::string, std::string> writer_defines_map;
+    if (borrow_C) {
+        writer_defines_map["C_BORROWED"] = "1";
+    }
+    KernelSpec::CompilerOptions::Defines writer_defines(writer_defines_map);
     KernelSpec writer{
         .unique_id = WRITER_KERNEL,
         .source = std::filesystem::path(std::string(KERNEL_DIR) + "dataflow/unified_matmul_writer.cpp"),
-        .compiler_options = {},
+        .compiler_options = {.defines = writer_defines},
         .dfb_bindings = {ConsumerOf(MN_CHUNK_DFB, "MN_chunk")},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = C_TENSOR, .accessor_name = "C"}},
         .compile_time_args =

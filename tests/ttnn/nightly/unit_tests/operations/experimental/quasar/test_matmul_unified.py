@@ -310,6 +310,75 @@ def test_dram_sharded_in1(device):
     _check(out, _golden(a, b))
 
 
+def test_borrowed_B_over_several_K_chunks(device):
+    """B width-sharded in L1 on the row of cores that own the chunks: its shard is bound as the B slice ring
+    (no copy) and consumed one K chunk at a time; four K chunks here."""
+    gx, gy = _grid(device)
+    if gx < 4:
+        pytest.skip("needs 4 columns")
+    M, K, N = 2 * TILE, 8 * TILE, 8 * TILE
+    cores = _rect(0, 0, 3, 0)
+    in1_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, _shard(cores, [K, 2 * TILE]))
+    torch.manual_seed(13)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(cores=cores, MN_chunk_M_tiles=2, MN_chunk_N_tiles=2, K_chunk_tiles=2)
+    out = _run(device, a, b, config, in1_mem=in1_mem)
+    _check(out, _golden(a, b))
+
+
+def test_height_sharded_A_with_padded_K_takes_the_copy_path(device):
+    """K = 100 is not a tile multiple, so A's padding has to be zeroed in the ring: A cannot be borrowed and is
+    copied even though its shard matches the chunks."""
+    gx, gy = _grid(device)
+    if gy < 4:
+        pytest.skip("needs 4 rows")
+    M, K, N = 8 * TILE, 100, 3 * TILE
+    cores = _rect(0, 0, 0, 3)
+    in0_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard(cores, [2 * TILE, 4 * TILE])
+    )
+    torch.manual_seed(14)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(cores=cores, MN_chunk_M_tiles=2, MN_chunk_N_tiles=3)
+    out = _run(device, a, b, config, in0_mem=in0_mem)
+    _check(out, _golden(a, b))
+
+
+def test_sharded_C_with_narrow_subblock_takes_the_copy_path(device):
+    """An explicit subblock narrower than the chunk means pack order != shard order, so C is written by the
+    writer instead of packed in place (with a warning); the result must still be right."""
+    gx, gy = _grid(device)
+    if gy < 2:
+        pytest.skip("needs 2 rows")
+    M, K, N = 4 * TILE, 4 * TILE, 4 * TILE
+    cores = _rect(0, 0, 0, 1)
+    out_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard(cores, [2 * TILE, N])
+    )
+    torch.manual_seed(15)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(
+        cores=cores, MN_chunk_M_tiles=2, MN_chunk_N_tiles=4, subblock_M_tiles=1, subblock_N_tiles=2
+    )
+    out = _run(device, a, b, config, out_mem=out_mem)
+    _check(out, _golden(a, b))
+
+
+def test_single_core_all_operands_borrowed(device):
+    """One core, A / B / C all L1-sharded on it: every ring is a resident shard, so the reader reads nothing
+    and the writer writes nothing."""
+    M, K, N = 3 * TILE, 4 * TILE, 2 * TILE
+    core = _rect(0, 0, 0, 0)
+    in0_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard(core, [M, K]))
+    in1_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, _shard(core, [K, N]))
+    out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard(core, [M, N]))
+    torch.manual_seed(16)
+    a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
+    config = qsr.MatmulUnifiedProgramConfig(cores=core, MN_chunk_M_tiles=3, MN_chunk_N_tiles=2)
+    out = _run(device, a, b, config, in0_mem=in0_mem, in1_mem=in1_mem, out_mem=out_mem)
+    _check(out, _golden(a, b))
+
+
 def test_l1_interleaved_everything(device):
     gx, gy = _grid(device)
     M, K, N = 4 * TILE, 4 * TILE, 4 * TILE
