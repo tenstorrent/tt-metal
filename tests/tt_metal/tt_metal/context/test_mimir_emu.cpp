@@ -51,7 +51,9 @@ CoreCoord translated_dram_core(const metal_SocDescriptor& soc_desc, uint32_t cha
     return {core.x, core.y};
 }
 
-TEST(MimirEmu, CceSramChannelsDoNotAliasThroughMetalCluster) {
+class CceSramChannelsDoNotAliasThroughMetalCluster : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(CceSramChannelsDoNotAliasThroughMetalCluster, RoundTrip) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
@@ -63,25 +65,29 @@ TEST(MimirEmu, CceSramChannelsDoNotAliasThroughMetalCluster) {
     ASSERT_EQ(cluster.all_chip_ids().size(), 1);
 
     constexpr ChipId chip_id = 0;
+    const uint32_t cce_index = GetParam();
+    const uint32_t other_cce_index = 1u - cce_index;
     const auto& soc_desc = cluster.get_soc_desc(chip_id);
-    const CoreCoord cce0 = translated_dram_core(soc_desc, 0);
-    const CoreCoord cce1 = translated_dram_core(soc_desc, 1);
+    const CoreCoord cce = translated_dram_core(soc_desc, cce_index);
+    const CoreCoord other_cce = translated_dram_core(soc_desc, other_cce_index);
     constexpr uint64_t address = kCceL1NocOffset + kCceSramTestOffset;
-    constexpr uint32_t first = 0xC0FFEE01;
-    constexpr uint32_t second = 0xC0FFEE02;
-    uint32_t read_first = 0;
-    uint32_t read_second = 0;
+    const uint32_t written = 0xC0FFEE01 + cce_index;
+    const uint32_t other_written = 0xC0FFEE01 + other_cce_index;
+    uint32_t read_back = 0;
+    uint32_t other_read_back = 0;
 
-    cluster.write_core(&first, sizeof(first), {chip_id, cce0}, address);
-    cluster.write_core(&second, sizeof(second), {chip_id, cce1}, address);
-    cluster.read_core(&read_first, sizeof(read_first), {chip_id, cce0}, address);
-    cluster.read_core(&read_second, sizeof(read_second), {chip_id, cce1}, address);
+    cluster.write_core(&other_written, sizeof(other_written), {chip_id, other_cce}, address);
+    cluster.write_core(&written, sizeof(written), {chip_id, cce}, address);
+    cluster.read_core(&read_back, sizeof(read_back), {chip_id, cce}, address);
+    cluster.read_core(&other_read_back, sizeof(other_read_back), {chip_id, other_cce}, address);
 
-    EXPECT_EQ(read_first, first);
-    EXPECT_EQ(read_second, second);
+    EXPECT_EQ(read_back, written);
+    EXPECT_EQ(other_read_back, other_written);
 }
 
-TEST(MimirEmu, CceSramRoundTripThroughMinimalDevice) {
+class CceSramRoundTripThroughMinimalDevice : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(CceSramRoundTripThroughMinimalDevice, RoundTrip) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
@@ -90,10 +96,13 @@ TEST(MimirEmu, CceSramRoundTripThroughMinimalDevice) {
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
+    const uint32_t cce_index = GetParam();
+    ASSERT_LT(cce_index, device->num_dram_channels());
+
     Cluster& cluster = MetalContext::instance().get_cluster();
-    const CoreCoord cce = device->virtual_core_from_logical_core({0, 0}, CoreType::DRAM);
+    const CoreCoord cce = device->virtual_core_from_logical_core({cce_index, 0}, CoreType::DRAM);
     constexpr uint64_t address = kCceL1NocOffset + kCceSramTestOffset;
-    constexpr uint32_t written = 0xC0FFEE03;
+    const uint32_t written = 0xC0FFEE03 + cce_index;
     uint32_t read_back = 0;
     cluster.write_core(&written, sizeof(written), {device->id(), cce}, address);
     cluster.read_core(&read_back, sizeof(read_back), {device->id(), cce}, address);
@@ -150,6 +159,53 @@ TEST_P(HartZeroRunsDramKernel, WritesMagic) {
     MetalContext::instance().get_cluster().read_core(
         &result, sizeof(result), {device->id(), virtual_dram_core}, result_noc_addr);
     EXPECT_EQ(result, magic);
+    EXPECT_TRUE(CloseDevice(device));
+}
+
+class AllHartsRunDramKernel : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(AllHartsRunDramKernel, WritesMagic) {
+    if (!emu_server_configured()) {
+        GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
+    }
+
+    IDevice* device = CreateDevice(0);
+    ASSERT_NE(device, nullptr);
+    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
+
+    const uint32_t cce_index = GetParam();
+    ASSERT_LT(cce_index, device->num_dram_channels());
+
+    const CoreCoord logical_dram_core{cce_index, 0};
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t num_harts = hal.get_num_risc_processors(HalProgrammableCoreType::DRAM);
+    ASSERT_EQ(num_harts, 8u);
+
+    const uint32_t result_dev_base =
+        kCceSramUncachedBase + hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const uint64_t result_noc_base = hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+
+    Program program = CreateProgram();
+    std::vector<uint32_t> expected(num_harts);
+    for (uint32_t hart = 0; hart < num_harts; hart++) {
+        expected[hart] = 0xC0FFEE10 + (cce_index << 8) + hart;
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/dram_write_one_uint32.cpp",
+            logical_dram_core,
+            DramConfig{
+                .processor = static_cast<DataMovementProcessor>(hart),
+                .noc = NOC::NOC_0,
+                .compile_args = {result_dev_base + hart * static_cast<uint32_t>(sizeof(uint32_t)), expected[hart]}});
+    }
+
+    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+
+    std::vector<uint32_t> result(num_harts, 0);
+    const CoreCoord virtual_dram_core = device->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
+    MetalContext::instance().get_cluster().read_core(
+        result.data(), result.size() * sizeof(uint32_t), {device->id(), virtual_dram_core}, result_noc_base);
+    EXPECT_EQ(result, expected);
     EXPECT_TRUE(CloseDevice(device));
 }
 
@@ -303,7 +359,24 @@ TEST_P(CopiesGddrThroughAllocatedBuffer, RoundTrip) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
+    MimirEmu,
+    CceSramChannelsDoNotAliasThroughMetalCluster,
+    ::testing::Values(0u, 1u),
+    [](const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Cce{}", info.param); });
+
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu,
+    CceSramRoundTripThroughMinimalDevice,
+    ::testing::Values(0u, 1u),
+    [](const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Cce{}", info.param); });
+
+INSTANTIATE_TEST_SUITE_P(
     MimirEmu, HartZeroRunsDramKernel, ::testing::Values(0u, 1u), [](const ::testing::TestParamInfo<uint32_t>& info) {
+        return fmt::format("Cce{}", info.param);
+    });
+
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu, AllHartsRunDramKernel, ::testing::Values(0u, 1u), [](const ::testing::TestParamInfo<uint32_t>& info) {
         return fmt::format("Cce{}", info.param);
     });
 
@@ -323,7 +396,9 @@ INSTANTIATE_TEST_SUITE_P(
         return fmt::format("Cce{}_Partition{}", std::get<0>(info.param), std::get<1>(info.param));
     });
 
-TEST(MimirEmu, DramChannelsDoNotAliasThroughPublicDeviceApi) {
+class DramChannelsDoNotAliasThroughPublicDeviceApi : public ::testing::TestWithParam<uint32_t> {};
+
+TEST_P(DramChannelsDoNotAliasThroughPublicDeviceApi, RoundTrip) {
     if (!emu_server_configured()) {
         GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>.";
     }
@@ -332,19 +407,29 @@ TEST(MimirEmu, DramChannelsDoNotAliasThroughPublicDeviceApi) {
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->num_dram_channels(), 2);
 
-    std::vector<uint32_t> first{0xAAAA1111};
-    std::vector<uint32_t> second{0xBBBB2222};
-    ASSERT_TRUE(detail::WriteToDeviceDRAMChannel(device.get(), 0, kDramOffset, first));
-    ASSERT_TRUE(detail::WriteToDeviceDRAMChannel(device.get(), 1, kDramOffset, second));
+    const uint32_t dram_partition = GetParam();
+    const uint32_t other_partition = 1u - dram_partition;
+    std::vector<uint32_t> written{0xAAAA1111 + dram_partition};
+    std::vector<uint32_t> other_written{0xBBBB2222 + other_partition};
+    ASSERT_TRUE(detail::WriteToDeviceDRAMChannel(device.get(), other_partition, kDramOffset, other_written));
+    ASSERT_TRUE(detail::WriteToDeviceDRAMChannel(device.get(), dram_partition, kDramOffset, written));
 
-    std::vector<uint32_t> read_first;
-    std::vector<uint32_t> read_second;
-    ASSERT_TRUE(detail::ReadFromDeviceDRAMChannel(device.get(), 0, kDramOffset, sizeof(uint32_t), read_first));
-    ASSERT_TRUE(detail::ReadFromDeviceDRAMChannel(device.get(), 1, kDramOffset, sizeof(uint32_t), read_second));
+    std::vector<uint32_t> read_back;
+    std::vector<uint32_t> other_read_back;
+    ASSERT_TRUE(
+        detail::ReadFromDeviceDRAMChannel(device.get(), dram_partition, kDramOffset, sizeof(uint32_t), read_back));
+    ASSERT_TRUE(detail::ReadFromDeviceDRAMChannel(
+        device.get(), other_partition, kDramOffset, sizeof(uint32_t), other_read_back));
 
-    EXPECT_EQ(read_first, first);
-    EXPECT_EQ(read_second, second);
+    EXPECT_EQ(read_back, written);
+    EXPECT_EQ(other_read_back, other_written);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    MimirEmu,
+    DramChannelsDoNotAliasThroughPublicDeviceApi,
+    ::testing::Values(0u, 1u),
+    [](const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Partition{}", info.param); });
 
 }  // namespace
 }  // namespace tt::tt_metal
