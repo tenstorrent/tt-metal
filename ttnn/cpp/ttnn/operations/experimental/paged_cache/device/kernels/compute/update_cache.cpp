@@ -28,9 +28,14 @@ void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto num_heads = get_arg(args::num_heads);
 
+#ifdef INPUT_IS_ROW_MAJOR
+    // Row-major decode input is already a contiguous token row; skip untilize.
+    // dfb::in / dfb::untilized_in are unbound on this path (writer splices from the input shard).
+    compute_kernel_hw_startup(dfb::cache, dfb::untilized_cache);
+#else
     compute_kernel_hw_startup(dfb::in, dfb::untilized_in);
 
-    // Untilize input (standalone operation)
+    // Untilize tiled input (standalone operation)
     compute_kernel_lib::untilize<
         Wt,
         dfb::in,
@@ -38,6 +43,7 @@ void kernel_main() {
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+#endif
 
     for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
         compute_kernel_lib::untilize<Wt, dfb::cache, dfb::untilized_cache>(1);

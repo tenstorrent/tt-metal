@@ -1,0 +1,146 @@
+import ttnn
+
+from models.experimental.deepseek_v4_flash.tt.decode_prefetch import (
+    DECODE_GCB_GROUP,
+    DECODE_LAYOUTS,
+    HC_FN_GCB,
+    ROUTER_GATE_GCB,
+    decode_gcb_group_specs,
+    decode_prefetch_page_bytes,
+    hc_fn_ring_specs,
+)
+from models.experimental.deepseek_v4_flash.tt.l1_placement import placement_for
+from models.experimental.deepseek_v4_flash.tt.layers import (
+    LinearDecode,
+    decode_weight_layout,
+    fused_rms_norm_gamma_memory_config,
+)
+
+
+def test_fused_rms_norm_gamma_is_width_sharded_on_the_weight_grid():
+    n, num_cores = 1024, 32
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))})
+    assert grid.num_cores() == num_cores
+
+    mem = fused_rms_norm_gamma_memory_config(n, grid)
+
+    assert mem.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    assert mem.buffer_type == ttnn.BufferType.L1
+    assert tuple(mem.shard_spec.shape) == (1, n // num_cores)
+    assert mem.shard_spec.grid == grid
+    assert mem.shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
+
+
+def test_linear_decode_forwards_fused_rms_norm_group_size():
+    layer = LinearDecode.__new__(LinearDecode)
+    layer.output_core_grid = None
+    layer.fused_rms_norm_eps = 1e-6
+    layer.fused_rms_norm_gamma = 1.0
+    layer.fused_rms_norm_group_size = 512
+    output_memory_config = object()
+
+    assert layer._epilogue_kwargs(output_memory_config) == {
+        "output_mem_config": output_memory_config,
+        "rms_norm": True,
+        "rms_norm_gamma": 1.0,
+        "rms_norm_epsilon": 1e-6,
+        "rms_norm_group_size": 512,
+    }
+
+
+def test_linear_decode_accepts_scalar_fused_rms_norm_gamma():
+    layer = LinearDecode.__new__(LinearDecode)
+    layer.can_fuse_rms_norm = lambda: True
+
+    assert layer.enable_fused_rms_norm(1e-6, 1.0, group_size=512)
+    assert layer.fused_rms_norm_eps == 1e-6
+    assert layer.fused_rms_norm_gamma == 1.0
+    assert layer.fused_rms_norm_group_size == 512
+
+
+def test_q_a_uses_full_width_32_core_layout():
+    assert DECODE_LAYOUTS["q_a_proj"] == {"K": 4096, "N": 1024, "n_blocks": 32}
+
+
+def test_q_a_uses_a_private_prefetch_ring():
+    assert "q_a_proj" not in DECODE_GCB_GROUP
+
+
+def test_kv_uses_full_width_16_core_layout():
+    assert DECODE_LAYOUTS["kv_proj"] == {"K": 4096, "N": 512, "n_blocks": 16}
+
+
+def test_kv_uses_a_private_prefetch_ring():
+    assert "kv_proj" not in DECODE_GCB_GROUP
+
+
+def test_csa_compressor_uses_full_width_32_core_layout():
+    assert DECODE_LAYOUTS["compressed_sparse_attention"] == {"K": 4096, "N": 1024, "n_blocks": 32}
+    assert "compressed_sparse_attention" not in DECODE_GCB_GROUP
+
+
+def test_hca_compressor_uses_full_width_16_core_layout():
+    assert DECODE_LAYOUTS["heavily_compressed_attention"] == {"K": 4096, "N": 512, "n_blocks": 16}
+    assert "heavily_compressed_attention" not in DECODE_GCB_GROUP
+
+
+def test_shared_gate_up_uses_full_width_32_core_layout():
+    assert DECODE_LAYOUTS["shared_gate_proj"] == {"K": 4096, "N": 2048, "n_blocks": 32}
+    assert DECODE_LAYOUTS["shared_up_proj"] == {"K": 4096, "N": 2048, "n_blocks": 32}
+    assert "shared_gate_proj" not in DECODE_GCB_GROUP
+    assert "shared_up_proj" not in DECODE_GCB_GROUP
+
+
+def test_shared_down_stays_on_the_shared_prefetch_ring():
+    assert DECODE_LAYOUTS["shared_down_proj"] == {"K": 2048, "N": 4096}
+    assert "shared_down_proj" in DECODE_GCB_GROUP
+
+
+def test_router_gate_uses_full_width_8_core_layout():
+    """No K split: hub mode is what lets it read the decode all-gather replica in place."""
+    assert DECODE_LAYOUTS["router_gate"] == {"K": 4096, "N": 256, "n_blocks": 8}
+    assert "router_gate" not in DECODE_GCB_GROUP
+
+
+def test_router_gate_leaves_the_hc_fn_ring():
+    """An 8-receiver full-width cut cannot share a 64-receiver GCB, so it has its own ring."""
+    assert DECODE_LAYOUTS["router_gate"] not in hc_fn_ring_specs()
+    # Every spec on one GCB has to want the same number of B cores, and the gate's 8 is not
+    # the ring's 64. HC_FN's own 8-tile slab is still there to pin the page (8 tiles).
+    assert {decode_weight_layout(**spec)[0] for spec in hc_fn_ring_specs()} == {64}
+    assert decode_weight_layout(**DECODE_LAYOUTS["router_gate"])[0] == 8
+    assert DECODE_LAYOUTS[HC_FN_GCB] in hc_fn_ring_specs()
+    assert ROUTER_GATE_GCB not in DECODE_GCB_GROUP
+
+
+def test_packed_router_gate_matches_full_width_layout():
+    placement = placement_for("router_gate")
+    assert placement.zone == "Z3"
+    assert placement.k_blocks is None
+    assert placement.n_blocks == 8
+    assert placement.shard_shape == (4096, 32)
+
+
+def test_shared_decode_gcb_page_stays_32_tiles():
+    """Compressor leaving the shared group must not inflate the ring to a 128-tile page."""
+    import ttnn
+    from models.experimental.deepseek_v4_flash.tt.layers import decode_gcb_page_bytes
+
+    assert decode_gcb_page_bytes(decode_gcb_group_specs(), ttnn.bfloat4_b) == 32 * 576
+    assert decode_prefetch_page_bytes(ttnn.bfloat4_b) == 32 * 576
+
+
+def test_packed_kv_matches_full_width_layout():
+    placement = placement_for("kv_proj")
+    assert placement.zone == "Z2"
+    assert placement.k_blocks is None
+    assert placement.n_blocks == 16
+    assert placement.shard_shape == (4096, 32)
+
+
+def test_packed_q_a_matches_full_width_layout():
+    placement = placement_for("q_a_proj")
+    assert placement.zone == "Z1"
+    assert placement.k_blocks is None
+    assert placement.n_blocks == 32
+    assert placement.shard_shape == (4096, 32)

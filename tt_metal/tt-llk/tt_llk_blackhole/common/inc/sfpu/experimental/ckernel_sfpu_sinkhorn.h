@@ -108,7 +108,7 @@ inline void _sinkhorn_zero_rect_padding_addrs_()
         }
         if constexpr (valid_rows < 4)
         {
-            v_if (sfpi::vConstTileId >= 16 * valid_rows)
+            v_if (sfpi::vConstTileId >= static_cast<std::int32_t>(16 * valid_rows))
             {
                 value = 0.0f;
             }
@@ -170,6 +170,19 @@ inline void _sinkhorn_program_constants_()
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (EPS_BITS >> 16) & 0xFFFF);
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, EPS_BITS & 0xFFFF);
     TTI_SFPCONFIG(0x5555, /*LREG13=*/13, /*MOD1_IMM16_IS_LANE_MASK=*/8);
+}
+
+// Restore LREG11 to its HW-const alias LCONST_neg1 = -1.0f. sinkhorn's parity mask
+// clobbers LREG11 for the entire tile; anything downstream that reads LCONST_neg1
+// (subtractions, negations, SFPMAD `-A*B+C` patterns in the next op's kernel) will
+// otherwise consume the leftover parity mask instead. Must be called before returning
+// from any sinkhorn API that touched the parity mask.
+inline void _sinkhorn_restore_lconst_neg1_()
+{
+    // Broadcast -1.0f (0xBF800000) into LREG0, then SFPCONFIG-copy to LREG11.
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0xBF80);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x0000);
+    TTI_SFPCONFIG(0x5555, /*LREG11=*/11, /*MOD1_IMM16_IS_LANE_MASK=*/8);
 }
 
 // Per-row max-sub for the comb 4x4 at face-0 top-left (rows 0..3, cols 0..3).
@@ -283,9 +296,25 @@ inline void _sinkhorn_strip_pair_body_()
     TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG4, 0);
     TTI_SFPADD(p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG5, 0);
 
-    // Reciprocal: LREG4 = 1 / strip0_row_sum, LREG5 = 1 / strip1_row_sum.
-    TTI_SFPARECIP(0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPARECIP_MOD1_RECIP);
-    TTI_SFPARECIP(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPARECIP_MOD1_RECIP);
+    // Reciprocal: LREG4 = 1 / (strip0_row_sum + eps), LREG5 = 1 / (strip1_row_sum + eps).
+    //
+    // SFPARECIP alone is only a ~5-7 bit mantissa initial estimate (designed as a Newton
+    // seed, not a final result). Refine each with three terms of the Neumann series
+    // (1/a = x*(1 + r + r^2 + ...) where r = 1 - a*x) -- same pattern that
+    // ckernel_sfpu_softmax_k.h uses on its normalization recip -- to get ~15+ bit mantissa
+    // (plenty after the final bf16 pack).
+    // LREG6/LREG7 hold the SFPARECIP seed x; LREG4/LREG5 shift from `a` to the refined 1/a.
+    TTI_SFPARECIP(0, p_sfpu::LREG4, p_sfpu::LREG6, sfpi::SFPARECIP_MOD1_RECIP);
+    TTI_SFPARECIP(0, p_sfpu::LREG5, p_sfpu::LREG7, sfpi::SFPARECIP_MOD1_RECIP);
+    // r = 1 - a*x  (SFPMAD MOD=1: dst = -A*B + C).
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG4, 1);
+    TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG7, p_sfpu::LCONST_1, p_sfpu::LREG5, 1);
+    // r + r^2.
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG4, 0);
+    TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG5, p_sfpu::LREG5, p_sfpu::LREG5, 0);
+    // Refined 1/a = x + x*(r + r^2) = x*(1 + r + r^2).
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG6, p_sfpu::LREG6, p_sfpu::LREG4, 0);
+    TTI_SFPMAD(p_sfpu::LREG5, p_sfpu::LREG7, p_sfpu::LREG7, p_sfpu::LREG5, 0);
 
     // Apply row recip to each strip's data LREGs.
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
@@ -314,9 +343,15 @@ inline void _sinkhorn_strip_pair_body_()
     TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG4, 0);
     TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG4, 0);
 
-    // Add eps to col_sum, then reciprocal: LREG4 = 1 / (col_sum + eps).
+    // Add eps to col_sum, then reciprocal: LREG4 = 1 / (col_sum + eps). Same Newton /
+    // Neumann-series refinement as the row-norm SFPARECIP above (see comment there). LREG5
+    // is available as scratch here (data lives in LREG0..3 after SFPTRANSP; LREG11/LREG13
+    // are persistent constants outside this group).
     TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG13, p_sfpu::LREG4, 0);
-    TTI_SFPARECIP(0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPARECIP_MOD1_RECIP);
+    TTI_SFPARECIP(0, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPARECIP_MOD1_RECIP);
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LCONST_1, p_sfpu::LREG4, 1); // r
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG4, 0);    // r + r^2
+    TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LREG5, p_sfpu::LREG4, 0);    // x*(1+r+r^2)
 
     // Apply col recip to each LREG (which now holds one row across cols).
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
@@ -427,6 +462,13 @@ inline void _sinkhorn_4x4_()
         // Face 3, strips 2+3.
         _sinkhorn_strip_pair_multi_<56, 58, 60, 62>(ITERS);
     }
+
+    // Restore LREG11 → LCONST_neg1 (-1.0). Parity mask lived in LREG11 for the whole
+    // tile; leaving it in place silently corrupts every downstream SFPU op that reads
+    // LCONST_neg1 (subtracts, negations, SFPMAD `-A*B+C` patterns), which in the full
+    // model produces immediate EOS. Unit tests never notice because sinkhorn is the last
+    // SFPU op in the fused-hyperconnection call chain.
+    _sinkhorn_restore_lconst_neg1_();
 }
 
 } // namespace sfpu

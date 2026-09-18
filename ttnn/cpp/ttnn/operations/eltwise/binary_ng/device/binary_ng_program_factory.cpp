@@ -39,9 +39,9 @@ uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     return nD_dim;
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(const Tensor& x) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(
+    const Tensor& x, const tt::tt_metal::Tile& tile) {
     const auto& shape = x.padded_shape();
-    const auto& tile = x.tensor_spec().tile();
     return {
         shape.rank() >= 5 ? shape[-5] : 1,
         shape[-4],
@@ -128,6 +128,79 @@ std::optional<AllShardSpecs> get_shard_specs(
         *get_shard_spec(c)};
 }
 
+// ROW_MAJOR sharded operands are processed IN PLACE with a 1x32 compute tile: each core's shard is a
+// run of contiguous 1x32 chunks of the rows it owns, so one CB page is exactly one chunk and the
+// row-major bytes sitting in the buffer *are* the tiles -- nothing is read, written, tilized or
+// untilized. The tile has to be 1x32 rather than the operand's own spec tile because a sharded
+// row-major shard (e.g. (1, 64) for a 64-column slice of a one-row tensor) is smaller than, and not
+// aligned to, a 32x32 tile -- which is precisely why such a tensor cannot be tilized at all.
+//
+// Returns the tile to use, or nullopt when the operands are not sharded row-major and the op keeps
+// its usual 32x32 tile. This is the bare decision -- no validation -- so that the shard volumes (which
+// are counted in these pages, and feed the program-cache key) can be derived from it too; the FATALs
+// live in row_major_sharded_compute_tile below.
+inline std::optional<tt::tt_metal::Tile> row_major_sharded_tile(
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c) {
+    if (a.layout() != Layout::ROW_MAJOR || c.layout() != Layout::ROW_MAJOR) {
+        return std::nullopt;
+    }
+    const bool any_sharded = a.memory_config().is_sharded() || c.memory_config().is_sharded() ||
+                             (b.has_value() and b->memory_config().is_sharded());
+    if (not any_sharded) {
+        return std::nullopt;
+    }
+    return tt::tt_metal::Tile({1u, tt::constants::TILE_WIDTH});
+}
+
+// The same decision, validated: this is what the descriptor factory runs with, so anything that would
+// silently page as 1x32 what cannot be paged that way has to fail here.
+inline std::optional<tt::tt_metal::Tile> row_major_sharded_compute_tile(
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const tt::tt_metal::TensorSpec& c,
+    SubtileBroadcastType subtile_broadcast_type) {
+    const auto tile = row_major_sharded_tile(a, b, c);
+    if (not tile.has_value()) {
+        return std::nullopt;
+    }
+    const auto shard_specs = get_shard_specs(a, b, c);
+    if (not shard_specs.has_value()) {
+        // Nothing to page in place: no operand carries a shard spec the in-place path could borrow.
+        return std::nullopt;
+    }
+    // The in-place path moves no data: every operand has to own its bytes, because there is no reader
+    // or writer here that could fetch one from DRAM. A row-major pair that disagrees on sharding is
+    // unified by the caller before it reaches the op -- there is no way to read an interleaved
+    // operand in this path, and no way to tilize the shard it would have to agree with -- so
+    // reaching this point with one is a bug worth failing on rather than silently paging an
+    // interleaved tensor as if it were a shard.
+    TT_FATAL(
+        not b.has_value() or
+            (a.memory_config().is_sharded() and b->memory_config().is_sharded() and c.memory_config().is_sharded()),
+        "binary_ng: a row-major operand is processed in place, which requires every operand to be sharded");
+    // The in-place path only shuffles CB pages; it cannot express a row or column broadcast, whose
+    // fills are written against the standard tile geometry.
+    TT_FATAL(
+        subtile_broadcast_type == SubtileBroadcastType::NONE ||
+            subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+            subtile_broadcast_type == SubtileBroadcastType::SCALAR_B,
+        "binary_ng: a sharded row-major operand is processed in place with a 1x32 compute tile, which "
+        "cannot express a row or column broadcast; only element-wise and scalar forms are supported");
+    // A page is one 1x32 chunk, so every sharded operand's width has to be whole chunks.
+    for (const auto* shard_spec :
+         {&shard_specs->a_shard_spec, &shard_specs->b_shard_spec, &shard_specs->c_shard_spec}) {
+        TT_FATAL(
+            shard_spec->shape[1] % tt::constants::TILE_WIDTH == 0,
+            "binary_ng: a sharded row-major operand is processed as 1x32 chunks, so its shard width ({}) must "
+            "be a multiple of {}",
+            shard_spec->shape[1],
+            tt::constants::TILE_WIDTH);
+    }
+    return tile;
+}
+
 bool should_use_row_major_path(
     const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
     const std::optional<Tensor>& b,
@@ -168,13 +241,13 @@ class ShardShapeGenerator {
 public:
     ShardShapeGenerator() = default;
 
-    ShardShapeGenerator(const ShardSpec& shard_spec, const Tensor& tensor) :
+    ShardShapeGenerator(const ShardSpec& shard_spec, const Tensor& tensor, const tt::tt_metal::Tile& tile) :
         // core ranges are sorted, so the last one is indeed the last core
         end_core(shard_spec.grid.ranges().rbegin()->end_coord),
         row_major(shard_spec.orientation == ShardOrientation::ROW_MAJOR),
         memory_layout(tensor.memory_config().memory_layout()) {
-        auto tile_height = tensor.tensor_spec().tile().get_height();
-        auto tile_width = tensor.tensor_spec().tile().get_width();
+        const auto tile_height = tile.get_height();
+        const auto tile_width = tile.get_width();
 
         shard_shape = {
             tt::round_up(shard_spec.shape[0], tile_height) / tile_height,
@@ -186,7 +259,7 @@ public:
             shard_shape[0],
             shard_shape[1]);
 
-        const auto [D, N, C, Ht, Wt] = get_shape_dims(tensor);
+        const auto [D, N, C, Ht, Wt] = get_shape_dims(tensor, tile);
         const auto unrolled_Ht = D * N * C * Ht;
         last_shard_shape = {
             shard_shape[0] - (tt::round_up(unrolled_Ht, shard_shape[0]) - unrolled_Ht),
@@ -382,7 +455,12 @@ std::optional<AllShardVolumes> get_shard_volumes(
     const auto a_sharded = a.memory_config().is_sharded();
     const auto b_sharded = b.has_value() and b->memory_config().is_sharded();
     const auto c_sharded = c.memory_config().is_sharded();
-    const auto tile_hw = c.tile().get_tile_hw();
+    // A shard is counted in the pages the program will page it in, which is the operand's own tile --
+    // except for a sharded row-major operand, which is processed in place as 1x32 chunks. Both this
+    // helper's callers (compute_program_hash, which caches on these volumes) and the descriptor
+    // factory have to see the same page size, so the decision is taken from the operands here rather
+    // than left to each caller to pass in.
+    const auto tile_hw = CMAKE_UNIQUE_NAMESPACE::row_major_sharded_tile(a, b, c).value_or(c.tile()).get_tile_hw();
 
     return AllShardVolumes{
         .a_shard_volume = a_sharded ? shard_specs->a_shard_spec.numel() / tile_hw : std::optional<std::uint32_t>{},
@@ -440,14 +518,25 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
     const auto cHt_r = c.padded_shape()[-2];
     const auto cWt_r = c.padded_shape()[-1];
 
-    const auto [aD, aN, aC, aHt, aWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(a);
-    const auto [bD, bN, bC, bHt, bWt] =
-        b.has_value() ? CMAKE_UNIQUE_NAMESPACE::get_shape_dims(*b) : std::tuple{1u, 1u, 1u, 1u, 1u};
-    const auto [cD, cN, cC, cHt, cWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(c);
-
     const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
         a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
     const bool rt_has_sharding = shard_specs.has_value();
+
+    const auto rm_sharded_tile = CMAKE_UNIQUE_NAMESPACE::row_major_sharded_compute_tile(
+        a.tensor_spec(),
+        b.has_value() ? std::optional<tt::tt_metal::TensorSpec>{b->tensor_spec()} : std::nullopt,
+        c.tensor_spec(),
+        operation_attributes.subtile_broadcast_type);
+    const bool rm_sharded_compute_tile = rm_sharded_tile.has_value();
+    const tt::tt_metal::Tile compute_tile = rm_sharded_tile.value_or(c.tensor_spec().tile());
+    const auto tile_of = [&](const Tensor& x) -> tt::tt_metal::Tile {
+        return rm_sharded_compute_tile ? compute_tile : x.tensor_spec().tile();
+    };
+
+    const auto [aD, aN, aC, aHt, aWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(a, tile_of(a));
+    const auto [bD, bN, bC, bHt, bWt] =
+        b.has_value() ? CMAKE_UNIQUE_NAMESPACE::get_shape_dims(*b, tile_of(*b)) : std::tuple{1u, 1u, 1u, 1u, 1u};
+    const auto [cD, cN, cC, cHt, cWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(c, tile_of(c));
     auto grid = rt_has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
 
     const auto row_major =
@@ -484,9 +573,9 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
     const uint32_t b_alignment = b.has_value() ? b->buffer()->alignment() : a_alignment;
     const uint32_t c_alignment = c.buffer()->alignment();
 
-    const uint32_t tile_height = c.tensor_spec().tile().get_height();
-    const uint32_t tile_width = c.tensor_spec().tile().get_width();
-    const uint32_t tile_hw = tile_height * tile_width;
+    const uint32_t tile_height = compute_tile.get_height();
+    const uint32_t tile_width = compute_tile.get_width();
+    const uint32_t tile_hw = compute_tile.get_tile_hw();
 
     uint32_t rt_c_num_tiles;
     uint32_t num_rows_per_tile = 0;
@@ -555,11 +644,12 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
 
     if (rt_has_sharding) {
         core_group_1 = grid;
-        a_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->a_shard_spec, a);
+        a_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->a_shard_spec, a, tile_of(a));
         if (b.has_value()) {
-            b_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->b_shard_spec, *b);
+            b_shard_shape_generator =
+                CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->b_shard_spec, *b, tile_of(*b));
         }
-        c_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->c_shard_spec, c);
+        c_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->c_shard_spec, c, tile_of(c));
         c_shard_height = shard_specs->c_shard_spec.shape[0] / tile_height;
         c_shard_width = shard_specs->c_shard_spec.shape[1] / tile_width;
         num_shards_per_width = CMAKE_UNIQUE_NAMESPACE::get_shards_per_width(
@@ -849,6 +939,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         TT_FATAL(is_sfpu_op, "Quantization op is SFPU-only");
     }
 
+    // The compute tile this program runs with: 1x32 for a sharded row-major operand, otherwise the
+    // output's own tile. Both the CB page sizes and the CB tile descriptors below are derived from it.
+    const auto rm_sharded_tile = CMAKE_UNIQUE_NAMESPACE::row_major_sharded_compute_tile(
+        a.tensor_spec(),
+        b.has_value() ? std::optional<tt::tt_metal::TensorSpec>{b->tensor_spec()} : std::nullopt,
+        c.tensor_spec(),
+        operation_attributes.subtile_broadcast_type);
+    const bool rm_sharded_compute_tile = rm_sharded_tile.has_value();
+    const tt::tt_metal::Tile compute_tile = rm_sharded_tile.value_or(c.tensor_spec().tile());
+
     const auto shard_volumes = get_shard_volumes(
         a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
     const auto has_sharding = shard_volumes.has_value();
@@ -875,9 +975,22 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // Int8 output is packed through the UInt8 packer path.
     const auto c_pack_data_format = cb_dataformat_for(c_dtype);
 
-    uint32_t a_single_tile_size = tt::tile_size(a_data_format);
-    uint32_t b_single_tile_size = tt::tile_size(b_data_format);
-    uint32_t c_single_tile_size = tt::tile_size(c_pack_data_format);
+    // Page size of the op's compute tile. For a sharded row-major operand that is the 1x32 tile --
+    // one page is one chunk of a row -- and the standard 32x32 page everywhere else.
+    uint32_t a_single_tile_size =
+        rm_sharded_compute_tile ? compute_tile.get_tile_size(a_data_format) : tt::tile_size(a_data_format);
+    uint32_t b_single_tile_size =
+        rm_sharded_compute_tile ? compute_tile.get_tile_size(b_data_format) : tt::tile_size(b_data_format);
+    uint32_t c_single_tile_size =
+        rm_sharded_compute_tile ? compute_tile.get_tile_size(c_pack_data_format) : tt::tile_size(c_pack_data_format);
+
+    // The kernels take get_tile_size/get_tile_hw and their unpack/pack geometry from the CB's tile
+    // descriptor, so a non-default compute tile has to travel with every CB that carries one of the
+    // pages sized above (the 32x32 activation-intermediate CBs are deliberately left alone).
+    const std::optional<tt::tt_metal::TileDescriptor> compute_tile_desc =
+        rm_sharded_compute_tile
+            ? std::optional<tt::tt_metal::TileDescriptor>(tt::tt_metal::TileDescriptor(compute_tile))
+            : std::nullopt;
 
     // we parallelize the computation across the output tiles
     const auto& all_device_cores = operation_attributes.worker_grid;
@@ -1090,6 +1203,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
                 .data_format = a_data_format,
                 .page_size = a_single_tile_size,
+                .tile = compute_tile_desc,
             }}},
             .buffer = a_sharded ? a_buffer : nullptr,
         });
@@ -1121,6 +1235,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
                 .data_format = b_data_format,
                 .page_size = b_single_tile_size,
+                .tile = compute_tile_desc,
             }}},
             .buffer = b_sharded ? b_buffer : nullptr,
         });
@@ -1153,6 +1268,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
                 .data_format = a_data_format,
                 .page_size = a_single_tile_size,
+                .tile = compute_tile_desc,
             }}},
         });
     }
@@ -1167,6 +1283,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
                 .data_format = b_data_format,
                 .page_size = b_single_tile_size,
+                .tile = compute_tile_desc,
             }}},
         });
     }
@@ -1181,6 +1298,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
                 .data_format = c_pack_data_format,
                 .page_size = c_single_tile_size,
+                .tile = compute_tile_desc,
             }}},
             .buffer = c_sharded ? c_buffer : nullptr,
         });
@@ -1188,6 +1306,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     const bool outputs_row_major = inputs_row_major && operation_attributes.output_layout == Layout::ROW_MAJOR;
     if (inputs_row_major) {
+        // This is the interleaved row-major scheme, whose DRAM-page reader/writer kernels address the
+        // whole tensor and so cannot serve a shard. A *sharded* row-major operand does not come here
+        // at all (`should_use_row_major_path` declines it) -- it runs in place through the tile
+        // reader/writer with the 1x32 compute tile decided above.
         TT_FATAL(!has_sharding, "Row-major binary_ng path does not support sharded tensors yet");
         TT_FATAL(outputs_row_major, "Row-major binary_ng path requires row-major output layout");
     }

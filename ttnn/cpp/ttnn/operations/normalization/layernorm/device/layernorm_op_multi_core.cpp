@@ -227,8 +227,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
-    const uint32_t tile_height = a.tensor_spec().tile().get_height();
-    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const auto& input_tile = a.tensor_spec().tile();
+    const uint32_t tile_height = input_tile.get_height();
+    const uint32_t tile_width = input_tile.get_width();
 
     // Data span in tiles, rounded up to tile boundaries
     uint32_t Wt = Wp / tile_width;
@@ -249,14 +250,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
                                           : tt::DataFormat::Float16_b;
     tt::DataFormat reciprocal_data_format = tt::DataFormat::Float32;
 
-    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
-    uint32_t single_tile_size = tt::tile_size(interm_data_format);
-    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
-    uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t in_single_tile_size = input_tile.get_tile_size(in_data_format);
+    uint32_t single_tile_size = input_tile.get_tile_size(interm_data_format);
+    uint32_t out_single_tile_size = input_tile.get_tile_size(out_data_format);
+    uint32_t bfloat16_tile_size = input_tile.get_tile_size(tt::DataFormat::Float16_b);
     tt::DataFormat scaler_data_format = tt::DataFormat::Float16_b;
-    uint32_t scaler_tile_size = tt::tile_size(scaler_data_format);
-    uint32_t gamma_single_tile_size = tt::tile_size(gamma_data_format);
-    uint32_t beta_single_tile_size = tt::tile_size(beta_data_format);
+    uint32_t scaler_tile_size = input_tile.get_tile_size(scaler_data_format);
+    uint32_t gamma_single_tile_size = input_tile.get_tile_size(gamma_data_format);
+    uint32_t beta_single_tile_size = input_tile.get_tile_size(beta_data_format);
 
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);

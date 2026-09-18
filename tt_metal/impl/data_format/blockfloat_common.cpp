@@ -367,6 +367,11 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);
     bool exponent_padding = (subtile_rows * subtiles_in_tile_col * subtiles_in_tile_row) < l1_alignment;
 
+    // Full tile size in 32-bit words, including any trailing DRAM-alignment padding after the mantissa section
+    // (see Tile::get_tile_size). Each packed tile must occupy exactly this many words so the layout stays
+    // both L1- and DRAM-aligned and matches the device tile size.
+    uint32_t bfp_tile_size_words = (tile.has_value() ? tile->get_tile_size(BfpFormat) : tt::tile_size(BfpFormat)) / 4;
+
     int num_float_in_tile = tile_HW;
     TT_ASSERT(input_data.size() % num_float_in_tile == 0);
     uint32_t num_tiles = input_data.size() / num_float_in_tile;
@@ -383,22 +388,18 @@ std::vector<uint32_t> pack_as_bfp_tiles(
 
     // Lambda to process a range of tiles
     auto process_tile_range = [&](int start_tile, int end_tile) -> std::vector<uint32_t> {
-        const int rows_per_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows;
         const int mantissa_dwords_per_tile = num_float_in_tile / num_mantissas_in_dword;
-        const int exp_dwords_per_tile =
-            exponent_padding ? static_cast<int>(tt::round_up(static_cast<uint32_t>(rows_per_tile), l1_alignment)) /
-                                   num_exponents_in_dword
-                             : rows_per_tile / num_exponents_in_dword;
 
         std::vector<uint32_t> local_result;
-        local_result.reserve(
-            static_cast<size_t>(end_tile - start_tile) * (exp_dwords_per_tile + mantissa_dwords_per_tile));
+        // With the trailing DRAM-alignment padding, every tile occupies exactly bfp_tile_size_words words.
+        local_result.reserve(static_cast<size_t>(end_tile - start_tile) * bfp_tile_size_words);
         std::vector<uint8_t> exponents;
         exponents.reserve(num_exponents_in_dword);
         std::vector<uint32_t> data;
         data.reserve(num_mantissas_in_dword);
 
         for (int tile_index = start_tile; tile_index < end_tile; ++tile_index) {
+            const size_t tile_start_words = local_result.size();
             std::vector<uint32_t> packed_data;
             packed_data.reserve(mantissa_dwords_per_tile);
             std::vector<uint8_t> exponents_with_padding;
@@ -470,6 +471,12 @@ std::vector<uint32_t> pack_as_bfp_tiles(
                 local_result.insert(local_result.end(), packed.begin(), packed.end());
             }
             local_result.insert(local_result.end(), packed_data.begin(), packed_data.end());
+
+            // Pad the tile out to the full (DRAM-aligned) tile size with trailing zeros after the mantissa section.
+            const size_t emitted_words = local_result.size() - tile_start_words;
+            if (emitted_words < bfp_tile_size_words) {
+                local_result.resize(local_result.size() + (bfp_tile_size_words - emitted_words), 0);
+            }
         }
 
         return local_result;

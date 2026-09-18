@@ -83,6 +83,8 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
     rotary_embedding_hf/device/rotary_embedding_hf_multi_core_program_factory.cpp
     rotary_embedding_hf/device/rotary_embedding_hf_sharded_program_factory.cpp
     rotary_embedding_hf/rotary_embedding_hf.cpp
+    fused_partial_rope/device/fused_partial_rope_device_operation.cpp
+    fused_partial_rope/fused_partial_rope.cpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_API_HEADERS
@@ -91,6 +93,7 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_API_HEADERS
     nlp_create_qkv_heads/nlp_create_qkv_heads.hpp
     nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp
     rotary_embedding_llama/rotary_embedding_llama.hpp
+    fused_partial_rope/fused_partial_rope.hpp
 )
 
 # Registered on the shared `ttnn` Python module target from
@@ -103,6 +106,7 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_NANOBIND_SRCS
     concatenate_heads/concatenate_heads_nanobind.cpp
     create_qkv_heads/create_qkv_heads_nanobind.cpp
     create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors_nanobind.cpp
+    fused_partial_rope/fused_partial_rope_nanobind.cpp
     nlp_concat_heads/nlp_concat_heads_nanobind.cpp
     nlp_concat_heads_decode/nlp_concat_heads_decode_nanobind.cpp
     nlp_concat_heads_boltz/nlp_concat_heads_boltz_nanobind.cpp

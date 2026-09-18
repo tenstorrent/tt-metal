@@ -36,6 +36,7 @@ void kernel_main() {
     // 0 = legacy unbounded behavior; nonzero = wrap update_idx mod this value before
     // page_table lookup (bounded sliding-window cache support).
     constexpr auto cache_position_modulo = get_arg(args::cache_position_modulo);
+    constexpr auto input_is_row_major = get_arg(args::input_is_row_major);
 
     constexpr uint32_t head_offset_t = Wt * St;
 
@@ -112,7 +113,8 @@ void kernel_main() {
     }
 #endif
 
-    dfb_untilized_input.wait_front(Wt);  // input tensor
+    constexpr uint32_t input_cb_pages = input_is_row_major ? 1 : Wt;
+    dfb_untilized_input.wait_front(input_cb_pages);  // input tensor
     const uint8_t noc_id = noc.get_noc_id();
     const uint32_t my_noc_x = my_x[noc_id];
     const uint32_t my_noc_y = my_y[noc_id];
@@ -159,7 +161,7 @@ void kernel_main() {
         cache_id += head_offset_t;
     }
 
-    dfb_untilized_input.pop_front(Wt);
+    dfb_untilized_input.pop_front(input_cb_pages);
 
     if (send_signal) {
         // send signal to receiver core that we are done using the input buffer

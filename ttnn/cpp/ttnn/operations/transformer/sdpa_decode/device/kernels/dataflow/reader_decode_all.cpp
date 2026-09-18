@@ -202,10 +202,12 @@ void kernel_main() {
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
 
-    // Read Q entirely - always read into cb_q_in
-    // When tilize_q is true, compute will tilize back to cb_q_in
-    // When tilize_q is false, Q is already tilized
-    const uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
+    // Read Q entirely
+    // When tilize_q is true, Q is ROW_MAJOR: read it into cb_q_rm and compute tilizes into cb_q_in
+    // When tilize_q is false, Q is already tilized and is read straight into cb_q_in
+    // A ROW_MAJOR buffer is paged by head row, so count and offset it in rows rather than tiles.
+    constexpr uint32_t q_num_rows = tilize_q ? (q_chunk_tiles * q_tile_bytes) / q_page_size_bytes : q_chunk_tiles;
+    const uint32_t q_batch_offset = cur_batch * q_num_rows;
 
     // Read Q
     read_q<cb_q_in, cb_q_rm, q_tile_bytes, q_chunk_tiles, is_q_sharded, tilize_q, use_half_tile, barrier_threshold>(
@@ -217,7 +219,8 @@ void kernel_main() {
         q_chunk_size_bytes,
         q_args,
         q_page_size_bytes,
-        q_batch_offset);
+        q_batch_offset,
+        q_num_rows);
 
     const auto k_reader = TensorAccessor(k_args, k_addr);
 

@@ -71,6 +71,15 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const bool is_q_sharded = input_tensor_q.is_sharded();
     const bool is_output_sharded = output_tensor.is_sharded();
     const bool tilize_q = input_tensor_q.layout() == Layout::ROW_MAJOR;
+    // compute_output_specs keeps the output in Q's layout, and compute untilizes cb_out whenever it
+    // tilized Q, so these two always move together. The writer pages the output by row in that
+    // case, so a mismatch would silently write tile-sized blocks to a row-paged buffer.
+    const bool is_output_row_major = output_tensor.layout() == Layout::ROW_MAJOR;
+    TT_FATAL(
+        tilize_q == is_output_row_major,
+        "Q and output layouts must agree: tilize_q={} but output is {}",
+        tilize_q,
+        is_output_row_major ? "ROW_MAJOR" : "TILE");
     const bool use_cur_pos_tensor = cur_pos_tensor.has_value();
     const bool use_attention_mask = attn_mask.has_value();
     const bool use_attention_sink = attention_sink.has_value();
@@ -161,6 +170,16 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t vDHt = vDH / TILE_WIDTH;
     const uint32_t PNHt = PNH / q_heads_parallel_factor / TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
+
+    if (tilize_q) {
+        // The GQA gather path writes face-sized fragments of a tiled output; an untilized output
+        // has no faces to address.
+        TT_FATAL(
+            num_kv_heads == 1,
+            "ROW_MAJOR Q requires num_kv_heads=1 (the output is untilized, so the GQA partial-tile "
+            "gather cannot address it), got {}",
+            num_kv_heads);
+    }
 
     // ========== Grid & Core Configuration ==========
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
@@ -442,12 +461,26 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // ========== Tile Configurations ==========
     const auto half_tile = tt::tt_metal::Tile({16, 32});
     const auto full_tile = tt::tt_metal::Tile({32, 32});
-    const bool use_half_tile = is_causal && num_q_heads <= 16 && q_df == tt::DataFormat::Float16_b;
+    // A tiny (16x32) Q tile halves the Q/mask/statistics footprint and the math for <=16 heads.
+    // ROW_MAJOR Q takes it whenever it can: a full tile would make compute tilize 32-row bands out
+    // of a buffer that only has num_q_heads rows, reading past the tensor.
+    //
+    // A half-tile mask CB is filled by reading half of each of the mask's full-tile pages, i.e. its
+    // top two faces, which is exactly the 16 head rows the mask populates. That only holds for a
+    // format whose tile is plain face-major data; a block-float mask keeps all four faces' exponents
+    // at the front of the page, so half of it is not a tile.
+    const bool mask_is_face_major =
+        !use_attention_mask || attn_mask->dtype() == DataType::BFLOAT16 || attn_mask->dtype() == DataType::FLOAT32;
+    const bool use_half_tile =
+        (is_causal || (tilize_q && mask_is_face_major)) && num_q_heads <= 16 && q_df == tt::DataFormat::Float16_b;
     const auto q_tile = use_half_tile ? half_tile : full_tile;
     const auto k_tile = full_tile;
     const auto v_tile = full_tile;
     const auto mask_tile = use_half_tile ? half_tile : full_tile;
-    const auto out_tile = full_tile;
+    // The output carries Q's tile geometry when it is untilized: the writer pages an untilized
+    // output by row and counts those rows out of the CB's tile size, so a full tile here would walk
+    // 32 rows per batch out of a 16-row band and spill into the next batch.
+    const auto out_tile = (use_half_tile && is_output_row_major) ? half_tile : full_tile;
     const auto scalar_tile = use_half_tile ? half_tile : full_tile;
     const auto im_tile = use_half_tile ? half_tile : full_tile;
     const auto stats_tile = use_half_tile ? half_tile : full_tile;
@@ -459,6 +492,20 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t scalar_tile_size = scalar_tile.get_tile_size(scalar_df);
     const uint32_t im_tile_size = im_tile.get_tile_size(im_df);
     const uint32_t stats_tile_size = stats_tile.get_tile_size(stats_df);
+
+    if (tilize_q) {
+        // The reader walks PNHt bands of the buffer and compute tilizes each one, so the head count
+        // must genuinely fill those bands rather than merely being padded up to them — otherwise the
+        // last band reads past the tensor.
+        TT_FATAL(
+            input_tensor_q.padded_shape()[2] % q_tile.get_height() == 0,
+            "ROW_MAJOR Q is tilized on chip in {}-row bands, so its head count must be a multiple "
+            "of {}: got {} padded rows ({} heads). Convert Q to TILE_LAYOUT for other head counts.",
+            q_tile.get_height(),
+            q_tile.get_height(),
+            input_tensor_q.padded_shape()[2],
+            num_q_heads);
+    }
 
     // ========== Debug Logging ==========
     log_debug(tt::LogOp, "Dimensions: B={}, PNH={}, S={}, DH={}, vDH={}, Bkv={}", B, PNH, S, DH, vDH, Bkv);
@@ -641,6 +688,14 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // If q is tilized and want to use tiny tiles, this is ignored since we need to skip bottom half of tiles
     const uint32_t q_chunk_size_bytes =
         q_tiles * (tilize_q ? num_q_heads * TILE_WIDTH * input_tensor_q.element_size() : q_tile_size);
+
+    // Page size the dataflow kernels address Q and the output with. A ROW_MAJOR buffer is paged by
+    // head row, not by tile, so the kernels must walk it a row at a time; overriding the page size
+    // to a tile would resolve to the wrong DRAM bank, since interleaved pages are distributed
+    // round-robin and one tile spans several of them.
+    const uint32_t q_page_size_bytes =
+        tilize_q ? input_tensor_q.padded_shape()[-1] * input_tensor_q.element_size() : full_tile.get_tile_size(q_df);
+    const uint32_t out_row_size_bytes = output_tensor.padded_shape()[-1] * output_tensor.element_size();
     const uint32_t reuse_k = (tensor_args.v.has_value() ? 0 : 1);
 
     // ========== Compile Time Arguments ==========
@@ -674,7 +729,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         q_chunk_size_bytes,
         static_cast<uint32_t>(is_cur_pos_tensor_sharded),
         static_cast<uint32_t>(is_page_table_sharded),
-        full_tile.get_tile_size(q_df),
+        q_page_size_bytes,
         sliding_window_size,
         original_block_size,
         k_mcast_semaphore_id,
@@ -726,6 +781,8 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         sliding_window_size,
         num_tree_reduction_rounds,
         original_block_size,
+        static_cast<uint32_t>(is_output_row_major),
+        out_row_size_bytes,
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 

@@ -716,14 +716,6 @@ inline auto invoke_binary_ng_impl(
 
     const auto input_a_rm = operations::binary::detail::is_layout_or_scalar(lhs_eff, Layout::ROW_MAJOR);
     const auto input_b_rm = operations::binary::detail::is_layout_or_scalar(rhs_eff, Layout::ROW_MAJOR);
-    const auto input_a_sharded = lhs_eff.memory_config().is_sharded();
-    const auto input_b_sharded = [&]() {
-        if constexpr (requires { rhs_eff.memory_config(); }) {
-            return rhs_eff.memory_config().is_sharded();
-        } else {
-            return false;
-        }
-    }();
     // we don't support to_layout with optional output tensor
     TT_FATAL(
         !(output_preallocated && input_a_rm && input_b_rm),
@@ -767,24 +759,45 @@ inline auto invoke_binary_ng_impl(
         }
     };
 
-    if (input_a_rm and input_b_rm and not input_a_sharded and not input_b_sharded) {
-        // is_layout_or_scalar reports a scalar as row-major, so a scalar first operand reaches here too.
-        return dispatch(lhs_eff, rhs_eff);
+    // A scalar rhs has no memory config to compare, so it always agrees with lhs.
+    const bool sharding_agrees = [&]() {
+        if constexpr (requires { rhs_eff.memory_config(); }) {
+            return lhs_eff.memory_config().is_sharded() == rhs_eff.memory_config().is_sharded();
+        } else {
+            return true;
+        }
+    }();
+
+    if (input_a_rm and input_b_rm) {
+        // binary_ng consumes row-major natively, sharded included, so it can be handed the operands
+        // as they are: for a row-major operand its compute tile is 1x32, so a row-major row is
+        // already a run of tiles and nothing needs tilizing. That is not just a saved relayout --
+        // a sharded row-major tensor cannot be tilized at all, because its physical shard (e.g.
+        // (1, 64) for a 64-column slice of a one-row tensor) is not tile-sized, and that is exactly
+        // what to_layout(TILE) rejects. is_layout_or_scalar also reports a scalar as row-major, so
+        // a scalar first operand reaches here too.
+        if (sharding_agrees) {
+            return dispatch(lhs_eff, rhs_eff);
+        }
+        // The pair disagrees on sharding, so exactly one operand is a shard. The tilize route below
+        // cannot rescue this one the way it rescues a tile/row-major mismatch: it would have to
+        // tilize the shard, and a row-major shard is not tile-sized. Move the interleaved operand
+        // onto the sharded operand's layout instead, which puts both operands on the shard the op
+        // processes in place. That is also where binary_ng puts the result for the shape this
+        // normally comes from -- a DRAM operand added to a shard it read -- so the caller still gets
+        // the layout it would have gotten had the operands agreed.
+        if constexpr (requires { rhs_eff.memory_config(); }) {
+            if (lhs_eff.memory_config().is_sharded()) {
+                return dispatch(lhs_eff, ttnn::to_memory_config(rhs_eff, lhs_eff.memory_config()));
+            }
+            return dispatch(ttnn::to_memory_config(lhs_eff, rhs_eff.memory_config()), rhs_eff);
+        }
     }
     // Either one or both are tiles
     const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE);
     const auto input_b = operations::binary::detail::to_layout(rhs_eff, Layout::TILE);
 
-    auto result = dispatch(input_a, input_b);
-
-    // if both inputs are in row major, convert the output to row major
-    // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
-    // since it leads to better perf
-    if (input_a_rm and input_b_rm) {
-        return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR);
-    }
-
-    return result;
+    return dispatch(input_a, input_b);
 }
 
 Tensor invoke_binary_ng(

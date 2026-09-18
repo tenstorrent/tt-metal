@@ -359,6 +359,7 @@ def run_test_sdpa_decode_single_iter(
     override_q_chunk_size=None,
     override_k_chunk_size=None,
     sliding_window_size=None,
+    q_layout=ttnn.TILE_LAYOUT,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if sub_core_grids is None:
@@ -458,7 +459,7 @@ def run_test_sdpa_decode_single_iter(
         Q[:, :, :nh],
         device=device,
         dtype=q_dtype,
-        layout=ttnn.TILE_LAYOUT,
+        layout=q_layout,
         memory_config=height_sharded_memcfg if sharded_in else dram_memcfg,
     )
     if causal:
