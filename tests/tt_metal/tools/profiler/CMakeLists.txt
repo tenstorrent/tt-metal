@@ -12,13 +12,6 @@ foreach(TEST_SRC ${PROFILER_TEST_SRCS})
     add_executable(${TEST_TARGET} ${TEST_SRC})
     target_link_libraries(${TEST_TARGET} PRIVATE tt_metal)
 
-    target_include_directories(
-        ${TEST_TARGET}
-        PRIVATE
-            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
-            ${CMAKE_CURRENT_SOURCE_DIR}
-    )
-
     set_target_properties(
         ${TEST_TARGET}
         PROPERTIES
@@ -26,5 +19,29 @@ foreach(TEST_SRC ${PROFILER_TEST_SRCS})
                 ${PROJECT_BINARY_DIR}/test/tt_metal/tools/profiler
             OUTPUT_NAME
                 ${TEST_NAME}
+    )
+endforeach()
+
+# These tests create Ethernet kernels through the internal kernel API.
+foreach(TEST_TARGET profiler_test_full_buffer profiler_test_timestamped_events)
+    target_include_directories(
+        ${TEST_TARGET}
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}
+            ${PROJECT_SOURCE_DIR}/tt_metal
+            ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
+            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
+            ${PROJECT_SOURCE_DIR}/tt_metal/llrt
+    )
+endforeach()
+
+# Streaming tests compile the internal decoder, which uses SIMDe directly.
+foreach(TEST_TARGET profiler_test_streaming_profiler_decode profiler_test_streaming_profiler_fetch)
+    target_link_libraries(${TEST_TARGET} PRIVATE simde::simde)
+    target_include_directories(
+        ${TEST_TARGET}
+        PRIVATE
+            ${PROJECT_SOURCE_DIR}/tt_metal
+            ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
     )
 endforeach()
