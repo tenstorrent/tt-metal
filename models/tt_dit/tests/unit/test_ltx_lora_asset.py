@@ -7,6 +7,7 @@ from models.tt_dit.utils import ltx_lora_asset as asset
 
 
 def test_missing_offline_adapter_has_actionable_failure(monkeypatch, tmp_path, expect_error):
+    monkeypatch.setattr("huggingface_hub.constants.HF_HUB_OFFLINE", True)
     monkeypatch.delenv("LORA_PATH", raising=False)
     monkeypatch.setattr(asset.Path, "home", lambda: tmp_path)
 
@@ -48,3 +49,18 @@ def test_preflight_copies_cached_file_to_shared_worker_storage(monkeypatch, tmp_
     staged = asset.resolve_lora(download_dir=destination)
     assert asset.Path(staged) == destination / asset.FILENAME
     assert asset.Path(staged).read_bytes() == b"adapter"
+
+
+def test_online_local_run_still_downloads_uncached_adapter(monkeypatch, tmp_path):
+    monkeypatch.delenv("LORA_PATH", raising=False)
+    monkeypatch.setattr(asset.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr("huggingface_hub.constants.HF_HUB_OFFLINE", False)
+
+    def download(repo, filename, **kwargs):
+        if kwargs.get("local_files_only"):
+            raise LocalEntryNotFoundError("not cached")
+        assert kwargs == {"revision": asset.REVISION}
+        return str(tmp_path / filename)
+
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", download)
+    assert asset.resolve_lora() == str(tmp_path / asset.FILENAME)

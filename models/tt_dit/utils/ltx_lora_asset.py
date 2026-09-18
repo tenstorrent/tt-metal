@@ -14,7 +14,7 @@ REVISION = "5948be4ced3a4493d1f836df64378ff136ddb770"
 
 
 def resolve_lora(*, download_dir=None):
-    from huggingface_hub import hf_hub_download
+    from huggingface_hub import constants, hf_hub_download
     from huggingface_hub.errors import LocalEntryNotFoundError
 
     def stage(path):
@@ -39,6 +39,8 @@ def resolve_lora(*, download_dir=None):
         return stage(hf_hub_download(REPO_ID, FILENAME, revision=REVISION, local_files_only=True))
     except LocalEntryNotFoundError:
         if download_dir is None:
+            if not constants.HF_HUB_OFFLINE:
+                return hf_hub_download(REPO_ID, FILENAME, revision=REVISION)
             raise RuntimeError(
                 "Distilled LoRA is missing from the offline cache. Stage it with "
                 "HF_HUB_OFFLINE=0 python -m models.tt_dit.utils.ltx_lora_asset --download-dir DIR "
