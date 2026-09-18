@@ -313,13 +313,23 @@ def test_mpfe_mixed_llama3b_ff1_sdpa(device):
         sdpa_torch = ttnn.to_torch(sdpa_warmup)
         ff1_torch = ttnn.to_torch(ff1_warmup)
 
-        # Validate four query heads sharing KV head zero without materializing a
-        # full repeated-head PyTorch reference.
-        reference_scores = torch.matmul(
-            pt_q[0, 0, :4].float(), pt_k[0, 0].float().transpose(-2, -1)
-        ) * (_HEAD_DIM**-0.5)
-        reference_sdpa = torch.matmul(torch.softmax(reference_scores, dim=-1), pt_v[0, 0].float())
-        sdpa_pass, sdpa_message = comp_pcc(reference_sdpa, sdpa_torch[0, 0, :4].float(), 0.99)
+        # Llama-3B GQA maps each group of three Q heads to one KV head
+        # (24 Q / 8 KV). Build the reference one head at a time to avoid
+        # materializing a full repeated-head K/V tensor.
+        q_heads_per_kv_head = _NUM_HEADS // _NUM_KV_HEADS
+        reference_heads = []
+        for q_head in range(_NUM_HEADS):
+            kv_head = q_head // q_heads_per_kv_head
+            reference_scores = torch.matmul(
+                pt_q[0, 0, q_head].float(), pt_k[0, kv_head].float().transpose(-2, -1)
+            ) * (_HEAD_DIM**-0.5)
+            reference_heads.append(
+                torch.matmul(torch.softmax(reference_scores, dim=-1), pt_v[0, kv_head].float())
+            )
+        reference_sdpa = torch.stack(reference_heads)
+        sdpa_pass, sdpa_message = comp_pcc(
+            reference_sdpa, sdpa_torch[0, 0, :_NUM_HEADS].float(), 0.99
+        )
         assert sdpa_pass, f"SDPA PCC failed: {sdpa_message}"
         reference_ff1 = pt_activation[:, :, :, :_FF1_K].float() @ pt_weight[
             :, :, :_FF1_K, :_FF1_N
