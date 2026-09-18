@@ -85,20 +85,23 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
         state_shape[0] == attrs.batch_heads && state_shape[1] == attrs.key_dim && state_shape[2] == attrs.value_dim,
         "affine_exclusive_scan: initial_state shape must be [batch_heads, K, V]");
     for (const auto& [tensor, name] :
-         {std::pair{&in.tail_a, "tail_a"}, std::pair{&in.tail_b, "tail_b"}, std::pair{&in.tail_state, "tail_state"}}) {
+         {std::pair{&in.tail_a, "tail_a"},
+          std::pair{&in.tail_b, "tail_b"},
+          std::pair{&in.tail_entry_states, "tail_entry_states"}}) {
         kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
         kda_factory_detail::check_layout(*tensor, tt::tt_metal::Layout::TILE, operation_name, name);
         kda_factory_detail::check_same_device(in.a, *tensor, operation_name, name);
     }
     kda_factory_detail::check_matching_dtype(in.a, in.tail_a, operation_name, "a and tail_a");
     kda_factory_detail::check_matching_dtype(in.b, in.tail_b, operation_name, "b and tail_b");
-    kda_factory_detail::check_dtype(in.tail_state, tt::tt_metal::DataType::FLOAT32, operation_name, "tail_state");
+    kda_factory_detail::check_dtype(
+        in.tail_entry_states, tt::tt_metal::DataType::FLOAT32, operation_name, "tail_entry_states");
 
     TT_FATAL(in.tail_a.logical_shape() == a_shape, "affine_exclusive_scan: tail_a shape must match a");
     TT_FATAL(in.tail_b.logical_shape() == b_shape, "affine_exclusive_scan: tail_b shape must match b");
     TT_FATAL(
-        in.tail_state.logical_shape() == state_shape,
-        "affine_exclusive_scan: tail_state shape must match initial_state");
+        in.tail_entry_states.logical_shape() == state_shape,
+        "affine_exclusive_scan: tail_entry_states shape must match initial_state");
 
     constexpr uint32_t max_coordinate_table_workers = 128;
     const auto grid = in.a.device()->compute_with_storage_grid_size();
@@ -140,7 +143,7 @@ AffineExclusiveScanOperation::create_op_performance_model(
         .fpu_add_ops = transitions * key_dim * value_dim,
     };
     std::vector<const Tensor*> inputs = {&in.a, &in.b, &in.initial_state};
-    inputs.insert(inputs.end(), {&in.tail_a, &in.tail_b, &in.tail_state});
+    inputs.insert(inputs.end(), {&in.tail_a, &in.tail_b, &in.tail_entry_states});
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
@@ -151,7 +154,7 @@ Tensor affine_exclusive_scan(
     uint32_t groups,
     const Tensor& tail_a,
     const Tensor& tail_b,
-    const Tensor& tail_state,
+    const Tensor& tail_entry_states,
     const tt::tt_metal::MemoryConfig& mem,
     const DeviceComputeKernelConfig& cfg,
     const Tensor& actual_start,
@@ -184,7 +187,7 @@ Tensor affine_exclusive_scan(
             .initial_state = state,
             .tail_a = tail_a,
             .tail_b = tail_b,
-            .tail_state = tail_state,
+            .tail_entry_states = tail_entry_states,
             .actual_start = actual_start});
     return outputs[0];
 }

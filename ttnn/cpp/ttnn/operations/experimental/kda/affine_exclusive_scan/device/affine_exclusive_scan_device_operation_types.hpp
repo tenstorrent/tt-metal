@@ -30,7 +30,7 @@ struct AffineExclusiveScanInputs {
     Tensor initial_state;
     Tensor tail_a;
     Tensor tail_b;
-    Tensor tail_state;
+    Tensor tail_entry_states;
 
     Tensor actual_start;
 };

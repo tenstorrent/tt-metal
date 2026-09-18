@@ -121,7 +121,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
     DataflowBuffer summary_seed(dfb::summary_seed);
     DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
     DataflowBuffer final_decay(dfb::final_decay);
-    DataflowBuffer tail_state(dfb::tail_state);
+    DataflowBuffer tail_entry_states(dfb::tail_entry_states);
     Noc noc;
 
     uint32_t reset_chunk = 0;
@@ -155,9 +155,9 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
         seed_identity<Kt, Vt>(summary_seed, noc, value_block);
 
     } else {
-        const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
+        const auto group_entry_states_accessor = TensorAccessor(tensor::group_entry_states);
         read_and_publish_value_slice<Vt, Vt_full>(
-            initial_state_accessor, state, noc, head * Kt * Vt_full, Kt, value_block);
+            group_entry_states_accessor, state, noc, head * Kt * Vt_full, Kt, value_block);
     }
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
@@ -174,9 +174,14 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
             }
         } else if constexpr (!summary) {
             if (reset_chunk != 0 && chunk == reset_chunk) {
-                const auto tail_state_accessor = TensorAccessor(tensor::tail_state);
+                const auto tail_entry_states_accessor = TensorAccessor(tensor::tail_entry_states);
                 read_and_publish_value_slice<Vt, Vt_full>(
-                    tail_state_accessor, tail_state, noc, (head / groups_per_head) * Kt * Vt_full, Kt, value_block);
+                    tail_entry_states_accessor,
+                    tail_entry_states,
+                    noc,
+                    (head / groups_per_head) * Kt * Vt_full,
+                    Kt,
+                    value_block);
             }
         }
         if constexpr (summary) {

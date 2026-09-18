@@ -10,7 +10,6 @@ from dataclasses import dataclass
 
 import pytest
 import torch
-import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
@@ -25,7 +24,6 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
 )
 
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
-    qkv_host_inputs,
     qkv_to_device,
     qkv_device_inputs,
     qkv_reference,

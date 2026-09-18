@@ -4,30 +4,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
 import pytest
 import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import _chronological_topology
+from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 pytestmark = [run_for_blackhole()]
-
-
-@pytest.fixture(autouse=True)
-def one_host_thread() -> Iterator[None]:
-    previous = torch.get_num_threads()
-    torch.set_num_threads(1)
-    try:
-        yield
-    finally:
-        torch.set_num_threads(previous)
 
 
 def _coordinate(sp_rank: int, tp_rank: int, sp_axis: int) -> tuple[int, int]:
@@ -62,10 +50,10 @@ def _sp_carries(tensor: ttnn.Tensor, device: ttnn.MeshDevice, sp_axis: int, tp_a
 @pytest.mark.parametrize(
     "mesh_device,tp_axis,device_params",
     [
-        pytest.param((2, 4), 1, fabric_1d_device_params(trace_region_size=8 * 1024 * 1024), id="SP2xTP4"),
-        pytest.param((4, 2), 1, fabric_1d_device_params(trace_region_size=8 * 1024 * 1024), id="SP4xTP2"),
-        pytest.param((4, 2), 0, fabric_1d_device_params(trace_region_size=8 * 1024 * 1024), id="SP2xTP4-axis1"),
-        pytest.param((2, 4), 0, fabric_1d_device_params(trace_region_size=8 * 1024 * 1024), id="SP4xTP2-axis1"),
+        pytest.param((2, 4), 1, fabric_1d_device_params(), id="SP2xTP4"),
+        pytest.param((4, 2), 1, fabric_1d_device_params(), id="SP4xTP2"),
+        pytest.param((4, 2), 0, fabric_1d_device_params(), id="SP2xTP4-axis1"),
+        pytest.param((2, 4), 0, fabric_1d_device_params(), id="SP4xTP2-axis1"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -79,23 +67,18 @@ def test_exchange_convolution_carry_preserves_causal_carries(
     width = 96 * 128 * 3
     generator = torch.Generator().manual_seed(128)
     qkv = torch.randn(1, sp * local_rows, width, generator=generator).bfloat16()
-    initial = torch.randn(1, 3, width, generator=generator).bfloat16()
     dims = [None, None]
     dims[axis], dims[tp_axis] = 1, 2
-    state_dims = [None, None]
-    state_dims[tp_axis] = 2
     qkv_tt = _to_device(qkv, mesh_device, tuple(dims))
-    initial_tt = _to_device(initial, mesh_device, tuple(state_dims))
 
     def release(outputs: tuple[ttnn.Tensor, ttnn.Tensor]) -> None:
         for tensor in outputs:
-            if tensor is not initial_tt:
-                ttnn.deallocate(tensor)
+            ttnn.deallocate(tensor)
 
     try:
         for first_rank in range(sp):
             for tail_rows in (0, 32, local_rows // 2, local_rows - 32):
-                topology = _chronological_topology(first_rank * local_rows + tail_rows, sp, local_rows)
+                topology = chronological_topology(first_rank * local_rows + tail_rows, sp, local_rows)
                 expected_entries = []
                 for rank in range(sp):
                     previous = (rank - 1) % sp
@@ -127,7 +110,7 @@ def test_exchange_convolution_carry_preserves_causal_carries(
                     assert all(
                         torch.equal(item, expected_final) for item in _sp_carries(final, mesh_device, axis, tp_axis)
                     )
-                    assert final.buffer_address() not in (initial_tt.buffer_address(), qkv_tt.buffer_address())
+                    assert final.buffer_address() != qkv_tt.buffer_address()
 
                 for _ in range(2):
                     outputs = run()
@@ -146,13 +129,11 @@ def test_exchange_convolution_carry_preserves_causal_carries(
 
                 if first_rank == sp - 1 and tail_rows in (0, local_rows // 2):
                     # Keep old allocations alive so fresh addresses cannot be recycled.
-                    old_qkv, old_initial = qkv_tt, initial_tt
+                    old_qkv = qkv_tt
                     cache_entries = mesh_device.num_program_cache_entries()
                     qkv_tt = _to_device(-qkv, mesh_device, tuple(dims))
-                    initial_tt = _to_device(-initial, mesh_device, tuple(state_dims))
                     try:
                         assert qkv_tt.buffer_address() != old_qkv.buffer_address()
-                        assert initial_tt.buffer_address() != old_initial.buffer_address()
                         expected_entries, expected_final = -expected_entries, -expected_final
                         outputs = run()
                         check(outputs)
@@ -161,18 +142,12 @@ def test_exchange_convolution_carry_preserves_causal_carries(
                         assert torch.equal(
                             _sp_carries(qkv_tt, mesh_device, axis, tp_axis), -qkv.reshape(sp, 1, local_rows, width)
                         )
-                        assert all(
-                            torch.equal(item, -initial) for item in _sp_carries(initial_tt, mesh_device, axis, tp_axis)
-                        )
                     finally:
                         ttnn.deallocate(qkv_tt)
-                        ttnn.deallocate(initial_tt)
-                        qkv_tt, initial_tt = old_qkv, old_initial
+                        qkv_tt = old_qkv
                 for tensor in (actual_start, selection_records):
                     ttnn.deallocate(tensor)
         assert torch.equal(_sp_carries(qkv_tt, mesh_device, axis, tp_axis), qkv.reshape(sp, 1, local_rows, width))
-        assert all(torch.equal(item, initial) for item in _sp_carries(initial_tt, mesh_device, axis, tp_axis))
     finally:
         ttnn.deallocate(qkv_tt)
-        ttnn.deallocate(initial_tt)
     print(f"SP={sp} axis={axis} C={local_rows}: exact routing, trace, rebinding and immutable inputs PASS")

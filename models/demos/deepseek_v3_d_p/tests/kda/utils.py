@@ -336,12 +336,12 @@ def make_kimi_k3_device_case(
             mesh_shape=tuple(mesh_device.shape),
         ),
     )
-    default_program_config = kimi_k3_program_config(
+    selected_program_config = program_config or kimi_k3_program_config(
+        active_seq_len_local=case.hidden.shape[1] // tuple(mesh_device.shape)[sequence_parallel_axis],
         tp_ccl_topology=(
             ttnn.Topology.Ring if tuple(mesh_device.shape)[sequence_parallel_axis] == 1 else ttnn.Topology.Linear
-        )
+        ),
     )
-    selected_program_config = program_config or default_program_config
     if summary_group_chunks is not None:
         selected_program_config = replace(
             selected_program_config,
@@ -358,6 +358,7 @@ def make_kimi_k3_device_case(
         sp_axis=sequence_parallel_axis,
         tp_axis=tensor_parallel_axis,
         program_config=selected_program_config,
+        active_seq_len=case.hidden.shape[1],
     )
     return layer, hidden
 
@@ -422,18 +423,18 @@ def random_weights(config: KDAConfig) -> dict[str, torch.Tensor]:
     return weights
 
 
-def _deallocate_state(state: KdaState) -> None:
+def deallocate_state(state: KdaState) -> None:
     ttnn.deallocate(state.recurrent)
     ttnn.deallocate(state.convolution)
 
 
-def _mla_row_permutation(actual_start: int, sp_size: int, local_rows: int) -> torch.Tensor:
+def mla_row_permutation(actual_start: int, sp_size: int, local_rows: int) -> torch.Tensor:
     """Natural-order index carried by each MLA row, flattened in chip-major order."""
     positions = rotated_chip_positions(actual_start, sp_size, local_rows)
     return torch.tensor([position - actual_start for chip in positions for position in chip])
 
 
-def _to_sp_input(hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int) -> ttnn.Tensor:
+def to_sp_input(hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: int) -> ttnn.Tensor:
     mesh_dims = [None, None]
     mesh_dims[sp_axis] = 1
     return ttnn.from_torch(
@@ -446,7 +447,20 @@ def _to_sp_input(hidden: torch.Tensor, mesh_device: ttnn.MeshDevice, sp_axis: in
     )
 
 
-def _build_layer(mesh_device, config, weights, sp_axis, tp_axis, *, summary_group_chunks: int = 8) -> ttKDA:
+def build_layer(
+    mesh_device: ttnn.MeshDevice,
+    config: KDAConfig,
+    weights: dict[str, torch.Tensor],
+    sp_axis: int,
+    tp_axis: int,
+    *,
+    active_seq_len: int,
+    summary_group_chunks: int | None = None,
+) -> ttKDA:
+    if summary_group_chunks is None:
+        # Explicit small-model configurations preserve the established geometry coverage.
+        local_rows = active_seq_len // tuple(mesh_device.shape)[sp_axis]
+        summary_group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 5, 640: 5, 1280: 8, 2560: 8, 5120: 8}[local_rows]
     return ttKDA(
         mesh_device,
         config,
@@ -459,10 +473,13 @@ def _build_layer(mesh_device, config, weights, sp_axis, tp_axis, *, summary_grou
             gated_rms_output_dtype=ttnn.bfloat16,
             output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         ),
+        active_seq_len=active_seq_len,
     )
 
 
-def _reference_case(sequence: int = 1280) -> tuple[KDAConfig, object, torch.Tensor, torch.Tensor, object]:
+def reference_case(
+    sequence: int = 1280,
+) -> tuple[KDAConfig, dict[str, torch.Tensor], torch.Tensor, torch.Tensor, KDAReferenceState]:
     config = KDAConfig(
         hidden_size=128,
         num_heads=8,
@@ -479,17 +496,17 @@ def _reference_case(sequence: int = 1280) -> tuple[KDAConfig, object, torch.Tens
     return config, weights, hidden, expected_output.to(torch.bfloat16), expected_state
 
 
-def _assert_matches_reference(
+def assert_matches_reference(
     *,
-    output_tt,
-    state,
-    permutation,
-    expected_output,
-    expected_state,
-    mesh_device,
-    sp_axis,
-    tp_axis,
-    config,
+    output_tt: ttnn.Tensor,
+    state: KdaState,
+    permutation: torch.Tensor,
+    expected_output: torch.Tensor,
+    expected_state: KDAReferenceState,
+    mesh_device: ttnn.MeshDevice,
+    sp_axis: int,
+    tp_axis: int,
+    config: KDAConfig,
     label: str,
     state_linf_threshold: float | None = 0.6,
     pcc_threshold: float = 0.999,
