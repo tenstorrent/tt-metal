@@ -1,0 +1,60 @@
+STATUS agent S -- M1 backward two-stream overlap (written 21:58 after the scratchpad wipe; all earlier logs are gone,
+numbers below are from the run outputs as they were reported before the wipe)
+
+DESIGN (tt-train only, uncommitted; ops/distributed/sp_overlap.hpp has the full contract)
+* AutoContext: open_device(..., num_command_queues=2); enable_ccl_sub_device(columns, rows) = sub-device manager
+  {compute rectangle, CCL rows/columns} + MeshDevice::set_compute_with_storage_grid_size_override(compute rect);
+  backward depth counter (Tensor::backward brackets its loop); backward-end hooks (run when the OUTERMOST backward has
+  run its last node) and teardown hooks (reset_graph / close_device). close_device also drops CCLResources (its pool
+  count is per queue) and the sub-device state, so a test can reopen with 1 queue.
+* CCLResources: per-command-queue pools of 8 rotating semaphore sets, allocated on the full grid.
+* ttnn_fixed::distributed: a collective runs on the sub-device of the queue it is issued on (queue 1 -> CCL sub-device,
+  queue 0 -> compute, never mixed: a sub-device is owned by the queue that last launched on it); all_gather takes a
+  persistent output, reduce_scatter takes its buffers (reduce_scatter_buffers() allocates {interm, output(, penult)} in
+  the op's own layout: ring via reduce_scatter_minimal_async_create_intermediate_buffer, line = [2B,1,S,K] tiled);
+  on queue 1 the buffers are mandatory (the op's own temporaries are freed by the host under the running collective).
+  Per-site policy: set_sp_linear_impl(both sites) / set_sp_linear_backward_impl(backward only), SPLinearSite passed by
+  the backward closures; sp_linear_matmul() exposes the Composed matmul.
+* SPOverlap (ops/distributed/sp_overlap.{hpp,cpp}): issue() = compute drain (record q0 on the compute sub-device, wait
+  on q1) -> collective under with_command_queue_id(1) -> event on q1; wait() = q0 waits, buffers retained until 2 later
+  collectives were waited (host allocation is not device-ordered across queues); defer()/drain_one()/drain_all() for
+  weight gradients; backward-end hook drains; teardown drops. Schedule in the Composed backward: column linear = dgrad
+  matmul (q0) -> RS (q1) -> drain ONE deferred wgrad (q0) -> defer own wgrad -> q0 waits RS; row linear = AG (q1) ->
+  drain one -> q0 waits AG -> dgrad -> defer own wgrad. So per block: w2-AG hides behind the previous block's qkv
+  wgrad, gate_up-RS behind w2's, out_proj-AG behind gate_up's, qkv-RS behind out_proj's. Same ops, other order =>
+  bitwise vs one queue on the same grid. NoComm backward goes through the same path with empty outputs (measures the
+  machinery alone). Modes: sp_overlap off | split (CCL region reserved, one queue = the reference) | backward.
+* Config/CLI: device_config sp_overlap, sp_ccl_rows (1), sp_ccl_columns (0), sp_linear_backward_impl (same); train.py
+  opens 2 queues + splits when sp_overlap != off. Python: ttml.ops.distributed.set_sp_overlap / get_sp_overlap /
+  set_sp_linear_backward_impl / get_sp_linear_backward_impl / sp_overlap_stats; AutoContext.enable_ccl_sub_device etc.
+  conftest: TTML_SP_OVERLAP=backward [TTML_SP_CCL=rows=1] runs any tp_mesh module under the overlap.
+FILES: tt-train/sources/ttml/{autograd/auto_context.{hpp,cpp},autograd/tensor.cpp,core/mesh_device.{hpp,cpp},
+  core/distributed/ccl_resources.{hpp,cpp},ttnn_fixed/distributed/ttnn_ops.{hpp,cpp},ops/distributed/sp_linear_ops.{hpp,cpp},
+  ops/distributed/sp_overlap.{hpp,cpp} (new),CMakeLists.txt,nanobind/{nb_autograd,nb_core,nb_ops}.cpp,ttml/_mesh.py,
+  ttml/common/config.py}, tt-train/sources/examples/train/train.py, tt-train/tests/python/{test_sp_overlap.py (new),
+  conftest.py}, tt-train/docs/DISTRIBUTED_TRAINING.md, tt-train/configs/README.md. Harness (recreated here):
+  bench_sp_overlap.sh, S_queue.sh, S_summarize.py.
+
+TESTS (all passed before the wipe; will re-run for logs)
+* tests/python/test_sp_overlap.py on 1x2 line: 16 passed (column/row linears B=1,2 bitwise overlap-on == overlap-off ==
+  reference sequence; 2-layer Llama all grads bitwise B=1,2; 3 repeated steps bitwise; fused-forward + two-stream
+  composed-backward bitwise vs same policy on one queue and logits bitwise the all-fused; TP oracle after sync;
+  switches; config knobs).
+* TTML_SP_OVERLAP=backward tests/python/test_sequence_parallel.py: 41 passed (the whole SP suite under the overlap).
+* TTML_SP_TEST_MESH=1x4_ring / 1x4_line test_sp_overlap.py: 16 passed each. (First attempt: 15 + 1 failed = the TP
+  oracle's LOGITS at tp=4: 2.50 ULP ring / 2.25 line vs limit 2.0, identical with the overlap on and off -> the inherent
+  4-rank reduce-order spread; limit set to 4 ULP at tp=4, and the test now asserts overlap-on == overlap-off bitwise
+  after ttml.sync_gradients.)
+
+MEASUREMENTS (s/step mean of steps 3-5; PHASES fwd/bwd ms; Llama-8B tp4 SP, 6-step runs, batch 1)
+ring: nocomm whole grid 0.533 (127.8/296.3) | nocomm split rows=1 0.541 (136.7/293.7) | composed whole 0.603
+      (157.5/339.4) | composed split rows=1 0.609 (165.2/334.5) | composed two-queue backward rows=1 0.592
+      (165.5/315.1) | fused fwd + composed two-queue bwd 0.599 (173.8/313.4)
+  => the split costs 6-8 ms; the two-queue backward saves 19.4 ms of the backward phase's 40.8 ms collective cost on
+     the same grid (48%), net -11 ms vs the whole-grid composed step, 59 ms of the 70 ms gap to nocomm remain (29 ms of
+     it is the untouched forward). Fused forward on the split grid is 8 ms SLOWER than composed (the fused ops carve
+     their own 2 CCL rows out of an already reduced 12x9 grid).
+line: nocomm split rows=1 0.537 (whole 0.534). composed split line was running when the session died; composed
+      backward line and fused-bwd line not yet run.
+IN FLIGHT when it stopped: S_queue (line b1 x3, MEMEFF=1 batch 5 x6, machinery-only NoComm backward x2, CCL columns=1 /
+rows=2 x8, batch 2 x6). Restarted now in the same order via generated/spfuse/S_queue.sh -> logs/S_queue.txt.
