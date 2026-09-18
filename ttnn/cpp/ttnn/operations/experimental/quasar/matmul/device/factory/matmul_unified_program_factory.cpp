@@ -612,13 +612,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
 
     // ---- Compute ----
     const bool fp32_dest_acc_en = get_fp32_dest_acc_en(operation_attributes.compute_kernel_config);
-    std::map<std::string, std::string> compute_defines_map;
-    if (plan.packer_l1_acc_en) {
-        compute_defines_map["PACKER_L1_ACC"] = "1";
-    }
-    if (fp32_dest_acc_en) {
-        compute_defines_map["FP32_DEST_ACC_EN"] = "1";
-    }
+    std::map<std::string, std::string> compute_defines_map;  // throttle / stagger only
     const ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level =
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
@@ -670,6 +664,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"MN_chunk_N_tiles", plan.MN_chunk_N_tiles},
                 {"subblock_M_tiles", plan.subblock_M_tiles},
                 {"subblock_N_tiles", plan.subblock_N_tiles},
+                {"packer_l1_acc", plan.packer_l1_acc_en ? 1u : 0u},
+                {"partials_format_differs", plan.C_partials_format != plan.C_format ? 1u : 0u},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_MN_chunks"}},
         .hw_config = compute_hw_config,

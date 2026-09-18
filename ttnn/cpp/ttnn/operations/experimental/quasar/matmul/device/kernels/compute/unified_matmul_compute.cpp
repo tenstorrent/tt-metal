@@ -7,20 +7,21 @@
 // GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N], batch_size times. An MN chunk is
 // MN_chunk_M_tiles x MN_chunk_N_tiles tiles of C, the L1-fittable piece of the output region this cluster
 // owns; normally the region is one chunk. This kernel produces num_MN_chunks chunks for every batch and does
-// not care where in C they sit. For every chunk it accumulates over K, K_chunk_tiles per K chunk: the
-// reader delivers one A slice ([MN_chunk_M_tiles][K_chunk_tiles] tiles) and one B slice
-// ([K_chunk_tiles][MN_chunk_N_tiles] tiles) per K chunk, and the MATH engine multiplies them one
-// subblock (subblock_M_tiles x subblock_N_tiles C tiles, the amount DST holds) at a time.
+// not care where in C they sit. For every chunk it accumulates over K, K_chunk_tiles per K chunk: the reader
+// delivers one A slice ([MN_chunk_M_tiles][K_chunk_tiles] tiles) and one B slice
+// ([K_chunk_tiles][MN_chunk_N_tiles] tiles) per K chunk, and the MATH engine multiplies them one subblock
+// (subblock_M_tiles x subblock_N_tiles C tiles, the amount DST holds) at a time.
 //
-// Between K chunks the running sums have to leave DST. Default: they are packed into the C_partials
-// ring and copied back into DST at the start of the next K chunk (spill / reload). With PACKER_L1_ACC the
-// packer adds DST onto the partials already in L1 instead, so only the last K chunk reloads. The last K
-// chunk packs the finished subblocks into the MN_chunk ring for the writer.
+// Between K chunks the running sums have to leave DST. Default: they are packed into the C_partials ring
+// and copied back into DST at the start of the next K chunk (spill / reload). With packer_l1_acc the packer
+// adds DST onto the partials already in L1 instead, so only the last K chunk reloads. The last K chunk packs
+// the finished subblocks into the MN_chunk ring for the writer.
 //
 // Loop order matches the reader and the writer: batch, MN chunk, K chunk, subblocks (m_tile, n_tile)
 // row-major over the chunk, k_tile within the K chunk. Runtime args: num_MN_chunks. Compile-time args:
 // batch_size, K_chunk_tiles, num_K_chunks, MN_chunk_M_tiles, MN_chunk_N_tiles, subblock_M_tiles,
-// subblock_N_tiles. Defines: FP32_DEST_ACC_EN, PACKER_L1_ACC.
+// subblock_N_tiles, packer_l1_acc, partials_format_differs (C_partials and MN_chunk hold different formats,
+// so the packer must be reconfigured when switching between them).
 
 #include <cstdint>
 
@@ -48,12 +49,11 @@ FORCE_INLINE void reload_partials_into_dst(
     matmul_block_init(dfb::A_slice, dfb::B_slice, /*transpose=*/0, subblock_N_tiles, subblock_M_tiles, K_chunk_tiles);
 }
 
-#ifdef PACKER_L1_ACC
 // With packer L1 accumulation the entries pushed to C_partials during a K chunk carry nothing new: the packer
 // added DST onto the partials already in L1. Pop them without reading so the ring is empty again and the next
 // K chunk's packs land on the same L1 addresses (the ring holds exactly one MN chunk). dummy_unpack orders the
 // pop after the wait on Quasar; it is a no-op elsewhere.
-FORCE_INLINE void drain_partials(uint32_t MN_chunk_tiles, uint32_t subblock_tiles) {
+FORCE_INLINE void pop_partials_without_reading(uint32_t MN_chunk_tiles, uint32_t subblock_tiles) {
     DataflowBuffer C_partials(dfb::C_partials);
     for (uint32_t popped = 0; popped < MN_chunk_tiles; popped += subblock_tiles) {
         C_partials.wait_front(subblock_tiles);
@@ -61,7 +61,6 @@ FORCE_INLINE void drain_partials(uint32_t MN_chunk_tiles, uint32_t subblock_tile
         C_partials.pop_front(subblock_tiles);
     }
 }
-#endif
 
 void kernel_main() {
     const uint32_t num_MN_chunks = get_arg(args::num_MN_chunks);  // this core's chunks, per batch
@@ -73,6 +72,8 @@ void kernel_main() {
     constexpr uint32_t MN_chunk_N_tiles = get_arg(args::MN_chunk_N_tiles);
     constexpr uint32_t subblock_M_tiles = get_arg(args::subblock_M_tiles);
     constexpr uint32_t subblock_N_tiles = get_arg(args::subblock_N_tiles);
+    constexpr bool packer_l1_acc = get_arg(args::packer_l1_acc) != 0;
+    constexpr bool partials_format_differs = get_arg(args::partials_format_differs) != 0;
 
     constexpr uint32_t A_slice_tiles = MN_chunk_M_tiles * K_chunk_tiles;
     constexpr uint32_t B_slice_tiles = K_chunk_tiles * MN_chunk_N_tiles;
@@ -89,21 +90,20 @@ void kernel_main() {
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
         for (uint32_t MN_chunk_index = 0; MN_chunk_index < num_MN_chunks; ++MN_chunk_index) {
-            if (batch > 0 || MN_chunk_index > 0) {
-                // The previous chunk's last K chunk left the packer on MN_chunk's format. (The unpacker
-                // needs no fix-up: reload_partials_into_dst already restores SrcA to B's format.)
-                pack_reconfig_data_format(dfb::C_partials);
+            if constexpr (partials_format_differs && num_K_chunks > 1) {
+                if (batch > 0 || MN_chunk_index > 0) {
+                    // The previous chunk's last K chunk left the packer on MN_chunk's format. (The unpacker needs
+                    // no fix-up: reload_partials_into_dst already restores SrcA to B's format.)
+                    pack_reconfig_data_format(dfb::C_partials);
+                }
             }
+
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
                 const bool last_K_chunk = K_chunk == num_K_chunks - 1;
                 // Partials exist once a previous K chunk has packed them. Without packer L1 accumulation every
-                // later chunk reloads them; with it the packer has been accumulating in L1 and only the last
-                // chunk reloads the sum.
-#ifdef PACKER_L1_ACC
-                const bool reload_partials = K_chunk > 0 && last_K_chunk;
-#else
-                const bool reload_partials = K_chunk > 0;
-#endif
+                // later K chunk reloads them; with it the packer has been accumulating in L1 and only the last
+                // K chunk reloads the sum.
+                const bool reload_partials = K_chunk > 0 && (last_K_chunk || !packer_l1_acc);
                 A_slice.wait_front(A_slice_tiles);
                 B_slice.wait_front(B_slice_tiles);
 
@@ -119,8 +119,8 @@ void kernel_main() {
                             reload_partials_into_dst(subblock_tiles, subblock_M_tiles, subblock_N_tiles, K_chunk_tiles);
                         }
 
-                        // Accumulate this subblock over the K chunk, one K tile per matmul_block call: each
-                        // call multiplies A's subblock_M_tiles-tall column of tiles at k_tile by B's
+                        // Accumulate this subblock over the K chunk, one K tile per matmul_block call: each call
+                        // multiplies A's subblock_M_tiles-tall column of tiles at k_tile by B's
                         // subblock_N_tiles-wide row of tiles at k_tile and adds the subblock_M_tiles x
                         // subblock_N_tiles products onto DST tiles 0..subblock_tiles-1. The LLK has no
                         // multi-K-tile call: kt_dim is only the row stride of the A slice
@@ -146,26 +146,22 @@ void kernel_main() {
                         if (last_K_chunk) {
                             MN_chunk.reserve_back(subblock_tiles);
                             tile_regs_wait();
-#if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                            pack_reconfig_data_format(dfb::MN_chunk);
-#endif
-#ifdef PACKER_L1_ACC
-                            pack_reconfig_l1_acc(0);
-#endif
+                            if constexpr (partials_format_differs) {
+                                pack_reconfig_data_format(dfb::MN_chunk);
+                            }
+                            if constexpr (packer_l1_acc) {
+                                pack_reconfig_l1_acc(0);
+                            }
                             pack_block(/*ifrom_dst=*/0, dfb::MN_chunk, subblock_tiles);
                             tile_regs_release();
                             MN_chunk.push_back(subblock_tiles);
                         } else {
                             C_partials.reserve_back(subblock_tiles);
                             tile_regs_wait();
-#ifdef PACKER_L1_ACC
-                            // K chunk 0 overwrites the partials; from K chunk 1 on the packer adds DST onto L1.
-                            if (K_chunk == 0) {
-                                pack_reconfig_l1_acc(0);
-                            } else if (K_chunk == 1) {
-                                pack_reconfig_l1_acc(1);
+                            if constexpr (packer_l1_acc) {
+                                // K chunk 0 overwrites the partials; from K chunk 1 on the packer adds DST onto L1.
+                                pack_reconfig_l1_acc(K_chunk > 0 ? 1 : 0);
                             }
-#endif
                             pack_block(/*ifrom_dst=*/0, dfb::C_partials, subblock_tiles);
                             tile_regs_release();
                             C_partials.push_back(subblock_tiles);
@@ -173,13 +169,15 @@ void kernel_main() {
                     }
                 }
 
-#ifdef PACKER_L1_ACC
-                // Keep the second-to-last K chunk's entries: the last K chunk reloads them.
-                const bool partials_are_stale = K_chunk + 2 < num_K_chunks;
-                if (partials_are_stale) {
-                    drain_partials(MN_chunk_tiles, subblock_tiles);
+                if constexpr (packer_l1_acc) {
+                    // The entries pushed this K chunk are only credits (the sums live in L1): pop them so the next
+                    // K chunk lands on the same addresses. Two exceptions: the last K chunk pushed nothing here, and
+                    // the second-to-last K chunk's entries are what the last K chunk reloads.
+                    const bool second_to_last_K_chunk = K_chunk + 2 == num_K_chunks;
+                    if (!last_K_chunk && !second_to_last_K_chunk) {
+                        pop_partials_without_reading(MN_chunk_tiles, subblock_tiles);
+                    }
                 }
-#endif
 
                 A_slice.pop_front(A_slice_tiles);
                 B_slice.pop_front(B_slice_tiles);
