@@ -437,3 +437,10 @@ Also fixed: test_module_tt_crossattnupblock.py was broken by the Part 4 hooks (`
   Image gen 6.78 s (4 prompts), denoising loop 6.36 s (v12 without the fixes: 6.31; reference 8.13),
   on-device VAE decode 0.18 s. Image: output/output1.png, copy fullgrid_worklog/final_astronaut_hifi2_convio_l1acc.png.
   Visually: torch-like composition (yellow sun, stars, clouds, white visor); the red visor of the Part 4 image is gone.
+
+### 2026-09-18 13:40 DEST rounding probe (`test_dest_rounding_probe.py`): the 16-bit accumulate is NOT RNE
+- Deterministic 1-core matmul with controlled ties (fp32 off, l1acc off): ties round AWAY from zero (256+1 -> 258,
+  40 tie adds -> 336), the K-tile is accumulated in two 16-row halves each rounded, products are rounded onto a grid
+  6 bits below the bf16 ULP (ties toward +inf) before summation, and the fp32->bf16 pack is ties-away as well.
+  Ties-away model 964/1024 cells vs RNE 869; fp32 DEST = exact accumulate (972/1024 with a ties-away pack).
+  Random data on the same path: gain 1.0011 / 1.0045 / 1.0172 at 2 / 8 / 40 K-tiles. Details: PRECISION_WRITEUP.md 3.6.

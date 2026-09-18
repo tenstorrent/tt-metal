@@ -98,8 +98,9 @@ Fidelity is irrelevant here; the inflation comes from accumulating in the 16-bit
 K=1280 shows gain 1.018 for ANY number of K blocks when l1acc is off, and with l1acc on the gain tracks the number
 of tiles accumulated inside DEST per block (in0_block_w 40/10/5/2/1 -> 1.018 / 1.011 / 1.005 / 1.0006 / 0.999).
 So every MAC result rounded into the bf16 accumulator carries a magnitude-increasing bias of ~0.05-0.15% per
-accumulated tile; the spill/reload of partials is not the cause. fp32 DEST, or packer L1 accumulation (fp32 in the
-packer) with short in-DEST runs, avoids it.
+accumulated tile; the spill/reload of partials is not the cause. fp32 DEST avoids it. Packer L1 accumulation also
+avoids most of it, not by extra precision (the L1 intermediate is bf16 when fp32 DEST is off) but because DEST is
+reset every in0_block_w tiles and the packer's L1 add is unbiased in practice. Root cause in 3.6.
 
 `conv_out` produces the noise prediction, so the shipped config scaled the UNet output by ~2% on every denoising
 step. Switching both convs to `CONV_HIFI2_NO_FP32_COMPUTE_CONFIG` (l1acc on) is free in device time
@@ -118,6 +119,32 @@ step. Switching both convs to `CONV_HIFI2_NO_FP32_COMPUTE_CONFIG` (l1acc on) is 
 - **Fast GELU**: gain 0.9976 with +0.005 mean bias.
 - **Matmul fidelity and weight dtype are NOT the issue**: matmul HiFi4 (0.9494) and bf16 attention/FF weights
   (0.9492) did not move up_blocks.0 from the shipped 0.9488.
+
+### 3.6 Root cause of the DEST inflation, measured (probe `test_dest_rounding_probe.py`, 2026-09-18)
+
+A deterministic matmul on one core (in0 rows = multipliers, in1 columns = a base in K-tile 0 plus a delta in every
+later K-tile) places the discarded bits of every accumulate step at an exact bf16 tie, just above or just below it,
+for both signs, and compares the device against simulated accumulators. fp32 DEST off, packer L1 acc off, HiFi4
+(LoFi identical). Results, all reproduced at bases 1, 256, 4096 and both signs:
+
+| observation | evidence |
+|---|---|
+| **Ties round away from zero, not to even.** | 256 + 1.0 -> 258 (RNE: 256); -256 - 1.0 -> -258; 40 tie adds: 256 -> 336 = 256 + 40 x 2 (RNE stays 256). Ties-away model matches 964/1024 cells vs RNE 869. |
+| **The K-tile is accumulated into DEST in two steps of 16 K-rows** (rows 0-15, 16-31), each rounded. | 16 x 1/16 in rows 0-15 or 16-31 -> tie -> up; the same 16 products in rows 8-23 -> 0.5 per half -> flat; 32 x 1/32 -> flat; 8 x 1/8 in each half -> two ups per tile. |
+| **Products are rounded onto a grid 6 bits below the bf16 ULP of the DEST value before summation.** | Single product 0.984375 (31.5 grid units) rounds as a tie -> up; 0.96875 (31 units) is exact -> down. 16 x 0.046875 (1.5 units each, exact sum 0.75) -> up (each product became 2 units, sum 1.0 = tie); 16 x 0.0390625 (1.25 units) -> flat; 12 x 0.0625 (on grid) -> flat. Same at base 4096 with grid 0.5. |
+| **Grid ties round toward +inf, final ties away from zero.** | 16 x +0.046875 -> up, 16 x -0.046875 -> flat (-1.5 units -> -1); but -256 - 0.9921875 (a non-tie, -31.75 units) -> -258, so negatives do round to nearest. |
+| **fp32 DEST accumulates exactly; the pack to bf16 also rounds ties away from zero.** | fp32 on: exact-sum model matches 972/1024; every miss is a tie (4096 + 8 x 2 = 4112 -> 4128, RNE 4096). |
+| Bias reproduced on the same one-core path with random data. | gain 1.0011 / 1.0045 / 1.0172 at 2 / 8 / 40 K-tiles (fp32 off), 1.0000 (fp32 on). |
+
+Interpretation: every rounding in the 16-bit path is implemented as "add half an ULP, then truncate". On the
+sign-magnitude final result that is ties-away-from-zero, which inflates magnitude symmetrically (gain > 1, mean
+bias ~0). On the two's-complement alignment grid it is ties-toward-+inf, which adds the small positive mean bias we
+saw (+0.003 on the conv). Neither is RNE, so the documented "round once, RNE" flow does not describe the 16-bit
+DEST accumulate. Per K-tile there are 2 DEST roundings plus 32 grid roundings; with random bf16 data a tie at the
+6-bit grid occurs about 1/64 of the time, each worth half a bf16 ULP of magnitude, which lands in the measured
+0.05-0.15% per tile. fp32 DEST removes it because the accumulate is exact and only the final pack rounds.
+Packer L1 accumulation removes most of it because DEST holds only in0_block_w tiles at a time and the packer's
+L1 add is unbiased in practice (gain 0.999 at in0_block_w = 1).
 
 ## 4. Why the less precise GroupNorm gave the more precise model
 
@@ -192,7 +219,8 @@ To adopt permanently: change the default in `tt_attention.py` (`sdpa_compute_ker
   uniform scale error completely.
 - Truncation-based fidelities (LoFi) are biased, not just noisy. Where the truncated operand is data (K, V), expect
   a magnitude loss proportional to the dropped bits, and do not expect fp32 accumulation to help.
-- bf16 DEST accumulation is biased upward; long in-DEST accumulation without fp32 DEST or packer L1 accumulation
-  will inflate the output. Prefer l1acc with short in-DEST runs.
+- bf16 DEST accumulation is biased upward because its roundings are ties-away-from-zero (and ties-toward-+inf on
+  the alignment grid), not RNE; long in-DEST accumulation without fp32 DEST or packer L1 accumulation will inflate
+  the output. Prefer l1acc with short in-DEST runs, or fp32 DEST. The pack fp32 -> bf16 is ties-away too.
 - When replacing an op with a more accurate one makes an end-to-end metric worse, look for a cancellation
   elsewhere before blaming the new op. Per-stage gain dumps found it in one afternoon.
