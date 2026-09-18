@@ -681,26 +681,20 @@ def apply_output_projection(tensor, weights: AttentionWeights):
     shorter one is hoisted into L1 first. Decode is below both bounds and is
     unchanged.
     """
+    rows = matmul_rows(tensor)
     if isinstance(weights.o_proj, DramShardedLinear):
         out = weights.o_proj(tensor)
-        tensor.deallocate(True)
-        return out
-    if not weights.tuned_prefill:
+    elif not weights.tuned_prefill:
         out = ttnn.linear(tensor, weights.o_proj)
-        tensor.deallocate(True)
-        return out
-
-    rows = matmul_rows(tensor)
-    if should_prefill_long_2d(rows):
+    elif should_prefill_long_2d(rows):
         out = prefill_linear_above_cutoff(tensor, weights.o_proj)
-        tensor.deallocate(True)
-        return out
-    activation, owned_activation = hoist_prefill_matmul_in0_if_needed(tensor)
-    out = ttnn.linear(
-        activation, weights.o_proj, compute_kernel_config=single_tile_matmul_ckc(rows, weights.single_tile_dest_acc)
-    )
-    if owned_activation is not None:
-        owned_activation.deallocate(True)
+    else:
+        activation, owned_activation = hoist_prefill_matmul_in0_if_needed(tensor)
+        out = ttnn.linear(
+            activation, weights.o_proj, compute_kernel_config=single_tile_matmul_ckc(rows, weights.single_tile_dest_acc)
+        )
+        if owned_activation is not None:
+            owned_activation.deallocate(True)
     tensor.deallocate(True)
     return out
 
