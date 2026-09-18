@@ -572,6 +572,52 @@ do 4 links help (212.6 -> 206.7 ms). Reproduce with
 `TT_EXP_SDPA_Q_GROUPS={2,4} … test_exp_ring_joint_attention.py::…[wormhole_b0-4x8_wh_h3_15s_seq{,_nl4}-ring]`
 under `--profile`; the normal-op row is `create_perf_table[minimax_h3_15s_768p_pad14336]`.
 
+### Bottom-row MUX placement: 64 SDPA cores instead of 56 (2026-09-18, branch `jameslee/exp_ring_sdpa_wh`)
+
+The 7 lost cores above come from the reserved MUX *column*: the SDPA grid is 7 wide, and the 9-row
+height must round down to 8 for the equal backward/forward MUX-client halves. The op already had a
+Blackhole placement experiment, `TT_EXP_SDPA_MUX_BOTTOM_ROW`, that puts the MUX kernels on the bottom
+*row* instead and gave up two rows to keep the count even. On the 8x9 Wormhole grid one row is enough:
+SDPA keeps all 8 columns and rows 0-7 (8x8 = **64 cores**), the 8 MUX kernels of 4 links fill row 8
+exactly. The change is host-side only: the grid helper (`exp_sdpa_grid_for_user_grid`) drops one row
+plus an idle row only when the remainder is odd, and the bottom-row MUX list is generalized from two
+hard-coded pairs to `num_links` columns per direction (the 9-row asymmetric-halves layout the previous
+section proposed would give 63 cores for far more surgery, so it is not needed).
+
+With 8 columns the 56 chunks of q=256 divide as 8 x 7, so a segment is 7 chunks wide and the sequential
+mode runs G=1: 98 segments on 8 rows -> 13 passes on rows 0-1, 12 on rows 2-7 (ideal 12.25). Every pass
+forwards its head's K/V (no groups), so a row forwards 13 shards per op against 7 in the segs=4/G=2 layout.
+
+| op | layout | links | per call |
+|---|---|---|---|
+| normal `RingJointSDPA` | q256 / k512, 63 cores | 4 | **192.9 ms** |
+| exp, sequential, G=2 (previous best) | segs=4, 7x8 = 56 cores, reserved-column MUX | 4 | 206.7 ms |
+| exp, sequential, G=1 | q256 / k512, segs=7, **8x8 = 64 cores**, bottom-row MUX | 2 | 199.6 ms |
+| exp, sequential, G=1 | same | 4 | **196.2 ms** |
+| exp, sequential, G=1 | q448 / k256, segs=4 (7 passes of 14 tile-rows), 64 cores | 4 | 200.9 ms |
+| exp, sequential, G=1 | q192 / k512 at 13824 rows/device (72 chunks = 8 x 9; 16 passes of 6 tile-rows) | 4 | 220.2 ms |
+| exp, sequential, G=1 | q128 / k512, segs=14 (25 passes of 4 tile-rows), 64 cores | 4 | 336.2 ms |
+| exp, sequential, G=1 | q448 / k512 | 4 | does not build: CBs need 1.71 MB of 1.34 MB |
+
+Numerics: PCC 0.99975 at the 3424-row shard on the bottom-row layout with 2 links (`4x8_wh_h3_sim32_seq`,
+7x8, unchanged from the reserved-column number) and 0.99972 on the 64-core grid with 4 links at a
+4096-row shard (`4x8_wh_h3_4096_bot_nl4`, 16 chunks = 8 x 2). The 15 s rows are timing-only as before.
+
+Reading: 64 cores take the exp op from 206.7 to **196.2 ms**, 1.7% behind the normal op (192.9). The
+per-core work model predicted 206.7 x 13/14 = 192 ms; the missing 4 ms is fabric traffic (13 forwards
+per row instead of 7), visible as 2 links -> 4 links = 199.6 -> 196.2 and as a 3 ms spread across
+devices that the 56-core layout did not have (206.80 / 206.84). The chunk sweep says the op's time
+follows the number of inner-loop steps (passes x K chunks), not Q tile-rows: q=192 does 8% fewer
+tile-rows per core but 19% more steps and is 12% slower; q=128 nearly doubles the steps and is 71%
+slower; q=448 cuts the steps but only fits with k=256, and the halved K chunk costs more than the
+larger Q chunk saves. q256 / k512 stays the shape. What is left between 196.2 and a win: the
+13-vs-12.25 pass imbalance (6%, inherent to 98 segments on 8 rows at q=256) and the duplicate
+forwarding (~2%, the 2-vs-4-link gap). With segs=7 a pass holds 8 segments of 2-3 distinct heads, so
+generalizing the pair dedup to "one forwarder per (pass, head)" would cut each row's forwards from 13
+to about 4 and take the traffic off the critical path even on 2 links. Reproduce with
+`TT_EXP_SDPA_MUX_BOTTOM_ROW=1 TT_EXP_SDPA_Q_GROUPS=1 … [wormhole_b0-4x8_wh_h3_15s_seq{,_nl4}-ring]`
+under `--profile`; the q128 / q192 / q448 rows are the `4x8_wh_h3_15s_q{128,192,448}_nl4` cases.
+
 ## TP/SP parallel-configuration sweep — 15 s / 16:9
 
 Measured 2026-09-17 on this host at `bc1d99d05f6` plus the `matmul.py` change listed at the end

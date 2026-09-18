@@ -259,7 +259,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             user_grid.y >= 3,
             "Program config grid ({}x{}) too short for bottom-row MUX placement: needs at least 3 "
-            "rows (2 reserved for the MUX row and its spacer).",
+            "rows (the MUX row plus an even number of SDPA rows).",
             user_grid.x,
             user_grid.y);
     } else {
@@ -270,8 +270,9 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
             user_grid.x,
             user_grid.y);
     }
-    const uint32_t sdpa_grid_x = mux_on_bottom_row ? user_grid.x : user_grid.x - 1;
-    const uint32_t sdpa_grid_y = mux_on_bottom_row ? user_grid.y - 2 : user_grid.y;
+    const CoreCoord sdpa_grid = exp_sdpa_grid_for_user_grid(user_grid);
+    const uint32_t sdpa_grid_x = sdpa_grid.x;
+    const uint32_t sdpa_grid_y = sdpa_grid.y;
     const uint32_t num_sdpa_cores = sdpa_grid_x * sdpa_grid_y;
     // The last num_links SDPA columns are the fabric-MUX clients (one per link) and the reserved
     // column hosts 2 MUX kernels per link (backward + forward). Mirrors the factory's checks.
@@ -284,9 +285,11 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         user_grid.x,
         user_grid.y);
     TT_FATAL(
-        mux_on_bottom_row || user_grid.y >= 2 * args.num_links,
-        "Reserved MUX column has {} rows but {} links need 2 MUX kernels per link.",
-        user_grid.y,
+        mux_on_bottom_row ? user_grid.x >= 2 * args.num_links : user_grid.y >= 2 * args.num_links,
+        "Reserved MUX {} has {} {} but {} links need 2 MUX kernels per link.",
+        mux_on_bottom_row ? "row" : "column",
+        mux_on_bottom_row ? user_grid.x : user_grid.y,
+        mux_on_bottom_row ? "columns" : "rows",
         args.num_links);
 
     // Joint sequence must divide evenly (or be zero); last local Q chunk may be padded.

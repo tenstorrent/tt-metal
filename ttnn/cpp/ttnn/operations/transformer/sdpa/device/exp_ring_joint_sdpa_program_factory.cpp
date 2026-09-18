@@ -299,11 +299,11 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     CoreCoord user_grid =
         args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size : device_grid;
     const bool mux_on_bottom_row = exp_sdpa_mux_on_bottom_row();
-    // Bottom-row experiment: SDPA keeps every column but gives up the two bottom rows (row y-1
-    // hosts the MUX kernels, row y-2 idles so the SDPA row count stays even for the direction
-    // split). Default: SDPA keeps every row but gives up the last column to the MUX kernels.
-    CoreCoord sdpa_grid =
-        mux_on_bottom_row ? CoreCoord{user_grid.x, user_grid.y - 2} : CoreCoord{user_grid.x - 1, user_grid.y};
+    // Bottom-row experiment: SDPA keeps every column but gives up the bottom row (row y-1 hosts the
+    // MUX kernels) plus one idle row when the remainder is odd, so the SDPA row count stays even
+    // for the direction split (8x9 Wormhole -> 8x8; 13x10 Blackhole -> 13x8). Default: SDPA keeps
+    // every row but gives up the last column to the MUX kernels.
+    const CoreCoord sdpa_grid = exp_sdpa_grid_for_user_grid(user_grid);
 
     TT_FATAL(
         user_grid.x <= device_grid.x && user_grid.y <= device_grid.y,
@@ -1508,11 +1508,19 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             mux_on_bottom_row ? std::vector<CoreCoord>{{mid - 1, fabric_mux_row}, {mid, fabric_mux_row}}
             : mux_top_cluster ? std::vector<CoreCoord>{{fabric_mux_col, 2}, {fabric_mux_col, 3}}
                               : std::vector<CoreCoord>{{fabric_mux_col, mid - 1}, {fabric_mux_col, mid}};
-    } else {
+    } else if (mux_on_bottom_row) {
+        // Fill the reserved bottom row from the left: backward at columns [0, num_links), forward
+        // at [num_links, 2*num_links). On the 8-wide Wormhole grid 4 links fill the row exactly.
         TT_FATAL(
-            !mux_on_bottom_row,
-            "Bottom-row MUX placement (TT_EXP_SDPA_MUX_BOTTOM_ROW) supports 2 links only; got {}.",
+            user_grid.x >= 2 * args.num_links,
+            "Reserved MUX row has {} columns but {} links need 2 MUX kernels per link.",
+            user_grid.x,
             args.num_links);
+        for (uint32_t link = 0; link < args.num_links; ++link) {
+            mux_backward_logical_cores.push_back({link, fabric_mux_row});
+            mux_forward_logical_cores.push_back({args.num_links + link, fabric_mux_row});
+        }
+    } else {
         TT_FATAL(
             user_grid.y >= 2 * args.num_links,
             "Reserved MUX column has {} rows but {} links need 2 MUX kernels per link.",
@@ -1984,8 +1992,7 @@ void ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     auto* mesh_device = tensor_args.input_q.device();
     const CoreCoord user_grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                                 : mesh_device->compute_with_storage_grid_size();
-    const CoreCoord sdpa_grid = exp_sdpa_mux_on_bottom_row() ? CoreCoord{user_grid.x, user_grid.y - 2}
-                                                             : CoreCoord{user_grid.x - 1, user_grid.y};
+    const CoreCoord sdpa_grid = exp_sdpa_grid_for_user_grid(user_grid);
     const uint32_t num_sdpa_cores = sdpa_grid.x * sdpa_grid.y;
     const uint32_t expected_reader_args = dyn::reader_arg_count(args.num_links);
 
