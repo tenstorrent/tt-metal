@@ -3754,15 +3754,25 @@ class ModelArgs:
                 return i
         return 1  # Fallback to 1 if no divisor found
 
+    # Blackhole DRAM-bank reader counts per decode projection role, by validated SKU.
+    # Measured on this P150x4 (4x Blackhole, 8 DRAM banks/device) with the traced batch-1
+    # decode ruler; see bringup/artifacts/tt_transformers/optimized_decode/work_log.md.
+    _DRAM_SHARDED_DECODE_READERS = {
+        "P150": 2,
+        "P150x4": 2,
+    }
+
     def get_dram_sharded_matmul_num_workers(self, tensor_group: TensorGroup, n: int) -> int:
-        """Return the validated P150 reader count for a Llama 3.1 8B decode projection."""
-        if self.base_model_name != "Llama-3.1-8B" or self.device_name != "P150":
+        """Return the validated Blackhole reader count for a Llama 3.1 8B decode projection."""
+        if self.base_model_name != "Llama-3.1-8B":
+            return 1
+        num_workers = self._DRAM_SHARDED_DECODE_READERS.get(self.device_name, 1)
+        if num_workers == 1:
             return 1
 
         if tensor_group not in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO):
             return 1
 
-        num_workers = 2
         shard_width_tiles = math.ceil(n / (ttnn.TILE_SIZE * self.dram_grid_size.x))
         return num_workers if shard_width_tiles % num_workers == 0 else 1
 
