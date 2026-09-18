@@ -28,14 +28,19 @@ namespace ckernel {
 template <bool use_tt_poly_bf16 = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void erfinv_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_erfinv, (APPROX, use_tt_poly_bf16), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_erfinv,
+        (APPROX, use_tt_poly_bf16 && !is_fp32_dest_acc_en),
+        idst,
+        VectorMode::RC));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-template <bool use_tt_poly_bf16 = false>
+template <bool use_tt_poly_bf16 = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void erfinv_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(erfinv, sfpu::erfinv_init, (APPROX, use_tt_poly_bf16)));
+    MATH(SFPU_UNARY_INIT_FN(erfinv, sfpu::erfinv_init, (APPROX, use_tt_poly_bf16 && !is_fp32_dest_acc_en)));
 }
 }  // namespace ckernel

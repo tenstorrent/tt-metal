@@ -115,7 +115,6 @@ def _reference(values):
     return getattr(module, _REFERENCE_FUNCTION)(values, **{})
 
 
-
 @pytest.mark.skipif(
     not (is_blackhole() or is_wormhole_b0()),
     reason="compiler-generated BF16 kernel ships on Blackhole and Wormhole B0",
@@ -138,7 +137,7 @@ def test_erfinv_bf16_exhaustive(device):
     assert np.all((nan_words & 0x7F80) == 0x7F80)
     assert np.all((nan_words & 0x007F) != 0)
 
-    scored = (expected == "finite_other")
+    scored = expected == "finite_other"
     x = host.to(torch.float64).numpy().reshape(-1)[scored]
     golden = _reference(torch.from_numpy(x)).numpy()
     rounded = _bf16_round_ftz(golden)
