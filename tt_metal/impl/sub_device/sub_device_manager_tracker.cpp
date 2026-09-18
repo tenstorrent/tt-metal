@@ -212,6 +212,11 @@ std::optional<DeviceAddr> SubDeviceManagerTracker::lowest_occupied_compute_l1_ad
                                     ->sub_device(sub_device_id)
                                     .impl()
                                     ->cores(HalProgrammableCoreType::TENSIX);
+            // A device with no Tensix grid still gets an allocator, so an allocator does not imply
+            // the sub-device has compute cores. Without any, there is no L1 bank to ask about.
+            if (cores.ranges().empty()) {
+                continue;
+            }
             auto bank_id = allocator->get_bank_ids_from_logical_core(BufferType::L1, cores.ranges()[0].start_coord)[0];
             found_addr = allocator->get_lowest_occupied_l1_address(bank_id);
             if (found_addr.has_value()) {

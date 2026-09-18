@@ -186,6 +186,11 @@ std::vector<CoreCoord> grid_to_cores(
 
 std::vector<CoreCoord> grid_to_cores(CoreCoord start, CoreCoord end, bool row_wise = false);
 
+// The CoreRangeSet covering a grid of the given size, empty if either dimension is zero. Devices with
+// no worker grid report (0, 0), where building a CoreRange from grid_size - 1 wraps around and claims
+// the whole coordinate space.
+CoreRangeSet grid_to_corerangeset(CoreCoord grid_size);
+
 // Noop cores are appended at the end with no guarantees on ordering
 std::vector<CoreCoord> grid_to_cores_with_noop(
     uint32_t bbox_x, uint32_t bbox_y, uint32_t grid_size_x, uint32_t grid_size_y, bool row_wise = false);
