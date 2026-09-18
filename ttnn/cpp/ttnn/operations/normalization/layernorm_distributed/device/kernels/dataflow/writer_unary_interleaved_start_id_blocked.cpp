@@ -15,6 +15,8 @@
 void kernel_main() {
     const auto num_tiles = get_arg(args::num_tiles);      // Number of tiles to write
     const auto tile_offset = get_arg(args::tile_offset);  // Tile offset for this core
+    const auto row_stride = get_arg(args::row_stride);    // Tiles to skip after each local row (0 for 1D)
+    const auto row_width = get_arg(args::row_width);      // Tiles this core writes per row
 
     constexpr auto blk = get_arg(args::blk);  // needed for correctness of softmax/LN kernels
 
@@ -29,6 +31,7 @@ void kernel_main() {
     const uint32_t tile_bytes = dfb_out_buf.get_tile_size();
 
     uint32_t tile_id = tile_offset;
+    uint32_t col = 0;
     for (uint32_t i = 0; i < num_tiles; i += blk) {
         dfb_out_buf.wait_front(blk);
         uint32_t write_offset = 0;
@@ -36,6 +39,11 @@ void kernel_main() {
             noc.async_write(dfb_out_buf, s, tile_bytes, {.offset_bytes = write_offset}, {.page_id = tile_id});
             tile_id++;
             write_offset += tile_bytes;
+            // After finishing a local row, skip the columns owned by other cores.
+            if (++col == row_width) {
+                tile_id += row_stride;
+                col = 0;
+            }
         }
         noc.async_write_barrier();
         dfb_out_buf.pop_front(blk);
