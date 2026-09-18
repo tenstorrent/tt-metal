@@ -275,11 +275,14 @@ def get_value_tiles_from_topk_tensor(
         [32, 128],
         [64, 128],
         [256, 128],
+        [32, 256],
+        [32, 512],
         [32, 1024],
     ],
-    # Wider dims (W >= 256) and K=64 are blocked on the wide-width harness
-    # discrepancies tracked in tt-llk#1344; sub-tile K and K=64 coverage lives
-    # in the ttnn-level topk tests.
+    # K=64 coverage, like sub-tile K, lives in the ttnn-level topk tests. The wide-width
+    # (W >= 256) harness discrepancies of tt-llk#1344 were a missing PACK->UNPACK hand-off
+    # in sources/topk_test.cpp between merge-ladder iterations, now fixed, so the
+    # multi-iteration widths are exercised here.
     K=[32],
     sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
     # unstable / comparator-stable / fused-key-stable (packed [bf16|u16] keys, unstable
@@ -297,11 +300,6 @@ def test_topk_sfpu(
     stable_sort = sort_mode == "stable"
     fused_stable = sort_mode == "fused"
     rank_stamped = sort_mode == "rank_stamped"
-
-    if input_dimensions == [32, 1024]:
-        # For 32x1024 input we have observed some discrepancies in the topk values between hardware and golden.
-        # TODO: Fix issue #1344 on tt-llk.
-        pytest.skip("Skipping test for 32x1024 input due to observed discrepancies.")
 
     if fused_stable and input_dimensions[1] != 128:
         # The fused kernel path handles a single 2-tile slab per pipeline (TOPK_NUM_ITERATIONS == 1);
