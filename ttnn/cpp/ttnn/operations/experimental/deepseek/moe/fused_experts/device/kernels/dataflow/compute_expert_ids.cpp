@@ -29,7 +29,8 @@
 //    table-driven router produces them); `index_is_bf16` picks the decode.
 // 2. Multicasts the ids buffer to all other compute cores' L1 (cb_bcast).
 // 3. Sets + multicasts a semaphore (sem_id) to signal the other cores.
-// 4. Waits for the activation broadcast and publishes it to this core's compute.
+// 4. Publishes the activation to this core's compute: either after the {1,0} broadcast, or
+//    immediately when the activation is already replicated in this core's L1 (INPUT_REPLICATED).
 // 5. Runs the per-expert reader loop as the LEADER: fetches this core's gate_up + down
 //    slices, gathers every SwiGLU core's activation chunk into the local cb_act, and
 //    broadcasts the full activation back to every core for the down matmul.
@@ -398,9 +399,18 @@ void kernel_main() {
     sem.set(1);
     sem.set_multicast(noc, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_dests, /*linked=*/false);
 
-    // ---- 4. Wait for the activation broadcast, then publish it to compute. ----
+    // ---- 4. Publish the activation to this core's compute kernel. ----
+#ifdef INPUT_REPLICATED
+    // The activation is a ROW_MAJOR HEIGHT_SHARDED replica this core already holds in L1, with
+    // cb_input aliased over its shard: there is no broadcast to wait for and no read to do -- the
+    // tiles are already in place, so publishing them is the whole job.
+    publish_input(cb_input_id, k_tiles);
+    (void)sem_input_id;
+#else
+    // Wait for the {1,0} input sender's multicast of the DRAM-resident activation row.
     Semaphore<>(sem_input_id).wait(1);
     publish_input(cb_input_id, k_tiles);
+#endif
 
     // ---- 5. Blocked reader loop (leader role): per block, gate_up, gather+broadcast, down. ----
     run_reader_loop(

@@ -16,6 +16,11 @@
 // Uses the *other* NoC (NoC 1) so it runs concurrently with the expert-id sender
 // on {0,0} (NoC 0).
 //
+// INPUT_REPLICATED: the activation is a ROW_MAJOR HEIGHT_SHARDED replica that every core already
+// holds in L1, and cb_input is aliased over this core's shard. Steps 1-3 below (read, multicast,
+// signal) do not happen at all -- this core is an ordinary compute core -- so the kernel only
+// publishes the tiles that are already in place and falls through to step 5.
+//
 //   1. Reads all Kt tiles of input_tensor into cb_input.
 //   2. Multicasts the tiles to every other core's L1 (same cb_input address).
 //   3. Sets + multicasts the input-ready semaphore to signal the other cores.
@@ -138,9 +143,22 @@ void kernel_main() {
 
     // Use NoC 1 ("the other NoC") so this runs in parallel with the {0,0} sender on NoC 0.
     Noc noc(1);
-    const auto input = TensorAccessor(input_args, input_addr);
 
     CircularBuffer cb_input(cb_input_id);
+
+#ifdef INPUT_REPLICATED
+    // The activation is a ROW_MAJOR HEIGHT_SHARDED replica this core already holds in L1, with
+    // cb_input aliased over its shard. There is nothing to read from DRAM, nothing to multicast and
+    // nothing to wait for: this core is an ordinary compute core, and publishing the tiles that are
+    // already in place is the whole job. The input accessor and the input-ready semaphore below are
+    // correspondingly unused.
+    (void)input_addr;
+    (void)input_args;
+    (void)src_tiles_per_page;
+    (void)sem_input_id;
+    publish_input(cb_input_id, input_num_pages);
+#else
+    const auto input = TensorAccessor(input_args, input_addr);
 
     // ---- 1. Read all activation tiles into cb_input. ----
     cb_input.reserve_back(input_num_pages);
@@ -180,6 +198,7 @@ void kernel_main() {
 
     // ---- 4. Publish the activation to this core's compute kernel. ----
     cb_input.push_back(input_num_pages);
+#endif
 
     // ---- 5. Wait for the expert-id broadcast, then run the per-expert reader loop. ----
     Semaphore<>(sem_id).wait(1);

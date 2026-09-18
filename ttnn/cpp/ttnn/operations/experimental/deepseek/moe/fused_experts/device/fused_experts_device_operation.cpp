@@ -27,14 +27,52 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
         x.layout() == tt::tt_metal::Layout::TILE || x.layout() == tt::tt_metal::Layout::ROW_MAJOR,
         "fused_experts: input_tensor must be TILE or ROW_MAJOR, got {}",
         x.layout());
+
+    // Two ROW_MAJOR shapes are accepted. Interleaved (the decode path that came off DRAM): one token
+    // row, broadcast to every core by the {1,0} input sender. Replicated onto every compute core in
+    // L1 (the `all_gather_for_matmul` replica that matmul_decode also consumes in place): each core
+    // already holds the row, so there is nothing to read or broadcast -- see
+    // fused_experts_input_is_replicated.
+    const bool input_replicated = fused_experts_input_is_replicated(x);
+    const uint32_t batch = fused_experts_input_rows(x);
     if (x.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
         TT_FATAL(
-            static_cast<uint32_t>(x.logical_shape()[-2]) == 1,
-            "fused_experts: ROW_MAJOR input is the decode 1x32 path and requires a single token row, got height {}",
-            x.logical_shape()[-2]);
+            batch == 1,
+            "fused_experts: ROW_MAJOR input is the decode 1x32 path and requires a single token row, got {}",
+            batch);
+    }
+    if (input_replicated) {
+        const auto& in_shard = x.memory_config().shard_spec().value();
+        TT_FATAL(
+            in_shard.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR,
+            "fused_experts: replicated input requires ROW_MAJOR shard orientation, got {}",
+            in_shard.orientation);
+        TT_FATAL(
+            in_shard.shape[0] == batch,
+            "fused_experts: replicated input shard height ({}) must equal the token row count ({})",
+            in_shard.shape[0],
+            batch);
+        TT_FATAL(
+            static_cast<uint32_t>(x.logical_shape()[-1]) == in_shard.shape[1],
+            "fused_experts: replicated input shard width ({}) must equal the hidden dim ({}): the whole row "
+            "is replicated on every core",
+            in_shard.shape[1],
+            x.logical_shape()[-1]);
+        // Each core's shard is handed to the compute as k_tiles 1x32 tiles by aliasing cb_input over
+        // the buffer, so the row has to be a whole number of them and carry no padding.
+        TT_FATAL(
+            in_shard.shape[1] % tt::constants::TILE_WIDTH == 0,
+            "fused_experts: replicated input row width ({}) must be divisible by the 1x32 tile width ({})",
+            in_shard.shape[1],
+            tt::constants::TILE_WIDTH);
+        TT_FATAL(
+            x.padded_shape()[-1] == x.logical_shape()[-1],
+            "fused_experts: replicated input padded width ({}) must equal the logical width ({}) so the "
+            "replica is one contiguous row per core",
+            x.padded_shape()[-1],
+            x.logical_shape()[-1]);
     }
 
-    const uint32_t batch = static_cast<uint32_t>(x.logical_shape()[-2]);
     const uint32_t num_weights_arg = static_cast<uint32_t>(tensor_args.gate_up_weights.size());
 
     {
@@ -295,7 +333,8 @@ void FusedExpertsDeviceOperation::validate_on_program_cache_miss(
         tt::constants::FACE_HEIGHT);
     TT_FATAL(
         batch >= 1 && batch <= input_tile_h,
-        "fused_experts: batch (input_tensor dim -2) must be in [1, tile height {}], got {}",
+        "fused_experts: token rows (input_tensor dim -2, or the shard height for a replicated ROW_MAJOR "
+        "input) must be in [1, tile height {}], got {}",
         input_tile_h,
         batch);
     const auto& x_shape = x.logical_shape();
@@ -397,7 +436,8 @@ FusedExpertsDeviceOperation::spec_return_value_t FusedExpertsDeviceOperation::co
     // (rather than defaulting to 32x32). At B <= 16 that leaves the output stored as a single tile
     // row too, so downstream ops can keep the same tiny tile without an intervening retile.
     const auto& input_tensor = tensor_args.input_tensor;
-    const uint32_t batch = static_cast<uint32_t>(input_tensor.logical_shape()[-2]);
+    // The row count, not dim -2: a replicated input carries `num_cores * rows` there.
+    const uint32_t batch = fused_experts_input_rows(input_tensor);
     const uint32_t hidden = static_cast<uint32_t>(input_tensor.logical_shape()[-1]);
     const ttnn::Shape output_shape({1, batch, hidden});
     return tt::tt_metal::TensorSpec(
@@ -443,7 +483,11 @@ FusedExpertsDeviceOperation::invoke(
         .routed_scaling_factor = routed_scaling_factor,
         .routing_eps = routing_eps,
         .two_hub_gather = two_hub_gather,
-        .output_memory_config = memory_config.value_or(input_tensor.memory_config()),
+        // A replicated input is L1 HEIGHT_SHARDED over the compute grid; the [1, B, H] result has no
+        // meaningful shard spec of its own (the writer addresses it as one row of pages), so it
+        // defaults to DRAM interleaved rather than inheriting the replica's layout.
+        .output_memory_config = memory_config.value_or(
+            fused_experts_input_is_replicated(input_tensor) ? ttnn::DRAM_MEMORY_CONFIG : input_tensor.memory_config()),
     };
     tensor_args_t tensor_args{
         .input_tensor = input_tensor,

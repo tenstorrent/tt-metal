@@ -32,6 +32,30 @@ inline tt::tt_metal::Tile fused_experts_compute_tile(const Tensor& x) {
     return x.tensor_spec().tile();
 }
 
+// ROW_MAJOR + L1 + HEIGHT_SHARDED with a shard spec: the replicated activation row that
+// `all_gather_for_matmul` multicasts onto every matmul core and that `matmul_decode` consumes in
+// place as its "replicated-A" input. Each core of the shard grid holds a full [rows, H] row, so the
+// op reads it locally and neither reads it from DRAM nor broadcasts it.
+inline bool fused_experts_input_is_replicated(const Tensor& x) {
+    if (x.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
+        return false;
+    }
+    const auto& mem = x.memory_config();
+    return mem.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+           mem.buffer_type() == tt::tt_metal::BufferType::L1 && mem.shard_spec().has_value();
+}
+
+// Token rows carried by the input. A replicated row has `num_cores * rows` in dim -2 (that is what
+// all_gather_for_matmul's output spec reports, so the framework's volume accounting stays honest),
+// so the row count has to come from the shard height -- the same derivation matmul_decode makes in
+// `m_from_replicated_shard`.
+inline uint32_t fused_experts_input_rows(const Tensor& x) {
+    if (fused_experts_input_is_replicated(x)) {
+        return static_cast<uint32_t>(x.memory_config().shard_spec()->shape[0]);
+    }
+    return static_cast<uint32_t>(x.logical_shape()[-2]);
+}
+
 // Fuses the per-expert routed-FFN loop
 //   gate_up = matmul(x, gate_up_w[e]); act = swiglu(gate_up);
 //   down = matmul(act, down_w[e]); acc += down * w[:, e]

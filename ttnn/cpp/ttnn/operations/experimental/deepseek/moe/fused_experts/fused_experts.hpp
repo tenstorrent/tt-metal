@@ -48,9 +48,23 @@ namespace ttnn::experimental::deepseek::moe {
 // temporary built by a scatter + normalize + relayout chain purely for the first kernel to scan it
 // straight back down to k -- and it turns an O(E x B) hit scan into an O(B x k) one.
 //
+// INPUT LAYOUTS. Three shapes are accepted, all consumed as one tile row of B tokens:
+//   * TILE, [1, 1, B, H] with B <= 32 -- the prefill / batched form.
+//   * ROW_MAJOR interleaved, [1, 1, 1, H] (decode) -- physically a run of 1x32 faces, so it is
+//     loaded as 1x32 compute tiles with no tilize. The row is read from DRAM once by the {1,0}
+//     sender and multicast to every core.
+//   * ROW_MAJOR HEIGHT_SHARDED replicated in L1, [1, 1, 1 * num_cores, H] with shard [1, H] -- the
+//     replica `ttnn.experimental.deepseek.all_gather_for_matmul` multicasts onto every matmul core,
+//     and the layout `matmul_decode` also consumes in place. Each core already holds the full row,
+//     so nothing is read from DRAM and nothing is broadcast: cb_input is aliased over the local
+//     shard and merely published. The row count therefore comes from the shard height (`B`), not
+//     from dim -2, which carries `num_cores * B`. This is the cheapest decode form, and it
+//     removes the input broadcast barrier from the critical path.
+//
 // Args:
-//   input_tensor:     activations, [1, 1, B, H] with B <= 32 token rows. TILE, or ROW_MAJOR
-//                     when B == 1 (decode; loaded as 1x32 compute tiles, no tilize).
+//   input_tensor:     activations, [1, 1, B, H] with B <= 32 token rows. TILE, ROW_MAJOR
+//                     (B == 1; loaded as 1x32 compute tiles, no tilize), or ROW_MAJOR
+//                     HEIGHT_SHARDED L1 replicated on the compute grid (see INPUT LAYOUTS).
 //   routing_indices:  selected expert ids, [1, 1, B, top_k] TILE, either UINT16 (a `ttnn.topk`
 //                     index output) or BFLOAT16 (a `ttnn.embedding` gather from an id table; exact
 //                     for E <= 256, and the only dtype that op gathers).
@@ -77,7 +91,9 @@ namespace ttnn::experimental::deepseek::moe {
 //                     extra chip-wide synchronization per block for an L1 footprint set by the block
 //                     rather than by `num_experts`. Since blocking double-buffers the activation
 //                     block, the largest usable block is about half the largest usable single block.
-//   memory_config:    optional output memory config (defaults to the input's).
+//   memory_config:    optional output memory config. Defaults to the input's, except for a
+//                     replicated input, whose L1 HEIGHT_SHARDED replica has no meaningful output
+//                     layout: there the default is DRAM interleaved.
 //
 // Returns a [1, B, H] BFLOAT16 tensor in the input's layout (TILE, or ROW_MAJOR when B == 1):
 //   act       = silu(clamp(gate, max=limit)) * clamp(up, -limit, limit),
