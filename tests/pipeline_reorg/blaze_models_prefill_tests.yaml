@@ -1278,6 +1278,51 @@
   sp_config: sc1
 
 
+
+# GPT-OSS-120B through the common prefill runner (runner + producer e2e; the production path): the
+# producer drives 11 x 5120-token chunks for one user and checks the KV PCC over the 5k golden prefix.
+# GPT-OSS reports layer completion through the host callback (adapter supports_d2h_layer_ack=False),
+# so the e2e test starts the runner with PREFILL_LAYER_ACK_D2H=0. Same staged mounts as the stages above.
+- name: "(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k vs 5k golden prefix"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export PREFILL_MODEL=gpt_oss_d_p
+    export PREFILL_FABRIC_MODE=2d_torus_xy
+    export PREFILL_SP=4
+    export PREFILL_TP=8
+    export PREFILL_NUM_LAYERS=36
+    export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+    export PREFILL_HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+    export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
+    export PREFILL_TTNN_CACHE=/mnt/models/blaze/openai/gpt-oss-120b
+    export GPT_OSS_WEIGHTS_FROM_CACHE=1
+    export EXPERT_DTYPE=bf8
+    export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+    export PREFILL_PCC_GOLDEN_LEN=5000
+    export PREFILL_STANDALONE_CHUNKED_PCC=0.85
+    export PREFILL_CI_PRODUCER_TIMEOUT_S=1800
+    export PREFILL_CI_RUNNER_READY_TIMEOUT_S=2400
+    export PREFILL_RUNNER_LAUNCH=ci
+    export LOGURU_LEVEL=INFO
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      export TT_METAL_OPERATION_TIMEOUT_SECONDS=300  # 5 min; the runner idles in the H2D recv between chunks
+      python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=3600
+    '
+  test_type: gpt_oss_prefill_runner
+  test_tags: [runner]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Measured 22 and 37 min on bh_sc1: the runner-ready phase (tilized-cache read over NFS + JIT) swung
+      # from 20 to 29 min between runs; the 11 chunks + PCC readback take ~1 min.
+      timeout: 45
+  owner_id: U08HM8SL5U4 # Maciek Dragula
+  team: models
+  budget_type: demo
+  sp_config: sc1
 # ===== Disaggregated prefill, SC4 -- one launcher shared by both entries, keep them adjacent ===========
 
 # 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,

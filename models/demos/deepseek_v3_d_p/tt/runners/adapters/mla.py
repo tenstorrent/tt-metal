@@ -57,6 +57,10 @@ def unwrap_multimodal_config(cfg):
 class MLAPrefillAdapter(PrefillModelAdapter):
     """DeepSeek-V3-family prefill adapter (MLA + MoE over TtPrefillRuntime)."""
 
+    # The MLA runtime ships D2H layer-ack records (set_d2h_ack_service) and captures the chunk as a trace.
+    supports_d2h_layer_ack = True
+    supports_trace = True
+
     # ------------------------------------------------------------------
     # HF config
     # ------------------------------------------------------------------

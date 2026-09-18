@@ -163,7 +163,9 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register the per-layer completion sink. Required at any rank count, unless the runner runs
-        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead.
+        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead. An adapter opts into
+        D2H mode with `supports_d2h_layer_ack = True` (the MLA family does); otherwise the runner refuses
+        PREFILL_LAYER_ACK_D2H=1 up front and the producer/runner e2e test starts it in callback mode.
 
         Call `sink(layer_idx, request_id)` once per layer, where `request_id` is the one
         `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the
