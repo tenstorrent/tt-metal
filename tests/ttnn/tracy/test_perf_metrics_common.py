@@ -266,7 +266,14 @@ def test_l1_grant_ratios_stay_bounded_when_ready_exceeds_requests():
 
 def test_tech_report_catalogue_matches_metric_labels_exactly():
     # One catalogue row per engine metric, no stale rows, labels identical to the engine's.
-    report = (Path(__file__).resolve().parents[3] / "tech_reports" / "PerfCounters" / "perf-counters.md").read_text()
+    report = (
+        Path(__file__).resolve().parents[3]
+        / "tt_metal"
+        / "tt-llk"
+        / "docs"
+        / "performance_counters"
+        / "hardware_reference.md"
+    ).read_text()
     catalogue = {}
     for label_unit, key in re.findall(r"^\| (.+?) \| `([a-z0-9_]+)` \| `", report, re.M):
         assert key not in catalogue, f"duplicate catalogue row for {key}"
