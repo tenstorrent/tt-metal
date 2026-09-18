@@ -15,11 +15,11 @@ struct DevicePrintMemoryLayout {
     DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, 2> buffer;
 #endif
 #elif defined(COMPILE_FOR_DRISC)
-    // TODO: This needs to be properly defined
+    // CCE is DM-only: one buffer covers all eight harts, same layout as dispatch.
 #if !defined(DEVICE_PRINT_BUFFER_SIZE)
-    DevicePrintBuffer<204, 1> buffer;
+    DevicePrintBuffer<1632, 8> buffer;
 #else
-    DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, 1> buffer;
+    DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, 8> buffer;
 #endif
 #elif defined(COMPILE_FOR_DISPATCH_ENGINE)
     // Dispatch engine cores are DM-only (no TRISCs), so one buffer covers all 8 processors.
