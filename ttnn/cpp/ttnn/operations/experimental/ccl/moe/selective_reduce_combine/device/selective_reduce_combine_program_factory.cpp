@@ -5,6 +5,8 @@
 #include <ranges>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -75,13 +77,17 @@ tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
     uint8_t num_buffers_header_only_channels,
     const size_t buffer_size_bytes_full_size_channel,
     const uint32_t l1_unreserved_base_address,
-    const std::optional<uint32_t>& occupied_l1_tensor_addr) {
+    const std::optional<uint32_t>& occupied_l1_tensor_addr,
+    const size_t usable_l1_end_address) {
     TT_FATAL(
         num_buffers_full_size_channels > 0 && num_buffers_header_only_channels > 0,
         "Not enough L1 space for mux core memory requirements given current occupancy. Likely too many experts per "
         "device");
 
-    const auto config = tt::tt_fabric::FabricMuxConfig(
+    // Size the map with no ceiling first, so this search is what shrinks the buffer counts. Passing the
+    // ceiling to the constructor up front would make *it* fatal on the first oversized candidate and the
+    // shrink below would never get a turn.
+    const auto candidate = tt::tt_fabric::FabricMuxConfig(
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
@@ -89,7 +95,17 @@ tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
         buffer_size_bytes_full_size_channel,
         l1_unreserved_base_address);
 
-    if (occupied_l1_tensor_addr.has_value() && config.get_memory_map_end_address() > *occupied_l1_tensor_addr) {
+    // Fit under whichever ceiling is lower: the live occupancy reading (best effort -- a build-time
+    // snapshot, so a later allocation can still descend past it) or the L1_SMALL floor (static, so it can
+    // never go stale).
+    std::optional<size_t> ceiling = occupied_l1_tensor_addr.has_value()
+                                        ? std::optional<size_t>(*occupied_l1_tensor_addr)
+                                        : std::nullopt;
+    if (usable_l1_end_address != 0) {
+        ceiling = ceiling.has_value() ? std::min<size_t>(*ceiling, usable_l1_end_address) : usable_l1_end_address;
+    }
+
+    if (ceiling.has_value() && candidate.get_memory_map_end_address() > *ceiling) {
         return get_fabric_mux_config(
             num_full_size_channels,
             num_header_only_channels,
@@ -97,10 +113,21 @@ tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
             --num_buffers_header_only_channels,
             buffer_size_bytes_full_size_channel,
             l1_unreserved_base_address,
-            occupied_l1_tensor_addr);
+            occupied_l1_tensor_addr,
+            usable_l1_end_address);
     }
 
-    return config;
+    // It fits, so hand back a config that carries the ceiling. Identical memory map, but FabricMuxConfig
+    // now asserts the invariant itself -- a backstop if this function's arithmetic ever drifts.
+    return tt::tt_fabric::FabricMuxConfig(
+        num_full_size_channels,
+        num_header_only_channels,
+        num_buffers_full_size_channels,
+        num_buffers_header_only_channels,
+        buffer_size_bytes_full_size_channel,
+        l1_unreserved_base_address,
+        tt::CoreType::WORKER,
+        usable_l1_end_address);
 }
 
 auto launch_mux_workers(
@@ -123,6 +150,28 @@ auto launch_mux_workers(
 
     const auto occupied_l1_tensor_addr = mesh_device.lowest_occupied_compute_l1_address();
 
+    // The mux carves raw L1 growing up from l1_unreserved_base_address, outside the allocator, so the
+    // allocator never learns those bytes are taken and may hand them to a later allocation. That is
+    // survivable for a tensor -- its producer rewrites it every iteration -- but not for a GlobalSemaphore,
+    // whose value is written once at allocation and thereafter only incremented by the kernels that read
+    // it. One clobber of a carried counter is unrecoverable, which is the #56769 hang.
+    //
+    // The fix is to keep semaphores out of the mux's reach entirely: with l1_small_size > 0 they are
+    // allocated from L1_SMALL, which sits at the *top* of L1, and the ceiling below pins the mux beneath
+    // it. Without an L1_SMALL region there is nowhere safe to put them, and we cannot detect the collision
+    // later -- at this point the semaphores do not exist yet, so an occupancy check cannot see them.
+    const auto l1_small_bank_size = mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
+    TT_FATAL(
+        l1_small_bank_size > 0,
+        "The fabric mux reserves raw L1 on cores {} outside the allocator, but this device was opened with "
+        "l1_small_size = 0. GlobalSemaphores then fall back to BufferType::L1 and can be allocated inside the "
+        "mux's region, which silently overwrites them and hangs (#56769). Open the mesh device with "
+        "l1_small_size > 0 (16384 is sufficient) so semaphores are placed in L1_SMALL, above the mux.",
+        mux_core_range_set.str());
+
+    // The mux stays below the floor of the L1_SMALL region, where carried semaphores live (#56769).
+    const size_t l1_small_floor_address = ttnn::ccl::l1_small_floor_address(mesh_device);
+
     auto mux_kernel_config = get_fabric_mux_config(
         num_full_size_channels,
         num_header_only_channels,
@@ -130,7 +179,8 @@ auto launch_mux_workers(
         num_buffers_header_only_channels,
         buffer_size_bytes_full_size_channel,
         l1_unreserved_base_address,
-        occupied_l1_tensor_addr);
+        occupied_l1_tensor_addr,
+        l1_small_floor_address);
 
     // Calculate required vs available mux cores for fabric communication (one core per link per neighbor)
     const uint32_t needed_cores = num_links * neighbors.size();
@@ -204,11 +254,14 @@ UnifiedSelectReduce::cached_mesh_workload_t UnifiedSelectReduce::create_mesh_wor
 
     auto* mesh_device = tensor_args.dense_input_tensor.device();
     const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
+    // Carried counters: keep them above the mux's ceiling where an L1_SMALL region exists. This op
+    // also TT_FATALs below if there is none, so the general-L1 fallback never reaches a mux.
+    const auto sem_buffer_type = ttnn::ccl::carried_semaphore_buffer_type(*mesh_device);
     auto init_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0);
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0, sem_buffer_type);
 
     auto final_barrier_semaphore = operation_attributes.optional_cross_device_semaphore.value_or(
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0));
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, worker_core_range_set, 0, sem_buffer_type));
 
     tt::tt_metal::distributed::Synchronize(
         *mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated

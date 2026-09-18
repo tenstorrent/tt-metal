@@ -50,6 +50,46 @@ def run_reduce_scatter_minimal_direct_impl(
     torch.manual_seed(0)
     assert persistent_mode in PERSISTENT_MODES, f"unknown persistent_mode {persistent_mode}"
 
+    # A mesh with more than one device on BOTH axes runs one INDEPENDENT ring per row (or column) of the
+    # other axis, all of them concurrently -- the configuration this op is not validated for and hangs in
+    # (#54864). Distributing over a single axis cannot express it, so build the input over both mesh axes
+    # instead: the scatter dim is sharded along cluster_axis and REPLICATED along the other, which makes
+    # every ring compute the same reduce-scatter. Composing back over both axes then puts each ring's
+    # answer at its own index of `replica_dim`, so a single ring going wrong is a failure rather than an
+    # unchecked device.
+    mesh_shape = tuple(mesh_device.shape)
+    multi_ring = cluster_axis is not None and len(mesh_shape) == 2 and min(mesh_shape) > 1
+    if multi_ring:
+        assert num_devices == mesh_shape[cluster_axis], (
+            f"the ring is the whole cluster axis: num_devices {num_devices} must be mesh {mesh_shape} "
+            f"axis {cluster_axis}"
+        )
+        num_rings = mesh_shape[1 - cluster_axis]
+        # Any dim but the scatter dim; the shapes here are rank 4, so dim 0 is free unless it IS the
+        # scatter dim.
+        replica_dim = 0 if dim != 0 else 1
+        placements = [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]
+        placements[cluster_axis] = ttnn.PlacementShard(dim)
+        concat_dims = [0, 0]
+        concat_dims[cluster_axis] = dim
+        concat_dims[1 - cluster_axis] = replica_dim
+        mesh_mapper = ttnn.create_mesh_mapper(
+            mesh_device, ttnn.MeshMapperConfig(placements, ttnn.MeshShape(mesh_shape[0], mesh_shape[1]))
+        )
+        mesh_composer = ttnn.create_mesh_composer(
+            mesh_device, ttnn.MeshComposerConfig(concat_dims, ttnn.MeshShape(mesh_shape[0], mesh_shape[1]))
+        )
+    else:
+        num_rings = 1
+        replica_dim = None
+        mesh_mapper = ttnn.create_mesh_mapper(
+            mesh_device,
+            ttnn.MeshMapperConfig(
+                [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+            ),
+        )
+        mesh_composer = ttnn.ConcatMeshToTensor(mesh_device, dim=dim)
+
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
@@ -82,12 +122,7 @@ def run_reduce_scatter_minimal_direct_impl(
                 layout=layout,
                 dtype=rs_input_dtype,
                 memory_config=mem_config_input,
-                mesh_mapper=ttnn.create_mesh_mapper(
-                    mesh_device,
-                    ttnn.MeshMapperConfig(
-                        [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
-                    ),
-                ),
+                mesh_mapper=mesh_mapper,
             )
         )
 
@@ -163,22 +198,21 @@ def run_reduce_scatter_minimal_direct_impl(
 
         for tt_tensor in trace_output_list:
             tt_rs_out = ttnn.from_device(tt_tensor)
-            tt_reduce_scatter_output_list.append(
-                ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
-            )
+            tt_reduce_scatter_output_list.append(ttnn.to_torch(tt_rs_out, mesh_composer=mesh_composer))
         ttnn.release_trace(mesh_device, trace_id)
     else:
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             tt_rs_out = ttnn.from_device(tt_reduce_scatter_output_tensor)
-            tt_reduce_scatter_output_list.append(
-                ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=dim))
-            )
+            tt_reduce_scatter_output_list.append(ttnn.to_torch(tt_rs_out, mesh_composer=mesh_composer))
             logger.info(f"Done iteration {i}")
 
     for i in range(num_iters):
         torch_rs_out = torch.cat(torch_reduce_scatter_output_list[i], dim)
+        if multi_ring:
+            # Every ring computed the same collective, and the composer stacked them on replica_dim.
+            torch_rs_out = torch.cat([torch_rs_out] * num_rings, replica_dim)
         eq, output = comp_pcc(tt_reduce_scatter_output_list[i], torch_rs_out)
         logger.info(f"{output}, iteration {i}")
         assert eq, f"iteration {i} FAILED: {output}"
@@ -197,6 +231,10 @@ RS_DIRECT_SHAPE_IDS = ["dim3_w256", "dim2_h256"]
 
 RS_DIRECT_TRACE_CASES = [(True, 3), (False, 2)]
 RS_DIRECT_TRACE_IDS = ["trace", "no_trace"]
+
+# Exercises 8x4 mesh in the tests/nighty/ccl/tg/test_minimal_reduce_scatter_direct.py
+RS_DIRECT_DEEPSEEK_SHAPES = [([1, 1, 32, 7168], 3)]
+RS_DIRECT_DEEPSEEK_SHAPE_IDS = ["deepseek_dim3_w7168"]
 
 RS_DIRECT_DRAM_MEM_CONFIG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 

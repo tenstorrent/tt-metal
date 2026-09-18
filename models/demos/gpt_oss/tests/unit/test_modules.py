@@ -685,6 +685,11 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     [False, True],
     ids=["unpaged", "paged"],
 )
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 16384}],
+    indirect=True,
+)
 def test_decoder(
     mesh_device, device_params, batch_size, seq_len, layer_idx, paged, test_modules, test_thresholds, reset_seeds
 ):
