@@ -1392,7 +1392,7 @@ Implementing continuous batching requires that the serving code track data for e
 
 ### 3.5 vLLM Integration
 
-vLLM is an [open-source LLM serving library](https://github.com/vllm-project/vllm). Tenstorrent maintains a [fork of vLLM](https://github.com/tenstorrent/vllm/tree/dev) for serving models in production on Tenstorrent hardware. For more information about vLLM and the instructions on integrating Tenstorrent models into vLLM, please see the [vLLM Integration Tech Report](./vLLM_integration.md).
+vLLM is an [open-source LLM serving library](https://github.com/vllm-project/vllm). Tenstorrent integrates TT hardware through the standalone [vLLM TT plugin](https://github.com/tenstorrent/vllm-tt-plugin). For model integration instructions, see the [vLLM Integration Tech Report](./vLLM_integration.md).
 
 ## 4. Best Practices and Optimizations
 ### 4.1 Tracing
