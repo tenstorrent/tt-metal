@@ -287,6 +287,41 @@ def test_logaddexp2_fp32(device, ttnn_function):
     assert status
 
 
+@pytest.mark.parametrize("ttnn_function", [ttnn.logaddexp, ttnn.logaddexp2])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_logaddexp_overflow_safe(device, ttnn_function, dtype):
+    # Regression for #52037: log(exp(a) + exp(b)) saturates for |a| or |b| > ~88.7
+    # and returns inf/-inf although the exact result is always finite.
+    # The sweep must sample past the saturation point on both sides.
+    pairs = [
+        (100.0, 0.0),      # exact: 100
+        (89.0, 0.0),       # exact: 89
+        (90.0, 89.0),      # exact: ~90.313
+        (100.0, 100.0),    # exact: 100 + ln2 (base e) / 101 (base 2)
+        (200.0, 199.0),    # exact: ~200.313
+        (-100.0, -100.0),  # exact: ~-99.307 (base e) / -99 (base 2)
+        (1000.0, 999.0),   # exact: ~1000.313
+        (1e4, -1e4),       # exact: 1e4
+        (-1e4, 1e4),       # exact: 1e4
+        (88.0, 0.0),       # in-range regression check
+        (0.0, 0.0),        # exact: ln2 (base e) / 1 (base 2)
+    ]
+    x_torch = torch.tensor([p[0] for p in pairs], dtype=torch.float32)
+    y_torch = torch.tensor([p[1] for p in pairs], dtype=torch.float32)
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_out = ttnn_function(x_tt, y_tt)
+    tt_out = ttnn.to_torch(z_tt_out)
+
+    # Finite inputs must produce finite outputs; inf/-inf here is always wrong.
+    assert torch.isfinite(tt_out).all(), f"{ttnn_function} produced non-finite output: {tt_out}"
+    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
+    assert status
+
+
 @pytest.mark.parametrize(
     "ttnn_function",
     [
