@@ -2054,7 +2054,9 @@ create_program_mcast_in0_in1(
     }
 
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
-    in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
+    // The per-batch barrier+signal of the REDUCE_SCATTER path is reused as-is by the SP reduce-scatter fusion.
+    in1_sender_writer_compile_time_args.push_back((std::uint32_t)(
+        fuse_op && (fused_op_signaler->is_reduce_scatter() || fused_op_signaler->is_sp_reduce_scatter())));
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
 
     // Append TensorAccessorArgs
@@ -2123,7 +2125,8 @@ create_program_mcast_in0_in1(
     } else {
         in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
-    in1_receiver_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
+    in1_receiver_writer_compile_time_args.push_back((std::uint32_t)(
+        fuse_op && (fused_op_signaler->is_reduce_scatter() || fused_op_signaler->is_sp_reduce_scatter())));
     tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(in1_receiver_writer_compile_time_args);
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -2186,6 +2189,25 @@ create_program_mcast_in0_in1(
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["OUT_SHARDED"] = "1";
+    }
+    // Sequence-parallel fusion: the in0 sender and both output writers iterate the sub-batches in the order given
+    // by the signaler's schedule words (rt args) instead of 0..B-1. Defines only: the positional CT-arg layout of
+    // these kernels (TensorAccessor offsets) must not change.
+    if (fuse_op && fused_op_signaler->has_sp_schedule()) {
+        TT_FATAL(!in0_block_sharded, "SP slice schedule requires interleaved in0 (the in0 sender kernel)");
+        TT_FATAL(!output_is_sharded, "SP slice schedule requires an interleaved output");
+        TT_FATAL(
+            fused_op_signaler->sp_schedule_words.size() == B,
+            "SP slice schedule has {} entries but the matmul has {} sub-batches",
+            fused_op_signaler->sp_schedule_words.size(),
+            B);
+        mm_kernel_in0_sender_interleaved_defines["SP_SLICE_SCHEDULE"] = "1";
+        mm_kernel_in1_sender_writer_defines["SP_SLICE_SCHEDULE"] = "1";
+        mm_kernel_in1_receiver_writer_defines["SP_SLICE_SCHEDULE"] = "1";
+        mm_kernel_in1_receiver_writer_other_noc_setup_defines["SP_SLICE_SCHEDULE"] = "1";
+        if (fused_op_signaler->is_sp_all_gather()) {
+            mm_kernel_in0_sender_interleaved_defines["SP_AG_WAIT"] = "1";
+        }
     }
 
     // Intermediate CB read
@@ -2256,10 +2278,10 @@ create_program_mcast_in0_in1(
         }
     } else {
         if (fuse_op) {
-            if (fused_op_signaler->is_all_gather()) {
-                // Create semaphores
+            if (fused_op_signaler->is_all_gather() || fused_op_signaler->is_sp_all_gather()) {
+                // Create semaphores (the two direction semaphores, MULTI mode, on every in0 sender core)
                 fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
-            } else if (fused_op_signaler->is_reduce_scatter()) {
+            } else if (fused_op_signaler->is_reduce_scatter() || fused_op_signaler->is_sp_reduce_scatter()) {
                 fused_op_signaler->init_fused_op(program, device, all_cores, cores);
             } else {
                 TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
@@ -2667,6 +2689,7 @@ create_program_mcast_in0_in1(
 
     uint32_t in0_end_idx = num_blocks_y - 1;
     uint32_t in1_end_idx = num_blocks_x - 1;
+    uint32_t sp_in0_alt_addr_rt_arg_idx = 0;  // 0 = none (index 0 is always the in0 address)
     const auto& in0_sender_interleaved_cores = grid_to_cores(
         in0_sender_interleaved.start_coord, in0_sender_interleaved.end_coord, true);  // Only used for interleaved in0
     const auto& in1_sender_cores = grid_to_cores(in1_sender.start_coord, in1_sender.end_coord, true);
@@ -2774,6 +2797,16 @@ create_program_mcast_in0_in1(
             // sparsity args
             mm_in0_sender_args.push_back(0);  // sparsity_addr
 
+            // SP slice schedule args come right after the standard args (kernel parses them in this order)
+            if (fuse_op && fused_op_signaler->has_sp_schedule()) {
+                const uint32_t sp_base = mm_in0_sender_args.size();
+                fused_op_signaler->push_sp_schedule_rt_args_in0(mm_in0_sender_args);
+                if (fused_op_signaler->is_sp_all_gather()) {
+                    // [num_sub_batches, words..., in0_alt_addr, sem0, sem1]: remember where in0_alt_addr lives so a
+                    // program-cache hit can refresh it (override_sp_in0_alt_addr).
+                    sp_in0_alt_addr_rt_arg_idx = sp_base + 1 + fused_op_signaler->sp_schedule_words.size();
+                }
+            }
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
@@ -2860,11 +2893,17 @@ create_program_mcast_in0_in1(
                     }
                 }
 
+                // SP slice schedule args come right after the standard args, before the OpSignaler args
+                if (fuse_op && fused_op_signaler->has_sp_schedule()) {
+                    fused_op_signaler->push_sp_schedule_rt_args_writer(mm_in1_sender_writer_args);
+                }
                 if (fuse_op) {
                     if (fused_op_signaler->is_all_gather()) {
                         fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
-                    } else if (fused_op_signaler->is_reduce_scatter()) {
+                    } else if (fused_op_signaler->is_reduce_scatter() || fused_op_signaler->is_sp_reduce_scatter()) {
                         fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, in0_idx, in1_idx);
+                    } else if (fused_op_signaler->is_sp_all_gather()) {
+                        // schedule args only; the AG wait happens on the in0 sender
                     } else {
                         TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
                     }
@@ -3015,7 +3054,11 @@ create_program_mcast_in0_in1(
                     }
                 }
 
-                if (fuse_op && fused_op_signaler->is_reduce_scatter()) {
+                // SP slice schedule args come right after the standard args, before the OpSignaler args
+                if (fuse_op && fused_op_signaler->has_sp_schedule()) {
+                    fused_op_signaler->push_sp_schedule_rt_args_writer(mm_in1_receiver_writer_args);
+                }
+                if (fuse_op && (fused_op_signaler->is_reduce_scatter() || fused_op_signaler->is_sp_reduce_scatter())) {
                     fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_receiver_writer_args, in0_idx, in1_idx);
                 }
 
@@ -3050,7 +3093,8 @@ create_program_mcast_in0_in1(
          start_core_x,
          start_core_y,
          transpose_mcast,
-         cores}};
+         cores,
+         sp_in0_alt_addr_rt_arg_idx}};
 }
 
 void override_runtime_arguments_impl(
@@ -3138,6 +3182,19 @@ void override_runtime_arguments_impl(
     }
 }
 }  // namespace reuse_mcast_optimized_helpers
+
+void override_sp_in0_alt_addr(
+    tt::tt_metal::Program& program,
+    const MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t& shared_variables,
+    uint32_t in0_alt_addr) {
+    TT_FATAL(
+        shared_variables.sp_in0_alt_addr_rt_arg_idx != 0,
+        "override_sp_in0_alt_addr: this program was not built with an SP_ALL_GATHER signaler");
+    auto& runtime_args_by_core = GetRuntimeArgs(program, shared_variables.mm_kernel_in0_sender_id);
+    for (const auto& core : shared_variables.in0_sender_interleaved_cores) {
+        runtime_args_by_core[core.x][core.y][shared_variables.sp_in0_alt_addr_rt_arg_idx] = in0_alt_addr;
+    }
+}
 
 static ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>
 matmul_multi_core_reuse_mcast_2d_optimized_(
@@ -3294,6 +3351,18 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     const auto Nt = get_N_dim(b_shape_padded, in1_tile);
 
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
+
+    if (fused_op_signaler.has_value() && fused_op_signaler->has_sp_schedule()) {
+        TT_FATAL(!fuse_batch, "SP slice schedule requires fuse_batch=false (one matmul sub-batch per sequence slice)");
+        TT_FATAL(bcast_batch, "SP slice schedule requires a non-batched (broadcast) weight (bcast_batch=true)");
+        TT_FATAL(
+            B == fused_op_signaler->sp_schedule_words.size(),
+            "SP slice schedule has {} entries but in0 has {} sub-batches",
+            fused_op_signaler->sp_schedule_words.size(),
+            B);
+        TT_FATAL(!a.is_sharded(), "SP slice schedule requires interleaved in0");
+        TT_FATAL(!output.memory_config().is_sharded(), "SP slice schedule requires an interleaved output");
+    }
 
     // This should allocate a DRAM buffer on the device
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -3539,10 +3608,14 @@ matmul_multi_core_reuse_mcast_2d_optimized_helper(
     DeviceComputeKernelConfig compute_kernel_config,
     const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    bool transpose_a,
+    bool transpose_b) {
     auto attributes = ttnn::prim::MatmulParams{.program_config = program_config, .bcast_batch = broadcast_batch};
     attributes.compute_kernel_config = compute_kernel_config;
     attributes.untilize_out = untilize_out;
+    attributes.transpose_a = transpose_a;
+    attributes.transpose_b = transpose_b;
 
     auto output_tensors = std::vector<ttnn::Tensor>{output_tensor};
     return matmul_multi_core_reuse_mcast_2d_optimized_(

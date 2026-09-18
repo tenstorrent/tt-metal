@@ -40,6 +40,15 @@ void kernel_main() {
     const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 #endif
 
+#ifdef SP_SLICE_SCHEDULE
+    // Sequence-parallel fusion: iteration b of the batch loop writes sub-batch out_idx = (sp_sched[b] >> 8) & 0xFF
+    // instead of b. rt args: [num_sub_batches, words...] (right after the standard args, before any OpSignaler args).
+    const uint32_t sp_num_sub_batches = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx));
+    const uint32_t* sp_sched = reinterpret_cast<const uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx + 1)));
+    rt_args_idx += 1 + sp_num_sub_batches;
+    const uint32_t sp_out_core_base_tile_id = out_tensor_start_tile_id;
+#endif  // SP_SLICE_SCHEDULE
+
     // COMPILE TIME ARGS
     // READER
     // in1 block args
@@ -110,6 +119,9 @@ void kernel_main() {
     (void)s;
 
     for (uint32_t b = 0; b < batch; ++b) {
+#ifdef SP_SLICE_SCHEDULE
+        out_tensor_start_tile_id = sp_out_core_base_tile_id + ((sp_sched[b] >> 8) & 0xFF) * MtNt;
+#endif  // SP_SLICE_SCHEDULE
         uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
@@ -226,7 +238,9 @@ void kernel_main() {
             }
             out_tensor_current_h_dim_block_tile_id += out_tensor_next_h_dim_block_stride;
         }
+#ifndef SP_SLICE_SCHEDULE
         out_tensor_start_tile_id += MtNt;
+#endif  // SP_SLICE_SCHEDULE (rebuilt from the schedule word at the top of the batch loop)
 
         if (fuse_op_reduce_scatter) {
             // Signal reduce_scatter to go

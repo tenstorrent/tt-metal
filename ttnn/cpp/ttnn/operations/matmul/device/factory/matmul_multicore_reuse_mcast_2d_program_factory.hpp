@@ -29,6 +29,9 @@ struct MatmulMultiCoreReuseMcast2DProgramFactory {
         uint32_t start_core_y{};
         bool transpose_mcast{};
         std::vector<CoreCoord> cores;
+        // SP_ALL_GATHER fusion only: rt-arg index of `in0_alt_addr` on the in0 sender kernel (0 = not an SP_AG
+        // program). See override_sp_in0_alt_addr().
+        uint32_t sp_in0_alt_addr_rt_arg_idx = 0;
     };
 
     static void override_runtime_arguments(
@@ -45,6 +48,13 @@ struct MatmulMultiCoreReuseMcast2DProgramFactory {
         const std::optional<CoreRangeSet>& core_range_set = std::nullopt);
 };
 
+// SP_ALL_GATHER fusion, program-cache hit: refresh the in0 sender's alternate in0 address (the original sharded
+// all-gather input read for local slices). override_runtime_arguments() only refreshes the matmul's own tensors.
+void override_sp_in0_alt_addr(
+    tt::tt_metal::Program& program,
+    const MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t& shared_variables,
+    uint32_t in0_alt_addr);
+
 ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>
 matmul_multi_core_reuse_mcast_2d_optimized_helper(
     tt::tt_metal::Program& program, /* Take programa as input by reference */
@@ -56,6 +66,10 @@ matmul_multi_core_reuse_mcast_2d_optimized_helper(
     DeviceComputeKernelConfig compute_kernel_config,
     const operations::matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler);
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    // In-kernel operand transposes (stride swap in the readers). Defaulted so existing fused-op callers are
+    // unchanged; without these the helper silently ignored a transposed weight.
+    bool transpose_a = false,
+    bool transpose_b = false);
 
 }  // namespace ttnn::prim

@@ -483,6 +483,44 @@ bool MatmulFusedOpSignaler::is_llama_all_gather() const {
     return fused_op_type == MatmulFusedOpSignalerType::LLAMA_ALL_GATHER;
 }
 
+bool MatmulFusedOpSignaler::is_sp_all_gather() const {
+    return fused_op_type == MatmulFusedOpSignalerType::SP_ALL_GATHER;
+}
+
+bool MatmulFusedOpSignaler::is_sp_reduce_scatter() const {
+    return fused_op_type == MatmulFusedOpSignalerType::SP_REDUCE_SCATTER;
+}
+
+bool MatmulFusedOpSignaler::has_sp_schedule() const { return is_sp_all_gather() || is_sp_reduce_scatter(); }
+
+void MatmulFusedOpSignaler::init_sp_schedule(const std::vector<uint32_t>& schedule_words, uint32_t in0_alt_addr) {
+    TT_FATAL(has_sp_schedule(), "init_sp_schedule is only valid for the SP_ALL_GATHER / SP_REDUCE_SCATTER types");
+    TT_FATAL(!schedule_words.empty(), "SP slice schedule must not be empty");
+    this->sp_schedule_words = schedule_words;
+    this->sp_in0_alt_addr = in0_alt_addr;
+    initialized_sp_schedule = true;
+}
+
+void MatmulFusedOpSignaler::push_sp_schedule_rt_args_in0(std::vector<uint32_t>& out_rt_args) const {
+    TT_FATAL(initialized_sp_schedule, "MatmulFusedOpSignaler SP schedule not initialized.");
+    out_rt_args.push_back(static_cast<uint32_t>(this->sp_schedule_words.size()));
+    out_rt_args.insert(out_rt_args.end(), this->sp_schedule_words.begin(), this->sp_schedule_words.end());
+    if (is_sp_all_gather()) {
+        TT_FATAL(
+            initialized_fused_op && this->fused_op_receiver_signal_semaphores.size() >= 2,
+            "SP_ALL_GATHER needs the two direction semaphores from init_fused_op(program, device, cores, MULTI)");
+        out_rt_args.push_back(this->sp_in0_alt_addr);
+        out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
+        out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
+    }
+}
+
+void MatmulFusedOpSignaler::push_sp_schedule_rt_args_writer(std::vector<uint32_t>& out_rt_args) const {
+    TT_FATAL(initialized_sp_schedule, "MatmulFusedOpSignaler SP schedule not initialized.");
+    out_rt_args.push_back(static_cast<uint32_t>(this->sp_schedule_words.size()));
+    out_rt_args.insert(out_rt_args.end(), this->sp_schedule_words.begin(), this->sp_schedule_words.end());
+}
+
 // Used to propagate semaphore information from matmul to all_gather in all_gather_matmul op
 void MinimalMatmulFusedOpSignaler::init_all_gather(
     uint32_t ring_size,

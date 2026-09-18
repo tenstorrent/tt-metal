@@ -110,6 +110,8 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     moe_compute/device/moe_compute_program_factory.cpp
     moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.cpp
     moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.cpp
+    sp_matmul_fusion_common/sp_matmul_fusion_common.cpp
+    sp_matmul_fusion_common/sp_matmul_schedule_test.cpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
@@ -133,6 +135,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
     reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_op_device_operation_types.hpp
     reduce_scatter_minimal_direct/device/reduce_scatter_minimal_direct_factory.hpp
     reduce_scatter_minimal_direct/reduce_scatter_minimal_direct.hpp
+    sp_matmul_fusion_common/sp_matmul_fusion_common.hpp
 )
 
 # Registered on the shared `ttnn` Python module target from
@@ -177,4 +180,5 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.cpp
     moe_compute/moe_compute_nanobind.cpp
     moe/selective_reduce_combine/selective_reduce_combine_nanobind.cpp
+    sp_matmul_fusion_common/sp_matmul_schedule_test_nanobind.cpp
 )

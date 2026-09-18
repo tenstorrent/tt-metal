@@ -33,6 +33,24 @@ void kernel_main() {
     // sparsity args
     const uint32_t sparsity_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
+#ifdef SP_SLICE_SCHEDULE
+    // Sequence-parallel fusion (MatmulFusedOpSignaler SP_* types): the batch loop below visits the sub-batches in
+    // the order given by the schedule words instead of 0..in0_B-1.
+    // rt args: [num_sub_batches, words..., (SP_AG_WAIT only:) in0_alt_addr, sem_dir0_id, sem_dir1_id]
+    // word: in0_idx = w & 0xFF | out_idx = (w >> 8) & 0xFF | wait_dir = (w >> 16) & 1 | is_local = (w >> 17) & 1 |
+    //       wait_count = w >> 24
+    const uint32_t sp_num_sub_batches = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx));
+    const uint32_t* sp_sched = reinterpret_cast<const uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx + 1)));
+    rt_args_idx += 1 + sp_num_sub_batches;
+#ifdef SP_AG_WAIT
+    const uint32_t sp_in0_alt_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t sp_sem_ids[2] = {
+        get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++)), get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++))};
+#endif  // SP_AG_WAIT
+    // This core's in0 offset within a sub-batch; the per-iteration start tile id is rebuilt from it below.
+    const uint32_t sp_in0_core_base_tile_id = in0_tensor_start_tile_id;
+#endif  // SP_SLICE_SCHEDULE
+
     // COMPILE TIME ARGS
     // in0 tensor args
     constexpr uint32_t in0_tensor_stride_w = get_compile_time_arg_val(0);
@@ -154,7 +172,9 @@ void kernel_main() {
     }
 
 #else
+#ifndef SP_AG_WAIT
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
+#endif  // SP_AG_WAIT (constructed per schedule iteration in the batch loop instead)
 #endif  // IN0_SHARDED
 
     // sparsity accessor
@@ -184,6 +204,24 @@ void kernel_main() {
     [[maybe_unused]] uint32_t num_valid_batches = 0;
 
     for (uint32_t b = 0; b < in0_B; ++b) {
+#ifdef SP_SLICE_SCHEDULE
+        // Iteration b processes sub-batch in0_idx = sp_sched[b] & 0xFF
+        const uint32_t sp_word = sp_sched[b];
+        ASSERT(sp_num_sub_batches == in0_B);
+        in0_tensor_start_tile_id = sp_in0_core_base_tile_id + (sp_word & 0xFF) * MtKt;
+#ifdef SP_AG_WAIT
+        const bool sp_is_local = ((sp_word >> 17) & 1) != 0;
+        if (!sp_is_local) {
+            // Remote slice: block until the all-gather has delivered it (wait_count-th slice on direction wait_dir)
+            Semaphore<>(sp_sem_ids[(sp_word >> 16) & 1]).wait_min(sp_word >> 24);
+        }
+#ifndef IN0_SHARDED
+        // Local slice: read the original (sharded) input so the matmul never depends on the AG's local copy.
+        // Interleaved TensorAccessor CT args are shape-independent, so the same in0_args serve both buffers.
+        const auto s0 = TensorAccessor(in0_args, sp_is_local ? sp_in0_alt_addr : in0_tensor_addr);
+#endif  // IN0_SHARDED
+#endif  // SP_AG_WAIT
+#endif  // SP_SLICE_SCHEDULE
         if constexpr (batchB > 0 && !use_indices) {
             noc.async_read(s_sparsity, dfb_sparsity, sparsity_pagesize, {.page_id = b}, {.offset_bytes = 0});
             noc.async_read_barrier();
@@ -408,14 +446,18 @@ void kernel_main() {
                 in0_tensor_current_h_dim_block_tile_id += in0_tensor_next_h_dim_block_stride;
             }
 
+#ifndef SP_SLICE_SCHEDULE
             if constexpr (!bcast_A) {
                 in0_tensor_start_tile_id += MtKt;
             }
+#endif  // SP_SLICE_SCHEDULE
         }
 
+#ifndef SP_SLICE_SCHEDULE
         if constexpr (bcast_A) {
             in0_tensor_start_tile_id += MtKt;
         }
+#endif  // SP_SLICE_SCHEDULE (start tile id is rebuilt from the schedule word at the top of the loop)
 
         // this is an optimization for the case when in0 is [1, 1, M, K] and in1 is [1, H, K, N], i.e. when in0_B ==
         // 1 and in1_B > 1 in this case we originally had to replicate the in0 block for each batch, but with this

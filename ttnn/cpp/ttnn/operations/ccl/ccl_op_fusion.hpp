@@ -125,6 +125,12 @@ enum class MatmulFusedOpSignalerType {
     EMPTY,
     LLAMA_REDUCE_SCATTER,
     LLAMA_ALL_GATHER,
+    // Sequence-parallel (dim-2) fusion: the matmul processes one "sub-batch" (batch b, sequence slice t) per
+    // batch-loop iteration in a caller-provided order (SP_SLICE_SCHEDULE kernel define). SP_ALL_GATHER additionally
+    // waits on the all-gather's per-direction semaphores before consuming a remote slice (SP_AG_WAIT); SP_REDUCE_SCATTER
+    // reuses the existing per-batch barrier+signal of the REDUCE_SCATTER path.
+    SP_ALL_GATHER,
+    SP_REDUCE_SCATTER,
 };
 
 // Used to propagate semaphore information from matmul to all_gather or reduce_scatter
@@ -163,14 +169,30 @@ struct MatmulFusedOpSignaler {
     /* Info for Llama All Gather*/
     uint32_t start_cb_index = 0;
 
+    /* Info for the SP slice schedule (SP_ALL_GATHER / SP_REDUCE_SCATTER) */
+    // One packed word per matmul batch-loop iteration j:
+    //   in0_idx = w & 0xFF           sub-batch index used for the in0 tile offset (in0_core_offset + in0_idx*MtKt)
+    //   out_idx = (w >> 8) & 0xFF    sub-batch index used for the output tile offset (out_core_offset + out_idx*MtNt)
+    //   wait_dir = (w >> 16) & 1     SP_ALL_GATHER: which direction semaphore to wait on (remote slices)
+    //   is_local = (w >> 17) & 1     SP_ALL_GATHER: read in0 from sp_in0_alt_addr (original sharded input), no wait
+    //   wait_count = w >> 24         SP_ALL_GATHER: wait_min value on the direction semaphore (remote slices)
+    std::vector<uint32_t> sp_schedule_words;
+    // SP_ALL_GATHER: address of the original (sharded) all-gather input read for is_local iterations.
+    uint32_t sp_in0_alt_addr = 0;
+
     bool initialized_all_gather = false;
     bool initialized_reduce_scatter = false;
     bool initialized_llama_reduce_scatter_part1 = false;
     bool initialized_llama_reduce_scatter = false;
     bool initialized_fused_op = false;
     bool initialized_llama_all_gather = false;
+    bool initialized_sp_schedule = false;
 
     MatmulFusedOpSignaler(MatmulFusedOpSignalerType signaler_type) : fused_op_type(signaler_type) {}
+
+    // SP types only. `schedule_words` has one packed entry per matmul sub-batch (see sp_schedule_words);
+    // `in0_alt_addr` is only used by SP_ALL_GATHER.
+    void init_sp_schedule(const std::vector<uint32_t>& schedule_words, uint32_t in0_alt_addr = 0);
 
     void init_all_gather(
         uint32_t num_transfers,
@@ -229,6 +251,17 @@ struct MatmulFusedOpSignaler {
     bool is_reduce_scatter() const;
     bool is_llama_reduce_scatter() const;
     bool is_llama_all_gather() const;
+    bool is_sp_all_gather() const;
+    bool is_sp_reduce_scatter() const;
+    // True for the SP types (both carry a slice schedule).
+    bool has_sp_schedule() const;
+
+    // in0 sender rt args: [num_sub_batches, words..., (SP_ALL_GATHER only:) in0_alt_addr, sem_dir0_id, sem_dir1_id].
+    // The two semaphore ids are fused_op_receiver_signal_semaphores[0/1] created by
+    // init_fused_op(program, device, core_range_to_signal, MULTI).
+    void push_sp_schedule_rt_args_in0(std::vector<uint32_t>& out_rt_args) const;
+    // in1 sender/writer and in1 receiver/writer rt args: [num_sub_batches, words...].
+    void push_sp_schedule_rt_args_writer(std::vector<uint32_t>& out_rt_args) const;
 
     void push_matmul_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args, uint32_t curr_worker_in0_idx, uint32_t curr_worker_in1_idx);
