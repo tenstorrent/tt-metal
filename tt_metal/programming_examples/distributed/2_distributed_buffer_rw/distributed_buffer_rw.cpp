@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <iostream>
 
 // Stand-alone example demonstrating usage of native multi-device TT-Metalium APIs
 // for issuing Read and Write commands to a distributed memory buffer spanning
@@ -19,6 +21,12 @@ int main() {
     using namespace tt::tt_metal;
     using namespace tt::tt_metal::distributed;
     using tt::tt_metal::distributed::ShardedBufferConfig;
+
+    constexpr size_t required_devices = 8;
+    if (tt::tt_metal::GetNumAvailableDevices() < required_devices) {
+        std::cout << "distributed_buffer_rw requires " << required_devices << " devices, skipping\n";
+        return 0;
+    }
 
     auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(2, 4)));
     auto& cq = mesh_device->mesh_command_queue();
