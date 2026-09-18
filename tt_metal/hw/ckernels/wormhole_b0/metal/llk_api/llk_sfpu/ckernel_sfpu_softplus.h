@@ -64,6 +64,7 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
 
     // Range reduction: x = k*ln(2) + r
     sfpi::vFloat z = x * INV_LN2;
+    z = sfpi::max(z, -126.5f);
     sfpi::vInt k_int;
     sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
 
