@@ -224,7 +224,7 @@ jobs:
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
       additional_test_categories: >-
         ${{ (github.event_name == 'schedule' &&
-        'conv,matmul,fused,reduction,experimental,pool,eltwise,kernel_lib,transformers,moreh,misc,sdpa,data_movement,ccl,docs_examples,cpp_accessor,cpp_lab_examples')
+        'conv,matmul,fused,reduction,experimental,pool,eltwise,kernel_lib,transformers,moreh,misc,sdpa,data_movement,ccl,docs_examples,cpp_accessor,cpp_lab_examples,dp_op_unit_tests')
         || (inputs.run_ccl_tests && inputs.run_cpp_tests && format('{0},ccl,cpp_accessor,cpp_lab_examples', inputs.additional_test_categories))
         || (inputs.run_ccl_tests && format('{0},ccl', inputs.additional_test_categories))
         || (inputs.run_cpp_tests && format('{0},cpp_accessor,cpp_lab_examples', inputs.additional_test_categories))
@@ -389,35 +389,6 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   # =============================================================================
-  # Models team
-  # =============================================================================
-  # Disaggregated-prefill op unit tests. Gated by the `dp_op_unit_tests` category
-  # tag in the shared `additional_test_categories` input (same pattern as
-  # `ttsim-unit-tests`/`compute_fused` and `ops-integration-tests`/`ops_docs_check`).
-  disaggregated-prefill-op-tests:
-    needs: [build-artifact, generate-arch-matrix]
-    if: |
-      needs.generate-arch-matrix.outputs.l2-nightly-skus != '' && (
-        github.event_name == 'schedule' ||
-        contains(format(',{0},', inputs.additional_test_categories), ',dp_op_unit_tests,')
-      )
-    secrets: inherit
-    uses: ./.github/workflows/ops-unit-tests-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
-      tests-yaml-path: ./tests/pipeline_reorg/disaggregated_prefill_op_tests.yaml
-      # Schedule runs pin the category so the impl's jq filter keeps the rows;
-      # dispatch runs forward whatever the user typed (must include dp_op_unit_tests).
-      additional_test_categories: >-
-        ${{ github.event_name == 'schedule' && 'dp_op_unit_tests'
-        || inputs.additional_test_categories }}
-      summary-scope: dp_op_unit_tests
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  # =============================================================================
   # AI run summary
   # =============================================================================
   # Aggregates the per-leg ai-job-summary artifacts into one run-level report.
@@ -455,7 +426,6 @@ jobs:
       - tt-train-perf-finetuning-tests
       - triage-tests
       - llk-unit-tests
-      - disaggregated-prefill-op-tests
     # Reports on a run that failed — the case the summary exists for — but not
     # on one that was cancelled: an aborted run has no outcome to summarize, and
     # asking for one spends an LLM call to say it stopped early.
