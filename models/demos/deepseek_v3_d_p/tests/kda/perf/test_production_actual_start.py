@@ -5,6 +5,7 @@
 import json
 import os
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,22 +13,45 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    KimiK3TestCase,
     _deallocate_state,
+    _kda_config_from_kimi_k3_constants,
     make_kimi_k3_device_case,
-    make_synthetic_kimi_k3_test_case,
+    random_weights,
 )
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device,local_rows",
+    [((2, 4), 2560), ((2, 4), 640), ((4, 2), 640)],
+    indirect=["mesh_device"],
+    ids=["production", "proxy-sp2tp4", "proxy-sp4tp2"],
+)
 @pytest.mark.parametrize("device_params", [fabric_1d_device_params(trace_region_size=8000000)], indirect=True)
 @pytest.mark.parametrize("capture_order", [("none", "zero"), ("zero", "none")], ids=["none-first", "zero-first"])
 def test_production_actual_start(
-    mesh_device: ttnn.MeshDevice, device_params: dict, capture_order: tuple[str, str], monkeypatch: pytest.MonkeyPatch
+    mesh_device: ttnn.MeshDevice,
+    device_params: dict,
+    capture_order: tuple[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+    local_rows: int,
 ) -> None:
-    case = make_synthetic_kimi_k3_test_case(sequence=5120)
+    mesh_shape = tuple(mesh_device.shape)
+    sequence = local_rows * mesh_shape[0]
+    config = replace(_kda_config_from_kimi_k3_constants(), num_heads=24 * mesh_shape[1])
+    weights = random_weights(config)
+    case = KimiK3TestCase(
+        config=config,
+        state_dict=weights,
+        hidden=torch.randn(
+            1, sequence, config.hidden_size, generator=torch.Generator().manual_seed(1607), dtype=torch.bfloat16
+        ),
+        weights_identity=kda_state_dict_sha256(weights),
+    )
     layer, hidden = make_kimi_k3_device_case(mesh_device, case, tensor_parallel_axis=1, cache_weights=False)
     assert layer.config.num_heads == 24
     assert layer.config.head_k_dim == layer.config.head_v_dim == 128
@@ -40,8 +64,19 @@ def test_production_actual_start(
         "affine_exclusive_scan",
         "recurrent_chunk_scan",
     )
-    evidence = dict(capture_order=capture_order, mesh=[2, 4], sequence=5120, local_heads=24, operations=[])
-    destination = Path(os.environ["KDA_EVIDENCE_DIR"]) / f"{capture_order[0]}-first.json"
+    evidence = dict(
+        capture_order=capture_order,
+        mesh=mesh_shape,
+        sequence=sequence,
+        local_rows=local_rows,
+        global_heads=config.num_heads,
+        local_heads=24,
+        operations=[],
+    )
+    destination = (
+        Path(os.environ["KDA_EVIDENCE_DIR"])
+        / f"sp{mesh_shape[0]}tp{mesh_shape[1]}-rows{local_rows}-{capture_order[0]}-first.json"
+    )
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     def metadata(value):
@@ -62,12 +97,12 @@ def test_production_actual_start(
             ordinary_kwargs.pop(key, None)
         effective_history = None
         if name == "qkv_causal_conv1d_silu":
-            assert tuple(args[0].shape) == (1, 2560, 9216)
+            assert tuple(args[0].shape) == (1, local_rows, 9216)
             assert args[6:9] == (3072, 3072, 3072)
-            composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(2, 4), dims=(1, 2))
+            composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(1, 2))
             history = ttnn.to_torch(args[1], mesh_composer=composer)
             predecessor = ttnn.to_torch(kwargs["predecessor_carry"], mesh_composer=composer)
-            # At start zero, SP rank 0 reads the layer history; rank 1 reads its predecessor.
+            # At start zero, SP rank 0 reads layer history; all other ranks read their predecessor.
             host_history = torch.cat((history[:, :3], predecessor[:, 3:]), dim=1)
             effective_history = ttnn.from_torch(
                 host_history,
@@ -75,12 +110,12 @@ def test_production_actual_start(
                 dtype=args[1].dtype,
                 layout=args[1].layout,
                 memory_config=args[1].memory_config(),
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(1, 2), mesh_shape=(2, 4)),
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(1, 2), mesh_shape=mesh_shape),
             )
             ordinary_args = (args[0], effective_history, *args[2:])
         elif name in ("summarize_chunk_recurrence", "recurrent_chunk_scan"):
-            assert tuple(args[0].shape) == (96, 20, 32, 128)
-            assert kwargs["groups_per_head"] == 4
+            groups = kwargs["groups_per_head"]
+            assert tuple(args[0].shape) == (24 * groups, local_rows // (32 * groups), 32, 128)
 
         def run(variant):
             result = operation(
