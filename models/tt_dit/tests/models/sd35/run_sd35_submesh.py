@@ -91,7 +91,15 @@ if _mmrs_cfg:
         None if _win == "none" else int(_win),
     )
     logger.info(f"MMRS config override: {_mmrs_cfg}")
-set_fabric(fabric)
+_pkt = int(
+    os.environ.get("SD35_FABRIC_PACKET", "8192")
+)  # fabric router max packet payload; 8192 B (Flux.2's setting) is 5% faster per step than the 4352 B default; 0 = default
+if _pkt:
+    _frc = ttnn.FabricRouterConfig()
+    _frc.max_packet_payload_size_bytes = _pkt
+    set_fabric(fabric, fabric_router_config=_frc)
+else:
+    set_fabric(fabric)
 full = ttnn.open_mesh_device(  # no mesh_shape: the whole system mesh, whatever its shape
     l1_small_size=int(os.environ.get("SD35_L1_SMALL", "65536")),
     trace_region_size=50_000_000,

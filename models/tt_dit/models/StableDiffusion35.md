@@ -82,8 +82,10 @@ To change the step count, edit `num_inference_steps` (the last field) in the par
 On a 4x1 or 1x4 mesh (a Galaxy column, or a QuietBox relabeled) the pipeline defaults to tensor
 parallel x4 with the CFG pair as batch 2, Ring fabric with the fused all-gather-matmul /
 matmul-reduce-scatter path, the streaming joint SDPA kernel, and the spatial-parallel VAE decoder
-(`vae_sd35_spatial.py`, traced). Open the mesh with `fabric_config=FABRIC_1D_RING` and
-`l1_small_size=65536`; nothing else needs to be passed:
+(`vae_sd35_spatial.py`, traced). Open the mesh with `fabric_config=FABRIC_1D_RING`, `l1_small_size=65536` and, for another 5%
+per step, a fabric router config with an 8192-byte packet payload
+(`models.tt_dit.utils.test.create_fabric_router_config(8192)`, i.e. `ring_params_8k`); nothing
+else needs to be passed:
 
 ```python
 pipeline = StableDiffusion3Pipeline(
