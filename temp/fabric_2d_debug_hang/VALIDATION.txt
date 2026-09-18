@@ -1,0 +1,2 @@
+Checks passed: Python syntax; shell syntax; YAML parse and flow assertions; indexed receiver-gate anchor; patch/remove roundtrip; duplicate/missing-anchor rejection.
+Not performed: TT kernel compilation or hardware execution.
