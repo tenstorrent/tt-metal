@@ -12,6 +12,7 @@
 #include "profiler.h"
 #include "quasar_test_common.h"
 #include "sfpu_stub.h"
+#include "tensor_shape.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -27,30 +28,31 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
-    const std::uint32_t INPUT_TILE_CNT = params.INPUT_TILE_CNT;
-    const Operand& buffer_A            = params.buffer_A;
-    const Operand& buffer_B            = params.buffer_B;
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t INPUT_TILE_CNT     = params.INPUT_TILE_CNT;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const Operand& buffer_A                = params.buffer_A;
+    const Operand& buffer_B                = params.buffer_B;
 #endif
 
     {
         ZONE_SCOPED("INIT")
         set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
         _llk_unpack_binary_operands_init_(
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
             ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-            1 /*num_tiles_per_unpack*/);
+            tensor_shape,
+            NUM_TILES_IN_BLOCK);
         PROFILER_SYNC();
     }
     {
@@ -66,9 +68,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < INPUT_TILE_CNT; ++i)
+                // Accumulation cases unpack two tiles per MOP, exercising per-tile counter resets.
+                for (std::uint32_t i = 0; i < INPUT_TILE_CNT; i += NUM_TILES_IN_BLOCK)
                 {
-                    _llk_unpack_binary_operands_(i, i);
+                    _llk_unpack_binary_operands_(i, i, tensor_shape);
                 }
             }
         }
@@ -95,6 +98,7 @@ using namespace ckernel;
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -120,7 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
         }
-        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY>(ckernel::DEFAULT_TENSOR_SHAPE, ACC_TO_DEST);
+        _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, ENABLE_DIRECT_INDEXING>(tensor_shape, ACC_TO_DEST);
         PROFILER_SYNC();
     }
     {
@@ -142,7 +146,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t num_tiles_in_block = std::min(remaining_tiles, NUM_TILES_IN_BLOCK);
                     for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
                     {
-                        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(dest_idx, ckernel::DEFAULT_TENSOR_SHAPE);
+                        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(dest_idx, tensor_shape);
                     }
                     ++dest_idx;
                 }
@@ -158,7 +162,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t num_tiles_in_block = std::min(remaining_tiles, NUM_TILES_IN_BLOCK);
                     for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
                     {
-                        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(dest_idx, ckernel::DEFAULT_TENSOR_SHAPE);
+                        _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(dest_idx, tensor_shape);
                     }
                     ++dest_idx;
                 }
@@ -180,6 +184,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
+    const auto tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
@@ -201,10 +206,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
         }
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
+        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape, 1 /*num_tiles_per_pack*/);
         PROFILER_SYNC();
     }
     {
@@ -218,7 +222,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t i = 0; i < OUTPUT_TILE_CNT; ++i)
                 {
-                    _llk_pack_(i, i, ckernel::DEFAULT_TENSOR_SHAPE);
+                    _llk_pack_(i, i, tensor_shape);
                 }
                 if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION)
                 {

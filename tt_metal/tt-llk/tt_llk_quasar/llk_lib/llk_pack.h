@@ -34,15 +34,8 @@ inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uin
     std::uint32_t pack_instrn;
     pack_instrn = TT_OP_PACR0_TILE_INC(1 /*Dst_Tile_Idx_Inc*/, 0 /*Src_Tile_Idx_Inc*/, buf_desc_id, 0 /*ClrDatValid*/);
 
-    std::uint32_t incr_to_next_face;
-    if (tensor_shape.total_num_faces() < NUM_FACES && tensor_shape.face_r_dim < (FACE_R_DIM >> 1)) // Using sparse tiling: jump to the next index w/ tile
-    {
-        incr_to_next_face = TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, (FACE_R_DIM >> (rows_log2(tensor_shape.face_r_dim) + 1)));
-    }
-    else // Using dense tiling: just increment to the next tile
-    {
-        incr_to_next_face = TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, 1 /*Value*/);
-    }
+    const std::uint32_t src_tile_idx_inc  = tensor_shape.total_num_faces() < NUM_FACES ? tiny_face_stride(tensor_shape) : 1;
+    const std::uint32_t incr_to_next_face = TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, src_tile_idx_inc);
 
     ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pack_instrn, incr_to_next_face);
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -88,14 +81,7 @@ inline void _llk_pack_(const std::uint32_t start_math_dest_tile_idx, const std::
         // For face_r_dim >= 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse and tiles are placed every 8 rows.
         // HW defined tiny-tile is registered with 1 face. To map to SW defined tile with different faces, the indices must be multiplied to get the correct
         // offset.
-        if (tensor_shape.face_r_dim < (FACE_R_DIM >> 1))
-        {
-            math_dest_tile_idx *= tensor_shape.total_num_faces() * (FACE_R_DIM >> (rows_log2(tensor_shape.face_r_dim) + 1));
-        }
-        else
-        {
-            math_dest_tile_idx *= tensor_shape.total_num_faces();
-        }
+        math_dest_tile_idx *= tensor_shape.total_num_faces() * tiny_face_stride(tensor_shape);
         l1_tile_idx *= tensor_shape.total_num_faces();
     }
 
