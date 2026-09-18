@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Each listed operation expands into an independent single-stage test.
+# Only the final SFPU operation is swept; preparation and pack checks are fixed.
+
+# UnaryEq: sfpi_bh_cast_fp32_to_fp16a_round_up_fp32
+# Keep the FP32 tail through direct-to-Dest unpack. Casting rounds to
+# 0.50048828125; exact equality against 0.5 produces 0, not truncation's 1.
+
+dest_acc: true
+supported_archs: [quasar]
+
+operands:
+  - {const_value: 0.5003662109375, dims: [32, 32], format: Float32, name: input}
+  - {dims: [32, 32], format: Float32, name: output}
+
+operations:
+  - math:
+      - {in0: input, operation: Datacopy, type: Fpu, unpack_to_dest: true, unpacker: UnpackerA}
+      - type: UnarySfpu
+        operation: CastFp32ToFp16a
+        iterations: 32
+      - type: UnarySfpu
+        operation:
+          - UnaryEq
+        iterations: 32
+    pack:
+      - {output: output, packer: Packer}

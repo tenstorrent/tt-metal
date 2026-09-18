@@ -1,0 +1,113 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+# Exact BH three-segment approximation contract, including saturation and boundaries.
+# Separate random quality test retains the independent torch.sigmoid reference.
+supported_archs: [quasar]
+dest_acc: false
+operands:
+  - {name: input_0, dims: [32, 32], format: Float16_b, const_value: -4}
+  - {name: output_0, dims: [32, 32], format: Float16_b}
+  - {name: input_1, dims: [32, 32], format: Float16_b, const_value: -2.015625}
+  - {name: output_1, dims: [32, 32], format: Float16_b}
+  - {name: input_2, dims: [32, 32], format: Float16_b, const_value: -2}
+  - {name: output_2, dims: [32, 32], format: Float16_b}
+  - {name: input_3, dims: [32, 32], format: Float16_b, const_value: -1.984375}
+  - {name: output_3, dims: [32, 32], format: Float16_b}
+  - {name: input_4, dims: [32, 32], format: Float16_b, const_value: -1.015625}
+  - {name: output_4, dims: [32, 32], format: Float16_b}
+  - {name: input_5, dims: [32, 32], format: Float16_b, const_value: -1}
+  - {name: output_5, dims: [32, 32], format: Float16_b}
+  - {name: input_6, dims: [32, 32], format: Float16_b, const_value: -0.984375}
+  - {name: output_6, dims: [32, 32], format: Float16_b}
+  - {name: input_7, dims: [32, 32], format: Float16_b, const_value: 0}
+  - {name: output_7, dims: [32, 32], format: Float16_b}
+  - {name: input_8, dims: [32, 32], format: Float16_b, const_value: 0.984375}
+  - {name: output_8, dims: [32, 32], format: Float16_b}
+  - {name: input_9, dims: [32, 32], format: Float16_b, const_value: 1}
+  - {name: output_9, dims: [32, 32], format: Float16_b}
+  - {name: input_10, dims: [32, 32], format: Float16_b, const_value: 1.015625}
+  - {name: output_10, dims: [32, 32], format: Float16_b}
+  - {name: input_11, dims: [32, 32], format: Float16_b, const_value: 1.984375}
+  - {name: output_11, dims: [32, 32], format: Float16_b}
+  - {name: input_12, dims: [32, 32], format: Float16_b, const_value: 2}
+  - {name: output_12, dims: [32, 32], format: Float16_b}
+  - {name: input_13, dims: [32, 32], format: Float16_b, const_value: 2.015625}
+  - {name: output_13, dims: [32, 32], format: Float16_b}
+  - {name: input_14, dims: [32, 32], format: Float16_b, const_value: 4}
+  - {name: output_14, dims: [32, 32], format: Float16_b}
+operations:
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_0, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_0, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_1, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_1, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_2, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_2, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_3, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_3, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_4, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_4, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_5, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_5, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_6, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_6, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_7, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_7, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_8, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_8, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_9, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_9, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_10, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_10, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_11, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_11, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_12, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_12, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_13, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_13, packer: Packer}
+  - math:
+      - {type: Fpu, operation: Datacopy, in0: input_14, unpacker: UnpackerA, unpack_to_dest: false}
+      - {type: UnarySfpu, operation: SigmoidAppxParity, iterations: 32}
+    pack:
+      - {output: output_14, packer: Packer}

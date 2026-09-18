@@ -2269,6 +2269,22 @@ class PackGolden:
 
 @register_golden
 class UnarySFPUGolden:
+    # Test-only fixed-slot registrations reuse the existing unary YAML node.
+    # They are block operations, not elementwise functions in self.ops.
+    _PARITY_TERNARY_OPS = {
+        MathOperation.ParityAddcdiv: MathOperation.SfpuAddcdiv,
+        MathOperation.ParityAddcmul: MathOperation.SfpuAddcmul,
+        MathOperation.ParityLerp: MathOperation.SfpuLerp,
+        MathOperation.ParitySnakeBeta: MathOperation.SfpuSnakeBeta,
+        MathOperation.ParityMac: MathOperation.SfpuAddcmul,
+    }
+    _PARITY_INTEGER_STRUCTURAL_OPS = frozenset(
+        {MathOperation.ParityIntSumCol, MathOperation.ParityIntSumRow}
+    )
+    _PARITY_FLOAT_STRUCTURAL_OPS = frozenset(
+        {MathOperation.ParityAltComplexRotate90, MathOperation.ParityTiledProd}
+    )
+
     # Ops whose NaN result carries a real sign, because the kernel moves the sign bit rather
     # than generating a NaN: Neg flips it, Abs clears it, Identity passes it through, and
     # Fmod copies the dividend's sign onto the remainder, including a NaN. For every
@@ -2380,7 +2396,9 @@ class UnarySFPUGolden:
             MathOperation.Xielu: self._xielu,
             MathOperation.Hardshrink: self._hardshrink,
             MathOperation.Softplus: self._softplus,
+            MathOperation.Softcap: self._softcap,
             MathOperation.SigmoidAppx: self._sigmoid_appx,
+            MathOperation.SigmoidAppxParity: self._sigmoid_appx_parity,
             MathOperation.SqrtCustom: self._sqrt,
             MathOperation.Add1: self._add1,
             MathOperation.CastFp32ToFp16a: self._cast_fp32_to_fp16a,
@@ -2395,6 +2413,10 @@ class UnarySFPUGolden:
             MathOperation.Cumsum: self._cumsum,
             MathOperation.Typecast: self._typecast,
             # Integer unary ops (routed through the integer path in __call__).
+            MathOperation.BitwiseNot: self._bitwise_not,
+            MathOperation.ScalarBitwiseAnd: self._scalar_bitwise_and,
+            MathOperation.ScalarBitwiseOr: self._scalar_bitwise_or,
+            MathOperation.ScalarBitwiseXor: self._scalar_bitwise_xor,
             MathOperation.LeftShift: self._left_shift,
             MathOperation.RightShift: self._right_shift,
             MathOperation.UnaryMaxInt32: self._unary_max_int32,
@@ -2406,6 +2428,10 @@ class UnarySFPUGolden:
         # __call__. Only these ops are routed there; other integer-capable ops
         # (e.g. ReduceColumn/ReduceRow, Typecast) keep their own layout handling.
         self._integer_unary_ops = {
+            MathOperation.BitwiseNot,
+            MathOperation.ScalarBitwiseAnd,
+            MathOperation.ScalarBitwiseOr,
+            MathOperation.ScalarBitwiseXor,
             MathOperation.LeftShift,
             MathOperation.RightShift,
             MathOperation.UnaryMaxInt32,
@@ -2459,8 +2485,26 @@ class UnarySFPUGolden:
         # integer format reads it. Signed here, two's-complement uint32 on the kernel side.
         self._relu_min_int_threshold = relu_min_int_threshold
 
-        if operation not in self.ops:
+        if (
+            operation not in self.ops
+            and operation not in self._PARITY_TERNARY_OPS
+            and operation not in self._PARITY_INTEGER_STRUCTURAL_OPS
+            and operation not in self._PARITY_FLOAT_STRUCTURAL_OPS
+            and operation != MathOperation.ParityDivInt32Float
+        ):
             raise ValueError(f"Unsupported operation: {operation}")
+
+        if operation in self._PARITY_INTEGER_STRUCTURAL_OPS:
+            return self._integer_structural_parity(
+                operation,
+                operand1,
+                input_format,
+                data_format,
+                dimensions,
+                iterations,
+                dest_idx,
+                skip_tilize,
+            )
 
         # Elementwise integer unary ops run on a dedicated exact-int path: tilize ->
         # per-element op -> untilize, staying in the integer dtype (no float dst
@@ -2566,7 +2610,86 @@ class UnarySFPUGolden:
             )
 
         window = slice(start, start + elements_to_process)
-        if whole_tensor_res is not None:
+        if operation == MathOperation.ParityDivInt32Float:
+            if (
+                dest_idx != 0
+                or elements_to_process != ELEMENTS_PER_TILE
+                or result.numel() < 3 * ELEMENTS_PER_TILE
+                or dest_acc != DestAccumulation.Yes
+                or data_format != DataFormat.Float32
+            ):
+                raise ValueError(
+                    "Int32-to-float division parity requires FP32 Dest tiles 0/1/2 at base 0."
+                )
+            a, b = (
+                result[: 2 * ELEMENTS_PER_TILE]
+                .to(torch.float32)
+                .reshape(2, ELEMENTS_PER_TILE)
+            )
+            # The test adapter maps finite floating stimuli to small signed
+            # integers, calls the production int-input/float-output division,
+            # then restores input tiles 0/1. Compute the independent reference
+            # with torch division, not the kernel's reciprocal approximation.
+            numerator = torch.round(a * 16).to(torch.int32) - 8
+            denominator_magnitude = torch.round((b * 16).abs()).to(torch.int32) + 1
+            denominator = torch.where(
+                b < 0, -denominator_magnitude, denominator_magnitude
+            )
+            op_res = (
+                numerator.to(torch.float32) / denominator.to(torch.float32)
+            ).tolist()
+            window = slice(2 * ELEMENTS_PER_TILE, 3 * ELEMENTS_PER_TILE)
+        elif operation in self._PARITY_TERNARY_OPS:
+            if (
+                dest_idx != 0
+                or elements_to_process != ELEMENTS_PER_TILE
+                or result.numel() < 3 * ELEMENTS_PER_TILE
+            ):
+                raise ValueError(
+                    "Ternary parity requires full tiles 0/1/2 and output tile 0."
+                )
+            a, b, c = result[: 3 * ELEMENTS_PER_TILE].reshape(3, ELEMENTS_PER_TILE)
+            value_bits = 0x3F000000  # Fixed adapter scalar: 0.5.
+            if operation == MathOperation.ParityMac:
+                # Reuse the independent addcmul reference: c + 1 * a * b.
+                a, b, c = c, a, b
+                value_bits = 0x3F800000
+            op_res = TernarySFPUGolden()(
+                self._PARITY_TERNARY_OPS[operation], a, b, c, value_bits, dst_format
+            ).tolist()
+        elif operation in self._PARITY_FLOAT_STRUCTURAL_OPS:
+            if elements_to_process != ELEMENTS_PER_TILE:
+                raise ValueError(
+                    "Structural parity requires exactly one full 32x32 tile."
+                )
+            faces = result[window].to(torch.float32).reshape(4, 16, 16)
+            if operation == MathOperation.ParityAltComplexRotate90:
+                # Adjacent SFPU vectors select even/odd columns of four face
+                # rows, so complex pairs are adjacent columns, not row bands.
+                # Rotate (real, imag) -> (-imag, real) in logical face space.
+                pairs = faces.reshape(4, 16, 8, 2)
+                rotated = torch.stack((-pairs[..., 1], pairs[..., 0]), dim=-1)
+                op_res = rotated.flatten().tolist()
+            else:
+                # SFPLOAD gathers one column parity of four face rows. Dest
+                # vector order is (face, row quad, parity); each vector contains
+                # (row within quad, column pair). See native cumsum's geometry.
+                vectors = (
+                    faces.reshape(4, 4, 4, 8, 2).permute(0, 1, 4, 2, 3).reshape(32, 32)
+                )
+                # One independent prefix product down the 32 vector positions
+                # for every SFPU lane. The accumulator stays FP32; BF16 stores
+                # truncate but do not feed back into the next multiplication.
+                scanned = torch.cumprod(vectors, dim=0)
+                if dest_acc == DestAccumulation.No:
+                    scanned = truncate_to_bfloat16(scanned)
+                op_res = (
+                    scanned.reshape(4, 4, 2, 4, 8)
+                    .permute(0, 1, 3, 4, 2)
+                    .flatten()
+                    .tolist()
+                )
+        elif whole_tensor_res is not None:
             op_res = whole_tensor_res.tolist()[window]
         else:
             op_res = [
@@ -2600,10 +2723,7 @@ class UnarySFPUGolden:
         # Two casts, both NaN-sign preserving: the Dest write's own rounding, then the store
         # into `result`, whose dtype is not always the Dest dtype.
         op_rounded = cast_to_dest_dtype(op_tensor, op_dtype).float()
-        result[
-            ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
-            + TILE_SIZE * iterations
-        ] = cast_to_dest_dtype(op_rounded, result.dtype)
+        result[window] = cast_to_dest_dtype(op_rounded, result.dtype)
 
         if not skip_tilize:
             result = untilize_block(result, input_format, dimensions).flatten()
@@ -2984,6 +3104,48 @@ class UnarySFPUGolden:
         )
         return torch.exp(0.5 * input_tensor).item()
 
+    @staticmethod
+    def _integer_structural_parity(
+        operation,
+        operand1,
+        input_format,
+        data_format,
+        dimensions,
+        iterations,
+        dest_idx,
+        skip_tilize,
+    ):
+        if input_format != DataFormat.Int32 or data_format != DataFormat.Int32:
+            raise ValueError(
+                "Integer structural parity requires Int32 input and output."
+            )
+        if tuple(dimensions) != (32, 32) or dest_idx != 0 or iterations != 32:
+            raise ValueError(
+                "Integer structural parity requires one full tile at Dest index 0."
+            )
+        result = operand1.to(torch.int32).clone().flatten()
+        if not skip_tilize:
+            result = tilize_block(result, dimensions, input_format).flatten()
+
+        # One vector selects even or odd columns of four face rows. Express
+        # these partial reductions in logical face coordinates independently
+        # of the SFPI loop, preserving every position the helper does not write.
+        faces = result.reshape(4, 16, 16)
+        if operation == MathOperation.ParityIntSumCol:
+            # Left faces: sum rows sharing their position within a four-row
+            # quad across both faces, writing only face 0's first four rows.
+            partial = faces[[0, 2]].reshape(2, 4, 4, 16).to(torch.int64).sum(dim=(0, 1))
+            faces[0, :4] = partial.to(torch.int32)
+        else:
+            # Top faces: sum matching adjacent column pairs across both faces,
+            # writing only the even columns of face 0. Odd columns stay intact.
+            partial = faces[:2].reshape(2, 16, 8, 2).to(torch.int64).sum(dim=(0, 3))
+            faces[0, :, ::2] = partial.to(torch.int32)
+
+        if not skip_tilize:
+            result = untilize_block(result, input_format, dimensions).flatten()
+        return result
+
     def _call_integer(self, operation, operand1, input_format, dimensions):
         """Exact integer golden: tilize -> elementwise op -> untilize, in int dtype.
 
@@ -3002,6 +3164,29 @@ class UnarySFPUGolden:
         result = untilize_block(result, input_format, dimensions).flatten()
         return result
 
+    def _bitwise_not(self, x):
+        return ~int(x)
+
+    def _scalar_bitwise_and(self, x):
+        return int(x) & 0x55
+
+    def _scalar_bitwise_or(self, x):
+        return int(x) | 0x55
+
+    def _scalar_bitwise_xor(self, x):
+        return int(x) ^ 0x55
+
+    def _sigmoid_appx_parity(self, x):
+        # Source LUT contract, separate from SigmoidAppx's independent sigmoid quality reference.
+        magnitude = abs(float(x))
+        if magnitude < 1.0:
+            result = 0.2265625 * magnitude
+        elif magnitude < 2.0:
+            result = 0.265625 * magnitude - 0.046875
+        else:
+            result = 0.5
+        return math.copysign(result, float(x)) + 0.5
+
     # The two unary shifts do NOT share an out-of-range rule: left shift zeroes the result,
     # right shift clamps the amount to 31 and shifts anyway. They agree for a positive operand
     # and part company for a negative one, where the clamped arithmetic shift gives -1. Both
@@ -3015,7 +3200,15 @@ class UnarySFPUGolden:
         n = self._shift_amount()
         if n < 0 or n >= 32:
             return 0
-        return int(x) << n
+        # Model the fixed-width integer result, not Python's unbounded integer.
+        # UInt16 stores retain the low 16 bits; signed Int32 wraps modulo 2**32
+        # and interprets bit 31 as the two's-complement sign.
+        if self.data_format == DataFormat.UInt16:
+            return (int(x) << n) & 0xFFFF
+        shifted = (int(x) << n) & 0xFFFFFFFF
+        if self.data_format == DataFormat.Int32 and shifted >= 0x80000000:
+            shifted -= 0x100000000
+        return shifted
 
     def _right_shift(self, x):
         # An arithmetic shift at an amount clamped to 31. Python's >> is already
@@ -3292,6 +3485,11 @@ class UnarySFPUGolden:
                 t, beta=self._SOFTPLUS_BETA, threshold=self._SOFTPLUS_THRESHOLD
             ),
         )
+
+    def _softcap(self, x):
+        # Fixed beta=2, matching the test dispatch; use the independent Torch
+        # function rather than reproducing the kernel's tanh polynomial.
+        return self._torch_unary(x, lambda t: 2.0 * torch.tanh(t / 2.0))
 
     def _sigmoid_appx(self, x):
         # Golden is the exact sigmoid; the kernel is a LUT approximation of it.
@@ -3773,6 +3971,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuLcm: self._lcm,
                 MathOperation.SfpuRsubInt32: self._rsub_int32,
                 MathOperation.SfpuMask: self._mask,
+                MathOperation.SfpuSituGlu: self._situ_glu,
                 MathOperation.SfpuAtan2: self._atan2,
                 MathOperation.SfpuMulInt32: self._mul_int32,
                 MathOperation.SfpuIsclose: self._isclose,
@@ -4198,6 +4397,13 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # through. Matches calculate_mask (v_if(is_fp16_zero(mask)) data = 0).
         return t1 if float(t2) != 0.0 else t1 * 0
 
+    def _situ_glu(self, t1, t2):
+        # Independent SiTU-GLU definition with the production ConfigKimi beta values.
+        gate, up = t1.to(torch.float32), t2.to(torch.float32)
+        return (4.0 * torch.tanh(gate / 4.0) * torch.sigmoid(gate)) * (
+            25.0 * torch.tanh(up / 25.0)
+        )
+
     def _atan2(self, t1, t2):
         # calculate_sfpu_atan2 computes atan2(in0, in1) = atan2(y, x) with y=t1
         # (src1) and x=t2 (src2). Evaluated in fp32 to mirror the SFPU minimax path;
@@ -4217,9 +4423,11 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         return int(int(t1) % int(t2))
 
     def _fmod_int(self, t1, t2):
-        # int32 fmod (sign follows dividend). Non-negative stimuli make it equal to a % b,
-        # matching the internal unsigned-remainder kernel.
-        return int(int(t1) % int(t2))
+        # Truncating remainder follows the dividend's sign, unlike Python %.
+        # Keep the computation integral so large Int32 values remain exact.
+        dividend, divisor = int(t1), int(t2)
+        magnitude = abs(dividend) % abs(divisor)
+        return -magnitude if dividend < 0 else magnitude
 
     def _mul_int32(self, t1, t2):
         # int32 multiply, low 32 bits. The kernel stores two's-complement bits via

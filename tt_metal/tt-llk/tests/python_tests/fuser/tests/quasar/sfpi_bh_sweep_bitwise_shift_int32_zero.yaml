@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Each listed operation expands into an independent single-stage test.
+# Only the final SFPU operation is swept; preparation and pack checks are fixed.
+
+# BitwiseNot: sfpi_bh_bitwise_not_int32_case_2
+# Blackhole SFPI parity: BitwiseNot; full tile, constant input = 0.
+# Single-stage direct-to-Dest case; keep integer payloads bit-exact.
+
+# ScalarBitwiseAnd: sfpi_bh_extra_scalar_bitwise_and_zero_int32
+# Exact ScalarBitwiseAnd(x, 0x55), including signed sign-magnitude Dest conversion.
+
+# ScalarBitwiseOr: sfpi_bh_extra_scalar_bitwise_or_zero_int32
+# Exact ScalarBitwiseOr(x, 0x55), including signed sign-magnitude Dest conversion.
+
+# ScalarBitwiseXor: sfpi_bh_extra_scalar_bitwise_xor_zero_int32
+# Exact ScalarBitwiseXor(x, 0x55), including signed sign-magnitude Dest conversion.
+
+# LeftShift: sfpi_bh_left_shift_int32_case_2
+# Blackhole SFPI parity: LeftShift; full tile, constant input = 0.
+# Dispatch parameter: 3u.
+# Single-stage direct-to-Dest case; keep integer payloads bit-exact.
+
+# RightShift: sfpi_bh_right_shift_int32_case_2
+# Blackhole SFPI parity: RightShift; full tile, constant input = 0.
+# Dispatch parameter: 3u.
+# Single-stage direct-to-Dest case; keep integer payloads bit-exact.
+
+dest_acc: true
+supported_archs: [quasar]
+
+operands:
+  - {const_value: 0, dims: [32, 32], format: Int32, name: input}
+  - {dims: [32, 32], format: Int32, name: output}
+
+operations:
+  - math:
+      - {in0: input, operation: Datacopy, type: Fpu, unpack_to_dest: true, unpacker: UnpackerA}
+      - type: UnarySfpu
+        operation:
+          - BitwiseNot
+          - ScalarBitwiseAnd
+          - ScalarBitwiseOr
+          - ScalarBitwiseXor
+          - LeftShift
+          - RightShift
+        iterations: 32
+    pack:
+      - {output: output, packer: Packer}
