@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
+
 #include <cstdint>
 
 #include "api/compute/common.h"
@@ -129,6 +131,16 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer remote_b(dfb::remote_b);
     DataflowBuffer scratch(dfb::scratch);
 
+    kda_chronology::Topology topology{};
+    {
+        DataflowBuffer chronology(dfb::chronology_compute);
+        topology = kda_chronology::receive(chronology);
+    }
+    {
+        if (group >= topology.head_groups(G)) {
+            return;
+        }
+    }
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::stage_a);
     initial_a.wait_front(a_tiles);
     initial_b.wait_front(b_tiles);

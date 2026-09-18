@@ -21,21 +21,34 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             S_{n+1} = final_decay_n * S_n + k_dec_t_n @ U_n
 
         Args:
-            v_beta (ttnn.Tensor): Prepared values ``[B*H, N, 32, V]``.
-            kd (ttnn.Tensor): Prepared decayed keys ``[B*H, N, 32, K]``.
-            q_decay (ttnn.Tensor): Prepared decayed queries ``[B*H, N, 32, K]``.
+            v_beta (ttnn.Tensor): Prepared values ``[B*H*G, N, 32, V]``.
+            kd (ttnn.Tensor): Prepared decayed keys ``[B*H*G, N, 32, K]``.
+            q_decay (ttnn.Tensor): Prepared decayed queries ``[B*H*G, N, 32, K]``.
             intra (ttnn.Tensor): Causal within-chunk interactions
-                ``[B*H, N, 32, 32]`` in FLOAT32.
+                ``[B*H*G, N, 32, 32]`` in FLOAT32.
             k_dec_t (ttnn.Tensor): Prepared transposed key term
-                ``[B*H, N, K, 32]``.
+                ``[B*H*G, N, K, 32]``.
             final_decay (ttnn.Tensor): End-of-chunk state decay
-                ``[B*H, N, K, 1]``.
+                ``[B*H*G, N, K, 1]``.
             t_inv (ttnn.Tensor): Triangular correction inverse
-                ``[B*H, N, 32, 32]`` in FLOAT32.
-            initial_state (ttnn.Tensor): Initial recurrent state ``[B*H, K, V]``
-                in FLOAT32.
+                ``[B*H*G, N, 32, 32]`` in FLOAT32.
+            group_entry_states (ttnn.Tensor): Initial recurrent state ``[B*H*G, K, V]``
+                in FLOAT32, with group folded into the leading dimension.
+                Tail state is unfolded: one ``[K,V]`` matrix per ``B*H``.
 
         Keyword Args:
+            actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar
+                containing the absolute position of the chunk's first token; pass [0]
+                for zero-offset execution. Its
+                value must be nonnegative and 32-aligned. Keep its address stable
+                and update its contents before replay of a captured trace.
+            sequence_parallel_axis (int, optional): Mesh axis partitioning the
+                sequence. Native mesh coordinates supply each device's rank.
+            tail_entry_states (ttnn.Tensor): FLOAT32 carry ``[B*H,K,V]``
+                to reload at the locally derived split. Ignored when unsplit.
+                No input tensor is modified.
+            groups_per_head (int, optional): Groups folded into the leading
+                dimension. Defaults to 1.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
@@ -43,11 +56,11 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: New tensors containing BFLOAT16 token
-                outputs ``Y[B*H,N,32,V]`` and FLOAT32 final state ``S[B*H,K,V]``.
+                outputs ``Y[B*H*G,N,32,V]`` and FLOAT32 final state ``S[B*H*G,K,V]``.
 
         Note:
             ``v_beta``, ``kd``, ``q_decay``, ``k_dec_t``, and ``final_decay`` may be
-            FLOAT32 or BFLOAT16. ``intra``, ``t_inv``, and ``initial_state`` must be
+            FLOAT32 or BFLOAT16. ``intra``, ``t_inv``, and ``group_entry_states`` must be
             FLOAT32. ``K`` and ``V`` must be positive and tile-aligned. All inputs
             must be interleaved TILE-layout tensors on the same device and are not
             modified.
@@ -60,10 +73,16 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("k_dec_t").noconvert(),
         nb::arg("final_decay").noconvert(),
         nb::arg("t_inv").noconvert(),
-        nb::arg("initial_state").noconvert(),
+        nb::arg("group_entry_states").noconvert(),
         nb::kw_only(),
+        nb::arg("actual_start").noconvert(),
+        nb::arg("tail_entry_states").noconvert(),
+
+        nb::arg("groups_per_head") = 1,
+
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("sequence_parallel_axis") = 0);
 
     ttnn::bind_function<"summarize_chunk_recurrence", "ttnn.experimental.kda.">(
         mod,
@@ -98,16 +117,29 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.
 
         Keyword Args:
+            actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar
+                containing the absolute position of the chunk's first token; pass [0]
+                for zero-offset execution. Its
+                value must be nonnegative and 32-aligned. Keep its address stable
+                and update its contents before replay of a captured trace.
+            sequence_parallel_axis (int, optional): Mesh axis partitioning the
+                sequence. Native mesh coordinates supply each device's rank.
+            groups_per_head (int, optional): Groups folded into the leading
+                dimension. Defaults to 1.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                 Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
                 Compute-kernel configuration.
 
         Returns:
-            tuple[ttnn.Tensor, ttnn.Tensor]: New FLOAT32 TILE-layout tensors
-                ``A[B*H*G,K,K]`` and ``B[B*H*G,K,V]``.
+            tuple[ttnn.Tensor, ...]: Four BFLOAT16 TILE tensors: head A/B followed by
+                tail A/B. A has shape ``[B*H*G,K,K]`` and B ``[B*H*G,K,V]``.
 
         Note:
+            Summaries accumulate in FLOAT32 and pack directly to BFLOAT16 for transport.
+            Unsplit execution defines only the head pair. Inactive head/tail slots
+            are unspecified; consumers must use the same chronology and geometry.
+
             The current summary path requires ``K=V``. ``q_decay`` and ``intra`` are
             accepted as part of the shared prepared-chunk protocol but do not contribute
             to the state-only summary. All inputs must be interleaved TILE-layout tensors
@@ -122,8 +154,13 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("final_decay").noconvert(),
         nb::arg("t_inv").noconvert(),
         nb::kw_only(),
+        nb::arg("actual_start").noconvert(),
+
+        nb::arg("groups_per_head") = 1,
+
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("sequence_parallel_axis") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail

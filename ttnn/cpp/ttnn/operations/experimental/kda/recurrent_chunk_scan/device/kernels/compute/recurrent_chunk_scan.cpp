@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
 //
 // Phase B (scan) compute kernel: the sequential-over-chunk recurrence for one
 // head.
@@ -11,6 +13,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
@@ -50,38 +53,69 @@ FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, Dataflow
     output.push_back(Mt * Nt);
 }
 
-template <ElementwiseOperation Operation, uint32_t Count>
+// Inputs remain resident; PacketTiles specifies output publication granularity.
+template <ElementwiseOperation Operation, uint32_t Count, uint32_t PacketTiles>
 FORCE_INLINE void elementwise(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& output) {
+    static_assert(PacketTiles > 0 && Count % PacketTiles == 0);
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t output_id = output.get_id();
-
-    output.reserve_back(Count);
     reconfig_data_format(a_id, b_id);
     if constexpr (Operation == ElementwiseOperation::ADD) {
         add_init(a_id, b_id);
-    } else if constexpr (Operation == ElementwiseOperation::SUBTRACT) {
+    } else {
         sub_init(a_id, b_id);
     }
-    for (uint32_t block_start = 0; block_start < Count; block_start += dst_tiles) {
-        const uint32_t remaining = Count - block_start;
-        const uint32_t block_tiles = remaining < dst_tiles ? remaining : dst_tiles;
-        tile_regs_acquire();
-        if constexpr (Operation == ElementwiseOperation::ADD) {
-            add_block(a_id, b_id, block_start, block_start, 0, block_tiles);
-        } else if constexpr (Operation == ElementwiseOperation::SUBTRACT) {
-            sub_block(a_id, b_id, block_start, block_start, 0, block_tiles);
+    for (uint32_t packet = 0; packet < Count; packet += PacketTiles) {
+        output.reserve_back(PacketTiles);
+        for (uint32_t first = 0; first < PacketTiles; first += dst_tiles) {
+            const uint32_t count = first + dst_tiles <= PacketTiles ? dst_tiles : PacketTiles - first;
+            const uint32_t input_start = packet + first;
+            tile_regs_acquire();
+            if constexpr (Operation == ElementwiseOperation::ADD) {
+                add_block(a_id, b_id, input_start, input_start, 0, count);
+            } else {
+                sub_block(a_id, b_id, input_start, input_start, 0, count);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t tile = 0; tile < count; ++tile) {
+                pack_tile(tile, output_id, first + tile);
+            }
+            tile_regs_release();
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            pack_tile(tile, output_id, block_start + tile);
-        }
-        tile_regs_release();
+        output.push_back(PacketTiles);
     }
-    output.push_back(Count);
+}
+
+template <uint32_t Count, uint32_t PacketTiles>
+FORCE_INLINE void copy(DataflowBuffer& input, DataflowBuffer& output) {
+    static_assert(PacketTiles > 0 && Count % PacketTiles == 0);
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    const uint32_t input_id = input.get_id();
+    const uint32_t output_id = output.get_id();
+    reconfig_data_format_srca(input_id);
+    copy_init(input_id);
+    for (uint32_t packet = 0; packet < Count; packet += PacketTiles) {
+        output.reserve_back(PacketTiles);
+        for (uint32_t first = 0; first < PacketTiles; first += dst_tiles) {
+            const uint32_t count = first + dst_tiles <= PacketTiles ? dst_tiles : PacketTiles - first;
+            tile_regs_acquire();
+            for (uint32_t tile = 0; tile < count; ++tile) {
+                copy_tile(input_id, packet + first + tile, tile);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t tile = 0; tile < count; ++tile) {
+                pack_tile(tile, output_id, first + tile);
+            }
+            tile_regs_release();
+        }
+        output.push_back(PacketTiles);
+    }
 }
 
 FORCE_INLINE void multiply_by_decay(
@@ -142,7 +176,8 @@ FORCE_INLINE void compute_value_new(
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         v_beta.wait_front(chunk_value_tiles);
     }
-    elementwise<ElementwiseOperation::SUBTRACT, chunk_value_tiles>(v_beta, state_projection, difference);
+    elementwise<ElementwiseOperation::SUBTRACT, chunk_value_tiles, chunk_value_tiles>(
+        v_beta, state_projection, difference);
     difference.wait_front(chunk_value_tiles);
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         v_beta.pop_front(chunk_value_tiles);
@@ -181,7 +216,8 @@ FORCE_INLINE void compute_chunk_output(
     value_projection.wait_front(chunk_value_tiles);
     intra.pop_front(chunk_chunk_tiles);
     pack_reconfig_data_format(output.get_id());
-    elementwise<ElementwiseOperation::ADD, chunk_value_tiles>(state_projection, value_projection, output);
+    elementwise<ElementwiseOperation::ADD, chunk_value_tiles, chunk_value_tiles>(
+        state_projection, value_projection, output);
     state_projection.pop_front(chunk_value_tiles);
     value_projection.pop_front(chunk_value_tiles);
 }
@@ -216,14 +252,15 @@ FORCE_INLINE void update_state(
     if constexpr (InputPolicy == ChunkInputPolicy::CONSUME) {
         final_decay.pop_front(Kt);
     }
-    elementwise<ElementwiseOperation::ADD, key_value_tiles>(state_temporary, state_update, destination);
+    elementwise<ElementwiseOperation::ADD, key_value_tiles, key_value_tiles>(
+        state_temporary, state_update, destination);
     current_state.pop_front(key_value_tiles);
     state_temporary.pop_front(key_value_tiles);
     state_update.pop_front(key_value_tiles);
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void compute_summary(uint32_t num_chunks) {
+FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
     DataflowBuffer v_beta(dfb::v_beta);
@@ -240,6 +277,8 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks) {
     DataflowBuffer summary_raw(dfb::summary_raw);
     DataflowBuffer summary_seed(dfb::summary_seed);
     DataflowBuffer summary_ring(dfb::summary_ring);
+    DataflowBuffer summary_head_output(dfb::summary_head_output);
+    DataflowBuffer summary_head_state(dfb::summary_head_state);
 
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
@@ -247,7 +286,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks) {
     constexpr uint32_t key_value_tiles = Kt * Vt;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(kd.get_id(), v_beta.get_id(), output.get_id());
+    pack_reconfig_data_format(dfb::state_update);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         DataflowBuffer& current_b = chunk == 0 ? state : state_ring;
         DataflowBuffer& current_ab = chunk == 0 ? summary_seed : summary_ring;
@@ -278,6 +317,25 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks) {
             final_decay,
             state_update,
             state_temporary);
+        {
+            const uint32_t snapshot_chunk = split_chunk;
+            if (snapshot_chunk != 0 && chunk + 1 == snapshot_chunk) {
+                state_ring.wait_front(key_value_tiles);
+                summary_ring.wait_front(key_value_tiles);
+                pack_reconfig_data_format(summary_head_output.get_id());
+                elementwise<ElementwiseOperation::SUBTRACT, Kt * Vt, Vt>(summary_ring, state_ring, summary_head_output);
+                copy<Kt * Vt, Vt>(state_ring, summary_head_state);
+                pack_reconfig_data_format(dfb::state_update);
+                state.wait_front(key_value_tiles);
+                summary_seed.wait_front(key_value_tiles);
+                copy<key_value_tiles, key_value_tiles>(state, state_ring);
+                state_ring.pop_front(key_value_tiles);
+                state.pop_front(key_value_tiles);
+                copy<key_value_tiles, key_value_tiles>(summary_seed, summary_ring);
+                summary_ring.pop_front(key_value_tiles);
+                summary_seed.pop_front(key_value_tiles);
+            }
+        }
         kd.pop_front(chunk_key_tiles);
         v_beta.pop_front(chunk_value_tiles);
         t_inv.pop_front(chunk_chunk_tiles);
@@ -286,12 +344,16 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks) {
     }
     summary_raw.wait_front(key_value_tiles);
     final_state.wait_front(key_value_tiles);
-    elementwise<ElementwiseOperation::SUBTRACT, key_value_tiles>(summary_raw, final_state, output);
+    pack_reconfig_data_format(output.get_id());
+    elementwise<ElementwiseOperation::SUBTRACT, key_value_tiles, key_value_tiles>(summary_raw, final_state, output);
+    DataflowBuffer transport_state(dfb::transport_state);
+    copy<key_value_tiles, key_value_tiles>(final_state, transport_state);
+    final_state.pop_front(key_value_tiles);
     summary_raw.pop_front(key_value_tiles);
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void compute_recurrent(uint32_t num_chunks) {
+FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
     DataflowBuffer v_beta(dfb::v_beta);
@@ -308,11 +370,24 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks) {
     DataflowBuffer state_temporary(dfb::state_temporary);
     DataflowBuffer final_state(dfb::final_state);
     DataflowBuffer scratch(dfb::scratch);
+    DataflowBuffer tail_entry_states(dfb::tail_entry_states);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(kd.get_id(), v_beta.get_id(), output.get_id());
+    constexpr uint32_t key_value_tiles = Kt * Vt;
+
     pack_reconfig_data_format(dfb::scratch);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+        // A chronological split restarts the causal stream mid-group. The recurrence is affine in
+        // the state, so no per-chunk term changes -- only where the carry comes
+        // from. reset_chunk 0 means never, which is exact rather than a sentinel:
+        // r == 0 means no group straddles, and chunk 0 always seeds from `state`.
         DataflowBuffer& current_state = chunk == 0 ? state : state_ring;
+        if (reset_chunk != 0 && chunk == reset_chunk) {
+            state_ring.wait_front(key_value_tiles);
+            tail_entry_states.wait_front(key_value_tiles);
+            copy<key_value_tiles, key_value_tiles>(tail_entry_states, state_ring);
+            state_ring.pop_front(key_value_tiles);
+            tail_entry_states.pop_front(key_value_tiles);
+        }
         DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : state_ring;
 
         compute_value_new<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
@@ -326,11 +401,21 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks) {
     }
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary_pair>
-TT_KERNEL void compute(uint32_t num_chunks) {
-    if constexpr (summary_pair) {
-        compute_summary<Ct, Kt, Vt>(num_chunks);
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary>
+TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
+    uint32_t reset_chunk = 0;
+    kda_chronology::Topology topology{};
+    {
+        DataflowBuffer chronology(dfb::chronology_compute);
+        topology = kda_chronology::receive(chronology);
+    }
+    {
+        reset_chunk = topology.reset_chunk(group, topology.local_rows / 32 / num_chunks);
+    }
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
+    if constexpr (summary) {
+        compute_summary<Ct, Kt, Vt>(num_chunks, reset_chunk);
     } else {
-        compute_recurrent<Ct, Kt, Vt>(num_chunks);
+        compute_recurrent<Ct, Kt, Vt>(num_chunks, reset_chunk);
     }
 }

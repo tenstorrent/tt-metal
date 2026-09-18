@@ -12,6 +12,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
+from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_BETA_DTYPE,
     KDA_CHUNK_SIZE,
@@ -72,7 +73,14 @@ class KdaState:
 
 
 class ttKDA:
-    """Prefill-only KDA layer with immutable, caller-owned logical state."""
+    """Prefill KDA for one fixed physical geometry and caller-owned logical state.
+
+    ``active_seq_len`` is the global physical token count, matching MLA's
+    construction contract. Each call supplies exactly ``active_seq_len / SP``
+    local rows. Construct another instance for a different physical length;
+    weights may be shared. Runtime ``actual_start`` changes chronology within
+    the constructed graph without changing grouping or reading device values.
+    """
 
     def __init__(
         self,
@@ -86,6 +94,8 @@ class ttKDA:
         tp_axis: int = 1,
         program_config: KDAProgramConfig | None = None,
         weights: KDAWeights | None = None,
+        *,
+        active_seq_len: int,
     ) -> None:
         if tp_axis not in (0, 1) or sp_axis not in (0, 1) or sp_axis == tp_axis:
             raise ValueError(f"KDA requires distinct 2D SP/TP axes, got SP={sp_axis}, TP={tp_axis}")
@@ -96,6 +106,12 @@ class ttKDA:
         self.sequence_parallel_size = (
             tuple(mesh_device.shape)[self.sequence_parallel_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         )
+        if active_seq_len <= 0 or active_seq_len % (self.sequence_parallel_size * KDA_CHUNK_SIZE):
+            raise ValueError("active_seq_len must give a positive tile-aligned local physical length")
+        self.active_seq_len_local = active_seq_len // self.sequence_parallel_size
+        self._is_sequence_parallel = self.sequence_parallel_size > 1
+        self._tp_cluster_axis = None if not self._is_sequence_parallel else self.tensor_parallel_axis
+        self._activate_decay = self._softplus_decay if config.gate_lower_bound is None else self._bounded_decay
         uses_grouped_scan = (
             self.sequence_parallel_size > 1 or program_config.recurrence.local_scan_strategy == "grouped"
         )
@@ -152,7 +168,11 @@ class ttKDA:
         self.recurrence = KDARecurrence(
             mesh_device,
             program_config.recurrence,
-            sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
+            sequence_parallel_axis=self.sequence_parallel_axis,
+            local_rows=self.active_seq_len_local,
+            heads=self.config.num_heads,
+            key_dim=self.config.head_k_dim,
+            value_dim=self.config.head_v_dim,
         )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -190,8 +210,17 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
+        actual_start: ttnn.Tensor,
     ) -> None:
         """Validate shape/type plus the documented SP state-distribution contract."""
+        if not isinstance(actual_start, ttnn.Tensor):
+            raise TypeError("actual_start must be a device UINT32 scalar")
+        if (
+            actual_start.dtype != ttnn.uint32
+            or actual_start.layout != ttnn.ROW_MAJOR_LAYOUT
+            or any(dimension != 1 for dimension in actual_start.shape)
+        ):
+            raise ValueError("device actual_start must be a UINT32 row-major scalar")
         if len(hidden_states.shape) != 3 or hidden_states.shape[-1] != self.config.hidden_size:
             raise ValueError(
                 f"hidden_states shape {tuple(hidden_states.shape)} must be [B,T,{self.config.hidden_size}]"
@@ -203,6 +232,10 @@ class ttKDA:
         if sequence <= 0 or sequence % KDA_CHUNK_SIZE != 0:
             raise ValueError(
                 f"KDA prefill requires local T to be positive and divisible by {KDA_CHUNK_SIZE}, got T={sequence}"
+            )
+        if sequence != self.active_seq_len_local:
+            raise ValueError(
+                f"hidden_states local T={sequence} does not match constructed T={self.active_seq_len_local}"
             )
         expected_recurrent = (batch, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim)
         expected_convolution = (batch, self.config.conv_kernel_size - 1, self._convolution_width)
@@ -218,44 +251,30 @@ class ttKDA:
     def _convolve_qkv(
         self,
         qkv: ttnn.Tensor,
-        convolution_state: ttnn.Tensor,
+        incoming_layer_carry: ttnn.Tensor,
+        selections: ChronologicalSelections | None,
+        actual_start: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-        """Run depthwise convolution and emit Q/K/V without post-convolution slices."""
         config = self.config
-        channels = self._convolution_width
-        sequence = qkv.shape[1]
-        qkv_row_major = ttnn.to_layout(
-            qkv,
-            ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        state_row_major = ttnn.to_layout(
-            convolution_state,
-            ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        if self.sequence_parallel_size > 1:
-            state_row_major, new_state = exchange_convolution_carry(
-                qkv_row_major,
-                state_row_major,
-                sequence_parallel_axis=self.sequence_parallel_axis,
-            )
+        if not self._is_sequence_parallel:
+            batch, rows, width = qkv.shape
+            new_state = ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
+            predecessor = incoming_layer_carry
         else:
-            new_state = ttnn.slice(
-                qkv_row_major,
-                (0, sequence - (config.conv_kernel_size - 1), 0),
-                (qkv_row_major.shape[0], sequence, channels),
+            predecessor, new_state = exchange_convolution_carry(
+                qkv, sequence_parallel_axis=self.sequence_parallel_axis, selections=selections
             )
-        # The replacement state is BF16 row-major DRAM [B, K - 1, Q_local + K_local + V_local],
-        # channel-sharded across TP and replicated across SP.
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
-            qkv_row_major,
-            state_row_major,
+            qkv,
+            incoming_layer_carry,
             *self.weights.convolution_taps,
             config.q_dim,
             config.k_dim,
             config.v_dim,
             program_config=self.qkv_convolution_program_config,
+            actual_start=actual_start,
+            sequence_parallel_axis=self.sequence_parallel_axis,
+            predecessor_carry=predecessor,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return q, k, v, new_state
@@ -313,30 +332,25 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_config,
         )
-        if config.gate_lower_bound is None:
-            gate = ttnn.multiply(
-                weights.decay_scale_flat,
-                gate,
-                input_tensor_b_activations=[
-                    ttnn.UnaryWithParam(
-                        ttnn.UnaryOpType.SOFTPLUS,
-                        KDA_SOFTPLUS_BETA,
-                        KDA_SOFTPLUS_THRESHOLD,
-                    )
-                ],
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        else:
-            gate = ttnn.multiply(
-                weights.decay_scale_flat,
-                gate,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            gate = ttnn.sigmoid(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            gate = ttnn.multiply(gate, config.gate_lower_bound, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return gate, beta_for_recurrence
+        return self._activate_decay(gate), beta_for_recurrence
+
+    def _softplus_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
+        return ttnn.multiply(
+            self.weights.decay_scale_flat,
+            gate,
+            input_tensor_b_activations=[
+                ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD)
+            ],
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _bounded_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
+        gate = ttnn.multiply(
+            self.weights.decay_scale_flat, gate, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        gate = ttnn.sigmoid(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.multiply(gate, self.config.gate_lower_bound, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def _kda_rms_norm(
         self,
@@ -369,7 +383,7 @@ class ttKDA:
             compute_kernel_config=self.output_projection_compute_config,
         )
         if self.tensor_parallel_size > 1:
-            cluster_axis = None if self.sequence_parallel_size == 1 else self.tensor_parallel_axis
+            cluster_axis = self._tp_cluster_axis
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output,
                 dim=-1,
@@ -386,29 +400,56 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
+        actual_start: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, KdaState]:
         """Run prefill KDA and return replacement logical carries.
+
+        ``actual_start`` is the absolute global position of this chunk's first
+        token. It selects the chronological SP segment order for MLA's
+        block-cyclic layout. The caller owns a replicated UINT32 row-major scalar
+        and must keep it alive at the captured address throughout trace use.
+        Update its contents before replay; every SP rank must observe the same
+        nonnegative, 32-aligned position. No device-to-host value validation is
+        performed. Pass an explicit zero-valued tensor for a zero-start call.
 
         The input state is only read. No tensor reachable from it is used as a
         ``ttnn.copy`` destination or retained on this layer. The returned output
         is sequence-partitioned along SP and, when TP > 1, reduce-scattered on
         the hidden dimension; TP == 1 returns the full hidden dimension.
         """
-        self._validate_forward(hidden_states, state)
+        self._validate_forward(hidden_states, state, actual_start)
+        selections = None
+        if self._is_sequence_parallel:
+            selections = ChronologicalSelections(
+                ttnn.experimental.kda.chronological_selections(
+                    actual_start,
+                    self.sequence_parallel_axis,
+                    self.active_seq_len_local,
+                    self.config.num_heads,
+                    self.config.head_k_dim,
+                    self.config.head_v_dim,
+                ),
+            )
         projected = self._project_inputs(hidden_states)
-        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution)
+        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        convolution_state = ttnn.to_layout(
+            state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, selections, actual_start)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,
         )
-        new_recurrent, output = self.recurrence(
+        result = self.recurrence(
             q=q,
             k=k,
             v=v,
             gate=gate,
             beta=beta,
             initial_state=state.recurrent,
+            selections=selections,
+            actual_start=actual_start,
         )
-        output = self._kda_rms_norm(output, projected.output_gate)
+        output = self._kda_rms_norm(result.output, projected.output_gate)
         output = self._project_output(output)
-        return output, KdaState(recurrent=new_recurrent, convolution=new_convolution)
+        return output, KdaState(recurrent=result.final_state, convolution=new_convolution)

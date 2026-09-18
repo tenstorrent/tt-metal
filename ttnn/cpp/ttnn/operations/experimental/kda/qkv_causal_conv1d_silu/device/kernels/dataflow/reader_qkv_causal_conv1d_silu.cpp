@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -33,7 +34,7 @@ FORCE_INLINE void load_weight_block(
     weights.push_back(4 * block_ct);
 }
 
-template <uint32_t block_ct, uint32_t num_blocks>
+template <uint32_t block_ct, uint32_t num_blocks, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
@@ -44,6 +45,19 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer weights(dfb::weights);
     DataflowBuffer activation(dfb::act_rm);
     Noc noc;
+
+    uint32_t local_split_row = 0;
+    bool initial_from_predecessor = false;
+    {
+        const auto actual_start = TensorAccessor(tensor::actual_start);
+        noc.async_read(
+            actual_start, CoreLocalMem<uint32_t>(activation.get_write_ptr()), sizeof(uint32_t), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        const auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(activation.get_write_ptr());
+        const auto topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);
+        local_split_row = topology.local_split ? topology.head_rows : 0;
+        initial_from_predecessor = topology.rank != topology.first_rank;
+    }
 
     const uint32_t tile_bytes = weights.get_entry_size();
     if constexpr (num_blocks == 1) {
@@ -63,18 +77,30 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             load_weight_block<block_ct>(noc, weights, tap0, tap1, tap2, tap3, tile_bytes, ct_start);
         }
 
+        int32_t row_floor = 0;
+        if (local_split_row != 0 && mt * tile_height >= local_split_row) {
+            row_floor = static_cast<int32_t>(local_split_row);
+        }
+
         for (uint32_t tap = 0; tap < 4; ++tap) {
             activation.reserve_back(block_ct);
             for (uint32_t row = 0; row < tile_height; ++row) {
                 const int32_t source_row = static_cast<int32_t>(mt * tile_height + row + tap) - 3;
-                if (source_row < 0) {
-                    noc.async_read(
-                        history,
-                        activation,
-                        block_row_bytes,
-                        {.page_id = static_cast<uint32_t>(source_row + 3),
-                         .offset_bytes = ct_start * block_offset_scale},
-                        {.offset_bytes = row * block_row_bytes});
+                if (source_row < row_floor) {
+                    const auto read_history = [&](const auto& carry) {
+                        noc.async_read(
+                            carry,
+                            activation,
+                            block_row_bytes,
+                            {.page_id = static_cast<uint32_t>(source_row - row_floor + 3),
+                             .offset_bytes = ct_start * block_offset_scale},
+                            {.offset_bytes = row * block_row_bytes});
+                    };
+                    if (initial_from_predecessor || row_floor != 0) {
+                        read_history(TensorAccessor(tensor::predecessor_carry));
+                    } else {
+                        read_history(history);
+                    }
                 } else {
                     noc.async_read(
                         input,

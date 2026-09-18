@@ -17,8 +17,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     uint32_t k_width,
     uint32_t v_width,
     const QkvCausalConv1dSiluProgramConfig& program_config,
+    const ttnn::Tensor& actual_start,
+    const ttnn::Tensor& predecessor_carry,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    uint32_t sequence_parallel_axis) {
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE && input.buffer() != nullptr,
         "qkv_causal_conv1d_silu: input must be an allocated device tensor");
@@ -41,8 +44,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
         k_width,
         v_width,
         program_config.channel_chunk_size,
+
         output_memory_config,
-        kernel_config);
+        kernel_config,
+        actual_start,
+        sequence_parallel_axis,
+        predecessor_carry);
     return {outputs[0], outputs[1], outputs[2]};
 }
 
