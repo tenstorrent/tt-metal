@@ -211,7 +211,6 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
 
     tt::tt_metal::experimental::ProgramSpec spec{
         .name = "reduce_affine_transforms",
-        .kernels = {std::move(dataflow), std::move(compute)},
         .dataflow_buffers = std::move(dfbs),
         .semaphores =
             {
@@ -247,7 +246,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
         {output_b_tensor_name, output_b},
     };
 
-    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, in.a, false);
+    kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, in.a, dataflow, compute);
+    spec.kernels = {std::move(dataflow), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{
             .spec = std::move(spec),
@@ -256,7 +256,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
         tensor_coords,
         device,
         attrs.sequence_parallel_axis,
-        attrs.local_rows);
+        attrs.local_rows,
+        dataflow_kernel_name);
 }
 
 }  // namespace ttnn::experimental::prim
