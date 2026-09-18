@@ -59,6 +59,7 @@ namespace HAL_BUILD {  // NOLINT(modernize-concat-nested-namespaces)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_IERISC_MAILBOX_BASE)->x))
 #elif defined(COMPILE_FOR_DRISC)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)MEM_DRISC_MAILBOX_BASE)->x))
+#define GET_MAILBOX_ADDRESS_DEV_CACHED(x) (&(((mailboxes_t tt_l1_ptr*)MEM_CCE_MAILBOX_BASE)->x))
 #elif defined(ARCH_QUASAR)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))->x))
 // Cached alias of the mailbox region. Needed for atomics.
