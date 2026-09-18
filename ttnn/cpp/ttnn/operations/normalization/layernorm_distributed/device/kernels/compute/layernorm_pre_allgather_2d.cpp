@@ -12,7 +12,10 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/layernorm.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
 #include "experimental/kernel_args.h"
@@ -33,13 +36,17 @@ void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto blk = get_arg(args::blk);
     constexpr auto num_cores_y = get_arg(args::num_cores_y);
+    constexpr bool unpack_fp32_active = get_arg(args::unpack_fp32_active) != 0;
+    // Accurate mode only supports SUM; with the reader's scaler of 1.0, SUM and AVG are equivalent.
+    constexpr auto reduce_type = unpack_fp32_active ? PoolType::SUM : PoolType::AVG;
+    constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
     constexpr uint32_t onetile = 1;
 
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(dfb::in0, dfb::res, dfb_inp_id);
+    compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
 #else
-    binary_op_init_common(dfb_inp_id, dfb::reduce, dfb::x2);
+    compute_kernel_hw_startup(dfb_inp_id, dfb::reduce, dfb::x2);
 #endif
 
     DataflowBuffer dfb_inp(dfb_inp_id);
@@ -56,7 +63,7 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Fuse pre-add: dfb_inp = dfb::in0 + dfb::res (absent entirely when there is no residual)
 #ifdef FUSE_PRE_ADD
-        pre_add::one_row<true>(dfb_in0, dfb_res, dfb_inp, Wt, blk);
+        pre_add::one_row<true, unpack_fp32_active>(dfb_in0, dfb_res, dfb_inp, Wt, blk);
 #endif
 
         /*
@@ -64,24 +71,39 @@ void kernel_main() {
          */
         reconfig_data_format(dfb_inp_id, dfb_inp_id);
         pack_reconfig_data_format(dfb::x2);
-        mul_tiles_init(dfb_inp_id, dfb_inp_id);
+        if constexpr (unpack_fp32_active) {
+            copy_init(dfb_inp_id);
+            square_tile_init();
+        } else {
+            mul_init(dfb_inp_id, dfb_inp_id);
+        }
 
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_inp.wait_front(wt + blk);  // cumulative wait
-
-            tile_regs_acquire();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(dfb_inp_id, dfb_inp_id, wt + wtr, wt + wtr, wtr);
-            }
-            tile_regs_commit();
-
             dfb_x2.reserve_back(blk);
 
-            tile_regs_wait();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                pack_tile(wtr, dfb::x2, wt + wtr);
+            if constexpr (unpack_fp32_active) {
+                for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                    tile_regs_acquire();
+                    copy_tile(dfb_inp_id, wt + wtr, 0);
+                    square_tile(0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, dfb::x2, wt + wtr);
+                    tile_regs_release();
+                }
+            } else {
+                tile_regs_acquire();
+                for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                    mul_tiles(dfb_inp_id, dfb_inp_id, wt + wtr, wt + wtr, wtr);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                    pack_tile(wtr, dfb::x2, wt + wtr);
+                }
+                tile_regs_release();
             }
-            tile_regs_release();
 
             dfb_x2.push_back(blk);
         }
@@ -91,12 +113,14 @@ void kernel_main() {
          */
         // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
         compute_kernel_lib::reduce<
-            PoolType::AVG,
+            reduce_type,
             ReduceDim::REDUCE_ROW,
             dfb::x2,
             dfb::reduce,
             dfb::out,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+            reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
         dfb_inp.pop_front(Wt);
         dfb_reduce.pop_front(1);
     }
@@ -115,15 +139,30 @@ void kernel_main() {
         dfb_zero.wait_front(1);
 
         // Initialize accumulation
-        binary_op_init_common(dfb::x2_merge, dfb::zero, dfb::out_final);
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        compute_kernel_hw_startup(dfb::x2_merge, dfb::zero, dfb::out_final);
         reconfig_data_format(dfb::x2_merge, dfb::zero);
         pack_reconfig_data_format(dfb::out_final);
-        add_tiles_init(dfb::x2_merge, dfb::zero, true);
+        // Add all the column's partials together. The accurate path sums them in Dest on the SFPU;
+        // add_tiles would pull each through SrcA/SrcB and round it to TF32.
+        if constexpr (unpack_fp32_active) {
+            copy_init(dfb::x2_merge);
+            add_binary_tile_init();
+        } else {
+            add_init(dfb::x2_merge, dfb::zero, true);
+        }
 
         tile_regs_acquire();
-        // Add all the column's partials together
-        for (uint32_t i = 0; i < num_cores_y; i++) {
-            add_tiles(dfb::x2_merge, dfb::zero, i, 0, dst0);
+        if constexpr (unpack_fp32_active) {
+            copy_tile(dfb::x2_merge, 0, dst0);
+            for (uint32_t i = 1; i < num_cores_y; i++) {
+                copy_tile(dfb::x2_merge, i, dst0 + 1);
+                add_binary_tile(dst0, dst0 + 1, dst0);
+            }
+        } else {
+            for (uint32_t i = 0; i < num_cores_y; i++) {
+                add_tiles(dfb::x2_merge, dfb::zero, i, 0, dst0);
+            }
         }
         tile_regs_commit();
 

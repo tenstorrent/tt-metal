@@ -16,6 +16,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
 )
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def get_torch_dtype(dtype):
     if dtype == ttnn.int32:
@@ -436,6 +439,8 @@ def test_softmax_callback(shape_dim_strategy, dtype, device):
     torch.manual_seed(0)
     rtol = atol = 0.05
 
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     for i in range(2):
         run_moreh_softmax_test(shape, dim, dtype, ttnn.TILE_LAYOUT, device, rtol, atol, True, strategy=strategy)
         if i == 0:
@@ -468,6 +473,8 @@ def test_softmax_backward_callback(shape_dim_strategy, dtype, device):
     torch.manual_seed(0)
     rtol = atol = 0.05
 
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     for i in range(2):
         run_moreh_softmax_backward_test(
             shape, dim, dtype, ttnn.TILE_LAYOUT, device, rtol, atol, True, strategy=strategy

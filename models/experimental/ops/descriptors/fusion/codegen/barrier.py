@@ -227,15 +227,15 @@ def _generate_unicast_segment(
         f"        release = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
         f"            get_arg_val<uint32_t>(rt_offset + {release_offset}));\n"
         f"        // NOTE: Do NOT reset *arrive / *release here.  These are\n"
-        f"        // cross-core GlobalSemaphores: a non-core0 core increments\n"
+        f"        // cross-core semaphore-bank words: a non-core0 core increments\n"
         f"        // core0's *arrive over NOC in sync(), and core0 unicasts\n"
         f"        // *release to the other cores.  init() runs unsynchronized\n"
         f"        // across cores, so a slow init() on the receiving core would\n"
         f"        // zero the semaphore AFTER a peer's NOC write already arrived,\n"
         f"        // erasing it and deadlocking the barrier (same NOC-clobber\n"
         f"        // race the op-semaphore NOTE in _emit_init_coordinator warns\n"
-        f"        // about).  The semaphores are allocated ephemerally with\n"
-        f"        // initial_value 0 on every dispatch, so an explicit reset is\n"
+        f"        // about).  A fresh bank initializes these words to 0 on every\n"
+        f"        // dispatch, so an explicit reset is\n"
         f"        // both unnecessary and unsafe.\n"
         f"    }}\n"
         f"\n"
@@ -276,9 +276,9 @@ namespace seg_{seg_idx} {{
             get_arg_val<uint32_t>(rt_offset + {release_offset}));
         // NOTE: Do NOT reset *release here.  core0 unicasts *release to this
         // core over NOC in sync(); a slow init() would zero it after that
-        // write arrived, deadlocking the spinwait.  The semaphore is allocated
-        // ephemerally with initial_value 0 on every dispatch, so resetting it
-        // here is both unnecessary and unsafe.
+        // write arrived, deadlocking the spinwait.  A fresh bank initializes
+        // this word to 0 on every dispatch, so resetting it here is both
+        // unnecessary and unsafe.
     }}
 
     template <SyncMode mode>
@@ -637,9 +637,9 @@ def _emit_init_coordinator(
     lines.append("    // Each follower RISC resets its own semaphore in its own init().")
     lines.append("    // Resetting here races with fast compute/BRISC signaling")
     lines.append("    // (e.g. no-op phase 0 where compute signals immediately).")
-    # NOTE: Do NOT reset op semaphores here. The hardware dispatch initializes
-    # semaphores to their initial_value on every enqueue (including cache hits),
-    # and local::sync()'s trailing barrier resets them after the last phase.
+    # NOTE: Do NOT reset op semaphores here. Each dispatch uses a fresh bank
+    # initialized to the configured values, and local::sync()'s trailing
+    # barrier resets them after the last phase.
     # Resetting in init() races with receiver cores that call sender_sem.up()
     # via NOC before this core finishes init() — those signals would be erased,
     # causing a deadlock when mcast_in0 is the first (phase 0) operation.
@@ -684,9 +684,8 @@ def _emit_init_follower(
         # no-op phase, where the fast threads reach local::sync almost
         # immediately) would write 0 here AFTER another thread already advanced
         # the flag in the first barrier — clobbering it and deadlocking the
-        # spinwait.  The GlobalSemaphores are allocated with initial_value 0 and
-        # the hardware dispatch re-initializes them to that value on every
-        # enqueue (including cache hits), so an explicit reset is both
+        # spinwait.  A fresh command-lifetime bank is initialized to 0 before
+        # every dispatch (including cache hits), so an explicit reset is both
         # unnecessary and unsafe.  This mirrors the compute_done/writer_done
         # rationale below (they are deliberately not reset in init() either).
     for seg_idx in range(num_segments):

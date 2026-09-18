@@ -5,7 +5,7 @@
 #include "tensor_prefetcher.hpp"
 
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::operations::experimental {

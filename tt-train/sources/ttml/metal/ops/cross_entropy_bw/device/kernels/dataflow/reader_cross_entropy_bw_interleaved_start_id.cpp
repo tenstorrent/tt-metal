@@ -29,6 +29,7 @@ void kernel_main() {
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
     constexpr uint32_t mask_w = get_compile_time_arg_val(2);
+    constexpr uint32_t target_page_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t tiled_H = get_compile_time_arg_val(4);
     constexpr uint32_t target_indexes_read_page_size = get_compile_time_arg_val(5);
 
@@ -66,17 +67,13 @@ void kernel_main() {
 
         // read target indexes
         cb_reserve_back(cb_target_idx, onetile);
-        uint32_t l1_target_indexes_write_addr =
-            get_write_ptr(cb_target_idx);  // get the address of the first tile in the target buffer
-
-        auto [page, offset] = get_page_and_offset(start_row + i, tiled_H);
-
-        auto noc_async_target_indexes_page_addr = target_indexes_address_generator.get_noc_addr(page, offset);
-        noc_async_read(
-            noc_async_target_indexes_page_addr,
-            l1_target_indexes_write_addr,
-            target_indexes_read_page_size);    // read the page from the target buffer
-        noc_async_read_barrier();              // wait until all tiles are read
+        read_target_indices_page_clamped(
+            target_indexes_address_generator,
+            get_write_ptr(cb_target_idx),
+            start_row + i,
+            tiled_H,
+            target_page_bytes,
+            target_indexes_read_page_size);
         cb_push_back(cb_target_idx, onetile);  // push the tile to the back of the target buffer
 
         // read input buffer by blocks

@@ -59,6 +59,31 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
+    // No early exit: beta is per-op, so every SOFTCAP entry in the chain has to be checked.
+    for (const auto& op : args.op_chain) {
+        if (op.type() == operations::unary::UnaryOpType::SOFTCAP) {
+            // ckernel_sfpu_softcap.h and the SfpuType registration it needs exist only
+            // under hw/ckernels/blackhole. Without this the kernel reaches JIT and
+            // dies on a missing header, which points nowhere useful.
+            TT_FATAL(
+                input_tensor.device()->arch() == tt::ARCH::BLACKHOLE,
+                "Unary: SOFTCAP is implemented for Blackhole only, got arch {}",
+                input_tensor.device()->arch());
+            // The op always runs the Sollya polynomial tanh, whose ~2.3e-3 relative error is
+            // below half a bf16 ULP but far coarser than fp32 would imply. Refuse fp32 rather
+            // than hand back a wide fp32 tensor; tanh_tile is the fp32-grade path.
+            TT_FATAL(
+                input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::BFLOAT8_B,
+                "Unary: SOFTCAP supports BFLOAT16 and BFLOAT8_B inputs, got dtype {}",
+                input_tensor.dtype());
+            // beta reaches the kernel as (beta, 1/beta), so zero would hand the SFPU inf and
+            // return something that is not beta * tanh(x / beta).
+            const auto beta = op.get_param_if<float>(0);
+            TT_FATAL(beta.has_value(), "Unary: SOFTCAP requires a float beta parameter");
+            TT_FATAL(*beta != 0.0f, "Unary: SOFTCAP requires a non-zero beta");
+        }
+    }
+
     if (!input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -74,13 +99,10 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (output_tensor.has_value()) {
-        const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
-        const auto preallocated_output_shape = output_tensor->logical_shape();
-        TT_FATAL(
-            preallocated_output_shape == computed_output_shape,
-            "Unary: Preallocated output shape must match computed shape. Computed: {}, Preallocated: {}",
-            computed_output_shape,
-            preallocated_output_shape);
+        // The preallocated output's shape is checked inside compute_output_specs (binary_ng
+        // pattern), which also covers the program-cache-hit path. Call it here so the check still
+        // runs when the program cache is disabled and compute_program_hash is never reached.
+        compute_output_specs(args, tensor_args);
 
         TT_FATAL(
             output_tensor->layout() == input_tensor.layout(),
@@ -92,11 +114,20 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
 
 tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Unary is elementwise, so the shape the op produces is the input's logical shape.
+    const auto output_shape = tensor_args.input.logical_shape();
+
     if (tensor_args.output_tensor.has_value()) {
+        // Check before returning the preallocated spec: taking the expected shape from the return
+        // value instead would compare the preallocated tensor against itself.
+        const auto preallocated_output_shape = tensor_args.output_tensor->logical_shape();
+        TT_FATAL(
+            preallocated_output_shape == output_shape,
+            "Unary: Preallocated output shape must match computed shape. Computed: {}, Preallocated: {}",
+            output_shape,
+            preallocated_output_shape);
         return tensor_args.output_tensor->tensor_spec();
     }
-
-    const auto output_shape = tensor_args.input.logical_shape();
 
     if (args.memory_config.is_sharded()) {
         const auto output_layout = tensor_args.input.layout();
@@ -112,7 +143,7 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
                     tensor_args.input.padded_shape(),
                     padded_out_shape);
             } else {
-                shard_spec_opt = generate_shard_spec_all_cores(tensor_args.input, padded_out_shape, memory_layout);
+                shard_spec_opt = generate_output_shard_spec(tensor_args.input, padded_out_shape, memory_layout);
             }
         }
 

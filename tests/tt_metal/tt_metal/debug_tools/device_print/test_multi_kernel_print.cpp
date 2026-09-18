@@ -48,6 +48,26 @@ Program& add_empty_program(distributed::MeshWorkload& workload) {
     return workload.get_programs().at(range);
 }
 
+// One print kernel per node, each its own KernelSpec in its own WorkUnit. These tests are about a
+// program carrying several distinct kernels, so this deliberately does not collapse them into a
+// single kernel fanned out over a node range.
+Program make_worker_print_program(
+    distributed::MeshDevice& mesh_device, const std::vector<experimental::NodeCoord>& nodes) {
+    experimental::ProgramSpec spec{.name = "dprint_multi_kernel"};
+    for (size_t i = 0; i < nodes.size(); i++) {
+        const experimental::KernelSpecName name{"worker_print_" + std::to_string(i)};
+        spec.kernels.push_back(experimental::KernelSpec{
+            .unique_id = name,
+            .source = std::filesystem::path{kWorkerKernel},
+            .num_threads = 1,
+            .hw_config = DevicePrintFixture::SingleThreadDmConfig(mesh_device.arch()),
+        });
+        spec.work_units.push_back(
+            experimental::WorkUnitSpec{.name = "wu_" + std::to_string(i), .kernels = {name}, .target_nodes = nodes[i]});
+    }
+    return experimental::MakeProgramFromSpec(mesh_device, spec);
+}
+
 EthernetConfig make_active_eth_config() {
     constexpr DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
     EthernetConfig config{.noc = static_cast<NOC>(processor), .processor = processor};
@@ -61,17 +81,16 @@ EthernetConfig make_active_eth_config() {
 // Single program, two BRISC kernels on two different worker cores.
 TEST_F(DevicePrintFixture, TwoWorkerKernelsSameProgram) {
     for (auto& mesh_device : this->devices_) {
-        distributed::MeshWorkload workload;
-        Program& program = add_empty_program(workload);
-
-        const std::vector<CoreCoord> cores = {{0, 0}, {1, 0}};
-        for (const auto& core : cores) {
-            CreateKernel(
-                program,
-                kWorkerKernel,
-                core,
-                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        // Kernel placement is bounds-checked against the compute grid, which is a single node on
+        // some Quasar configurations.
+        const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
+        if (grid.x < 2) {
+            log_info(tt::LogTest, "Skipping device (need a compute grid at least 2 wide, have {}x{})", grid.x, grid.y);
+            continue;
         }
+
+        distributed::MeshWorkload workload;
+        workload.add_program(single_device_range(), make_worker_print_program(*mesh_device, {{0, 0}, {1, 0}}));
 
         this->RunProgram(mesh_device, workload);
         EXPECT_TRUE(FileContainsAllStrings(this->dprint_file_name, kWorkerExpected));
@@ -105,15 +124,9 @@ TEST_F(DevicePrintFixture, TwoActiveEthKernelsSameProgram) {
 // Two programs run back-to-back on the same worker core / RISC.
 TEST_F(DevicePrintFixture, TwoWorkerProgramsBackToBack) {
     for (auto& mesh_device : this->devices_) {
-        constexpr CoreCoord core = {0, 0};
         for (int i = 0; i < 2; i++) {
             distributed::MeshWorkload workload;
-            Program& program = add_empty_program(workload);
-            CreateKernel(
-                program,
-                kWorkerKernel,
-                core,
-                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            workload.add_program(single_device_range(), make_worker_print_program(*mesh_device, {{0, 0}}));
             this->RunProgram(mesh_device, workload);
         }
 

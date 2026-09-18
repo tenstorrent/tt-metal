@@ -20,7 +20,8 @@
 void kernel_main() {
     uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    copy_init(tt::CBIndex::c_0);
 
     tile_regs_acquire();
     cb_reserve_back(tt::CBIndex::c_16, 1);

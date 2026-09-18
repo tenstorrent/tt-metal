@@ -7,7 +7,7 @@ GLM-5.1 / GLM-5.2 have their own serving adapters (``adapters/glm_5_1.py`` / ``a
 what remains here is the test-only base + DeepSeek-V3.2-Exp.
 
 Both add a lightning indexer (DeepSeek Sparse Attention) on top of the MLA + MoE
-family. Two things set them apart from the dense ``DeepSeekV3Adapter`` / ``KimiK26Adapter``:
+family. Two things set them apart from the dense ``DeepSeekV3Adapter`` / ``KimiK27Adapter``:
 
   * Their HF ``model_type`` (``deepseek_v32`` / ``glm_moe_dsa``) is NOT registered with
     transformers, so ``AutoConfig`` cannot load them — the config is HAND-BUILT via
@@ -40,6 +40,7 @@ class SparseMLAPrefillAdapter(MLAPrefillAdapter):
     """
 
     supports_pretrained = False
+    pretrained_mla_layer = None  # no reachable checkpoint, hence no MLA weights and no GPU trace
     # No golden prefill trace: these variants are exercised only by the sparse-MLA reference
     # tests, which build their own traces. Set explicitly so ``.prefill_trace_default`` is always
     # readable (the base declares it annotation-only).

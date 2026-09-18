@@ -5,6 +5,7 @@
 #include "layernorm_fw_program_factory.hpp"
 
 #include <cstdint>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
@@ -352,8 +353,11 @@ LayerNormForwardProgramFactory::cached_program_t LayerNormForwardProgramFactory:
         tt::tt_metal::TensorAccessorArgs(rstd_buffer).append_to(writer_compile_time_args);
     } else {
         // Add dummy TensorAccessorArgs for mean and rstd (they won't be used)
-        auto dummy_buffer =
-            tt::tt_metal::CreateBuffer(tt::tt_metal::BufferConfig{device, 0, 0, tt::tt_metal::BufferType::DRAM});
+        auto dummy_buffer = tt::tt_metal::distributed::MeshBuffer::create(
+            tt::tt_metal::distributed::ReplicatedBufferConfig{.size = 0},
+            tt::tt_metal::distributed::DeviceLocalBufferConfig{
+                .page_size = 0, .buffer_type = tt::tt_metal::BufferType::DRAM},
+            input.device());
         tt::tt_metal::TensorAccessorArgs(dummy_buffer).append_to(writer_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(dummy_buffer).append_to(writer_compile_time_args);
     }

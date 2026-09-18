@@ -771,14 +771,17 @@ TEST_F(StreamPipelineTest, EightStageLargeAllCores) {
 // Metadata (uint32, full grid): an inline blob ships with every transfer and is
 // forwarded stage-by-stage; the last iter's blob is verified on every terminal
 // worker core. 1-word (smallest), 3-word triple {-1,0,base}, and a full
-// socket-page iota (4096 B) cover the metadata size range. The 3-stage variant
+// FIFO-sized iota (4096 B) cover the metadata size range. The 3-stage variant
 // proves a middle relay forwards the blob (consume + produce) like the stage-0
 // bridge does.
 // ===========================================================================
 
 constexpr uint32_t kMetadataWord = static_cast<uint32_t>(sizeof(uint32_t));
 constexpr uint32_t kMetadataTriple = 3u * static_cast<uint32_t>(sizeof(uint32_t));
-constexpr uint32_t kMetadataFullPageWords = 1024u;  // 4096 B == one socket page
+// 4096 B == the whole socket FIFO for these specs (fifo_bytes_for), and orders of
+// magnitude larger than the 64 B flow-control socket page: metadata capacity is bounded
+// by the FIFO, not by the socket page.
+constexpr uint32_t kMetadataFullPageWords = 1024u;
 
 // 2 stages, 3-word triple {-1,0,1+iter}: basic end-to-end metadata.
 TEST_F(StreamPipelineTest, MetadataTriple) {
@@ -811,7 +814,8 @@ TEST_F(StreamPipelineTest, MetadataOneWord) {
         [](uint32_t iter) { return std::vector<uint32_t>{1u + iter}; });
 }
 
-// Full socket-page metadata: 1024 uint32 words (4096 B) iota [0..1023].
+// Full-FIFO metadata: 1024 uint32 words (4096 B) iota [0..1023]. Also the regression
+// guard for metadata sized well beyond the 64 B socket page.
 TEST_F(StreamPipelineTest, MetadataFullPage) {
     PIPELINE_GUARD(2);
     run_pipeline<uint32_t>(

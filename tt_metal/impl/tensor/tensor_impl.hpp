@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>

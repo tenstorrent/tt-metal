@@ -4,8 +4,8 @@
 
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
 
 from .unpack_a import UnpackerA
 
@@ -14,7 +14,7 @@ class TransposeDestUnpacker(UnpackerA):
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -23,7 +23,7 @@ class TransposeDestUnpacker(UnpackerA):
 
     def unpack(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -32,7 +32,7 @@ class TransposeDestUnpacker(UnpackerA):
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,

@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
 
@@ -39,8 +40,17 @@ Tensor glu(
     const Tensor& input_a, int32_t dim = -1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor reglu(
     const Tensor& input_a, int32_t dim = -1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+// The original three-parameter signature is preserved so its symbol survives;
+// it forwards with GeluVariant::ACCURATE.  `variant` deliberately carries no
+// default on the overload below, since a default there would make every
+// three-argument call ambiguous between the two.
 Tensor geglu(
     const Tensor& input_a, int32_t dim = -1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor geglu(
+    const Tensor& input_a,
+    int32_t dim,
+    const std::optional<MemoryConfig>& output_mem_config,
+    operations::unary::GeluVariant variant);
 Tensor swiglu(
     const Tensor& input_a, int32_t dim = -1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);

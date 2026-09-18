@@ -30,7 +30,7 @@ constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
 // SFPGT mod1 selector that sets the destination to all-ones (-1) when the comparison is true.
 constexpr std::uint32_t SFPGT_MOD1_SET_ALL_ONES = 8;
 
-template <bool APPROXIMATION_MODE, int ITERATIONS, bool DST_ACCUM_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_typecast_fp32_to_uint16() {
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
@@ -38,14 +38,14 @@ inline void calculate_typecast_fp32_to_uint16() {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
         TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        if (DST_ACCUM_MODE) {
+        if (is_fp32_dest_acc_en) {
             TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);
         } else {
             TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_6, 0);
         }
     }
 #else
-    if constexpr (!DST_ACCUM_MODE) {
+    if constexpr (!is_fp32_dest_acc_en) {
         // 16-bit Dest: SFPLOADMACRO fast path, throughput of 2 cycles per input row.
         //
         // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
@@ -207,9 +207,20 @@ inline void calculate_typecast_fp32_to_int32() {
         // result = -result (two's complement)
         TTI_SFPIADD(
             0, p_sfpu::LCONST_0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+        // A positive input cannot legitimately produce a negative int32, so the only lanes this
+        // matches are the positive overflows that the INT_MIN constant above saturated the wrong
+        // way: the same constant serves both signs and the negate only fires for in < 0.
+        // Decrementing wraps INT_MIN to INT_MAX.
+        // LaneEnabled = in >= 0, the complement of the negate's in < 0. SFPSETCC compares the
+        // register as a signed int32, so LT0 and GTE0 partition every bit pattern and one
+        // SFPCOMPC is exactly equivalent to re-enabling all lanes and re-testing the sign.
+        TTI_SFPCOMPC(0, 0, 0, 0);
+        // LaneEnabled &= result < 0
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+        // result -= 1
+        TTI_SFPIADD(-1 & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
         // LaneEnabled = true
         TTI_SFPENCC(0, 0, 0, 0);
-
         TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
     }
 }
@@ -261,7 +272,7 @@ inline void calculate_typecast_fp32_to_fp16b() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS, bool DST_ACCUM_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_typecast_uint16_to_fp32() {
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
@@ -272,7 +283,7 @@ inline void calculate_typecast_uint16_to_fp32() {
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
     }
 #else
-    if constexpr (!DST_ACCUM_MODE) {
+    if constexpr (!is_fp32_dest_acc_en) {
         // 16-bit Dest: SFPLOADMACRO fast path, throughput of 1 cycle per input row. The LO16 load
         // keeps only the low 16 bits (the UInt16 value), so casting it matches the plain loop's
         // INT32 load + 0xFFFF mask + cast.
@@ -471,7 +482,7 @@ inline void calculate_typecast_uint32_to_fp32() {
 #endif
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS, bool DST_ACCUM_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_typecast_uint16_to_uint32() {
 #ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 8
@@ -481,7 +492,7 @@ inline void calculate_typecast_uint16_to_uint32() {
         TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
     }
 #else
-    if constexpr (!DST_ACCUM_MODE) {
+    if constexpr (!is_fp32_dest_acc_en) {
         // 16-bit Dest: SFPLOADMACRO fast path, throughput of 1 cycle per input row. The LO16 load
         // keeps only the low 16 bits (the UInt16 value) and zero-extends them, so the INT32 store
         // matches the plain loop's INT32 load + 0xFFFF mask.
@@ -592,7 +603,7 @@ inline void init_typecast_uint16_to_uint32() {
 #ifdef DISABLE_SFPLOADMACRO
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 #else
-    // The 32-bit Dest (DST_ACCUM_MODE) path of calculate_typecast_uint16_to_uint32 falls
+    // The 32-bit Dest (is_fp32_dest_acc_en) path of calculate_typecast_uint16_to_uint32 falls
     // back to the plain loop, which masks the loaded word with LREG1. Load the mask here
     // so that path is correct; the macro-programming below only targets LREG0, so LREG1
     // survives. The 16-bit Dest macro path does not read LREG1.
@@ -763,7 +774,7 @@ inline void init_typecast_uint16_to_fp32() {
 #ifdef DISABLE_SFPLOADMACRO
     TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 #else
-    // The 32-bit Dest (DST_ACCUM_MODE) path of calculate_typecast_uint16_to_fp32 falls
+    // The 32-bit Dest (is_fp32_dest_acc_en) path of calculate_typecast_uint16_to_fp32 falls
     // back to the plain loop, which masks the loaded word with LREG1. Load the mask here
     // so that path is correct; the macro-programming below only targets LREG0, so LREG1
     // survives. The 16-bit Dest macro path does not read LREG1.

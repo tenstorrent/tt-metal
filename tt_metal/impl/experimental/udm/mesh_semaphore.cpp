@@ -7,6 +7,7 @@
 #include <tt-metalium/experimental/udm/mesh_program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::experimental::udm {
@@ -26,10 +27,10 @@ MeshSemaphoreHandle CreateMeshSemaphore(MeshBuilder& builder, MeshProgram& /* pr
 
     // Create a GlobalSemaphore across all devices in the mesh
     auto* mesh_device = builder.mesh_device();
-    auto global_semaphore = tt::tt_metal::CreateGlobalSemaphore(mesh_device, local_cores, initial_value);
+    auto global_semaphore = tt::tt_metal::GlobalSemaphore(*mesh_device, local_cores, initial_value);
 
     // Synchronize mesh device after creating global semaphore
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
 
     // Return handle that keeps the GlobalSemaphore alive
     return MeshSemaphoreHandle(std::move(global_semaphore));

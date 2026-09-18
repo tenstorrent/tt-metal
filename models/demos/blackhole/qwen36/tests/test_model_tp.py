@@ -231,7 +231,9 @@ def test_prefill_warmup_no_recompile(mesh_device, reset_seeds, ensure_gc):
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-@pytest.mark.parametrize("B", [8, 32], ids=["B8", "B32"])
+# B32 dropped (#50969 CI budget): width 32 reaches no branch B8 misses, and the oracle runs B
+# independent B=1 chains. Width 32 stays covered by test_model_tp_prefill_chunked_batched.
+@pytest.mark.parametrize("B", [8], ids=["B8"])
 def test_model_tp_decode_batched(mesh_device, B, reset_seeds, ensure_gc):
     """Batched per-user decode contract (TP): higher-batch serving acceptance test.
 
@@ -562,7 +564,8 @@ def test_model_tp_prefill_paged_slots_long(mesh_device, T, traced, reset_seeds, 
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-@pytest.mark.parametrize("B", [8, 32], ids=["B8", "B32"])
+# B32 dropped (#50969 CI budget): same reason as test_model_tp_decode_batched.
+@pytest.mark.parametrize("B", [8], ids=["B8"])
 def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, request):
     """Traced batched short-prompt prefill (TP): traced-bucket-prefill acceptance test.
 
@@ -702,8 +705,10 @@ def test_model_tp_prefill_traced_bucket(mesh_device, B, reset_seeds, ensure_gc, 
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-@pytest.mark.parametrize("B", [8, 32], ids=["B8", "B32"])
-@pytest.mark.parametrize("seqlen", [2048, 4096, "mixed"], ids=["isl2048", "isl4096", "mixed"])
+# Two cases, not the 2x3 cross product (#50969 CI budget): "mixed" already cycles
+# {128,1024,2048,4096}, so it covers the short-via-masked-bucket + 1-chunk + 2-chunk branches in one
+# batch; isl4096-B32 keeps the uniform-long, max-width capacity case that "mixed" does not reach.
+@pytest.mark.parametrize("seqlen, B", [("mixed", 8), (4096, 32)], ids=["mixed-B8", "isl4096-B32"])
 def test_model_tp_prefill_chunked_batched(mesh_device, B, seqlen, reset_seeds, ensure_gc, request):
     """Batched per-user long prefill (TP): chunked-batched-prefill acceptance test.
 

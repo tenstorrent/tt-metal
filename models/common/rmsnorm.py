@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import copy_to_buffer
 from models.tt_transformers.tt.common import Mode
 
 TILE = 32
@@ -61,6 +62,7 @@ class RMSNorm(LightweightModule):
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
         self.tt_ccl = tt_ccl
+        self.add_unit_offset = add_unit_offset
 
         if state_dict_prefix:
             weight_name = f"{state_dict_prefix}{weight_key}.weight"
@@ -118,6 +120,36 @@ class RMSNorm(LightweightModule):
             fp32_dest_acc_en=fp32_dest_acc_en,
             packer_l1_acc=True,
         )
+
+    def update(self, *, weight: ttnn.Tensor) -> None:
+        """In-place replace the RMSNorm gamma via ``ttnn.copy``.
+
+        HF-format input: ``weight`` is HF ``...norm.weight``, shape
+        ``(1, 1, 1, dim)``, bf16, TILE, DRAM-interleaved, replicated.
+
+        ``copy_to_buffer`` reshapes to the storage shape
+        ``(1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)`` and TILE -> ROW_MAJOR to
+        match ``self.weight``. ``add_unit_offset`` is not supported (see
+        assert): the caller must ship a gamma that already includes the +1.
+
+        When ``self.weight_distributed`` (the column-sharded mirror) exists it's
+        kept in sync on device: project ``self.weight`` into the sharded layout
+        via ``ttnn.mesh_partition`` (the inverse of the constructor's
+        ``ShardTensor2dMesh(dims=(None, 2))``, hence ``dim=2, cluster_axis=1``)
+        and ``ttnn.copy`` into it. Both buffers keep their address, so captured
+        traces and the prefetcher's recorded addresses stay valid.
+        """
+        assert not self.add_unit_offset, "RMSNorm.update does not support add_unit_offset=True"
+        copy_to_buffer(weight, self.weight, self.weight.dtype)
+
+        if getattr(self, "weight_distributed", None) is not None:
+            partitioned = ttnn.mesh_partition(
+                self.weight,
+                memory_config=self.weight_distributed.memory_config(),
+                dim=2,
+                cluster_axis=1,
+            )
+            copy_to_buffer(partitioned, self.weight_distributed, self.weight_distributed.dtype)
 
     def forward(
         self,

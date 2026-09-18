@@ -282,14 +282,22 @@ def test_sampling_log_probs_pcc(mesh_device, reset_seeds, request):
             f"{LOG_PROBS_SUPPORTED_DEVICE_COUNTS} device meshes, got {num_devices}."
         )
     args = _make_sampling_args(mesh_device)
+    tp = mesh_device.shape[1]
+    per_device_vocab = _compute_per_device_vocab(VOCAB_SIZE, tp)
 
-    torch.manual_seed(0)
-    # Range-bounded random logits so softmax doesn't underflow on bf16. The
-    # device-side log_probs path applies a multiply-mask (-inf * 0 → NaN on
-    # bf16), so we use a large negative finite floor for the padding region
-    # past VOCAB_SIZE — same trick as ``test_gpt_oss_logprobs``.
-    logits_cpu = torch.randn(1, 1, BATCH_SIZE, args.padded_vocab_size, dtype=torch.bfloat16) * 2.0
+    # Per-user peak heights (not iid noise). On a 262k-way softmax, bf16
+    # sum-exp collapses nearly-uniform argmax logprobs to a constant (~-log V),
+    # so PCC vs fp32 torch is meaningless (~0.73) even when the kernel is
+    # correct. Varied peaks give real dynamic range and still exercise the
+    # cross-shard gather (winners spread across TP devices).
+    logits_cpu = torch.full((1, 1, BATCH_SIZE, args.padded_vocab_size), 0.01, dtype=torch.bfloat16)
+    for u in range(BATCH_SIZE):
+        shard_idx = u % tp
+        winner = shard_idx * per_device_vocab + (1000 + u)
+        logits_cpu[0, 0, u, winner] = 20.0 - 0.5 * u
     if args.padded_vocab_size > VOCAB_SIZE:
+        # Device log_probs multiply-mask: -inf * 0 → NaN on bf16; use a large
+        # finite floor for padded vocab — same trick as ``test_gpt_oss_logprobs``.
         logits_cpu[:, :, :, VOCAB_SIZE:] = -1e9
 
     sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)

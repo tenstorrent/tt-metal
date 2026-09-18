@@ -1097,29 +1097,20 @@ class WanResample(Module):
                     feat_cache[idx] = cache_x_BTHWC
                     feat_idx[0] += 1
             else:
-                # NOTE: This else section was commented out in order
-                # to match the reference model (i.e. huggingface's WanResample module)'s behavior in
-                # test_vae_wan2_1.py::test_wan_resample when feature_cache is None.
-                # I had claude cross reference the reference model's implementation
-                # and doing nothing is the naive way to replicate the reference model, which also does
-                # nothing when feature_cache is None.
-                #
-                # Given this was put in at some point it's possible the overall algorithm
-                # may be incorrect for other edge cases not tested. It may also
-                # be we deliberately break compatibility against reference model for performance purposes,
-                # so I'm leaving it here.
-                #
-                # TODO: Does the comment below 1) make sense? 2) convey the correct intention?
-                # I don't know.
-                # Full-T mode: frame 0 passes through without time_conv (matches
-                # the cached path's first-iteration behavior), remaining frames
-                # get the strided temporal conv with frame 0 prepended as context.
-                # if T > 2:
-                #     x_first = x_conv_BTHWC[:, :1, :, :, :]
-                #     x_rest_input = ttnn.concat([x_first, x_conv_BTHWC[:, 1:, :, :, :]], dim=1)
-                #     x_rest_output = self.time_conv(x_rest_input, logical_h, logical_w=logical_w)
-                #     x_conv_BTHWC = ttnn.concat([x_first, x_rest_output], dim=1)
-                pass
+                # Full-T mode: the whole clip is encoded in one pass, so there is no feat_cache
+                # to carry temporal context across chunks. Reproduce the cached path's arithmetic
+                # in a single call: frame 0 passes through untouched (the cached path only stores
+                # it and returns x unchanged on the first iteration), and frames 1..T-1 go through
+                # the strided temporal conv with frame 0 supplying the real context frame -- the
+                # same tensor the cached path would have prepended from feat_cache.
+                #   cached : time_conv(concat([cache_last, chunk]))  -> len(chunk) // 2 per chunk
+                #   full-T : time_conv(concat([frame0,     rest ]))  -> (T - 1) // 2 in one go
+                # Without this branch the temporal conv never ran and latent T stayed at pixel T.
+                T_conv = x_conv_BTHWC.shape[1]
+                if T_conv > 2:
+                    x_first_BTHWC = x_conv_BTHWC[:, :1, :, :, :]
+                    x_time_BTHWC = self.time_conv(x_conv_BTHWC, logical_h, logical_w=logical_w)
+                    x_conv_BTHWC = ttnn.concat([x_first_BTHWC, x_time_BTHWC], dim=1)
 
         return x_conv_BTHWC, logical_h, logical_w
 
@@ -1825,11 +1816,28 @@ class WanEncoder(Module):
         height: int = 0,
         width: int = 0,
         encoder_t_chunk_size: int | None = None,
+        latents_mean: Sequence[float] | None = None,
+        latents_std: Sequence[float] | None = None,
     ) -> None:
         super().__init__()
 
         self.z_dim = z_dim
         self.out_channels = z_dim * 2  # Mean and logvar
+
+        if (latents_mean is None) != (latents_std is None):
+            raise ValueError("latents_mean and latents_std must be given together")
+        if latents_mean is not None:
+            if len(latents_mean) != z_dim or len(latents_std) != z_dim:
+                raise ValueError(
+                    f"latents_mean/latents_std must have z_dim={z_dim} entries, "
+                    f"got {len(latents_mean)}/{len(latents_std)}"
+                )
+            self._latents_mean = torch.tensor(latents_mean, dtype=torch.float32)
+            self._latents_inv_std = 1.0 / torch.tensor(latents_std, dtype=torch.float32)
+        else:
+            self._latents_mean = None
+            self._latents_inv_std = None
+
         self.encoder = WanEncoder3D(
             in_channels=in_channels,
             dim=base_dim,
@@ -1859,11 +1867,29 @@ class WanEncoder(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "quant_conv.weight" in state and "quant_conv.bias" in state:
             state_sub = conv3d_to_linear_weight(pop_substate(state, "quant_conv"))
-            state["quant_conv.weight"] = state_sub["weight"]
-            state["quant_conv.bias"] = state_sub["bias"]
+            weight, bias = state_sub["weight"], state_sub["bias"]
+            if self._latents_mean is not None:
+                weight, bias = self._fold_latent_norm(weight, bias)
+            state["quant_conv.weight"] = weight
+            state["quant_conv.bias"] = bias
 
         pop_substate(state, "decoder")
         pop_substate(state, "post_quant_conv")
+
+    def _fold_latent_norm(self, weight: torch.Tensor, bias: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Fold ``(z - latents_mean) / latents_std`` into quant_conv.
+
+        Both are per-output-channel affines on the same axis, so the composition is another
+        affine and the encoder can emit normalized latents directly. Only the first ``z_dim``
+        output rows are touched: the rest carry the logvar, which forward discards.
+
+        ``weight`` is (padded_out, padded_in) here, before Linear transposes it.
+        """
+        scale = torch.ones(weight.shape[0], dtype=weight.dtype)
+        shift = torch.zeros(bias.shape[0], dtype=bias.dtype)
+        scale[: self.z_dim] = self._latents_inv_std.to(weight.dtype)
+        shift[: self.z_dim] = (-self._latents_mean * self._latents_inv_std).to(bias.dtype)
+        return weight * scale[:, None], bias * scale + shift
 
     def clear_cache(self):
         self._conv_idx = [0]
@@ -1878,7 +1904,10 @@ class WanEncoder(Module):
     ) -> tuple[ttnn.Tensor, int, int]:
         """
         encoder_t_chunk_size controls how the T dimension is processed:
-            chunk_size => None  - process full-T frame by frame, no caching (fastest, most memory)
+            chunk_size => None  - single pass over all T frames, no feat_cache (fastest, most
+                                  memory). Temporal downsamples take their context frame
+                                  straight from frame 0 instead of the cache, which is
+                                  numerically equivalent to the chunked path.
             chunk_size => N     - process frame 0 alone, then cache it, then process in chunks consisting
                                   of (N - 1) frames from the input plus 1 from the cache; trailing
                                   (T-1) % N frames are dropped. This behavior is intended to match
@@ -1949,7 +1978,8 @@ class WanEncoder(Module):
         output_BTHWC = ttnn.to_layout(output_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
         # Permute to channel second expected by torch
         output_BCTHW = ttnn.permute(output_BTHWC, (0, 4, 1, 2, 3))
-        # Trim padding on output channels
+        # Trim padding on output channels. Already normalized by latents_mean/std when
+        # those were given to __init__, since quant_conv absorbed them.
         output_BCTHW = output_BCTHW[:, : self.z_dim, :, :, :]  # Get the mean
         return (output_BCTHW, new_logical_h, new_logical_w)
 

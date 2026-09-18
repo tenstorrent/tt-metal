@@ -14,12 +14,12 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/host_tensor.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/experimental/tensor_apis_with_pad_values.hpp>
-#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/float8.hpp>
@@ -181,8 +181,8 @@ TEST(HostTensorToTensorSpec, PerCoreOnlyMismatchFullRewrite) {
     auto dest_spec = TensorSpec(
         shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), dest_memory, Alignment({32, 32})));
 
-    // Spec equality ignores per_core, but exact-spec predicate must not early-out.
-    EXPECT_TRUE(source.tensor_spec() == dest_spec);
+    // Spec equality must include per_core_allocation because it changes allocator semantics.
+    EXPECT_FALSE(source.tensor_spec() == dest_spec);
     EXPECT_FALSE(CMAKE_UNIQUE_NAMESPACE::exact_spec_match(source.tensor_spec(), dest_spec));
 
     auto result = host_tensor_to_tensor_spec_with_pad_value<float>(source, dest_spec, /*pad_value=*/77.f);

@@ -68,7 +68,13 @@ set_source_files_properties(
 target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
 
 target_include_directories(fabric PRIVATE .)
-target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(
+    fabric
+    SYSTEM
+    PRIVATE
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${Metalium_BINARY_DIR}/tools/scaleout # FSD proto header for physical_descriptor_builder.cpp
+)
 
 target_link_libraries(
     fabric

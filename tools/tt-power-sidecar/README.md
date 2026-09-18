@@ -107,7 +107,7 @@ sidecar.
 
 **`--backend auto` is safe on T3000.**  When `tt-kmd` is loaded, `auto` detects
 ≥2 local sysfs devices and selects the sysfs path — no ARC traffic is generated.
-The T3000 fabric and CCL jobs in CI (`t3000-fast-tests-impl.yaml`) use
+The T3000 fabric and CCL jobs in CI (`t3000-sanity-tests-impl.yaml`) use
 `--backend auto` for exactly this reason.
 
 **Workaround for explicit control:** use `--backend sysfs` on any multi-chip

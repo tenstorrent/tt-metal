@@ -60,7 +60,7 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
     auto data_valid_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     for (const auto& coord : tensor_coords.coords()) {

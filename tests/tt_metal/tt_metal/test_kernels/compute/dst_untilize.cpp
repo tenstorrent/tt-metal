@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t full_ct_dim = per_core_block_tile_cnt;
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
-    copy_tile_to_dst_init_short(dfb::in);
+    copy_init(dfb::in);
     pack_untilize_dest_init<block_ct_dim, full_ct_dim>(dfb::out);
 
     for (uint32_t r = 0; r < per_core_block_cnt; ++r) {

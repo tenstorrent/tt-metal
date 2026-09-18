@@ -72,8 +72,8 @@ void kernel_main() {
     CircularBuffer cb_addcmul_b(addcmul_b_cb);
 #endif
 
-    binary_op_init_common(input_cb, intermediate_cb, output_cb);
-    add_tiles_init(input_cb, intermediate_cb, false);
+    compute_kernel_hw_startup(input_cb, intermediate_cb, output_cb);
+    add_init(input_cb, intermediate_cb, false);
 
     for (uint32_t b = 0; b < batch_size; b++) {
         for (uint32_t m_block_iter = 0; m_block_iter < mm_M_unit_blocks_per_core; m_block_iter++) {
@@ -83,6 +83,9 @@ void kernel_main() {
                 const uint32_t effective_chunk_width_in_tiles =
                     get_effective_chunk_width_in_tiles(chunk_idx, chunk_width_in_tiles, mm_N_full_block_wt);
                 const uint32_t effective_subchunk_size = current_mm_block_ht * effective_chunk_width_in_tiles;
+                // Hoist the (run-invariant) divisions out of the tile advance.
+                const auto steps_worker = decompose_tile_advance(
+                    effective_worker_id, effective_subchunk_size, effective_chunk_width_in_tiles);
 
                 // Same slice_idx pattern as the reader, but starting at i=1 (skipping
                 // the read-only i=0 pass that the compute kernel does not participate in).
@@ -106,8 +109,7 @@ void kernel_main() {
                             tile_row_in_mm_M_unit_block,
                             chunk_col_in_tiles,
                             mm_core_idx,
-                            effective_worker_id,
-                            effective_subchunk_size,
+                            steps_worker,
                             effective_chunk_width_in_tiles,
                             current_mm_block_ht);
                         uint32_t tiles_to_read = how_many_tiles_to_read_formula(
@@ -134,7 +136,7 @@ void kernel_main() {
                                 cb_in.wait_front(tile_granularity);
                                 cb_intermediate.wait_front(tile_granularity);
 
-                                add_tiles_init(input_cb, intermediate_cb, false);
+                                add_init(input_cb, intermediate_cb, false);
                                 reconfig_data_format(input_cb, intermediate_cb);
 
                                 tile_regs_acquire();
@@ -164,9 +166,9 @@ void kernel_main() {
                                 cb_addcmul_b.wait_front(tile_granularity);
 
 #ifdef ADDCMUL_B_BROADCAST
-                                mul_bcast_rows_init_short(addcmul_temp_cb, addcmul_b_cb);
+                                mul_bcast_rows_init(addcmul_temp_cb, addcmul_b_cb);
 #else
-                                mul_tiles_init(addcmul_temp_cb, addcmul_b_cb, 0, __builtin_LINE());
+                                mul_init(addcmul_temp_cb, addcmul_b_cb, 0, __builtin_LINE());
 #endif
                                 reconfig_data_format(addcmul_temp_cb, addcmul_b_cb);
                                 pack_reconfig_data_format(addcmul_temp_cb);
@@ -197,7 +199,7 @@ void kernel_main() {
                                 cb_addcmul_temp.wait_front(tile_granularity);
                                 cb_addcmul_a.wait_front(tile_granularity);
 
-                                add_tiles_init(addcmul_temp_cb, addcmul_a_cb, false);
+                                add_init(addcmul_temp_cb, addcmul_a_cb, false);
                                 reconfig_data_format(addcmul_temp_cb, addcmul_a_cb);
 
                                 tile_regs_acquire();

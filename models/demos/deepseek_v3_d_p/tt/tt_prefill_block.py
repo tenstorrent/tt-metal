@@ -12,10 +12,16 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
+    DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+    ROUTED_EXPERT_ACTIVATION_BY_NAME,
+)
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
@@ -67,8 +73,26 @@ class TtPrefillBlock(LightweightModule):
     """
 
     @staticmethod
-    def check_cache_complete(cache_path: Path, layer_idx: int, is_dense: bool, experts_per_chip: int = 8) -> bool:
-        """Check if block cache is complete (norms + MLA + FFN/MoE)."""
+    def check_cache_complete(
+        cache_path: Path,
+        layer_idx: int,
+        is_dense: bool,
+        experts_per_chip: int = 8,
+        *,
+        model_cfg: type | None = None,
+        routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+    ) -> bool:
+        """Check if block cache is complete (norms + MLA + FFN/MoE).
+
+        ``model_cfg`` is optional but MUST be passed for a LatentMoE model (Kimi-K3): without it this
+        cannot know to look for the latent-projection cache files, and would report a cache that is
+        missing them as complete. Left optional so existing callers are unaffected.
+
+        routed_expert_weights_dtype: dtype the routed experts were/will be BUILT at.
+        as_tensor stamps it into the tensorbin filename, so the completeness check must pin the
+        same value it will later request -- otherwise a stale cache at another dtype reports
+        complete and the empty placeholder is loaded as the weights.
+        """
         prefix = f"layer_{layer_idx}"
 
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm"):
@@ -82,7 +106,15 @@ class TtPrefillBlock(LightweightModule):
             if not TtFfn.check_cache_complete(cache_path, f"{prefix}.ffn"):
                 return False
         else:
-            if not TtMoe.check_cache_complete(cache_path, layer_idx, experts_per_chip):
+            if not TtMoe.check_cache_complete(
+                cache_path,
+                layer_idx,
+                experts_per_chip,
+                use_latent_moe=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None)
+                not in (None, getattr(model_cfg, "EMB_SIZE", None)),
+                latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
+                routed_expert_weights_dtype=routed_expert_weights_dtype,
+            ):
                 return False
 
         return True
@@ -103,7 +135,7 @@ class TtPrefillBlock(LightweightModule):
         tp_axis: int = 1,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         kv_only: bool = False,
@@ -117,7 +149,7 @@ class TtPrefillBlock(LightweightModule):
             cache_path: Cache directory
             mesh_device: Mesh device reference
             config: Model config
-            model_cfg: Variant static-constants class (DeepSeekV3Config | KimiK26Config)
+            model_cfg: Variant static-constants class (DeepSeekV3Config | KimiK27Config)
             ... other args for sub-components
         """
         is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
@@ -188,6 +220,12 @@ class TtPrefillBlock(LightweightModule):
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
                 cache_path=cache_path,
                 layer_idx=layer_idx,
+                # Must match _build_moe's reads: omitting them caches the shared expert at the wrong
+                # intermediate, which regenerates as a plausible-but-wrong cache rather than an error.
+                shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
+                routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
+                latent_weights=state_dict.get("latent_weights"),
+                latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
             )
         else:
             # Use static method (no device copy!)
@@ -216,7 +254,7 @@ class TtPrefillBlock(LightweightModule):
         is_balanced: bool = False,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat4_b,
+        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
@@ -228,6 +266,8 @@ class TtPrefillBlock(LightweightModule):
         routing_use_l1_small_for_semaphores: bool = False,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
+        first_layer_idx: Optional[int] = None,
+        llama4_scale_cache: Optional[dict] = None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -263,6 +303,14 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # --- Attention norm ---
+        use_glm52_l1_attn_norm = (
+            is_blackhole()
+            and is_chunked
+            and seq_len // mesh_device.shape[sp_axis] == 640
+            and config.num_attention_heads == 64
+            and config.q_lora_rank == 2048
+            and getattr(config, "indexer_types", None) is not None
+        )
         self.attn_norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
             emb_dim=emb_dim,
@@ -273,6 +321,7 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm52_l1_attn_norm else None,
         )
 
         # --- MLA ---
@@ -293,10 +342,13 @@ class TtPrefillBlock(LightweightModule):
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
             is_chunked=is_chunked,
+            active_seq_len=seq_len,
             slot_num=slot_num,
             layer_num=layer_num,
             kv_only=kv_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
+            first_layer_idx=first_layer_idx,
+            llama4_scale_cache=llama4_scale_cache,
         )
 
         if kv_only:
@@ -321,6 +373,7 @@ class TtPrefillBlock(LightweightModule):
             self.ffn = self._build_moe(
                 mesh_device=mesh_device,
                 model_cfg=model_cfg,
+                config=config,
                 state_dict=state_dict,
                 seq_len=seq_len,
                 sp_axis=sp_axis,
@@ -355,6 +408,12 @@ class TtPrefillBlock(LightweightModule):
                 topology=tp_topology,  # dense FFN all-gather/reduce-scatter run on the TP axis
                 weight_cache_path=weight_cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.ffn",
+                # Same rule as the MoE shared expert in _build_moe: only Kimi-K3 names a
+                # non-SiLU activation here (#53625).
+                activation=getattr(model_cfg, "DENSE_FFN_ACTIVATION", ACTIVATION_SILU),
+                situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
+                situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
+                clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
                 **_dense_ffn_kwargs,
             )
 
@@ -362,6 +421,7 @@ class TtPrefillBlock(LightweightModule):
     def _build_moe(
         mesh_device,
         model_cfg,
+        config,
         state_dict,
         seq_len,
         sp_axis,
@@ -411,14 +471,37 @@ class TtPrefillBlock(LightweightModule):
             seq_len_per_chip=seq_len_per_chip,
             emb_dim=emb_dim,
             hidden_dim=model_cfg.MOE_INTERMEDIATE_SIZE,
+            # getattr because every other model config lacks these; None makes TtMoe fall back.
+            routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
+            # Absent on the models whose routed-expert shape never favours the composite, so
+            # they keep the single-op path rather than paying a second dispatch for nothing.
+            routed_expert_hybrid_token_threshold=getattr(model_cfg, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None),
+            shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
+            latent_weights=state_dict.get("latent_weights"),  # None if cache exists
+            latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
+            # Same source as the block's attn_norm and ffn_norm, so the three cannot disagree.
+            rms_norm_eps=config.rms_norm_eps,
+            max_gate_seq_len_per_chip=getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists
             shared_expert_weights=state_dict.get("shared_expert_weights"),  # None if cache exists
             routed_expert_activations_dtype=routed_expert_activations_dtype,
             routed_expert_weights_dtype=routed_expert_weights_dtype,
+            # Kimi-K3 is the only config that names one; everything else defaults to SiLU.
+            routed_expert_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[
+                getattr(model_cfg, "ROUTED_EXPERT_ACTIVATION", "silu")
+            ],
             shared_expert_activations_dtype=shared_expert_activations_dtype,
             shared_expert_weights_dtype=shared_expert_weights_dtype,
+            # Kimi-K3 names "situ" here too (#53625); every other config defaults to SiLU. The
+            # betas are only read on the SiTU path, so getattr(None) is fine for everyone else.
+            shared_expert_activation=getattr(model_cfg, "SHARED_EXPERT_ACTIVATION", ACTIVATION_SILU),
+            shared_expert_situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
+            shared_expert_situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
+            shared_expert_clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
+            # Only DeepSeek-V4 names one; None keeps the gate config's sigmoid default.
+            gate_score_func=getattr(model_cfg, "SCORE_FUNC", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
             gate_fallback_mode=gate_fallback_mode,
             n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
@@ -436,18 +519,8 @@ class TtPrefillBlock(LightweightModule):
         its MLA (per-layer migration-ack segmentation; only acts when the controller carries an ack
         callback). No-op for dense / kv-only FFNs, whose FFN has no sub-device overlap to trace around.
 
-        DENSE-MLA ONLY — see TtPrefillTransformer.set_trace_controller for why. Re-asserted here so a
-        caller that drives a single block (the block-level tests) is caught too, not just whole-model
-        callers."""
-        mla = getattr(self, "mla", None)
-        if controller is not None and mla is not None and getattr(mla, "_has_indexer", False):
-            raise AssertionError(
-                f"trace capture is not supported for sparse/DSA (indexer) attention (layer "
-                f"{getattr(self.mla, 'layer_idx', '?')} resolved has_indexer=True). Supported today: "
-                "the dense-MLA models (deepseek_v3, kimi_k2_6, kimi_k2_7). GLM (glm_5_1 / glm_5_2) and "
-                "other sparse variants need their indexer ops ported to the per-element-tensor metadata "
-                "form first — run them untraced until then."
-            )
+        Both dense-MLA and sparse/DSA (indexer) blocks are traceable — see
+        TtPrefillTransformer.set_trace_controller."""
         # Stored so the block's migration-ack site (below, in forward) can route through the controller
         # (trace path) instead of calling on_layer_complete directly — see the ack comment in forward.
         self._trace_controller = controller
@@ -459,10 +532,13 @@ class TtPrefillBlock(LightweightModule):
             mla.set_trace_controller(controller)
 
     def release_sub_device_managers(self):
-        """Remove this block's MoE overlap sub-device manager before mesh close (no-op otherwise)."""
+        """Remove this block's registered overlap managers before mesh close (no-op otherwise)."""
         ffn = getattr(self, "ffn", None)
         if ffn is not None and hasattr(ffn, "release_sub_device_manager"):
             ffn.release_sub_device_manager()
+        mla = getattr(self, "mla", None)
+        if mla is not None and hasattr(mla, "release_sparse_mla_overlap_manager"):
+            mla.release_sparse_mla_overlap_manager()
 
     def forward(
         self,
@@ -472,6 +548,8 @@ class TtPrefillBlock(LightweightModule):
         cache_layer_idx: int = 0,
         return_kv_cache: bool = False,
         return_intermediates: bool = False,
+        d2h_service=None,
+        metadata_msg: Optional[ttnn.Tensor] = None,
         on_layer_complete: Optional[Callable[[int], None]] = None,
         on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_start: Optional[int] = None,
@@ -493,8 +571,18 @@ class TtPrefillBlock(LightweightModule):
             return_intermediates: if True, forward to TtMoe so it runs its
                 intermediates-gated checks (per-chip dispatch buffer overflow,
                 region-offset bounds). Has no effect on dense layers.
-            on_layer_complete: optional per-layer migration ack. In chunked prefill, after MLA writes
-                the chunk this block zeros the pad window past actual_end, flushes, then fires this.
+            d2h_service: optional service used to send a layer-ack completion signal back to host once
+                this layer's KV cache has been populated on device. In chunked prefill, after MLA writes
+                the chunk this block zeros the pad window past actual_end, then enqueues the ack via the
+                outbound_socket_service_sync device op on the same CQ — no host sync. This is the
+                single-host (LayerAckService) ack path; mutually exclusive with on_layer_complete.
+            metadata_msg: the chunk's PrefillMetadata device tensor sent as the ack record; required when
+                d2h_service is set. Distinct from `metadata`: metadata_msg is the socket record handed to
+                the host, `metadata` is the per-element scalar triple read by the on-device ops.
+            on_layer_complete: optional per-layer migration ack fired on the HOST. In chunked prefill,
+                after MLA writes the chunk this block zeros the pad window past actual_end, flushes, then
+                fires this. Used by pipelined prefill (the layer-completion router), which the device-side
+                d2h_service path does not cover.
             on_layer_hidden: optional tap fired at the END of the block with (GLOBAL layer index, output
                 residual x) — for consumers that need the post-FFN hidden (e.g. the DFlash drafter
                 matching target_layer_ids). NOT fired for kv_only blocks (no output). The callback must
@@ -534,6 +622,7 @@ class TtPrefillBlock(LightweightModule):
             kvpe_cache,
             cache_layer_idx=cache_layer_idx,
             actual_start=actual_start,
+            actual_end=actual_end,
             cache_user_id=cache_user_id,
             return_kv_intermediates=return_kv_intermediates,
             indexer_indices=indexer_indices,
@@ -556,13 +645,20 @@ class TtPrefillBlock(LightweightModule):
 
         # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
         # 32-row tiles, leaving stale data between the last real token (actual_end) and the next
-        # 128-boundary; zero that pad window so the decode side reads clean zeros. The synchronize
-        # flushes the (async) zero to device before on_layer_complete hands this layer's KV to the
-        # migration worker, which reads the cache over NoC out-of-band from the ttnn command queue —
-        # without the flush it could copy pre-zero data. layer_idx is GLOBAL (the scheduler orders acks
-        # across pipeline ranks); cache_layer_idx is the LOCAL per-rank cache slot.
-        if on_layer_complete is not None:
+        # 128-boundary; zero that pad window so the decode side reads clean zeros.
+        #
+        # Two ack transports share that zero, and exactly one is wired per run:
+        #   d2h_service (single host)   — the ack is a DEVICE op enqueued on the same CQ right after the
+        #       zero, so the record only reaches the host after the zero has executed; the ack (driven by
+        #       record arrival) implies zero-complete with NO host sync.
+        #   on_layer_complete (pipeline) — a HOST callback, so the zero must be flushed first: the
+        #       migration worker reads the cache over NoC out-of-band from the ttnn command queue and
+        #       without the flush could copy pre-zero data. layer_idx is GLOBAL (the scheduler orders acks
+        #       across pipeline ranks).
+        # cache_layer_idx is the LOCAL per-rank cache slot in both.
+        if d2h_service is not None or on_layer_complete is not None:
             assert actual_end is not None or metadata is not None, "actual_end or metadata required for zero_pad"
+            assert d2h_service is None or metadata_msg is not None, "metadata_msg required when d2h_service is set"
             # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
             # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
             # sparse.
@@ -590,18 +686,28 @@ class TtPrefillBlock(LightweightModule):
                         seq_len_local * self.mla.sp_factor,
                         self.mla.sp_axis,
                     )
-            # Trace path: route the ack through the controller. At capture it splits the trace here (a host
-            # shm bump cannot live inside a trace); at replay the controller fires the ack between the two
-            # segments, after the first segment's writes flush (execute_trace blocking). Non-trace:
-            # synchronize then call directly. The controller takes precedence iff it carries an ack callback
-            # (runner trace path); the test path sets a controller WITHOUT an ack callback, so has_layer_ack()
-            # is False (and on_layer_complete is None there, so neither fires).
-            tc = getattr(self, "_trace_controller", None)
-            if tc is not None and tc.has_layer_ack():
-                tc.layer_ack(self.mla.layer_idx)
+            if d2h_service is not None:
+                # Device-op ack, enqueued on the same CQ right after the zero: the record cannot reach the
+                # host before the zero has executed, so the ack implies zero-complete with no host sync —
+                # unlike the host-callback path below, which needs an explicit flush.
+                # Capture-safe only because metadata_msg is at a fixed address: the op registers it as a
+                # buffer binding, which trace replay does not re-patch. A traced caller must therefore
+                # pass a persistent record (TtPrefillRuntime._trace_metadata_msg), never the per-chunk
+                # socket tensor, whose address moves every chunk.
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
             else:
-                ttnn.synchronize_device(self.mesh_device)
-                on_layer_complete(self.mla.layer_idx)
+                # Trace path: route the ack through the controller. At capture it splits the trace here (a host
+                # shm bump cannot live inside a trace); at replay the controller fires the ack between the two
+                # segments, after the first segment's writes flush (execute_trace blocking). Non-trace:
+                # synchronize then call directly. The controller takes precedence iff it carries an ack callback
+                # (runner trace path); the test path sets a controller WITHOUT an ack callback, so has_layer_ack()
+                # is False (and on_layer_complete is None there, so neither fires).
+                tc = getattr(self, "_trace_controller", None)
+                if tc is not None and tc.has_layer_ack():
+                    tc.layer_ack(self.mla.layer_idx)
+                else:
+                    ttnn.synchronize_device(self.mesh_device)
+                    on_layer_complete(self.mla.layer_idx)
 
         if self.kv_only:
             # KV cache filled (by MLA), migration callback fired. The block

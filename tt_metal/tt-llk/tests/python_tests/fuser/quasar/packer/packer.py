@@ -5,17 +5,18 @@
 from typing import List
 
 import torch
+from fuser.base_packer import Packer as BasePacker
 from fuser.block_data import BlockData
-from fuser.fused_loop import FusedLoop
-from fuser.fused_operation import FusedOperation
-from fuser.fused_packer import Packer as BasePacker
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
+from fuser.operand import BfdResource, bfd_current
 from fuser.pack_node import PackNode
+from fuser.tile_loop import TileLoop
 from helpers.llk_params import L1Accumulation, PackerReluType
 
 
 class Packer(BasePacker):
-    loop: FusedLoop = FusedLoop()
+    loop: TileLoop = TileLoop()
 
     def get_headers(self) -> List[str]:
         return [
@@ -27,32 +28,34 @@ class Packer(BasePacker):
         self,
         tensor: torch.Tensor,
         pack_node: PackNode,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
     ) -> torch.Tensor:
         if pack_node.pack_relu != PackerReluType.NoRelu:
-            tensor = self._relu_golden(tensor, pack_node, config)
+            tensor = self.relu_golden(tensor, config, operation, pack_node)
 
         if pack_node.pack_l1_accumulation == L1Accumulation.Yes:
-            tensor = self._l1_acc_golden(tensor, pack_node, operation, config)
+            tensor = self.l1_acc_golden(tensor, config, operation, pack_node)
 
         return tensor
 
     def init(
         self,
         pack_node: PackNode,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        buf_desc_id = pack_node.output.buf_desc_id
         tensor_shape = pack_node.output.tile_shape.cpp_value
-        return f"_llk_pack_init_({buf_desc_id}, {tensor_shape}, 1);\n"
+        return (
+            pack_node.output.bfd_alloc_and_program(BfdResource.PACK0)
+            + f"_llk_pack_init_({bfd_current(BfdResource.PACK0)}, {tensor_shape}, 1);\n"
+        )
 
     def pack(
         self,
         pack_node: PackNode,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         block: BlockData,
     ) -> str:

@@ -47,8 +47,9 @@ inline void deepseek_moe_gate_eltwise_binary_reuse_dest_as_src() {
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA) {
         TTI_STALLWAIT(
             p_stall::STALL_MATH,
-            p_stall::WAIT_SFPU | p_stall::SRCA_VLD);  // MOVD2A for a whole face assumes unpacker will set a dummy
-                                                      // data_valid, so we want to wait on that
+            p_stall::WAIT_SFPU | p_stall::MATH |
+                p_stall::SRCA_VLD);  // MOVD2A for a whole face assumes unpacker will set a dummy
+                                     // data_valid, so we want to wait on that
         TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 0, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, 0);
         TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 4, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, 4);
         TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 8, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, 8);
@@ -56,8 +57,9 @@ inline void deepseek_moe_gate_eltwise_binary_reuse_dest_as_src() {
     } else if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB) {
         TTI_STALLWAIT(
             p_stall::STALL_MATH,
-            p_stall::WAIT_SFPU | p_stall::SRCB_VLD);  // MOVD2B for a whole face assumes unpacker will set a dummy
-                                                      // data_valid, so we want to wait on that
+            p_stall::WAIT_SFPU | p_stall::MATH |
+                p_stall::SRCB_VLD);  // MOVD2B for a whole face assumes unpacker will set a dummy
+                                     // data_valid, so we want to wait on that
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 0);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 4);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_1, p_movd2b::MOV_4_ROWS, 8);

@@ -1,0 +1,52 @@
+# --- Meshes ---------------------------------------------------------------
+# CPU-only test copy: single-galaxy 4-stage pipeline ring of 2x2 stages.
+# - Each mesh id is one 2x2 RING+LINE stage (4 ASICs) on a single host.
+# - Four stages occupy half of one 32-ASIC galaxy; inter-stage links form a
+#   closed ring (mesh 3 -> mesh 0 loops back).
+# - The declared RING on the extent-2 axis exercises the MGD-declared-torus
+#   path of issue #54650: a descriptor may keep RING on a 2-device dimension
+#   (its boundary ports stay available for inter-mesh links); only a
+#   fabric-config-driven torus axis has its edge ports reserved.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 2, 2 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels {
+    count: 2
+    policy: RELAXED
+  }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    channels { count: 8 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    channels { count: 8 policy: RELAXED }
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

@@ -88,20 +88,25 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_fp32_accurate_(sfpi::vFloat x) {
     return sfpi::copysgn(y, x);
 }
 
+// Sollya coefficients. tanh_init has programmable CRegs for the top three only, so these three
+// cost an SFPLOADI pair per use unless the caller keeps them in an LReg.
+// val * (0.999004364013671875 + val * (3.0897438526153564453125e-2 + val * (-0.4890659749507904052734375 + val *
+// (0.281917631626129150390625 + val * (-6.6649019718170166015625e-2 + val *
+// (5.876733921468257904052734375e-3))))));
+constexpr float TANH_POLY_C1 = 0.999004364013671875f;
+constexpr float TANH_POLY_C2 = 3.0897438526153564453125e-2f;
+constexpr float TANH_POLY_C3 = -0.4890659749507904052734375f;
+
 sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // For negative numbers, we compute tanh(-x) = -tanh(x)
     sfpi::vFloat val = sfpi::abs(x);  // set positive
 
-    // Polynomial coefficients found using Sollya
-    // val * (0.999004364013671875 + val * (3.0897438526153564453125e-2 + val * (-0.4890659749507904052734375 + val *
-    // (0.281917631626129150390625 + val * (-6.6649019718170166015625e-2 + val *
-    // (5.876733921468257904052734375e-3))))));
     sfpi::vFloat result = PolynomialEvaluator::eval(
         val,
         0.0f,
-        0.999004364013671875,
-        3.0897438526153564453125e-2,
-        -0.4890659749507904052734375,
+        TANH_POLY_C1,
+        TANH_POLY_C2,
+        TANH_POLY_C3,
         sfpi::vConstFloatPrgm2,
         sfpi::vConstFloatPrgm1,
         sfpi::vConstFloatPrgm0);
@@ -115,43 +120,87 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     return result;
 }
 
+// Two datums through the polynomial in lockstep, so each fills the other's SFPMAD stall slots.
+// Only WH stalls; BH comes out even either way, so both arches run this shape. Only c1 can be
+// hoisted on top of it: six vectors are already live for the data, and an eighth spills.
+sfpi_inline void _sfpu_tanh_polynomial_x2_(
+    sfpi::vFloat& y0, sfpi::vFloat& y1, sfpi::vFloat x0, sfpi::vFloat x1, sfpi::vFloat c1) {
+    sfpi::vFloat a0 = sfpi::abs(x0);
+    sfpi::vFloat a1 = sfpi::abs(x1);
+
+    sfpi::vFloat r0 = sfpi::vConstFloatPrgm0;
+    sfpi::vFloat r1 = sfpi::vConstFloatPrgm0;
+    r0 = r0 * a0 + sfpi::vConstFloatPrgm1;
+    r1 = r1 * a1 + sfpi::vConstFloatPrgm1;
+    r0 = r0 * a0 + sfpi::vConstFloatPrgm2;
+    r1 = r1 * a1 + sfpi::vConstFloatPrgm2;
+    // One local each, else sfpi emits the SFPLOADI pair per MAD. Both die after their second use.
+    sfpi::vFloat c3 = TANH_POLY_C3;
+    r0 = r0 * a0 + c3;
+    r1 = r1 * a1 + c3;
+    sfpi::vFloat c2 = TANH_POLY_C2;
+    r0 = r0 * a0 + c2;
+    r1 = r1 * a1 + c2;
+    r0 = r0 * a0 + c1;
+    r1 = r1 * a1 + c1;
+    r0 = r0 * a0;
+    r1 = r1 * a1;
+
+    y0 = sfpi::copysgn(sfpi::min(r0, 1.0f), x0);
+    y1 = sfpi::copysgn(sfpi::min(r1, 1.0f), x1);
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_tanh() {
     if constexpr (APPROXIMATION_MODE) {
         // SFPU microcode
-        sfpi::vUInt l0 = l_reg[sfpi::LRegs::LReg0];
-        sfpi::vUInt l1 = l_reg[sfpi::LRegs::LReg1];
-        sfpi::vUInt l2 = l_reg[sfpi::LRegs::LReg2];
+        sfpi::vLut8si si0 = l_reg[sfpi::LRegs::LReg0];
+        sfpi::vLut8si si1 = l_reg[sfpi::LRegs::LReg1];
+        sfpi::vLut8si si2 = l_reg[sfpi::LRegs::LReg2];
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat val = sfpi::dst_reg[0];
-            val = sfpi::lut(val, l0, l1, l2);
+            val = sfpi::lut(val, si0, si1, si2);
             sfpi::dst_reg[0] = val;
 
             sfpi::dst_reg++;
         }
 
-        l_reg[sfpi::LRegs::LReg0] = l0;
-        l_reg[sfpi::LRegs::LReg1] = l1;
-        l_reg[sfpi::LRegs::LReg2] = l2;
-    } else {  // APPROXIMATION_MODE is false
-        if constexpr (is_fp32_dest_acc_en) {
-            for (int d = 0; d < ITERATIONS; d++) {
-                sfpi::vFloat val = sfpi::dst_reg[0];
-                sfpi::vFloat result = _sfpu_tanh_fp32_accurate_(val);
-                sfpi::dst_reg[0] = result;
-                sfpi::dst_reg++;
-            }
-        } else {
-#pragma GCC unroll 8
-            for (int d = 0; d < ITERATIONS; d++) {
-                sfpi::vFloat val = sfpi::dst_reg[0];
-                sfpi::vFloat result = _sfpu_tanh_polynomial_(val);
-                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-                sfpi::dst_reg[0] = result;
-                sfpi::dst_reg++;
-            }
+        l_reg[sfpi::LRegs::LReg0] = si0;
+        l_reg[sfpi::LRegs::LReg1] = si1;
+        l_reg[sfpi::LRegs::LReg2] = si2;
+    } else if constexpr (is_fp32_dest_acc_en) {  // APPROXIMATION_MODE is false
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat val = sfpi::dst_reg[0];
+            sfpi::vFloat result = _sfpu_tanh_fp32_accurate_(val);
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
+        }
+    } else {
+        sfpi::vFloat c1 = TANH_POLY_C1;  // inline it and every datum pays an SFPLOADI pair
+
+        // Walk dst_reg rather than index by d: a uniform body is what the replay buffer records
+        // once, and a runtime index makes sfpi build each SFPLOAD/SFPSTORE in scalar registers.
+#pragma GCC unroll 4
+        for (int d = 0; d < ITERATIONS / 2; d++) {
+            sfpi::vFloat r0, r1;
+            _sfpu_tanh_polynomial_x2_(r0, r1, sfpi::dst_reg[0], sfpi::dst_reg[1], c1);
+            // Round into a vFloat; storing the vFloat16b expression pins SFPSTORE to FP16B.
+            r0 = sfpi::convert<sfpi::vFloat16b>(r0, sfpi::RoundMode::Nearest);
+            r1 = sfpi::convert<sfpi::vFloat16b>(r1, sfpi::RoundMode::Nearest);
+
+            sfpi::dst_reg[0] = r0;
+            sfpi::dst_reg[1] = r1;
+            sfpi::dst_reg += 2;
+        }
+
+        if constexpr (ITERATIONS % 2 != 0) {
+            sfpi::vFloat result = _sfpu_tanh_polynomial_(sfpi::dst_reg[0]);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
         }
     }
 }
@@ -160,9 +209,9 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (APPROXIMATION_MODE) {
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vUInt(0x1DFF);  // 0.90625*x
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vUInt(0x481A);  // 0.09375*x + 0.8125
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vUInt(0xFF00);  // 1
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.90625f, 0.0f);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.09375f, 0.8125f);
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);
     } else {
         if constexpr (is_fp32_dest_acc_en) {
             sfpi::vConstFloatPrgm0 = 2.0f * 1.442695f;      // 2 * log2(e) == 2 / ln(2)

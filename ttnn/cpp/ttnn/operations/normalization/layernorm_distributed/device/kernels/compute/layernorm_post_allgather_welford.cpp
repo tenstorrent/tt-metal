@@ -28,7 +28,7 @@ constexpr uint32_t stats_tile_stride = 2;
 
 struct x_minus_mean_node {
     static constexpr LLK_Node node{
-        .llk_init = sub_bcast_cols_init_short,
+        .llk_init = sub_bcast_cols_init,
         .llk = FN_compute(sub_tiles_bcast_cols),
         .DFB_A = dfb::inp,
         .DFB_B = dfb::stats_reduced,
@@ -48,7 +48,7 @@ constexpr auto normed_output_dfb = dfb::out;
 #endif
 struct normed_output_node {
     static constexpr LLK_Node node{
-        .llk_init = mul_bcast_cols_init_short,
+        .llk_init = mul_bcast_cols_init,
         .llk = FN_compute(mul_tiles_bcast_cols),
         .DFB_A = dfb_norm_x_input,
         .DFB_B = dfb::recip_sqrt_var,
@@ -74,7 +74,7 @@ constexpr auto dfb_times_gamma_out = dfb::out;
 #ifdef FUSE_GAMMA
 struct gamma_optional_node {
     static constexpr LLK_Node node{
-        .llk_init = mul_bcast_rows_init_short,
+        .llk_init = mul_bcast_rows_init,
         .llk = FN_compute(mul_tiles_bcast_rows),
         .DFB_A = dfb::x_normed,
         .DFB_B = dfb::gamma,
@@ -94,7 +94,7 @@ constexpr auto dfb_in_beta = normed_output_dfb;
 #ifdef FUSE_BETA
 struct beta_optional_node {
     static constexpr LLK_Node node{
-        .llk_init = add_bcast_rows_init_short,
+        .llk_init = add_bcast_rows_init,
         .llk = FN_compute(add_tiles_bcast_rows),
         .DFB_A = dfb_in_beta,
         .DFB_B = dfb::beta,
@@ -116,7 +116,7 @@ void kernel_main() {
     constexpr auto dfb_length = get_arg(args::dfb_length);
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(dfb::inp, dfb::inp, dfb::stats_reduced);
+    compute_kernel_hw_startup(dfb::inp, dfb::inp, dfb::stats_reduced);
 
     DataflowBuffer dfb_eps(dfb::eps);
     DataflowBuffer dfb_stats(dfb::stats);
@@ -146,7 +146,7 @@ void kernel_main() {
         reconfig_data_format(dfb::stats_reduced, dfb::eps);
         pack_reconfig_data_format(dfb::recip_sqrt_var);
 
-        add_tiles_init(dfb::stats_reduced, dfb::eps);
+        add_init(dfb::stats_reduced, dfb::eps);
         tile_regs_acquire();
         tile_regs_wait();
         add_tiles(dfb::stats_reduced, dfb::eps, 1, 0, 0);

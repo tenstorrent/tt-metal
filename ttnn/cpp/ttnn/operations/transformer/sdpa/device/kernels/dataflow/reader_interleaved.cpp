@@ -11,6 +11,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "dataflow_common.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp"
 
 // Fetch a KV chunk into L1 for forwarding. No CB lifecycle — caller manages
 // cb_reserve_back / cb_push_back. Single read barrier at end for lower latency.
@@ -95,14 +96,19 @@ void kernel_main() {
     constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(31);
     constexpr bool mcast_enabled = get_compile_time_arg_val(32) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(33) == 1;
+    // Windowed K-range narrowing: the reader computes each Q chunk's [k_lo, k_hi) from
+    // cu_window_seqlens, streams only that range, and feeds it to compute over a ctrl CB.
+    constexpr bool use_windowed_narrowing = get_compile_time_arg_val(34) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<34>();
+    constexpr auto q_args = TensorAccessorArgs<35>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
     constexpr auto page_table_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
     constexpr auto chunk_start_idx_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
+    constexpr auto cu_window_args = TensorAccessorArgs<chunk_start_idx_args.next_compile_time_args_offset()>();
+    constexpr auto q_offset_args = TensorAccessorArgs<cu_window_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -177,6 +183,20 @@ void kernel_main() {
     global_q_start = get_arg_val<uint32_t>(argidx++);
     global_q_count = get_arg_val<uint32_t>(argidx++);
 
+    // Windowed K-range narrowing tail: the same four values the writer receives, so both kernels
+    // resolve each Q chunk's global row range and windows identically (the writer self-computes the
+    // range this reader feeds to compute — they must agree or the CB counts desync).
+    uint32_t cu_window_seqlens_addr = 0;
+    uint32_t cu_window_seqlens_eles = 0;
+    uint32_t windowed_q_tok_offset = 0;
+    uint32_t windowed_q_tok_offset_addr = 0;
+    if constexpr (use_windowed_narrowing) {
+        cu_window_seqlens_addr = get_arg_val<uint32_t>(argidx++);
+        cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
+        windowed_q_tok_offset = get_arg_val<uint32_t>(argidx++);
+        windowed_q_tok_offset_addr = get_arg_val<uint32_t>(argidx++);
+    }
+
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
     // valid_Skt_bound = min(offset_tiles + valid_Sqt, valid_Skt); cap at valid_Skt for callers that pass
     // different valid_Sqt (e.g. ring_distributed uses full Q length in tiles).
@@ -185,7 +205,7 @@ void kernel_main() {
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = chunk_start_idx_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_arg_offset = q_offset_args.next_compile_time_args_offset();
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -194,6 +214,10 @@ void kernel_main() {
     constexpr uint32_t cb_id_page_table = get_compile_time_arg_val(cb_arg_offset + 5);
     constexpr uint32_t cb_id_chunk_start_idx_compute = get_compile_time_arg_val(cb_arg_offset + 6);
     constexpr uint32_t cb_id_chunk_start_idx_writer = get_compile_time_arg_val(cb_arg_offset + 7);
+    // Windowed narrowing CBs: the reader's own cu_window copy, and the {k_lo, k_hi} ctrl CB consumed
+    // by compute. Valid fallback ids (q_in) when not windowed; only touched behind the constexpr flag.
+    constexpr uint32_t cb_id_windowed_cu_reader = get_compile_time_arg_val(cb_arg_offset + 8);
+    constexpr uint32_t cb_id_windowed_k_range = get_compile_time_arg_val(cb_arg_offset + 9);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -263,6 +287,28 @@ void kernel_main() {
             }
         }
     }
+
+    // Windowed narrowing: load cu_window_seqlens once (the reader's own copy — the writer has its own
+    // CB with its own producer contract), resolving the per-device Q-offset override first so the
+    // 4-byte read can stage through the same landing spot before the full array overwrites it.
+    volatile tt_l1_ptr uint32_t* windowed_cu_ptr = nullptr;
+    if constexpr (use_windowed_narrowing) {
+        CircularBuffer cb_cu_reader(cb_id_windowed_cu_reader);
+        cb_cu_reader.reserve_back(1);
+        const uint32_t cu_write_ptr = cb_cu_reader.get_write_ptr();
+        if (windowed_q_tok_offset_addr != 0) {
+            const auto q_offset_reader = TensorAccessor(q_offset_args, windowed_q_tok_offset_addr);
+            noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(cu_write_ptr), 4, {.page_id = 0}, {});
+            noc.async_read_barrier();
+            windowed_q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
+        }
+        const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
+        constexpr uint32_t cu_tile_bytes = get_tile_size(cb_id_windowed_cu_reader);
+        noc.async_read(cu_window_reader, CoreLocalMem<uint32_t>(cu_write_ptr), cu_tile_bytes, {.page_id = 0}, {});
+        noc.async_read_barrier();
+        windowed_cu_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cu_write_ptr);
+    }
+
     uint32_t read_offset = 0;
     for (uint32_t phase = 0; phase < num_phases; ++phase) {
         if (phase == 0) {
@@ -342,6 +388,33 @@ void kernel_main() {
             const uint32_t q_iter = per_head_q_iter;
             ++per_head_q_iter;
 
+            // Windowed narrowing: this Q chunk's K-chunk range. Pushed to compute over the ctrl CB
+            // BEFORE any blocking CB reserve, so compute learns its bounds even while this reader is
+            // parked on cb_k space. The writer self-computes the same range from the same tensor.
+            uint32_t windowed_k_lo = 0;
+            uint32_t windowed_k_hi = k_num_chunks;
+            if constexpr (use_windowed_narrowing) {
+                const auto range = windowed_k_chunk_range(
+                    q_chunk,
+                    Sq_chunk_t,
+                    valid_Sqt,
+                    windowed_q_tok_offset,
+                    windowed_cu_ptr,
+                    cu_window_seqlens_eles,
+                    Sk_chunk_t,
+                    k_num_chunks,
+                    tt::constants::TILE_HEIGHT);
+                windowed_k_lo = range.k_lo;
+                windowed_k_hi = range.k_hi;
+                CircularBuffer cb_k_range(cb_id_windowed_k_range);
+                cb_k_range.reserve_back(1);
+                volatile tt_l1_ptr uint32_t* k_range_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_k_range.get_write_ptr());
+                k_range_ptr[0] = windowed_k_lo;
+                k_range_ptr[1] = windowed_k_hi;
+                cb_k_range.push_back(1);
+            }
+
             /*
             Determine how many rows of Q will be read. Both start and end rows are
             capped by valid_Sqt, since Sq padding is independent of Sk padding.
@@ -384,6 +457,11 @@ void kernel_main() {
                     const uint32_t window_high_unclamped = q_low_idx + Sq_chunk_t + right_window_tiles;
                     q_high_idx = window_high_unclamped < Skt ? window_high_unclamped : Skt;
                 }
+            }
+            if constexpr (use_windowed_narrowing) {
+                // Must match what this reader pushed to compute and what the writer self-computes.
+                k_loop_start = windowed_k_lo;
+                q_high_idx = windowed_k_hi * Sk_chunk_t;
             }
 
             const uint32_t k_head = nq / q_heads_per_k;

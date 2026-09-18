@@ -4,7 +4,7 @@
 
 import pytest
 from conftest import skip_for_coverage, skip_for_quasar
-from fuser.fuser_config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
+from fuser.config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
 
 yaml_files = sorted(FUSER_CONFIG_DIR.glob("*.yaml"))
 test_names = [f.stem for f in yaml_files]

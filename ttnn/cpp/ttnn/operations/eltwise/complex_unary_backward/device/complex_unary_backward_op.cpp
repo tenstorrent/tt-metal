@@ -43,7 +43,7 @@ std::vector<ComplexTensor> _polar_bw(
     sgn_result.deallocate();
     ComplexTensor flip_tensor = ComplexTensor(
         {ttnn::zeros_like(input.real(), input.real().dtype(), input.real().layout(), std::nullopt, output_mem_config),
-         ttnn::ones_like(input.imag())});
+         ttnn::ones_like(input.imag(), input.imag().dtype(), input.imag().layout(), std::nullopt, output_mem_config)});
     Tensor grad_angle = ttnn::real(
         ttnn::operations::complex_binary::multiply(
             ttnn::conj(grad, output_mem_config),
@@ -64,7 +64,9 @@ std::vector<ComplexTensor> _polar_bw(
 std::vector<ComplexTensor> _imag_bw(
     const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    Tensor real_input = ttnn::real(input, output_mem_config);
+    // Only a template for the zeros below, so take the component directly: ttnn::real would copy it
+    // when the caller's config differs from the component's own.
+    const Tensor& real_input = input.real();
     Tensor r = ttnn::zeros_like(real_input, real_input.dtype(), real_input.layout(), std::nullopt, output_mem_config);
     ComplexTensor grad_result = ComplexTensor({r, grad});
     r.deallocate();
@@ -77,7 +79,8 @@ std::vector<ComplexTensor> _imag_bw(
 std::vector<ComplexTensor> _real_bw(
     const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    Tensor real_input = ttnn::real(input, output_mem_config);
+    // As in _imag_bw: a zeros template only, so no need to place a copy of the component.
+    const Tensor& real_input = input.real();
     Tensor i = ttnn::zeros_like(real_input, real_input.dtype(), real_input.layout(), std::nullopt, output_mem_config);
     ComplexTensor grad_result = ComplexTensor({grad, i});
     i.deallocate();

@@ -2,7 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from fuser.fused_operand import Operand
+from typing import TYPE_CHECKING
+
+from fuser.operand import Operand
 from fuser.wormhole.packer.common import (  # noqa: F401
     configure_pack,
     l1_accumulation_config,
@@ -16,10 +18,19 @@ from fuser.wormhole.packer.common import (  # noqa: F401
 )
 from helpers.format_config import DataFormat
 
+if TYPE_CHECKING:
+    from fuser.fuser_config import GlobalConfig
+    from fuser.l1_operation import L1Operation
+    from fuser.pack_node import PackNode
+
 
 def pack_dest_init(
-    dest_sync: str, dest_acc: str, pack_mode: str = "PackMode::Default", **kwargs
+    config: "GlobalConfig", operation: "L1Operation", node: "PackNode"
 ) -> str:
+    if operation.stage_id != 1:
+        return ""
+    dest_sync = operation.dest_sync.cpp_enum_value
+    dest_acc = config.dest_acc.cpp_enum_value
     return f"_llk_pack_dest_init_<{dest_sync}, {dest_acc}>();\n"
 
 

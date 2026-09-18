@@ -19,7 +19,8 @@ void kernel_main() {
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
 
-    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    copy_init(tt::CBIndex::c_0);
     dropout_kernel_init(seed);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb16.reserve_back(per_core_block_dim);

@@ -6,10 +6,10 @@ from typing import List
 
 import torch
 from fuser.block_data import BlockData
-from fuser.fused_loop import FusedLoop, LoopBlockRow
-from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
+from fuser.l1_operation import L1Operation
 from fuser.pack_node import PackNode
+from fuser.tile_loop import LoopBlockRow, TileLoop
 from helpers.llk_params import PackerReluType
 
 from .common import untilize_l1_address
@@ -17,7 +17,7 @@ from .packer import Packer
 
 
 class PackUntilize(Packer):
-    loop: FusedLoop = LoopBlockRow()
+    loop: TileLoop = LoopBlockRow()
     per_block_init = True
     pack_mode = "PackMode::Untilize"
 
@@ -32,18 +32,18 @@ class PackUntilize(Packer):
         self,
         tensor: torch.Tensor,
         pack_node: PackNode,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
     ) -> torch.Tensor:
         if pack_node.pack_relu != PackerReluType.NoRelu:
-            tensor = self._relu_golden(tensor, pack_node, config)
+            tensor = self.relu_golden(tensor, config, operation, pack_node)
 
-        return self._untilize_golden(tensor, pack_node)
+        return self.untilize_golden(tensor, config, operation, pack_node)
 
     def init(
         self,
         pack_node: PackNode,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
@@ -61,7 +61,7 @@ class PackUntilize(Packer):
     def pack(
         self,
         pack_node: PackNode,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
@@ -79,7 +79,7 @@ class PackUntilize(Packer):
     def uninit(
         self,
         pack_node: PackNode,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         block: BlockData,
     ) -> str:

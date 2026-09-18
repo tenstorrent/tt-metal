@@ -23,7 +23,8 @@ void kernel_main() {
     DataflowBuffer dfb_in(cb_input);
     DataflowBuffer dfb_out(cb_output);
 
-    init_sfpu(cb_input, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_output);
+    copy_init(cb_input);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
 

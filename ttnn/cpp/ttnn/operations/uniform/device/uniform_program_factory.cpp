@@ -86,17 +86,15 @@ uint32_t uniform_seed_for_core(const UniformDeviceOperation::operation_attribute
     return attrs.seed != 0 ? attrs.seed + i : get_random_seed();
 }
 
-// [from, to) as the bit patterns the compute kernel expects; shared so eps cannot drift between the
-// miss-build and the hit-patch.
+// Inclusive, destination-representable bounds as the bit patterns the compute
+// kernel expects; shared so the miss-build and the hit-patch cannot drift.
 struct UniformRange {
-    uint32_t f2u_from;
-    uint32_t f2u_to;
+    uint32_t lower_bound_bits;
+    uint32_t upper_bound_bits;
 };
 
 UniformRange uniform_range(const UniformDeviceOperation::operation_attributes_t& attrs) {
-    constexpr float eps = 1e-6f;
-    // -eps make sure that generated number is < attrs.to
-    return {std::bit_cast<uint32_t>(attrs.from), std::bit_cast<uint32_t>(attrs.to - eps)};
+    return {std::bit_cast<uint32_t>(attrs.lower_bound), std::bit_cast<uint32_t>(attrs.upper_bound)};
 }
 }  // namespace
 
@@ -104,7 +102,7 @@ static constexpr const char* WRITER_KERNEL_PATH = "ttnn/cpp/ttnn/operations/unif
 static constexpr const char* COMPUTE_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/uniform/device/kernels/compute_uniform.cpp";
 
-ProgramDescriptor UniformDeviceOperation::create_descriptor(
+ProgramDescriptor UniformDeviceOperation::UniformProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output) {
@@ -116,50 +114,32 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     DataType output_dtype = output.dtype();
     auto out_data_format = datatype_to_dataformat_converter(output_dtype);
     const uint32_t dtype_tile_size = tile_size(out_data_format);
-    const uint32_t intermed_tile_size = tile_size(tt::DataFormat::Float32);
 
-    constexpr uint32_t in_out_num_tiles = 1;
-    constexpr uint32_t intermed_num_tiles = 2;
+    constexpr uint32_t output_num_tiles = 2;
 
-    constexpr uint32_t intermed_cb_id = CBIndex::c_24;
-    constexpr uint32_t dst_cb_id = CBIndex::c_0;
+    constexpr uint32_t output_cb_id = CBIndex::c_24;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
     ProgramDescriptor desc;
 
-    // Intermediate CB (Float32)
+    // Keep the SFPU destination in FP32, then let the packer perform the
+    // destination-format conversion while writing this CB. In particular,
+    // FP32-to-BF16 rounding is handled in hardware instead of by a scalar
+    // conversion loop in the writer kernel.
     desc.cbs.push_back(CBDescriptor{
-        .total_size = intermed_num_tiles * intermed_tile_size,
+        .total_size = output_num_tiles * dtype_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = intermed_cb_id,
-            .data_format = tt::DataFormat::Float32,
-            .page_size = intermed_tile_size,
-        }}},
-    });
-
-    // Output CB
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in_out_num_tiles * dtype_tile_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = dst_cb_id,
+            .buffer_index = output_cb_id,
             .data_format = out_data_format,
             .page_size = dtype_tile_size,
         }}},
     });
 
     // Writer kernel
-    KernelDescriptor::Defines writer_defines;
-    switch (output_dtype) {
-        case DataType::BFLOAT16: writer_defines.emplace_back("OUTPUT_DTYPE_BFLOAT16", "1"); break;
-        case DataType::FLOAT32: writer_defines.emplace_back("OUTPUT_DTYPE_FLOAT32", "1"); break;
-        default: break;
-    }
-
-    KernelDescriptor::CompileTimeArgs writer_ct_args{intermed_cb_id, dst_cb_id};
+    KernelDescriptor::CompileTimeArgs writer_ct_args{output_cb_id};
     TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
@@ -167,7 +147,6 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.defines = std::move(writer_defines);
     writer_desc.config = WriterConfigDescriptor{};
     writer_desc.runtime_args.reserve(num_cores_total);
 
@@ -176,18 +155,19 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     compute_desc.kernel_source = COMPUTE_KERNEL_PATH;
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = {intermed_cb_id};
+    compute_desc.compile_time_args = {output_cb_id};
     compute_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = true,  // if fp32_dest_acc_en set to false a precision error may occur which makes
-                                   // generated number out of range [from, to)
+        // Retain generated values in FP32 until packing so reduced destination
+        // precision cannot cross the validated inclusive bounds.
+        .fp32_dest_acc_en = true,
         .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
     compute_desc.runtime_args.reserve(num_cores_total);
 
     // Runtime args per core
-    const auto [f2u_from, f2u_to] = uniform_range(operation_attributes);
+    const auto [lower_bound_bits, upper_bound_bits] = uniform_range(operation_attributes);
 
     const auto layout = uniform_core_layout(ws);
     for (int i = 0; i < static_cast<int>(layout.size()); ++i) {
@@ -196,10 +176,11 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
         // Each core has its own seed to increase the number of generated random numbers
         const uint32_t seed = uniform_seed_for_core(operation_attributes, i);
 
-        // seed/from/to are DYNAMIC (excluded from compute_program_hash): baked here for the
+        // Seed/range bounds are DYNAMIC (excluded from compute_program_hash): baked here for the
         // cache-miss build, re-applied on every cache hit by override_runtime_arguments().
         compute_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{seed, f2u_from, f2u_to, tile_offset, units_per_core});
+            core,
+            KernelDescriptor::CoreRuntimeArgs{seed, lower_bound_bits, upper_bound_bits, tile_offset, units_per_core});
 
         writer_desc.emplace_runtime_args(core, {output.buffer(), tile_offset, units_per_core});
     }
@@ -210,21 +191,21 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     return desc;
 }
 
-void UniformDeviceOperation::override_runtime_arguments(
+void UniformDeviceOperation::UniformProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // Patch the cached program in place: no descriptor rebuild. Per-dispatch state is the compute
-    // kernel's seed/from/to (hash-excluded) and the writer's output address — override supersedes
+    // kernel's seed/bounds (hash-excluded) and the writer's output address — override supersedes
     // resolve_bindings, so the address is ours to re-apply. tile_offset/units_per_core come from the
     // same shared work-split helpers create_descriptor uses, so the slots cannot drift.
     // Kernel push order in create_descriptor: writer 0, compute 1. No globally-allocated CBs.
     constexpr uint32_t writer_kernel_idx = 0;
     constexpr uint32_t compute_kernel_idx = 1;
 
-    const auto [f2u_from, f2u_to] = uniform_range(operation_attributes);
+    const auto [lower_bound_bits, upper_bound_bits] = uniform_range(operation_attributes);
     const uint32_t out_addr = output.buffer()->address();
 
     const auto ws = uniform_work_split(output);
@@ -234,8 +215,8 @@ void UniformDeviceOperation::override_runtime_arguments(
 
         auto& compute_args = GetRuntimeArgs(program, compute_kernel_idx, core);
         compute_args[0] = uniform_seed_for_core(operation_attributes, i);
-        compute_args[1] = f2u_from;
-        compute_args[2] = f2u_to;
+        compute_args[1] = lower_bound_bits;
+        compute_args[2] = upper_bound_bits;
         compute_args[3] = tile_offset;
         compute_args[4] = units_per_core;
 

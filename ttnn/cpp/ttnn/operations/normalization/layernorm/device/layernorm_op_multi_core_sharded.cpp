@@ -5,16 +5,17 @@
 #include <string>
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
-#include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation_types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 
 #include <optional>
@@ -26,7 +27,9 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descriptor(
+namespace m2 = tt::tt_metal::experimental;
+
+ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_program_artifacts(
     const LayerNormParams& operation_attributes,
     const LayerNormInputs& tensor_args,
     Tensor& tensor_return_value,
@@ -34,24 +37,37 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     using namespace sharded_layernorm_helpers;
 
     // For sharded layernorm, core ranges are derived from tensor shard spec.
-    // If core_range_set is provided, validate that shard spec cores are within it.
+    // If core_range_set is provided, validate that every core this program will touch is within it.
     const auto& input_shard_spec = tensor_args.input.shard_spec();
     TT_FATAL(input_shard_spec.has_value(), "Sharded layernorm requires input tensor to have a shard spec");
 
     if (core_range_set.has_value()) {
         const auto& shard_grid = input_shard_spec.value().grid;
-        // Verify that all cores in the shard spec are within the provided core_range_set
-        for (const auto& shard_core_range : shard_grid.ranges()) {
-            for (auto x = shard_core_range.start_coord.x; x <= shard_core_range.end_coord.x; ++x) {
-                for (auto y = shard_core_range.start_coord.y; y <= shard_core_range.end_coord.y; ++y) {
-                    CoreCoord core = {x, y};
-                    TT_FATAL(
-                        core_range_set.value().contains(core),
-                        "Sharded tensor shard spec core ({}, {}) is not within the provided core_range_set. "
-                        "The sharded tensor must lie entirely within the input core range.",
-                        x,
-                        y);
+        // Multicast destinations span the whole bounding box of the shard grid, so a non-rectangular
+        // shard grid also places idle kernels, buffers and semaphores on the holes inside that box.
+        // Validate the bounding box rather than just the active shard cores, otherwise the program
+        // would run on cores the caller excluded and can collide with other programs.
+        const CoreRange mcast_bbox = shard_grid.bounding_box();
+        for (auto x = mcast_bbox.start_coord.x; x <= mcast_bbox.end_coord.x; ++x) {
+            for (auto y = mcast_bbox.start_coord.y; y <= mcast_bbox.end_coord.y; ++y) {
+                CoreCoord core = {x, y};
+                if (core_range_set.value().contains(core)) {
+                    continue;
                 }
+                TT_FATAL(
+                    !shard_grid.contains(core),
+                    "Sharded tensor shard spec core ({}, {}) is not within the provided core_range_set. "
+                    "The sharded tensor must lie entirely within the input core range.",
+                    x,
+                    y);
+                TT_THROW(
+                    "Core ({}, {}) is a hole in the non-rectangular shard grid {} and is not within the provided "
+                    "core_range_set. Sharded layernorm multicasts over the bounding box {} of the shard grid, so "
+                    "every core in that bounding box must be included in core_range_set.",
+                    x,
+                    y,
+                    shard_grid.str(),
+                    mcast_bbox.str());
             }
         }
     }
@@ -96,6 +112,9 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
 
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / tile_width;
     bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
+    // The write-back reads runtime arguments that only the post-all-gather stage supplies, so the
+    // build that compiles it is the build where those arguments exist.
+    const bool writes_back = is_post_all_gather && !skip_write_back;
 
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
@@ -112,19 +131,19 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
 
     auto
         [out_data_format,
-         cb_data_format,
-         gamma_cb_data_format,
-         beta_cb_data_format,
-         stats_cb_data_format,
-         reciprocal_cb_data_format] = get_cb_data_formats(output, gamma, beta, stats, fp32_dest_acc_en);
+         dfb_data_format,
+         gamma_dfb_data_format,
+         beta_dfb_data_format,
+         stats_dfb_data_format,
+         reciprocal_dfb_data_format] = get_dfb_data_formats(output, gamma, beta, stats, fp32_dest_acc_en);
 
     // tile sizes
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(dfb_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
-    uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
-    uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
-    uint32_t stats_single_tile_size = tt::tile_size(stats_cb_data_format);
+    uint32_t gamma_single_tile_size = tt::tile_size(gamma_dfb_data_format);
+    uint32_t beta_single_tile_size = tt::tile_size(beta_dfb_data_format);
+    uint32_t stats_single_tile_size = tt::tile_size(stats_dfb_data_format);
     uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
     // tensor shape
@@ -147,7 +166,6 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     bool output_row_wise = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
     CoreRangeSet all_storage_cores = output_shard_spec.grid;
-    CoreRangeSet all_worker_and_storage_cores = all_storage_cores.merge(a.shard_spec().value().grid);
     std::vector<uint32_t> storage_core_noc_x;
     std::vector<uint32_t> storage_core_noc_y;
     std::vector<CoreCoord> storage_core_coords =
@@ -156,10 +174,6 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         storage_core_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
         storage_core_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
     }
-
-    // get sharded addr
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -174,15 +188,15 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
 
     // Reciprocal LUT for Welford
     std::optional<Tensor> recip_tensor = std::nullopt;
-    uint32_t reciprocal_CB_size_bytes = 0;
+    uint32_t reciprocal_dfb_size_bytes = 0;
     if (use_welford) {
         TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
         recip_tensor = tensor_args.recip_tensor;
-        reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
+        reciprocal_dfb_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
     }
 
-    // Compute CB sizes using helper
-    CBSizeParams cb_size_params{
+    // Compute buffer sizes using helper
+    DFBSizeParams dfb_size_params{
         .block_ht = block_ht,
         .block_wt = block_wt,
         .block_wt_resharded = block_wt_resharded,
@@ -194,7 +208,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .beta_single_tile_size = beta_single_tile_size,
         .stats_single_tile_size = stats_single_tile_size,
         .bfloat16_tile_size = bfloat16_tile_size,
-        .reciprocal_CB_size_bytes = reciprocal_CB_size_bytes,
+        .reciprocal_dfb_size_bytes = reciprocal_dfb_size_bytes,
         .num_rows_per_all_to_all_worker = workers.num_rows_per_all_to_all_worker,
         .num_blocks_first_stage = workers.num_blocks_first_stage,
         .num_blocks_second_stage = workers.num_blocks_second_stage,
@@ -206,42 +220,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .use_welford = use_welford,
         .skip_write_back = skip_write_back,
         .rms_norm = rms_norm};
-    auto cb_sizes = cb_size_params.compute();
-
-    // Build ProgramDescriptor
-    ProgramDescriptor program_descriptor;
-
-    // Create semaphore descriptors
-    uint32_t reduce_sender_semaphore_id = 0;
-    uint32_t reduce_receiver_semaphore_id = 1;
-    uint32_t reduce_second_stage_semaphore_id = 2;
-
-    program_descriptor.semaphores.push_back(SemaphoreDescriptor{
-        .id = reduce_sender_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges.all_cores,
-        .initial_value = 0});
-    program_descriptor.semaphores.push_back(SemaphoreDescriptor{
-        .id = reduce_receiver_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges.all_cores,
-        .initial_value = 0});
-    program_descriptor.semaphores.push_back(SemaphoreDescriptor{
-        .id = reduce_second_stage_semaphore_id,
-        .core_type = tt::CoreType::WORKER,
-        .core_ranges = core_ranges.all_cores,
-        .initial_value = 0});
-
-    // Get kernel defines using helper
-    auto kernel_defines = KernelDefines::build(
-        b.has_value(),
-        gamma.has_value(),
-        beta.has_value(),
-        rms_norm,
-        use_welford,
-        skip_write_back,
-        operation_attributes.fused_activation,
-        tensor_return_value.dtype());
+    auto dfb_sizes = dfb_size_params.compute();
 
     // Get kernel paths using helper
     bool use_row_major_kernel = (gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR) ||
@@ -256,51 +235,15 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         writer_noc = NOC::NOC_1;
     }
 
-    // Build compile-time args using helper
-    CompileTimeArgsContext ct_ctx{
-        .reduce_receiver_semaphore_id = reduce_receiver_semaphore_id,
-        .reduce_sender_semaphore_id = reduce_sender_semaphore_id,
-        .reduce_second_stage_semaphore_id = reduce_second_stage_semaphore_id,
-        .grid = &grid,
-        .workers = &workers,
-        .core_ranges = &core_ranges,
-        .block_ht = block_ht,
-        .block_wt = block_wt,
-        .subblock_wt = subblock_wt,
-        .single_tile_size = single_tile_size,
-        .out_single_tile_size = out_single_tile_size,
-        .block_wt_resharded = block_wt_resharded,
-        .K = K,
-        .logical_K = logical_K,
-        .rms_norm = rms_norm,
-        .use_welford = use_welford,
-        .has_gamma = gamma.has_value(),
-        .has_beta = beta.has_value(),
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .legacy_reduction = legacy_reduction,
-        .legacy_rsqrt = legacy_rsqrt,
-        .gamma_cb_data_format = gamma_cb_data_format,
-        .beta_cb_data_format = beta_cb_data_format,
-        .gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr,
-        .beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr,
-        .gamma_is_row_major = gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR,
-        .beta_is_row_major = beta.has_value() && beta.value().layout() == Layout::ROW_MAJOR,
-        .gamma_stick_size = gamma.has_value() && gamma.value().layout() == Layout::ROW_MAJOR
-                                ? gamma.value().padded_shape()[-1] * gamma.value().element_size()
-                                : 0,
-        .beta_stick_size = beta.has_value() && beta.value().layout() == Layout::ROW_MAJOR
-                               ? beta.value().padded_shape()[-1] * beta.value().element_size()
-                               : 0,
-        .eps = eps,
-        .per_core_recip_lut_size = block_w,
-        .tile_width = tile_width};
-    auto compile_time_args = CompileTimeArgs::build(ct_ctx);
-
     // Pack eps for later use
     uint32_t eps_u = std::bit_cast<uint32_t>(eps);
 
-    // Build runtime args using helper
-    const auto& cores = corerange_to_cores(core_ranges.all_cores, core_ranges.all_cores.num_cores(), grid.row_wise);
+    // Enumerate the shard grid as given, not core_ranges.all_cores: that is merge_ranges()'d, and merging
+    // can re-partition a non-rectangular grid into different rectangles whose traversal order no longer
+    // matches the tensor's shard order. Per-core index drives the gamma/beta offset, so a mismatch feeds
+    // cores the wrong weight slice.
+    const auto& shard_grid = grid.shard_spec.grid;
+    const auto& cores = corerange_to_cores(shard_grid, shard_grid.num_cores(), grid.row_wise);
 
     uint32_t last_core_width_index =
         grid.mcast_1d ? (cores.size() - 1) : (grid.row_wise ? (grid.grid_size.x - 1) : (grid.grid_size.y - 1));
@@ -340,7 +283,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     }
 
     // A non-tile-aligned width split across multiple cores is supported on every path. The non-Welford
-    // path masks each core's final-tile padding columns with its per-core column mask (CB 19). Welford
+    // path masks each core's final-tile padding columns with its per-core column mask. Welford
     // has no column mask, so each core is instead told its real (logical) column count (welford_reduce_w)
     // and reduces exactly those columns; full block_w on the cores before the last, the remaining logical
     // columns (ending in a partial tile) on the final real core; and the cross-core combine weights the
@@ -348,12 +291,88 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // Legacy (non-Welford) path: zero the padding columns of a non-tile-aligned width's final tile so
     // they do not enter the statistics (E[x] and variance for layernorm, the mean of squares for
     // RMSNorm), except the post-all-gather stage, which reduces gathered stats rather than the input.
-    // The mask is CB 19 at every masking site, generated on-device in the writer (generate_mask_w<T>)
-    // keyed off each core's width position, so it carries the correct validity whether the width lives
-    // on one core or is split across many. CB 14 (E[x] scratch) additionally feeds the non-distributed
-    // LayerNorm E[x] site so cb_in stays intact for the (x - E[x]) pass.
+    // The mask is generated on-device in the writer (generate_mask_w<T>) keyed off each core's width
+    // position, so it carries the correct validity whether the width lives on one core or is split
+    // across many. A separate scratch buffer additionally feeds the non-distributed LayerNorm E[x] site
+    // so the input buffer stays intact for the (x - E[x]) pass.
     const bool do_col_mask = col_mask_needed && !use_welford && !is_post_all_gather;
     const bool do_legacy_layernorm_col_mask = do_col_mask && !rms_norm && !is_pre_all_gather;
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Spec configuration
+    ////////////////////////////////////////////////////////////////////////////
+    SpecConfig config{
+        .reader_sender_path = kernel_paths.reader_sender,
+        .reader_receiver_path = kernel_paths.reader_receiver,
+        .writer_path = kernel_paths.writer,
+        .compute_path = kernel_paths.compute,
+        .is_pre_all_gather = is_pre_all_gather,
+        .is_post_all_gather = is_post_all_gather,
+        .rms_norm = rms_norm,
+        .use_welford = use_welford,
+        .has_b = b.has_value(),
+        .has_gamma = gamma.has_value(),
+        .has_beta = beta.has_value(),
+        .skip_write_back = skip_write_back,
+        .writes_back = writes_back,
+        .do_col_mask = do_col_mask,
+        .do_legacy_layernorm_col_mask = do_legacy_layernorm_col_mask,
+        // Enable the welford-fp32 alias only when the SrcA-routed transpose_tile would
+        // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
+        // RMSNorm doesn't use Welford in this kernel path.
+        .welford_fp32_alias = use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en,
+        .sizes = dfb_sizes,
+        .reciprocal_dfb_size_bytes = reciprocal_dfb_size_bytes,
+        // The column mask is one tile-row wide: block_wt tiles, holding only 1.0 or 0.0 in bfloat16.
+        .col_mask_gen_dfb_size_bytes = block_wt * bfloat16_tile_size,
+        .in_data_format = in_data_format,
+        .dfb_data_format = dfb_data_format,
+        .out_data_format = out_data_format,
+        .gamma_dfb_data_format = gamma_dfb_data_format,
+        .beta_dfb_data_format = beta_dfb_data_format,
+        .stats_dfb_data_format = stats_dfb_data_format,
+        .reciprocal_dfb_data_format = reciprocal_dfb_data_format,
+        .in_single_tile_size = in_single_tile_size,
+        .single_tile_size = single_tile_size,
+        .out_single_tile_size = out_single_tile_size,
+        .gamma_single_tile_size = gamma_single_tile_size,
+        .beta_single_tile_size = beta_single_tile_size,
+        .stats_single_tile_size = stats_single_tile_size,
+        .bfloat16_tile_size = bfloat16_tile_size,
+        .block_ht = block_ht,
+        .block_wt = block_wt,
+        .subblock_wt = subblock_wt,
+        .block_wt_resharded = block_wt_resharded,
+        .K = K,
+        .logical_K = logical_K,
+        .tile_width = tile_width,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .legacy_reduction = legacy_reduction,
+        .legacy_rsqrt = legacy_rsqrt,
+        .eps = eps,
+        .per_core_recip_lut_size = block_w,
+        .reader_noc = reader_noc,
+        .writer_noc = writer_noc,
+        .compute_hw = to_compute_hardware_config(device->arch(), compute_kernel_config),
+    };
+    if (operation_attributes.fused_activation.has_value()) {
+        const auto& act = operation_attributes.fused_activation.value();
+        // The inner tile loop variable in the sharded compute kernels is "w" (dst register index).
+        // Using "i" would refer to the outer block_h loop and apply the activation to the
+        // wrong dst register.
+        auto act_defines = ttnn::operations::unary::utils::get_defines(
+            act.op_type, act.params, "ACTIVATION", "w", tensor_return_value.dtype());
+        for (auto& [key, val] : act_defines) {
+            config.activation_defines.emplace(key, val);
+        }
+    }
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Program spec and run args
+    ////////////////////////////////////////////////////////////////////////////
+    m2::ProgramSpec spec{.name = "layernorm_sharded"};
+    add_dataflow_buffer_specs(spec, config);
+    add_tensor_parameter_specs(spec, config, a, b, gamma, beta, stats, recip_tensor, output);
 
     RuntimeArgsContext rt_ctx{
         .grid = grid,
@@ -365,8 +384,6 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .packed_cinv_value_one = pack_two_bfloat16_into_uint32({bfloat_cinv_one, bfloat_cinv_one}),
         .packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv, bfloat_winv}),
         .eps_u = eps_u,
-        .gamma_dram_addr = gamma_dram_addr,
-        .beta_dram_addr = beta_dram_addr,
         .single_tile_size = single_tile_size,
         .out_single_tile_size = out_single_tile_size,
         .block_wt = block_wt,
@@ -375,146 +392,23 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .logical_K = logical_K,
         .last_core_width_index = last_core_width_index,
         .is_post_all_gather = is_post_all_gather,
+        .writes_back = writes_back,
         .num_distributed_devices = num_distributed_devices,
         .reader_noc = reader_noc,
         .storage_core_noc_x = std::move(storage_core_noc_x),
         .storage_core_noc_y = std::move(storage_core_noc_y),
         .num_storage_cores = (uint32_t)all_storage_cores.num_cores()};
 
-    auto runtime_args = RuntimeArgsResult::build(cores, rt_ctx, device);
+    // The write-back segment block's length is measured per node while the run args are built, and
+    // the kernel specs declare it, so the run args come first.
+    auto [run_args, writer_num_varargs] =
+        build_run_args(cores, rt_ctx, config, device, a, b, gamma, beta, stats, recip_tensor, output);
+    add_kernel_and_work_unit_specs(spec, core_ranges, workers, grid, config, writer_num_varargs);
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Build Kernel Descriptors
-    ////////////////////////////////////////////////////////////////////////////
-    KernelConfig kernel_config;
-    kernel_config.reader_sender_path = kernel_paths.reader_sender;
-    kernel_config.reader_receiver_path = kernel_paths.reader_receiver;
-    kernel_config.writer_path = kernel_paths.writer;
-    kernel_config.compute_path = kernel_paths.compute;
-    kernel_config.reader_sender_ct_args = std::move(compile_time_args.reader_sender);
-    kernel_config.reader_receiver_all_to_all_ct_args = std::move(compile_time_args.reader_receiver_all_to_all);
-    kernel_config.reader_receiver_ct_args = std::move(compile_time_args.reader_receiver);
-    kernel_config.writer_sender_ct_args = std::move(compile_time_args.writer_sender);
-    kernel_config.writer_receiver_ct_args = std::move(compile_time_args.writer_receiver);
-    kernel_config.compute_all_to_all_ct_args = std::move(compile_time_args.compute_all_to_all);
-    kernel_config.compute_not_all_to_all_ct_args = std::move(compile_time_args.compute_not_all_to_all);
-    kernel_config.reader_sender_defines = kernel_defines.reader;
-    kernel_config.reader_receiver_defines = kernel_defines.reader;
-    kernel_config.writer_defines = std::move(kernel_defines.writer);
-    kernel_config.compute_defines = std::move(kernel_defines.compute);
-    kernel_config.reader_sender_rt_args = std::move(runtime_args.reader_sender);
-    kernel_config.reader_receiver_all_to_all_rt_args = std::move(runtime_args.reader_receiver_all_to_all);
-    kernel_config.reader_receiver_rt_args = std::move(runtime_args.reader_receiver);
-    kernel_config.writer_sender_rt_args = std::move(runtime_args.writer_sender);
-    kernel_config.writer_receiver_rt_args = std::move(runtime_args.writer_receiver);
-    kernel_config.compute_all_to_all_rt_args = std::move(runtime_args.compute_all_to_all);
-    kernel_config.compute_not_all_to_all_rt_args = std::move(runtime_args.compute_not_all_to_all);
-    kernel_config.reader_noc = reader_noc;
-    kernel_config.writer_noc = writer_noc;
-    kernel_config.math_fidelity = math_fidelity;
-    kernel_config.fp32_dest_acc_en = fp32_dest_acc_en;
-    kernel_config.dst_full_sync_en = dst_full_sync_en;
-    kernel_config.math_approx_mode = math_approx_mode;
-    // Enable the welford-fp32 alias only when the SrcA-routed transpose_tile would
-    // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
-    // RMSNorm doesn't use Welford in this kernel path.
-    kernel_config.welford_fp32_alias =
-        use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en;
-    // Writer named compile-time args (block_w in tiles and the Welford flag).
-    kernel_config.block_wt = block_wt;
-    kernel_config.use_welford = use_welford;
-    if (do_col_mask) {
-        // The writer generates the CB 19 mask on-device with generate_mask_w; compute applies it at
-        // every masking site. Pass the logical width so the writer knows where the padding columns begin.
-        kernel_config.compute_defines.emplace_back("DO_COL_MASK", "1");
-        kernel_config.writer_defines.emplace_back("DO_COL_MASK", "1");
-        kernel_config.logical_K = logical_K;
-    }
-    kernel_config.gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr;
-    kernel_config.beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr;
-
-    add_kernel_descriptors(program_descriptor, core_ranges, workers, grid, std::move(kernel_config));
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Build CB Descriptors
-    ////////////////////////////////////////////////////////////////////////////
-    // When resharding (is_post_all_gather && !skip_write_back):
-    //   CB 16 is intermediate (no buffer), CB 17 is the final resharded output
-    // Otherwise:
-    //   CB 16 is the output, CB 17 is not used
-    Buffer* output_buffer = nullptr;
-    Buffer* output_reshard_buffer = nullptr;
-    if (is_post_all_gather && !skip_write_back) {
-        // Resharding case: CB 17 needs the output buffer
-        output_reshard_buffer = output.buffer();
-    } else {
-        // Normal case: CB 16 needs the output buffer
-        output_buffer = output.buffer();
-    }
-
-    CBConfig cb_config;
-    cb_config.in0_CB_size = cb_sizes.in0_CB_size;
-    cb_config.in1_CB_size = cb_sizes.in1_CB_size;
-    cb_config.in2_CB_size = cb_sizes.in2_CB_size;
-    cb_config.in3_CB_size = cb_sizes.in3_CB_size;
-    cb_config.in5_CB_size = cb_sizes.in5_CB_size;
-    cb_config.in6_CB_size = cb_sizes.in6_CB_size;
-    cb_config.x_CB_size = cb_sizes.x_CB_size;
-    cb_config.xmm_CB_size = cb_sizes.xmm_CB_size;
-    cb_config.ex_partial_CB_size = cb_sizes.ex_partial_CB_size;
-    cb_config.ex_CB_size = cb_sizes.ex_CB_size;
-    cb_config.ex_external_CB_size = cb_sizes.ex_external_CB_size;
-    cb_config.ex_global_CB_size = cb_sizes.ex_global_CB_size;
-    cb_config.ex2pe_CB_size = cb_sizes.ex2pe_CB_size;
-    cb_config.out_CB_size = cb_sizes.out_CB_size;
-    cb_config.out_reshard_CB_size = cb_sizes.out_reshard_CB_size;
-    cb_config.stats_cb_size = cb_sizes.stats_cb_size;
-    cb_config.stats_reduced_cb_size = cb_sizes.stats_reduced_cb_size;
-    cb_config.reciprocal_CB_size_bytes = reciprocal_CB_size_bytes;
-    cb_config.in_data_format = in_data_format;
-    cb_config.cb_data_format = cb_data_format;
-    cb_config.out_data_format = out_data_format;
-    cb_config.gamma_cb_data_format = gamma_cb_data_format;
-    cb_config.beta_cb_data_format = beta_cb_data_format;
-    cb_config.stats_cb_data_format = stats_cb_data_format;
-    cb_config.reciprocal_cb_data_format = reciprocal_cb_data_format;
-    cb_config.in_single_tile_size = in_single_tile_size;
-    cb_config.single_tile_size = single_tile_size;
-    cb_config.out_single_tile_size = out_single_tile_size;
-    cb_config.gamma_single_tile_size = gamma_single_tile_size;
-    cb_config.beta_single_tile_size = beta_single_tile_size;
-    cb_config.stats_single_tile_size = stats_single_tile_size;
-    cb_config.bfloat16_tile_size = bfloat16_tile_size;
-    cb_config.a_buffer = a.buffer();
-    cb_config.b_buffer = b.has_value() ? b.value().buffer() : nullptr;
-    cb_config.gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr;
-    cb_config.beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr;
-    cb_config.stats_buffer = stats.has_value() ? stats.value().buffer() : nullptr;
-    cb_config.recip_buffer = recip_tensor.has_value() ? recip_tensor.value().buffer() : nullptr;
-    cb_config.output_buffer = output_buffer;
-    cb_config.output_reshard_buffer = output_reshard_buffer;
-    cb_config.has_b = b.has_value();
-    cb_config.has_gamma = gamma.has_value();
-    cb_config.has_beta = beta.has_value();
-    cb_config.rms_norm = rms_norm;
-    cb_config.use_welford = use_welford;
-    cb_config.is_pre_all_gather = is_pre_all_gather;
-    cb_config.is_post_all_gather = is_post_all_gather;
-    cb_config.skip_write_back = skip_write_back;
-    // CB 19 is the writer-generated column mask; size it to block_wt tiles (one tile-row). The mask holds
-    // only 1.0 or 0.0 in bfloat16.
-    cb_config.do_col_mask = do_col_mask;
-    cb_config.col_mask_gen_CB_size_bytes = block_wt * bfloat16_tile_size;
-    cb_config.do_legacy_layernorm_col_mask = do_legacy_layernorm_col_mask;
-    // Enable the welford-fp32 alias only when the SrcA-routed transpose_tile would
-    // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
-    // RMSNorm doesn't use Welford in this kernel path.
-    cb_config.welford_fp32_alias =
-        use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en;
-
-    add_cb_descriptors(program_descriptor, core_ranges, all_worker_and_storage_cores, cb_config);
-
-    return program_descriptor;
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::prim

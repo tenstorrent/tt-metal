@@ -1,49 +1,31 @@
 # DiffusionGemma 26B-A4B (bring-up)
 
-## Platforms
-Blackhole — QB2
-
 ## Introduction
-DiffusionGemma 26B-A4B-it is a discrete **text-diffusion** LLM fine-tuned from
-Gemma-4 26B-A4B (MoE). Its text backbone is identical to
-[`models/demos/gemma4`](../../demos/gemma4) and is reused unchanged; the net-new
-work is the block-autoregressive multi-canvas **generation procedure**:
-bidirectional canvas attention, a three-phase KV-cache state machine,
-entropy-budget acceptance sampling, and self-conditioning.
 
-## Status
-This directory is the **foundation layer**, not yet an end-to-end demo:
+DiffusionGemma 26B-A4B-it is a discrete **text-diffusion** LLM fine-tuned from Gemma-4 26B-A4B (MoE).
+Its text backbone is identical to [`models/demos/gemma4`](../../demos/gemma4) and is reused unchanged;
+the net-new work is the block-autoregressive multi-canvas **generation procedure** — bidirectional
+canvas attention, a three-phase KV-cache state machine, entropy-budget acceptance sampling and
+self-conditioning. Platform: Blackhole **QB2 only**. The module has a traced denoise loop and a serving
+adapter (`tt/serving.py`, `tt/generator_vllm.py`) that serves through the standalone vllm-tt-plugin.
 
-- `reference/` — pure-torch oracle (sampling/entropy/Gumbel-max, denoise loop,
-  self-conditioning, canvas attention mask): the PCC ground truth.
-- `tests/test_*_parity.py` — guard that the reference reproduces HF
-  `transformers` `diffusion_gemma` bit-for-bit (drift oracle).
-- `tt/` — net-new on-device (ttnn) primitives: entropy/Gumbel-max sampling and
-  the self-conditioning gated MLP.
-- `weight_mapping.py` — remaps the DiffusionGemma checkpoint (`model.decoder.*`)
-  onto the unmodified gemma4 loader (`model.language_model.*`).
-- `tests/test_device_*` — QB2 validation: backbone logits PCC, entropy/accept
-  chain, self-conditioning, and the 256K weights+KV memory budget.
+Layout: `reference/` pure-torch oracle + drift guard, `tt/` on-device (ttnn) modules, `tests/` CPU +
+QB2 suites. `weight_mapping.py` remaps the DiffusionGemma checkpoint (`model.decoder.*`) onto the
+unmodified gemma4 loader (`model.language_model.*`).
 
-The bidirectional encoder-decoder forward, the discrete-diffusion decode loop,
-and text-only e2e generation are tracked as follow-ups (#47462 / #47463 /
-#47464 / #47474).
+## How to run
 
-## How to Run
-
-CPU reference + parity tests (no device; device tests auto-skip):
 ```sh
+# CPU reference + parity tests (device tests auto-skip)
 pytest models/experimental/diffusion_gemma/tests -q
-```
 
-QB2 device validation (4× Blackhole):
-```sh
+# QB2 device validation (4x Blackhole)
 DG_RUN_DEVICE=1 MESH_DEVICE=P150x4 HF_MODEL=<path to gemma-4-26B-A4B-it> \
   pytest models/experimental/diffusion_gemma/tests -q -s -k 1x4
 ```
 
 ## Notes
-- The reused gemma4 MoE backbone PCCs ~0.88 vs the HF reference on Blackhole
-  (recorded as xfail against the 0.99 target — this is the known gemma4 MoE
-  fidelity, not a DiffusionGemma defect).
+
+- The reused gemma4 MoE backbone PCCs ~0.88 vs HF on Blackhole (recorded as xfail against the 0.99
+  target). That is the known gemma4 MoE fidelity, **not** a DiffusionGemma defect.
 - Parent issue: tenstorrent/tt-metal#47452.

@@ -7,6 +7,7 @@
 
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
 
@@ -129,6 +130,20 @@ std::vector<std::optional<Tensor>> assign_bw(
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
     std::optional<Tensor> input_grad = std::nullopt,
     std::optional<Tensor> other_grad = std::nullopt);
+
+std::vector<Tensor> bias_gelu_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_a,
+    const Tensor& input_b,
+    operations::unary::GeluVariant variant = operations::unary::GeluVariant::ACCURATE,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt);
+
+std::vector<Tensor> bias_gelu_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_tensor,
+    float bias,
+    operations::unary::GeluVariant variant = operations::unary::GeluVariant::ACCURATE,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt);
 
 std::vector<Tensor> bias_gelu_bw(
     const Tensor& grad_tensor,
