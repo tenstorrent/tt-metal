@@ -90,8 +90,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     TT_FATAL(num_cores > 0, "Reduce H requires at least one worker core");
 
     namespace rh = ttnn::kernel_lib::host;
-    const rh::ReduceHardwareConfig hardware{
-        a.device().arch(), fp32_dest_acc_en, dst_full_sync_en, a.device().l1_size_per_core()};
+    const rh::ReduceHardwareConfig hardware{a.device().arch(), fp32_dest_acc_en, dst_full_sync_en};
     auto plan_reduction = [&](uint32_t local_Wt) {
         return make_generic_reduce_sequence(
             a.tensor_spec(),

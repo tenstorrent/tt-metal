@@ -113,7 +113,7 @@ def create_program_artifacts(
                     reduce_dim=planner.ReduceDimension.ROW,
                     scalar=1.0 / origin_W,
                     fp32_mode=planner.ReduceFp32Mode.FAST,
-                    max_input_cb_bytes=BLOCK_SIZE * input_page_size,
+                    input_policy=planner.ReduceInputPolicy.BULK_WAIT_BULK_POP,
                 ),
             )
         )
@@ -124,7 +124,6 @@ def create_program_artifacts(
             arch=input_tensor.device().arch(),
             fp32_dest_acc_en=False,
             dst_full_sync_en=False,
-            available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
         ),
     )
     reduce_args = []

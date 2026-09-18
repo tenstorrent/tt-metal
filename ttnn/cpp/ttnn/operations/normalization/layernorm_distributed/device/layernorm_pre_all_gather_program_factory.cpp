@@ -89,8 +89,9 @@ ttnn::kernel_lib::host::ReducePlan make_pre_norm_reduce_plan(
         ReduceOpDim::W,
         1.0F,
         accurate ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast,
-        hardware);
-    plan.input_policy = compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop;
+        hardware,
+        compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop);
+
     return plan;
 }
 
@@ -162,8 +163,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t in0_tiles = Wt * double_buffer_constant;
-    const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
-    const uint32_t fused_tiles = Wt;                           // a + b
+    const uint32_t res_tiles = Wt * double_buffer_constant;  // residual b
+    const uint32_t fused_tiles = Wt;                         // a + b
 
     const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
     uint32_t out0_tiles = 1;
@@ -230,10 +231,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
         output.dtype(),
         unpack_fp32_active,
-        {device->arch(),
-         fp32_dest_acc_en,
-         operation_attributes.compute_kernel_config.dst_full_sync_en,
-         device->l1_size_per_core()});
+        {device->arch(), fp32_dest_acc_en, operation_attributes.compute_kernel_config.dst_full_sync_en});
     const auto reduce_compute_args = rh::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
     const auto reduce_auxiliary_args =
         rh::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
@@ -475,8 +473,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
 
     const uint32_t double_buffer_constant = 2;
     const uint32_t in0_tiles = Wt * double_buffer_constant;
-    const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
-    const uint32_t fused_tiles = Wt;                           // a + b
+    const uint32_t res_tiles = Wt * double_buffer_constant;  // residual b
+    const uint32_t fused_tiles = Wt;                         // a + b
 
     const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
     uint32_t out0_tiles = 1;
@@ -549,10 +547,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
         unpack_fp32_active,
-        {device->arch(),
-         fp32_dest_acc_en,
-         operation_attributes.compute_kernel_config.dst_full_sync_en,
-         device->l1_size_per_core()});
+        {device->arch(), fp32_dest_acc_en, operation_attributes.compute_kernel_config.dst_full_sync_en});
     const auto reduce_compute_args = rh::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
     const auto reduce_auxiliary_args =
         rh::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();

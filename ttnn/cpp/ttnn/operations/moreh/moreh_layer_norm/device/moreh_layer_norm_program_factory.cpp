@@ -184,19 +184,13 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
                 is_lastdim_layer_norm ? ReduceOpDim::W : ReduceOpDim::HW,
                 1.0F / static_cast<float>(reduce_elements),
                 ReduceFp32Mode::Fast,
-                im7_t * intermed_single_tile_size});
+                compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop});
     }
     auto moment_sequence = reduce_host::make_reduce_sequence_plan(
         moment_calls,
         {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
-        {.arch = device->arch(),
-         .fp32_dest_acc_en = fp32_dest_acc_en,
-         .dst_full_sync_en = dst_full_sync_en,
-         .available_l1_bytes = 32 * intermed_single_tile_size});
+        {.arch = device->arch(), .fp32_dest_acc_en = fp32_dest_acc_en, .dst_full_sync_en = dst_full_sync_en});
     moment_sequence.calls.back().accumulation_index = num_blocks - 1;
-    for (auto& call : moment_sequence.calls) {
-        call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
-    }
     const auto* auxiliary = moment_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
     const uint32_t in1_t = moment_sequence.auxiliary.tiles.size();
     const auto append_moment_args = [&](auto& args) {
@@ -240,23 +234,23 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
         });
     };
 
-    push_cb(static_cast<uint8_t>(CBIndex::c_0), in0_t, cb_data_format);       // input
+    push_cb(static_cast<uint8_t>(CBIndex::c_0), in0_t, cb_data_format);          // input
     push_cb(static_cast<uint8_t>(CBIndex::c_1), in1_t, auxiliary->data_format);  // scaler
-    push_cb(static_cast<uint8_t>(CBIndex::c_2), in2_t, cb_data_format);       // epsilon
-    push_cb(static_cast<uint8_t>(CBIndex::c_3), in3_t, cb_data_format);       // gamma
-    push_cb(static_cast<uint8_t>(CBIndex::c_4), in4_t, cb_data_format);       // beta
-    push_cb(static_cast<uint8_t>(CBIndex::c_5), in5_t, cb_data_format);       // mask_h
-    push_cb(static_cast<uint8_t>(CBIndex::c_6), in6_t, cb_data_format);       // mask_w
-    push_cb(static_cast<uint8_t>(CBIndex::c_16), out0_t, cb_data_format);     // output
-    push_cb(static_cast<uint8_t>(CBIndex::c_17), out1_t, cb_data_format);     // mean
-    push_cb(static_cast<uint8_t>(CBIndex::c_18), out2_t, cb_data_format);     // rstd
-    push_cb(static_cast<uint8_t>(CBIndex::c_24), im0_t, intermed_cb_format);  // E[x]
-    push_cb(static_cast<uint8_t>(CBIndex::c_25), im1_t, intermed_cb_format);  // x - E[x]
-    push_cb(static_cast<uint8_t>(CBIndex::c_27), im3_t, intermed_cb_format);  // Sum[(x - E[x])^2]
-    push_cb(static_cast<uint8_t>(CBIndex::c_28), im4_t, intermed_cb_format);  // E[(x - E[x])^2] = Var[x]
-    push_cb(static_cast<uint8_t>(CBIndex::c_29), im5_t, intermed_cb_format);  // 1.0/(sqrt(Var[x] + eps))
-    push_cb(static_cast<uint8_t>(CBIndex::c_30), im6_t, intermed_cb_format);  // y * gamm + beta
-    push_cb(static_cast<uint8_t>(CBIndex::c_31), im7_t, intermed_cb_format);  // Sum[x]
+    push_cb(static_cast<uint8_t>(CBIndex::c_2), in2_t, cb_data_format);          // epsilon
+    push_cb(static_cast<uint8_t>(CBIndex::c_3), in3_t, cb_data_format);          // gamma
+    push_cb(static_cast<uint8_t>(CBIndex::c_4), in4_t, cb_data_format);          // beta
+    push_cb(static_cast<uint8_t>(CBIndex::c_5), in5_t, cb_data_format);          // mask_h
+    push_cb(static_cast<uint8_t>(CBIndex::c_6), in6_t, cb_data_format);          // mask_w
+    push_cb(static_cast<uint8_t>(CBIndex::c_16), out0_t, cb_data_format);        // output
+    push_cb(static_cast<uint8_t>(CBIndex::c_17), out1_t, cb_data_format);        // mean
+    push_cb(static_cast<uint8_t>(CBIndex::c_18), out2_t, cb_data_format);        // rstd
+    push_cb(static_cast<uint8_t>(CBIndex::c_24), im0_t, intermed_cb_format);     // E[x]
+    push_cb(static_cast<uint8_t>(CBIndex::c_25), im1_t, intermed_cb_format);     // x - E[x]
+    push_cb(static_cast<uint8_t>(CBIndex::c_27), im3_t, intermed_cb_format);     // Sum[(x - E[x])^2]
+    push_cb(static_cast<uint8_t>(CBIndex::c_28), im4_t, intermed_cb_format);     // E[(x - E[x])^2] = Var[x]
+    push_cb(static_cast<uint8_t>(CBIndex::c_29), im5_t, intermed_cb_format);     // 1.0/(sqrt(Var[x] + eps))
+    push_cb(static_cast<uint8_t>(CBIndex::c_30), im6_t, intermed_cb_format);     // y * gamm + beta
+    push_cb(static_cast<uint8_t>(CBIndex::c_31), im7_t, intermed_cb_format);     // Sum[x]
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp

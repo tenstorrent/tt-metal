@@ -114,17 +114,14 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPreAllGatherProgramFactory::create_d
                 ReduceOpDim::W,
                 1.0F,
                 ReduceFp32Mode::Fast,
-                dst_reg_count * intermediate_tile_size});
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop});
     }
     // The sequence planner keeps one accumulation representation for every
     // block, including short tails which cannot use AccumulateViaAdd.
     auto reduce_sequence = rh::make_reduce_sequence_plan(
         reductions,
         {reduce_scalar_cb_id, accumulator_cb_id, output_cb_id},
-        {device->arch(), fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()});
-    for (auto& call : reduce_sequence.calls) {
-        call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop;
-    }
+        {device->arch(), fp32_dest_acc_en, dst_full_sync_en});
     reduce_sequence.calls.back().accumulation_index = num_reduce_calls - 1;
 
     std::vector<uint32_t> reader_compile_time_args = {

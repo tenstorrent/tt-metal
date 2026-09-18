@@ -72,10 +72,7 @@ enum class ReduceCbRole : std::uint8_t {
     Input,
     Output,
     Auxiliary,
-    RowMajorStaging,
-    TiledScratch,
     Accumulator,
-    PaddingIdentity,
 };
 
 enum class ReduceCbAlias : std::uint8_t { None, InputTensor, OutputTensor };
@@ -84,7 +81,6 @@ struct ReduceHardwareConfig {
     tt::ARCH arch = tt::ARCH::Invalid;
     bool fp32_dest_acc_en = false;
     bool dst_full_sync_en = false;
-    std::size_t available_l1_bytes = 0;
 };
 
 struct ReduceChunkPlan {
@@ -92,7 +88,7 @@ struct ReduceChunkPlan {
     std::uint32_t reduce_axis_tiles = 1;
     // Independent outputs retained in DEST for the chunk (greater than one for H reduction).
     std::uint32_t output_tiles = 1;
-    // Number of chunks which fit concurrently in the input allocation.
+    // Number of chunks required by the default input allocation.
     std::uint32_t buffers = 1;
     // Consume a full packet at short static edges, without reducing its unused tiles.
     bool padded = false;
@@ -125,23 +121,6 @@ struct ReduceAuxiliaryTileSpec {
 struct ReduceAuxiliaryPlan {
     std::uint32_t cb_id = no_cb_id;
     std::vector<ReduceAuxiliaryTileSpec> tiles;
-};
-
-// Dense row-major geometry. This replaces the former factory-local RmPlan.
-struct DenseRowMajorPlan {
-    std::uint32_t H_logical = 0;
-    std::uint32_t W_logical = 0;
-    std::uint32_t Ht_rm = 0;
-    std::uint32_t Wt = 0;
-    std::uint32_t rm_rows_per_tile = 0;
-    std::uint32_t wt_tiles_per_chunk = 1;
-    std::uint32_t ht_tiles_per_chunk = 1;
-    std::uint32_t chunk_row_bytes = 0;
-    std::uint32_t rm_staging_page_size = 0;
-    std::uint32_t padding_identity_bits = 0;
-    std::uint32_t src_datum_size = 0;
-    std::uint32_t dst_datum_size = 0;
-    std::uint32_t staging_buffers = 1;
 };
 
 struct ReducePlan {
@@ -184,8 +163,8 @@ struct ReducePlan {
     std::vector<ReduceAuxiliaryTileSpec> auxiliary_tiles;
     std::uint32_t partial_reduce_axis_elements = 0;
 
-    std::optional<DenseRowMajorPlan> row_major;
     std::vector<ReduceCbRequirement> cb_requirements;
+    // Descriptive allocation total only; no memory budget is accepted or checked.
     std::size_t total_owned_l1_bytes = 0;
 
     const ReduceCbRequirement* find_cb(ReduceCbRole role) const;
@@ -205,15 +184,13 @@ struct ReduceBlockSpec {
     std::uint32_t batches = 1;
     tt::tt_metal::DataType input_dtype = tt::tt_metal::DataType::BFLOAT16;
     tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::BFLOAT16;
-    tt::tt_metal::Layout input_layout = tt::tt_metal::Layout::TILE;
-    tt::tt_metal::Layout output_layout = tt::tt_metal::Layout::TILE;
     tt::tt_metal::Tile input_tile;
     tt::tt_metal::Tile output_tile;
     // Tiled resident input only. Zero means contiguous at padded_w.
     std::uint32_t input_row_stride_tiles = 0;
     // Present: caller supplies an existing local allocation of this many tiles.
-    // Input is already available to compute; output follows the ordinary pack protocol.
-    // Absent: the planner sizes the corresponding FIFO/staging allocation.
+    // Synchronization and consumption follow the explicitly requested input policy.
+    // Absent: the planner reports the required buffer capacity.
     std::optional<std::uint32_t> resident_input_tiles;
     std::optional<std::uint32_t> resident_output_tiles;
     // Absent: reduce the whole logical block. Present: also plan this known
@@ -253,7 +230,7 @@ struct ReduceCallConfig {
     // accumulated calls); other operations use 1. Geometry still determines masks.
     std::optional<float> scalar = std::nullopt;
     ReduceFp32Mode fp32_mode;
-    std::optional<std::size_t> max_input_cb_bytes = std::nullopt;
+    compute_kernel_lib::ReduceInputPolicy input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
 };
 
 using ReduceCbConfig = std::pair<std::uint32_t, ReduceCallConfig>;
@@ -332,15 +309,14 @@ private:
     std::vector<std::uint32_t> compile_time_args_;
 };
 
-// Plan one local reduction. A missing input-CB cap means "use the available
-// reduction-owned L1 budget". A supplied cap must be positive. Existing local
-// buffers are described by block.resident_input_tiles / resident_output_tiles.
+// Plan one local tiled reduction using the requested input policy. The planner
+// reports buffer requirements; the factory owns allocation and L1 fit checks.
+// Tilization and row-major staging belong to the caller.
 // INT32 and accurate FLOAT32 use SFPU SUM/MAX/MIN along W or H on non-Quasar
 // devices. Accurate FLOAT32 AVG must be lowered to SUM plus its normalization
 // scalar; SFPU HW reductions must be split into W and H. Tiled SFPU calls require
 // a tile-aligned reduction axis: callers with partial inputs must identity-pad
-// that axis and describe the padded view. Dense row-major staging already pads
-// its input to the reduction identity before tilizing.
+// that axis and describe the padded view.
 // scalar follows ReduceCallConfig: an explicit scale overrides AVG normalization.
 ReducePlan make_reduce_plan(
     const ReduceBlockSpec& block,
@@ -349,7 +325,7 @@ ReducePlan make_reduce_plan(
     std::optional<float> scalar,
     ReduceFp32Mode fp32_mode,
     const ReduceHardwareConfig& hardware,
-    std::optional<std::size_t> max_input_cb_bytes = std::nullopt);
+    compute_kernel_lib::ReduceInputPolicy input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
 
 inline ReducePlan make_reduce_plan(
     const ReduceBlockSpec& block,
@@ -357,8 +333,8 @@ inline ReducePlan make_reduce_plan(
     tt::tt_metal::ReduceOpDim reduce_dim,
     ReduceFp32Mode fp32_mode,
     const ReduceHardwareConfig& hardware,
-    std::optional<std::size_t> max_input_cb_bytes = std::nullopt) {
-    return make_reduce_plan(block, reduce_math, reduce_dim, std::nullopt, fp32_mode, hardware, max_input_cb_bytes);
+    compute_kernel_lib::ReduceInputPolicy input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile) {
+    return make_reduce_plan(block, reduce_math, reduce_dim, std::nullopt, fp32_mode, hardware, input_policy);
 }
 
 // Plan a kernel-ordered sequence of reductions whose results are accumulated

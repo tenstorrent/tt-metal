@@ -406,8 +406,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         tt::tt_metal::ReduceOpDim::W,
         1.0F,
         ReduceFp32Mode::Fast,
-        {q.device()->arch(), false, false, q.device()->l1_size_per_core()});
-    pool_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop;
+        {q.device()->arch(), false, false},
+        compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop);
+
     rh::ReduceCallArgs(pool_plan, {cb_id[cb_acc_strip_arg], cb_id[cb_scaler_arg], cb_id[cb_out_strip_arg]})
         .append_to(compute_ct);
     rh::ReduceAuxiliaryArgs({cb_id[cb_scaler_arg], pool_plan.auxiliary_tiles}).append_to(reader_ct);

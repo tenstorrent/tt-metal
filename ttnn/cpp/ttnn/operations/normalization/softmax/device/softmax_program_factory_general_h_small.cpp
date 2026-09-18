@@ -93,10 +93,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralHSmall::create_program_artif
     // Circular buffers
     namespace reduce_host = ttnn::kernel_lib::host;
     const reduce_host::ReduceHardwareConfig reduce_hardware{
-        .arch = arch,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .available_l1_bytes = (Ht + 8) * intermed_tile_size};
+        .arch = arch, .fp32_dest_acc_en = fp32_dest_acc_en, .dst_full_sync_en = dst_full_sync_en};
     auto max_plan = reduce_host::make_reduce_plan(
         reduce_host::ReduceBlockSpec::tiled(
             input.logical_shape()[-2], 32, input.dtype(), fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
@@ -105,8 +102,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralHSmall::create_program_artif
         1.0F,
         ReduceFp32Mode::Fast,
         reduce_hardware,
-        Ht * in_tile_size);
-    max_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop);
+
     // The exponentials retain their output-padding mask, so their padded
     // extent is a complete reduction input with zero-valued padding.
     auto sum_plan = reduce_host::make_reduce_plan(
@@ -120,8 +117,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralHSmall::create_program_artif
         1.0F,
         ReduceFp32Mode::Fast,
         reduce_hardware,
-        Ht * intermed_tile_size);
-    sum_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop);
+
     std::vector<uint32_t> compute_reduce_args;
     reduce_host::ReduceCallArgs(max_plan, {0, 1, 2}).append_to(compute_reduce_args);
     reduce_host::ReduceCallArgs(sum_plan, {0, 1, 2}).append_to(compute_reduce_args);

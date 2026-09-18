@@ -5,6 +5,14 @@
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
+The host planner accepts tiled storage and an explicit input policy, defaulting to
+`WaitAndPopPerTile`. It does not take an available-L1 budget or an input-CB byte
+cap. It reports CB requirements; the factory owns allocations and any row-major
+staging/tilization. Logical partial tiles and planned runtime tails remain supported.
+This example maps `bulk`, `stream`, `wait_upfront`, and `no_wait` to bulk, per-tile,
+wait-upfront/no-pop, and no-wait/no-pop policies respectively. H per-tile reductions select the native algorithm because
+additive H requires grouped input.
+
 ## The problem
 A single-strip reduce that collapses a `1 × W` (or `H × 1`) row of tiles into **one** output tile is easy — but real reductions run over a full 2-D tile block `(Ht, Wt, NC)` and emit **many** output tiles (one per non-reduced position, per batch). The reduce library handles this, but its datapath folds the cross-tile sum and the within-tile reduction together in one matmul-with-ones per input tile, so it pays that datapath once per input tile. This example takes the "accumulate the tiles, then finalize once on the SFPU" fast path — which wins on a single strip — and drives it over general 2-D blocks to see whether it still wins when the output is many tiles, and where the crossover is per dim.
 

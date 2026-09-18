@@ -377,6 +377,7 @@ def create_program_descriptor(
                         reduce_dim=planner.ReduceDimension.ROW,
                         scalar=1.0,
                         fp32_mode=planner.ReduceFp32Mode.FAST,
+                        input_policy=planner.ReduceInputPolicy.NO_WAIT_NO_POP,
                     ),
                 )
             ],
@@ -387,7 +388,6 @@ def create_program_descriptor(
                 arch=input_tensors[0].device().arch(),
                 fp32_dest_acc_en=False,
                 dst_full_sync_en=False,
-                available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
             ),
         )
         sequence.append_to(compile_time_args)

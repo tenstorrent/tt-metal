@@ -146,11 +146,7 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
     const auto data_format = tt_metal::datatype_to_dataformat_converter(output_grad.dtype());
     const auto single_tile_size = tt::tile_size(data_format);
     auto reduction = make_moreh_reduce_blocks(
-        num_inner_tiles,
-        ReduceOpDim::HW,
-        output_grad.dtype(),
-        output_grad.dtype(),
-        {device->arch(), false, false, device->l1_size_per_core()});
+        num_inner_tiles, ReduceOpDim::HW, output_grad.dtype(), output_grad.dtype(), {device->arch(), false, false});
     const auto& auxiliary =
         *reduction.sequence.calls.front().plan.find_cb(ttnn::kernel_lib::host::ReduceCbRole::Auxiliary);
     const uint32_t in4_t = reduction.sequence.auxiliary.tiles.size();
@@ -185,10 +181,10 @@ MorehGroupNormBackwardInputGradOperation::MorehGroupNormBackwardInputGradFactory
         });
     };
 
-    add_dfb(DY, in0_t);         // output_grad
-    add_dfb(X, in1_t);          // input
-    add_dfb(MEAN, in2_t);       // mean
-    add_dfb(RSTD, in3_t);       // rstd
+    add_dfb(DY, in0_t);    // output_grad
+    add_dfb(X, in1_t);     // input
+    add_dfb(MEAN, in2_t);  // mean
+    add_dfb(RSTD, in3_t);  // rstd
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = SCALER,
         .entry_size = auxiliary.page_size,

@@ -88,10 +88,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
 
     namespace reduce_host = ttnn::kernel_lib::host;
     const reduce_host::ReduceHardwareConfig reduce_hardware{
-        .arch = arch,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .available_l1_bytes = 24 * tile_size_intermed};
+        .arch = arch, .fp32_dest_acc_en = fp32_dest_acc_en, .dst_full_sync_en = dst_full_sync_en};
     const auto max_plan = reduce_host::make_reduce_plan(
         reduce_host::ReduceBlockSpec::tiled(
             input.logical_shape()[-2], 32, input.dtype(), fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype()),
@@ -100,7 +97,7 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
         1.0F,
         ReduceFp32Mode::Fast,
         reduce_hardware,
-        2 * tile_size_data);
+        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
 
     // Keep a full block with the tail so long sums use AccumulateViaAdd
     // consistently across the seed, repeated middle, and final calls.
@@ -125,14 +122,11 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
                 ReduceOpDim::H,
                 1.0F,
                 ReduceFp32Mode::Fast,
-                reduce_buffer_tiles * tile_size_intermed});
+                compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop});
     }
     auto sum_sequence = reduce_host::make_reduce_sequence_plan(
         reductions, {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2}, reduce_hardware);
     sum_sequence.calls.back().accumulation_index = num_blocks - 1;
-    for (auto& call : sum_sequence.calls) {
-        call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
-    }
     std::vector<uint32_t> compute_reduce_args;
     reduce_host::ReduceCallArgs(max_plan, {0, 1, 2}).append_to(compute_reduce_args);
     const auto sum_args = sum_sequence.get_compile_time_args();

@@ -43,9 +43,7 @@ void bind_reduce_planner(nb::module_& mod) {
     nb::enum_<ReduceFp32Mode>(planner, "ReduceFp32Mode")
         .value("FAST", ReduceFp32Mode::Fast)
         .value("ACCURATE", ReduceFp32Mode::Accurate);
-    nb::enum_<ttnn::kernel_lib::ReducePath>(planner, "ReducePath")
-        .value("TILED", ttnn::kernel_lib::ReducePath::Tiled)
-        .value("DENSE_ROW_MAJOR", ttnn::kernel_lib::ReducePath::DenseRowMajor);
+    nb::enum_<ttnn::kernel_lib::ReducePath>(planner, "ReducePath").value("TILED", ttnn::kernel_lib::ReducePath::Tiled);
     nb::enum_<ttnn::kernel_lib::ReduceAccumulationMode>(planner, "ReduceAccumulationMode")
         .value("NONE", ttnn::kernel_lib::ReduceAccumulationMode::None)
         .value("INTERMEDIATE", ttnn::kernel_lib::ReduceAccumulationMode::Intermediate)
@@ -81,10 +79,7 @@ void bind_reduce_planner(nb::module_& mod) {
         .value("INPUT", host::ReduceCbRole::Input)
         .value("OUTPUT", host::ReduceCbRole::Output)
         .value("AUXILIARY", host::ReduceCbRole::Auxiliary)
-        .value("ROW_MAJOR_STAGING", host::ReduceCbRole::RowMajorStaging)
-        .value("TILED_SCRATCH", host::ReduceCbRole::TiledScratch)
-        .value("ACCUMULATOR", host::ReduceCbRole::Accumulator)
-        .value("PADDING_IDENTITY", host::ReduceCbRole::PaddingIdentity);
+        .value("ACCUMULATOR", host::ReduceCbRole::Accumulator);
     nb::enum_<host::ReduceCbAlias>(planner, "ReduceCbAlias")
         .value("NONE", host::ReduceCbAlias::None)
         .value("INPUT_TENSOR", host::ReduceCbAlias::InputTensor)
@@ -98,25 +93,16 @@ void bind_reduce_planner(nb::module_& mod) {
     nb::class_<host::ReduceHardwareConfig>(planner, "ReduceHardwareConfig")
         .def(
             "__init__",
-            [](host::ReduceHardwareConfig* self,
-               tt::ARCH arch,
-               bool fp32_dest_acc_en,
-               bool dst_full_sync_en,
-               std::size_t available_l1_bytes) {
+            [](host::ReduceHardwareConfig* self, tt::ARCH arch, bool fp32_dest_acc_en, bool dst_full_sync_en) {
                 new (self) host::ReduceHardwareConfig{
-                    .arch = arch,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .dst_full_sync_en = dst_full_sync_en,
-                    .available_l1_bytes = available_l1_bytes};
+                    .arch = arch, .fp32_dest_acc_en = fp32_dest_acc_en, .dst_full_sync_en = dst_full_sync_en};
             },
             nb::arg("arch"),
             nb::arg("fp32_dest_acc_en"),
-            nb::arg("dst_full_sync_en"),
-            nb::arg("available_l1_bytes"))
+            nb::arg("dst_full_sync_en"))
         .def_rw("arch", &host::ReduceHardwareConfig::arch)
         .def_rw("fp32_dest_acc_en", &host::ReduceHardwareConfig::fp32_dest_acc_en)
-        .def_rw("dst_full_sync_en", &host::ReduceHardwareConfig::dst_full_sync_en)
-        .def_rw("available_l1_bytes", &host::ReduceHardwareConfig::available_l1_bytes);
+        .def_rw("dst_full_sync_en", &host::ReduceHardwareConfig::dst_full_sync_en);
 
     nb::class_<host::ReduceChunkPlan>(planner, "ReduceChunkPlan")
         .def_ro("reduce_axis_tiles", &host::ReduceChunkPlan::reduce_axis_tiles)
@@ -165,21 +151,6 @@ void bind_reduce_planner(nb::module_& mod) {
             },
             nb::arg("compile_time_args"),
             "Append the aggregate auxiliary-CB record to dataflow-kernel arguments.");
-
-    nb::class_<host::DenseRowMajorPlan>(planner, "DenseRowMajorPlan")
-        .def_ro("H_logical", &host::DenseRowMajorPlan::H_logical)
-        .def_ro("W_logical", &host::DenseRowMajorPlan::W_logical)
-        .def_ro("Ht_rm", &host::DenseRowMajorPlan::Ht_rm)
-        .def_ro("Wt", &host::DenseRowMajorPlan::Wt)
-        .def_ro("rm_rows_per_tile", &host::DenseRowMajorPlan::rm_rows_per_tile)
-        .def_ro("wt_tiles_per_chunk", &host::DenseRowMajorPlan::wt_tiles_per_chunk)
-        .def_ro("ht_tiles_per_chunk", &host::DenseRowMajorPlan::ht_tiles_per_chunk)
-        .def_ro("chunk_row_bytes", &host::DenseRowMajorPlan::chunk_row_bytes)
-        .def_ro("rm_staging_page_size", &host::DenseRowMajorPlan::rm_staging_page_size)
-        .def_ro("padding_identity_bits", &host::DenseRowMajorPlan::padding_identity_bits)
-        .def_ro("src_datum_size", &host::DenseRowMajorPlan::src_datum_size)
-        .def_ro("dst_datum_size", &host::DenseRowMajorPlan::dst_datum_size)
-        .def_ro("staging_buffers", &host::DenseRowMajorPlan::staging_buffers);
 
     nb::class_<host::ReduceValidShape>(planner, "ReduceValidShape")
         .def(
@@ -230,7 +201,6 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_ro("partial_mode", &host::ReducePlan::partial_mode)
         .def_ro("auxiliary_tiles", &host::ReducePlan::auxiliary_tiles)
         .def_ro("partial_reduce_axis_elements", &host::ReducePlan::partial_reduce_axis_elements)
-        .def_ro("row_major", &host::ReducePlan::row_major)
         .def_ro("cb_requirements", &host::ReducePlan::cb_requirements)
         .def_ro("total_owned_l1_bytes", &host::ReducePlan::total_owned_l1_bytes)
         .def(
@@ -271,8 +241,6 @@ void bind_reduce_planner(nb::module_& mod) {
                uint32_t batches,
                std::optional<uint32_t> padded_h,
                std::optional<uint32_t> padded_w,
-               tt::tt_metal::Layout input_layout,
-               tt::tt_metal::Layout output_layout,
                tt::tt_metal::Tile input_tile,
                tt::tt_metal::Tile output_tile,
                uint32_t input_row_stride_tiles,
@@ -284,8 +252,6 @@ void bind_reduce_planner(nb::module_& mod) {
                     host::ReduceBlockSpec::tiled(logical_h, logical_w, input_dtype, output_dtype, batches, input_tile);
                 block.padded_h = padded_h.value_or(block.padded_h);
                 block.padded_w = padded_w.value_or(block.padded_w);
-                block.input_layout = input_layout;
-                block.output_layout = output_layout;
                 block.output_tile = output_tile;
                 block.input_row_stride_tiles = input_row_stride_tiles;
                 block.resident_input_tiles = resident_input_tiles;
@@ -302,8 +268,6 @@ void bind_reduce_planner(nb::module_& mod) {
             nb::arg("batches") = 1,
             nb::arg("padded_h") = nb::none(),
             nb::arg("padded_w") = nb::none(),
-            nb::arg("input_layout") = tt::tt_metal::Layout::TILE,
-            nb::arg("output_layout") = tt::tt_metal::Layout::TILE,
             nb::arg("input_tile") = tt::tt_metal::Tile{},
             nb::arg("output_tile") = tt::tt_metal::Tile{},
             nb::arg("input_row_stride_tiles") = 0,
@@ -320,8 +284,6 @@ void bind_reduce_planner(nb::module_& mod) {
         .def_rw("batches", &host::ReduceBlockSpec::batches)
         .def_rw("input_dtype", &host::ReduceBlockSpec::input_dtype)
         .def_rw("output_dtype", &host::ReduceBlockSpec::output_dtype)
-        .def_rw("input_layout", &host::ReduceBlockSpec::input_layout)
-        .def_rw("output_layout", &host::ReduceBlockSpec::output_layout)
         .def_rw("input_tile", &host::ReduceBlockSpec::input_tile)
         .def_rw("output_tile", &host::ReduceBlockSpec::output_tile)
         .def_rw("input_row_stride_tiles", &host::ReduceBlockSpec::input_row_stride_tiles)
@@ -339,22 +301,22 @@ void bind_reduce_planner(nb::module_& mod) {
                tt::tt_metal::ReduceOpDim reduce_dim,
                std::optional<float> scalar,
                ReduceFp32Mode fp32_mode,
-               std::optional<std::size_t> max_input_cb_bytes) {
-                new (self) host::ReduceCallConfig{
-                    std::move(block), reduce_math, reduce_dim, scalar, fp32_mode, max_input_cb_bytes};
+               compute_kernel_lib::ReduceInputPolicy input_policy) {
+                new (self)
+                    host::ReduceCallConfig{std::move(block), reduce_math, reduce_dim, scalar, fp32_mode, input_policy};
             },
             nb::arg("block"),
             nb::arg("reduce_math"),
             nb::arg("reduce_dim"),
             nb::arg("scalar") = nb::none(),
             nb::arg("fp32_mode") = ReduceFp32Mode::Fast,
-            nb::arg("max_input_cb_bytes") = nb::none())
+            nb::arg("input_policy") = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile)
         .def_rw("block", &host::ReduceCallConfig::block)
         .def_rw("reduce_math", &host::ReduceCallConfig::reduce_math)
         .def_rw("reduce_dim", &host::ReduceCallConfig::reduce_dim)
         .def_rw("scalar", &host::ReduceCallConfig::scalar)
         .def_rw("fp32_mode", &host::ReduceCallConfig::fp32_mode)
-        .def_rw("max_input_cb_bytes", &host::ReduceCallConfig::max_input_cb_bytes);
+        .def_rw("input_policy", &host::ReduceCallConfig::input_policy);
 
     nb::class_<host::ReduceSequenceCbIds>(planner, "ReduceSequenceCbIds")
         .def(
@@ -430,14 +392,14 @@ void bind_reduce_planner(nb::module_& mod) {
             std::optional<float>,
             ReduceFp32Mode,
             const host::ReduceHardwareConfig&,
-            std::optional<std::size_t>>(&host::make_reduce_plan),
+            compute_kernel_lib::ReduceInputPolicy>(&host::make_reduce_plan),
         nb::arg("block"),
         nb::arg("reduce_math"),
         nb::arg("reduce_dim"),
         nb::arg("scalar"),
         nb::arg("fp32_mode"),
         nb::arg("hardware"),
-        nb::arg("max_input_cb_bytes") = nb::none(),
+        nb::arg("input_policy") = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
         "Plan one reduction. An explicit scalar overrides normalization; None derives AVG scaling from geometry.");
     planner.def(
         "make_reduce_plan",
@@ -447,13 +409,13 @@ void bind_reduce_planner(nb::module_& mod) {
             tt::tt_metal::ReduceOpDim,
             ReduceFp32Mode,
             const host::ReduceHardwareConfig&,
-            std::optional<std::size_t>>(&host::make_reduce_plan),
+            compute_kernel_lib::ReduceInputPolicy>(&host::make_reduce_plan),
         nb::arg("block"),
         nb::arg("reduce_math"),
         nb::arg("reduce_dim"),
         nb::arg("fp32_mode"),
         nb::arg("hardware"),
-        nb::arg("max_input_cb_bytes") = nb::none(),
+        nb::arg("input_policy") = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
         "Plan one reduction with geometry-derived AVG normalization, or unit scaling for other operations.");
     planner.def(
         "make_reduce_sequence_plan",

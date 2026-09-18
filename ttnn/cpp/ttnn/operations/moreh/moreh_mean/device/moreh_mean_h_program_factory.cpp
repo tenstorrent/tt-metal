@@ -82,11 +82,8 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
         ReduceOpDim::H,
         1.0F / origin_H,
         ReduceFp32Mode::Fast,
-        {.arch = device->arch(),
-         .fp32_dest_acc_en = fp32_dest_acc_en,
-         .dst_full_sync_en = dst_full_sync_en,
-         .available_l1_bytes = 8 * tile_size(data_format)},
-        num_input_tiles * tile_size(data_format));
+        {.arch = device->arch(), .fp32_dest_acc_en = fp32_dest_acc_en, .dst_full_sync_en = dst_full_sync_en},
+        compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop);
     const auto* auxiliary = reduce_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
     // The optional endpoint has no generated dfb::scaler token when omitted.
     const KernelSpec::CompilerOptions::Defines auxiliary_defines{

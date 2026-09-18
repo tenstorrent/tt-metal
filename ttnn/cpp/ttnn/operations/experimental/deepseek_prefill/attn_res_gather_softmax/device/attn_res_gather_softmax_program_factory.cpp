@@ -343,8 +343,8 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         ReduceOpDim::W,
         1.0F,
         ReduceFp32Mode::Fast,
-        {target_device->arch(), fp32_dest_acc_en, dst_full_sync_en, target_device->l1_size_per_core()});
-    reduce_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop;
+        {target_device->arch(), fp32_dest_acc_en, dst_full_sync_en},
+        compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop);
 
     std::vector<uint32_t> reader_ct_args = {Wt, static_cast<uint32_t>(fuse_add)};
     TensorAccessorArgs(*running_sum.buffer()).append_to(reader_ct_args);

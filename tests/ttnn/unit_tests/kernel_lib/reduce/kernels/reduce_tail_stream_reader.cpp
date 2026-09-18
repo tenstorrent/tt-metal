@@ -20,9 +20,11 @@ void kernel_main() {
     const uint32_t batches = runtime.has_override() ? runtime.batches : Call::batches;
     constexpr uint32_t axis_chunk = Call::reduce_axis_chunk_tiles;
     constexpr uint32_t output_chunk = Call::output_chunk_tiles;
-    constexpr uint32_t packet_tiles = axis_chunk * output_chunk;
+    constexpr bool chunked = Call::input_policy == compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop;
+    constexpr uint32_t packet_tiles = chunked ? axis_chunk * output_chunk : 1;
     const uint32_t packets =
-        Call::reduce_dim == ckernel::ReduceDim::REDUCE_ROW
+        !chunked ? batches * rows * columns
+        : Call::reduce_dim == ckernel::ReduceDim::REDUCE_ROW
             ? batches * rows * ((columns + axis_chunk - 1) / axis_chunk)
             : batches * ((columns + output_chunk - 1) / output_chunk) * ((rows + axis_chunk - 1) / axis_chunk);
     DataflowBuffer source(3);

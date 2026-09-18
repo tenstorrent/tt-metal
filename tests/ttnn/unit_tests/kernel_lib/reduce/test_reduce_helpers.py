@@ -23,7 +23,7 @@ PLAN_SEQUENCE_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_p
 PLAN_SEQUENCE_AUX_KERNEL = "tests/ttnn/unit_tests/kernel_lib/reduce/kernels/reduce_plan_sequence_aux.cpp"
 
 DIMS = ("REDUCE_ROW", "REDUCE_COL", "REDUCE_SCALAR")
-INPUT_MODES = ("bulk", "chunked", "alias")
+INPUT_MODES = ("bulk", "chunked", "per_tile", "alias")
 
 _PLANNER = ttnn.reduce_planner
 _REDUCE_MATH = {
@@ -45,6 +45,7 @@ _INPUT_POLICY = {
     "bulk": _PLANNER.ReduceInputPolicy.BULK_WAIT_BULK_POP,
     "chunked": _PLANNER.ReduceInputPolicy.CHUNKED_WAIT_CHUNKED_POP,
     "alias": _PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
+    "per_tile": _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE,
 }
 _ALGORITHM = {
     "REDUCE_TILE": _PLANNER.ReduceAlgorithm.REDUCE_TILE,
@@ -115,6 +116,7 @@ class ReduceCase:
             self.pool in ("SUM", "AVG")
             and self.input_dtype in ("bf16", "fp32", "bf8", "bf4")
             and self.fp32_mode != "Accurate"
+            and not (self.dim == "REDUCE_COL" and self.input_mode == "per_tile")
             and reduced_tiles * self.calls >= (4 if self.dim == "REDUCE_ROW" else 8)
         )
         return "ACCUMULATE_VIA_ADD" if additive else "REDUCE_TILE"
@@ -132,7 +134,7 @@ def _input_space_cases() -> list[ReduceCase]:
     cases = []
     for dim in DIMS:
         rows, cols, batches = _shape_for_dim(dim)
-        modes = ("bulk", "chunked", "alias") if dim != "REDUCE_SCALAR" else ("bulk", "chunked")
+        modes = ("bulk", "chunked", "per_tile", "alias") if dim != "REDUCE_SCALAR" else ("bulk", "chunked", "per_tile")
         for input_mode in modes:
             for accumulated in (False, True):
                 cases.append(
@@ -146,6 +148,7 @@ def _input_space_cases() -> list[ReduceCase]:
                         input_mode=input_mode,
                         calls=2 if accumulated else 1,
                         output_dtype="fp32",
+                        allow_empty_auxiliary=input_mode == "per_tile",
                     )
                 )
     return cases
@@ -415,7 +418,9 @@ def _assert_complete_case_matrix() -> None:
     expected = {
         (dim, input_mode, accumulated)
         for dim in DIMS
-        for input_mode in (("bulk", "chunked", "alias") if dim != "REDUCE_SCALAR" else ("bulk", "chunked"))
+        for input_mode in (
+            ("bulk", "chunked", "per_tile", "alias") if dim != "REDUCE_SCALAR" else ("bulk", "chunked", "per_tile")
+        )
         for accumulated in (False, True)
     }
     assert actual == expected
@@ -489,19 +494,6 @@ def _memory_strategy(case: ReduceCase) -> ttnn.ShardStrategy:
     return ttnn.ShardStrategy.WIDTH if case.dim == "REDUCE_COL" else ttnn.ShardStrategy.HEIGHT
 
 
-def _max_input_cb_bytes(case: ReduceCase, input_dtype: ttnn.DataType) -> int | None:
-    assert case.input_mode in INPUT_MODES
-    if case.input_mode == "bulk":
-        return None
-    if case.input_mode == "alias":
-        return None
-    assert case.input_mode == "chunked"
-    # Keep two buffers of two reduction-axis tiles. H reductions retain four
-    # output columns in DEST, so each input buffer needs eight tiles.
-    cap_tiles = 16 if case.dim == "REDUCE_COL" else 4
-    return cap_tiles * ttnn.tile_size(input_dtype)
-
-
 def _serialize_plan(plan) -> tuple[list[int], list[int]]:
     compute_compile_time_args = [17]
     plan.append_to(compute_compile_time_args)
@@ -544,7 +536,7 @@ def _make_plan(
                 reduce_dim=_REDUCE_DIM[case.dim],
                 scalar=case.planner_scalar,
                 fp32_mode=_FP32_MODE[case.fp32_mode],
-                max_input_cb_bytes=_max_input_cb_bytes(case, input_dtype),
+                input_policy=_INPUT_POLICY[case.input_mode],
             ),
         )
         for cb_id in input_cb_ids
@@ -560,7 +552,6 @@ def _make_plan(
             arch=device.arch(),
             fp32_dest_acc_en=case.fp32_dest_acc_en,
             dst_full_sync_en=False,
-            available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
         ),
     )
     _assert_plan(case, plan, input_cb_ids)
@@ -631,7 +622,6 @@ def _repeated_input_cb_plan(input_tensor, output):
         arch=input_tensor.device().arch(),
         fp32_dest_acc_en=False,
         dst_full_sync_en=False,
-        available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
     )
     configs = [
         (
@@ -649,6 +639,7 @@ def _repeated_input_cb_plan(input_tensor, output):
                 reduce_dim=planner.ReduceDimension.ROW,
                 scalar=1.0,
                 fp32_mode=planner.ReduceFp32Mode.FAST,
+                input_policy=planner.ReduceInputPolicy.NO_WAIT_NO_POP,
             ),
         )
         for _ in range(2)
@@ -750,6 +741,7 @@ def _physical_input(case: ReduceCase, logical: torch.Tensor, call) -> torch.Tens
     physical_tiles = torch.empty_like(logical_tiles)
 
     streams_by_col_chunk = case.dim == "REDUCE_COL" and call.plan.input_policy in (
+        _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE,
         _PLANNER.ReduceInputPolicy.BULK_WAIT_BULK_POP,
         _PLANNER.ReduceInputPolicy.CHUNKED_WAIT_CHUNKED_POP,
     )
@@ -957,14 +949,10 @@ def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):
     physical = torch.full((core_count, allocation_rows * TILE, row_stride * TILE), 128, dtype=torch.bfloat16)
     expected = []
     kernels, plans = [], []
-    resident_bytes = allocation_rows * row_stride * ttnn.tile_size(ttnn.bfloat16) + output_capacity * ttnn.tile_size(
-        ttnn.float32
-    )
     hardware = _PLANNER.ReduceHardwareConfig(
         arch=device.arch(),
         fp32_dest_acc_en=True,
         dst_full_sync_en=False,
-        available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size() - resident_bytes,
     )
     scalar = 1.0 / TILE if pool == "SUM" else 1.0
     for core_index, (height, width) in enumerate(local_shapes):
@@ -1000,6 +988,7 @@ def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):
                         _REDUCE_DIM[dim],
                         scalar,
                         _PLANNER.ReduceFp32Mode.FAST,
+                        input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
                     ),
                 )
             ],
@@ -1031,7 +1020,6 @@ def test_reduce_local_blocks_on_multiple_cores(device, dim, pool):
 
     # Reserve one common capacity even when the per-core recipes use fewer pages.
     auxiliary_tiles = max(len(plan.auxiliary.tiles) for plan in plans)
-    assert auxiliary_tiles * ttnn.tile_size(ttnn.bfloat16) <= hardware.available_l1_bytes
 
     def memory(shard_shape):
         return ttnn.create_sharded_memory_config(
@@ -1106,14 +1094,10 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
     output_capacity = max_batches * (max_h // TILE if dim == "REDUCE_ROW" else max_w // TILE)
     output_dtype = ttnn.float32 if fp32_dest else ttnn.bfloat16
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))])
-    input_bytes = allocation_rows * row_stride * ttnn.tile_size(ttnn.bfloat16)
-    output_bytes = output_capacity * ttnn.tile_size(output_dtype)
-    accumulator_bytes = output_bytes if calls > 1 else 0
     hardware = _PLANNER.ReduceHardwareConfig(
         arch=device.arch(),
         fp32_dest_acc_en=fp32_dest,
         dst_full_sync_en=False,
-        available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size() - input_bytes - output_bytes - accumulator_bytes,
     )
     scalar = explicit_scalar if pool == "AVG" else (1.0 / TILE if pool == "SUM" else 1.0)
 
@@ -1159,7 +1143,12 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
                 (
                     CB_INPUT,
                     _PLANNER.ReduceCallConfig(
-                        block, _REDUCE_MATH[pool], _REDUCE_DIM[dim], scalar, _PLANNER.ReduceFp32Mode.FAST
+                        block,
+                        _REDUCE_MATH[pool],
+                        _REDUCE_DIM[dim],
+                        scalar,
+                        _PLANNER.ReduceFp32Mode.FAST,
+                        input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
                     ),
                 )
                 for _ in range(calls)
@@ -1171,7 +1160,7 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
         plan = sequence.calls[0].plan
         assert plan.tail_plan is not None
         auxiliary_tiles = len(sequence.auxiliary.tiles)
-        assert auxiliary_tiles * ttnn.tile_size(ttnn.bfloat16) <= hardware.available_l1_bytes
+
         compute_args, auxiliary_args = _serialize_plan(sequence)
         if shape_index == 1:
             assert previous_args == (compute_args, auxiliary_args)
@@ -1281,8 +1270,16 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
     ),
 )
 @pytest.mark.parametrize("fp32_input", (False, True))
-def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_input):
+@pytest.mark.parametrize("input_policy", ("chunked", "per_tile", "bulk"))
+def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_input, input_policy):
     """Full and tail overrides use the same compiled kernels through repeated FIFO wraps."""
+    policy = {
+        "chunked": _PLANNER.ReduceInputPolicy.CHUNKED_WAIT_CHUNKED_POP,
+        "per_tile": _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE,
+        "bulk": _PLANNER.ReduceInputPolicy.BULK_WAIT_BULK_POP,
+    }[input_policy]
+    if input_policy == "per_tile" and dim == "REDUCE_COL":
+        algorithm = "REDUCE_TILE"
     input_dtype = ttnn.float32 if fp32_input else ttnn.bfloat16
     for height, width, batches in ((135, 135, 2), (64, 64, 1), (1, 17, 2)):
         block = _PLANNER.ReduceBlockSpec(
@@ -1295,7 +1292,6 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
             tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(height, width, batches)),
         )
         scalar = None if pool == "AVG" else 1.0
-        cap_tiles = 4 if dim == "REDUCE_ROW" else 12
         sequence = _PLANNER.make_reduce_sequence_plan(
             reductions=[
                 (
@@ -1306,7 +1302,7 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
                         _REDUCE_DIM[dim],
                         scalar,
                         _PLANNER.ReduceFp32Mode.FAST,
-                        max_input_cb_bytes=cap_tiles * ttnn.tile_size(input_dtype),
+                        input_policy=policy,
                     ),
                 )
             ],
@@ -1315,19 +1311,23 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
                 arch=device.arch(),
                 fp32_dest_acc_en=True,
                 dst_full_sync_en=False,
-                available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
             ),
             algorithm=_ALGORITHM[algorithm],
         )
         plan = sequence.calls[0].plan
-        assert plan.input_policy == _PLANNER.ReduceInputPolicy.CHUNKED_WAIT_CHUNKED_POP
-        axis, group = plan.chunk.reduce_axis_tiles, plan.chunk.output_tiles
+        assert plan.input_policy == policy
         input_pages = next(cb.page_count for cb in plan.cb_requirements if cb.role == _PLANNER.ReduceCbRole.INPUT)
-        assert input_pages <= cap_tiles
+        if input_policy != "bulk":
+            assert input_pages == (2 if input_policy == "chunked" else 1)
+        else:
+            assert input_pages % plan.chunk.input_tiles == 0
+            assert input_pages % plan.tail_plan.chunk.input_tiles == 0
         compute_args, auxiliary_args = _serialize_plan(sequence)
         # The test reader uses the same call metadata to count the planned packets.
         auxiliary_args += sequence.calls[0].compile_time_args
         for use_tail in (False, True):
+            variant = plan.tail_plan if use_tail else plan
+            axis, group = variant.chunk.reduce_axis_tiles, variant.chunk.output_tiles
             height, width, batches = (
                 (block.tail.shape.height, block.tail.shape.width, block.tail.shape.batches)
                 if use_tail
@@ -1348,6 +1348,8 @@ def test_reduce_runtime_tail_stream_wraps(device, dim, pool, algorithm, fp32_inp
                         for a in range(axis):
                             for o in range(group):
                                 h, w = (out + o, base + a) if dim == "REDUCE_ROW" else (base + a, out + o)
+                                if input_policy != "chunked" and (h >= ht or w >= wt):
+                                    continue
                                 tiles.append(
                                     padded[batch, h * TILE : (h + 1) * TILE, w * TILE : (w + 1) * TILE]
                                     if h < ht and w < wt
@@ -1456,7 +1458,9 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail):
             resident_output_tiles=output_tiles,
             tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(tail_height, tail_width)) if index else None,
         )
-        config = _PLANNER.ReduceCallConfig(block, _PLANNER.ReduceMath.AVG, _REDUCE_DIM[dim])
+        config = _PLANNER.ReduceCallConfig(
+            block, _PLANNER.ReduceMath.AVG, _REDUCE_DIM[dim], input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP
+        )
         assert config.scalar is None
         if scalar is not None:
             config.scalar = scalar
@@ -1469,7 +1473,6 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail):
             arch=device.arch(),
             fp32_dest_acc_en=True,
             dst_full_sync_en=False,
-            available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
         ),
         algorithm=_ALGORITHM[algorithm],
     )
@@ -1538,13 +1541,22 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset)
         tail=_PLANNER.ReduceTailConfig(_PLANNER.ReduceValidShape(32, 17)),
     )
     sequence = _PLANNER.make_reduce_sequence_plan(
-        reductions=[(0, _PLANNER.ReduceCallConfig(block, _PLANNER.ReduceMath.AVG, _PLANNER.ReduceDimension.ROW))],
+        reductions=[
+            (
+                0,
+                _PLANNER.ReduceCallConfig(
+                    block,
+                    _PLANNER.ReduceMath.AVG,
+                    _PLANNER.ReduceDimension.ROW,
+                    input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
+                ),
+            )
+        ],
         cb_ids=_PLANNER.ReduceSequenceCbIds(1, 16, 2),
         hardware=_PLANNER.ReduceHardwareConfig(
             arch=device.arch(),
             fp32_dest_acc_en=True,
             dst_full_sync_en=False,
-            available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
         ),
     )
     plan = sequence.calls[0].plan
@@ -1622,14 +1634,21 @@ def test_reduce_resident_hw_row_tail(device, algorithm):
     )
     sequence = _PLANNER.make_reduce_sequence_plan(
         reductions=[
-            (CB_INPUT, _PLANNER.ReduceCallConfig(block, _PLANNER.ReduceMath.AVG, _PLANNER.ReduceDimension.SCALAR))
+            (
+                CB_INPUT,
+                _PLANNER.ReduceCallConfig(
+                    block,
+                    _PLANNER.ReduceMath.AVG,
+                    _PLANNER.ReduceDimension.SCALAR,
+                    input_policy=_PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
+                ),
+            )
         ],
         cb_ids=_PLANNER.ReduceSequenceCbIds(CB_SCALER, CB_ACCUMULATOR, CB_OUTPUT),
         hardware=_PLANNER.ReduceHardwareConfig(
             arch=device.arch(),
             fp32_dest_acc_en=True,
             dst_full_sync_en=False,
-            available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
         ),
         algorithm=_ALGORITHM[algorithm],
     )
@@ -1848,7 +1867,7 @@ def test_reduce_helpers_complete_input_space(device, case: ReduceCase):
             expected.to(torch.float64),
             rtol=0.01,
             atol=0.01,
-            msg=case.name,
+            msg=lambda detail: f"{case.name}: {detail}",
         )
 
 

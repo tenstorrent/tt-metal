@@ -331,22 +331,21 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     const float reduce_divisor = static_cast<float>(num_rows_per_batch_per_core * num_datum_row_per_group) *
                                  (pad.active ? static_cast<float>(pad.logical_hw) / pad.padded_hw : 1.0F);
-    const auto reduce_plans =
-        use_welford ? GroupNormReducePlans{}
-                    : make_groupnorm_reduce_plans(
-                          block_ht,
-                          block_wt,
-                          1,
-                          1,
-                          1,
-                          1.0F / reduce_divisor,
-                          1.0F / (num_cores_per_batch * num_cores_per_group),
-                          im_data_format,
-                          {device->arch(), fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()},
-                          compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                          // Masking leaves input/mask unpack formats active. The new
-                          // mean call consumes intermediates and its planned auxiliary.
-                          compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT);
+    const auto reduce_plans = use_welford ? GroupNormReducePlans{}
+                                          : make_groupnorm_reduce_plans(
+                                                block_ht,
+                                                block_wt,
+                                                1,
+                                                1,
+                                                1,
+                                                1.0F / reduce_divisor,
+                                                1.0F / (num_cores_per_batch * num_cores_per_group),
+                                                im_data_format,
+                                                {device->arch(), fp32_dest_acc_en, dst_full_sync_en},
+                                                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                                                // Masking leaves input/mask unpack formats active. The new
+                                                // mean call consumes intermediates and its planned auxiliary.
+                                                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -1390,8 +1389,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             // Tile id for negative mask is same as input mask. Wrap on the set size, not the whole
             // tensor: under the pad correction the caller's mask carries a second (row-masked) set
             // beyond the first that the sharded writer never reads.
-            input_mask_tile_start_id =
-                (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
+            input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
         }
     }
 

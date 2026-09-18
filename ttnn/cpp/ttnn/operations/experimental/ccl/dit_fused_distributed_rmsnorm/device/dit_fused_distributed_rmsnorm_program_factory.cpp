@@ -285,8 +285,7 @@ uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows, uint32_t cap) {
 // Sizing derivation used in both spec computation (to size the stats scratch
 // tensor in `compute_output_specs`) and the program factory (to lay out
 // kernels + CBs). Single source of truth so the two cannot drift.
-DitFusedDistributedRmsnormSizing compute_sizing(
-    const DitFusedDistributedRmsnormParams& args, const Tensor& input) {
+DitFusedDistributedRmsnormSizing compute_sizing(const DitFusedDistributedRmsnormParams& args, const Tensor& input) {
     // Page geometry depends only on the input shape, ring size, links, and norm_type — NOT on
     // weight/bias/RoPE or the streaming decision (window_size is fixed: 1 here, sticks_per_packet *
     // stats_per_token on the mux path). So there is no tensor_args to consult.
@@ -411,8 +410,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     auto affine_tile_rows = [](const Tensor& t) -> uint32_t {
         return (t.physical_volume() / t.padded_shape()[-1]) / TILE_HEIGHT;  // padded tile-rows spanned
     };
-    const bool per_batch_weight =
-        has_weight && !per_token_weight && batch > 1 && affine_tile_rows(*weight) == batch;
+    const bool per_batch_weight = has_weight && !per_token_weight && batch > 1 && affine_tile_rows(*weight) == batch;
     const bool per_batch_bias = has_bias && !per_token_bias && batch > 1 && affine_tile_rows(*bias) == batch;
     // Broadcast reader read count: 1 row for true-broadcast, `batch` rows for per-batch adaLN.
     // Broadcast bulk-read count is one row (num_tile_cols): only TRUE broadcast [1,1,H] uses the
@@ -536,7 +534,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     std::vector<CoreCoord> worker_cores(all_cores_vec.begin(), all_cores_vec.begin() + num_workers);
     std::vector<CoreCoord> forwarder_cores;
     forwarder_cores.reserve(num_forwarders);
-for (uint32_t f = 0; f < num_forwarders; f++) {
+    for (uint32_t f = 0; f < num_forwarders; f++) {
         forwarder_cores.push_back(all_cores_vec[num_workers + f]);
     }
 
@@ -1064,8 +1062,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             ReduceOpDim::W,
             scalar,
             ReduceFp32Mode::Fast,
-            {device->arch(), fp32_dest_acc_en, false, device->l1_size_per_core()});
-        plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
+            {device->arch(), fp32_dest_acc_en, false},
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
+
         return plan;
     };
     const auto pre_reduce_plan = make_local_call(1.0F);

@@ -9,10 +9,10 @@ reduce plan to append a call count followed by complete, independently decodable
 calls. It issues those calls back to back; a fused kernel may instead place
 unrelated work between them.
 
-The legacy ``variant``, ``policy``, and reload-shaped arguments remain accepted
+The legacy ``variant`` and reload-shaped arguments remain accepted
 while callers migrate.  They no longer select compute implementations: shape,
-tensor specs, reduction semantics, hardware, and the input-CB L1 constraint are
-the inputs to the C++ planner.
+tensor specs, reduction semantics, hardware, and the requested input policy are
+the inputs to the C++ planner. The caller owns allocation and tilization.
 """
 
 import ttnn
@@ -256,19 +256,7 @@ def _hardware(input_tensor, fp32_dest):
         arch=input_tensor.device().arch(),
         fp32_dest_acc_en=fp32_dest,
         dst_full_sync_en=False,
-        available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
     )
-
-
-def _natural_input_cb_bytes(input_tensor, Ht, Wt, NC, row_stride=0):
-    physical_wt = row_stride or Wt
-    return NC * Ht * physical_wt * ttnn.tile_size(input_tensor.dtype)
-
-
-def _input_cb_budget(input_tensor, Ht, Wt, NC, policy):
-    if policy == "stream":
-        return 2 * ttnn.tile_size(input_tensor.dtype)
-    return _natural_input_cb_bytes(input_tensor, Ht, Wt, NC)
 
 
 def _input_cb_ids(count):
@@ -293,10 +281,18 @@ def _make_sequence_plan(
     partial_elems,
     policy,
     row_stride=0,
-    max_input_cb_bytes=None,
 ):
     _, logical_h, logical_w = _logical_input_shape(dim, Ht, Wt, NC, partial_elems)
-    resident = bool(row_stride) or (max_input_cb_bytes is None and policy == "no_wait" and dim != "scalar")
+    input_policy = {
+        "bulk": _PLANNER.ReduceInputPolicy.BULK_WAIT_BULK_POP,
+        "stream": _PLANNER.ReduceInputPolicy.WAIT_AND_POP_PER_TILE,
+        "wait_upfront": _PLANNER.ReduceInputPolicy.WAIT_UPFRONT_NO_POP,
+        "no_wait": _PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
+    }[policy]
+    # A strided example binds the existing shard directly; gaps are not a FIFO stream.
+    if row_stride:
+        input_policy = _PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP
+    resident = bool(row_stride) or policy in ("no_wait", "wait_upfront")
     block = _PLANNER.ReduceBlockSpec(
         logical_h,
         logical_w,
@@ -311,9 +307,6 @@ def _make_sequence_plan(
         resident_input_tiles=input_tensor.buffer_num_pages() if resident else None,
         allow_empty_auxiliary=True,
     )
-    cap = max_input_cb_bytes
-    if cap is None and not resident:
-        cap = _input_cb_budget(input_tensor, Ht, Wt, NC, policy)
     configs = [
         (
             cb_id,
@@ -323,7 +316,7 @@ def _make_sequence_plan(
                 reduce_dim=_REDUCE_DIM[dim],
                 scalar=scalar,
                 fp32_mode=_PLANNER.ReduceFp32Mode.FAST,
-                max_input_cb_bytes=cap,
+                input_policy=input_policy,
             ),
         )
         for cb_id in input_cb_ids
@@ -400,7 +393,6 @@ def create_program_descriptor(
     reconfig=None,
     row_stride=0,
     within_tile="collapse",
-    max_input_cb_bytes=None,
 ):
     if variant not in VARIANTS + _LEGACY_VARIANTS:
         raise ValueError(f"variant must be 'automatic', got {variant!r}")
@@ -442,7 +434,6 @@ def create_program_descriptor(
         partial_elems=partial_elems,
         policy=policy,
         row_stride=row_stride,
-        max_input_cb_bytes=max_input_cb_bytes,
     )
     fidelity = math_fidelity or ttnn.MathFidelity.HiFi4
     kernels = _planned_kernels(
@@ -484,7 +475,6 @@ def create_accumulate_program_descriptor(
     row_stride=0,
     reload="copy_pairs",
     acc_unpack_to_dest=False,
-    max_input_cb_bytes=None,
     avg_post_op=False,
 ):
     if dim not in DIMS:
@@ -521,7 +511,6 @@ def create_accumulate_program_descriptor(
         partial_elems=partial_elems,
         policy="bulk",
         row_stride=row_stride,
-        max_input_cb_bytes=max_input_cb_bytes,
     )
 
     fidelity = math_fidelity or ttnn.MathFidelity.HiFi4

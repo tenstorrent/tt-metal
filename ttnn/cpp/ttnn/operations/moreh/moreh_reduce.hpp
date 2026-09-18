@@ -37,12 +37,17 @@ inline MorehReduceBlocks make_moreh_reduce_blocks(
             input_dtype,
             output_dtype);
         block.resident_input_tiles = std::min(num_tiles, 2 * block_tiles - 1);
-        calls.emplace_back(0, rh::ReduceCallConfig{block, ReduceOpMath::SUM, dim, 1.0F, ReduceFp32Mode::Fast});
+        calls.emplace_back(
+            0,
+            rh::ReduceCallConfig{
+                block,
+                ReduceOpMath::SUM,
+                dim,
+                1.0F,
+                ReduceFp32Mode::Fast,
+                compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop});
     }
     auto sequence = rh::make_reduce_sequence_plan(calls, {1, 3, 2}, hardware);
-    for (auto& call : sequence.calls) {
-        call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
-    }
     if (num_blocks > 1) {
         sequence.calls.back().accumulation_index = num_blocks - 1;
     }

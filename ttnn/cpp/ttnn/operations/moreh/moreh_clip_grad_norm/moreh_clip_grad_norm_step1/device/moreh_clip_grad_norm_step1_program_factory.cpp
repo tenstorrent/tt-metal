@@ -95,9 +95,9 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
     const uint32_t im1_t = 1;  // |x|^p
     constexpr uint32_t reduce_block_tiles = 8;
     constexpr uint32_t im2_t = 2 * reduce_block_tiles - 1;  // resident transformed input
-    const uint32_t im3_t = 1;  // log(|x|)
-    const uint32_t im4_t = 1;  // exp(log(|x|) * decimal)
-    const uint32_t im5_t = 1;  // |x|^p * exp(log(|x|) * decimal)
+    const uint32_t im3_t = 1;                               // log(|x|)
+    const uint32_t im4_t = 1;                               // exp(log(|x|) * decimal)
+    const uint32_t im5_t = 1;                               // |x|^p * exp(log(|x|) * decimal)
 
     const auto cb_data_format = datatype_to_dataformat_converter(tmp_pow_sum.dtype());
     const uint32_t cb_tile_size = tile_size(cb_data_format);
@@ -123,16 +123,11 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
                     ReduceOpDim::HW,
                     1.0F,
                     ReduceFp32Mode::Fast,
-                    im2_t * cb_tile_size});
+                    compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop});
         }
         auto sequence = reduce_host::make_reduce_sequence_plan(
-            calls,
-            {.auxiliary_cb_id = 1, .accumulator_cb_id = 30, .output_cb_id = 16},
-            {.arch = device->arch(), .available_l1_bytes = 32 * cb_tile_size});
+            calls, {.auxiliary_cb_id = 1, .accumulator_cb_id = 30, .output_cb_id = 16}, {.arch = device->arch()});
         sequence.calls.back().accumulation_index = num_blocks - 1;
-        for (auto& call : sequence.calls) {
-            call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
-        }
         auxiliary_tiles = std::max(auxiliary_tiles, static_cast<uint32_t>(sequence.auxiliary.tiles.size()));
         reductions.push_back(std::move(sequence));
     }

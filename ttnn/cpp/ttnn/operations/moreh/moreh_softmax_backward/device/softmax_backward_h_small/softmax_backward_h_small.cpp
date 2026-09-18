@@ -70,12 +70,10 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create_program
         ReduceFp32Mode::Fast,
         {.arch = device.arch(),
          .fp32_dest_acc_en = fp32_dest_acc_en,
-         .dst_full_sync_en = compute_kernel_config.dst_full_sync_en,
-         .available_l1_bytes = (Ht + 8) * tile_size_intermed},
-        Ht * tile_size(tt::tt_metal::datatype_to_dataformat_converter(reduce_dtype)));
-    reduce_plan.input_policy = op == MorehSoftmaxBackwardOp::LOGSOFTMAX
-                                   ? compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop
-                                   : compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop;
+         .dst_full_sync_en = compute_kernel_config.dst_full_sync_en},
+        op == MorehSoftmaxBackwardOp::LOGSOFTMAX ? compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop
+                                                 : compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop);
+
     const auto* auxiliary = reduce_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
     const auto compute_reduce_args = reduce_host::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
     const auto reader_reduce_args =

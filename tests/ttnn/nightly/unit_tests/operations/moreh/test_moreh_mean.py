@@ -120,7 +120,7 @@ def run_moreh_mean_backward(
 @pytest.mark.parametrize("height", [128, 256, 273])
 def test_moreh_mean_optional_auxiliary(height, device):
     # Aligned and partial heights with the optional-auxiliary factory contract.
-    # This factory's two-tile input cap currently selects native scaler plans.
+    # The factory explicitly requests chunked consumption through its two-tile FIFO.
     # Reusing each program checks that leaving auxiliaries resident at exit does
     # not carry their occupancy into the next launch.
     torch.manual_seed(2024)

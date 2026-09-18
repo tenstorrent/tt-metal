@@ -152,8 +152,9 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
         ReduceOpDim::W,
         1.0F,
         ReduceFp32Mode::Fast,
-        {device->arch(), false, false, device->l1_size_per_core()});
-    reduce_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
+        {device->arch(), false, false},
+        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop);
+
     const auto* auxiliary = reduce_plan.find_cb(rh::ReduceCbRole::Auxiliary);
     add_cb(cb_reduce_ones_scalar, auxiliary->page_size, auxiliary->page_count, auxiliary->data_format);
 

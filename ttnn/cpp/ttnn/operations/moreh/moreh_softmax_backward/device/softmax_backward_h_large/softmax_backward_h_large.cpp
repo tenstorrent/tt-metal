@@ -82,21 +82,16 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHLargeFactory::create_program
                 ReduceOpDim::H,
                 1.0F,
                 ReduceFp32Mode::Fast,
-                is_log ? 2 * tile_size_data : reduce_buffer_tiles * tile_size_intermed});
+                (is_log ? compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile
+                        : compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop)});
     }
     auto reduce_sequence = reduce_host::make_reduce_sequence_plan(
         reductions,
         {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
         {.arch = device.arch(),
          .fp32_dest_acc_en = fp32_dest_acc_en,
-         .dst_full_sync_en = compute_kernel_config.dst_full_sync_en,
-         .available_l1_bytes = 24 * tile_size_intermed});
+         .dst_full_sync_en = compute_kernel_config.dst_full_sync_en});
     reduce_sequence.calls.back().accumulation_index = num_blocks - 1;
-    if (!is_log) {
-        for (auto& call : reduce_sequence.calls) {
-            call.plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop;
-        }
-    }
     const auto* auxiliary = reduce_sequence.calls.front().plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
     const uint32_t auxiliary_tiles = reduce_sequence.auxiliary.tiles.size();
     const auto compute_reduce_args = reduce_sequence.get_compile_time_args();

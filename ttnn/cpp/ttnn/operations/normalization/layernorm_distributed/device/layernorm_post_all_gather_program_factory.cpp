@@ -325,9 +325,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
             ReduceOpDim::W,
             1.0F / reduce_factor,
             ReduceFp32Mode::Fast,
-            {device->arch(), fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()},
-            in1_tiles * stats_single_tile_size);
-        reduce_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
+            {device->arch(), fp32_dest_acc_en, dst_full_sync_en},
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
+
         reduce_compute_args = rh::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
         reduce_auxiliary.tiles = reduce_plan.auxiliary_tiles;
         scaler_data_format = reduce_plan.find_cb(rh::ReduceCbRole::Auxiliary)->data_format;

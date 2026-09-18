@@ -85,8 +85,9 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         ReduceOpDim::W,
         1.0F / attrs.value_dim,
         ReduceFp32Mode::Fast,
-        {arch, reduce_fp32, reduce_full_sync, device.l1_size_per_core()});
-    reduce_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
+        {arch, reduce_fp32, reduce_full_sync},
+        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
+
     const auto reduce_args = rh::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
     const auto auxiliary_args = rh::ReduceAuxiliaryArgs({1, reduce_plan.auxiliary_tiles}).get_compile_time_args();
     m2::Group<m2::DataflowBufferSpec> dfbs = {

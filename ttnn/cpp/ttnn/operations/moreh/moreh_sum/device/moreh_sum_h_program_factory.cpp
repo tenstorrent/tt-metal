@@ -90,11 +90,8 @@ ttnn::device_operation::ProgramArtifacts MorehSumOperation::MorehSumHFactory::cr
         ReduceOpDim::H,
         1.0F,
         ReduceFp32Mode::Fast,
-        {.arch = device->arch(),
-         .fp32_dest_acc_en = fp32_dest_acc_en,
-         .dst_full_sync_en = dst_full_sync_en,
-         .available_l1_bytes = 8 * src0_single_tile_size},
-        num_input_tiles * src0_single_tile_size);
+        {.arch = device->arch(), .fp32_dest_acc_en = fp32_dest_acc_en, .dst_full_sync_en = dst_full_sync_en},
+        compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop);
     const auto* auxiliary = reduce_plan.find_cb(reduce_host::ReduceCbRole::Auxiliary);
     const auto compute_reduce_args = reduce_host::ReduceCallArgs(reduce_plan, {0, 1, 2}).get_compile_time_args();
     const auto reader_reduce_args =

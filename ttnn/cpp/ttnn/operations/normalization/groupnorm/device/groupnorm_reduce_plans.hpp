@@ -59,13 +59,12 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
             block.resident_input_tiles = rows * columns;
             block.tail = rh::ReduceTailConfig{{*tail_rows * 32, columns * 32, 1}};
         }
-        auto plan =
-            rh::make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::HW, scalar, ReduceFp32Mode::Fast, hardware);
+        auto plan = rh::make_reduce_plan(
+            block, ReduceOpMath::SUM, ReduceOpDim::HW, scalar, ReduceFp32Mode::Fast, hardware, policy);
         // Existing native calls retain caller-owned format state. The sharded
         // mean follows masking and must restore its reduction operands instead.
         // Add consumes two inputs instead of input/scaler and configures that pair.
         auto configure = [&](rh::ReducePlan& variant) {
-            variant.input_policy = policy;
             variant.reconfig_mode = variant.algorithm == compute_kernel_lib::ReduceAlgorithm::ReduceTile
                                         ? native_reconfig
                                         : compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;

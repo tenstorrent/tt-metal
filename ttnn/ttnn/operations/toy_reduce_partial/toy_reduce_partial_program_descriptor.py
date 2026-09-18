@@ -42,7 +42,7 @@ def create_program_descriptor(
                     reduce_dim=planner.ReduceDimension.ROW if reduce_row else planner.ReduceDimension.COLUMN,
                     scalar=1.0,
                     fp32_mode=planner.ReduceFp32Mode.FAST,
-                    max_input_cb_bytes=2 * input_tensor.buffer_page_size(),
+                    input_policy=planner.ReduceInputPolicy.CHUNKED_WAIT_CHUNKED_POP,
                 ),
             )
         ],
@@ -51,7 +51,6 @@ def create_program_descriptor(
             arch=input_tensor.device().arch(),
             fp32_dest_acc_en=False,
             dst_full_sync_en=False,
-            available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
         ),
     )
     plan = sequence.calls[0].plan

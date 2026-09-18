@@ -197,6 +197,7 @@ ALWI bool dfb_unpacks_to_dest(uint32_t dfb_id) {
 // the first pair when even, no phantom zero tile), finalize within the tile on the SFPU (sfpu_reduce
 // SUM, which reads DST in place), and for AVG multiply by the compile-time 1/reduce_factor once. One DST
 // register per active output tile; grouped COL input keeps a host-planned set of those slots live together.
+// WaitAndPopPerTile uses one-tile DEST folds so a one-tile FIFO is sufficient.
 //
 // Restrictions (enforced by reduce()): float SUM or AVG. AVG's reduce_factor is caller-owned, so standalone,
 // partial, cross-chunk, sharded, and uneven means all use the same reduce<AVG> entry point.
@@ -204,9 +205,8 @@ ALWI bool dfb_unpacks_to_dest(uint32_t dfb_id) {
 // block; ROW/SCALAR can stream either one tile or a host-planned chunk, while COL requires grouped Bulk or
 // Chunked input. should_pop policies (Bulk / WaitAndPop / Chunked)
 // pop the input and pack per output; no-pop policies (WaitUpfront / NoWait) leave the input resident and
-// bulk-reserve the outputs upfront, packing output o -> its OWN page o. The one-time SFPU-macro load
-// (sfpu_reduce_init) is hoisted OUT of the per-output loop; only the light MOP inits (add_tiles/copy) run per
-// output.
+// bulk-reserve the outputs upfront, packing output o -> its OWN page o. Pairwise policies load the
+// SFPU reduction macro once. Per-tile folding restores it after its DEST additions.
 //
 // PARTIAL (non-tile-aligned) reduce dims — ROW/COL only, signalled by ReducePartialMode::Mask: the last tile
 // is folded in with a DEST-ACCUMULATING masked broadcast-mul via fold_partial_last(), so the padding
@@ -274,7 +274,8 @@ ALWI void reduce_accumulate_via_add(
     // an intermediate call may read and write the same full accumulator CB, so it must pop one tile before it
     // reserves the slot used to write that tile back.
     // helper_waits_block: the whole resident block is waited once (Bulk / WaitUpfront) — NoWaitNoPop trusts the
-    // caller to have it resident, WaitAndPop streams per pair. helper_pops_block: only BulkWaitBulkPop pops it.
+    // caller to have it resident, WaitAndPop streams one tile at a time. helper_pops_block: only BulkWaitBulkPop pops
+    // it.
     constexpr bool should_pop_p =
         (input_policy == ReduceInputPolicy::WaitAndPopPerTile || input_policy == ReduceInputPolicy::BulkWaitBulkPop ||
          input_policy == ReduceInputPolicy::ChunkedWaitChunkedPop);
@@ -590,11 +591,11 @@ ALWI void reduce_accumulate_via_add(
         tile_regs_acquire();
 
         if constexpr (streaming) {
-            // Stream this output's reduce-dim tiles through DST in pairs, waiting/popping as they arrive
+            // Stream this output's reduce-dim tiles through DST, waiting/popping as they arrive
             // (front-relative indices 0/1). Contiguous per output (row/scalar), so tiles arrive in reduce
             // order. A later cross-call accumulation first copy-seeds DST from the accumulator CB; the first
-            // call starts from a fresh DST. An odd new-input count is then handled by either a unary seed
-            // (first call) or one DEST-reuse add (later calls), leaving an even pairwise tail.
+            // call starts from a fresh DST. Chunked input resolves odd counts before its pairwise fold;
+            // per-tile input folds each tile in DEST without reading across a FIFO boundary.
             bool loaded_accumulator = false;
             if constexpr (has_accum) {
                 if (!accumulate.is_first()) {
@@ -608,7 +609,50 @@ ALWI void reduce_accumulate_via_add(
                 }
             }
 
-            if (input_chunk.padded) {
+            if constexpr (input_policy == ReduceInputPolicy::WaitAndPopPerTile) {
+                // Index zero is safe even when an odd row leaves the FIFO at its
+                // last slot. Fold in DEST: routing the running sum through SrcB
+                // on every tile repeatedly rounds it to the input precision.
+                bool seeded = loaded_accumulator;
+                for (uint32_t k = 0; k < full_cnt; ++k) {
+                    input_dfb.wait_front(1);
+#ifndef ARCH_QUASAR
+                    copy_init(input_dfb_id);
+                    copy_tile(input_dfb_id, 0, seeded ? 1 : 0);
+                    if (seeded) {
+                        add_binary_tile_init();
+                        add_binary_tile(0, 1, 0);
+                    }
+#else
+                    if (seeded) {
+                        binary_dest_reuse_tiles_init<
+                            ckernel::EltwiseBinaryType::ELWADD,
+                            ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+                        binary_dest_reuse_tiles<
+                            ckernel::EltwiseBinaryType::ELWADD,
+                            ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id, 0, 0);
+                    } else {
+                        copy_init(input_dfb_id);
+                        copy_tile(input_dfb_id, 0, 0);
+                    }
+#endif
+                    seeded = true;
+                    input_dfb.pop_front(1);
+                }
+                if constexpr (has_accum) {
+                    if (loaded_accumulator) {
+                        accum_dfb.pop_front(1);
+                    }
+                }
+                if (has_partial) {
+                    input_dfb.wait_front(1);
+                    fold_partial_last(0);
+                    input_dfb.pop_front(1);
+                }
+                if constexpr (within_tile == ReduceWithinTile::Collapse) {
+                    sfpu_reduce_init<PoolType::SUM, dst_fmt>();
+                }
+            } else if (input_chunk.padded) {
                 bool seeded = loaded_accumulator;
                 const uint32_t packet = input_chunk.reduce_axis_tiles;
                 for (uint32_t base = 0; base < cnt; base += packet) {
@@ -1743,7 +1787,7 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
     auto shape = ReduceInputBlockShape::of(Call::rows, Call::columns, Call::batches);
     auto layout = Call::row_stride == 0 ? ReduceInputMemoryLayout::contiguous()
                                         : ReduceInputMemoryLayout::with_row_stride(Call::row_stride);
-    constexpr auto chunk = Call::padded_input_chunk || (Call::is_tail && should_pop(Call::input_policy))
+    constexpr auto chunk = Call::padded_input_chunk
                                ? ReduceInputChunk::padded_to(Call::reduce_axis_chunk_tiles, Call::output_chunk_tiles)
                                : ReduceInputChunk::of(Call::reduce_axis_chunk_tiles, Call::output_chunk_tiles);
     [[maybe_unused]] uint32_t valid_h = Call::logical_h;

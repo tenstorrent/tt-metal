@@ -155,10 +155,10 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
         arch=device.arch(),
         fp32_dest_acc_en=False,
         dst_full_sync_en=False,
-        available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
     )
     mean_plan = planner.make_reduce_plan(
         block=resident_block,
+        input_policy=planner.ReduceInputPolicy.NO_WAIT_NO_POP,
         reduce_math=planner.ReduceMath.SUM,
         reduce_dim=planner.ReduceDimension.ROW,
         scalar=1.0 / origin_W,
@@ -172,7 +172,7 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
         scalar=1.0 / origin_W,
         fp32_mode=planner.ReduceFp32Mode.FAST,
         hardware=hardware,
-        max_input_cb_bytes=shard_tiles * tile_bytes,
+        input_policy=planner.ReduceInputPolicy.BULK_WAIT_BULK_POP,
     )
     reduce_args = mean_plan.compile_time_args(input_cb_id=0, auxiliary_cb_id=1, output_cb_id=2)
     reduce_args += variance_plan.compile_time_args(input_cb_id=0, auxiliary_cb_id=1, output_cb_id=2)

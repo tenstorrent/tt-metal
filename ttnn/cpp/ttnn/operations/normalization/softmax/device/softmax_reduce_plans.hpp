@@ -50,7 +50,8 @@ inline SoftmaxReducePlans make_softmax_reduce_plans(
                 ReduceOpMath::MAX,
                 ReduceOpDim::W,
                 1.0F,
-                ReduceFp32Mode::Fast});
+                ReduceFp32Mode::Fast,
+                input_policy});
         sum_calls.emplace_back(
             0,
             rh::ReduceCallConfig{
@@ -58,7 +59,8 @@ inline SoftmaxReducePlans make_softmax_reduce_plans(
                 ReduceOpMath::SUM,
                 ReduceOpDim::W,
                 1.0F,
-                ReduceFp32Mode::Fast});
+                ReduceFp32Mode::Fast,
+                input_policy});
     }
     SoftmaxReducePlans plans{
         rh::make_reduce_sequence_plan(max_calls, {1, 3, 2}, hardware),
@@ -71,9 +73,6 @@ inline SoftmaxReducePlans make_softmax_reduce_plans(
             passes > 1 && !hardware.fp32_dest_acc_en ? std::optional{compute_kernel_lib::ReduceAlgorithm::ReduceTile}
                                                      : std::nullopt)};
     for (auto* sequence : {&plans.max, &plans.sum}) {
-        for (auto& call : sequence->calls) {
-            call.plan.input_policy = input_policy;
-        }
         if (passes > 1) {
             sequence->calls.back().accumulation_index = passes - 1;
         }

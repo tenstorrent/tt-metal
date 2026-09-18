@@ -152,7 +152,7 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
         ReduceOpDim::HW,
         DataType::FLOAT32,
         output_grad.dtype(),
-        {device->arch(), true, false, device->l1_size_per_core()});
+        {device->arch(), true, false});
     const auto& auxiliary =
         *reduction.sequence.calls.front().plan.find_cb(ttnn::kernel_lib::host::ReduceCbRole::Auxiliary);
     const uint32_t in4_t = reduction.sequence.auxiliary.tiles.size();
@@ -171,10 +171,10 @@ MorehGroupNormBackwardGammaBetaGradOperation::MorehGroupNormBackwardGammaBetaGra
         });
     };
 
-    add_dfb(DY, in0_t);       // output_grad(==dy)
-    add_dfb(X, in1_t);        // input(==x)
-    add_dfb(MEAN, in2_t);     // mean
-    add_dfb(RSTD, in3_t);     // rstd
+    add_dfb(DY, in0_t);    // output_grad(==dy)
+    add_dfb(X, in1_t);     // input(==x)
+    add_dfb(MEAN, in2_t);  // mean
+    add_dfb(RSTD, in3_t);  // rstd
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = SCALER,
         .entry_size = auxiliary.page_size,

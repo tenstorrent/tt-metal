@@ -68,15 +68,12 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
                 ReduceOpDim::W,
                 1.0F,
                 ReduceFp32Mode::Fast,
-                im0_t * cb_tile_size});
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile});
     }
     auto reduce_sequence = reduce_host::make_reduce_sequence_plan(
         reductions,
         {.auxiliary_cb_id = 1, .accumulator_cb_id = 3, .output_cb_id = 2},
-        {.arch = device->arch(),
-         .fp32_dest_acc_en = fp32_dest_acc_en,
-         .dst_full_sync_en = dst_full_sync_en,
-         .available_l1_bytes = 16 * cb_tile_size});
+        {.arch = device->arch(), .fp32_dest_acc_en = fp32_dest_acc_en, .dst_full_sync_en = dst_full_sync_en});
     for (auto& call : reduce_sequence.calls) {
         // Multiplication configures both unpack operands for the input dtype;
         // reduction's auxiliary tile may have a different format (e.g. BF8 input).

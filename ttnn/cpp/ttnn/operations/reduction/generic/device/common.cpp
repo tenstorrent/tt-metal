@@ -67,31 +67,18 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
         }
         auto block = rh::ReduceBlockSpec::tiled(h, w, input.data_type(), output.data_type(), batches, tile);
         block.output_tile = output.tile();
-        calls.emplace_back(0, rh::ReduceCallConfig{block, math, dim, scalar, fp32_mode, input_cb_bytes});
+        calls.emplace_back(
+            0,
+            rh::ReduceCallConfig{
+                block,
+                math,
+                dim,
+                scalar,
+                fp32_mode,
+                (row_major && dim == ReduceOpDim::H ? compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop
+                                                    : compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile)});
     }
-    // The tiled H reader interleaves columns in a per-tile stream. Request its
-    // native algorithm explicitly instead of relying on a small input budget
-    // to make the planner fall back from grouped column accumulation.
-    const auto algorithm = dim == ReduceOpDim::H && !row_major
-                               ? std::optional{compute_kernel_lib::ReduceAlgorithm::ReduceTile}
-                               : std::nullopt;
-    auto sequence = rh::make_reduce_sequence_plan(calls, {1, 3, 2}, hardware, algorithm);
-    if (dim == ReduceOpDim::H && !row_major) {
-        // The existing H reader streams individual tiles through a two-tile FIFO,
-        // interleaving independent columns in DEST. A grouped wait would require
-        // the complete row group resident in L1. Keep native per-tile consumption
-        // and describe the actual rectangle instead of serializing its columns.
-        auto& plan = sequence.calls.front().plan;
-        TT_FATAL(
-            plan.algorithm == compute_kernel_lib::ReduceAlgorithm::ReduceTile,
-            "The two-tile H input stream requires native per-tile reduction");
-        plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
-        const uint32_t dest_tiles =
-            hardware.dst_full_sync_en ? (hardware.fp32_dest_acc_en ? 8U : 16U) : (hardware.fp32_dest_acc_en ? 4U : 8U);
-        const bool sfpu_work_tile = input.data_type() == DataType::INT32 ||
-                                    (input.data_type() == DataType::FLOAT32 && fp32_mode == ReduceFp32Mode::Accurate);
-        plan.chunk.output_tiles = std::min(Wt, dest_tiles - (sfpu_work_tile ? 1U : 0U));
-    }
+    auto sequence = rh::make_reduce_sequence_plan(calls, {1, 3, 2}, hardware);
     for (auto& call : sequence.calls) {
         // The kernel starts with its output format configured. Row-major mixed
         // output formats must also restore the packer after tilize.
@@ -102,10 +89,9 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
     if (row_major) {
         for (auto& call : sequence.calls) {
             auto& plan = call.plan;
-            if (dim == ReduceOpDim::H && plan.algorithm == compute_kernel_lib::ReduceAlgorithm::AccumulateViaAdd) {
+            if (dim == ReduceOpDim::H) {
                 // The producer emits one column in fixed packets of up to eight
                 // rows. The helper owns wait/pop, including unused tail slots.
-                plan.input_policy = compute_kernel_lib::ReduceInputPolicy::ChunkedWaitChunkedPop;
                 plan.chunk = {.reduce_axis_tiles = chunk_tiles, .output_tiles = 1, .buffers = 1, .padded = true};
                 for (auto& cb : plan.cb_requirements) {
                     if (cb.role == rh::ReduceCbRole::Input) {
@@ -115,12 +101,6 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
                         plan.total_owned_l1_bytes += cb.total_size_bytes;
                     }
                 }
-                TT_FATAL(
-                    plan.total_owned_l1_bytes <= hardware.available_l1_bytes,
-                    "Row-major H reduction input packet exceeds the reduction L1 budget");
-            } else {
-                // Tilize pushes individual tiles; consume them the same way.
-                plan.input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile;
             }
         }
         if (num_chunks > 1) {

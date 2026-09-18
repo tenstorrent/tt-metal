@@ -659,8 +659,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         (std::uint32_t)ex_global_cb_index};
 
     namespace rh = ttnn::kernel_lib::host;
-    const rh::ReduceHardwareConfig reduce_hardware{
-        mesh_device->arch(), fp32_dest_acc_en, false, mesh_device->l1_size_per_core()};
+    const rh::ReduceHardwareConfig reduce_hardware{mesh_device->arch(), fp32_dest_acc_en, false};
     const auto make_stats_call = [&](uint32_t tiles, float scalar, compute_kernel_lib::ReduceInputPolicy policy) {
         auto plan = rh::make_reduce_plan(
             rh::ReduceBlockSpec::tiled(
@@ -672,8 +671,9 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             ReduceOpDim::W,
             scalar,
             ReduceFp32Mode::Fast,
-            reduce_hardware);
-        plan.input_policy = policy;
+            reduce_hardware,
+            policy);
+
         plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
         return rh::ReduceCallPlan{
             .input_cb_id = 0, .auxiliary_cb_id = 1, .output_cb_id = 2, .accumulator_cb_id = std::nullopt, .plan = plan};

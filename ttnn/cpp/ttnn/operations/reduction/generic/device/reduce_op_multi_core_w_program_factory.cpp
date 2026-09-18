@@ -137,7 +137,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     const TensorParamName OUTPUT_TENSOR{"output"};
 
     ProgramSpec spec;
-    spec.name = rm_path              ? "reduce_multi_core_w_dense_rm"
+    spec.name = rm_path               ? "reduce_multi_core_w_dense_rm"
                 : use_height_sharding ? "reduce_multi_core_w_height_sharded"
                                       : "reduce_multi_core_w";
 
@@ -159,7 +159,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
                                        ? ReduceFp32Mode::Accurate
                                        : ReduceFp32Mode::Fast;
     // These kernels use the legacy double-buffered DEST configuration.
-    const rh::ReduceHardwareConfig reduce_hardware{device->arch(), fp32_dest_acc_en, false, device->l1_size_per_core()};
+    const rh::ReduceHardwareConfig reduce_hardware{device->arch(), fp32_dest_acc_en, false};
     auto make_unit = [&](uint32_t local_ht, uint32_t local_wt, uint32_t local_nc) {
         return make_generic_reduce_sequence(
             a.tensor_spec(),
@@ -678,8 +678,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
                 }
             }
         } else {
-            cores =
-                grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
+            cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, false);
         }
         TT_FATAL(
             cores.size() == num_cores,

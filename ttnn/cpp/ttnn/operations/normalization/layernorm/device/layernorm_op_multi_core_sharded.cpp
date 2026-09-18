@@ -360,8 +360,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         rh::ReduceAuxiliaryPlan local_auxiliary{1, {}};
         if (!is_post_all_gather) {
             const auto reduce_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16;
-            const rh::ReduceHardwareConfig hardware{
-                device->arch(), fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()};
+            const rh::ReduceHardwareConfig hardware{device->arch(), fp32_dest_acc_en, dst_full_sync_en};
             const uint32_t logical_tiles = tt::div_up(logical_K, tile_width);
             TT_FATAL(Kt == logical_tiles, "Sharded layernorm reduction requires tile-rounded logical width");
             TT_FATAL(
@@ -378,8 +377,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             }
             // Aligned additive reductions apply winv in compute and need no scaler tile.
             block.allow_empty_auxiliary = true;
-            auto plan =
-                rh::make_reduce_plan(block, ReduceOpMath::SUM, ReduceOpDim::W, winv, ReduceFp32Mode::Fast, hardware);
+            auto plan = rh::make_reduce_plan(
+                block,
+                ReduceOpMath::SUM,
+                ReduceOpDim::W,
+                winv,
+                ReduceFp32Mode::Fast,
+                hardware,
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
             plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
             if (plan.tail_plan) {
                 plan.tail_plan->reconfig_mode = plan.reconfig_mode;

@@ -392,7 +392,7 @@ def create_program_descriptor(
                     reduce_dim=planner.ReduceDimension.ROW,
                     scalar=1.0 / (width_tiles * TILE),
                     fp32_mode=planner.ReduceFp32Mode.FAST,
-                    max_input_cb_bytes=reduce_tiles * ttnn.tile_size(scaler_format),
+                    input_policy=planner.ReduceInputPolicy.BULK_WAIT_BULK_POP,
                 ),
             )
         ],
@@ -401,7 +401,6 @@ def create_program_descriptor(
             arch=input_tensor.device().arch(),
             fp32_dest_acc_en=fp32_dest,
             dst_full_sync_en=False,
-            available_l1_bytes=ttnn.get_max_worker_l1_unreserved_size(),
         ),
         algorithm=planner.ReduceAlgorithm.REDUCE_TILE,
     )
