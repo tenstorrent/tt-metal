@@ -1064,41 +1064,52 @@ void topology_sat_encode_same_rank_groups(
     if (target_to_group.empty() || global_rank.empty()) {
         return;
     }
-    for (size_t t1 = 0; t1 < nt; ++t1) {
-        if (t1 >= target_to_group.size()) {
-            continue;
+    // Label-channeling encoding (O(sum of grouped domains) clauses) instead of the naive pairwise exclusion
+    // (O(group_size^2 * domain^2) binary clauses — which generated tens of millions of clauses on dense
+    // instances like the QuadGalaxy torus mapping). Semantics are identical: all targets in a group must map
+    // to globals sharing one label. Per group we introduce one auxiliary "group uses label L" variable per
+    // distinct candidate label; each assignment implies its label's group-var (x_{t,g} -> grp_has[label(g)])
+    // and each group is constrained at-most-one label. Two grouped targets picking different labels then both
+    // force their group-var, tripping the at-most-one -> exactly the pairwise-excluded assignments, but linear
+    // in the grouped domain size. Unlabeled candidates (glob out of global_rank range) stay unconstrained,
+    // matching the prior behavior.
+    std::map<size_t, std::vector<size_t>> targets_by_group;
+    for (size_t t = 0; t < nt && t < target_to_group.size(); ++t) {
+        const size_t tg = target_to_group[t];
+        if (tg != SIZE_MAX) {
+            targets_by_group[tg].push_back(t);
         }
-        const size_t tg = target_to_group[t1];
-        if (tg == SIZE_MAX) {
-            continue;
+    }
+    for (const auto& [tg, tlist] : targets_by_group) {
+        if (tlist.size() < 2) {
+            continue;  // a single-target group has no same-rank constraint
         }
-        for (size_t t2 = t1 + 1; t2 < nt; ++t2) {
-            if (t2 >= target_to_group.size() || target_to_group[t2] != tg) {
-                continue;
-            }
-            const auto& gidx1 = enc.allowed_global_idx[t1];
-            const auto& lit1 = enc.assign_lit[t1];
-            const auto& gidx2 = enc.allowed_global_idx[t2];
-            const auto& lit2 = enc.assign_lit[t2];
-            for (size_t i1 = 0; i1 < gidx1.size(); ++i1) {
-                const size_t glob1 = gidx1[i1];
-                if (glob1 >= global_rank.size()) {
-                    continue;
+        std::map<int, int> label_var;  // distinct label -> "group uses this label" aux var (created lazily)
+        for (size_t t : tlist) {
+            const auto& gidx = enc.allowed_global_idx[t];
+            const auto& lit = enc.assign_lit[t];
+            for (size_t k = 0; k < gidx.size(); ++k) {
+                const size_t glob = gidx[k];
+                if (glob >= global_rank.size()) {
+                    continue;  // unlabeled candidate: unconstrained by same-rank
                 }
-                const int L1 = global_rank[glob1];
-                for (size_t i2 = 0; i2 < gidx2.size(); ++i2) {
-                    const size_t glob2 = gidx2[i2];
-                    if (glob2 >= global_rank.size()) {
-                        continue;
-                    }
-                    const int L2 = global_rank[glob2];
-                    if (L1 != L2) {
-                        solver.add(-lit1[i1]);
-                        solver.add(-lit2[i2]);
-                        solver.add(0);
-                    }
+                const int label = global_rank[glob];
+                auto it = label_var.find(label);
+                if (it == label_var.end()) {
+                    it = label_var.emplace(label, solver.declare_one_more_variable()).first;
                 }
+                solver.add(-lit[k]);   // x_{t,g} -> grp_has[label(g)]
+                solver.add(it->second);
+                solver.add(0);
             }
+        }
+        if (label_var.size() >= 2) {
+            std::vector<int> group_label_vars;
+            group_label_vars.reserve(label_var.size());
+            for (const auto& [label, var] : label_var) {
+                group_label_vars.push_back(var);
+            }
+            topology_sat_add_at_most_one_sequential(solver, group_label_vars);
         }
     }
 }
