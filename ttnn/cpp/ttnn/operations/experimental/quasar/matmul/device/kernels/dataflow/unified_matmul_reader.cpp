@@ -2,18 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified matmul reader: streams the A and B slices for this cluster's C blocks of C.
+// Unified matmul reader: streams the A and B slices for this cluster's C chunks of C.
 //
-// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. A C block is the per_core_M_tiles x
-// per_core_N_tiles tiles of C at origin (C_block_M_tile, C_block_N_tile) in one batch. This cluster starts at
-// (first_batch, first_C_block_M_tile, first_C_block_N_tile) and produces num_C_blocks of them, stepping
-// per_core_N_tiles tiles across N, then per_core_M_tiles tiles down M, then into the next batch. For each C block and
+// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. A C chunk is the per_core_M_tiles x
+// per_core_N_tiles tiles of C at origin (C_chunk_M_tile, C_chunk_N_tile) in one batch. This cluster starts at
+// (first_batch, first_C_chunk_M_tile, first_C_chunk_N_tile) and produces num_C_chunks of them, stepping
+// per_core_N_tiles tiles across N, then per_core_M_tiles tiles down M, then into the next batch. For each C chunk and
 // each K iteration the reader pushes
-//   - one A slice: the C block's rows of A, K_iteration_tiles wide    -> [per_core_M_tiles][K_iteration_tiles] tiles
-//   - one B slice: the C block's columns of B, K_iteration_tiles tall -> [K_iteration_tiles][per_core_N_tiles] tiles
-// both row-major, which is the layout the compute kernel indexes. Loop order (C block, K iteration) matches it.
+//   - one A slice: the C chunk's rows of A, K_iteration_tiles wide    -> [per_core_M_tiles][K_iteration_tiles] tiles
+//   - one B slice: the C chunk's columns of B, K_iteration_tiles tall -> [K_iteration_tiles][per_core_N_tiles] tiles
+// both row-major, which is the layout the compute kernel indexes. Loop order (C chunk, K iteration) matches it.
 //
-// Edge C blocks: tiles past M_tiles / N_tiles are never read; their slots keep stale L1, which only reaches
+// Edge C chunks: tiles past M_tiles / N_tiles are never read; their slots keep stale L1, which only reaches
 // C tiles the writer drops (a valid C tile uses valid A rows and valid B columns only). When K is not a
 // multiple of the tile dim, the padding columns of A's last K tile are zeroed so they contribute nothing.
 //
@@ -31,11 +31,11 @@
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
-    // Per-core runtime args: where this cluster's run of C blocks starts and how long it is.
+    // Per-core runtime args: where this cluster's run of C chunks starts and how long it is.
     const uint32_t first_batch = get_arg(args::first_batch);
-    const uint32_t first_C_block_M_tile = get_arg(args::first_C_block_M_tile);
-    const uint32_t first_C_block_N_tile = get_arg(args::first_C_block_N_tile);
-    const uint32_t num_C_blocks = get_arg(args::num_C_blocks);
+    const uint32_t first_C_chunk_M_tile = get_arg(args::first_C_chunk_M_tile);
+    const uint32_t first_C_chunk_N_tile = get_arg(args::first_C_chunk_N_tile);
+    const uint32_t num_C_chunks = get_arg(args::num_C_chunks);
 
     constexpr uint32_t M_tiles = get_arg(args::M_tiles);
     constexpr uint32_t K_tiles = get_arg(args::K_tiles);
@@ -67,26 +67,26 @@ void kernel_main() {
     const uint32_t B_slot_bytes = B_slice.get_entry_size();
 
     uint32_t batch = first_batch;
-    uint32_t C_block_M_tile = first_C_block_M_tile;  // origin of the current C block, in tiles
-    uint32_t C_block_N_tile = first_C_block_N_tile;
-    for (uint32_t C_block_index = 0; C_block_index < num_C_blocks; ++C_block_index) {
+    uint32_t C_chunk_M_tile = first_C_chunk_M_tile;  // origin of the current C chunk, in tiles
+    uint32_t C_chunk_N_tile = first_C_chunk_N_tile;
+    for (uint32_t C_chunk_index = 0; C_chunk_index < num_C_chunks; ++C_chunk_index) {
         const uint32_t A_batch_first_tile = batch * A_tiles_per_batch;
         const uint32_t B_batch_first_tile = broadcast_B_over_batch ? 0 : batch * B_tiles_per_batch;
-        // Rows / columns of this C block that lie inside the matrices (edge C blocks are clipped).
+        // Rows / columns of this C chunk that lie inside the matrices (edge C chunks are clipped).
         const uint32_t valid_M_tiles =
-            (M_tiles - C_block_M_tile < per_core_M_tiles) ? (M_tiles - C_block_M_tile) : per_core_M_tiles;
+            (M_tiles - C_chunk_M_tile < per_core_M_tiles) ? (M_tiles - C_chunk_M_tile) : per_core_M_tiles;
         const uint32_t valid_N_tiles =
-            (N_tiles - C_block_N_tile < per_core_N_tiles) ? (N_tiles - C_block_N_tile) : per_core_N_tiles;
+            (N_tiles - C_chunk_N_tile < per_core_N_tiles) ? (N_tiles - C_chunk_N_tile) : per_core_N_tiles;
 
         for (uint32_t K_iteration = 0; K_iteration < num_K_iterations; ++K_iteration) {
             const uint32_t first_K_tile = K_iteration * K_iteration_tiles;
 
-            // A slice: rows C_block_M_tile.., columns first_K_tile.. (invalid rows trail, so they are
+            // A slice: rows C_chunk_M_tile.., columns first_K_tile.. (invalid rows trail, so they are
             // simply not written).
             A_slice.reserve_back(A_slice_tiles);
             uint32_t A_slot_offset = 0;
             for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
-                uint32_t A_tile_index = A_batch_first_tile + (C_block_M_tile + m_tile) * K_tiles + first_K_tile;
+                uint32_t A_tile_index = A_batch_first_tile + (C_chunk_M_tile + m_tile) * K_tiles + first_K_tile;
                 for (uint32_t k_tile = 0; k_tile < K_iteration_tiles;
                      ++k_tile, ++A_tile_index, A_slot_offset += A_slot_bytes) {
                     noc.async_read(
@@ -94,11 +94,11 @@ void kernel_main() {
                 }
             }
 
-            // B slice: rows first_K_tile.., columns C_block_N_tile.. (invalid columns keep their slot).
+            // B slice: rows first_K_tile.., columns C_chunk_N_tile.. (invalid columns keep their slot).
             B_slice.reserve_back(B_slice_tiles);
             uint32_t B_slot_offset = 0;
             for (uint32_t k_tile = 0; k_tile < K_iteration_tiles; ++k_tile) {
-                uint32_t B_tile_index = B_batch_first_tile + (first_K_tile + k_tile) * N_tiles + C_block_N_tile;
+                uint32_t B_tile_index = B_batch_first_tile + (first_K_tile + k_tile) * N_tiles + C_chunk_N_tile;
                 for (uint32_t n_tile = 0; n_tile < per_core_N_tiles;
                      ++n_tile, ++B_tile_index, B_slot_offset += B_slot_bytes) {
                     if (n_tile < valid_N_tiles) {
@@ -127,13 +127,13 @@ void kernel_main() {
             B_slice.push_back(B_slice_tiles);
         }
 
-        // Next C block: across N, then down M, then the next batch.
-        C_block_N_tile += per_core_N_tiles;
-        if (C_block_N_tile >= N_tiles) {
-            C_block_N_tile = 0;
-            C_block_M_tile += per_core_M_tiles;
-            if (C_block_M_tile >= M_tiles) {
-                C_block_M_tile = 0;
+        // Next C chunk: across N, then down M, then the next batch.
+        C_chunk_N_tile += per_core_N_tiles;
+        if (C_chunk_N_tile >= N_tiles) {
+            C_chunk_N_tile = 0;
+            C_chunk_M_tile += per_core_M_tiles;
+            if (C_chunk_M_tile >= M_tiles) {
+                C_chunk_M_tile = 0;
                 ++batch;
             }
         }
