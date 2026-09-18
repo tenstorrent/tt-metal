@@ -87,8 +87,8 @@ void py_module(nb::module_& mod) {
     matmul_multi_core_reuse_program_config.def_rw("in0_block_w", &MatmulMultiCoreReuseProgramConfig::in0_block_w, R"doc(
         Block width for both input tensors along the K dimension (shared inner dimension).
 
-        This parameter determines the granularity of data C blocks by specifying how many tiles wide
-        each C block is along the K dimension. It affects the size of data chunks processed together
+        This parameter determines the granularity of data C chunks by specifying how many tiles wide
+        each C chunk is along the K dimension. It affects the size of data chunks processed together
         and impacts memory usage and compute efficiency for both tensors. Must be a divisor of the
         K dimension. Suggested to be a multiple of 32 for tile alignment.
     )doc");
@@ -96,17 +96,17 @@ void py_module(nb::module_& mod) {
         "out_subblock_h", &MatmulMultiCoreReuseProgramConfig::out_subblock_h, R"doc(
         Height of output subblocks in tiles.
 
-        Controls the granularity of computation within each output C block along the M dimension.
+        Controls the granularity of computation within each output C chunk along the M dimension.
         Smaller values can reduce memory usage but may decrease efficiency. Must divide evenly
-        into the output C block height.
+        into the output C chunk height.
     )doc");
     matmul_multi_core_reuse_program_config.def_rw(
         "out_subblock_w", &MatmulMultiCoreReuseProgramConfig::out_subblock_w, R"doc(
         Width of output subblocks in tiles.
 
-        Controls the granularity of computation within each output C block along the N dimension.
+        Controls the granularity of computation within each output C chunk along the N dimension.
         Smaller values can reduce memory usage but may decrease efficiency. Must divide evenly
-        into the output C block width.
+        into the output C chunk width.
     )doc");
     matmul_multi_core_reuse_program_config.def_rw("per_core_M", &MatmulMultiCoreReuseProgramConfig::per_core_M, R"doc(
         Number of output tiles each core processes along the M dimension.
@@ -145,7 +145,7 @@ void py_module(nb::module_& mod) {
     auto matmul_multi_core_reuse_multicast_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastProgramConfig>(
             mod, "MatmulMultiCoreReuseMultiCastProgramConfig", R"doc(
-        The "2D" matmul program config is used for C block sharded tensors, and general interleaved tensors.
+        The "2D" matmul program config is used for C chunk sharded tensors, and general interleaved tensors.
     )doc");
 
     matmul_multi_core_reuse_multicast_program_config.def(
@@ -211,9 +211,9 @@ void py_module(nb::module_& mod) {
         "in0_block_w", &MatmulMultiCoreReuseMultiCastProgramConfig::in0_block_w, R"doc(
         Block width for both input tensors along the K dimension (shared inner dimension).
 
-        Determines the data granularity by specifying how many tiles wide each C block is along
+        Determines the data granularity by specifying how many tiles wide each C chunk is along
         the K dimension for both input_tensor_a and input_tensor_b in multicast operations.
-        Must be a divisor of the K dimension. Smaller C blocks can improve load balancing but
+        Must be a divisor of the K dimension. Smaller C chunks can improve load balancing but
         may increase communication overhead in multicast scenarios.
     )doc");
 
@@ -221,7 +221,7 @@ void py_module(nb::module_& mod) {
         "out_subblock_h", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_h, R"doc(
         Height of output subblocks in tiles.
 
-        Controls the granularity of computation within each output C block along the M dimension.
+        Controls the granularity of computation within each output C chunk along the M dimension.
         Must divide evenly into out_block_h. Affects memory usage and compute scheduling
         in the multicast implementation.
     )doc");
@@ -230,25 +230,25 @@ void py_module(nb::module_& mod) {
         "out_subblock_w", &MatmulMultiCoreReuseMultiCastProgramConfig::out_subblock_w, R"doc(
         Width of output subblocks in tiles.
 
-        Controls the granularity of computation within each output C block along the N dimension.
+        Controls the granularity of computation within each output C chunk along the N dimension.
         Must divide evenly into out_block_w. Affects memory usage and compute scheduling
         in the multicast implementation.
     )doc");
 
     matmul_multi_core_reuse_multicast_program_config.def_rw(
         "out_block_h", &MatmulMultiCoreReuseMultiCastProgramConfig::out_block_h, R"doc(
-        Height of output C blocks in tiles.
+        Height of output C chunks in tiles.
 
-        Specifies the C block size for output tensor along the M dimension. If not provided,
+        Specifies the C chunk size for output tensor along the M dimension. If not provided,
         defaults to per_core_M. Must be divisible by out_subblock_h and should be chosen
         to optimize multicast efficiency and memory usage.
     )doc");
 
     matmul_multi_core_reuse_multicast_program_config.def_rw(
         "out_block_w", &MatmulMultiCoreReuseMultiCastProgramConfig::out_block_w, R"doc(
-        Width of output C blocks in tiles.
+        Width of output C chunks in tiles.
 
-        Specifies the C block size for output tensor along the N dimension. If not provided,
+        Specifies the C chunk size for output tensor along the N dimension. If not provided,
         defaults to per_core_N. Must be divisible by out_subblock_w and should be chosen
         to optimize multicast efficiency and memory usage.
     )doc");
@@ -420,7 +420,7 @@ void py_module(nb::module_& mod) {
         .def_rw("in0_block_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
 
-            Determines the data granularity by specifying how many tiles wide each C block is
+            Determines the data granularity by specifying how many tiles wide each C chunk is
             along the inner dimension for both input_tensor_a and input_tensor_b. This parameter
             impacts 1D multicast performance as it affects the size of data chunks that
             are broadcast across cores and memory access patterns for both tensors.
@@ -428,28 +428,28 @@ void py_module(nb::module_& mod) {
         .def_rw("out_subblock_h", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_h, R"doc(
             Height of output subblocks in tiles.
 
-            Controls computation granularity within output C blocks along the M dimension.
+            Controls computation granularity within output C chunks along the M dimension.
             In 1D multicast, this affects how computation is scheduled and memory usage
             patterns across the participating cores.
         )doc")
         .def_rw("out_subblock_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_subblock_w, R"doc(
             Width of output subblocks in tiles.
 
-            Controls computation granularity within output C blocks along the N dimension.
+            Controls computation granularity within output C chunks along the N dimension.
             This parameter affects the efficiency of the 1D multicast communication pattern
             and compute scheduling.
         )doc")
         .def_rw("out_block_h", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_block_h, R"doc(
-            Height of output C blocks in tiles.
+            Height of output C chunks in tiles.
 
-            Defines the output C block size along the M dimension. If not specified, defaults
+            Defines the output C chunk size along the M dimension. If not specified, defaults
             to per_core_M. This parameter is important for optimizing the 1D multicast
             pattern and memory access efficiency.
         )doc")
         .def_rw("out_block_w", &MatmulMultiCoreReuseMultiCast1DProgramConfig::out_block_w, R"doc(
-            Width of output C blocks in tiles.
+            Width of output C chunks in tiles.
 
-            Defines the output C block size along the N dimension. If not specified, defaults
+            Defines the output C chunk size along the N dimension. If not specified, defaults
             to per_core_N. This affects the efficiency of data distribution in the 1D
             multicast implementation.
         )doc")
@@ -560,7 +560,7 @@ void py_module(nb::module_& mod) {
         .def_rw("in0_block_w", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
 
-            Determines the data granularity by specifying how many tiles wide each C block is
+            Determines the data granularity by specifying how many tiles wide each C chunk is
             along the inner dimension for both input_tensor_a and input_tensor_b in DRAM-sharded
             operations. This parameter must be chosen to align with the DRAM sharding
             strategy and optimize memory bandwidth utilization for both tensors.
@@ -616,7 +616,7 @@ void py_module(nb::module_& mod) {
         .def_rw("in0_block_w", &MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig::in0_block_w, R"doc(
             Block width for both input tensors along the K dimension (shared inner dimension).
 
-            Determines the data granularity by specifying how many tiles wide each C block is
+            Determines the data granularity by specifying how many tiles wide each C chunk is
             along the inner dimension for both input_tensor_a and input_tensor_b in batched DRAM-sharded
             operations. This parameter must be chosen to align with the DRAM sharding
             strategy and optimize memory bandwidth utilization for both tensors.
@@ -649,16 +649,16 @@ void py_module(nb::module_& mod) {
         Placement-first program config (Quasar-native matmul, stage A).
 
         GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. Name the cores and
-        the C block of C (per_core_M_tiles x per_core_N_tiles tiles) each core produces; the factory walks C in
-        C blocks (across N, then down M, then the next batch) and hands that walk to the cores in
+        the C chunk of C (per_core_M_tiles x per_core_N_tiles tiles) each core produces; the factory walks C in
+        C chunks (across N, then down M, then the next batch) and hands that walk to the cores in
         enumeration order as contiguous runs (a core may produce several; surplus cores idle). Edge
-        C blocks are clipped on read and write, so any M / N works. Every
+        C chunks are clipped on read and write, so any M / N works. Every
         operand is addressed through the tensor accessor, so interleaved, L1-sharded and DRAM-sharded
         inputs and outputs all take the same kernels. The 1D, 2D and DRAM-sharded strategies are
         particular choices of (cores, per_core_M_tiles, per_core_N_tiles).
 
         Limits: no fused bias (applied as a separate add) or activation, no untilize, 32x32 tiles
-        only; a sharded output needs batch 1 and exactly one C block per core.
+        only; a sharded output needs batch 1 and exactly one C chunk per core.
     )doc");
 
     matmul_unified_program_config
@@ -676,17 +676,17 @@ void py_module(nb::module_& mod) {
             Cores (clusters) that take part, as a CoreRangeSet.
         )doc")
         .def_rw("per_core_M_tiles", &MatmulUnifiedProgramConfig::per_core_M_tiles, R"doc(
-            Height of the C block of C each core produces, in tiles.
+            Height of the C chunk of C each core produces, in tiles.
         )doc")
         .def_rw("per_core_N_tiles", &MatmulUnifiedProgramConfig::per_core_N_tiles, R"doc(
-            Width of the C block of C each core produces, in tiles.
+            Width of the C chunk of C each core produces, in tiles.
         )doc")
         .def_rw("K_iteration_tiles", &MatmulUnifiedProgramConfig::K_iteration_tiles, R"doc(
             K tiles accumulated per K iteration (one A slice and one B slice resident at a time); must
             divide K in tiles. 0 = auto (largest divisor <= 8 whose rings fit L1).
         )doc")
         .def_rw("subblock_M_tiles", &MatmulUnifiedProgramConfig::subblock_M_tiles, R"doc(
-            Subblock height in tiles (the C block's tiles accumulated in DST at once); must divide per_core_M_tiles.
+            Subblock height in tiles (the C chunk's tiles accumulated in DST at once); must divide per_core_M_tiles.
             0 with subblock_N_tiles = 0 means auto.
         )doc")
         .def_rw("subblock_N_tiles", &MatmulUnifiedProgramConfig::subblock_N_tiles, R"doc(
