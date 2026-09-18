@@ -189,8 +189,8 @@ TT_KERNEL void compute(uint32_t group) {
 
     kda_chronology::Topology topology{};
     if constexpr (dynamic_chronology) {
-        DataflowBuffer control(dfb::chronology_compute);
-        topology = kda_chronology::receive(control);
+        DataflowBuffer chronology(dfb::chronology_compute);
+        topology = kda_chronology::receive(chronology);
     }
     const uint32_t reset_group = dynamic_chronology ? topology.reset_group(G) : G;
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);

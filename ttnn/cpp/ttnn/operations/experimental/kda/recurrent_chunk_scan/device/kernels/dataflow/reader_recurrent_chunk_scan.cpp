@@ -92,7 +92,7 @@ template <
     uint32_t Kt,
     uint32_t Vt,
     uint32_t Vt_full,
-    uint32_t summary_pair,
+    uint32_t summary,
     uint32_t groups_per_head,
     uint32_t dynamic_chronology,
     uint32_t sp_rank,
@@ -121,30 +121,30 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
     uint32_t reset_chunk = 0;
     kda_chronology::Topology topology{};
     if constexpr (dynamic_chronology) {
-        DataflowBuffer control(dfb::chronology_compute);
-        control.reserve_back(1);
+        DataflowBuffer chronology(dfb::chronology_compute);
+        chronology.reserve_back(1);
         const auto actual_start = TensorAccessor(tensor::actual_start);
-        noc.async_read(actual_start, control, sizeof(uint32_t), {.page_id = 0}, {});
+        noc.async_read(actual_start, chronology, sizeof(uint32_t), {.page_id = 0}, {});
         noc.async_read_barrier();
-        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_write_ptr());
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_write_ptr());
         topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);
         kda_chronology::store(words, topology);
-        control.push_back(1);
+        chronology.push_back(1);
     }
     if constexpr (dynamic_chronology) {
         reset_chunk = topology.reset_chunk(head % groups_per_head, groups_per_head);
-        DataflowBuffer writer_control(dfb::chronology_writer);
-        writer_control.reserve_back(1);
-        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_control.get_write_ptr());
+        DataflowBuffer writer_chronology(dfb::chronology_writer);
+        writer_chronology.reserve_back(1);
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_chronology.get_write_ptr());
         kda_chronology::store(words, topology);
-        writer_control.push_back(1);
+        writer_chronology.push_back(1);
     }
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
     constexpr uint32_t key_value_tiles = Kt * Vt;
 
-    if constexpr (summary_pair) {
+    if constexpr (summary) {
         state.reserve_back(key_value_tiles);
         noc.async_write_zeros(state, key_value_tiles * state.get_entry_size());
         noc.write_zeros_l1_barrier();
@@ -159,12 +159,12 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         const uint32_t head_chunk = head * num_chunks + chunk;
-        // Publish the post-wrap seed just in time, never before the loop. The state
+        // Publish the restart seed just in time, never before the loop. The state
         // DFB holds one kv payload and compute frees it only via pop_front at the
         // end of chunk 0, so hoisting this deadlocks; pushing it here reuses the
         // same capacity as a queue and costs no extra L1. reset_chunk is >= 1
         // whenever it is non-zero, so chunk 0 has always been consumed by now.
-        if constexpr (summary_pair && dynamic_chronology) {
+        if constexpr (summary && dynamic_chronology) {
             if (reset_chunk != 0 && chunk == reset_chunk) {
                 // Reset the split rank's summary before the tail fragment.
                 wrap_mask.reserve_back(1);
@@ -174,7 +174,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
                 wrap_mask.push_back(1);
                 seed_identity<Kt, Vt>(tail_state, noc, value_block);
             }
-        } else if constexpr (!summary_pair) {
+        } else if constexpr (!summary) {
             if (reset_chunk != 0 && chunk == reset_chunk) {
                 wrap_mask.reserve_back(1);
                 noc.async_write_zeros(wrap_mask, wrap_mask.get_entry_size());
@@ -194,7 +194,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
                 wrap_mask.push_back(1);
             }
         }
-        if constexpr (summary_pair) {
+        if constexpr (summary) {
             read_and_publish_contiguous_tiles(kd_accessor, kd, noc, head_chunk * chunk_key_tiles, chunk_key_tiles);
             read_and_publish_value_slice<Vt, Vt_full>(
                 v_beta_accessor, v_beta, noc, head_chunk * Ct * Vt_full, Ct, value_block);

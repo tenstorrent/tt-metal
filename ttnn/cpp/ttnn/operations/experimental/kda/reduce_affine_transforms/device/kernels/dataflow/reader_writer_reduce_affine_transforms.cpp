@@ -110,15 +110,15 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
 
     kda_chronology::Topology topology{};
     if constexpr (dynamic_chronology) {
-        DataflowBuffer control(dfb::chronology_compute);
-        control.reserve_back(1);
+        DataflowBuffer chronology(dfb::chronology_compute);
+        chronology.reserve_back(1);
         const auto actual_start = TensorAccessor(tensor::actual_start);
-        noc.async_read(actual_start, control, sizeof(uint32_t), {.page_id = 0}, {});
+        noc.async_read(actual_start, chronology, sizeof(uint32_t), {.page_id = 0}, {});
         noc.async_read_barrier();
-        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_write_ptr());
+        auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_write_ptr());
         topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);
         kda_chronology::store(words, topology);
-        control.push_back(1);
+        chronology.push_back(1);
     }
     const uint32_t active = dynamic_chronology ? topology.head_groups(G) : G;
     if (group < active) {

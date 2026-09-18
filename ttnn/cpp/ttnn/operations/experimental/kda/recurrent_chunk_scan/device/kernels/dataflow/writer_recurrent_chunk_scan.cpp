@@ -72,9 +72,9 @@ FORCE_INLINE void write_segmented_summary(
     uint32_t head,
     uint32_t value_block,
     uint32_t group,
-    uint32_t wrap_group,
+    uint32_t split_group,
     uint32_t split_in_group,
-    bool dynamic_wrap) {
+    bool local_split) {
     const auto head_a_accessor = TensorAccessor(tensor::output);
     const auto head_b_accessor = TensorAccessor(tensor::final_state);
     const auto tail_a_accessor = TensorAccessor(tensor::tail_output);
@@ -85,11 +85,9 @@ FORCE_INLINE void write_segmented_summary(
     DataflowBuffer split_head_b(dfb::summary_head_state);
     Noc noc;
 
-    bool device_wrap = dynamic_wrap;
-
-    const bool straddles = device_wrap && split_in_group != 0 && group == wrap_group;
-    const bool head_active = !device_wrap || group < wrap_group || straddles;
-    const bool tail_active = device_wrap && group >= wrap_group;
+    const bool straddles = local_split && split_in_group != 0 && group == split_group;
+    const bool head_active = !local_split || group < split_group || straddles;
+    const bool tail_active = local_split && group >= split_group;
     const uint32_t row_base = head * Kt * VtFull;
 
     if (head_active) {
@@ -126,25 +124,25 @@ FORCE_INLINE void write_recurrent(uint32_t head, uint32_t value_block, uint32_t 
     write_value_slice<Kt, Vt, VtFull>(final_state_accessor, final_state, noc, state_row_base, value_block);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary_pair, uint32_t dynamic_chronology>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary, uint32_t dynamic_chronology>
 TT_KERNEL void writer(uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t group) {
-    uint32_t wrap_group = 0;
+    uint32_t split_group = 0;
     uint32_t split_in_group = 0;
-    bool dynamic_wrap = false;
+    bool local_split = false;
     if constexpr (dynamic_chronology) {
-        DataflowBuffer control(dfb::chronology_writer);
-        control.wait_front(1);
-        auto topology = kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_read_ptr()));
-        control.pop_front(1);
+        DataflowBuffer chronology(dfb::chronology_writer);
+        chronology.wait_front(1);
+        auto topology = kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_read_ptr()));
+        chronology.pop_front(1);
         uint32_t groups = topology.local_rows / 32 / num_chunks;
-        wrap_group = topology.wrap_group(groups);
+        split_group = topology.split_group(groups);
         split_in_group = topology.split_in_group(groups);
-        dynamic_wrap = topology.local_split;
+        local_split = topology.local_split;
     }
-    if constexpr (summary_pair) {
+    if constexpr (summary) {
         if constexpr (dynamic_chronology) {
             write_segmented_summary<Kt, Vt, Vt_full>(
-                head, value_block, group, wrap_group, split_in_group, dynamic_wrap);
+                head, value_block, group, split_group, split_in_group, local_split);
         } else {
             write_summary<Kt, Vt, Vt_full>(head, value_block);
         }

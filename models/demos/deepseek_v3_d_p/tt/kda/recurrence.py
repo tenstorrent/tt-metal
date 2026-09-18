@@ -207,9 +207,9 @@ def _effective_summary_group_chunks(
 
     ``configured_group_chunks`` is a performance ceiling; ``max_groups`` is a
     hardware limit, since every group needs its own summary owner core. A
-    fragment whose chunk count is prime -- which an offset split can easily
-    produce -- has no divisor at or below the ceiling other than one, and one
-    chunk per group can demand far more owners than exist. When the ceiling and
+    local sequence with a prime chunk count has no divisor at or below the
+    ceiling other than one, and one chunk per group can demand far more owners
+    than exist. When the ceiling and
     the budget conflict, the budget wins and the group grows past the ceiling.
     """
     preferred = 1
@@ -252,9 +252,9 @@ def _distributed_prefix(
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compose one affine transform per chip in chronological order.
 
-    The entry tensor is stored by physical rank before mesh partitioning, while
-    the carry advances in chronological rank order. Return local entry and the
-    replicated final carry on each independent TP line.
+    Entry states are stored in chronological order; the selector maps the
+    local physical rank to its entry while the carry advances in that order.
+    Return local entry and the replicated final carry on each independent TP line.
     """
     transform_a, transform_b = transform.a, transform.b
     batch_heads, key_dim = tuple(transform_a.shape)[0], tuple(transform_a.shape)[1]
