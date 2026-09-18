@@ -32,6 +32,16 @@ Every constant in those artifacts is Blackhole Galaxy (12x9 = 108-core AGMM grid
 kept verbatim, labelled as inherited, for the side-by-side. Note the two fabrics coincide on aggregate
 ingress (4 x 12.5 = 2 x 25 = 50 GB/s per direction), so the fabric bars are identical across arches.
 
+Whole-block mode (default when the Tracy profile exists; `--agmm-only` restores the AGMM-only output): reads
+the fsdp1 15 s block profile the perf doc's per-op table came from (`--profile-csv`), merges the warm iteration
+across the 32 devices like `project_block_perf.py`, and gives every op a roofline by class -- these are
+judgement calls built on the models already in the repo (AGMM analysis, `OpPerformanceModelGeneral`,
+`roofline_utils.py`, `estimate_fabric_transfer_cycles`) and are printed on every block figure:
+  compute-bound (SDPA, matmuls): 2*FLOPs / (cores_of_the_op * 2048 FLOP/cycle * 1.0 GHz at HiFi2)
+  DRAM-bound (embeddings, RMSNorm, tilize/untilize, concat): bytes in + out of DRAM tensors / 288 GB/s
+  fabric-bound (all-gather, reduce-scatter, broadcast): (R-1) * shard / (2 * links) / 12.5 GB/s per link
+  ideal = max of the terms that apply; ops under ~1% of the block are grouped as "other" (measured only).
+
 Per-hop fabric latency (~0.7 us on Wormhole 1D, `ccl_common.cpp`) is ~2 us over the 3-hop ring against
 ~1 ms of transfer at this M and is not modelled. Colours: resources use the dataviz reference
 categorical slots 1-3 (compute blue, DRAM orange, fabric aqua), pre-validated for CVD separation;
@@ -44,6 +54,7 @@ import argparse
 import csv
 import math
 import os
+import re
 from dataclasses import dataclass, replace
 
 FIDELITY_CYCLES = {"LoFi": 1, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}
@@ -869,6 +880,359 @@ def selftest() -> None:
 
 
 # ----------------------------------------------------------------------------------------------
+# whole transformer block from a Tracy ops_perf_results CSV
+# ----------------------------------------------------------------------------------------------
+
+DEFAULT_PROFILE_CSV = "generated/profiler/reports/2026_09_17_21_33_20/ops_perf_results_2026_09_17_21_33_20.csv"
+DTYPE_BYTES = {
+    "BFLOAT16": 2,
+    "FLOAT32": 4,
+    "UINT32": 4,
+    "INT32": 4,
+    "UINT16": 2,
+    "BFLOAT8_B": 1.0625,
+    "BFLOAT4_B": 0.5625,
+    "UINT8": 1,
+}
+SDPA_COMPUTE_CORES = 63  # 7x9: CORE COUNT reads 71 because it includes the fused CCL workers (perf doc)
+OTHER_SHARE = 0.01  # ops below this share of the block are grouped as "other"
+CLASS_COLOR = {
+    "compute": RESOURCE_COLOR["compute"],
+    "dram": RESOURCE_COLOR["dram"],
+    "fabric": RESOURCE_COLOR["fabric"],
+    "other": "#8a8983",
+}
+CLASS_LABEL = {"compute": "compute-bound", "dram": "DRAM-bound", "fabric": "fabric-bound", "other": "measured only"}
+BOUND_NOTE = (
+    "Bound models (per op class, stated assumptions): compute = 2·FLOPs / (op's core count × 2048 FLOP/cycle × 1.0 GHz, HiFi2); "
+    "DRAM = bytes in + out of DRAM-resident tensors / 288 GB/s;\n"
+    "fabric = ring volume (R−1)·shard / (2·links) / 12.5 GB/s per link; ideal = max of the terms that apply. "
+    "\nSDPA FLOPs = 4·S_local·S_total·d·heads (full joint attention) on 63 compute cores. Ops under 1% of the block are 'other' (measured only)."
+)
+
+
+@dataclass
+class BlockOp:
+    name: str
+    op_code: str
+    calls: int
+    measured: float  # seconds, summed over calls, merged across devices
+    klass: str  # compute | dram | fabric | other
+    t_compute: float = 0.0
+    t_dram: float = 0.0
+    t_fabric: float = 0.0
+    formula: str = ""
+
+    @property
+    def ideal(self) -> float | None:
+        if self.klass == "other":
+            return None
+        return max(self.t_compute, self.t_dram, self.t_fabric)
+
+    @property
+    def limiter(self) -> str:
+        if self.klass == "other":
+            return "other"
+        return max(
+            {"compute": self.t_compute, "dram": self.t_dram, "fabric": self.t_fabric}.items(), key=lambda kv: kv[1]
+        )[0]
+
+
+def _tensors(row: dict, prefix: str) -> list[tuple[tuple[int, ...], str, bool]]:
+    """[(padded shape, dtype, is_dram)] for INPUT_i / OUTPUT_i columns of one Tracy row."""
+    out = []
+    for i in range(8):
+        w = row.get(f"{prefix}_{i}_W_PAD[LOGICAL]", "")
+        if not w:
+            break
+        shape = tuple(int(row[f"{prefix}_{i}_{d}_PAD[LOGICAL]"].split("[")[0]) for d in "WZYX")
+        out.append((shape, row.get(f"{prefix}_{i}_DATATYPE", ""), "DRAM" in row.get(f"{prefix}_{i}_MEMORY", "")))
+    return out
+
+
+def _bytes(tensors, only_dram: bool = True) -> float:
+    total = 0.0
+    for shape, dtype, is_dram in tensors:
+        if only_dram and not is_dram:
+            continue
+        n = 1
+        for d in shape:
+            n *= d
+        total += n * DTYPE_BYTES.get(dtype, 2)
+    return total
+
+
+def _attr(row: dict, key: str, default):
+    m = re.search(rf"'{key}': '([^']*)'", row.get("ATTRIBUTES", ""))
+    if not m or not m.group(1).isdigit():
+        return default
+    return int(m.group(1))
+
+
+def load_block_profile(path: str, arch: Arch, fidelity: str = "HiFi2") -> list[BlockOp]:
+    """Warm-iteration ops of one transformer block, one BlockOp per (op, shape) group, rooflined by class."""
+    with open(path, newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    start = stop = None
+    for i, r in enumerate(rows):
+        if r.get("OP TYPE") != "signpost":
+            continue
+        if r["OP CODE"] == "start" and start is None:
+            start = i
+        elif r["OP CODE"] == "stop" and start is not None and stop is None:
+            stop = i
+    warm = rows[start + 1 : stop] if start is not None else rows
+    by_dev: dict[str, list[dict]] = {}
+    for r in warm:
+        if r.get("OP TYPE") == "signpost":
+            continue
+        by_dev.setdefault(r["DEVICE ID"], []).append(r)
+    devices = list(by_dev.values())
+    n_ops = min(len(d) for d in devices)
+    per_cycle = LOFI_FLOP_PER_CYCLE_PER_CORE / FIDELITY_CYCLES[fidelity]
+    dram_bw, link_bw = arch.dram_bw, arch.link_bw
+    groups: dict[str, BlockOp] = {}
+    for i in range(n_ops):
+        r0 = devices[0][i]
+        code = r0["OP CODE"]
+        durs = [int(d[i]["DEVICE KERNEL DURATION [ns]"]) * 1e-9 for d in devices if d[i]["DEVICE KERNEL DURATION [ns]"]]
+        # tt-perf-report convention (project_block_perf._per_op): mean for collectives, max otherwise
+        dur = (
+            (sum(durs) / len(durs))
+            if any(k in code.lower() for k in ("allgather", "reducescatter", "broadcast"))
+            else max(durs)
+        )
+        ins, outs = _tensors(r0, "INPUT"), _tensors(r0, "OUTPUT")
+        cores = int(r0.get("CORE COUNT") or 0) or arch.full_cores
+        R, L = _attr(r0, "ring_size", arch.ring_size), _attr(r0, "num_links", arch.num_links)
+        name, klass, tc, td, tf, formula = (
+            code.replace("DeviceOperation", "").replace("Op", ""),
+            "other",
+            0.0,
+            0.0,
+            0.0,
+            "",
+        )
+        if code == "AllGatherMinimalMatmulAsyncOp":
+            m_rows, k_g, n = ins[0][0][2], ins[1][0][2], ins[1][0][3]
+            op = {5376: OPS[0], 1344: OPS[1], 7168: OPS[2]}.get(n, Op(f"agmm N{n}", k_g, n, "?"))
+            rl = roofline(m_rows, op, arch, fidelity, num_links=L)
+            name, klass, tc, td, tf = f"AGMM {op.name}", rl.limiter, rl.t_compute, rl.t_dram, rl.t_fabric
+            formula = f"AGMM roofline: 2·{m_rows}·{k_g}·{n} FLOP on {arch.agmm_cores} cores; gather (R−1)·M·K_local·2B/(2·{L})"
+        elif code == "RingJointSDPADeviceOperation":
+            heads, s_local, d = ins[0][0][1], ins[0][0][2], ins[0][0][3]
+            s_total = ins[3][0][2] if len(ins) > 3 else s_local
+            flops = 4.0 * s_local * s_total * d * heads
+            tc = flops / (SDPA_COMPUTE_CORES * per_cycle * arch.clock_hz)
+            td = _bytes(ins + outs) / dram_bw
+            name, klass = "RingJointSDPA", "compute"
+            formula = f"4·{s_local}·{s_total}·{d}·{heads} = {flops / 1e12:.2f} TFLOP on {SDPA_COMPUTE_CORES} cores"
+        elif code == "MinimalMatmulDeviceOperation":
+            m_rows, k, n = ins[0][0][2], ins[1][0][2], ins[1][0][3]
+            tc = 2.0 * m_rows * k * n / (cores * per_cycle * arch.clock_hz)
+            td = _bytes(ins + outs) / dram_bw
+            name = "MinimalMatmul ff2" if m_rows > 32 else f"MinimalMatmul M={m_rows} (adaLN)"
+            klass = "compute" if tc >= td else "dram"
+            formula = f"2·{m_rows}·{k}·{n} FLOP on {cores} cores; {_bytes(ins + outs) / 1e6:.0f} MB DRAM"
+        elif code == "ReduceScatterMinimalAsyncDeviceOperation":
+            b = _bytes(ins[:1])
+            tf = (R - 1) * (b / R) / (2 * L) / link_bw
+            td = (b + b / R) / dram_bw
+            name, klass = "ReduceScatter (ff2)", "fabric"
+            formula = f"(R−1)·(B/R)/(2·L): B={b / 1e6:.0f} MB, R={R}, L={L}"
+        elif code == "AllGatherAsyncDeviceOperation":
+            b = _bytes(ins[:1])
+            tf = (R - 1) * b / (2 * L) / link_bw
+            td = (b + R * b) / dram_bw
+            name, klass = "AllGatherAsync (FSDP weights)", "fabric"
+            formula = f"(R−1)·shard/(2·L): shard={b / 1e6:.1f} MB, R={R}, L={L}"
+        elif code == "AllBroadcastDeviceOperation":
+            b, n_out = _bytes(ins[:1]), max(1, len(outs))
+            tf = (n_out - 1) * b / (2 * L) / link_bw
+            td = (b + n_out * b) / dram_bw
+            name, klass = "AllBroadcast (FSDP)", "fabric"
+            formula = f"(n_out−1)·B/(2·L): B={b / 1e6:.1f} MB, n_out={n_out}, L={L}"
+        elif code in (
+            "EmbeddingsDeviceOperation",
+            "DitFusedDistributedRmsnormDeviceOperation",
+            "UntilizeWithUnpaddingDeviceOperation",
+            "TilizeWithValPaddingDeviceOperation",
+            "ConcatDeviceOperation",
+        ):
+            td = _bytes(ins + outs) / dram_bw
+            klass = "dram"
+            name = {
+                "EmbeddingsDeviceOperation": "Embeddings (adaLN tables)",
+                "DitFusedDistributedRmsnormDeviceOperation": "DistributedRMSNorm",
+                "UntilizeWithUnpaddingDeviceOperation": "UntilizeWithUnpadding",
+                "TilizeWithValPaddingDeviceOperation": "TilizeWithValPadding",
+                "ConcatDeviceOperation": "Concat",
+            }[code]
+            formula = f"{_bytes(ins + outs) / 1e6:.0f} MB in+out / {dram_bw / 1e9:.0f} GB/s"
+        g = groups.get(name)
+        if g is None:
+            groups[name] = BlockOp(name, code, 1, dur, klass, tc, td, tf, formula)
+        else:
+            g.calls += 1
+            g.measured += dur
+            g.t_compute += tc
+            g.t_dram += td
+            g.t_fabric += tf
+    ops = list(groups.values())
+    total = sum(o.measured for o in ops)
+    keep, other = [], BlockOp("other (small ops)", "", 0, 0.0, "other")
+    for o in sorted(ops, key=lambda o: -o.measured):
+        if o.measured < OTHER_SHARE * total or o.klass == "other":
+            other.calls += o.calls
+            other.measured += o.measured
+        else:
+            keep.append(o)
+    if other.calls:
+        other.formula = "below 1% of the block each"
+        keep.append(other)
+    return keep
+
+
+def dump_block_table(ops: list[BlockOp], title: str) -> str:
+    out = [
+        f"### {title}",
+        "",
+        "| op | calls | measured ms | ideal ms | limiter | util | headroom | bound model |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    tm = ti = 0.0
+    for o in ops:
+        tm += o.measured
+        if o.ideal is None:
+            out.append(f"| {o.name} | {o.calls} | {o.measured * 1e3:.2f} | — | measured only | — | — | {o.formula} |")
+            continue
+        ti += o.ideal
+        out.append(
+            f"| {o.name} | {o.calls} | {o.measured * 1e3:.2f} | {o.ideal * 1e3:.2f} | {o.limiter} | {100 * o.ideal / o.measured:.0f}% | "
+            f"{o.measured / o.ideal:.2f}x | {o.formula} |"
+        )
+    out += [
+        "",
+        f"block measured {tm * 1e3:.1f} ms; sum of ideals {ti * 1e3:.1f} ms (rooflined ops); headroom {tm / ti:.2f}x",
+    ]
+    return "\n".join(out)
+
+
+def _stack(ax, x, ops, key, width, label_min_frac):
+    import matplotlib.patches as mpatches  # noqa: F401
+
+    bottom, total = 0.0, sum((getattr(o, key) or 0.0) for o in ops)
+    for o in ops:
+        v = getattr(o, key)
+        if not v:
+            continue
+        ms = v * 1e3
+        ax.bar(x, ms, width, bottom=bottom, color=CLASS_COLOR[o.klass], edgecolor="white", linewidth=1.2, zorder=3)
+        if v / total >= label_min_frac:
+            ax.text(
+                x,
+                bottom + ms / 2,
+                f"{o.name}  {ms:,.1f}",
+                ha="center",
+                va="center",
+                fontsize=7.5,
+                color=INK,
+                bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85),
+            )
+        bottom += ms
+    return bottom
+
+
+def fig_block_stacked(ops: list[BlockOp], arch: Arch, fidelity: str, title: str, source: str):
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 8.2), gridspec_kw={"width_ratios": [1, 1]})
+    panels = (("whole block", ops), ("block without RingJointSDPA", [o for o in ops if o.name != "RingJointSDPA"]))
+    for ax, (ptitle, pops) in zip(axes, panels):
+        _style(ax, grid_axis="y")
+        rooflined = [o for o in pops if o.ideal is not None]
+        top_ideal = _stack(ax, 0.0, sorted(rooflined, key=lambda o: -o.ideal), "ideal", 0.6, 0.035)
+        top_meas = _stack(ax, 1.0, sorted(pops, key=lambda o: -o.measured), "measured", 0.6, 0.035)
+        ax.text(
+            0.0, top_ideal, f"{top_ideal:,.1f} ms", ha="center", va="bottom", fontsize=9, color=INK, fontweight="bold"
+        )
+        ax.text(
+            1.0, top_meas, f"{top_meas:,.1f} ms", ha="center", va="bottom", fontsize=9, color=INK, fontweight="bold"
+        )
+        ax.hlines(top_meas, -0.3, 1.3, color=INK, lw=1.2, ls=(0, (3, 2)), zorder=5)
+        ax.annotate(
+            f"{top_meas / top_ideal:.2f}x",
+            (0.0, top_meas),
+            xytext=(0, 6),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+            color=INK_2,
+        )
+        ax.set_xticks([0.0, 1.0])
+        ax.set_xticklabels(["roofline ideal\n(per op, summed)", "measured\n(Tracy, per op)"], fontsize=9, color=INK)
+        ax.tick_params(axis="x", length=0)
+        ax.set_xlim(-0.55, 1.55)
+        ax.set_ylim(0, max(top_ideal, top_meas) * 1.1)
+        ax.set_ylabel("ms per transformer block, per device", fontsize=9, color=INK_2)
+        ax.set_title(ptitle, fontsize=10, color=INK, loc="left")
+    handles = [Patch(color=CLASS_COLOR[k], label=CLASS_LABEL[k]) for k in ("compute", "dram", "fabric", "other")]
+    handles.append(Line2D([], [], color=INK, ls=(0, (3, 2)), label="measured total"))
+    fig.legend(
+        handles=handles,
+        loc="upper right",
+        bbox_to_anchor=(0.995, 0.935),
+        ncol=5,
+        frameon=False,
+        fontsize=8.5,
+        title="segment colour = bound class",
+        title_fontsize=8.5,
+    )
+    fig.suptitle(title, fontsize=12, color=INK, x=0.01, ha="left")
+    fig.text(0.01, 0.945, f"{_constants_line(arch, fidelity)}   ·   source {source}", fontsize=8.5, color=INK_2)
+    fig.text(0.01, 0.005, BOUND_NOTE, fontsize=7.8, color=INK_MUTED, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=(0, 0.08, 1, 0.9))
+    return fig
+
+
+def fig_block_ops(ops: list[BlockOp], arch: Arch, fidelity: str, title: str, source: str):
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+
+    rows = sorted(ops, key=lambda o: o.measured)
+    fig, ax = plt.subplots(figsize=(13, 0.48 * len(rows) + 3.2))
+    _style(ax, grid_axis="x")
+    ax.set_xscale("log")
+    ys = list(range(len(rows)))
+    for y, o in zip(ys, rows):
+        c = CLASS_COLOR[o.klass]
+        ax.barh(y + 0.18, o.measured * 1e3, 0.34, color=c, alpha=0.55, zorder=3)
+        note = f"{o.measured * 1e3:,.2f} ms measured"
+        if o.ideal is not None:
+            ax.barh(y - 0.18, o.ideal * 1e3, 0.34, color=c, zorder=3)
+            note += f"  ·  ideal {o.ideal * 1e3:,.2f} ({CLASS_LABEL[o.limiter]}, {100 * o.ideal / o.measured:.0f}% util, {o.measured / o.ideal:.1f}x)"
+        ax.text(o.measured * 1e3 * 1.08, y, note, va="center", fontsize=8, color=INK_2)
+    ax.set_yticks(ys)
+    ax.set_yticklabels([f"{o.name}  ×{o.calls}" if o.calls > 1 else o.name for o in rows], fontsize=8.5, color=INK)
+    ax.set_xlabel("ms per block (log)", fontsize=9, color=INK_2)
+    xmax = max(o.measured for o in rows) * 1e3
+    ax.set_xlim(0.05, xmax * 40)
+    handles = [
+        Patch(color=CLASS_COLOR[k], label=CLASS_LABEL[k] + " (ideal, solid)") for k in ("compute", "dram", "fabric")
+    ]
+    handles.append(Patch(color=INK_MUTED, alpha=0.55, label="measured (faded)"))
+    ax.legend(handles=handles, loc="lower right", frameon=False, fontsize=8)
+    fig.suptitle(title, fontsize=12, color=INK, x=0.01, ha="left")
+    fig.text(0.01, 0.93, f"{_constants_line(arch, fidelity)}   ·   source {source}", fontsize=8.5, color=INK_2)
+    fig.text(0.01, 0.005, BOUND_NOTE, fontsize=7.8, color=INK_MUTED, va="bottom", linespacing=1.4)
+    fig.tight_layout(rect=(0, 0.1, 1, 0.91))
+    return fig
+
+
+# ----------------------------------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------------------------------
 
@@ -877,7 +1241,11 @@ def main() -> None:
     p = argparse.ArgumentParser(
         description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    p.add_argument("--figs", default="all", help="comma list of roofline,bars,stacked,nstar or all (default) or none")
+    p.add_argument(
+        "--figs",
+        default="all",
+        help="comma list of roofline,bars,stacked,nstar,block_stacked,block_ops or all (default) or none",
+    )
     p.add_argument("--dump", action="store_true", help="print the constants and roofline tables (markdown) to stdout")
     p.add_argument(
         "--selftest", action="store_true", help="check the port against the artifact rows and the perf-doc anchors"
@@ -902,6 +1270,16 @@ def main() -> None:
         help="sweep_mm_block_sizes.py results CSV; best OK time per op replaces the shipped numbers",
     )
     p.add_argument("--no-measured", action="store_true", help="do not overlay measured times")
+    p.add_argument(
+        "--profile-csv",
+        default=DEFAULT_PROFILE_CSV,
+        help="Tracy ops_perf_results CSV of one block (fsdp1 15 s profile by default)",
+    )
+    p.add_argument(
+        "--agmm-only",
+        action="store_true",
+        help="AGMM figures/tables only (the pre-block behaviour); block figures need --profile-csv",
+    )
     p.add_argument("--out-dir", default="agmm_roofline_out")
     p.add_argument("--dpi", type=int, default=160)
     args = p.parse_args()
@@ -935,6 +1313,22 @@ def main() -> None:
         rows_by_arch[arch.short] = rows
 
     all_rows = [r for rows in rows_by_arch.values() for r in rows]
+    block_ops = None
+    if not args.agmm_only:
+        if os.path.exists(args.profile_csv):
+            block_ops = load_block_profile(args.profile_csv, wh, args.fidelity)
+        else:
+            print(
+                f"note: no block profile at {args.profile_csv}; block figures skipped (pass --profile-csv or --agmm-only)"
+            )
+    if args.dump and block_ops:
+        print(
+            dump_block_table(
+                block_ops,
+                f"Transformer block — {wh.name}, per device, {args.fidelity}, {os.path.basename(args.profile_csv)}",
+            )
+        )
+        print()
     if args.dump:
         print(constants_table(arches, args.fidelity))
         print()
@@ -944,7 +1338,7 @@ def main() -> None:
 
     figs = set() if args.figs == "none" else set(args.figs.split(","))
     if "all" in figs:
-        figs = {"roofline", "bars", "stacked", "nstar"}
+        figs = {"roofline", "bars", "stacked", "nstar"} | (set() if args.agmm_only else {"block_stacked", "block_ops"})
     if not figs and not args.dump and not args.selftest:
         p.error("nothing to do: pass --dump, --selftest or --figs")
     if figs:
@@ -992,6 +1386,28 @@ def main() -> None:
                 measured_note,
             )
             path = os.path.join(args.out_dir, f"agmm_stacked_{tag}.png")
+            fig.savefig(path, dpi=args.dpi)
+            written.append(path)
+        if block_ops and "block_stacked" in figs:
+            fig = fig_block_stacked(
+                block_ops,
+                wh,
+                args.fidelity,
+                f"Roofline vs measured, every op — {shape_title.replace('MiniMax-H3 AGMMs', 'MiniMax-H3 transformer block')}",
+                os.path.basename(args.profile_csv),
+            )
+            path = os.path.join(args.out_dir, f"block_stacked_{tag}.png")
+            fig.savefig(path, dpi=args.dpi)
+            written.append(path)
+        if block_ops and "block_ops" in figs:
+            fig = fig_block_ops(
+                block_ops,
+                wh,
+                args.fidelity,
+                f"Per-op roofline vs measured — {shape_title.replace('MiniMax-H3 AGMMs', 'MiniMax-H3 transformer block')}",
+                os.path.basename(args.profile_csv),
+            )
+            path = os.path.join(args.out_dir, f"block_ops_{tag}.png")
             fig.savefig(path, dpi=args.dpi)
             written.append(path)
         if "nstar" in figs:
