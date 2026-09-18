@@ -246,6 +246,7 @@ OUTPUT_DIMS = {
 
 
 UNARY_SFPU_OPS = {
+    MathOperation.Add1,
     MathOperation.Abs,
     MathOperation.Exp,
     MathOperation.Gelu,
