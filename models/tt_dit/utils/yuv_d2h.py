@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -41,6 +43,23 @@ def _get_default_reassemble_pool() -> ThreadPoolExecutor:
 # Persistent output buffer for the C++ planar-concat fast path
 _PLANAR_OUT_BUF: np.ndarray | None = None
 _PLANAR_OUT_SHAPE: tuple[int, int] | None = None
+
+
+_FALLBACK_WARNED = False
+
+
+def _warn_once_about_the_fallback() -> None:
+    """The AVX2 concat is roughly 1.7x the torch scatter at the served chunk, but nothing in the
+    build compiles it -- `models/tt_dit/utils/cpp/build.sh` has to be run by hand -- so a serving
+    process can lose that quietly. Say it once per process rather than per frame."""
+    global _FALLBACK_WARNED
+    if _FALLBACK_WARNED:
+        return
+    _FALLBACK_WARNED = True
+    logger.warning(
+        "yuv readback is using the torch scatter: the AVX2 planar concat is not built "
+        "(run models/tt_dit/utils/cpp/build.sh to get it; ~1.7x on this step)"
+    )
 
 
 def _get_planar_out_buf(T: int, row_stride: int) -> np.ndarray:
@@ -86,7 +105,7 @@ def _yuv_planar_d2h(
     timings: dict | None = None,
     reuse_out_buffer: bool = False,
     defer: bool = False,
-) -> np.ndarray:
+) -> np.ndarray | Callable[[], np.ndarray]:
     """Batched D2H of three YUV ttnn tensors into ffmpeg yuv420p planar uint8.
 
     Per-shard input shapes (kernel-native BHWT with C=1):
@@ -242,6 +261,8 @@ def _yuv_planar_d2h(
                 timings["yuv_scatter"] = timings.get("yuv_scatter", 0.0) + (time.perf_counter() - mark)
             return assembled
 
+        _warn_once_about_the_fallback()
+
         # --- Python fallback (torch_threaded scatter) ------------------------ Assemble directly into the logical-sized
         out_Hu, out_Wu = out_H // 2, out_W // 2
         out_hw, out_uv = out_H * out_W, out_Hu * out_Wu
@@ -302,7 +323,7 @@ def fast_device_to_host_yuv(
     timings: dict | None = None,
     reuse_out_buffer: bool = False,
     defer: bool = False,
-) -> np.ndarray | None:
+) -> np.ndarray | Callable[[], np.ndarray] | None:
     """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
 
     Takes a sharded BCTHW bf16 row-major tensor with values in ``[-1, 1]`` —

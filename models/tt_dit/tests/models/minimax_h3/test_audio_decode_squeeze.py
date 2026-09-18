@@ -168,8 +168,20 @@ def _best(fn, mesh_device, n=3):
     return best, out
 
 
+# PSNR against the CPU reference and log-mel distance, for the recipes whose fidelity is a contract
+# rather than an experiment. `full_pack` is what the pipeline ships (MINIMAX_H3_AUDIO_SPLIT unset,
+# MINIMAX_H3_AUDIO_PACK at its default), measured 67.31 dB / 0.0034 at 600lat_b2 on 2026-09-18; the
+# floors sit a little under that so ordinary run-to-run movement does not trip them, while a real
+# regression in the packed default does.
+FIDELITY_FLOORS = {
+    "full_pack": (66.0, 0.006),
+    "full": (66.0, 0.006),
+    "off_pack": (52.0, 0.020),
+}
+
+
 def _selected_recipes():
-    names = os.environ.get("SQZ_RECIPES", "full,weight,off,off_ge3,off_ge5").split(",")
+    names = os.environ.get("SQZ_RECIPES", "full_pack,full,weight,off,off_ge3,off_ge5").split(",")
     return [(n, RECIPES[n]) for n in names if n]
 
 
@@ -200,6 +212,13 @@ def test_audio_decode_squeeze(mesh_device, num_latent_frames, batch):
         if baseline_out is None:
             baseline_out = out
         db_base = psnr(baseline_out, out)
+        floors = FIDELITY_FLOORS.get(name)
+        if floors is not None:
+            db_floor, mel_ceiling = floors
+            assert db_ref >= db_floor and mel <= mel_ceiling, (
+                f"{name} is a shipping configuration and its fidelity moved: {db_ref:.2f} dB against a "
+                f"{db_floor:.1f} dB floor, log-mel {mel:.4f} against a {mel_ceiling:.4f} ceiling"
+            )
         rows.append((name, counts, eager, traced, db_ref, mel, db_base))
         logger.info(
             f"SQZ {name}: split {counts} eager {eager:.4f} s traced {traced:.4f} s | vs CPU ref {db_ref:.2f} dB "
