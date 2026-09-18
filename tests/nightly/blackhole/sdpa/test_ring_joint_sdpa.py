@@ -596,7 +596,7 @@ def open_ring_joint_sdpa_runtime(
 ):
     if full_mesh:
         # The caller asks for a full-mesh gather; the op resolves whether that route closes.
-        fabric_config = fabric_config or ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if fabric_config is None else fabric_config
         topology = Topology.Ring
     else:
         use_ring = mesh_config.sp_size > 2 if topology is None else topology == Topology.Ring
