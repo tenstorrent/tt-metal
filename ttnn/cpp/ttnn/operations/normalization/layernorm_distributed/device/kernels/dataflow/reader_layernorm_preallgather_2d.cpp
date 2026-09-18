@@ -27,6 +27,7 @@ void kernel_main() {
     const auto reduce_core_noc_x = get_arg(args::reduce_core_noc_x);
     const auto reduce_core_noc_y = get_arg(args::reduce_core_noc_y);
     const auto y = get_arg(args::y);
+    const auto row_stride = get_arg(args::row_stride);
 
     const uint32_t onetile = 1;
 
@@ -99,7 +100,7 @@ void kernel_main() {
 #endif
 
         }  // wt loop
-
+        inp_tile_idx += row_stride;
     }  // ncht loop
 
     // wait on the partial output and then write it to the merge core over the NoC
