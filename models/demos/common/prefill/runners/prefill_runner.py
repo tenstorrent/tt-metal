@@ -80,18 +80,10 @@ MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_gate_mode)
-KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
 DFLASH_ENABLED = (
     ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(os.environ.get("DFLASH_HF_MODEL"))
 )
 
-# KV dedup: also shard the KV/index caches across TP (1/(sp*tp) slice per device) instead of TP-replicating
-# them. Storage only, cache content bit-identical; sparse (DSA) path only.
-TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", "0") == "1"
-assert not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv, (
-    f"PREFILL_TP_SHARD_KV=1 is not supported by model {ADAPTER.name!r}: its allocate_kv_cache does not pass "
-    f"params.tp_shard_kv to the cache allocators, so writes would be TP-sharded into TP-replicated caches."
-)
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 _L1_SMALL_SIZE = ADAPTER.l1_small_size
@@ -100,23 +92,6 @@ _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 
 assert not (DFLASH_ENABLED and USE_TRACE), (
     "PREFILL_DFLASH=1 is incompatible with PREFILL_USE_TRACE=1: the DFlash drafter path is not "
     "trace-captured. Run DFlash with PREFILL_USE_TRACE=0."
-)
-assert not (USE_TRACE and not KV_ONLY_LAST_LAYER), (
-    "PREFILL_KV_ONLY_LAST_LAYER=0 is incompatible with PREFILL_USE_TRACE=1: without the kv-only last "
-    "layer the last rank runs the norm/LM-head tail, and TtLMHead.logit_to_host() calls "
-    "ttnn.synchronize_device() -- a host sync inside begin_trace_capture(), which TT_FATALs in "
-    "fd_mesh_command_queue as 'Event Synchronization is not supported during trace capture'. A prefill "
-    "runner ignores the emitted token anyway, so leave PREFILL_KV_ONLY_LAST_LAYER at its default 1 when "
-    "tracing (the kv-only last block still writes its KV cache)."
-)
-
-_ALLOW_TP_SHARD_TRACE = os.environ.get("PREFILL_ALLOW_UNTESTED_TP_SHARD_TRACE", "0") == "1"
-assert not (TP_SHARD_KV and USE_TRACE) or _ALLOW_TP_SHARD_TRACE, (
-    "PREFILL_TP_SHARD_KV=1 with PREFILL_USE_TRACE=1 has no CI coverage: no job exercises the tp_axis "
-    "on-device kv_actual_global read, the key_stripe_split>1 indexer geometry, or the kv-dedup two-stage "
-    "KVPE gather. The combination works (hand-validated on 8x4) but nothing would catch a regression. "
-    "Set PREFILL_ALLOW_UNTESTED_TP_SHARD_TRACE=1 to run it anyway, or add a `tp_sharded and traced` CI row "
-    "and delete this tripwire."
 )
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
@@ -407,14 +382,12 @@ def _print_config() -> None:
         ("PREFILL_TP", str(_tp)),
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
         ("PREFILL_PP_LAYER_COUNTS", os.environ.get("PREFILL_PP_LAYER_COUNTS", "<even split>")),
-        ("PREFILL_KV_ONLY_LAST_LAYER", str(KV_ONLY_LAST_LAYER)),
         (
             "DFLASH_ENABLED",
             f"{DFLASH_ENABLED} (adapter.supports_dflash={ADAPTER.supports_dflash}, "
             f"DFLASH_HF_MODEL={os.environ.get('DFLASH_HF_MODEL') or '<unset>'})",
         ),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
-        ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
@@ -515,10 +488,11 @@ def main() -> None:
         capacity_factor=CAPACITY_FACTOR,
         num_links=2 if is_blackhole() else 1,
         gate_mode_name=_gate_mode_name,
-        kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
+        # is_last_rank, not True: TtPrefillTransformer asserts kv_only_last_layer -> is_last_rank, since a
+        # non-last rank must still hand its hidden state downstream.
+        kv_only_last_layer=is_last_rank,
         dflash_enabled=DFLASH_ENABLED,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
-        tp_shard_kv=TP_SHARD_KV,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,
         overlap_shared_expert_with_dispatch=os.environ.get("PREFILL_OVERLAP_SHARED_EXPERT", "1") == "1",

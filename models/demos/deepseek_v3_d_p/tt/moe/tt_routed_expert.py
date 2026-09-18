@@ -43,22 +43,24 @@ def _fused_compute_config(config):
 
 
 # Model configs are torch-only and so name their activation as a string; this is the one place
-# that maps those names onto the kernel enum. Keys match the HF ``hidden_act`` spelling.
+# that maps those names onto the kernel enum. Keys are the TT activation name, not the HF
+# ``hidden_act``: DeepSeek-V4's ``hidden_act`` is "silu", with the clamp on ``swiglu_limit``.
 ROUTED_EXPERT_ACTIVATION_BY_NAME = {
     "silu": ttnn.RoutedExpertActivation.Silu,
     "swiglu_oai": ttnn.RoutedExpertActivation.SwiGluOai,
     "situ": ttnn.RoutedExpertActivation.SituGlu,
+    "clamped_silu_glu": ttnn.RoutedExpertActivation.ClampedSiluGlu,
 }
 
-# Activations whose fused kernel path carries the bias branch (gate/up bias before the
-# activation, down bias after the down matmul). SiLU has no bias branch.
+# Activations allowed to carry expert biases. ClampedSiluGlu is excluded because
+# DeepSeek-V4's experts are bias-free, not because the kernel lacks a bias branch.
 _BIAS_CAPABLE_ACTIVATIONS = (
     ttnn.RoutedExpertActivation.SwiGluOai,
     ttnn.RoutedExpertActivation.SituGlu,
 )
 
-# Activations moe_fused_swiglu implements; its own validation rejects the rest. Both ops now cover
-# all three, so this only constrains which experts a hybrid split may hand to the fused op.
+# Activations moe_fused_swiglu implements; its own validation rejects the rest. ClampedSiluGlu is
+# absent (only unified_routed_expert_moe has it), so a hybrid split cannot hand it to the fused op.
 _FUSED_OP_ACTIVATIONS = (
     ttnn.RoutedExpertActivation.Silu,
     ttnn.RoutedExpertActivation.SituGlu,
@@ -376,12 +378,13 @@ class TtRoutedExpert(LightweightModule):
         # Required RoutedExpertActivation, chosen explicitly by the caller (no
         # silent default): pass ttnn.RoutedExpertActivation.Silu for the DeepSeek
         # path (byte-identical), .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
-        # swigluoai activation, or .SituGlu for Kimi K3's SiTU-GLU. Enforcing presence
-        # avoids silently running the wrong activation when a caller forgets to set it.
+        # swigluoai activation, .SituGlu for Kimi K3's SiTU-GLU, or .ClampedSiluGlu for
+        # DeepSeek-V4's clamped SiLU-GLU. Enforcing presence avoids silently running the
+        # wrong activation when a caller forgets to set it.
         if activation is None:
             raise ValueError(
                 "TtRoutedExpert requires an explicit `activation` "
-                "(ttnn.RoutedExpertActivation.Silu, .SwiGluOai or .SituGlu)"
+                "(ttnn.RoutedExpertActivation.Silu, .SwiGluOai, .SituGlu or .ClampedSiluGlu)"
             )
         self.activation = activation
         # Hybrid routed-expert dispatch. None keeps the single-op path. An int T splits the
@@ -414,13 +417,12 @@ class TtRoutedExpert(LightweightModule):
                 "the fallback path computes SiLU"
             )
 
-        # Optional per-expert projection biases (gpt-oss). Supported by any fused binary
-        # activation (the kernel adds gate/up bias before the activation and down bias
-        # after the down matmul). Converted + distributed like the weights below.
+        # Optional per-expert projection biases (gpt-oss). Converted + distributed like the
+        # weights below.
         if torch_biases is not None and activation not in _BIAS_CAPABLE_ACTIVATIONS:
             raise ValueError(
-                "TtRoutedExpert expert biases require a fused binary activation "
-                "(RoutedExpertActivation.SwiGluOai or .SituGlu); the SiLU path has no bias branch."
+                "TtRoutedExpert expert biases are enabled only for "
+                f"RoutedExpertActivation.SwiGluOai and .SituGlu, not {activation}."
             )
 
         total_experts = self.num_devices * experts_per_chip
