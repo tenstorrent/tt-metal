@@ -1,0 +1,93 @@
+{
+  "units": "ms per audio frame (46.44 ms of audio); RTF = generation seconds / audio seconds",
+  "bandwidth_assumption_gbs_per_chip": 512.0,
+  "meshes": {
+    "phaseA/1x1": {
+      "clips": 8,
+      "fast_impl": "torch-cpu",
+      "codec_impl": "torch-cpu",
+      "slow_ms_per_frame": 36.54997674087728,
+      "fast_ms_per_frame": 304.06875980842074,
+      "codec_ms_per_frame": 28.150663573548172,
+      "prefill_s_median": 1.7046904563903809,
+      "rtf_total_median": 8.312458680115585,
+      "frames_per_s_median": 2.915133843682138,
+      "roofline_estimate": {
+        "slow_ms": 8.445736,
+        "fast_10steps_ms": 8.812800000000001
+      },
+      "e2e_ms_per_frame_lm": 340.61873654929803,
+      "named_limitations": [
+        "fast decoder on CPU",
+        "codec on CPU",
+        "host sampling: 1 logits readback per slow step and 9 per frame for the fast decoder",
+        "prefill untraced (fixed ~1.8 s per request)",
+        "no device-side profiler run yet: device_ms unknown"
+      ]
+    },
+    "phaseA/1x4": {
+      "clips": 8,
+      "fast_impl": "torch-cpu",
+      "codec_impl": "torch-cpu",
+      "slow_ms_per_frame": 33.46270952976896,
+      "fast_ms_per_frame": 309.9307290960157,
+      "codec_ms_per_frame": 29.538935464619534,
+      "prefill_s_median": 1.6031399965286255,
+      "rtf_total_median": 8.447999405475425,
+      "frames_per_s_median": 2.872126066001244,
+      "roofline_estimate": {
+        "slow_ms": 2.111434,
+        "fast_10steps_ms": 2.2032000000000003
+      },
+      "e2e_ms_per_frame_lm": 343.39343862578465,
+      "named_limitations": [
+        "fast decoder on CPU",
+        "codec on CPU",
+        "host sampling: 1 logits readback per slow step and 9 per frame for the fast decoder",
+        "prefill untraced (fixed ~1.8 s per request)",
+        "no device-side profiler run yet: device_ms unknown"
+      ]
+    },
+    "phaseB/1x1": {
+      "clips": 2,
+      "fast_impl": "ttnn",
+      "codec_impl": "torch-cpu",
+      "slow_ms_per_frame": 51.259957859162185,
+      "fast_ms_per_frame": 49.290401873245735,
+      "codec_ms_per_frame": 26.599624688997096,
+      "prefill_s_median": 1.7870550155639648,
+      "rtf_total_median": 3.393870829827125,
+      "frames_per_s_median": 9.701589853181396,
+      "roofline_estimate": {
+        "slow_ms": 8.445736,
+        "fast_10steps_ms": 8.812800000000001
+      },
+      "e2e_ms_per_frame_lm": 100.55035973240791,
+      "named_limitations": [
+        null,
+        "codec on CPU",
+        "host sampling: 1 logits readback per slow step and 9 per frame for the fast decoder",
+        "prefill untraced (fixed ~1.8 s per request)",
+        "no device-side profiler run yet: device_ms unknown"
+      ]
+    },
+    "server/baremetal-p150": {
+      "mesh": "1x1",
+      "ttfa_s": 4.669577598571777,
+      "impl": {
+        "slow": "ttnn/tt_transformers",
+        "fast": "ttnn",
+        "codec": "torch-cpu"
+      }
+    },
+    "server/baremetal-p300x2": {
+      "mesh": "1x4",
+      "ttfa_s": 4.733420133590698,
+      "impl": {
+        "slow": "ttnn/tt_transformers",
+        "fast": "ttnn",
+        "codec": "torch-cpu"
+      }
+    }
+  }
+}
