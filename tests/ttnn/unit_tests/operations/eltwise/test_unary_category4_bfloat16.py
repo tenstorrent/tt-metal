@@ -9,6 +9,8 @@ from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, asser
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
     to_tt_tensor,
+    float_to_bf16_bits,
+    bf16_bits_to_float,
 )
 from models.common.utility_functions import is_blackhole
 
@@ -20,7 +22,7 @@ Category 4: Ops with float/scalar parameter
 11. ttnn.elu          - alpha (default 1.0):  x >= 0 ? x : alpha * (exp(x) - 1)
 12. ttnn.heaviside     - value:                 x < 0 ? 0 : x > 0 ? 1 : value
 13. ttnn.leaky_relu    - negative_slope:        x >= 0 ? x : negative_slope * x
-14. ttnn.relu_max      - upper_limit:           min(max(x, 0), upper_limit)
+14. ttnn.relu_max      - upper_limit:           max(0, min(x, upper_limit))
 15. ttnn.relu_min      - lower_limit:           max(x, lower_limit)
 16. ttnn.rpow          - exponent:              exponent ** x
 17. ttnn.celu          - alpha (default 1.0):   x >= 0 ? x : alpha * (exp(x / alpha) - 1)
@@ -29,59 +31,54 @@ Category 4: Ops with float/scalar parameter
 20. ttnn.hardshrink    - lambd (default 0.5):   |x| > lambd ? x : 0
 21. ttnn.softshrink    - lambd (default 0.5):   x > lambd ? x - lambd : x < -lambd ? x + lambd : 0
 
-Each op takes a single tensor input plus one Python float/scalar parameter, unlike
-Category 5's dim-split gated-linear-units. The input tensor is where "exhaustive
-bfloat16 coverage" applies: every op below sweeps all 32,512 positive and 32,512
-negative normal bfloat16 values (a single (256, 256) tile, one device dispatch) through
-the tensor argument. The scalar parameter is not itself tensor-shaped, so it cannot be
-swept bit-for-bit in the same single-dispatch way; instead it is parametrized over a
-representative set of values (default, fractional, integer, and sign-varying), except
-for `fill`, whose output does not depend on the input tensor at all -- there the
-parameter itself is the thing being covered, so `fill_value` is parametrized across
-representative bfloat16 value classes instead.
+Every op sweeps all 32,512 positive + 32,512 negative normal bfloat16 values
+(one (256, 256) tile, one dispatch) through the tensor input. The scalar
+parameter can't be swept the same way, so it's parametrized over a
+representative set of values instead -- except `fill`, whose output doesn't
+depend on the input at all, so `fill_value` itself is the swept domain there.
 
 Accuracy criteria
 ─────────────────
   heaviside, relu_max, relu_min, hardshrink : exact (bit-for-bit)
-      Pure comparison/selection with no arithmetic on the passthrough branches.
+      Pure comparison/selection, no arithmetic.
   leaky_relu, softshrink                    : ULP ≤ 1
-      Exactly one multiply/add-sub on the non-identity branch.
+      One multiply/add-sub on the non-identity branch.
   elu, celu                                 : ULP ≤ 1 (excluding a narrow band)
-      alpha * (exp(x) - 1) [or exp(x/alpha)] loses more than 1 ULP to
-      cancellation for x in a narrow band adjacent to 0; this band is
-      already characterized (and covered via allclose) in test_elu.py /
-      test_celu_21f.py and is excluded here the same way.
-  softcap                                   : ULP ≤ 2 (after FTZ masking) + PCC ≥ 0.9999
-      beta * tanh(x / beta): the tanh is a Sollya polynomial approximation
-      (see test_unary.py::test_softcap_bfloat16_full_domain). Blackhole only.
+      exp(x)-1 [or exp(x/alpha)-1] cancels near 0; already characterized via
+      allclose in test_elu.py / test_celu_21f.py and excluded the same way.
+  softcap                                   : ULP ≤ 2 (post-FTZ) + PCC ≥ 0.9999
+      tanh is a Sollya polynomial approximation. Blackhole only.
   rpow                                      : PCC ≥ 0.99 + allclose(atol=1e-2, rtol=0.1)
-      exponent ** x is evaluated via an exp2/log2 chain; existing coverage
-      (test_unary_rpow_ttnn) already uses this looser, magnitude-scaled
-      tolerance because the transcendental approximation -- not rounding --
-      dominates the error.
+      exp2/log2 chain; transcendental approximation error dominates.
   fill                                      : exact (bit-for-bit)
-      The output is the parameter value itself, broadcast.
+      Output is the parameter value itself, broadcast.
 """
 
 
-def _flush_subnormal_golden_and_result(golden, result):
-    """Zero both tensors where golden is subnormal (device FTZ), leaving finite
-    non-subnormal mismatches (real bugs) visible."""
-    tiny = torch.finfo(torch.bfloat16).tiny
-    ftz = (golden.abs() > 0) & (golden.abs() <= tiny)
+def _flush_subnormal_golden_and_result(golden, result, exact=None):
+    """Zero `golden` where the true (pre-rounding) result is subnormal, since the
+    device flushes such outputs to zero (FTZ). `result` is left untouched so a
+    device that fails to flush still shows up as a mismatch.
+
+    `exact`, if given, is a higher-precision (non-bf16-rounded) reference used to
+    decide the FTZ mask instead of `golden`. Needed because bf16's coarse rounding
+    can round a truly-subnormal result *up* into the smallest normal value (seen
+    with leaky_relu(negative_slope=-0.5) near x = -2*tiny), which would make
+    `golden` alone miss that the device's 0 there is actually correct.
+    """
+    reference = exact if exact is not None else golden
+    tiny = torch.finfo(torch.bfloat16).tiny  # smallest normal magnitude
+    ftz = (reference.abs() > 0) & (reference.abs() < tiny)
     golden = golden.clone()
     golden[ftz] = 0.0
-    result = result.clone()
-    result[ftz] = 0.0
     return golden, result
 
 
 def _exhaustive_input(mask_predicate=None, safe_value=1.0):
     """All normal bfloat16 bit patterns as a (1, 1, 256, 256) tensor.
 
-    If mask_predicate is given, elements where it is True are replaced by
-    safe_value so the tile shape (and therefore exhaustive coverage of every
-    other element) is preserved instead of dropping elements.
+    If mask_predicate is given, matching elements are replaced by safe_value
+    (preserving tile shape / coverage of the rest) instead of being dropped.
     """
     B = generate_bfloat16_bits(include_spl_values=False)  # (256, 256)
     if mask_predicate is not None:
@@ -97,16 +94,10 @@ def _exhaustive_input(mask_predicate=None, safe_value=1.0):
 
 @pytest.mark.parametrize("value", [0.0, 0.5, 1.0, -1.0, 2.5])
 def test_heaviside_op(device, value):
-    """Exhaustive normal bfloat16 coverage for heaviside.
+    """output_i = 0 if x_i < 0, value if x_i == 0, 1 if x_i > 0.
 
-    output_i = 0 if x_i < 0, value if x_i == 0, 1 if x_i > 0. Pure selection
-    with no arithmetic on the passthrough branches, so the device result
-    must match the CPU reference bit-for-bit.
-
-    Also exercises the preallocated output_tensor=/queue_id= call path
-    exhaustively (previously only covered by test_unary_ops_ttnn.py::
-    test_unary_heaviside_ttnn on a small random bf16 sample; that test was
-    removed once this covered it exhaustively).
+    Also exercises the preallocated output_tensor=/queue_id= path (previously
+    covered only by the now-removed test_unary_heaviside_ttnn).
     """
     input_tensor = _exhaustive_input()
 
@@ -132,14 +123,9 @@ def test_heaviside_op(device, value):
 
 @pytest.mark.parametrize("upper_limit", [0.0, 1.0, 3.0, 100.0, -1.0])
 def test_relu_max_op(device, upper_limit):
-    """Exhaustive normal bfloat16 coverage for relu_max.
-
-    output_i = min(max(x_i, 0), upper_limit). Pure clamp with no rounding,
-    so the device result must match the CPU reference bit-for-bit.
-    upper_limit < 0 collapses the output to a constant, since
-    max(x, 0) >= 0 > upper_limit for every x; that degenerate case is
-    included via -1.0.
-    """
+    """output_i = max(0, min(x_i, upper_limit)). upper_limit=-1.0 covers the
+    degenerate case where min(x, upper_limit) <= -1 for every x, collapsing
+    the output to the constant 0."""
     input_tensor = _exhaustive_input()
 
     tt_in = to_tt_tensor(input_tensor, device)
@@ -157,12 +143,8 @@ def test_relu_max_op(device, upper_limit):
 
 @pytest.mark.parametrize("lower_limit", [0.0, -1.0, -3.0, -100.0, 1.0])
 def test_relu_min_op(device, lower_limit):
-    """Exhaustive normal bfloat16 coverage for relu_min.
-
-    output_i = max(x_i, lower_limit). Pure clamp with no rounding, so the
-    device result must match the CPU reference bit-for-bit. lower_limit > 0
-    collapses the output's lower bound above 0, tested via 1.0.
-    """
+    """output_i = max(x_i, lower_limit). lower_limit=1.0 covers the case where
+    the lower bound sits above 0."""
     input_tensor = _exhaustive_input()
 
     tt_in = to_tt_tensor(input_tensor, device)
@@ -180,16 +162,9 @@ def test_relu_min_op(device, lower_limit):
 
 @pytest.mark.parametrize("lambd", [0.5, 0.25, 1.0, 2.0, 4.0])
 def test_hardshrink_op(device, lambd):
-    """Exhaustive normal bfloat16 coverage for hardshrink.
-
-    output_i = x_i if |x_i| > lambd else 0. Pure selection with no
-    arithmetic on the passthrough branch. For BFLOAT16 inputs the device
-    pre-rounds lambd to BF16 (RNE) before comparing (UnaryOpType::HARDSHRINK
-    in unary_op_utils.cpp) so the FP32-domain compare lands on a threshold
-    the input's BF16 precision can actually represent. All lambd values
-    used here are already exactly representable in bfloat16, so no extra
-    quantization is needed to keep the golden aligned with the device.
-    """
+    """output_i = x_i if |x_i| > lambd else 0. All lambd values used here are
+    exactly bf16-representable, so device's RNE pre-rounding of lambd (see
+    UnaryOpType::HARDSHRINK in unary_op_utils.cpp) can't diverge from golden."""
     input_tensor = _exhaustive_input()
 
     tt_in = to_tt_tensor(input_tensor, device)
@@ -212,22 +187,15 @@ def test_hardshrink_op(device, lambd):
 
 @pytest.mark.parametrize("negative_slope", [0.01, 0.1, 1.0, 2.0, -0.5])
 def test_leaky_relu_op(device, negative_slope):
-    """Exhaustive normal bfloat16 coverage for leaky_relu.
+    """output_i = x_i if x_i >= 0, else negative_slope * x_i.
 
-    output_i = x_i (exact) if x_i >= 0, else negative_slope * x_i (one
-    multiply, rounds at most 1 ULP). A small negative_slope can multiply a
-    normal x_i down into subnormal range, which the SFPU flushes to zero
-    (FTZ); that is masked the same way Category 5 handles it, deriving the
-    mask from golden alone so a genuine device bug at those positions
-    would still be caught. A |negative_slope| > 1 can also overflow the
-    most negative bfloat16 values to +/-inf on both the golden (computed
-    in bf16) and device sides, so non-finite values are allowed as long as
-    they agree in position.
+    A small negative_slope can push a normal x_i into subnormal range (FTZ,
+    masked via _flush_subnormal_golden_and_result). |negative_slope| > 1 can
+    overflow the most-negative bf16 values to +/-inf on both sides, so
+    non-finite values are allowed as long as they agree in position.
 
-    Also exercises the preallocated output_tensor=/queue_id= call path
-    exhaustively (previously only covered by test_unary_ops_ttnn.py::
-    test_unary_leaky_relu_ttnn on a small random bf16 sample; that test was
-    removed once this covered it exhaustively).
+    Also exercises the preallocated output_tensor=/queue_id= path (previously
+    covered only by the now-removed test_unary_leaky_relu_ttnn).
     """
     input_tensor = _exhaustive_input()
 
@@ -235,39 +203,44 @@ def test_leaky_relu_op(device, negative_slope):
     golden_function = ttnn.get_golden_function(ttnn.leaky_relu)
     golden_raw = golden_function(input_tensor, negative_slope=negative_slope, device=device)
 
+    # Exact (float64) reference for the FTZ mask -- see _flush_subnormal_golden_and_result.
+    x64 = input_tensor.to(torch.float64)
+    exact = torch.where(input_tensor >= 0, x64, x64 * negative_slope)
+
     tt_result = ttnn.leaky_relu(tt_in, negative_slope=negative_slope)
     result = ttnn.to_torch(tt_result)
-    golden, result = _flush_subnormal_golden_and_result(golden_raw, result)
+    golden, result = _flush_subnormal_golden_and_result(golden_raw, result, exact=exact)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1, allow_nonfinite=True)
 
     preallocated_output = to_tt_tensor(torch.zeros_like(input_tensor), device)
     ttnn.leaky_relu(tt_in, negative_slope=negative_slope, output_tensor=preallocated_output, queue_id=0)
     preallocated_result = ttnn.to_torch(preallocated_output)
-    golden_pa, preallocated_result = _flush_subnormal_golden_and_result(golden_raw, preallocated_result)
+    golden_pa, preallocated_result = _flush_subnormal_golden_and_result(golden_raw, preallocated_result, exact=exact)
 
     assert_with_ulp(expected_result=golden_pa, actual_result=preallocated_result, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize("lambd", [0.5, 0.25, 1.0, 2.0])
 def test_softshrink_op(device, lambd):
-    """Exhaustive normal bfloat16 coverage for softshrink.
-
-    output_i = x_i - lambd if x_i > lambd, x_i + lambd if x_i < -lambd,
-    else 0 (exact). The shrink branches have one add/sub, rounding at most
-    1 ULP; that add/sub can also land in subnormal range near the lambd
-    boundary, which the SFPU flushes to zero (FTZ) -- masked the same way
-    as Category 5, deriving the mask from golden alone.
-    """
+    """output_i = x_i - lambd if x_i > lambd, x_i + lambd if x_i < -lambd, else 0.
+    The shrink branches' add/sub can land in subnormal range near the lambd
+    boundary (FTZ, masked via _flush_subnormal_golden_and_result)."""
     input_tensor = _exhaustive_input()
 
     tt_in = to_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn.softshrink)
     golden = golden_function(input_tensor, lambd=lambd, device=device)
 
+    # Exact (float64) reference for the FTZ mask -- see _flush_subnormal_golden_and_result.
+    x64 = input_tensor.to(torch.float64)
+    exact = torch.where(
+        input_tensor > lambd, x64 - lambd, torch.where(input_tensor < -lambd, x64 + lambd, torch.zeros_like(x64))
+    )
+
     tt_result = ttnn.softshrink(tt_in, lambd=lambd)
     result = ttnn.to_torch(tt_result)
-    golden, result = _flush_subnormal_golden_and_result(golden, result)
+    golden, result = _flush_subnormal_golden_and_result(golden, result, exact=exact)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
@@ -276,21 +249,18 @@ def test_softshrink_op(device, lambd):
 # elu, celu — ULP ≤ 1 (excluding a narrow cancellation band near 0)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# test_elu.py::test_elu_arange_masking / test_celu_21f.py::test_celu_arange already
-# characterize this band for the default alpha (1.0) and cover it separately via
-# allclose. It is alpha-independent: the loss comes from cancellation in exp(x) - 1
-# (or exp(x/alpha) - 1) before the alpha scale is applied.
+# Characterized (default alpha=1.0) and covered via allclose in test_elu.py /
+# test_celu_21f.py. elu's band is in x directly (alpha only scales the output
+# after cancellation); celu's band is in x/alpha (it evaluates exp(x/alpha)-1),
+# so the celu mask below scales the band by alpha.
 _ELU_CANCELLATION_BAND = (-0.28515625, 1.1663108012064884e-38)
 
 
-@pytest.mark.parametrize("alpha", [1.0, 0.5, 2.0, 0.1])
+@pytest.mark.parametrize("alpha", [1.0, 0.5, 2.0, 0.1, 0.0, -1.0, -0.5])
 def test_elu_op(device, alpha):
-    """Exhaustive normal bfloat16 coverage for elu across alpha values.
-
-    output_i = x_i (exact) if x_i >= 0, else alpha * (exp(x_i) - 1).
-    test_elu.py already covers the default alpha exhaustively; this adds
-    coverage for non-default alpha over the same exhaustive input domain.
-    """
+    """output_i = x_i if x_i >= 0, else alpha * (exp(x_i) - 1). Includes
+    alpha=0 and negative alpha (valid for elu, unlike celu) since the
+    removed test_scalarB_elu covered those and this replaces it."""
     low, high = _ELU_CANCELLATION_BAND
     input_tensor = _exhaustive_input(mask_predicate=lambda b: (b >= low) & (b <= high))
 
@@ -306,13 +276,9 @@ def test_elu_op(device, alpha):
 
 @pytest.mark.parametrize("alpha", [1.0, 0.5, 2.0, 0.1])
 def test_celu_op(device, alpha):
-    """Exhaustive normal bfloat16 coverage for celu across alpha values.
-
-    output_i = x_i (exact) if x_i >= 0, else alpha * (exp(x_i / alpha) - 1).
-    test_celu_21f.py already covers the default alpha exhaustively; this
-    adds coverage for non-default alpha over the same exhaustive domain.
-    """
+    """output_i = x_i if x_i >= 0, else alpha * (exp(x_i / alpha) - 1)."""
     low, high = _ELU_CANCELLATION_BAND
+    low, high = low * alpha, high * alpha
     input_tensor = _exhaustive_input(mask_predicate=lambda b: (b >= low) & (b <= high))
 
     tt_in = to_tt_tensor(input_tensor, device)
@@ -331,15 +297,10 @@ def test_celu_op(device, alpha):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
-@pytest.mark.parametrize("beta", [1.0, 25.0, 0.5, 100.0])
+@pytest.mark.parametrize("beta", [1.0, 0.5, 100.0])  # beta=25.0 already covered exhaustively by
+# test_unary.py::test_softcap_bfloat16_full_domain; not duplicated here.
 def test_softcap_op(device, beta):
-    """Exhaustive normal bfloat16 coverage for softcap across beta values.
-
-    output_i = beta * tanh(x_i / beta). test_unary.py's
-    test_softcap_bfloat16_full_domain already covers the full bfloat16
-    domain for the model-specific beta=25.0 case; this extends the same
-    exhaustive sweep and tolerance policy to other beta values.
-    """
+    """output_i = beta * tanh(x_i / beta)."""
     input_tensor = _exhaustive_input()
 
     tt_in = to_tt_tensor(input_tensor, device)
@@ -353,31 +314,37 @@ def test_softcap_op(device, beta):
     bound = beta * (1.0 + 2**-8)
     assert max_abs <= bound, f"softcap overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
 
-    # Scale the near-zero FTZ guard with beta: tanh(x/beta) ~= x/beta near 0, so the
-    # subnormal-flush boundary in x shifts proportionally to beta.
+    # FTZ guard scales with beta: tanh(x/beta) ~= x/beta near 0.
     flush_floor = 1e-30 * max(beta, 1.0)
     mask = golden.abs() > flush_floor
     assert_with_ulp(expected_result=golden[mask], actual_result=result[mask], ulp_threshold=2)
     assert_with_pcc(golden[mask], result[mask], pcc=0.9999)
+
+    # Bound the masked-out (negligible-reference) region too, same as
+    # test_softcap_bfloat16_full_domain, so it isn't a silent blind spot.
+    tiny_max = result[~mask].to(torch.float32).abs().max().item()
+    assert tiny_max <= 4.0 * flush_floor, f"softcap negligible-reference region returned {tiny_max:.4e}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # rpow — PCC ≥ 0.99 + allclose(atol=1e-2, rtol=0.1)
 # ─────────────────────────────────────────────────────────────────────────────
 
+# rpow evaluates exponent ** x as exp2(x * log2(exponent)). Once |x * log2(exponent)|
+# >= ~8.1e31, the device's exp2 argument reduction breaks down and returns a bogus
+# finite value (observed: 1.0) instead of +/-inf like golden -- a real SFPU
+# limitation at extreme magnitudes. Excluded from the accuracy assertions below
+# (wide margin under the observed boundary) but still swept through the device.
+_RPOW_UNRELIABLE_ARG_MAGNITUDE = 1e30
 
-@pytest.mark.parametrize("exponent", [0.5, 2.0, 3.0, 10.0])
+
+@pytest.mark.parametrize("exponent", [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 8.0, 9.0, 10.0])
 def test_rpow_op(device, exponent):
-    """Exhaustive normal bfloat16 coverage for rpow across exponent values.
-
-    output_i = exponent ** x_i. exponent ** x overflows or underflows to
-    +/-inf/0 for most large-magnitude bfloat16 x when exponent != 1, so
-    input values outside [-30, 30] -- the range already exercised by
-    test_unary_rpow_ttnn -- are neutralized to 1.0. This still exhaustively
-    sweeps every normal bfloat16 value within the representable working
-    range instead of a random uniform sample.
+    """output_i = exponent ** x_i. Non-finite classification (overflow/underflow
+    to +/-inf) is checked separately from the finite-element PCC/allclose
+    comparison, since ULP/PCC aren't meaningful once either side is non-finite.
     """
-    input_tensor = _exhaustive_input(mask_predicate=lambda b: b.abs() > 30.0)
+    input_tensor = _exhaustive_input()
 
     tt_in = to_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn.rpow)
@@ -386,8 +353,36 @@ def test_rpow_op(device, exponent):
     tt_result = ttnn.rpow(tt_in, exponent)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_pcc(golden, result, pcc=0.99)
-    assert_allclose(result, golden, atol=1e-2, rtol=0.1)
+    import math
+
+    arg_magnitude = input_tensor.to(torch.float64).abs() * abs(math.log2(exponent))
+    reliable = arg_magnitude < _RPOW_UNRELIABLE_ARG_MAGNITUDE
+
+    golden_finite = torch.isfinite(golden)
+    result_finite = torch.isfinite(result)
+    mismatched_finiteness = (golden_finite != result_finite) & reliable
+    assert not mismatched_finiteness.any(), (
+        f"rpow(exponent={exponent}) finite/non-finite classification diverged for "
+        f"{int(mismatched_finiteness.sum().item())} of {result.numel()} elements"
+    )
+
+    # isfinite() alone doesn't distinguish NaN from Inf, or +inf from -inf, so a
+    # device returning e.g. +inf where golden has -inf (or NaN) would still pass
+    # the check above. Verify those match exactly too.
+    golden_nan, result_nan = torch.isnan(golden), torch.isnan(result)
+    nan_mismatch = (golden_nan != result_nan) & reliable
+    assert (
+        not nan_mismatch.any()
+    ), f"rpow(exponent={exponent}) NaN classification diverged for {int(nan_mismatch.sum().item())} elements"
+    golden_inf, result_inf = torch.isinf(golden), torch.isinf(result)
+    sign_mismatch = golden_inf & result_inf & reliable & (torch.sign(golden) != torch.sign(result))
+    assert (
+        not sign_mismatch.any()
+    ), f"rpow(exponent={exponent}) infinity sign diverged for {int(sign_mismatch.sum().item())} elements"
+
+    finite = golden_finite & result_finite & reliable
+    assert_with_pcc(golden[finite], result[finite], pcc=0.99)
+    assert_allclose(golden[finite], result[finite], atol=1e-2, rtol=0.1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -397,34 +392,61 @@ def test_rpow_op(device, exponent):
 
 @pytest.mark.parametrize(
     "fill_value",
-    # All values are exactly representable in bfloat16 (zero mantissa bits below
-    # bf16's 7-bit mantissa), so truncating vs. round-to-nearest-even fp32->bf16
-    # conversion of fill_value cannot disagree with the CPU reference.
-    [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 100.0, -100.0, 2.0**-30, 2.0**127, -(2.0**127)],
+    [
+        # Exactly bf16-representable.
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        0.5,
+        -0.5,
+        100.0,
+        -100.0,
+        # Smallest/largest finite bf16 magnitudes, with sign.
+        torch.finfo(torch.bfloat16).tiny,
+        -torch.finfo(torch.bfloat16).tiny,
+        torch.finfo(torch.bfloat16).max,
+        -torch.finfo(torch.bfloat16).max,
+        # NOT exactly bf16-representable: exercises fill_value's own fp32->bf16
+        # conversion instead of trivially agreeing with the CPU reference.
+        0.1,
+        -3.4028235e38,  # fp32 max; truncates to bf16's max instead of rounding to -inf
+        -10.0,
+        15.5,
+        -29.5,
+        2147483647.0,
+        -2147483648.0,
+    ],
 )
 def test_fill_op(device, fill_value):
-    """Coverage for fill across representative bfloat16 value classes.
+    """output is fill_value broadcast; the input tensor is ignored, so fill_value
+    itself is parametrized across representative bf16 value classes instead of
+    the input being swept.
 
-    fill_value is a single scalar baked into the op call rather than a
-    per-element tensor value, so -- unlike every other Category 4 op --
-    there is no tensor-shaped domain to sweep exhaustively in one
-    dispatch: each distinct fill_value requires its own op call. The
-    output does not depend on the input at all (every element is
-    unconditionally overwritten), so a fixed input is used here and
-    fill_value is instead parametrized across zero, signed values, a
-    subnormal-adjacent magnitude, and the largest finite bfloat16
-    magnitude.
+    The device truncates fill_value to bf16 rather than round-to-nearest-even
+    (unlike torch.full_like()'s default conversion), so golden is built from the
+    truncated value to match -- otherwise e.g. 0.1 or fp32 max would spuriously
+    disagree (the latter overflows to inf under RNE, but not under truncation).
     """
     input_tensor = torch.arange(256 * 256, dtype=torch.float32).view(1, 1, 256, 256).to(torch.bfloat16)
+    device_fill_value = bf16_bits_to_float(float_to_bf16_bits(fill_value))
 
     tt_in = to_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn.fill)
-    golden = golden_function(input_tensor, fill_value, device=device)
+    golden = golden_function(input_tensor, device_fill_value, device=device)
 
     tt_result = ttnn.fill(tt_in, fill_value)
     result = ttnn.to_torch(tt_result)
 
-    assert torch.equal(result, golden), (
-        f"fill(fill_value={fill_value}) diverged for {int((result != golden).sum().item())} "
+    # Bit-exact, except sign-of-zero: device canonicalizes a -0.0 fill_value to
+    # +0.0 (verified on hardware), so fall back to value equality there.
+    result_bits = result.view(torch.int16)
+    golden_bits = golden.view(torch.int16)
+    zero_fill = golden == 0.0
+    bits_match = result_bits == golden_bits
+    value_match = result == golden
+    elementwise_match = torch.where(zero_fill, value_match, bits_match)
+    assert elementwise_match.all(), (
+        f"fill(fill_value={fill_value}) diverged for {int((~elementwise_match).sum().item())} "
         f"of {result.numel()} elements"
     )
