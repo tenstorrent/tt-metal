@@ -47,8 +47,9 @@ inline BlockTilingParams compute_block_tiling_params(
     const uint32_t output_addr_stride =
         (block_size_width != TILE_HEIGHT) ? output_stride_sticks * config.output_shard_width * config.element_size_bytes
                                           : 0;
-    const uint32_t block_size_bytes =
-        config.gather_l1_output_shard_height * block_size_width * config.element_size_bytes;
+    // Output shard bytes covered by one block. Writers rebase L1 write addresses
+    // from this at the start of each block.
+    const uint32_t block_size_bytes = block_size_width * config.output_shard_width * config.element_size_bytes;
     return {
         total_tiles_per_block,
         total_tiles_per_core,
