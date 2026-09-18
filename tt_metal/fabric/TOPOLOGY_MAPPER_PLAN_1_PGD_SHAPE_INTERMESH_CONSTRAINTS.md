@@ -1,12 +1,19 @@
 # Plan 1 — PGD-shape-aware inter-mesh constraints
 
-**Priority: 1 (ship first).** Self-contained; no solver-library changes.
+**Status: not done.** `mesh_shape_names_` and `add_inter_mesh_shape_class_constraints` were never
+added. Plan 4 already seats each logical mesh instance onto a typed footprint, so this filter only
+matters while [Plan 2](TOPOLOGY_MAPPER_PLAN_2_INCREMENTAL_INTERMESH_SOLVE.md)'s MeshId SAT can still
+permute a 4×1 onto a 4×4 region. **Skip this plan if [Plan 6](TOPOLOGY_MAPPER_PLAN_6_COLLAPSE_INTERMESH_SAT.md)
+lands** (identity consume). Otherwise it remains a cheap domain filter on the leftover permutation SAT.
 
-Tracking issue: [#54623 — \[Auto-mapper\] Verify inter-mesh connectivity in heterogeneous placements via
-SAT-based joint planning](https://github.com/tenstorrent/tt-metal/issues/54623)
-Related: #40640 (SAT engine), #50510 (epic), #52016 (pipeline-stage adjacency in MGD).
-Sibling plans: [Plan 2 — incremental inter-mesh solving](TOPOLOGY_MAPPER_PLAN_2_INCREMENTAL_INTERMESH_SOLVE.md),
-[Plan 3 — connectivity-aware PGD placement](TOPOLOGY_MAPPER_PLAN_3_CONNECTIVITY_AWARE_PGD_PLACEMENT.md).
+**Priority: lowest while Plan 6 is the intended next architecture.** Originally "ship first"; the
+default path moved to Plan 4.
+
+Tracking issue: [#54623](https://github.com/tenstorrent/tt-metal/issues/54623)
+Sibling plans: [index](TOPOLOGY_MAPPER_HETEROGENEOUS_PLACEMENT_PLAN.md),
+[Plan 2](TOPOLOGY_MAPPER_PLAN_2_INCREMENTAL_INTERMESH_SOLVE.md),
+[Plan 4](TOPOLOGY_MAPPER_PLAN_4_SAT_JOINT_PLACEMENT.md),
+[Plan 6](TOPOLOGY_MAPPER_PLAN_6_COLLAPSE_INTERMESH_SAT.md).
 
 > **Goal.** Restrict each logical mesh's inter-mesh domain to physical meshes carved from the *same* PGD
 > grouping / MGD mesh-descriptor name, so a shape-mismatched pair is never proposed.

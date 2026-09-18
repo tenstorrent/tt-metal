@@ -3,17 +3,23 @@
 **Adjacency-guided mixed-shape placement.** Replace the per-shape maximum-coverage tiling with a single
 DFS that grows one mixed-shape placement along the MGD's own mesh graph.
 
-**Status: WIP.** The search is implemented (`PhysicalGroupingDescriptor::solve_adjacency_guided_placement`
-and the pool entry point) and covered by offline unit tests. It is not wired into
-`build_physical_multi_mesh_adjacency_graph`; `find_all_in_psd` is still the production placement path.
+**Status: superseded as the default by [Plan 4](TOPOLOGY_MAPPER_PLAN_4_SAT_JOINT_PLACEMENT.md).** The
+DFS is implemented and reachable via `TT_METAL_PLACEMENT_SOLVER=dfs`, or as the fallback when SAT
+returns no seating and candidate lists are incomplete. Production `build_physical_multi_mesh_adjacency_graph`
+calls `solve_adjacency_guided_placement`, which prefers SAT.
 
-**Priority: 2.** This is the plan that actually answers #54623.
+**Do not treat the rest of this document as the implementation queue.** Two-pass architecture (§4)
+still describes the mapper (placement then label/embed). Pool-index / MRV / node-budget work is
+fallback-only and listed as not-done under Plan 4 Phases 2/3. DFS incremental retry will not be built
+(delete-soon).
+
+**Priority: maintenance only.**
 
 Tracking issue: [#54623 — \[Auto-mapper\] Verify inter-mesh connectivity in heterogeneous placements via
 SAT-based joint planning](https://github.com/tenstorrent/tt-metal/issues/54623)
 Related: #40640 (SAT engine), #50510 (epic), #52016 (pipeline-stage adjacency in MGD).
-Sibling plans: [Plan 1 — PGD-shape-aware inter-mesh constraints](TOPOLOGY_MAPPER_PLAN_1_PGD_SHAPE_INTERMESH_CONSTRAINTS.md),
-[Plan 2 — incremental inter-mesh solving](TOPOLOGY_MAPPER_PLAN_2_INCREMENTAL_INTERMESH_SOLVE.md).
+Sibling plans: [index](TOPOLOGY_MAPPER_HETEROGENEOUS_PLACEMENT_PLAN.md),
+[Plan 4](TOPOLOGY_MAPPER_PLAN_4_SAT_JOINT_PLACEMENT.md) (the production path that superseded this).
 
 > **Goal.** Choose physical regions by walking the logical mesh-level adjacency graph, placing one mesh
 > at a time next to a neighbour that is already placed, so every declared inter-mesh boundary is
