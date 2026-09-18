@@ -251,10 +251,9 @@ FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_
         NCRISC_AT_CMD_BUF,
         dispatch_addr,
         NOC_UNICAST_WRITE_VC,
-        1,      // increment
-        31,     // wrap bits
-        false,  // linked
-        true    // posted
+        1,     // increment
+        31,    // wrap bits
+        false  // linked
     );
 #else
     // Workaround for BH inline writes does not apply here because this writes to a stream register.
