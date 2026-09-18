@@ -1101,6 +1101,8 @@ fabric_agmm_configs: dict[ttnn.CoreCoord, dict[tuple, FabricAGMMConfig]] = {
         # best device_kernel_duration.
         # attn to_qkv: N = 3 * 640 (40 padded heads / tp4 * 64). Nt/core = 8 = N_block (1 N block).
         (8192, 2432, 1920, 1): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 11, 1, 8, 1, 4, 3, 8),  # 652.7 us
+        # same shape emitted as three chunks (q, k, v) for the fused per-head QK norm
+        (8192, 2432, 1920, 3): FabricAGMMConfig(ttnn.CoreCoord(12, 8), (0, 8), 11, 1, 8, 1, 4, 3, 8),
         # attn to_out with the fused gate/residual epilogue (fused_ternary_input_a/b), K = 2560 padded
         # inner dim (Kt/device = 20). Nt/core = 3; N_block 10 covers it in one block.
         (8192, 2560, 608, 1): FabricAGMMConfig(
