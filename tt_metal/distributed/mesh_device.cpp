@@ -905,6 +905,9 @@ DeviceIds MeshDeviceImpl::get_device_ids() const {
 size_t MeshDeviceImpl::num_devices() const { return view_->num_devices(); }
 
 CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
+    if (compute_with_storage_grid_size_override_.has_value()) {
+        return *compute_with_storage_grid_size_override_;
+    }
     if (compute_with_storage_grid_size_.has_value()) {
         return *compute_with_storage_grid_size_;
     }
@@ -2055,6 +2058,22 @@ bool MeshDevice::is_inactive_ethernet_core(CoreCoord logical_core) const {
     return pimpl_->is_inactive_ethernet_core(logical_core);
 }
 CoreCoord MeshDevice::compute_with_storage_grid_size() const { return pimpl_->compute_with_storage_grid_size(); }
+void MeshDevice::set_compute_with_storage_grid_size_override(std::optional<CoreCoord> grid_size) {
+    pimpl_->set_compute_with_storage_grid_size_override(grid_size);
+}
+void MeshDeviceImpl::set_compute_with_storage_grid_size_override(std::optional<CoreCoord> grid_size) {
+    if (grid_size.has_value() && compute_with_storage_grid_size_.has_value()) {
+        const auto device_grid = *compute_with_storage_grid_size_;
+        TT_FATAL(
+            grid_size->x >= 1 && grid_size->y >= 1 && grid_size->x <= device_grid.x && grid_size->y <= device_grid.y,
+            "compute_with_storage_grid_size override {}x{} must lie within the device grid {}x{}",
+            grid_size->x,
+            grid_size->y,
+            device_grid.x,
+            device_grid.y);
+    }
+    compute_with_storage_grid_size_override_ = grid_size;
+}
 CoreRangeSet MeshDevice::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
     return pimpl_->worker_cores(core_type, sub_device_id);
 }

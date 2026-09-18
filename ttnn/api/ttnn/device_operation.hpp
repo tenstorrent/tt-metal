@@ -11,6 +11,7 @@
 #include <string_view>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
+#include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <unordered_map>
@@ -223,7 +224,11 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    // Honour ttnn::core::with_command_queue_id / ttnn.command_queue(): operations issued inside
+    // such a scope go to that queue (default queue otherwise). Lets a caller run e.g. collectives
+    // on a second queue so their launches do not serialize with compute launched on the first.
+    tt::tt_metal::distributed::EnqueueMeshWorkload(
+        mesh_device->mesh_command_queue(*ttnn::core::get_current_command_queue_id_for_thread()), workload, false);
 
     TracyOpMeshWorkload(
         mesh_device,

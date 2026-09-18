@@ -2277,11 +2277,24 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
         }
         return true;
     };
+    // With a sub-device manager loaded the device may report a compute grid narrowed to one
+    // sub-device (MeshDevice::set_compute_with_storage_grid_size_override); programs placed on another
+    // sub-device's worker cores are still valid, so also accept ranges inside any sub-device.
+    auto within_a_sub_device = [&](const CoreRange& cr) {
+        for (uint32_t i = 0; i < device->num_sub_devices(); ++i) {
+            const auto& workers =
+                device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{static_cast<uint8_t>(i)});
+            if (workers.intersection(CoreRangeSet(cr)).num_cores() == cr.size()) {
+                return true;
+            }
+        }
+        return false;
+    };
     for (const auto& cb : circular_buffers_) {
         for (const auto& cr : cb->core_ranges().ranges()) {
             const bool in_worker_grid = cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y;
             TT_FATAL(
-                in_worker_grid || entirely_on_service_cores(cr),
+                in_worker_grid || entirely_on_service_cores(cr) || within_a_sub_device(cr),
                 "Circular buffer core range {} in program {} exceeds device compute grid ({}x{}) and is "
                 "not entirely on cores claimed via ServiceCoreManager",
                 cr.str(),

@@ -219,6 +219,12 @@ public:
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
     void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
+    // Override the grid reported by compute_with_storage_grid_size(). Intended for sub-device
+    // partitioning: programs on a mesh command queue must lie inside a single sub-device, and most
+    // ops size their core grid from compute_with_storage_grid_size(), so after loading a sub-device
+    // manager whose compute sub-device is the rectangle [0, grid) a caller sets that rectangle here
+    // to keep every such op off the other sub-devices' cores. std::nullopt restores the device grid.
+    void set_compute_with_storage_grid_size_override(std::optional<CoreCoord> grid_size);
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
     // Returns true if this MeshDevice contains only remote devices (no local devices on this host).

@@ -162,6 +162,8 @@ private:
     ttsl::SmallVector<std::unique_ptr<MeshCommandQueueBase>> mesh_command_queues_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
+    // See MeshDevice::set_compute_with_storage_grid_size_override.
+    std::optional<CoreCoord> compute_with_storage_grid_size_override_;
     uint32_t trace_buffers_size_ = 0;
     uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
@@ -299,6 +301,7 @@ public:
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
     uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) const;
     CoreCoord compute_with_storage_grid_size() const override;
+    void set_compute_with_storage_grid_size_override(std::optional<CoreCoord> grid_size);
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<Allocator>& allocator() const override;
