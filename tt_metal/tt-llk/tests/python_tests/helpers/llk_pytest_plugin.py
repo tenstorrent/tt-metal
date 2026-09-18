@@ -630,7 +630,28 @@ def _select_tests_by_op(config, items):
 
 
 @pytest.hookimpl(tryfirst=True)
+def _stable_xdist_groups(config, items):
+    """Assign every test to a group from a stable hash of its node id.
+
+    With --dist loadgroup a group is scheduled as one unit to one worker,
+    so every test in it has the same predecessors in every run. crc32 and
+    not hash(): each xdist worker is its own process and Python randomises
+    str hashing per process, so hash() would give the workers different
+    assignments and no determinism at all. The count matches the worker
+    count, so each worker takes exactly one group.
+    """
+    import zlib
+
+    count = int(os.environ.get("PERF_STABLE_GROUPS", "0"))
+    if count <= 0:
+        return
+    for item in items:
+        bucket = zlib.crc32(item.nodeid.encode()) % count
+        item.add_marker(pytest.mark.xdist_group(f"perfgrp{bucket}"))
+
+
 def pytest_collection_modifyitems(config, items):
+    _stable_xdist_groups(config, items)
     _select_tests_by_op(config, items)
 
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
