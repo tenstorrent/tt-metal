@@ -15,6 +15,8 @@
 //                    coherent, so a RISC-V atomic on an L1 word would not serialize between them)
 // - Quasar dispatch: MPSC, slot claimed via a RISC-V atomic on a cached head (no NEO registers, and
 //                    only DMs, whose caches are coherent). Each push flushes the head so the host sees it.
+// - Quasar CCE:      MPSC, slot claimed under a lock in the cached SRAM view. CCE has only DM harts and
+//                    they share a coherent data cache.
 // - Blackhole:       MPSC, slot claimed via a 32-bit RISC-V atomic on the in-mailbox head
 // - Wormhole:        SPSC, no synchronization between RISCs
 
@@ -23,7 +25,7 @@
 #include "risc_common.h"
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
 #include "internal/tt-2xx/quasar/cache.h"
-#elif defined(ARCH_QUASAR)
+#elif defined(ARCH_QUASAR) && !defined(COMPILE_FOR_DRISC)
 #include "api/debug/waypoint.h"
 #include "tensix_neo_reg.h"
 // NEO cluster semaphore 31 is reserved for the MPSC head; kernels must not use it. The watcher's
@@ -63,7 +65,7 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
     // AMOs hang on the uncached alias, so the head is claimed through the cached view.
     uint32_t pos = __atomic_fetch_add(reinterpret_cast<uint32_t*>(MEM_DISPATCH_WATCHER_RING_HEAD), 1, __ATOMIC_RELAXED);
-#elif defined(ARCH_QUASAR)
+#elif defined(ARCH_QUASAR) && !defined(COMPILE_FOR_DRISC)
     // A claim past reset_at landed before the rewind, which erases it: wait for the rewind and claim again.
     uint32_t pos;
     while (true) {
@@ -79,6 +81,12 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     if (__builtin_expect(pos == watcher_ring_buf_reset_at, 0)) {
         watcher_ring_buf_sem_init(0);
     }
+#elif defined(ARCH_QUASAR)
+    auto* lock = reinterpret_cast<uint32_t tt_l1_ptr*>(MEM_CCE_WATCHER_RING_BUFFER_LOCK);
+    while (__atomic_exchange_n(lock, 1, __ATOMIC_ACQUIRE) != 0) {
+    }
+    uint32_t pos = buf->head++;
+    __atomic_store_n(lock, 0, __ATOMIC_RELEASE);
 #else
     uint32_t pos = __atomic_fetch_add(&buf->head, 1, __ATOMIC_RELAXED);
 #endif
@@ -120,8 +128,14 @@ inline __attribute__((always_inline)) void init_ring_buffer() {
 #if defined(COMPILE_FOR_DISPATCH_ENGINE)
     __atomic_store_n(reinterpret_cast<uint32_t*>(MEM_DISPATCH_WATCHER_RING_HEAD), 0, __ATOMIC_RELAXED);
     flush_l2_cache_line(MEM_DISPATCH_WATCHER_RING_HEAD);
-#elif defined(ARCH_QUASAR)
+#elif defined(ARCH_QUASAR) && !defined(COMPILE_FOR_DRISC)
     watcher_ring_buf_sem_init(0);
+#elif defined(ARCH_QUASAR)
+    auto* lock = reinterpret_cast<uint32_t tt_l1_ptr*>(MEM_CCE_WATCHER_RING_BUFFER_LOCK);
+    __atomic_store_n(lock, 0, __ATOMIC_RELAXED);
+    auto* wrapper = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
+    auto* buf = reinterpret_cast<debug_mpsc_ring_buf_msg_t tt_l1_ptr*>(wrapper->data);
+    buf->head = 0;
 #endif
 }
 
