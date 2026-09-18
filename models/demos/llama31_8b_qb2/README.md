@@ -61,7 +61,7 @@ opening the mesh; they do not need to be repeated in the launch command.
 ## Verification and weekly CI
 
 The **Agentic Research Model Tests** workflow runs every Saturday at 07:00 UTC.
-Select `llama3.1-8b-qb2` and `bh_quietbox_2` for a manual run. Its Tier 3 entry
+Select `AR-llama-3.1-8b` and `bh_quietbox_2` for a manual run. Its Tier 3 entry
 has a 12-minute test budget, independent of the daily model pipelines.
 
 The [CI entry](../../../tests/pipeline_reorg/agentic_research_model_tests.yaml)

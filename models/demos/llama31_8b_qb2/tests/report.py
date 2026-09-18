@@ -27,7 +27,7 @@ def report(summary):
     benchmark.save_partial_run_json(
         profiler,
         run_type="demo",
-        ml_model_name="llama3.1-8b-qb2",
+        ml_model_name="AR-llama-3.1-8b",
         ml_model_type="LLM",
         device_name="P150x4",
         num_layers=32,

@@ -17,7 +17,7 @@ def qb2_mesh():
     ):
         pytest.skip("Requires a four-device Blackhole P300_X2 QB2")
     ttnn.set_fabric_config(**LlamaForCausalLM.model_capabilities["fabric_config"])
-    params = build_trace_device_params("llama3.1-8b-qb2-decoder")
+    params = build_trace_device_params("AR-llama-3.1-8b-decoder")
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), l1_small_size=16384, **params)
     try:
         yield mesh

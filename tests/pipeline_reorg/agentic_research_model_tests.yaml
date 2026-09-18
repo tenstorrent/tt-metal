@@ -1,5 +1,5 @@
 # Weekly on Saturday. Budgets: models.agentic_research_tier<N> in .github/time_budget.yaml.
-- name: Llama 3.1-8B QB2 decoder and IFEval serving
+- name: AR-llama-3.1-8b decoder and IFEval serving
   cmd: |
     set -euo pipefail
 
@@ -37,7 +37,7 @@
     from models.demos.utils.trace_region_sizes import resolve_trace_region_size
     print(json.dumps({"tt": {
         "sample_on_device_mode": "all",
-        "trace_region_size": resolve_trace_region_size("llama3.1-8b-qb2", "bh_quietbox_2"),
+        "trace_region_size": resolve_trace_region_size("AR-llama-3.1-8b", "bh_quietbox_2"),
         "l1_small_size": 16384,
     }}))
     PY
@@ -62,7 +62,7 @@
         "$work/eval-env/bin/python" "$model_dir/tests/benchmark.py" --output-dir "$results" || status=$?
     CI=true python -m models.demos.llama31_8b_qb2.tests.report "$results/summary.json"
     exit "$status"
-  model: llama3.1-8b-qb2
+  model: AR-llama-3.1-8b
   model_family: Llama
   skus:
     bh_quietbox_2:

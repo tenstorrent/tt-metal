@@ -42,7 +42,7 @@ These models use the [weekly Agentic Research pipeline](#agentic-research-model-
 
 | Model implementation | System | Tier | Weekly coverage |
 |----------------------|--------|------|-----------------|
-| Llama3.1-8B QB2 TP4 | BH QuietBox 2 | 3 | Decoder PCC and trace replay; scored IFEval serving |
+| AR-llama-3.1-8b | BH QuietBox 2 | 3 | Decoder PCC and trace replay; scored IFEval serving |
 
 ## Daily Model Pipelines
 
@@ -265,7 +265,9 @@ Saturday schedule becomes active after the workflow is merged to the default bra
 
 To add a model:
 
-1. Add its command, model identifier, owner, and team to the test YAML.
+1. Add its command, model identifier, owner, and team to the test YAML. Use
+   `AR-<model-name>` (for example, `AR-llama-3.1-8b`) in the workflow, test entry,
+   targets, and benchmark report. Keep hardware names in `skus`.
 2. For each SKU, set `tier` and `timeout` in minutes.
 3. Set the total budget under `models.agentic_research_tier<N>.<sku>` in
    `time_budget.yaml`. The sum of test timeouts for that tier and SKU must fit

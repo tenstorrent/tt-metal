@@ -1,11 +1,11 @@
 version: 1
 description: Centralized trace region sizes (bytes) for models CI.
 sizes:
-  llama3.1-8b-qb2:
+  AR-llama-3.1-8b:
     skus:
       p300x2:
         trace_region_size: 268435456
-  llama3.1-8b-qb2-decoder:
+  AR-llama-3.1-8b-decoder:
     skus:
       p300x2:
         trace_region_size: 16000000
