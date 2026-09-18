@@ -155,11 +155,7 @@ def test_ondevice_lora_bind_matches_host_delta(
     # leave a residue on the order of the delta.
     assert not torch.allclose(restored_w, fused_w.to(torch.float32)), "unbind did not change the weight"
 
-    # How far off base it lands is precision-dependent and not asserted here.
-    # Every write rounds the result into W's own dtype, and for a block format
-    # that rounding is a requantization to the tile's shared exponent, so the
-    # residue can exceed the delta itself — measured ~4x under all_bf8_lofi
-    # against ~1x at bf16. Logged because it is useful, not load-bearing.
+    # Residue is precision-dependent and only logged, never asserted.
     delta_mag = delta.abs().max().item()
     residue = (restored_w - base_w.to(torch.float32)).abs().max().item()
     logger.info(f"[{path}] residue after subtract-unbind: {residue:.5f} (delta max {delta_mag:.5f})")
@@ -177,10 +173,7 @@ def test_ondevice_lora_bind_matches_host_delta(
     logger.info("On-device LoRA bind/unbind weight checks passed.")
 
     # --- stack: several adapters bound at once ------------------------------
-    # Registered twice from the same file at different scales, which gives two
-    # distinct bank slots and so exercises stack summation and per-member scale
-    # without needing a second adapter on disk. Shares the pipeline built above
-    # because a 22B build costs ~90s.
+    # Same file registered twice at different scales -> two bank slots.
     #
     # Re-read the base here rather than reusing base_w: the bind/unbind cycle
     # above leaves a small residue in W by design (see the drift note in
