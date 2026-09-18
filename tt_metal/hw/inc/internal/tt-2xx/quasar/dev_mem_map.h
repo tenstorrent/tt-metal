@@ -461,14 +461,23 @@
 /////////////
 // CCE (DRAM-core) memory map
 //
-// Mimir CCE SRAM is the Quasar analogue of Blackhole DRISC L1: host reaches it through the
-// DRAM-core coordinate plus the 0x2000000000 NOC tag, while the hart sees the remapped local
-// window at 0x40000000. HAL L1 addresses below are offsets in that tagged window (base 0) so
-// get_dev_noc_addr() = offset + MEM_CCE_L1_NOC_OFFSET lands in UMD's dram_l1 range. The reset
-// vector programmed into the hart is the CCE-visible address MEM_CCE_SRAM_LOCAL_BASE + offset.
+// Mimir CCE SRAM is the Quasar analogue of Blackhole DRISC L1, but it has three different
+// addresses depending on who is looking:
+//
+//   - Local CPU (the hart itself): its own SRAM at 0, uncached alias at +MEM_CCE_L1_SIZE. Every
+//     CCE sees its own SRAM here, so one firmware image is linked once and boots on any of them.
+//   - External JTAG / local AXI: CCE n's SRAM at 0x40000000 + n * 4MB. This is the SoC/MLA view,
+//     not something firmware ever names.
+//   - Package-global SPA: 0x1280000000 + n * 4MB.
+//
+// Firmware is linked against the local CPU view, so MEM_CCE_SRAM_LOCAL_BASE is 0 and the offsets
+// below serve as both the hart's addresses and the HAL's. Host access is independent of all three:
+// it goes through the DRAM-core coordinate plus the 0x2000000000 NOC tag, so
+// get_dev_noc_addr() = offset + MEM_CCE_L1_NOC_OFFSET lands in UMD's dram_l1 range, and UMD picks
+// the right CCE from the coordinate.
 //
 #define MEM_CCE_L1_NOC_OFFSET 0x2000000000ULL
-#define MEM_CCE_SRAM_LOCAL_BASE 0x40000000
+#define MEM_CCE_SRAM_LOCAL_BASE 0x0
 #define MEM_CCE_L1_BASE 0x0
 #define MEM_CCE_L1_SIZE (4 * 1024 * 1024)
 #define MEM_CCE_RESERVED_SIZE 64
@@ -484,7 +493,10 @@
 // crt0 indexes TLS by mhartid. One shared firmware image, one TLS slot per CCE hart.
 #define MEM_CCE_LOCAL_SIZE MEM_DM_LOCAL_SIZE
 #define MEM_CCE_LOCAL_HARTS 8
-#define MEM_CCE_LOCAL_BASE (MEM_CCE_GLOBAL_BASE + MEM_CCE_GLOBAL_SIZE)
+// Global slot 0 is the firmware's .data/.bss (__fw_data); slots 1..MEM_CCE_LOCAL_HARTS are the
+// per-hart kernel .data/.bss (__kn_data). Without the kernel slots, __kn_data would alias the TLS
+// base below.
+#define MEM_CCE_LOCAL_BASE (MEM_CCE_GLOBAL_BASE + MEM_CCE_GLOBAL_SIZE * (MEM_CCE_LOCAL_HARTS + 1))
 #define MEM_CCE_MAP_END (MEM_CCE_LOCAL_BASE + (MEM_CCE_LOCAL_SIZE * MEM_CCE_LOCAL_HARTS))
 #define MEM_CCE_INIT_LOCAL_L1_BASE_SCRATCH MEM_CCE_MAP_END
 #define MEM_CCE_INIT_LOCAL_L1_SCRATCH_SIZE (1 * 1024)
@@ -498,7 +510,9 @@
 // Device-side mailbox pointer (hart view). Use the uncached SRAM alias so boot-hart .data and
 // subordinate_sync are coherent across harts. Host HAL uses the 0-based MEM_CCE_MAILBOX_BASE.
 #define MEM_DRISC_MAILBOX_BASE (MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_L1_SIZE + MEM_CCE_MAILBOX_BASE)
-// CCE0 RESET_VECTOR[n] in the SMC/CCE config map. 8-byte entries; Metal boot hart is 0.
+// CCE RESET_VECTOR[n] in the SMC/CCE config map, reached through the SMC core rather than the CCE.
+// 8-byte entries; Metal boot hart is 0. The value is a local CPU address, so it is the same on
+// every CCE. CCE_RESET_VECTOR_BASE itself names CCE0; UMD offsets it per CCE.
 #define CCE_RESET_VECTOR_BASE 0x02000000
 #define CCE_BOOT_HART_RESET_VECTOR CCE_RESET_VECTOR_BASE
 
