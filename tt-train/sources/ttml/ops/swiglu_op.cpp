@@ -17,6 +17,7 @@
 #include "ops/linear_op.hpp"
 #include "ops/unary_ops.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -28,7 +29,7 @@ namespace {
 // Zero-copy flatten of all dims except the last into a single leading dim: [B,N,S,D] -> [B*N*S, D]
 ttnn::Tensor flatten_leading(const ttnn::Tensor& t) {
     const auto vol = t.logical_volume() / static_cast<uint64_t>(t.logical_shape()[-1]);
-    return t.reshape(ttnn::Shape({static_cast<uint32_t>(vol), t.logical_shape()[-1]}));
+    return ttnn::reshape(t, ttnn::Shape({static_cast<uint32_t>(vol), t.logical_shape()[-1]}));
 }
 
 bool force_swiglu_composite() {
