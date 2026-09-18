@@ -110,23 +110,71 @@ def kvpe_golden_present(trace_dir, layer_idx: int) -> bool:
     return any((root / f"layer_{layer_idx}").glob("rows_*.safetensors"))
 
 
-def index_golden_present(trace_dir) -> bool:
+def index_golden_present(trace_dir, layer_idx: int | None = None) -> bool:
     """True when ``trace_dir`` carries the indexer-key golden that ``_load_golden_index_k`` reads.
 
     Some vLLM dumps store only ``dsa/dsa_topk_indices_layer_*``, so a trace can hold a valid KVPE golden
     and no indexer key at all. Callers use this to skip index-cache validation instead of failing on the
     empty ``torch.cat([])`` the loader would hit. Lives next to the loader so the ``dsa/indexer_k_layer_*``
-    layout stays encoded in exactly one place."""
+    layout stays encoded in exactly one place.
+
+    ``layer_idx`` narrows the question to one layer, which matters wherever a trace holds only part of
+    the model -- an MTP tail trace carries its own indexer key and no trunk one."""
     from pathlib import Path
 
     dsa_dir = Path(trace_dir) / "dsa"
-    return dsa_dir.is_dir() and any(dsa_dir.glob("indexer_k_layer_*"))
+    pattern = "indexer_k_layer_*" if layer_idx is None else f"indexer_k_layer_{layer_idx}"
+    return dsa_dir.is_dir() and any(dsa_dir.glob(pattern))
 
 
-def _load_golden_index_k(trace_dir, layer_idx: int, total_len: int) -> "torch.Tensor":
+def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config) -> "torch.Tensor":
+    """A half-split-roped indexer-key golden re-based onto the device's interleaved rope pairing.
+
+    GLM-5.2 is rope-asymmetric: MLA ropes k_pe half-split while the DSA indexer ropes interleaved, so
+    a uniformly-roped trace has to be un-roped, re-paired and re-roped -- not column-permuted.
+    """
+    from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
+
+    rope_dim = hf_config.qk_rope_head_dim
+    n, width = golden_ik.shape[0], golden_ik.shape[-1]
+    assert rope_dim % 2 == 0 and width >= rope_dim, f"index key [{n}, {width}] has no {rope_dim}-wide rope half"
+    pe, nope = golden_ik[:, :rope_dim].float(), golden_ik[:, rope_dim:]
+
+    def tables(interleave):
+        cos, sin = get_cos_sin_matrix(hf_config, interleave=interleave, num_positions=n)
+        assert cos.shape[-1] == rope_dim, f"rope table is {cos.shape[-1]} wide, expected {rope_dim}"
+        return cos[0, 0].float(), sin[0, 0].float()
+
+    def rot_half_split(x):  # rotate_half: [a, b] -> [-b, a]
+        h = rope_dim // 2
+        return torch.cat([-x[:, h:], x[:, :h]], dim=-1)
+
+    def rot_interleaved(x):  # [x0, x1, x2, ..] -> [-x1, x0, -x3, ..]
+        y = x.reshape(n, rope_dim // 2, 2)
+        return torch.stack([-y[:, :, 1], y[:, :, 0]], dim=-1).reshape(n, rope_dim)
+
+    cos_hs, sin_hs = tables(False)
+    cos_il, sin_il = tables(True)
+    # Rope is orthogonal, so un-roping is its transpose: x = out*cos - rot(out)*sin.
+    pre = pe * cos_hs - rot_half_split(pe) * sin_hs  # scalars recovered, in wk output order
+    fixed = pre * cos_il + rot_interleaved(pre) * sin_il  # re-roped on the device's pairing
+
+    # Both steps rotate the whole rope half, so its per-row norm is invariant. A mis-signed sin or a
+    # table at the wrong width breaks this, and nothing downstream would separate it from bad math.
+    before, after = pe.norm(dim=-1), fixed.norm(dim=-1)
+    assert torch.allclose(
+        before, after, rtol=1e-4, atol=1e-4
+    ), f"re-basing changed the rope half's norm by up to {(before - after).abs().max():.3e}: not a rotation"
+    return torch.cat([fixed.to(golden_ik.dtype), nope], dim=-1)
+
+
+def _load_golden_index_k(
+    trace_dir, layer_idx: int, total_len: int, *, rope_layout: str = "interleaved", hf_config=None
+) -> "torch.Tensor":
     """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
     dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
-    _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key."""
+    _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key. ``rope_layout`` is
+    the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split`` is re-based."""
     from pathlib import Path
 
     from safetensors import safe_open
@@ -142,7 +190,14 @@ def _load_golden_index_k(trace_dir, layer_idx: int, total_len: int) -> "torch.Te
         have += t.shape[0]
         if have >= total_len:
             break
-    return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
+    golden = torch.cat(rows, dim=0)[:total_len].to(torch.float32)
+    if rope_layout == "interleaved":
+        return golden
+    if rope_layout != "half_split":
+        raise ValueError(f"unknown index rope layout {rope_layout!r} (expected 'interleaved' or 'half_split')")
+    if hf_config is None:
+        hf_config = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL)).load_hf_config()
+    return _rebase_index_k_rope(golden, hf_config)
 
 
 def kv_cache_pcc_check(
