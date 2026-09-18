@@ -17,6 +17,8 @@ namespace ckernel {
  * Performs an elementwise shift operation to the left on the input at idst0, by input at idst1: y = x0 << x1
  * Both inputs must be of same data type only. Output overwrites odst in DST.
  *
+ * A shift amount < 0 or >= 32 produces 0.
+ *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
  * on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
@@ -57,6 +59,11 @@ ALWI void binary_left_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) 
  * Performs an elementwise shift operation to the right on the input at idst0, by input at idst1: y = x0 >> x1
  * Both inputs must be of same data type only. Output overwrites odst in DST.
  *
+ * Int32 uses an arithmetic shift. UInt32 uses a logical shift. UInt16 uses the Int32 path.
+ *
+ * For UInt32 a shift amount >= 32 saturates to 31, matching scalar `right_shift_tile`. For Int32 and UInt16 a shift
+ * amount < 0 or >= 32 produces 0.
+ *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
  * on the compute engine.
  * A maximum of 4 tiles from each operand can be loaded into DST at once, for a total of 8 tiles,
@@ -81,21 +88,38 @@ ALWI void binary_right_shift_tile(uint32_t idst0, uint32_t idst1, uint32_t odst)
         "Unsupported data format for right shift. Supported data formats are: Int32, UInt32, UInt16");
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
-    MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_binary_right_shift,
-        (APPROX, 8 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
-        idst0,
-        idst1,
-        odst,
-        VectorMode::RC)));
+    // UInt32 uses a logical shift and clamps counts >= 32 to 31, matching the
+    // scalar right-shift contract. UInt16 and Int32 retain their existing paths.
+    if constexpr (data_format == DataFormat::UInt32) {
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_clamped_logical_right_shift,
+            (APPROX, 8 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
+            idst0,
+            idst1,
+            odst,
+            VectorMode::RC)));
+    } else {
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binary_right_shift,
+            (APPROX, 8 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
+            idst0,
+            idst1,
+            odst,
+            VectorMode::RC)));
+    }
 }
 
 // clang-format off
 /**
  * Performs an elementwise logical shift operation to the right on the input at idst0, by input at idst1: y = x0 >> x1
- * Both inputs must be same data type only. Output overwrites odst in DST.
+ * Both inputs must be same data type only. Vacated high bits are filled with zeros. Output overwrites odst in DST.
+ *
+ * A shift amount < 0 or >= 32 produces 0. Unlike `binary_right_shift_tile` on UInt32, out-of-range counts are not
+ * saturated to 31.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
  * on the compute engine.

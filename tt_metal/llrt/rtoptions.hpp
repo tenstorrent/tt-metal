@@ -174,6 +174,13 @@ struct SanitizerSettings {
 // than a specific limit. Firmware only accepts limits in [50, 500] W, so zero is free to mean this.
 inline constexpr uint32_t TDP_LIMIT_RESTORE_DEFAULT_SENTINEL = 0;
 
+// Streaming profiler sizing defaults and bounds (TT_METAL_STREAMING_PROFILER_*). Sizes stay under 4 GiB
+// because the device addresses them with 32-bit offsets.
+inline constexpr uint32_t STREAMING_PROFILER_SPOOL_MB_DEFAULT = 128;
+inline constexpr uint32_t STREAMING_PROFILER_SPOOL_MB_MAX = 4095;
+inline constexpr uint32_t STREAMING_PROFILER_FIFO_MB_DEFAULT = 128;
+inline constexpr uint32_t STREAMING_PROFILER_FIFO_MB_MAX = 2048;  // FIFO size must be a power of two
+
 class RunTimeOptions {
     std::string root_dir;
 
@@ -236,11 +243,19 @@ class RunTimeOptions {
     bool profiler_accumulate = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
+    // Streaming device profiler. Mutually exclusive with profiler_enabled (the legacy profiler):
+    // the two device producers overlay the same L1 profiler region and the two hosts would both drive it.
+    bool streaming_profiler_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
     std::string profiler_noc_events_report_path;
     bool profiler_disable_dump_to_files = false;
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
+    bool streaming_profiler_tracy_enabled = false;
+    uint32_t streaming_profiler_spool_mb = STREAMING_PROFILER_SPOOL_MB_DEFAULT;
+    uint32_t streaming_profiler_fifo_mb = STREAMING_PROFILER_FIFO_MB_DEFAULT;
+    std::string streaming_profiler_ops_csv_path;
+    std::string streaming_profiler_zone_csv_path;
     bool experimental_noc_debug_dump_enabled = false;
     // Tuning for the NOC-debug-dump background thread (see ProfilerStateManager::start_debug_dump_thread).
     std::chrono::milliseconds noc_debug_poll_interval{500};
@@ -430,12 +445,13 @@ class RunTimeOptions {
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
-    // Process-start trace allocation tracker settings. These are static because
-    // environment variables are process-wide and the hot-path accessors do not
-    // belong to a particular MetalContext.
-    inline static bool trace_allocation_tracking_enabled_ = false;
-    inline static bool trace_allocation_diagnostics_enabled_ = false;
-    inline static bool trace_allocation_skip_program_cache_enabled_ = false;
+    struct TraceAllocationOptions {
+        bool tracking_enabled = false;
+        bool diagnostics_enabled = false;
+        bool skip_program_cache = false;
+    };
+
+    static const TraceAllocationOptions& get_trace_allocation_options();
 
     // Disable shared memory tracking for tt-smi
     bool shm_tracking_disabled = false;
@@ -533,11 +549,9 @@ public:
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
 
-    static bool get_trace_allocation_tracking_enabled() { return trace_allocation_tracking_enabled_; }
-    static bool get_trace_allocation_diagnostics_enabled() { return trace_allocation_diagnostics_enabled_; }
-    static bool get_trace_allocation_skip_program_cache_enabled() {
-        return trace_allocation_skip_program_cache_enabled_;
-    }
+    static bool get_trace_allocation_tracking_enabled();
+    static bool get_trace_allocation_diagnostics_enabled();
+    static bool get_trace_allocation_skip_program_cache_enabled();
 
     bool get_shm_tracking_disabled() const { return shm_tracking_disabled; }
     bool get_shm_verbose() const { return shm_verbose; }
@@ -567,10 +581,12 @@ public:
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
     void set_feature_enabled(RunTimeDebugFeatures feature, bool enabled) { feature_targets[feature].enabled = enabled; }
     // Note: dprint cores are logical
-    const std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
+    const std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>>& get_feature_cores(
+        RunTimeDebugFeatures feature) const {
         return feature_targets[feature].cores;
     }
-    void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores) {
+    void set_feature_cores(
+        RunTimeDebugFeatures feature, std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores) {
         feature_targets[feature].cores = std::move(cores);
     }
     // An alternative to setting cores by range, a flag to enable all.
@@ -581,7 +597,8 @@ public:
         return feature_targets[feature].all_cores.at(core_type);
     }
     // Note: core range is inclusive
-    void set_feature_core_range(RunTimeDebugFeatures feature, tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, CoreType core_type) {
+    void set_feature_core_range(
+        RunTimeDebugFeatures feature, tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, CoreType core_type) {
         feature_targets[feature].cores[core_type] = std::vector<tt::tt_metal::CoreCoord>();
         for (uint32_t x = start.x; x <= end.x; x++) {
             for (uint32_t y = start.y; y <= end.y; y++) {
@@ -693,10 +710,16 @@ public:
     }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
+    bool get_streaming_profiler_enabled() const { return streaming_profiler_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
     std::string get_profiler_noc_events_report_path() const { return profiler_noc_events_report_path; }
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
+    bool get_streaming_profiler_tracy_enabled() const { return streaming_profiler_tracy_enabled; }
+    uint32_t get_streaming_profiler_spool_mb() const { return streaming_profiler_spool_mb; }
+    uint32_t get_streaming_profiler_fifo_mb() const { return streaming_profiler_fifo_mb; }
+    const std::string& get_streaming_profiler_ops_csv_path() const { return streaming_profiler_ops_csv_path; }
+    const std::string& get_streaming_profiler_zone_csv_path() const { return streaming_profiler_zone_csv_path; }
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
     // How often the NOC-debug-dump background thread polls for stalled cores (light, unblocking poll).
