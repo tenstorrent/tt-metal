@@ -15,6 +15,8 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
+#include "ttnn/operations/eltwise/binary_backward/device/binary_backward_device_operation.hpp"
+#include "ttnn/operations/eltwise/binary_backward/device/binary_backward_op_types.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
@@ -833,6 +835,31 @@ std::vector<std::optional<Tensor>> mul_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
+    // Route the both-grads path through the shared binary_backward device op;
+    // partial-mask requests stay on the composite path (device op's contract
+    // requires both grads until the writer is generalised).
+    const bool same_shape_no_bcast = grad_tensor_arg.padded_shape() == input_tensor_arg.padded_shape() &&
+                                     input_tensor_arg.padded_shape() == other_tensor_arg.padded_shape();
+    const bool routable = are_required_outputs.at(0) && are_required_outputs.at(1) &&
+                          grad_tensor_arg.layout() == tt::tt_metal::Layout::TILE &&
+                          input_tensor_arg.layout() == tt::tt_metal::Layout::TILE &&
+                          other_tensor_arg.layout() == tt::tt_metal::Layout::TILE && !grad_tensor_arg.is_sharded() &&
+                          !input_tensor_arg.is_sharded() && !other_tensor_arg.is_sharded() && same_shape_no_bcast;
+    if (routable) {
+        auto out_mem_config = output_mem_config.value_or(input_tensor_arg.memory_config());
+        auto outs = operations::binary_backward::launch_binary_backward(
+            operations::binary_backward::BinaryBackwardOpType::MUL_BW,
+            grad_tensor_arg,
+            input_tensor_arg,
+            other_tensor_arg,
+            tt::tt_metal::DataType::INVALID,
+            out_mem_config,
+            {true, true},
+            input_grad,
+            other_grad);
+        return {outs[0], outs[1]};
+    }
+
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
     operations::binary_backward::detail::preallocated_tensors_check(
         input_grad,

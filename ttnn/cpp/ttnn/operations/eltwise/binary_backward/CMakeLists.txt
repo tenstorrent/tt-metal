@@ -6,6 +6,8 @@ add_library(TTNN::Ops::Eltwise::Binary::Backward ALIAS ttnn_op_eltwise_binary_ba
 tt_reuse_precompile_headers(ttnn_op_eltwise_binary_backward TTNN::PCHLean)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary_backward)
 
+file(GLOB_RECURSE binary_backward_kernels device/kernels/*.cpp)
+
 target_sources(
     ttnn_op_eltwise_binary_backward
     PUBLIC
@@ -13,6 +15,10 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
         FILES ${TTNN_OP_ELTWISE_BINARY_BACKWARD_API_HEADERS}
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${binary_backward_kernels}
     PRIVATE
         ${TTNN_OP_ELTWISE_BINARY_BACKWARD_SRCS}
 )
