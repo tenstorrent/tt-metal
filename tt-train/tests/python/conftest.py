@@ -109,6 +109,35 @@ def _close_device_mesh_quietly() -> None:
         pass
 
 
+# TTML_SP_OVERLAP=backward runs every module that uses ``tp_mesh`` with the sequence-parallel linears'
+# backward scheduled across two command queues (ttml.ops.distributed.set_sp_overlap), on a CCL sub-device
+# given by TTML_SP_CCL ("rows=1", the default, or "columns=1", ...). That is how the SP suite is checked
+# under the overlap without a second copy of it; test_sp_overlap.py holds the overlap-specific tests.
+def sp_overlap_mode_from_env() -> str:
+    return os.environ.get("TTML_SP_OVERLAP", "off")
+
+
+def ccl_sub_device_from_env() -> tuple[int, int]:
+    """(columns, rows) of the CCL sub-device requested by TTML_SP_CCL."""
+    spec = os.environ.get("TTML_SP_CCL", "rows=1")
+    kind, _, count = spec.partition("=")
+    if kind not in ("rows", "columns") or not count.isdigit():
+        raise ValueError(f"TTML_SP_CCL must be rows=<n> or columns=<n>, got {spec!r}")
+    return (int(count), 0) if kind == "columns" else (0, int(count))
+
+
+def enable_sp_overlap_from_env() -> None:
+    """After the mesh is open: split the grid and switch the overlap on when TTML_SP_OVERLAP asks for it."""
+    mode = sp_overlap_mode_from_env()
+    if mode == "off":
+        return
+    ctx = ttml.autograd.AutoContext.get_instance()
+    if not ctx.has_ccl_sub_device():
+        columns, rows = ccl_sub_device_from_env()
+        ctx.enable_ccl_sub_device(columns, rows)
+    ttml.ops.distributed.set_sp_overlap(mode)
+
+
 @pytest.fixture(scope="module")
 def tp_mesh():
     """A ``[1, 2]`` mesh with axes ``("dp", "tp")``, per requesting module.
@@ -121,7 +150,10 @@ def tp_mesh():
     previous_mgd = _ensure_mgd_path(TP_MESH_SHAPE)
     _close_device_mesh_quietly()
     try:
-        ttml.open_device_mesh(ttml.Mesh(TP_MESH_SHAPE, ("dp", "tp")))
+        ttml.open_device_mesh(
+            ttml.Mesh(TP_MESH_SHAPE, ("dp", "tp")),
+            num_command_queues=2 if sp_overlap_mode_from_env() != "off" else 1,
+        )
         ctx = ttml.autograd.AutoContext.get_instance()
         if ctx.is_parallelism_context_initialized():
             # ParallelismContext is a one-shot singleton with no reset hook, so an
@@ -138,6 +170,7 @@ def tp_mesh():
                 )
         else:
             ctx.initialize_parallelism_context(ttml.autograd.DistributedConfig(enable_ddp=False, enable_tp=True))
+        enable_sp_overlap_from_env()
     except Exception as e:  # noqa: BLE001
         _close_device_mesh_quietly()
         _restore_mgd_path(previous_mgd)
@@ -145,5 +178,6 @@ def tp_mesh():
 
     yield ttml.mesh()
 
+    ttml.ops.distributed.set_sp_overlap("off")
     _close_device_mesh_quietly()
     _restore_mgd_path(previous_mgd)

@@ -13,7 +13,9 @@
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "tt-metalium/experimental/fabric/fabric.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -87,9 +89,33 @@ ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
     return is_cluster_axis_ring(cluster_axis.value()) ? ttnn::ccl::Topology::Ring : ttnn::ccl::Topology::Linear;
 }
 
+// A collective runs on the sub-device that belongs to the command queue it is issued on: the CCL
+// sub-device for the second queue, the compute sub-device (the op default) for the first. A sub-device is
+// owned by the queue that last launched on it, so a collective issued from the compute queue must stay on
+// the compute sub-device with the compute around it, and one issued from the second queue must not.
+bool on_ccl_queue() {
+    return *ttnn::core::get_current_command_queue_id_for_thread() != 0U;
+}
+
+std::optional<tt::tt_metal::SubDeviceId> collective_sub_device_id() {
+    if (!on_ccl_queue()) {
+        return std::nullopt;
+    }
+    auto& ctx = ttml::autograd::ctx();
+    TT_FATAL(
+        ctx.has_ccl_sub_device(),
+        "a collective was issued on the second command queue but no CCL sub-device is enabled "
+        "(AutoContext::enable_ccl_sub_device)");
+    return ctx.ccl_sub_device_id();
+}
+
 }  // namespace
 
-ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+ttnn::Tensor all_gather(
+    const ttnn::Tensor& tensor,
+    const int dim,
+    const std::optional<uint32_t> cluster_axis,
+    const std::optional<ttnn::Tensor>& persistent_output) {
     auto* mesh_device = &ttml::autograd::ctx().get_device();
     auto num_devices = mesh_device->num_devices();
     if (num_devices == 1U) {
@@ -103,18 +129,26 @@ ttnn::Tensor all_gather(const ttnn::Tensor& tensor, const int dim, const std::op
 
     // Use cluster_axis overload for 2D mesh
     // Note: Pass topology (not hardcoded Ring) - Ring only works with proper TORUS fabric config
-    return ttnn::experimental::all_gather_async(
+    auto gathered = ttnn::experimental::all_gather_async(
         tensor,
-        /* persistent_output_buffer */ std::nullopt,
+        persistent_output,
         dim,
         ccl_resources.get_all_gather_semaphore(),
         num_links,
         /* memory_config */ std::nullopt,
         topology,
-        /* subdevice_id */ std::nullopt,
+        /* subdevice_id */ collective_sub_device_id(),
         cluster_axis,
         /* use_optimal_ccl_for_llama */ false,
         /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
+    // A caller that hands over a persistent output relies on the result landing there.
+    TT_FATAL(
+        !persistent_output.has_value() || &gathered.mesh_buffer() == &persistent_output->mesh_buffer(),
+        "all_gather did not write into the persistent output for shape {} dim {}: the op took a path that "
+        "allocates its own result (typically the composite fallback for a shard that is not tile-aligned)",
+        tensor.logical_shape(),
+        dim);
+    return gathered;
 }
 
 ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis) {
@@ -169,7 +203,11 @@ ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t
     }
 }
 
-ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+ttnn::Tensor reduce_scatter(
+    const ttnn::Tensor& tensor,
+    const int dim,
+    const std::optional<uint32_t> cluster_axis,
+    const std::optional<std::vector<ttnn::Tensor>>& persistent_buffers) {
     auto& ccl_resources = ttml::autograd::ctx().get_ccl_resources();
     auto& mesh_device = ttml::autograd::ctx().get_device();
     uint32_t num_links = ttnn::operations::ccl::common::get_num_links(mesh_device, /* cluster_axis */ cluster_axis);
@@ -177,10 +215,15 @@ ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std
     // Determine topology based on cluster axis configuration (Ring if torus, Linear otherwise)
     auto topology = get_topology(cluster_axis);
 
+    TT_FATAL(
+        persistent_buffers.has_value() || !on_ccl_queue(),
+        "reduce_scatter on the second command queue needs its buffers passed in (reduce_scatter_buffers): the "
+        "temporaries the op allocates itself are freed by the host while the collective may still be using them");
+
     // Note: Pass topology (not hardcoded Ring) - Ring only works with proper TORUS fabric config
-    return ttnn::experimental::reduce_scatter_minimal_async(
+    auto scattered = ttnn::experimental::reduce_scatter_minimal_async(
         tensor,
-        /* persistent_output_buffers */ std::nullopt,
+        persistent_buffers,
         dim,
         ccl_resources.get_reduce_scatter_semaphores(),
         ccl_resources.get_barrier_semaphore(),
@@ -188,8 +231,54 @@ ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std
         /* memory_config */ std::nullopt,
         /* intermediate_memory_config */ std::nullopt,
         topology,
-        /* subdevice_id */ std::nullopt,
+        /* subdevice_id */ collective_sub_device_id(),
         /* cluster_axis */ cluster_axis);
+    // A caller that hands over the buffers relies on the result landing in them (the composite fallback for
+    // shapes the direct kernels cannot take allocates its own).
+    TT_FATAL(
+        !persistent_buffers.has_value() || &scattered.mesh_buffer() == &persistent_buffers->at(1).mesh_buffer(),
+        "reduce_scatter did not write into the persistent output for shape {} dim {}",
+        tensor.logical_shape(),
+        dim);
+    return scattered;
+}
+
+std::vector<ttnn::Tensor> reduce_scatter_buffers(
+    const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+    auto& mesh_device = ttml::autograd::ctx().get_device();
+    const auto& mesh_shape = mesh_device.shape();
+    const uint32_t axis_size = cluster_axis.has_value() ? mesh_shape[*cluster_axis] : mesh_device.num_devices();
+    const auto logical_shape = tensor.logical_shape();
+    const int normalized_dim = dim < 0 ? static_cast<int>(logical_shape.rank()) + dim : dim;
+    TT_FATAL(
+        normalized_dim > 0 && logical_shape[normalized_dim] % axis_size == 0,
+        "reduce_scatter_buffers: dim {} of {} is not scattered {} ways",
+        dim,
+        logical_shape,
+        axis_size);
+    // The topology the op will really run (a 2-device ring is demoted to a line before the staging layout is
+    // chosen; the same helper reduce_scatter_minimal_async uses).
+    const auto topology = ::ttnn::ccl::get_usable_topology(tensor, get_topology(cluster_axis), cluster_axis);
+
+    auto output_shape = logical_shape;
+    output_shape[normalized_dim] /= axis_size;
+    auto output = ttnn::empty(output_shape, tensor.dtype(), tensor.layout(), &mesh_device, tensor.memory_config());
+
+    if (topology == ttnn::ccl::Topology::Ring) {
+        // Contiguous ring path: chunk-paged intermediate plus the smaller penult intermediate, sized by the
+        // op's own helper so they match what it validates against.
+        auto staging = ttnn::experimental::reduce_scatter_minimal_async_create_intermediate_buffer(
+            tensor, normalized_dim, topology, cluster_axis, /* compute_kernel_config */ std::nullopt);
+        TT_FATAL(staging.size() == 2, "expected {{intermediate, penult}} staging buffers, got {}", staging.size());
+        return {staging[0], output, staging[1]};
+    }
+    // Line: an input-shaped tiled intermediate with dim 0 doubled (one half per direction), same dtype,
+    // layout and memory config as the input (ReduceScatterMinimalAsyncDeviceOperation::compute_output_specs).
+    auto intermediate_shape = tensor.padded_shape();
+    intermediate_shape[0] *= 2;
+    auto intermediate =
+        ttnn::empty(intermediate_shape, tensor.dtype(), tensor.layout(), &mesh_device, tensor.memory_config());
+    return {intermediate, output};
 }
 
 ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
@@ -272,6 +361,7 @@ ttnn::Tensor ring_shift(
 namespace {
 
 SPLinearImpl g_sp_linear_impl = SPLinearImpl::Fused;
+std::optional<SPLinearImpl> g_sp_linear_backward_impl;  // nullopt: follows the forward
 
 // The matmul exactly as tt-train issues it today, which is what makes Composed bit-identical to the
 // unfused modules: the forward `a @ W^T (+ bias)` is linear_op's 4-D ttnn::linear on the full compute
@@ -379,14 +469,58 @@ ttnn::Tensor matmul_reduce_scatter_fused(
         /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
 }
 
+// Measurement only (SPLinearImpl::NoComm): the collective's output is allocated but never computed, so the step
+// runs every matmul at its real shape and no communication at all -- the ideal the other implementations chase.
+std::pair<ttnn::Tensor, ttnn::Tensor> all_gather_matmul_nocomm(
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& w,
+    uint32_t cluster_axis,
+    bool transpose_b,
+    const std::optional<ttnn::Tensor>& bias) {
+    auto& device = ttml::autograd::ctx().get_device();
+    const uint32_t ranks = device.shape()[cluster_axis];
+    const auto& s = x.logical_shape();
+    auto gathered =
+        ttml::core::empty(ttnn::Shape({s[0], s[1], s[2] * ranks, s[3]}), &device, x.memory_config());
+    auto mm = unfused_matmul(gathered, w, transpose_b, bias);
+    return {std::move(gathered), std::move(mm)};
+}
+
+ttnn::Tensor matmul_reduce_scatter_nocomm(
+    const ttnn::Tensor& x, const ttnn::Tensor& w, uint32_t cluster_axis, bool transpose_b) {
+    auto& device = ttml::autograd::ctx().get_device();
+    const uint32_t ranks = device.shape()[cluster_axis];
+    auto mm = unfused_matmul(x, w, transpose_b, std::nullopt);
+    const auto& s = mm.logical_shape();
+    return ttml::core::empty(ttnn::Shape({s[0], s[1], s[2] / ranks, s[3]}), &device, mm.memory_config());
+}
+
 }  // namespace
+
+ttnn::Tensor sp_linear_matmul(
+    const ttnn::Tensor& a, const ttnn::Tensor& w, bool transpose_b, const std::optional<ttnn::Tensor>& bias) {
+    return unfused_matmul(a, w, transpose_b, bias);
+}
 
 void set_sp_linear_impl(SPLinearImpl impl) {
     g_sp_linear_impl = impl;
+    g_sp_linear_backward_impl = std::nullopt;
 }
 
 SPLinearImpl get_sp_linear_impl() {
     return g_sp_linear_impl;
+}
+
+void set_sp_linear_backward_impl(std::optional<SPLinearImpl> impl) {
+    g_sp_linear_backward_impl = impl;
+}
+
+SPLinearImpl get_sp_linear_backward_impl() {
+    return g_sp_linear_backward_impl.value_or(g_sp_linear_impl);
+}
+
+SPLinearImpl get_sp_linear_impl(SPLinearSite site) {
+    return site == SPLinearSite::Backward ? get_sp_linear_backward_impl() : g_sp_linear_impl;
 }
 
 std::pair<ttnn::Tensor, ttnn::Tensor> all_gather_matmul(
@@ -394,17 +528,22 @@ std::pair<ttnn::Tensor, ttnn::Tensor> all_gather_matmul(
     const ttnn::Tensor& w,
     uint32_t cluster_axis,
     bool transpose_b,
-    const std::optional<ttnn::Tensor>& bias) {
-    if (g_sp_linear_impl == SPLinearImpl::Fused) {
-        return all_gather_matmul_fused(x, w, cluster_axis, transpose_b, bias);
+    const std::optional<ttnn::Tensor>& bias,
+    SPLinearSite site) {
+    switch (get_sp_linear_impl(site)) {
+        case SPLinearImpl::Fused: return all_gather_matmul_fused(x, w, cluster_axis, transpose_b, bias);
+        case SPLinearImpl::NoComm: return all_gather_matmul_nocomm(x, w, cluster_axis, transpose_b, bias);
+        case SPLinearImpl::Composed: break;
     }
     return all_gather_matmul_composed(x, w, cluster_axis, transpose_b, bias);
 }
 
 ttnn::Tensor matmul_reduce_scatter(
-    const ttnn::Tensor& x, const ttnn::Tensor& w, uint32_t cluster_axis, bool transpose_b) {
-    if (g_sp_linear_impl == SPLinearImpl::Fused) {
-        return matmul_reduce_scatter_fused(x, w, cluster_axis, transpose_b);
+    const ttnn::Tensor& x, const ttnn::Tensor& w, uint32_t cluster_axis, bool transpose_b, SPLinearSite site) {
+    switch (get_sp_linear_impl(site)) {
+        case SPLinearImpl::Fused: return matmul_reduce_scatter_fused(x, w, cluster_axis, transpose_b);
+        case SPLinearImpl::NoComm: return matmul_reduce_scatter_nocomm(x, w, cluster_axis, transpose_b);
+        case SPLinearImpl::Composed: break;
     }
     return matmul_reduce_scatter_composed(x, w, cluster_axis, transpose_b);
 }

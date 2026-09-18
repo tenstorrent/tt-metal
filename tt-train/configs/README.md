@@ -99,6 +99,9 @@ Device mesh and distributed training configuration.
 | `enable_tp` | bool | false | Enable Tensor Parallelism |
 | `enable_sp` | bool | false | Megatron sequence parallelism on top of TP: the residual stream is sharded along the sequence across the TP axis. Requires `enable_tp`; Llama only |
 | `sp_linear_impl` | string | fused | How the sequence-parallel linears run their collective + matmul pair: `fused` (the fused ttnn ops, which overlap the collective with the matmul) or `composed` (two separate ops). Only read with `enable_sp` |
+| `sp_linear_backward_impl` | string | same | The backward's implementation when it should differ from the forward's (`composed`, `fused`); `same` follows `sp_linear_impl` |
+| `sp_overlap` | string | off | With a `composed` backward: `backward` runs each backward collective of the sequence-parallel linears on a second command queue and a CCL sub-device, overlapped with a weight-gradient matmul; `split` reserves the sub-device but keeps one queue (the measurement reference); `off` uses the whole grid on one queue |
+| `sp_ccl_rows` / `sp_ccl_columns` | int | 1 / 0 | The CCL sub-device for `sp_overlap`: the bottom rows or the rightmost columns of every chip (exactly one of the two non-zero; a 12-core row fits 2 CCL workers per link, a 10-core column 1) |
 
 ### Constraints
 - DDP and TP can be combined on a 2D mesh (e.g. `mesh_shape: [4, 8]` with `enable_ddp: true` and `enable_tp: true`)

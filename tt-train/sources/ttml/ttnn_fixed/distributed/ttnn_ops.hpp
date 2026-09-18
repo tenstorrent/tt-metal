@@ -7,10 +7,32 @@
 
 namespace ttml::ttnn_fixed::distributed {
 
+// Which queue a collective is issued on decides where it runs: on the default (compute) command queue it
+// runs on the compute sub-device like every other op; issued on the second command queue (inside
+// ttnn::core::with_command_queue_id(QueueId(1))) it runs on the CCL sub-device, see
+// AutoContext::enable_ccl_sub_device and ops/distributed/sp_overlap.hpp. A sub-device is owned by the queue
+// that last launched on it, so the two must never be mixed.
+
+// All-gather `tensor` along `dim` across `cluster_axis`. With `persistent_output` (a pre-allocated
+// full-shape tensor) the result is written there and returned; otherwise a fresh tensor is allocated.
 ttnn::Tensor all_gather(
-    const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
+    const ttnn::Tensor& tensor,
+    const int dim,
+    const std::optional<uint32_t> cluster_axis = std::nullopt,
+    const std::optional<ttnn::Tensor>& persistent_output = std::nullopt);
 ttnn::Tensor all_reduce(const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis = std::nullopt);
+// Reduce-scatter `tensor` along `dim` across `cluster_axis`. `persistent_buffers` are the op's staging
+// tensor(s) and output as reduce_scatter_buffers() allocates them; the op then allocates nothing itself.
+// Required on the second command queue: temporaries the op allocates are freed by the host on return, while
+// the collective may still be running and the compute queue can be handed their addresses.
 ttnn::Tensor reduce_scatter(
+    const ttnn::Tensor& tensor,
+    const int dim,
+    const std::optional<uint32_t> cluster_axis = std::nullopt,
+    const std::optional<std::vector<ttnn::Tensor>>& persistent_buffers = std::nullopt);
+// Every buffer reduce_scatter(tensor, dim, cluster_axis) needs -- {intermediate, output} or {intermediate,
+// output, penult intermediate} on the contiguous ring path -- freshly allocated in the layout the op expects.
+std::vector<ttnn::Tensor> reduce_scatter_buffers(
     const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis = std::nullopt);
 
 // Local, communication-free per-device shard extraction along `dim` on `cluster_axis`.
@@ -51,9 +73,22 @@ ttnn::Tensor ring_shift(
 // Which implementation backs the sequence-parallel linears (ops/distributed/sp_linear_ops.hpp), process-wide.
 //   Composed: today's unfused sequence -- the collective, then the matmul (or the reverse) -- op for op.
 //   Fused:    the fused ttnn ops of issue #52944 (all_gather_matmul_sp_async / matmul_reduce_scatter_sp_async).
-enum class SPLinearImpl { Composed, Fused };
+// NoComm is for measurement only: both collectives are replaced by uninitialised outputs of the right shape, so a
+// training step's time is the zero-communication ideal the other two are compared against. Its results are garbage.
+enum class SPLinearImpl { Composed, Fused, NoComm };
+// The two call sites of each sequence: a linear's forward and the mirrored dgrad in its backward. They can run
+// different implementations: the fused ops help the forward while the backward's collectives are better hidden
+// by the two-stream schedule of the Composed backward (ops/distributed/sp_overlap.hpp).
+enum class SPLinearSite { Forward, Backward };
+// Selects the implementation of BOTH sites (and drops any backward override).
 void set_sp_linear_impl(SPLinearImpl impl);
+// The forward's implementation.
 SPLinearImpl get_sp_linear_impl();
+// Overrides the backward's implementation (std::nullopt: the same as the forward again).
+void set_sp_linear_backward_impl(std::optional<SPLinearImpl> impl);
+// The backward's effective implementation.
+SPLinearImpl get_sp_linear_backward_impl();
+SPLinearImpl get_sp_linear_impl(SPLinearSite site);
 
 // Sequence-parallel matmul fusions on dim 2 of (B, 1, S, X) across `cluster_axis`; T = the mesh extent on it.
 // The result is the Composed sequence's result; the implementation only decides how it is computed.
@@ -66,10 +101,21 @@ std::pair<ttnn::Tensor, ttnn::Tensor> all_gather_matmul(
     const ttnn::Tensor& w,
     uint32_t cluster_axis,
     bool transpose_b,
-    const std::optional<ttnn::Tensor>& bias = std::nullopt);
+    const std::optional<ttnn::Tensor>& bias = std::nullopt,
+    SPLinearSite site = SPLinearSite::Forward);
 
 // x [B,1,S,K] -> reduce_scatter over T of x @ (transpose_b ? W^T : W), split on the sequence: [B,1,S/T,N].
 ttnn::Tensor matmul_reduce_scatter(
-    const ttnn::Tensor& x, const ttnn::Tensor& w, uint32_t cluster_axis, bool transpose_b);
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& w,
+    uint32_t cluster_axis,
+    bool transpose_b,
+    SPLinearSite site = SPLinearSite::Forward);
+
+// The matmul half of the Composed sequences on its own: a [B,1,S,K] @ (transpose_b ? W^T : W) (+ bias), issued
+// exactly as the Composed implementation issues it (so a caller that schedules the collective separately, see
+// ops/distributed/sp_overlap.hpp, stays bit-identical to Composed). A bias is only supported with transpose_b.
+ttnn::Tensor sp_linear_matmul(
+    const ttnn::Tensor& a, const ttnn::Tensor& w, bool transpose_b, const std::optional<ttnn::Tensor>& bias = std::nullopt);
 
 }  // namespace ttml::ttnn_fixed::distributed

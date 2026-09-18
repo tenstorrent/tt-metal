@@ -200,14 +200,27 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none(),
-            "Raw all_gather without autograd tracking. Returns a new ttnn::Tensor.");
+            nb::arg("persistent_output") = nb::none(),
+            "Raw all_gather without autograd tracking. Returns a new ttnn::Tensor, or `persistent_output` "
+            "(a pre-allocated full-shape tensor the result is written into) when given.");
         py_distributed.def(
             "reduce_scatter",
             &ttml::ttnn_fixed::distributed::reduce_scatter,
             nb::arg("tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none(),
-            "Raw reduce_scatter without autograd tracking. Returns a new ttnn::Tensor.");
+            nb::arg("persistent_buffers") = nb::none(),
+            "Raw reduce_scatter without autograd tracking. Returns a new ttnn::Tensor. `persistent_buffers` "
+            "(reduce_scatter_buffers(...)) are the op's staging tensors and output; required on the second "
+            "command queue.");
+        py_distributed.def(
+            "reduce_scatter_buffers",
+            &ttml::ttnn_fixed::distributed::reduce_scatter_buffers,
+            nb::arg("tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis") = nb::none(),
+            "Every buffer reduce_scatter(tensor, dim, cluster_axis) needs, freshly allocated in the layout the op "
+            "expects; pass the list back as `persistent_buffers`.");
         py_distributed.def(
             "all_reduce",
             &ttml::ttnn_fixed::distributed::all_reduce,

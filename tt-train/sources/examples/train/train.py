@@ -886,12 +886,33 @@ def main() -> None:
 
     if device_cfg.enable_ddp or device_cfg.enable_tp or moe_ax != -1:
         print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
-    ttml.open_device_mesh(mesh, tuple(device_cfg.device_ids) if device_cfg.device_ids else None)
+    sp_overlap = device_cfg.enable_sp and device_cfg.sp_overlap != "off"
+    ttml.open_device_mesh(
+        mesh,
+        tuple(device_cfg.device_ids) if device_cfg.device_ids else None,
+        num_command_queues=2 if sp_overlap else 1,
+    )
     ttml.autograd.AutoContext.get_instance().get_device()
     if device_cfg.enable_sp:
         # Process-wide: the sequence-parallel linears run their collective + matmul pair composed or fused.
         ttml.ops.distributed.set_sp_linear_impl(device_cfg.sp_linear_impl)
-        print(f"Sequence-parallel linears: {device_cfg.sp_linear_impl}")
+        if device_cfg.sp_linear_backward_impl != "same":
+            ttml.ops.distributed.set_sp_linear_backward_impl(device_cfg.sp_linear_backward_impl)
+        print(
+            f"Sequence-parallel linears: {device_cfg.sp_linear_impl} forward, "
+            f"{device_cfg.sp_linear_backward_impl} backward"
+        )
+        if sp_overlap:
+            # Their backward collectives on a second queue and a CCL sub-device, behind the weight gradients
+            # ("backward"); "split" only reserves the sub-device, the reference for measuring the overlap.
+            ctx = ttml.autograd.AutoContext.get_instance()
+            ctx.enable_ccl_sub_device(device_cfg.sp_ccl_columns, device_cfg.sp_ccl_rows)
+            ttml.ops.distributed.set_sp_overlap("backward" if device_cfg.sp_overlap == "backward" else "off")
+            gx, gy = ctx.get_device().compute_with_storage_grid_size().x, ctx.get_device().compute_with_storage_grid_size().y
+            print(
+                f"Sequence-parallel overlap: {device_cfg.sp_overlap} (CCL sub-device: {device_cfg.sp_ccl_rows} rows, "
+                f"{device_cfg.sp_ccl_columns} columns; compute grid {gx}x{gy})"
+            )
     ttml.manual_seed(training_cfg.seed)
     np.random.seed(training_cfg.seed)
     random.seed(training_cfg.seed)  # Python RNG drives the per-token sampling seed in inference

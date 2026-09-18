@@ -146,8 +146,13 @@ def _validate_mgd(mesh: Mesh) -> None:
 _mesh: Mesh | None = None
 
 
-def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] | None = None):
+def open_device_mesh(
+    mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] | None = None, num_command_queues: int = 1
+):
     """Initialize the global device mesh and open the underlying TT devices.
+
+    ``num_command_queues=2`` adds a second hardware queue for collectives (see
+    ``ttml.ops.distributed.set_sp_overlap``).
 
     When more than one device is requested the MGD file is validated and the
     TT-Fabric interconnect is enabled.  A plain tuple is accepted for backward
@@ -173,7 +178,7 @@ def open_device_mesh(mesh: tuple[int, ...] | Mesh, device_ids: tuple[int, ...] |
         fabric_enabled = True
 
     try:
-        ttml.autograd.AutoContext.get_instance().open_device(list(mesh.shape), list(device_ids))
+        ttml.autograd.AutoContext.get_instance().open_device(list(mesh.shape), list(device_ids), num_command_queues)
     except BaseException:
         if fabric_enabled:
             try:

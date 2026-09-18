@@ -9,8 +9,10 @@
 
 namespace ttml::ops::distributed {
 
-// Composed | Fused, selected process-wide with ttnn_fixed::distributed::set_sp_linear_impl.
+// Composed | Fused | NoComm, selected process-wide with ttnn_fixed::distributed::set_sp_linear_impl (both sites)
+// and set_sp_linear_backward_impl (the backward alone); the two-stream backward is ops/distributed/sp_overlap.hpp.
 using ttnn_fixed::distributed::SPLinearImpl;
+using ttnn_fixed::distributed::SPLinearSite;
 
 // The Megatron sequence-parallel linears: the collective on dim 2 of (B, 1, S, X) issued together with the
 // matmul it feeds (column) or that feeds it (row), across mesh axis `cluster_axis` with T ranks. Under

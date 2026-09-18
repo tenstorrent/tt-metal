@@ -216,6 +216,10 @@ auto weight_mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(
 
 `device_config.sp_linear_impl` selects how each pair runs: `fused` (default) uses the fused ttnn ops `ttnn.experimental.all_gather_matmul_sp_async` / `matmul_reduce_scatter_sp_async`, which overlap the collective with the matmul one (batch, sequence slice) at a time on both ring and line meshes; `composed` issues the collective and the matmul as two separate ttnn ops. Both give the same result to within bf16 rounding (the fused matmul uses its own blocking). The same switch is available as `ttml.ops.distributed.set_sp_linear_impl("composed" | "fused")`.
 
+`device_config.sp_linear_backward_impl` (default `same`) lets the backward of these linears run a different implementation than the forward -- `fused` forward with a `composed` backward is the combination for `sp_overlap` below (`ttml.ops.distributed.set_sp_linear_backward_impl`).
+
+`device_config.sp_overlap: backward` (with a `composed` backward) schedules the backward of these linears across two hardware command queues: each backward collective runs on the second queue and a reserved CCL sub-device (the bottom `sp_ccl_rows` rows, default 1, or the rightmost `sp_ccl_columns` columns of every chip) while a weight-gradient matmul that does not depend on it runs on the compute queue -- every linear defers its weight gradient and each collective is followed by the previous linear's, so the reduce-scatter of a column-parallel linear hides behind the row-parallel linear's weight gradient and vice versa; the outermost `backward()` drains the rest. Ordering between the queues is by device events, and the results are bit-identical to the same ops issued on one queue (`sp_overlap: split` keeps the CCL sub-device but one queue, the reference for measuring the overlap; `off`, the default, uses the whole grid). The Python equivalent is `open_device_mesh(..., num_command_queues=2)`, `AutoContext.enable_ccl_sub_device(columns, rows)` and `ttml.ops.distributed.set_sp_overlap("backward")`; see `ops/distributed/sp_overlap.hpp` for the rules the schedule follows.
+
 ---
 
 ### Context Parallelism (CP)
@@ -484,6 +488,8 @@ In the device config, you can specify which parallelism strategies to use:
 - **`enable_tp`**: Enable tensor parallelism (shard model parameters)
 - **`enable_sp`**: Enable Megatron sequence parallelism on top of TP (norms, dropout and residual adds run on a sequence-sharded stream; requires `enable_tp`, Llama only)
 - **`sp_linear_impl`**: `fused` (default) or `composed` — how the sequence-parallel linears run their collective + matmul pair (see Sequence Parallelism under Tensor Parallelism above)
+- **`sp_linear_backward_impl`**: `same` (default), `composed`, `fused` — the backward's implementation when it should differ from the forward's
+- **`sp_overlap`**: `off` (default), `split` or `backward` — with a `composed` backward, run the linears' backward collectives on a second command queue and a CCL sub-device (`sp_ccl_rows` / `sp_ccl_columns`) behind the weight-gradient matmuls
 - **`enable_ddp`**: Enable data parallelism (replicate model, shard data)
 - **`enable_pp`**: Enable pipeline parallelism (shard layers sequentially)
 - **`enable_cp`**: Enable context parallelism (shard input along sequence dimension)

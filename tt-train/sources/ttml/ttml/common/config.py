@@ -42,8 +42,41 @@ class DeviceConfig:
         # the default) or "composed" (the two as separate ttnn ops). Applied process-wide at startup by the
         # training scripts; only meaningful with enable_sp.
         self.sp_linear_impl = str(device_config.get("sp_linear_impl", "fused"))
-        if self.sp_linear_impl not in ("composed", "fused"):
-            raise ValueError(f"device_config.sp_linear_impl must be 'composed' or 'fused', got {self.sp_linear_impl!r}")
+        # "nocomm" replaces the collectives with uninitialised outputs: a zero-communication timing baseline only.
+        if self.sp_linear_impl not in ("composed", "fused", "nocomm"):
+            raise ValueError(
+                f"device_config.sp_linear_impl must be 'composed' or 'fused' (or 'nocomm', measurement only), "
+                f"got {self.sp_linear_impl!r}"
+            )
+        # The backward of the sequence-parallel linears may run another implementation than the forward ("same",
+        # the default, follows sp_linear_impl): e.g. fused forward + composed backward under sp_overlap.
+        self.sp_linear_backward_impl = str(device_config.get("sp_linear_backward_impl", "same"))
+        if self.sp_linear_backward_impl not in ("same", "composed", "fused", "nocomm"):
+            raise ValueError(
+                "device_config.sp_linear_backward_impl must be 'same', 'composed' or 'fused' (or 'nocomm', "
+                f"measurement only), got {self.sp_linear_backward_impl!r}"
+            )
+        # Two-stream scheduling of the Composed sequence-parallel linears' backward: "backward" runs each
+        # collective on a second command queue and a CCL sub-device, overlapped with a weight-gradient matmul;
+        # "off" (the default) issues everything in order on one queue on the whole grid; "split" reserves the
+        # CCL sub-device but keeps one queue (the measurement reference for "backward": same core grid, no
+        # overlap). Only meaningful with enable_sp and sp_linear_impl: composed. The CCL sub-device is the
+        # bottom sp_ccl_rows rows or the rightmost sp_ccl_columns columns of every chip (exactly one non-zero).
+        sp_overlap = device_config.get("sp_overlap", "off")
+        if isinstance(sp_overlap, bool):  # YAML 1.1 reads a bare `off` / `on` as a boolean
+            sp_overlap = "backward" if sp_overlap else "off"
+        self.sp_overlap = str(sp_overlap)
+        if self.sp_overlap not in ("off", "split", "backward"):
+            raise ValueError(
+                f"device_config.sp_overlap must be 'off', 'split' or 'backward', got {self.sp_overlap!r}"
+            )
+        self.sp_ccl_rows = int(device_config.get("sp_ccl_rows", 1))
+        self.sp_ccl_columns = int(device_config.get("sp_ccl_columns", 0))
+        if self.sp_overlap != "off" and (self.sp_ccl_rows > 0) == (self.sp_ccl_columns > 0):
+            raise ValueError(
+                "device_config: exactly one of sp_ccl_rows / sp_ccl_columns must be non-zero, got "
+                f"{self.sp_ccl_rows} rows and {self.sp_ccl_columns} columns"
+            )
         # Defaults to True: build as deferred metadata -> fully_shard -> materialize already-sharded,
         # so large models (e.g. 32B) never materialize a full replicated copy on one chip.
         # Set to false to opt into the eager (full-replicated, then shard) path.

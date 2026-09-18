@@ -27,6 +27,7 @@
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/distributed/losses.hpp"
 #include "ops/distributed/sp_linear_ops.hpp"
+#include "ops/distributed/sp_overlap.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
 #include "ops/layernorm_op.hpp"
@@ -179,7 +180,8 @@ void py_module(nb::module_& m) {
         using ttml::ops::distributed::SPLinearImpl;
         nb::enum_<SPLinearImpl>(py_distributed, "SPLinearImpl")
             .value("COMPOSED", SPLinearImpl::Composed)
-            .value("FUSED", SPLinearImpl::Fused);
+            .value("FUSED", SPLinearImpl::Fused)
+            .value("NOCOMM", SPLinearImpl::NoComm);
         py_distributed.def("set_sp_linear_impl", &ttml::ttnn_fixed::distributed::set_sp_linear_impl, nb::arg("impl"));
         py_distributed.def(
             "set_sp_linear_impl",
@@ -189,12 +191,82 @@ void py_module(nb::module_& m) {
                     ttml::ttnn_fixed::distributed::set_sp_linear_impl(SPLinearImpl::Composed);
                 } else if (impl == "fused") {
                     ttml::ttnn_fixed::distributed::set_sp_linear_impl(SPLinearImpl::Fused);
+                } else if (impl == "nocomm") {
+                    ttml::ttnn_fixed::distributed::set_sp_linear_impl(SPLinearImpl::NoComm);
                 } else {
-                    throw std::invalid_argument("sp_linear_impl must be 'composed' or 'fused', got '" + impl + "'");
+                    throw std::invalid_argument(
+                        "sp_linear_impl must be 'composed' or 'fused' (or 'nocomm', measurement only), got '" + impl +
+                        "'");
                 }
             },
             nb::arg("impl"));
-        py_distributed.def("get_sp_linear_impl", &ttml::ttnn_fixed::distributed::get_sp_linear_impl);
+        // (a lambda: get_sp_linear_impl is overloaded on the site in C++)
+        py_distributed.def(
+            "get_sp_linear_impl",
+            []() { return ttml::ttnn_fixed::distributed::get_sp_linear_impl(); },
+            "The forward's implementation.");
+        // The backward alone (the forward keeps its own): None or "same" follows the forward again.
+        const auto parse_impl = [](const std::string& impl) -> SPLinearImpl {
+            if (impl == "composed") {
+                return SPLinearImpl::Composed;
+            }
+            if (impl == "fused") {
+                return SPLinearImpl::Fused;
+            }
+            if (impl == "nocomm") {
+                return SPLinearImpl::NoComm;
+            }
+            throw std::invalid_argument(
+                "sp_linear_backward_impl must be 'same', 'composed' or 'fused' (or 'nocomm', measurement only), got '" +
+                impl + "'");
+        };
+        py_distributed.def(
+            "set_sp_linear_backward_impl",
+            [](std::optional<SPLinearImpl> impl) { ttml::ttnn_fixed::distributed::set_sp_linear_backward_impl(impl); },
+            nb::arg("impl").none());
+        py_distributed.def(
+            "set_sp_linear_backward_impl",
+            [parse_impl](const std::string& impl) {
+                ttml::ttnn_fixed::distributed::set_sp_linear_backward_impl(
+                    impl == "same" ? std::nullopt : std::optional<SPLinearImpl>(parse_impl(impl)));
+            },
+            nb::arg("impl"),
+            "The implementation of the sequence-parallel linears' backward only: 'composed', 'fused', 'nocomm', or "
+            "'same' / None to follow set_sp_linear_impl again (which also clears this override).");
+        py_distributed.def(
+            "get_sp_linear_backward_impl",
+            &ttml::ttnn_fixed::distributed::get_sp_linear_backward_impl,
+            "The backward's effective implementation.");
+        // Two-stream scheduling of the Composed linears' backward (ops/distributed/sp_overlap.hpp).
+        using ttml::ops::distributed::SPOverlapMode;
+        nb::enum_<SPOverlapMode>(py_distributed, "SPOverlapMode")
+            .value("OFF", SPOverlapMode::Off)
+            .value("BACKWARD", SPOverlapMode::Backward);
+        py_distributed.def("set_sp_overlap", &ttml::ops::distributed::set_sp_overlap_mode, nb::arg("mode"));
+        py_distributed.def(
+            "set_sp_overlap",
+            [](const std::string& mode) {
+                // The device-config spelling: sp_overlap: off | backward.
+                if (mode == "off") {
+                    ttml::ops::distributed::set_sp_overlap_mode(SPOverlapMode::Off);
+                } else if (mode == "backward") {
+                    ttml::ops::distributed::set_sp_overlap_mode(SPOverlapMode::Backward);
+                } else {
+                    throw std::invalid_argument("sp_overlap must be 'off' or 'backward', got '" + mode + "'");
+                }
+            },
+            nb::arg("mode"),
+            "Overlap the collectives of the Composed sequence-parallel linears' backward with their weight-gradient "
+            "matmuls on a second command queue and the CCL sub-device ('backward'), or not ('off', the default). "
+            "Needs open_device(..., num_command_queues=2) and AutoContext.enable_ccl_sub_device().");
+        py_distributed.def("get_sp_overlap", &ttml::ops::distributed::get_sp_overlap_mode);
+        py_distributed.def(
+            "sp_overlap_stats",
+            []() {
+                auto& overlap = ttml::ops::distributed::SPOverlap::instance();
+                return nb::make_tuple(overlap.num_deferred(), overlap.num_retained());
+            },
+            "(deferred weight gradients, retained collective buffer sets) -- both 0 between backward passes.");
         py_distributed.def(
             "sp_column_parallel_linear",
             [](const autograd::TensorPtr& x,

@@ -4,6 +4,7 @@
 
 #include "auto_context.hpp"
 
+#include <array>
 #include <optional>
 #include <sstream>
 
@@ -61,16 +62,125 @@ GradMode AutoContext::get_gradient_mode() const {
 }
 
 void AutoContext::reset_graph() {
+    for (auto& hook : m_teardown_hooks) {
+        hook(TeardownReason::GraphReset);
+    }
     m_graph.reset();
 }
 
+void AutoContext::enter_backward() {
+    ++m_backward_depth;
+}
+
+void AutoContext::exit_backward() {
+    TT_FATAL(m_backward_depth > 0U, "AutoContext::exit_backward called without a matching enter_backward");
+    --m_backward_depth;
+}
+
+bool AutoContext::is_backward_in_progress() const {
+    return m_backward_depth > 0U;
+}
+
+void AutoContext::add_backward_end_hook(std::function<void()> hook) {
+    m_backward_end_hooks.push_back(std::move(hook));
+}
+
+void AutoContext::run_backward_end_hooks_if_outermost() {
+    if (m_backward_depth != 1U) {
+        return;
+    }
+    for (auto& hook : m_backward_end_hooks) {
+        hook();
+    }
+}
+
+void AutoContext::add_teardown_hook(std::function<void(TeardownReason)> hook) {
+    m_teardown_hooks.push_back(std::move(hook));
+}
+
+void AutoContext::enable_ccl_sub_device(uint32_t num_columns, uint32_t num_rows) {
+    TT_FATAL(!m_ccl_sub_device_id.has_value(), "AutoContext: the CCL sub-device is already enabled");
+    TT_FATAL(
+        m_num_command_queues == 2U,
+        "AutoContext: the CCL sub-device needs the device opened with two command queues (a sub-device is owned by "
+        "the queue that last launched on it, so collectives on the CCL sub-device must come from their own queue)");
+    TT_FATAL(
+        (num_columns > 0U) != (num_rows > 0U),
+        "AutoContext: the CCL sub-device is either the rightmost columns or the bottom rows, got {} columns and {} "
+        "rows",
+        num_columns,
+        num_rows);
+    auto& device = get_device();
+    const auto grid = device.compute_with_storage_grid_size();
+    const uint32_t grid_x = static_cast<uint32_t>(grid.x);
+    const uint32_t grid_y = static_cast<uint32_t>(grid.y);
+    TT_FATAL(num_columns < grid_x && num_rows < grid_y, "AutoContext: CCL sub-device must leave compute cores");
+    // The CCL kernels take (workers + 1 mux) x 2 directions cores per link (no mux core with one worker)
+    // and pick 4, 2 or 1 workers per link by what fits: at 2 links that is 20, 12 or 4 cores, so one 12-core
+    // row of a 12x10 Blackhole grid gives 2 workers per link, a 10-core column 1, two rows or columns 4.
+    const uint32_t compute_x = grid_x - num_columns;
+    const uint32_t compute_y = grid_y - num_rows;
+
+    const std::array<tt::tt_metal::CoreRangeSet, 1> compute_cores{tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(
+        tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{compute_x - 1U, compute_y - 1U}))};
+    const tt::tt_metal::CoreRange ccl_range =
+        num_columns > 0U
+            ? tt::tt_metal::CoreRange(
+                  tt::tt_metal::CoreCoord{compute_x, 0}, tt::tt_metal::CoreCoord{grid_x - 1U, grid_y - 1U})
+            : tt::tt_metal::CoreRange(
+                  tt::tt_metal::CoreCoord{0, compute_y}, tt::tt_metal::CoreCoord{grid_x - 1U, grid_y - 1U});
+    const std::array<tt::tt_metal::CoreRangeSet, 1> ccl_cores{tt::tt_metal::CoreRangeSet(ccl_range)};
+
+    const std::array<tt::tt_metal::SubDevice, 2> sub_devices{
+        tt::tt_metal::SubDevice(ttsl::Span<const tt::tt_metal::CoreRangeSet>(compute_cores)),
+        tt::tt_metal::SubDevice(ttsl::Span<const tt::tt_metal::CoreRangeSet>(ccl_cores))};
+    // local_l1_size 0: keep the single global allocator; the sub-devices only partition execution.
+    const auto manager_id =
+        device.create_sub_device_manager(ttsl::Span<const tt::tt_metal::SubDevice>(sub_devices), /* local_l1_size */ 0);
+    device.load_sub_device_manager(manager_id);
+    // Programs on a mesh command queue must lie inside one sub-device and nearly every op sizes its
+    // core grid from compute_with_storage_grid_size(), so make the device report the compute
+    // rectangle from now on. Leave the default stall group (all sub-devices) so host reads and
+    // synchronizes wait for both.
+    m_full_compute_grid = grid;
+    device.set_compute_with_storage_grid_size_override(tt::tt_metal::CoreCoord{compute_x, compute_y});
+    m_ccl_sub_device_id = tt::tt_metal::SubDeviceId{1};
+}
+
+bool AutoContext::has_ccl_sub_device() const {
+    return m_ccl_sub_device_id.has_value();
+}
+
+std::optional<tt::tt_metal::SubDeviceId> AutoContext::ccl_sub_device_id() const {
+    return m_ccl_sub_device_id;
+}
+
+tt::tt_metal::SubDeviceId AutoContext::compute_sub_device_id() const {
+    return tt::tt_metal::SubDeviceId{0};
+}
+
+tt::tt_metal::CoreCoord AutoContext::full_compute_grid_size() {
+    return m_full_compute_grid.value_or(get_device().compute_with_storage_grid_size());
+}
+
 void AutoContext::open_device(
-    const tt::tt_metal::distributed::MeshShape& mesh_shape, const std::vector<int>& device_ids) {
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    const std::vector<int>& device_ids,
+    size_t num_command_queues) {
     if (m_device) {
         throw std::runtime_error("open_device was called after the device was created.");
     }
+    TT_FATAL(
+        num_command_queues == 1 || num_command_queues == 2,
+        "num_command_queues must be 1 or 2, got {}",
+        num_command_queues);
     m_mesh_shape = mesh_shape;
-    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape, device_ids);
+    m_num_command_queues = num_command_queues;
+    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape, device_ids, num_command_queues);
+}
+
+size_t AutoContext::num_command_queues() const {
+    return m_num_command_queues;
 }
 
 void AutoContext::close_profiler() {
@@ -78,6 +188,17 @@ void AutoContext::close_profiler() {
 }
 
 void AutoContext::close_device() {
+    // Everything bound to this device goes first: state kept across the graph (teardown hooks), then
+    // the collective resources (global semaphores, and a pool per command queue of THIS device).
+    if (m_device) {
+        for (auto& hook : m_teardown_hooks) {
+            hook(TeardownReason::DeviceClose);
+        }
+    }
+    m_ccl_resources = nullptr;
+    m_ccl_sub_device_id = std::nullopt;
+    m_full_compute_grid = std::nullopt;
+    m_num_command_queues = 1;
     m_device = nullptr;
     // Drop the process-global fabric config that open_device_mesh may have
     // installed via enable_fabric(). Without this, fabric stays armed for
