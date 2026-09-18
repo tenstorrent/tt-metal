@@ -51,7 +51,7 @@ void kernel_main() {
     constexpr uint32_t k_partial_col = get_compile_time_arg_val(32);
     // Zigzag remap flag drives the external remap_q_index call on the flat B*NQH*q_num_chunks range.
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(33) == 1;
-    // Windowed K-range narrowing: per-Q-chunk [k_lo, k_hi) arrives from the reader over a ctrl CB.
+    // Windowed narrowing or a mask block map: per-Q-chunk [k_lo, k_hi) arrives from the reader over a ctrl CB.
     constexpr bool use_windowed_narrowing = get_compile_time_arg_val(34) == 1;
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);

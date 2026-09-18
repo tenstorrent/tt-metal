@@ -101,8 +101,10 @@ void kernel_main() {
     constexpr bool use_windowed_narrowing = get_compile_time_arg_val(34) == 1;
     // 2 = causal prefix chains: heavy zigzag chunks of a head take a prefix of K/V from the previous core.
     constexpr bool causal_chain = get_compile_time_arg_val(35) == 2;
+    // Mask block map: one int32 row of block flags per Q chunk; blocks flagged 0 are not read at all.
+    constexpr bool use_mask_block_map = get_compile_time_arg_val(36) == 1;
 
-    constexpr auto q_args = TensorAccessorArgs<36>();
+    constexpr auto q_args = TensorAccessorArgs<37>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -111,6 +113,7 @@ void kernel_main() {
     constexpr auto chunk_start_idx_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
     constexpr auto cu_window_args = TensorAccessorArgs<chunk_start_idx_args.next_compile_time_args_offset()>();
     constexpr auto q_offset_args = TensorAccessorArgs<cu_window_args.next_compile_time_args_offset()>();
+    constexpr auto block_map_args = TensorAccessorArgs<q_offset_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -205,7 +208,11 @@ void kernel_main() {
         cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset_addr = get_arg_val<uint32_t>(argidx++);
+    } else {
+        argidx += 4;
     }
+    const uint32_t block_map_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t block_map_stick_bytes = get_arg_val<uint32_t>(argidx++);
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
     // valid_Skt_bound = min(offset_tiles + valid_Sqt, valid_Skt); cap at valid_Skt for callers that pass
@@ -215,7 +222,7 @@ void kernel_main() {
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = q_offset_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_arg_offset = block_map_args.next_compile_time_args_offset();
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -228,6 +235,7 @@ void kernel_main() {
     // by compute. Valid fallback ids (q_in) when not windowed; only touched behind the constexpr flag.
     constexpr uint32_t cb_id_windowed_cu_reader = get_compile_time_arg_val(cb_arg_offset + 8);
     constexpr uint32_t cb_id_windowed_k_range = get_compile_time_arg_val(cb_arg_offset + 9);
+    constexpr uint32_t cb_id_mask_block_map = get_compile_time_arg_val(cb_arg_offset + 10);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -402,6 +410,42 @@ void kernel_main() {
             const uint32_t q_iter = per_head_q_iter;
             ++per_head_q_iter;
 
+            // Mask block map: fetch this Q chunk's row of block flags and count the blocks to process.
+            // Compute needs at least one chunk per Q chunk, so a fully masked row group runs chunk 0.
+            uint32_t block_map_active = k_num_chunks;
+            uint32_t block_map_first = 0;
+            bool block_map_all_masked = false;
+            volatile tt_l1_ptr uint32_t* block_map = nullptr;
+            if constexpr (use_mask_block_map) {
+                const uint32_t map_row =
+                    ((broadcast_provided_mask_batch ? 0 : nb) * (broadcast_provided_mask_heads ? 1 : NQH) +
+                     (broadcast_provided_mask_heads ? 0 : nq)) *
+                        q_num_chunks +
+                    q_chunk;
+                const uint32_t map_l1 = CircularBuffer(cb_id_mask_block_map).get_write_ptr();
+                noc.async_read(
+                    TensorAccessor(block_map_args, block_map_addr),
+                    CoreLocalMem<uint32_t>(map_l1),
+                    block_map_stick_bytes,
+                    {.page_id = map_row},
+                    {});
+                noc.async_read_barrier();
+                block_map = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(map_l1);
+                block_map_active = 0;
+                block_map_first = k_num_chunks;
+                for (uint32_t k = 0; k < k_num_chunks; ++k) {
+                    if (block_map[k] != 0) {
+                        block_map_first = block_map_first == k_num_chunks ? k : block_map_first;
+                        ++block_map_active;
+                    }
+                }
+                block_map_all_masked = block_map_active == 0;
+                if (block_map_all_masked) {
+                    block_map_active = 1;
+                    block_map_first = 0;
+                }
+            }
+
             // Windowed narrowing: this Q chunk's K-chunk range. Pushed to compute over the ctrl CB
             // BEFORE any blocking CB reserve, so compute learns its bounds even while this reader is
             // parked on cb_k space. The writer self-computes the same range from the same tensor.
@@ -420,6 +464,11 @@ void kernel_main() {
                     tt::constants::TILE_HEIGHT);
                 windowed_k_lo = range.k_lo;
                 windowed_k_hi = range.k_hi;
+            }
+            if constexpr (use_mask_block_map) {
+                windowed_k_hi = block_map_active;
+            }
+            if constexpr (use_windowed_narrowing || use_mask_block_map) {
                 CircularBuffer cb_k_range(cb_id_windowed_k_range);
                 cb_k_range.reserve_back(1);
                 volatile tt_l1_ptr uint32_t* k_range_ptr =
@@ -478,6 +527,7 @@ void kernel_main() {
                 q_high_idx = windowed_k_hi * Sk_chunk_t;
             }
 
+            const uint32_t first_k_chunk = use_mask_block_map ? block_map_first : k_loop_start;
             const uint32_t k_head = nq / q_heads_per_k;
             const uint32_t v_head = nq / q_heads_per_v;
 
@@ -521,6 +571,11 @@ void kernel_main() {
 
             // loop while k_low < q_high
             for (uint32_t k_chunk = k_loop_start; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+                if constexpr (use_mask_block_map) {
+                    if (block_map[k_chunk] == 0 && !(block_map_all_masked && k_chunk == 0)) {
+                        continue;
+                    }
+                }
                 const bool should_forward = k_chunk < fwd_chunks;
                 const bool should_receive = k_chunk < recv_chunks;
                 const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
@@ -713,7 +768,7 @@ void kernel_main() {
                 // (noc_async_read_barrier inside read_q_subblock deadlocks on BH
                 // when NOC writes are in-flight).
                 if constexpr (use_q_subblock_push) {
-                    if (k_chunk == k_loop_start) {
+                    if (k_chunk == first_k_chunk) {
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
                             read_q_subblock<q_tile_bytes>(
                                 q_reader,
