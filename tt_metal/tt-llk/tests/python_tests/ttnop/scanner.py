@@ -73,8 +73,15 @@ def scan(elf: str, mode: str = "sync") -> Scan:
     build_root = (
         Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()) / "tt-llk-build"
     ).resolve()
-    elf_path.relative_to(build_root)
-    safe_elf_name = TTNOP_ELF_NAMES[elf_path.name]
+    if os.environ.get("TTNOP_METAL"):
+        metal_cache = Path(
+            os.environ.get("TT_METAL_CACHE", Path.home() / ".cache" / "tt-metal-cache")
+        ).resolve()
+        elf_path.relative_to(metal_cache)
+        safe_elf_name = SCANNER_ELF_NAME
+    else:
+        elf_path.relative_to(build_root)
+        safe_elf_name = TTNOP_ELF_NAMES[elf_path.name]
     elf = str(elf_path)
     key = (elf, elf_path.stat().st_mtime_ns, mode)
     if key in _cache:

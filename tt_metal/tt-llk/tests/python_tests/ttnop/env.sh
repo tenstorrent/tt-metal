@@ -67,7 +67,12 @@ build_scanner() {
 #   make metal_cave     (once, and again after rebuilding the hw_toolchain target)
 metal_env() {
     export TTNOP_METAL=1
-    export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$LLK_ROOT/../.." && pwd)}"
+    local repo_root
+    repo_root="$(cd "$LLK_ROOT/../.." && pwd)"
+    export TT_METAL_HOME="${TT_METAL_HOME:-$repo_root}"
+    if [[ ! -d "$TT_METAL_HOME/tt_metal" || ! -d "$TT_METAL_HOME/ttnn" ]]; then
+        export TT_METAL_HOME="$repo_root"
+    fi
     local default_sim="$TT_METAL_HOME/../tt-umd-simulators/build/emu-quasar-1x3"
     local simulator="${TT_METAL_SIMULATOR:-${TT_UMD_SIMULATOR_PATH:-}}"
     if [[ "$CHIP_ARCH" == "quasar" || "${ARCH_NAME:-}" == "quasar" || -n "$simulator" ]] \
@@ -104,6 +109,15 @@ metal_env() {
     export TT_METAL_SLOW_DISPATCH_MODE="${TT_METAL_SLOW_DISPATCH_MODE:-1}"
     # The scan reads the post-XIP dump metal writes beside each kernel ELF.
     unset TT_METAL_DISABLE_XIP_DUMP
+
+    # A reservation can expose one chip from a P300 board. Metal classifies that
+    # partial board as CUSTOM and requires an explicit one-chip mesh descriptor.
+    if [[ "$CHIP_ARCH" == "blackhole" && ! -f "${TT_MESH_GRAPH_DESC_PATH:-}" ]]; then
+        local device_nodes=(/dev/tenstorrent/[0-9]*)
+        if [[ ${#device_nodes[@]} -eq 1 && -e "${device_nodes[0]}" ]]; then
+            export TT_MESH_GRAPH_DESC_PATH="$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto"
+        fi
+    fi
 
     # A ttnn test path is written from the repo root, and metal JITs its own
     # kernels on the first launch, so there is no producer pass to consume.
