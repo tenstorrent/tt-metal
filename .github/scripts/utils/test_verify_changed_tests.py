@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+import importlib.util
+import io
 import json
 import subprocess
 import sys
 import textwrap
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -814,45 +817,44 @@ def test_codeowners_team_only_path_yields_no_individuals(repo: Repo):
 
 
 def run_reviews(repo: Repo, reviews: list, head_sha: str = "headsha"):
-    """Invoke the gate with the reviews API stubbed by a local http server."""
-    import http.server, json as _json, threading
+    """Invoke the gate directly with review data stubbed at the API boundary."""
+    spec = importlib.util.spec_from_file_location("gate", SCRIPT)
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
 
-    payload = _json.dumps(reviews).encode()
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def log_message(self, *a):
-            pass
-
-    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    port = server.server_address[1]
-
-    shim = repo.root / "shim.py"
-    shim.write_text(
-        "import runpy, sys, urllib.request\n"
-        "_orig = urllib.request.Request\n"
-        "def _patched(url, *a, **k):\n"
-        f"    return _orig('http://127.0.0.1:{port}/reviews', *a, **k)\n"
-        "urllib.request.Request = _patched\n"
-        f"sys.argv = ['gate', '--base', {repo.base!r}, '--sku-config', '.github/sku_config.yaml',\n"
-        f"            '--review-skus', {DEFAULT_REVIEW_SKUS!r}, '--non-matrix-files', {DEFAULT_NON_MATRIX!r},\n"
-        f"            '--codeowners', '.github/CODEOWNERS', '--unsupported-files', 'sample_vllm_tests.yaml',\n"
-        f"            '--matrix-dir', 'empty', '--repo', 'o/r', '--pr', '1', '--head-sha', {head_sha!r},\n"
-        "            '--output', 'result.json']\n"
-        f"runpy.run_path({str(SCRIPT)!r}, run_name='__main__')\n"
-    )
+    argv = [
+        "--base",
+        repo.base,
+        "--sku-config",
+        ".github/sku_config.yaml",
+        "--review-skus",
+        DEFAULT_REVIEW_SKUS,
+        "--non-matrix-files",
+        DEFAULT_NON_MATRIX,
+        "--codeowners",
+        ".github/CODEOWNERS",
+        "--unsupported-files",
+        "sample_vllm_tests.yaml",
+        "--matrix-dir",
+        "empty",
+        "--repo",
+        "o/r",
+        "--pr",
+        "1",
+        "--head-sha",
+        head_sha,
+        "--output",
+        "result.json",
+    ]
     (repo.root / "empty").mkdir(exist_ok=True)
     (repo.root / "empty/placeholder.json").write_text("[]")
-    result = subprocess.run([sys.executable, str(shim)], cwd=repo.root, capture_output=True, text=True)
-    server.shutdown()
-    return result.returncode, result.stdout, result.stderr
+    stdout, stderr = io.StringIO(), io.StringIO()
+    with pytest.MonkeyPatch.context() as patch, redirect_stdout(stdout), redirect_stderr(stderr):
+        patch.chdir(repo.root)
+        patch.setenv("GITHUB_OUTPUT", str(repo.root / "github-output"))
+        patch.setattr(gate, "fetch_reviews", lambda *_: reviews)
+        code = gate.main(argv)
+    return code, stdout.getvalue(), stderr.getvalue()
 
 
 def test_approval_from_the_files_own_code_owner_satisfies_the_gate(repo: Repo):
@@ -863,6 +865,7 @@ def test_approval_from_the_files_own_code_owner_satisfies_the_gate(repo: Repo):
     )
     assert code == 0, stderr
     assert "approved by: @mtairum" in stdout
+    assert "review-met=true" in (repo.root / "github-output").read_text().splitlines()
 
 
 def test_approval_from_an_unrelated_owner_does_not_satisfy_the_gate(repo: Repo):
@@ -870,16 +873,18 @@ def test_approval_from_an_unrelated_owner_does_not_satisfy_the_gate(repo: Repo):
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
     code, _, stderr = run_reviews(repo, [{"state": "APPROVED", "commit_id": "headsha", "user": {"login": "roseli-TT"}}])
-    assert code == 1
+    assert code == 0, stderr
+    assert "review-met=false" in (repo.root / "github-output").read_text().splitlines()
     assert "@mtairum" in stderr
 
 
-def test_approval_on_a_stale_commit_does_not_count(repo: Repo):
+def test_approval_on_an_earlier_commit_survives_a_push(repo: Repo):
+    """Match the existing policy: main does not dismiss approvals on a push."""
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
     code, _, stderr = run_reviews(repo, [{"state": "APPROVED", "commit_id": "oldsha", "user": {"login": "mtairum"}}])
-    assert code == 1
-    assert "approving review on headsha" in stderr
+    assert code == 0, stderr
+    assert "review-met=true" in (repo.root / "github-output").read_text().splitlines()
 
 
 def test_team_owned_path_falls_back_to_any_approval(repo: Repo):
@@ -890,13 +895,15 @@ def test_team_owned_path_falls_back_to_any_approval(repo: Repo):
     )
     assert code == 0, stderr
     assert "falling back to the normal CODEOWNERS review requirement" in stdout
+    assert "review-met=true" in (repo.root / "github-output").read_text().splitlines()
 
 
 def test_team_owned_path_with_no_approval_still_blocks(repo: Repo):
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_team_tests.yaml", BASE_GALAXY_YAML)
     code, _, stderr = run_reviews(repo, [])
-    assert code == 1
+    assert code == 0, stderr
+    assert "review-met=false" in (repo.root / "github-output").read_text().splitlines()
     assert "a code owner" in stderr
 
 
@@ -908,7 +915,8 @@ def test_unsupported_yaml_is_blocked_not_skipped(repo: Repo):
     repo.write(".github/CODEOWNERS", CODEOWNERS)
     repo.write("tests/pipeline_reorg/sample_vllm_tests.yaml", BASE_GALAXY_YAML.replace("wh_galaxy", "bh_p150"))
     code, _, stderr = run_reviews(repo, [])
-    assert code == 1
+    assert code == 0, stderr
+    assert "review-met=false" in (repo.root / "github-output").read_text().splitlines()
     assert "sample_vllm_tests.yaml" in stderr
 
 

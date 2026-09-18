@@ -302,6 +302,14 @@ class TtPrefillBlock(LightweightModule):
             f"({'MoE' if self.is_moe else 'dense'}, kv_only={kv_only})"
         )
 
+        # Eager execution and trace capture select the same norm operator.
+        use_fused_rmsnorm = (
+            getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False)
+            and is_blackhole()
+            and is_chunked
+            and TtDistributedRmsNorm.supports_fused_prefill(mesh_device, emb_dim, tp_axis, seq_len)
+        )
+
         # --- Attention norm ---
         use_glm52_l1_attn_norm = (
             is_blackhole()
@@ -321,6 +329,7 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            use_fused=use_fused_rmsnorm,
             output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm52_l1_attn_norm else None,
         )
 
@@ -366,6 +375,7 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
+            use_fused=use_fused_rmsnorm,
         )
 
         # --- FFN (MoE or dense) ---
