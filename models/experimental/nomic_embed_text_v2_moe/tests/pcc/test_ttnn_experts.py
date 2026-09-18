@@ -28,7 +28,7 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
     to_block_layout,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import flatten_tokens, to_device
-from models.experimental.nomic_embed_text_v2_moe.tt.experts import TtNomicExperts
+from models.experimental.nomic_embed_text_v2_moe.tt.experts import MAX_TILE_ROWS_PER_CORE, TtNomicExperts
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
@@ -94,6 +94,51 @@ def test_the_expert_reduce_covers_every_token(device, config, reference, tt_expe
     assert got.shape == ref.shape
     # No all-zero token rows: a token dropped by a bad slice would leave one behind.
     assert (got.abs().sum(dim=-1) > 0).all()
+
+
+def test_the_pass_size_keeps_one_output_tile_row_per_core(device, tt_config, tt_experts):
+    """The derived pass size has to hold per_core_M at 1, which is what avoids the matmul hang.
+
+    ttnn.matmul deadlocks on this module's broadcast-batch operands once per_core_M steps to 2;
+    see the constant in tt/experts.py for the mechanism and the measured 110/111 tile boundary.
+    A regression here is a hung board rather than a failed assert, so the derivation is pinned
+    directly instead of being probed.
+    """
+    cores = tt_config.core_grid.x * tt_config.core_grid.y
+
+    assert tt_experts.max_tokens_per_pass == cores * ttnn.TILE_SIZE
+    assert MAX_TILE_ROWS_PER_CORE == 1
+
+
+@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
+def test_chunking_the_token_axis_does_not_change_the_answer(device, config, reference, tt_experts, batch, seqlen):
+    """Splitting the token axis has to be exact, not merely close.
+
+    Every pass runs the same weights over a disjoint slice of tokens, and the shared bias is
+    added once to the assembled result, so the split is arithmetically a no-op. Forcing a small
+    pass size on a shape that would otherwise fit in one is the only way to compare the two
+    paths on the same input: the shapes that chunk for real cannot be run unchunked, because
+    that is precisely the geometry that hangs.
+
+    Asserted bit-exact. The tile-aligned sizes and the ones that are not are both covered, and
+    the smallest forces a pass boundary inside a sequence.
+    """
+    tokens = batch * seqlen
+    x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device))
+    dense = to_device(
+        dense_routing(tokens, config.num_experts, config.moe_top_k).reshape(1, 1, tokens, config.num_experts), device
+    )
+
+    whole = ttnn.to_torch(tt_experts(x, dense)).float()
+
+    for pass_size in (tokens, tokens // 2 + 1, 64, 30):
+        tt_experts.max_tokens_per_pass = pass_size
+        chunked = ttnn.to_torch(tt_experts(x, dense)).float()
+        assert chunked.shape == whole.shape, f"pass size {pass_size} changed the shape"
+        assert torch.equal(chunked, whole), (
+            f"pass size {pass_size} ({-(-tokens // pass_size)} passes) changed the result: "
+            f"max abs {float((chunked - whole).abs().max()):.3e}"
+        )
 
 
 def test_shared_bias_is_added_after_the_weighted_sum(device, config, tt_config, state_dict, reference):

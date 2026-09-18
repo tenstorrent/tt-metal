@@ -149,6 +149,37 @@ def test_last_hidden_state(config, reference_model, tt_model, batch, seqlen):
     assert_with_pcc(ref, got, MODEL_PCC)
 
 
+# B*S over one output block row per core hangs ttnn's broadcast-batch matmul unless the expert
+# bank splits the token axis; see the constant in tt/experts.py. 3584 is the smallest shape that
+# crosses it, 4096 is the one the hang was reported at, and both are one test rather than an
+# addition to MODEL_SHAPES, which several parametrized tests multiply over.
+CHUNKING_SHAPES = [(7, 512), (8, 512)]
+
+
+@pytest.mark.parametrize("batch, seqlen", CHUNKING_SHAPES)
+def test_a_batch_that_chunks_the_expert_token_axis(config, reference_model, tt_model, batch, seqlen):
+    """Shapes past the expert bank's pass limit, which used to hang rather than fail.
+
+    Asserted on the same gates as the shapes that fit in one pass, since splitting the token
+    axis is arithmetically a no-op; test_chunking_the_token_axis_does_not_change_the_answer holds
+    it bit-exact at module level. This test is here for the shape, so a regression in the pass
+    limit is caught end to end.
+    """
+    input_ids, attention_mask = random_input_ids(batch, seqlen, config, seed=0)
+
+    got = (
+        ttnn.to_torch(pooled_embedding(tt_model, input_ids, attention_mask)).float().reshape(batch, config.hidden_size)
+    )
+
+    with torch.no_grad():
+        ref_hidden = reference_model(input_ids, attention_mask=attention_mask)
+    ref = l2_normalize(mean_pool(ref_hidden, attention_mask))
+    cosine = (got * ref).sum(-1)
+
+    assert torch.allclose(got.norm(dim=-1), torch.ones(batch), atol=1e-2), "output is not unit norm"
+    assert bool((cosine > 1.0 - COSINE_TOLERANCE).all()), f"worst row cosine {float(cosine.min()):.6f}"
+
+
 @pytest.mark.parametrize("batch, seqlen", MODEL_SHAPES)
 @pytest.mark.parametrize("pad_lengths", [None, "ragged"])
 @pytest.mark.parametrize("seed", [0, 1, 2, 3])
