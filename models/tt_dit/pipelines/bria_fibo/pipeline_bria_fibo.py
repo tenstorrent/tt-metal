@@ -373,7 +373,7 @@ class BriaFiboPipeline:
             sigmas=np.linspace(1.0, 1 / num_inference_steps, num_inference_steps),
             mu=_calculate_shift(spatial_sequence_length, self._scheduler),
         )
-        self._solver.set_schedule(self._scheduler.sigmas.tolist())
+        self._solver.set_schedule(sigmas=self._scheduler.sigmas.tolist())
         timesteps = self._scheduler.timesteps
 
         # Latents (no 2x2 pack): (1, 48, h, w) -> (1, h*w, 48), sequence-sharded on sp.
