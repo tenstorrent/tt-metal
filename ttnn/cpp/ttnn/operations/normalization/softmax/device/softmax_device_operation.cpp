@@ -184,6 +184,20 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
             tensors_args.input_tensor.dtype() == DataType::BFLOAT8_B,
         "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: {}",
         tensors_args.input_tensor.dtype());
+
+    // subblock_w == 0 reaches `block_w % subblock_w` in the mask branch below and `block_w /
+    // subblock_w` in the program factory, so the zero check runs here, ahead of every divisibility
+    // check and of both branches. The Dest-capacity half of the same bound needs the compute
+    // config and stays with the other sharded checks further down.
+    std::visit(
+        [&](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
+                TT_FATAL(program_config.subblock_w > 0, "subblock_w must be greater than 0.");
+            }
+        },
+        attributes.program_config);
+
     if (tensors_args.mask.has_value()) {
         const auto& mask = tensors_args.mask.value();
         TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
@@ -326,6 +340,20 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
                     shard_shape[0],
                     shard_shape[1],
                     tensors_args.input_tensor.tensor_spec().tile().get_width());
+
+                // The sharded compute kernel keeps subblock_w tiles live in Dest at once, so a
+                // subblock_w above the Dest capacity silently returns wrong results. The capacity
+                // depends on the compute config, hence get_dest_reg_count rather than a constant.
+                const uint32_t dest_tile_capacity = ttnn::get_dest_reg_count(
+                    attributes.compute_kernel_config, tensors_args.input_tensor.tensor_spec().tile().get_tile_shape());
+                TT_FATAL(
+                    program_config.subblock_w <= dest_tile_capacity,
+                    "subblock_w ({}) must be at most the Dest capacity of {} tiles for this compute config "
+                    "(fp32_dest_acc_en={}, dst_full_sync_en={}).",
+                    program_config.subblock_w,
+                    dest_tile_capacity,
+                    attributes.compute_kernel_config.fp32_dest_acc_en,
+                    attributes.compute_kernel_config.dst_full_sync_en);
 
                 const auto& a = tensors_args.input_tensor;
                 if (a.is_sharded()) {
