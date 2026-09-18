@@ -146,6 +146,15 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
             std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor),
         preparation);
 
+    const std::size_t cache_entries_before_failure = this->device_->num_program_cache_entries();
+    ProgramDescriptor oversized_program_descriptor = program_descriptor;
+    oversized_program_descriptor.kernels.front().common_runtime_args.resize(1 << 20);
+    EXPECT_THROW(
+        ttnn::experimental::prepare_generic_op(
+            std::vector<Tensor>{device_input_tensor, device_output_tensor}, oversized_program_descriptor),
+        std::exception);
+    EXPECT_EQ(this->device_->num_program_cache_entries(), cache_entries_before_failure);
+
     ttnn::generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
     Tensor output_tensor = device_output_tensor.cpu();
     auto allclose = ttnn::allclose<uint32_t>(golden, output_tensor);
