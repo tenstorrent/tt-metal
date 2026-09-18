@@ -149,6 +149,9 @@ grid_12_10_configs = {
     # "plain", 12x10). M = 8192 is the CFG pair flattened (fused Ring-TP path); M = 4096 is one CFG
     # branch (legacy path, batch 2 on dim 1). The default 8x8x8 blocking ran these at ~30% util.
     (8192, 2432, 2432): (11, 4, 4, (1, 4)),  # ff1 on gathered input: 438.9 us (default 8x8x8 ~1046 us)
+    # SD3.5 VAE mid-block attention (spatial-parallel decoder, 16384 tokens x 512 ch), swept 2026-09-17
+    (16384, 512, 1536): (16, 4, 5, (4, 1)),  # fused QKV: 290.5 us
+    (16384, 512, 512): (16, 8, 4, (2, 2)),  # out projection: 129.3 us
     (8192, 2432, 1920): (11, 4, 10, (1, 2)),  # to_qkv on gathered input: 355.6 us (default ~483 us)
     (8192, 2560, 608): (12, 8, 2, (2, 2)),  # to_out on gathered input: 171.0 us
     (4096, 2432, 2432): (11, 4, 4, (1, 4)),  # ff1 / ff2 matmul per CFG branch: 225.0 us

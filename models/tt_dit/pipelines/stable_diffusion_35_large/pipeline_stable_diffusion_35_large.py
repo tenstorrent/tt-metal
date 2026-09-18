@@ -19,6 +19,7 @@ import ttnn
 # NOTE: SD35Transformer is the new tt-dit implementation
 from models.tt_dit.models.transformers.transformer_sd35 import SD35Checkpoint
 from models.tt_dit.models.vae.vae_sd35 import VAEDecoderAdapter
+from models.tt_dit.models.vae.vae_sd35_spatial import SD35SpatialVaeAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, distribute_cfg
@@ -67,6 +68,11 @@ class StableDiffusion3PipelineConfig:
     max_t5_sequence_length: int
 
     checkpoint_name: str
+    # Spatial-parallel VAE decoder on the shared VAE library (vae_sd35_spatial.py): the image is split
+    # across the VAE submesh by width/height with halo exchange, unpatchify and uint8 conversion run on
+    # device, and the decode traces. Off: the channel-TP decoder on the reshaped 1x4 mesh.
+    vae_spatial: bool = False
+    vae_use_conv3d: bool = True
 
     @classmethod
     def default(
@@ -84,6 +90,8 @@ class StableDiffusion3PipelineConfig:
         cfg_enabled: bool = True,
         max_t5_sequence_length: int = 256,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        vae_spatial: bool = False,
+        vae_use_conv3d: bool = True,
     ) -> StableDiffusion3PipelineConfig:
         preset = _PRESETS.get(tuple(mesh_shape), {})
 
@@ -118,6 +126,8 @@ class StableDiffusion3PipelineConfig:
             cfg_enabled=cfg_enabled,
             max_t5_sequence_length=max_t5_sequence_length,
             checkpoint_name=checkpoint_name,
+            vae_spatial=vae_spatial,
+            vae_use_conv3d=vae_use_conv3d,
         )
 
 
@@ -224,13 +234,27 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
                 max_t5_sequence_length=config.max_t5_sequence_length,
             )
 
-            logger.info("creating VAE decoder...")
-            self._vae = VAEDecoderAdapter(
+            if not config.vae_spatial:
+                logger.info("creating VAE decoder...")
+                self._vae = VAEDecoderAdapter(
+                    checkpoint_name=checkpoint_name,
+                    parallel_config=self.vae_parallel_config,
+                    ccl_manager=self.ccl_managers[vae_submesh_idx],
+                    use_torch=False,
+                )
+
+        self._vae_spatial = config.vae_spatial
+        if config.vae_spatial:
+            # Built on the VAE submesh's native shape (no 1x4 reshape); the spatial split follows the
+            # mesh axes with more than one device.
+            logger.info("creating spatial-parallel VAE decoder...")
+            self._vae = SD35SpatialVaeAdapter(
                 checkpoint_name=checkpoint_name,
-                parallel_config=self.vae_parallel_config,
+                mesh_device=vae_device,
                 ccl_manager=self.ccl_managers[vae_submesh_idx],
-                use_torch=False,
+                use_conv3d=config.vae_use_conv3d,
             )
+            logger.info(f"spatial VAE parallel config: {self._vae.parallel_config}")
 
         ttnn.synchronize_device(self.encoder_device)
 
@@ -403,6 +427,15 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         tt_latents = self.ccl_managers[self.vae_submesh_idx].all_gather_persistent_buffer(
             tt_latents, dim=2, mesh_axis=self.dit_parallel_config.sequence_parallel.mesh_axis
         )
+
+        if self._vae_spatial:
+            images_u8 = self._vae.decode_device(
+                tt_latents,
+                height=self._height // _VAE_SCALE_FACTOR,
+                width=self._width // _VAE_SCALE_FACTOR,
+                traced=traced,
+            )
+            return [Image.fromarray(image.numpy()) for image in images_u8]
 
         torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
         torch_latents = self.transformers[0].unpatchify(

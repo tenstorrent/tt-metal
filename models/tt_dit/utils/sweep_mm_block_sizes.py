@@ -481,6 +481,10 @@ SHAPES = [
     # blocking in the model: M = 8192 (fused path, CFG pair flattened) and M = 4096 (legacy path,
     # batch 2 on dim 1 so the op sees 4096 rows per batch).
     (8192, 2432, 2432, 12, 10, False, "plain"),  # ff1 on the gathered input
+    # SD3.5 VAE mid-block attention on the shared spatial-parallel decoder (no TP): fused QKV and
+    # out projection over the 128x128 latent grid (16384 tokens), 512 channels.
+    (16384, 512, 1536, 12, 10, False, "plain"),
+    (16384, 512, 512, 12, 10, False, "plain"),
     (8192, 2432, 1920, 12, 10, False, "plain"),  # to_qkv on the gathered input
     (8192, 2560, 608, 12, 10, False, "plain"),  # to_out on the gathered input
     (4096, 2432, 2432, 12, 10, False, "plain"),  # ff1 (legacy, per batch) / ff2 matmul
