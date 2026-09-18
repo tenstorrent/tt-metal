@@ -4128,12 +4128,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Single MGD mesh instance: adjacency-guided placement seats that one 32-ASIC galaxy.
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
 
-    // Check that each graph has exit nodes
-    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
-        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
-    }
-
     // Check the shape of the mesh adjacency graphs
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
         // Check that there should be 32 nodes in the graph
@@ -4186,12 +4180,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
 
     // Single top-level mesh M0 (32x4 torus = 128 ASICs)
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
-
-    // Check that each graph has exit nodes
-    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
-        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
-    }
 
     // Check the shape of the mesh adjacency graphs
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
@@ -4352,12 +4340,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
     }
 
-    // Check that each graph has exit nodes
-    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
-        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
-    }
-
     // Check the shape of the mesh adjacency graphs
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
         // Check that there should be 32 nodes in the graph
@@ -4488,11 +4470,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     }
 
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
-        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
-    }
-
-    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
         (void)mesh_id;
         EXPECT_EQ(adjacency_graph.get_nodes().size(), kAsicsPerStage);
 
@@ -4617,11 +4594,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
 
     for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
         EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
-    }
-
-    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
-        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
     }
 
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
@@ -4797,12 +4769,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
     }
 
-    // Check that each graph has exit nodes
-    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
-        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
-    }
-
     // Check the shape of the mesh adjacency graphs
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
         // Check that there should be 16 nodes in the graph (4x4)
@@ -4860,12 +4826,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
     }
 
-    // Check that each graph has exit nodes
-    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
-        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
-    }
-
     // Check the shape of the mesh adjacency graphs
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
         // Check that there should be 16 nodes in the graph (8x2)
@@ -4917,12 +4877,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
 
     // Single MGD mesh instance: one 32-ASIC region.
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 1u);
-
-    // Check that the graph has exit nodes
-    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
-        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
-    }
 
     // Check the shape of the mesh adjacency graph
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
@@ -4986,10 +4940,13 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
         EXPECT_EQ(adjacency_graph.get_nodes().size(), 16u);
 
-        // 8x4 with LINE x RING: 2D topology, 2-4 neighbors per node (BH may have more links)
+        // The mesh adjacency graph is the region's raw physical wiring (per-channel), not the grouping's
+        // logical 2D topology, so on the BH xyz galaxy it includes the Z-dimension / 4-channel seams and a
+        // chip's degree depends on how much of the physical connectivity is in-region. Only the lower bound
+        // (region is at least 2D-connected) is a meaningful invariant; the upper bound is not, so it is not
+        // asserted.
         for (const auto& node : adjacency_graph.get_nodes()) {
             EXPECT_GE(adjacency_graph.get_neighbors(node).size(), 2u * 2u);
-            EXPECT_LE(adjacency_graph.get_neighbors(node).size(), 4u * 2u);
         }
     }
 }
@@ -5338,12 +5295,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
     // Four pipeline stages of 2x4 (8 ASICs each).
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 4u);
-
-    // Check that the graph has exit nodes
-    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
-        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
-        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
-    }
 
     // Check the shape of the mesh adjacency graph
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {

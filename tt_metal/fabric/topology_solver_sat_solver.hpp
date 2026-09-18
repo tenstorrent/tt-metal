@@ -59,6 +59,19 @@ private:
 // At-most-one on listed positive literals: pairwise for small n, else Sinz sequential encoding.
 void topology_sat_add_at_most_one(TopologySatSolver& solver, const std::vector<int>& lits);
 
+// Generic occupancy indicators, shared by the inter-mesh host-group cap and the master placement's
+// per-host packing. `group_member_lits[g][m]` is the list of literals whose disjunction means member m of
+// group g is used. For each non-empty group this appends one occupancy literal `occ` to `occ_out` with
+// occ <=> OR(member used); when `all_or_nothing` is set it also forces occ => every reachable member used
+// (a used group is FULLY used -- the "fill every host" packing constraint). Asserting clauses are guarded
+// by `extra_lit` (0 = unguarded), so a caller can assume(extra_lit) and retract it to make it optional.
+void topology_sat_build_occupancy_indicators(
+    TopologySatSolver& solver,
+    const std::vector<std::vector<std::vector<int>>>& group_member_lits,
+    bool all_or_nothing,
+    std::vector<int>& occ_out,
+    int extra_lit = 0);
+
 bool topology_sat_encode_hard_constraints(
     TopologySatSolver& solver,
     const TopologySatGraphView& graph_data,

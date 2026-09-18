@@ -271,7 +271,7 @@ public:
      * @brief Add explicit forbidden constraint (one-to-one)
      *
      * Forbids a specific target node from mapping to a specific global node.
-     * Removes the mapping from valid mappings.
+     * Validates the result on a trial copy first; on failure this object is unchanged.
      *
      * @param target_node The target node to constrain
      * @param global_node The global node it cannot map to
@@ -564,6 +564,9 @@ private:
 
     // Helper to intersect two sets
     static std::set<GlobalNode> intersect_sets(const std::set<GlobalNode>& set1, const std::set<GlobalNode>& set2);
+
+    // Apply a trial copy, validate it, and only then replace *this. On failure *this is untouched.
+    bool commit_trial(MappingConstraints&& trial);
 
     // Validate that all cardinality constraints are compatible with required constraints
     // and that they are satisfiable together
@@ -1055,6 +1058,9 @@ public:
         std::string* error_out = nullptr);
     bool next(std::vector<int>& mapping_out);
     bool block(const std::vector<int>& mapping);
+    bool refresh_constraints(const TopologySatConstraintView& constraint_data);
+    int assignment_lit(size_t target_idx, size_t global_idx) const;
+    bool add_unit(int lit);
     size_t solve_calls() const noexcept;
 
 private:
@@ -1297,6 +1303,13 @@ public:
 
     virtual bool block(const std::vector<int>& mapping) = 0;
 
+    /**
+     * Re-read the ConstraintIndexData from start(). Session updates that object in place, then
+     * calls this with no arguments. SAT adds units for the new domains; DFS already reads through
+     * the same pointer.
+     */
+    virtual bool refresh_constraints() = 0;
+
     virtual const TopologySearchState& get_state() const = 0;
 
     /**
@@ -1348,8 +1361,9 @@ public:
     /**
      * @brief Incremental DFS session: same start / next / block shape as SatSearchEngine.
      *
-     * start() snapshots graph/constraint pointers (must outlive next()/block()). next() yields one
-     * complete mapping. block() excludes a mapping from later next() calls.
+     * start() snapshots graph/constraint pointers (must outlive next()/block()).
+     * refresh_constraints() re-reads the same ConstraintIndexData after the session updates it
+     * in place. next() yields one complete mapping. block() excludes a mapping from later next() calls.
      */
     bool start(
         const GraphIndexData<TargetNode, GlobalNode>& graph_data,
@@ -1362,6 +1376,8 @@ public:
     bool next(std::vector<int>& mapping_out) override;
 
     bool block(const std::vector<int>& mapping) override;
+
+    bool refresh_constraints() override;
 
     const TopologySearchState& get_state() const override { return state_; }
 
@@ -1423,8 +1439,9 @@ private:
 /**
  * @brief SAT (CaDiCaL) search engine: one incremental session.
  *
- * start() encodes once. next() solves, decodes, and blocks that model so the following next()
- * yields a different mapping. unique_shapes / forbidden keys belong on start(), not on a one-shot search.
+ * start() encodes once and keeps the ConstraintIndexData pointer. refresh_constraints() re-reads
+ * that same object and adds units. next() solves, decodes, and blocks that model so the following
+ * next() yields a different mapping. unique_shapes / forbidden keys belong on start().
  */
 template <typename TargetNode, typename GlobalNode>
 class SatSearchEngine : public TopologySearchEngine<TargetNode, GlobalNode> {
@@ -1441,6 +1458,8 @@ public:
 
     bool block(const std::vector<int>& mapping) override;
 
+    bool refresh_constraints() override;
+
     const TopologySearchState& get_state() const override { return state_; }
 
 private:
@@ -1453,6 +1472,7 @@ private:
     size_t n_target_ = 0;
     size_t n_global_ = 0;
     size_t max_same_rank_groups_used_ = 0;
+    const ConstraintIndexData<TargetNode, GlobalNode>* constraint_data_ = nullptr;
     SatSearchBackend backend_;
 
     bool fail(std::string message);
@@ -1552,35 +1572,50 @@ struct MappingValidator {
 }  // namespace detail
 
 /**
- * @brief Incremental enumeration: each next() finds one mapping not listed in excluded_mappings.
+ * @brief Incremental enumeration session: the constructor snapshots the problem, next() yields one mapping.
  *
- * Holds one TopologySearchEngine (SAT or DFS) for a fixed graph/constraints/engine context.
- * Constructs the concrete engine once; each next() is start/block/next on that parent interface.
+ * Graphs, constraints, validation mode, solver engine, and unique_shapes are constructor-only.
+ * Changing them means destroy this session and construct a new one. next() does not take those
+ * arguments and does not silently restart. The type is immovable: DFS holds pointers into this
+ * object's snapshots, so a move would dangle. Hold it in unique_ptr when it must be replaced.
+ *
+ * After construction, add_forbidden_constraint / add_required_constraint update the owned
+ * MappingConstraints snapshot, rebuild the constraint index in place, and tell the engine to
+ * refresh. exclude_mapping(s) block now. quiet_mode is live via set_quiet_mode.
  */
 template <typename TargetNode, typename GlobalNode>
 class TopologyMappingEnumerationSession {
 public:
     TopologyMappingEnumerationSession() = default;
-    TopologyMappingEnumerationSession(const TopologyMappingEnumerationSession&) = delete;
-    TopologyMappingEnumerationSession& operator=(const TopologyMappingEnumerationSession&) = delete;
-    TopologyMappingEnumerationSession(TopologyMappingEnumerationSession&&) noexcept = default;
-    TopologyMappingEnumerationSession& operator=(TopologyMappingEnumerationSession&&) noexcept = default;
-    ~TopologyMappingEnumerationSession();
-
-    void reset() noexcept;
-
-    /**
-     * @brief Find the next mapping not listed in excluded_mappings.
-     */
-    MappingResult<TargetNode, GlobalNode> next(
+    TopologyMappingEnumerationSession(
         const AdjacencyGraph<TargetNode>& target_graph,
         const AdjacencyGraph<GlobalNode>& global_graph,
         const MappingConstraints<TargetNode, GlobalNode>& constraints,
-        const std::vector<std::map<TargetNode, GlobalNode>>& excluded_mappings,
         ConnectionValidationMode connection_validation_mode = ConnectionValidationMode::RELAXED,
         bool quiet_mode = false,
         TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto,
         bool unique_shapes = false);
+    TopologyMappingEnumerationSession(const TopologyMappingEnumerationSession&) = delete;
+    TopologyMappingEnumerationSession& operator=(const TopologyMappingEnumerationSession&) = delete;
+    TopologyMappingEnumerationSession(TopologyMappingEnumerationSession&&) = delete;
+    TopologyMappingEnumerationSession& operator=(TopologyMappingEnumerationSession&&) = delete;
+    ~TopologyMappingEnumerationSession();
+
+    bool started() const noexcept { return ready_; }
+
+    void set_quiet_mode(bool quiet_mode);
+
+    bool add_forbidden_constraint(TargetNode target, GlobalNode global);
+    bool add_forbidden_constraint(TargetNode target, const std::set<GlobalNode>& globals);
+    bool add_forbidden_constraint(const std::set<TargetNode>& targets, GlobalNode global);
+    bool add_forbidden_constraint(const std::set<TargetNode>& targets, const std::set<GlobalNode>& globals);
+    bool add_required_constraint(TargetNode target, GlobalNode global);
+    bool add_required_constraint(TargetNode target, const std::set<GlobalNode>& globals);
+
+    bool exclude_mappings(const std::vector<std::map<TargetNode, GlobalNode>>& additional_excluded);
+    bool exclude_mapping(const std::map<TargetNode, GlobalNode>& mapping);
+
+    MappingResult<TargetNode, GlobalNode> next();
 
     size_t sat_solve_calls() const noexcept { return sat_solve_calls_; }
 
@@ -1592,16 +1627,21 @@ private:
     bool quiet_{false};
     bool unique_shapes_{false};
     bool use_sat_{false};
-    size_t sat_exclusions_encoded_{0};
     size_t sat_solve_calls_{0};
     size_t sat_hard_constraint_encode_calls_{0};
     AdjacencyGraph<TargetNode> snap_target_{};
     AdjacencyGraph<GlobalNode> snap_global_{};
+    MappingConstraints<TargetNode, GlobalNode> snap_constraints_{};
     TopologyMappingSolverEngine engine_{TopologyMappingSolverEngine::Auto};
     ConnectionValidationMode mode_{ConnectionValidationMode::RELAXED};
+    std::string start_error_;
     std::optional<detail::GraphIndexData<TargetNode, GlobalNode>> graph_data_;
     std::optional<detail::ConstraintIndexData<TargetNode, GlobalNode>> constraint_data_;
     std::unique_ptr<detail::TopologySearchEngine<TargetNode, GlobalNode>> search_engine_;
+
+    void reset() noexcept;
+    bool refresh_constraints();
+    std::vector<int> to_index_mapping(const std::map<TargetNode, GlobalNode>& node_map) const;
 };
 
 }  // namespace tt::tt_fabric
