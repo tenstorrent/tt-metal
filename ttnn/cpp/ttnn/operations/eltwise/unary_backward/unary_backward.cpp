@@ -463,18 +463,23 @@ std::vector<Tensor> tan_bw(
     return grad_tensor;
 }
 
-// grad(sigmoid) = grad*(1 - sigmoid(x))*sigmoid(x)
+// grad(sigmoid) = grad * sigmoid(x) * sigmoid(-x)
 std::vector<Tensor> sigmoid_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
-    Tensor sig_result = ttnn::sigmoid(
+    Tensor sig_pos = ttnn::sigmoid(
         input,
         (int)ttnn::operations::unary::VecMode::RC,
         ttnn::operations::unary::SigmoidMode::ACCURATE,
         output_mem_config);
-    Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, std::nullopt, output_mem_config);
-    Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
+    Tensor neg_input = ttnn::neg(input, output_mem_config);
+    Tensor sig_neg = ttnn::sigmoid(
+        neg_input,
+        (int)ttnn::operations::unary::VecMode::RC,
+        ttnn::operations::unary::SigmoidMode::ACCURATE,
+        output_mem_config);
+    Tensor prod_term_1 = ttnn::multiply(sig_pos, sig_neg, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config));
     return grad_tensor;
 }
