@@ -4,6 +4,8 @@
 
 #include "all_gather_unicast_factory.hpp"
 
+#include <mutex>
+
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -50,10 +52,16 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
     bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
     auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
     if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
-        log_warning(
-            tt::LogOp,
-            "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
-            "allocations. Configure an L1_SMALL region to mitigate this.");
+        // Once per process: the same op runs repeatedly inside per-step model loops, and the
+        // L1_SMALL/L1 choice doesn't change across those calls.
+        static std::once_flag l1_fallback_warned;
+        std::call_once(l1_fallback_warned, [] {
+            log_warning(
+                tt::LogOp,
+                "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
+                "allocations. Configure an L1_SMALL region to mitigate this. This warning is emitted once "
+                "per process.");
+        });
     }
     auto barrier_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
