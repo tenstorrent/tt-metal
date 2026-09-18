@@ -12,6 +12,7 @@
 #include <limits>
 #include <string>
 #include <type_traits>
+#include <unordered_set>
 
 #include "impl/context/metal_context.hpp"
 #include "jit_build/jit_build_options.hpp"
@@ -2602,13 +2603,26 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
             continue;
         }
 
+        // The alias group is placed as one unit: the address must clear every member's cores, and
+        // the region must be reserved on every member's cores. When all members cover the same
+        // nodes this is exactly the primary's own core set; when they cover disjoint nodes (a
+        // multicast sender mirroring the receivers' slot offset on a node the receivers' DFB does
+        // not reach) the union is what keeps a later DFB off the secondary's region.
+        std::vector<CoreRange> group_ranges(dfb->core_ranges.ranges().begin(), dfb->core_ranges.ranges().end());
+        CoreRangeSet group_core_ranges = dfb->core_ranges;
+        for (uint32_t sec_id : dfb->alias_secondary_ids) {
+            const auto& sec = this->dataflow_buffers_[sec_id];
+            group_ranges.insert(group_ranges.end(), sec->core_ranges.ranges().begin(), sec->core_ranges.ranges().end());
+            group_core_ranges = group_core_ranges.merge(sec->core_ranges);
+        }
+
         uint32_t alloc_addr;
         if (dfb->borrows_memory()) {
             // Use the address latched by set_borrowed_memory_base_addr()
             alloc_addr = dfb->borrowed_addr_;
         } else {
-            uint64_t computed_addr = reserve_program_local_l1(device, dfb->core_ranges);
-            for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
+            uint64_t computed_addr = reserve_program_local_l1(device, group_core_ranges);
+            for (const CoreRange& core_range : group_ranges) {
                 // Need the max available address across all cores dataflow buffer is placed on
                 for (const CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
                     if (dfb_allocator.core_range == core_range) {
@@ -2618,9 +2632,18 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
                 }
             }
             computed_addr = align(computed_addr, device->allocator()->get_alignment(BufferType::DRAM));
-            for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
-                for (CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
+            // At most one mark per allocator. mark_address appends to the allocator's last L1 region,
+            // so an allocator whose core range intersects more than one of the group's ranges (any
+            // allocator spanning the union -- e.g. one created for a DFB placed on all of them) would
+            // otherwise reserve the region once per range it touches.
+            std::unordered_set<size_t> marked_allocators;
+            for (const CoreRange& core_range : group_ranges) {
+                for (size_t ai = 0; ai < this->dfb_allocators_.size(); ++ai) {
+                    CircularBufferAllocator& dfb_allocator = this->dfb_allocators_[ai];
                     if (dfb_allocator.core_range.intersects(core_range)) {
+                        if (marked_allocators.contains(ai)) {
+                            continue;
+                        }
                         if (dfb_allocator.core_range != core_range and
                             computed_addr < dfb_allocator.get_cb_region_end()) {
                             // Intersecting core range has already been marked to have allocation at this address. This
@@ -2631,6 +2654,7 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
                         const uint64_t allocator_base =
                             reserve_program_local_l1(device, CoreRangeSet(dfb_allocator.core_range));
                         dfb_allocator.mark_address(computed_addr, dfb->total_size(), allocator_base);
+                        marked_allocators.insert(ai);
                     }
                 }
             }

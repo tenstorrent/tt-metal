@@ -1706,16 +1706,49 @@ void ValidateProgramSpec(
                     total_size_a,
                     total_size_b);
 
-                // Rule 3: same node coverage.
+                // Rule 3: node coverage must be either identical or fully disjoint.
+                //
+                // Identical coverage is the memory-reuse case: the members are two views of one L1
+                // region on the same nodes.
+                //
+                // Disjoint coverage is address co-location: the members occupy the same L1 offset on
+                // different nodes and share no memory at all. A NoC multicast writes one L1 offset on
+                // every destination, so a sender that derives that offset from its own local DFB
+                // cursor must have its DFB at the receivers' offset. The sender's node may be outside
+                // the receivers' DFB (it has no consumer there), so the two cannot be one DFB — and
+                // the offsets cannot be left to allocation order, because each node set's base comes
+                // from its own persistent-L1 high-water mark.
+                //
+                // Partial overlap is rejected: it is neither reuse nor co-location, and the allocator
+                // would reserve the region on the union while only some members can see all of it.
                 const auto& nodes_b = collected.dfb_node_set.at(alias_name);
+                const bool same_nodes = (nodes_a == nodes_b);
+                const bool disjoint_nodes = !nodes_a.intersects(nodes_b);
                 TT_FATAL(
-                    nodes_a == nodes_b,
-                    "Aliased DFBs '{}' and '{}' cover different sets of nodes. Aliased DFBs must "
-                    "cover the same node coverage (their bound kernels' WorkUnitSpec membership "
-                    "must yield identical target_nodes unions) — the shared L1 region must be "
-                    "reserved at the same cores for all members.",
+                    same_nodes || disjoint_nodes,
+                    "Aliased DFBs '{}' and '{}' cover partially overlapping node sets. Alias group "
+                    "members must cover either identical nodes (sharing one L1 region) or fully "
+                    "disjoint nodes (the same L1 offset on different nodes, sharing no memory).",
                     dfb.unique_id,
                     alias_name);
+
+                // Co-located members carry the same FIFO geometry. Equal total size is not enough:
+                // the point of a disjoint alias is that the two cursors advance in step, which holds
+                // only if entry_size and num_entries agree.
+                if (disjoint_nodes) {
+                    TT_FATAL(
+                        dfb.entry_size == alias_spec->entry_size && dfb.num_entries == alias_spec->num_entries,
+                        "Aliased DFBs '{}' and '{}' cover disjoint nodes but have different FIFO "
+                        "geometry ({}x{} vs {}x{} entry_size x num_entries). Disjoint alias members "
+                        "sit at one L1 offset so their cursors stay in step, which requires identical "
+                        "entry_size and num_entries.",
+                        dfb.unique_id,
+                        alias_name,
+                        dfb.entry_size,
+                        dfb.num_entries,
+                        alias_spec->entry_size,
+                        alias_spec->num_entries);
+                }
 
                 // Rule 4: consistent borrowed_from.
                 TT_FATAL(

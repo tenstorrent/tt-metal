@@ -5708,15 +5708,16 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBMatmulStyleSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnDifferentNodeCoverage) {
-    // Two DFBs aliased, but bound to kernels running on disjoint nodes. The shared L1
-    // region only makes sense if both members cover the same cores; otherwise the
-    // secondary's address propagation would alias into L1 the primary never reserved.
-    NodeCoord node_a{0, 0};
-    NodeCoord node_b{1, 0};
-
+// Builds two aliased DFBs, each with its own producer/consumer pair, over the given node sets.
+// Geometry is shared by default so the only variable is coverage.
+namespace {
+ProgramSpec MakeAliasedDFBPairSpec(
+    const Nodes& nodes_a,
+    const Nodes& nodes_b,
+    uint32_t entry_size_b = 512,
+    uint32_t num_entries_b = 8) {
     auto dfb_a = MakeMinimalDFB("dfb_a", /*entry_size=*/512, /*num_entries=*/8);
-    auto dfb_b = MakeMinimalDFB("dfb_b", /*entry_size=*/512, /*num_entries=*/8);
+    auto dfb_b = MakeMinimalDFB("dfb_b", entry_size_b, num_entries_b);
     dfb_a.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_b"}}};
     dfb_b.advanced_options = DFBAdvancedOptions{.alias_with = {DFBSpecName{"dfb_a"}}};
 
@@ -5733,13 +5734,46 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnDifferentNodeCoverage) {
     spec.kernels = {producer_a, consumer_a, producer_b, consumer_b};
     spec.dataflow_buffers = {dfb_a, dfb_b};
     spec.work_units = {
-        MakeMinimalWorkUnit("wu_a", node_a, {"producer_a", "consumer_a"}),
-        MakeMinimalWorkUnit("wu_b", node_b, {"producer_b", "consumer_b"}),
+        MakeMinimalWorkUnit("wu_a", nodes_a, {"producer_a", "consumer_a"}),
+        MakeMinimalWorkUnit("wu_b", nodes_b, {"producer_b", "consumer_b"}),
     };
+    return spec;
+}
+}  // namespace
+
+TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBSucceedsOnDisjointNodeCoverage) {
+    // Alias members on fully disjoint nodes share no memory at all -- they occupy the same L1
+    // OFFSET on different nodes. That is address co-location, and it is what a NoC multicast
+    // needs: a multicast writes one offset on every destination, so a sender that derives that
+    // offset from its own local DFB cursor must have its DFB at the receivers' offset, even when
+    // its node is outside the receivers' DFB. The allocator places the group as one unit, taking
+    // the address over the union of the members' cores and reserving the region on all of them.
+    ProgramSpec spec = MakeAliasedDFBPairSpec(NodeCoord{0, 0}, NodeCoord{1, 0});
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnPartiallyOverlappingNodeCoverage) {
+    // Neither memory reuse (which needs identical coverage) nor address co-location (which needs
+    // disjoint coverage): on the shared node the two members really would share L1, while on the
+    // rest only one member can see the region the allocator reserved across the union.
+    ProgramSpec spec = MakeAliasedDFBPairSpec(NodeRange({0, 0}, {1, 0}), NodeRange({1, 0}, {2, 0}));
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("cover different sets of nodes")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("partially overlapping node sets")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnDisjointCoverageWithDifferentGeometry) {
+    // Equal total size is enough for memory reuse, but not for co-location: the point of putting
+    // two DFBs at one offset on different nodes is that their cursors advance in step, which holds
+    // only if entry_size and num_entries both agree. 512x8 and 1024x4 are the same 4096 bytes.
+    ProgramSpec spec =
+        MakeAliasedDFBPairSpec(NodeCoord{0, 0}, NodeCoord{1, 0}, /*entry_size_b=*/1024, /*num_entries_b=*/4);
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different FIFO")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnInconsistentBorrowedFrom) {
