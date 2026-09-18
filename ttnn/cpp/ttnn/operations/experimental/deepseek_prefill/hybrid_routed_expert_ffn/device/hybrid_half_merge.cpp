@@ -103,6 +103,17 @@ uint32_t overlay_circular_buffers(
     // next -- no fault, no watcher trip, just corruption.
     const uint32_t arena_bytes_per_core = static_cast<uint32_t>(l1_arena->aligned_size_per_bank());
 
+    // Arena OFFSETS overlap between the halves on purpose; CB INDICES must not. An index is a
+    // per-core hardware slot and every descriptor placed here lands on one program, so the two
+    // halves have to have been built with disjoint ranges -- the merge does not renumber. Metal
+    // rejects a collision at program construction, but names only the index; which half owns it is
+    // the part that otherwise takes a debugger to recover.
+    struct IndexClaim {
+        const char* half;
+        tt::tt_metal::CoreRangeSet cores;
+    };
+    std::map<uint8_t, IndexClaim> claimed;
+
     auto place_half = [&](ProgramDescriptor& half, const char* which) {
         uint32_t offset = 0;
         for (auto& cb : half.cbs) {
@@ -110,6 +121,19 @@ uint32_t overlay_circular_buffers(
                 cb.buffer == nullptr && cb.tensor == nullptr && cb.global_circular_buffer == nullptr,
                 "a half handed over a circular buffer that is already backed by its own allocation; the merge owns "
                 "CB placement");
+            // Local and remote share one index space per core, exactly as metal's own check does.
+            for (const auto* formats : {&cb.format_descriptors, &cb.remote_format_descriptors}) {
+                for (const auto& format : *formats) {
+                    const auto [it, inserted] = claimed.emplace(format.buffer_index, IndexClaim{which, cb.core_ranges});
+                    TT_FATAL(
+                        inserted || !it->second.cores.intersects(cb.core_ranges),
+                        "circular buffer index {} is claimed twice on overlapping cores, by the {} half and the {} "
+                        "half; one program gives an index to one buffer",
+                        format.buffer_index,
+                        it->second.half,
+                        which);
+                }
+            }
             cb.buffer = l1_arena;
             cb.address_offset = offset;
             offset += (cb.total_size + alignment - 1) / alignment * alignment;
