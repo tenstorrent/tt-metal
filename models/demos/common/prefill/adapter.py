@@ -85,6 +85,9 @@ class PrefillRunParams:
     # feature never breaks existing PrefillRunParams constructors (which need not pass it); the runner
     # derives it from the model capability (supports_dflash) + PREFILL_DFLASH + a drafter checkpoint.
     dflash_enabled: bool = False
+    # Drafter checkpoint the runner resolved (DFLASH_HF_MODEL, else the adapter's own default). Carried
+    # rather than re-read from the env downstream so one resolution decides which drafter gets built.
+    dflash_checkpoint_path: str = ""
 
     @property
     def sp_factor(self) -> int:
@@ -137,6 +140,11 @@ class PrefillModelAdapter(ABC):
     pipeline_activation_emb_tp_sharded: bool = True
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
+    # The drafter checkpoint trained against THIS verifier, and the context-KV golden for it. A drafter has
+    # exactly one parent (tt_prefill_runtime asserts the match), so both belong to the model. Empty when the
+    # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
+    dflash_model_default: str = ""
+    dflash_golden_default: str = ""
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says

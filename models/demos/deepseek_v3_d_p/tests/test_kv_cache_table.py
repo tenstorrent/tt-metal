@@ -427,6 +427,132 @@ def test_dflash_kv_cache_mock(
 
 
 # sp x tp
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [torus_xy_device_params()], ids=["torus-xy"], indirect=True)
+@pytest.mark.parametrize("seq_len", [5 * 1024], ids=["seq5k"])
+@pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
+@pytest.mark.parametrize("num_layers", [2], ids=["2layers"])
+@pytest.mark.skipif(not is_blackhole(), reason="DFlash is Blackhole-only")
+@pytest.mark.timeout(0)
+def test_dflash_kv_cache_stage_layout_equivalence(mesh_device, seq_len, num_users, num_layers, device_params):
+    """The pipeline-parallel drafter table must address the SAME bytes as the single-rank one.
+
+    Under PP the drafter lives on the KV-tail rank while rank 0 builds the table, so
+    ``populate_kv_chunk_address_table_dflash`` takes its base address, bank count, fabric nodes and host
+    from an all-gathered stage layout instead of a local tensor. Here we synthesize that layout from the
+    LOCAL cache (plus a count==0 null stage, standing in for the ranks that own no drafter) and assert the
+    staged path emits byte-identical addresses to the tensor path. That isolates the addressing change
+    from any device/numerics question: a single galaxy is enough to prove it, and a mismatch means the
+    multi-rank table would silently point at the wrong DRAM rather than fail loudly.
+    """
+    from models.demos.common.prefill.runners.migration import _host_tag_int, get_num_dram_banks
+
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+    sp_factor, tp_factor = mesh_shape[sp_axis], mesh_shape[tp_axis]
+
+    head_dim, num_kv_heads = 128, 8
+    heads_per_chip = num_kv_heads // tp_factor
+    batch = num_users * num_layers
+    CHUNK_SIZE_BYTES = (head_dim // 32) * 1088
+
+    core_ranges = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
+    ]
+    kv_mem_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
+            grid=ttnn.CoreRangeSet(core_ranges),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+    shard_dims = [None, None]
+    shard_dims[sp_axis], shard_dims[tp_axis] = -2, 1
+    tt_k = ttnn.from_torch(
+        torch.zeros(batch, num_kv_heads, seq_len, head_dim, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=kv_mem_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    assert list(tt_k.shape) == [batch, heads_per_chip, seq_len // sp_factor, head_dim], f"{tt_k.shape}"
+
+    def table_config():
+        c = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+        c.num_layers = num_layers
+        c.max_sequence_length = seq_len
+        c.num_slots = num_users
+        c.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+        c.chunk_size_bytes = CHUNK_SIZE_BYTES
+        return c
+
+    # The layout the all-gather WOULD produce for this cache: one real stage (this rank owns it) plus a
+    # null stage for a rank that does not, which the populate walk must skip.
+    real_stage = {
+        "rank": 0,
+        "first_layer": 0,
+        "count": num_layers,
+        "base_addr": int(tt_k.buffer_address()),
+        "num_banks": get_num_dram_banks(mesh_device),
+        "host_tag": _host_tag_int(),
+        "fnids": [
+            [mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c)) for c in range(mesh_shape[1])]
+            for r in range(mesh_shape[0])
+        ],
+    }
+    null_stage = dict(real_stage, rank=1, count=0, base_addr=0)
+    synthesized = [null_stage, real_stage]
+
+    def build(stage_layout):
+        configs = [table_config() for _ in range(num_kv_heads)]
+        table = ttnn.experimental.disaggregation.KvChunkAddressTable(configs)
+        for head_idx in range(num_kv_heads):
+            populate_kv_chunk_address_table_dflash(
+                lookup_table=table,
+                config=configs[head_idx],
+                mesh_device=mesh_device,
+                mesh_shape=mesh_shape,
+                seq_len=seq_len,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                kv_cache=None if stage_layout is not None else tt_k,
+                chunk_size_bytes=CHUNK_SIZE_BYTES,
+                num_kv_heads=num_kv_heads,
+                head_idx=head_idx,
+                num_users=num_users,
+                config_id=head_idx,
+                stage_layout=stage_layout,
+            )
+        return table
+
+    local_table = build(None)
+    staged_table = build(synthesized)
+
+    compared = 0
+    for head_idx in range(num_kv_heads):
+        for slot in range(num_users):
+            for layer in range(num_layers):
+                for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                    a = local_table.lookup(layer, position, slot, head_idx)
+                    b = staged_table.lookup(layer, position, slot, head_idx)
+                    assert a.noc_addr == b.noc_addr, (
+                        f"noc_addr differs at head {head_idx} slot {slot} layer {layer} pos {position}: "
+                        f"{a.noc_addr:#x} (local) vs {b.noc_addr:#x} (staged)"
+                    )
+                    assert a.size_bytes == b.size_bytes, f"size differs at head {head_idx} pos {position}"
+                    fa = local_table.get_device_group(a.device_group_index).fabric_node_ids
+                    fb = staged_table.get_device_group(b.device_group_index).fabric_node_ids
+                    assert [(f.mesh_id, f.chip_id) for f in fa] == [
+                        (f.mesh_id, f.chip_id) for f in fb
+                    ], f"device group differs at head {head_idx} slot {slot} layer {layer} pos {position}"
+                    compared += 1
+    logger.info(f"[dflash] staged == local for {compared} entries ({num_kv_heads} heads x {seq_len} tok)")
+
+
+# sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
     [(8, 4)],

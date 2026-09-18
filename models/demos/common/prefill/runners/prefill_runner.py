@@ -80,9 +80,8 @@ MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_gate_mode)
-DFLASH_ENABLED = (
-    ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(os.environ.get("DFLASH_HF_MODEL"))
-)
+DFLASH_MODEL = os.environ.get("DFLASH_HF_MODEL") or ADAPTER.dflash_model_default
+DFLASH_ENABLED = ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(DFLASH_MODEL)
 
 # KV dedup: also shard the KV/index caches across TP (1/(sp*tp) slice per device) instead of TP-replicating
 # them. Storage only, cache content bit-identical; sparse (DSA) path only.
@@ -302,6 +301,7 @@ def _compute_and_send(
     t_perf = time.perf_counter()
     where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     logger.info(f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where}")
+
     out = runtime.prefill_chunk(
         inp,
         kv_caches,
@@ -370,6 +370,7 @@ def run_request_loop(
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
             inp, meta, metadata_msg = _socket_next(h2d_service)
+            logger.info(f"Recieved tensor from socket of shape: {inp.shape}")
         else:
             inp, meta, metadata_msg = _d2d_recv(d2d_in)
         if _is_shutdown_sentinel(meta):
@@ -401,7 +402,7 @@ def _print_config() -> None:
         (
             "DFLASH_ENABLED",
             f"{DFLASH_ENABLED} (adapter.supports_dflash={ADAPTER.supports_dflash}, "
-            f"DFLASH_HF_MODEL={os.environ.get('DFLASH_HF_MODEL') or '<unset>'})",
+            f"drafter={DFLASH_MODEL or '<unset>'})",
         ),
         ("PREFILL_USE_TRACE", f"{USE_TRACE} (trace_region={_TRACE_REGION_SIZE >> 20} MB)"),
         ("PREFILL_TP_SHARD_KV", str(TP_SHARD_KV)),
@@ -509,6 +510,7 @@ def main() -> None:
         # non-last rank must still hand its hidden state downstream.
         kv_only_last_layer=is_last_rank,
         dflash_enabled=DFLASH_ENABLED,
+        dflash_checkpoint_path=DFLASH_MODEL,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         tp_shard_kv=TP_SHARD_KV,
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
@@ -595,10 +597,18 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
         teardown_timeout_ms=30000,
     )
+    first_layer_idx, num_my_layers = compute_layer_split(
+        NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
+    )[rank]
+    # A runtime may ack rows the model's layer split does not describe (DFlash acks its draft layers past
+    # the verifier's last), so the ack axis is sized by the runtime, not by NUM_LAYERS. Both paths below
+    # must use the same global count: it is the modulus of the seq the master router reorders on.
+    ack_num_layers, ack_local_layers = (
+        runtime.layer_ack_layers(NUM_LAYERS, num_my_layers)
+        if getattr(runtime, "layer_ack_layers", None) is not None
+        else (NUM_LAYERS, num_my_layers)
+    )
     if use_d2h:
-        first_layer_idx, num_my_layers = compute_layer_split(
-            NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
-        )[rank]
         d2h_service = ttnn.D2HStreamService(
             mesh_device,
             global_spec=None,
@@ -610,9 +620,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2h_service,
             ring_shm_name,
             source_rank=rank,
-            num_layers=NUM_LAYERS,
+            num_layers=ack_num_layers,
             first_layer_idx=first_layer_idx,
-            local_layers=num_my_layers,
+            local_layers=ack_local_layers,
         )
         if runtime.config.use_trace:
             runtime.set_d2h_ack_service(d2h_service)
@@ -631,7 +641,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             build_layer_completion_sink(
                 producer,
                 source_rank=rank,
-                num_layers=NUM_LAYERS,
+                num_layers=ack_num_layers,
             )
         )
         source_desc = "host on_layer_complete callback"
@@ -668,9 +678,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             rank_scoped_device_map_path,
         )
 
-        first_layer_idx, num_my_layers = compute_layer_split(
-            NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
-        )[rank]
         table_path = migration_table_path()
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
 
