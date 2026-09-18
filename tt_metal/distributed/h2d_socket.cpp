@@ -264,8 +264,7 @@ void H2DSocket::write_socket_metadata(
     const PinnedBufferInfo& data_info) {
     // The L2CPU path has no MeshBuffer-backed config_buffer_ (the caller pre-reserves a fixed LIM address and
     // init_config_buffer is never called), so config_buffer_ is null there; it still has exactly one md slot.
-    // The external-config and L2CPU paths skip the MeshBuffer allocation entirely
-    // and own exactly one md slot.
+    // External-config and L2CPU paths have no MeshBuffer and one md slot.
     const size_t num_md_slots =
         (is_l2cpu_ || config_buffer_ == nullptr) ? 1u : (config_buffer_->size() / sizeof(receiver_socket_md));
     std::vector<receiver_socket_md> config_data(num_md_slots, receiver_socket_md());
@@ -293,8 +292,7 @@ void H2DSocket::write_socket_metadata(
     }
 
     if (config_buffer_ == nullptr) {
-        // External-config ctor: no MeshBuffer, so write the blob straight to the
-        // caller-reserved L1 region.
+        // No MeshBuffer: write straight to the caller-reserved L1 region.
         auto* device = mesh_device->get_device(recv_core_.device_coord);
         std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(&md), sizeof(md));
         tt::tt_metal::detail::WriteToDeviceL1(device, recv_core_.core_coord, config_buffer_address_, bytes);

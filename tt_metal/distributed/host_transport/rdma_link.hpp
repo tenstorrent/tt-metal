@@ -17,15 +17,12 @@ struct ibv_mr;
 
 namespace tt::tt_metal::distributed::host_transport {
 
-// Descriptor for a peer-accessible memory region, exchanged out-of-band.
 struct RemoteRegion {
     uint64_t addr = 0;
     uint64_t len = 0;
     uint32_t rkey = 0;
 };
 
-// Everything a peer needs to reach this side: QP identity plus the regions it
-// may write into. Exchanged over DistributedContext during socket init.
 struct RdmaEndpoint {
     uint8_t gid[16] = {};
     uint32_t qpn = 0;
@@ -35,9 +32,8 @@ struct RdmaEndpoint {
     RemoteRegion credit;    // sender advertises: where the receiver publishes consumption
 };
 
-// RDMA device and protection domain. One per host process; shared by every
-// channel. Completion queues are per-channel so that polling one channel never
-// consumes another's completions.
+// Completion queues are per-channel: polling one channel must not consume
+// another's completions.
 class RdmaContext {
 public:
     struct Config {
@@ -65,8 +61,6 @@ private:
     uint8_t gid_[16] = {};
 };
 
-// A registered local buffer. Wraps ibv_reg_mr so socket FIFOs can be pinned
-// once and written straight out of, with no staging copy.
 class RdmaRegion {
 public:
     RdmaRegion(RdmaContext& ctx, void* addr, size_t len);
@@ -86,19 +80,12 @@ private:
     size_t len_ = 0;
 };
 
-// One RC queue pair: an ordered, pipelined, one-way byte stream.
+// One RC queue pair. RC is in-order, so a trailing doorbell cannot be seen
+// before the payload it follows: no read fence needed.
 //
-// RC delivery is in-order, which is what preserves end-to-end write ordering:
-// payload writes are posted back-to-back unsignaled, and the trailing doorbell
-// write cannot be observed by the peer before the payload it follows has landed.
-// That removes any need for a read fence on the fast path.
-//
-// Both signals are plain RDMA writes of an absolute counter into a small
-// registered slot, which the peer reads with an ordinary load: the same
-// "each side writes the other's memory and polls only its own" shape the rest of
-// the socket protocol uses. Immediate data is deliberately not used -- whether a
-// completion reports IBV_WC_RECV_RDMA_WITH_IMM and sets IBV_WC_WITH_IMM varies by
-// provider, and a silently dropped or bogus immediate is very hard to diagnose.
+// Doorbell and credit are absolute counters written to a registered slot, not
+// RDMA immediates. These NICs report the completion without IBV_WC_WITH_IMM, so
+// imm_data is unusable.
 class RdmaChannel {
 public:
     struct Config {
@@ -112,38 +99,29 @@ public:
     RdmaChannel(const RdmaChannel&) = delete;
     RdmaChannel& operator=(const RdmaChannel&) = delete;
 
-    // Local identity; caller fills in the region descriptors before exchanging.
+    // Caller fills in the region descriptors before exchanging.
     RdmaEndpoint local_endpoint() const;
     void connect(const RdmaEndpoint& remote);
     bool connected() const { return connected_; }
 
-    // Room left in the send queue. Callers must not exceed it.
     uint32_t send_slots_available() const;
 
-    // Work-request sequence numbers. A batch is locally complete -- its source
-    // bytes reusable -- once reaped() passes the id returned when it was posted.
+    // Source bytes are reusable once reaped() passes the id post returned.
     uint64_t last_posted_id() const { return posted_ - 1; }
     uint64_t reaped() const { return reaped_; }
 
-    // Queue a payload write. Unsignaled unless the signal cadence falls due.
-    // Returns false if the send queue is full, leaving nothing posted.
+    // False if the send queue is full; nothing is posted.
     bool post_write(const RdmaRegion& src, uint64_t src_offset, uint64_t dst_offset, uint32_t len);
 
-    // Ordered doorbell: lands after every write already queued on this channel.
-    // Carries an absolute count rather than a delta, so a duplicated or coalesced
-    // doorbell is harmless -- the same reason the socket's own credits are absolute.
+    // Absolute count, not a delta: a duplicated doorbell must be a no-op.
     bool post_doorbell(uint32_t total);
 
-    // Credit update written inline to the peer's credit region; needs no
-    // registered source buffer.
     bool post_credit(uint32_t value);
 
-    // Reap send completions. Non-blocking; returns how many were reaped.
     uint32_t poll_send();
 
 private:
-    // inline_data sends the payload inside the work request, which is how the
-    // 4-byte doorbell and credit writes avoid needing a registered source.
+    // inline_data avoids needing a registered source for the 4-byte signals.
     bool post(
         uint64_t local_addr,
         uint32_t lkey,

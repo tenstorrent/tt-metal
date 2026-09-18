@@ -1,9 +1,5 @@
-# Two independent single-chip Blackhole meshes, one per rank.
-#
-# HostMeshSocket connects its two endpoints over host RDMA, not over ethernet, so
-# the two meshes are deliberately declared with no connections between them: the
-# control plane only has to agree that each rank owns its own mesh. Each rank
-# should be pinned to one PCIe x8 chip via TT_VISIBLE_DEVICES.
+# Two independent single-chip Blackhole meshes, one per rank. Deliberately no
+# connections between them: HostMeshSocket runs over host RDMA, not ethernet.
 
 mesh_descriptors {
   name: "M0"

@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Transport-agnostic socket receiver, the counterpart to host_socket_sender.cpp.
-// SOCKET_MODE selects where the FIFO being drained lives; the flow-control calls
-// are identical in both cases.
+// Counterpart to host_socket_sender.cpp. SOCKET_MODE picks only the payload move.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -20,7 +18,7 @@ void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t data_size = get_compile_time_arg_val(3);
     constexpr uint32_t socket_mode = get_compile_time_arg_val(4);
-    // Destination bytes to cycle through; equal to data_size for a correctness run.
+    // Bytes to cycle through; data_size for a correctness run.
     constexpr uint32_t dst_buffer_size = get_compile_time_arg_val(5);
 
     static_assert(socket_mode == kModeHostTransport || socket_mode == kModeD2D);
@@ -39,9 +37,9 @@ void kernel_main() {
             (static_cast<uint64_t>(socket.h2d.data_addr_hi) << 32) | static_cast<uint64_t>(socket.h2d.data_addr_lo);
         while (remaining) {
             socket_wait_for_pages(socket, 1);
-            // DEVICE_PULL: read_ptr and fifo_addr are offsets into the pinned host ring.
+            // DEVICE_PULL: read_ptr and fifo_addr are offsets into the host ring.
             noc_read_page_chunked(pcie_xy_enc, fifo_base + socket.read_ptr - socket.fifo_addr, dst, page_size);
-            // The page must be in L1 before the ring slot is released.
+            // Must land in L1 before the ring slot is released.
             noc_async_read_barrier();
             socket_pop_pages(socket, 1);
             socket_notify_sender(socket);

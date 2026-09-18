@@ -2,11 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Device-free tests for the RDMA transport underneath HostMeshSocket. Two queue
-// pairs are cross-connected on one port (the HCA loops back internally), so the
-// payload/doorbell/credit mechanism can be exercised without a Tenstorrent device
-// and without a second host. Every protocol bug found so far lived here, not in
-// the device legs, and these run in seconds.
+// Device-free transport tests: two queue pairs cross-connected on one port, which
+// the HCA loops back internally. Needs no Tenstorrent device and no second host.
 
 #include <gtest/gtest.h>
 
@@ -35,7 +32,6 @@ bool rdma_available() {
     }
 }
 
-// A page-aligned buffer, so it can be registered and used as a ring.
 std::vector<std::byte> make_ring() { return std::vector<std::byte>(kRingBytes); }
 
 std::vector<std::byte> pattern(uint64_t seed, size_t bytes) {
@@ -48,7 +44,7 @@ std::vector<std::byte> pattern(uint64_t seed, size_t bytes) {
     return out;
 }
 
-// Spin until `predicate` holds, so a lost signal fails the test instead of hanging.
+// Bounded, so a lost signal fails instead of hanging.
 template <typename F>
 bool spin_until(F predicate, std::chrono::milliseconds limit = std::chrono::seconds(5)) {
     const auto deadline = std::chrono::steady_clock::now() + limit;
@@ -61,7 +57,6 @@ bool spin_until(F predicate, std::chrono::milliseconds limit = std::chrono::seco
     return predicate();
 }
 
-// One connected pair of channels plus the regions each side advertises.
 struct Loopback {
     RdmaContext ctx;
     RdmaChannel a{ctx};
@@ -78,10 +73,10 @@ struct Loopback {
     RdmaRegion b_doorbell_mr{ctx, &b_doorbell, sizeof(b_doorbell)};
 
     Loopback() {
-        // a is the sender: it advertises where b should write credit.
+        // a sends: advertises where b writes credit.
         RdmaEndpoint a_local = a.local_endpoint();
         a_local.credit = a_credit_mr.descriptor();
-        // b is the receiver: it advertises its ring and its doorbell slot.
+        // b receives: advertises its ring and doorbell slot.
         RdmaEndpoint b_local = b.local_endpoint();
         b_local.fifo = b_ring_mr.descriptor();
         b_local.doorbell = b_doorbell_mr.descriptor();
@@ -100,7 +95,7 @@ TEST(HostTransportTest, ConnectsLoopback) {
     EXPECT_TRUE(lb.b.connected());
 }
 
-// The core claim: a doorbell written after a payload is never visible before it.
+// A doorbell written after a payload must never be visible before it.
 TEST(HostTransportTest, DoorbellOrderedAfterPayload) {
     if (!rdma_available()) {
         GTEST_SKIP() << "no usable RoCEv2 RDMA device on this host";
@@ -130,8 +125,7 @@ TEST(HostTransportTest, DoorbellOrderedAfterPayload) {
         forwarded += pages;
         ASSERT_TRUE(lb.a.post_doorbell(static_cast<uint32_t>(forwarded)));
 
-        // The doorbell is the only thing polled; when it lands, the payload behind
-        // it must already be there.
+        // Only the doorbell is polled; the payload must already be there.
         ASSERT_TRUE(spin_until([&] {
             lb.b.poll_send();
             return *static_cast<volatile uint32_t*>(lb.b_doorbell_mr.addr()) == forwarded;
@@ -155,8 +149,7 @@ TEST(HostTransportTest, DoorbellOrderedAfterPayload) {
     EXPECT_EQ(forwarded, 15u);
 }
 
-// Enough batches to lap the ring many times, which is where pointer arithmetic
-// and counter widening go wrong.
+// Many laps: where pointer arithmetic and 32-bit counter wrap go wrong.
 TEST(HostTransportTest, SurvivesManyRingLaps) {
     if (!rdma_available()) {
         GTEST_SKIP() << "no usable RoCEv2 RDMA device on this host";
@@ -181,18 +174,19 @@ TEST(HostTransportTest, SurvivesManyRingLaps) {
 
         ASSERT_TRUE(spin_until([&] {
             lb.b.poll_send();
-            observed = widen(observed, *static_cast<volatile uint32_t*>(lb.b_doorbell_mr.addr()));
+            const uint32_t wire = *static_cast<volatile uint32_t*>(lb.b_doorbell_mr.addr());
+            observed += static_cast<uint32_t>(wire - static_cast<uint32_t>(observed));
             return observed == forwarded;
         })) << "stalled at batch "
             << batch << ": observed " << observed << " want " << forwarded;
 
-        // The derived delta must stay within a ring, which is what the relay asserts.
+        // Delta must stay within a ring, as the relay asserts.
         ASSERT_LE(forwarded - (forwarded - pages), kNumPages);
     }
     EXPECT_EQ(forwarded, 2000u);
 }
 
-// Credit flows the other way on the same pair, as absolute counts.
+// Credit flows the other way on the same pair.
 TEST(HostTransportTest, CreditReturnsAbsoluteCount) {
     if (!rdma_available()) {
         GTEST_SKIP() << "no usable RoCEv2 RDMA device on this host";
@@ -207,15 +201,14 @@ TEST(HostTransportTest, CreditReturnsAbsoluteCount) {
             return *static_cast<volatile uint32_t*>(lb.a_credit_mr.addr()) == consumed;
         })) << "credit "
             << consumed << " never arrived";
-        seen = widen(seen, *static_cast<volatile uint32_t*>(lb.a_credit_mr.addr()));
+        const uint32_t wire = *static_cast<volatile uint32_t*>(lb.a_credit_mr.addr());
+        seen += static_cast<uint32_t>(wire - static_cast<uint32_t>(seen));
         EXPECT_EQ(seen, consumed);
     }
 }
 
-// RelaySender retires a batch when the completion for its doorbell lands, so the
-// doorbell must be signaled even when the periodic signal cadence has not come
-// due -- otherwise the last batch of a stream never retires and the socket's
-// barrier hangs.
+// Batches retire on the doorbell's completion, so it must signal even when the
+// periodic cadence has not come due, or the last batch of a stream strands.
 TEST(HostTransportTest, DoorbellCompletionRetiresBatch) {
     if (!rdma_available()) {
         GTEST_SKIP() << "no usable RoCEv2 RDMA device on this host";
@@ -229,8 +222,7 @@ TEST(HostTransportTest, DoorbellCompletionRetiresBatch) {
         ASSERT_TRUE(lb.a.post_doorbell(static_cast<uint32_t>(forwarded)));
         const uint64_t doorbell_id = lb.a.last_posted_id();
 
-        // Nothing else is posted after this batch, so only a signaled doorbell can
-        // ever move reaped() past it.
+        // Nothing follows, so only a signaled doorbell moves reaped() past it.
         ASSERT_TRUE(spin_until([&] {
             lb.a.poll_send();
             return lb.a.reaped() > doorbell_id;
@@ -239,7 +231,7 @@ TEST(HostTransportTest, DoorbellCompletionRetiresBatch) {
     }
 }
 
-// The send queue must report back-pressure rather than silently dropping work.
+// Must report back-pressure, not silently drop work.
 TEST(HostTransportTest, SendQueueReportsBackPressure) {
     if (!rdma_available()) {
         GTEST_SKIP() << "no usable RoCEv2 RDMA device on this host";
@@ -259,7 +251,6 @@ TEST(HostTransportTest, SendQueueReportsBackPressure) {
     EXPECT_EQ(lb.a.send_slots_available(), 0u);
     EXPECT_FALSE(lb.a.post_write(lb.a_ring_mr, 0, 0, kPageSize)) << "a full send queue must refuse work";
 
-    // Draining completions must make room again.
     ASSERT_TRUE(spin_until([&] {
         lb.a.poll_send();
         return lb.a.send_slots_available() > 0;

@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Transport-agnostic socket sender. SOCKET_MODE selects where the socket's
-// downstream FIFO lives, which is the only thing that differs between a
-// host-interconnect socket and a D2D socket: the flow-control calls are
-// identical because socket_api.h is transport-agnostic.
+// Transport-agnostic socket sender. SOCKET_MODE picks only the payload move; the
+// flow-control calls are identical either way.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -21,8 +19,7 @@ void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t data_size = get_compile_time_arg_val(3);
     constexpr uint32_t socket_mode = get_compile_time_arg_val(4);
-    // Source bytes to cycle through. Equal to data_size for a correctness run so
-    // every page is distinct; one page for a throughput run.
+    // Bytes to cycle through: data_size to make every page distinct, else one page.
     constexpr uint32_t src_buffer_size = get_compile_time_arg_val(5);
 
     static_assert(socket_mode == kModeHostTransport || socket_mode == kModeD2D);
@@ -40,9 +37,9 @@ void kernel_main() {
         const uint64_t fifo_base = (static_cast<uint64_t>(socket.d2h.data_addr_hi) << 32) | socket.downstream_fifo_addr;
         while (remaining) {
             socket_reserve_pages(socket, 1);
-            // Chunked because a single NOC write past the burst size is silently dropped.
+            // Chunked: a single NOC write past the burst size is silently dropped.
             noc_write_page_chunked(pcie_xy_enc, src, fifo_base + socket.write_ptr, page_size);
-            // The payload must be retired before bytes_sent advertises it.
+            // Must retire before bytes_sent advertises it.
             noc_async_write_barrier();
             socket_push_pages(socket, 1);
             socket_notify_receiver(socket);

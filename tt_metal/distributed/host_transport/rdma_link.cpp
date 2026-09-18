@@ -21,8 +21,8 @@ namespace {
 
 constexpr uint8_t kIpv4MappedPrefix[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
 
-// ibv_query_gid does not report the RoCE version, and a port commonly exposes a
-// v1 and a v2 GID for the same IPv4 address. Picking v1 fails to connect.
+// ibv_query_gid does not report the RoCE version, and a port usually exposes
+// both v1 and v2 GIDs for one IPv4 address. Picking v1 fails to connect.
 bool gid_is_rocev2(const char* device_name, uint8_t port, int index) {
     char path[256];
     std::snprintf(path, sizeof(path), "/sys/class/infiniband/%s/ports/%u/gid_attrs/types/%d", device_name, port, index);
@@ -260,11 +260,8 @@ bool RdmaChannel::post(
         wr.num_sge = 1;
     }
 
-    // Signal periodically so the send queue can be reaped, and always signal a
-    // doorbell: the caller retires a batch when the completion for its doorbell
-    // lands, so an unsignaled doorbell would leave the batch outstanding until
-    // some later work request happened to be signaled -- and forever at the end
-    // of a stream, where no later request exists.
+    // A doorbell must always signal: batches retire on its completion, so an
+    // unsignaled one strands the last batch of a stream forever.
     if (++since_signal_ >= config_.sig_every || force_signal) {
         wr.send_flags |= IBV_SEND_SIGNALED;
         since_signal_ = 0;
@@ -273,9 +270,7 @@ bool RdmaChannel::post(
     ibv_send_wr* bad = nullptr;
     int rc = ibv_post_send(qp_, &wr, &bad);
     if (rc == ENOMEM) {
-        // The slot check above is conservative (unsignaled work requests retire
-        // only at a signal point), so this should not happen -- but report it as
-        // back-pressure rather than aborting a run that can still recover.
+        // Unreachable given the slot check; report back-pressure, do not abort.
         since_signal_ = since_signal_ == 0 ? 0 : since_signal_ - 1;
         return false;
     }
@@ -335,8 +330,8 @@ uint32_t RdmaChannel::poll_send() {
             "RDMA completion failed: {} (opcode {})",
             ibv_wc_status_str(wc[i].status),
             static_cast<int>(wc[i].opcode));
-        // Unsignaled WRs retire in order behind the signaled one, so a
-        // completion accounts for every WR posted up to its wr_id.
+        // Unsignaled WRs retire behind the signaled one, so this accounts for
+        // every WR up to wr_id.
         reaped_ = wc[i].wr_id + 1;
         completed++;
     }

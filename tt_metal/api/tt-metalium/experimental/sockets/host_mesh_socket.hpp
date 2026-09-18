@@ -25,56 +25,32 @@ class RelayEndpoint;
 }  // namespace host_transport
 
 /**
- * @brief A socket carrying a device-to-device stream over the host interconnect.
- *
- * Presents MeshSocket's interface, but reaches its peer through host RDMA rather
- * than TT-Fabric:
+ * @brief A D2D socket that reaches its peer over host RDMA instead of TT-Fabric.
  *
  * @code
  *   sender tensix --D2H--> host RAM --RDMA--> host RAM --H2D--> receiver tensix
  * @endcode
  *
- * Each leg is existing tt-metal machinery. The device side needs no new kernel
- * primitives: `socket_api.h` is transport-agnostic apart from
- * `socket_notify_receiver` / `socket_notify_sender`, which already branch on the
- * `is_d2h` / `is_h2d` discriminators this socket sets. A sender kernel therefore
- * drives an ordinary SocketSenderInterface and a receiver kernel an ordinary
- * SocketReceiverInterface; only the payload-move call differs (a PCIe write
- * instead of a NOC write, and a chunked NOC read instead of an L1 copy).
+ * Needs no new device primitives: socket_api.h already branches on the is_d2h /
+ * is_h2d discriminators this socket sets, so kernels drive an ordinary
+ * Socket{Sender,Receiver}Interface. Only the payload-move call differs.
  *
- * Both FIFOs are pinned host rings holding the same number of pages, registered
- * once with the NIC, so the host hop copies nothing: the NIC reads the D2H ring
- * and writes the peer's H2D ring directly.
- *
- * Ordering and pipelining come from using one RC queue pair per connection. RC
- * delivery is in-order, so payload work requests are posted back-to-back
- * unsignaled and a trailing RDMA_WRITE_WITH_IMM doorbell cannot be observed by
- * the peer before the bytes ahead of it have landed. Payload is never striped
- * across queue pairs, which would break that guarantee.
- *
- * A single process-wide relay thread services every socket with a non-blocking
- * poll loop, so an owner incurs no polling duty. Pass
- * `TransportConfig::own_relay_thread = false` to drive `poll()` yourself.
- *
- * Requirements:
- * - vIOMMU enabled (the pinned rings must be NOC-mappable)
- * - a RoCE-capable RDMA device reachable from both hosts
- * - endpoints placed on PCIe x8 chips for any real throughput
+ * Requires vIOMMU, a RoCE device reachable from both hosts, and endpoints on
+ * PCIe x8 chips for any real throughput. See
+ * tech_reports/TT-Distributed/HostMeshSocket.md.
  */
 class HostMeshSocket {
 public:
     struct TransportConfig {
-        /// Transfer granularity, in bytes. Must divide the socket's fifo_size and
-        /// match the page size the device kernels set.
+        /// Must divide fifo_size and match the page size the kernels set.
         uint32_t page_size = 0;
-        /// RDMA device name; empty selects the first.
+        /// Empty selects the first device.
         std::string rdma_device;
-        /// GID index; negative auto-selects a RoCEv2 IPv4-mapped GID.
+        /// Negative auto-selects a RoCEv2 IPv4-mapped GID.
         int gid_index = -1;
-        /// Pages coalesced into one work request. Larger amortises per-request
-        /// cost; the peer ring depth is the real bound.
+        /// Pages per work request; peer ring depth is the real bound.
         uint32_t max_batch_pages = 8;
-        /// When false, the caller must call poll(); no relay thread is started.
+        /// False: no relay thread, caller must call poll().
         bool own_relay_thread = true;
     };
 
@@ -87,48 +63,34 @@ public:
     HostMeshSocket(HostMeshSocket&&) noexcept;
     HostMeshSocket& operator=(HostMeshSocket&&) noexcept;
 
-    /// L1 address of the socket config buffer. The same on every endpoint core,
-    /// so a multi-core kernel takes one value.
+    /// Same on every endpoint core, so a multi-core kernel takes one value.
     DeviceAddr get_config_buffer_address() const;
     std::shared_ptr<MeshBuffer> get_config_buffer() const;
-    /// Always throws: unlike MeshSocket, this socket's FIFO is a pinned host ring,
-    /// not a device buffer. A receiver kernel pulls into a landing buffer the
-    /// caller allocates, so there is no socket-owned device data buffer to hand back.
+    /// Always throws: the FIFO is a pinned host ring, not a device buffer. The
+    /// receiver kernel pulls into a landing buffer the caller allocates.
     std::shared_ptr<MeshBuffer> get_data_buffer() const;
     const SocketConfig& get_config() const;
     SocketEndpoint get_socket_endpoint_type() const;
     std::vector<MeshCoreCoord> get_active_cores() const;
     MeshDevice* get_mesh_device() const;
 
-    /// One non-blocking relay sweep on the calling thread. Returns whether it
-    /// progressed. Only required when own_relay_thread is false.
+    /// Only valid when own_relay_thread is false; an endpoint is single-consumer.
     bool poll();
 
-    /// On a **sender**, blocks until every page the local device produced has been
-    /// read off the host by the NIC and acknowledged back to the device, so the
-    /// send ring is empty and the data is on the peer.
+    /// Sender: blocks until the NIC has read every page the local device produced.
     ///
-    /// On a **receiver**, returns as soon as the relay is healthy. There is
-    /// deliberately nothing to wait for: publication into the receive ring is
-    /// driven by the peer, and the only step after that is the device consuming,
-    /// which the owner controls by running its own program. Waiting for
-    /// consumption here would deadlock, because the peer pipelines into the next
-    /// round and the barrier would block on pages that only the caller's next
-    /// kernel launch will read. A receiver's synchronisation point is its own
-    /// program completion.
+    /// Receiver: returns immediately. Waiting for device consumption would
+    /// deadlock -- the peer pipelines into the next round, so it would block on
+    /// pages only the caller's next kernel launch reads. A receiver's sync point
+    /// is its own program completion.
     ///
-    /// Either way this raises if the relay has failed, which is how a transport
-    /// error on the relay thread reaches the caller.
+    /// Raises if the relay failed; this is how a relay-thread error surfaces.
     void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
 
-    /// Pages handed to the wire (sender) or published to the device (receiver).
     uint64_t pages_transferred() const;
 
-    /// Samples, on a sender, the time from handing a batch to the NIC until the
-    /// peer credits it -- the round trip through the far host and far device.
-    /// Off by default; enabling it costs a timestamp per batch. No effect on a
-    /// receiver. Pair with an idle round-trip measurement to separate transit
-    /// from queueing delay under load.
+    /// Sender only. Batch-handoff to peer-credit round trip. Off by default:
+    /// costs a timestamp per batch.
     void set_latency_sampling(bool enabled);
     std::vector<uint64_t> take_latency_samples_ns();
 

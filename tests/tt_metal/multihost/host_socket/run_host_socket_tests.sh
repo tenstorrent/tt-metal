@@ -33,22 +33,15 @@
 #   HOST_SOCKET_BIN            test binary, if not under $TT_METAL_HOME/build*
 #   HOST_SOCKET_VISIBLE_DEVICES  candidate chips, tried in order until one opens.
 #                              An entry is "N", or "A:B" to give each rank its own
-#                              chip when both share a host. Defaults depend on the
-#                              mode: perf and sweep use only the four PCIe x8 chips
-#                              (5, 13, 21, 29), since the other 28 are x1 and
-#                              cannot reach target throughput; the correctness
-#                              modes try a wider list, because they do not need
-#                              bandwidth and the x8 chips are the contended ones.
-#   HOST_SOCKET_TIMEOUT        per-run timeout in seconds (default 600, 120 for
-#                              smoke). Device open normally takes ~10 s, so a small
-#                              value makes the occupied-chip retry quick; a soak
-#                              must raise it above HOST_SOCKET_SOAK_SECONDS.
+#                              chip when both share a host. perf/sweep default to
+#                              the four x8 chips (5,13,21,29); correctness modes
+#                              try a wider list, since those four are contended.
+#   HOST_SOCKET_TIMEOUT        per-run timeout, seconds (600; 120 for smoke). A
+#                              soak must raise it above HOST_SOCKET_SOAK_SECONDS.
 #   HOST_SOCKET_DEVICE_ID      index within the visible set (default 0)
-#   HOST_SOCKET_NICS           per-rank RDMA device names, "a:b" (default: both
-#                              ranks on rocep201s0f0 in the single-node mode,
-#                              auto-selected otherwise)
-#   HOST_SOCKET_NIC_IF         host interface MPI should use for out-of-band;
-#                              otherwise the docker/flannel interfaces are excluded
+#   HOST_SOCKET_NICS           per-rank RDMA device names, "a:b"
+#   HOST_SOCKET_NIC_IF         interface for MPI out-of-band; else docker/flannel
+#                              are excluded
 #   HOST_SOCKET_MGD            mesh graph descriptor (default: config/two_bh_single_chip_mgd.textproto)
 #   HOST_SOCKET_SOAK_SECONDS   soak duration in seconds (soak mode defaults to 3900)
 #   HOST_SOCKET_CSV            where throughput rows are appended
@@ -59,9 +52,7 @@ set -uo pipefail
 
 MODE="${1:-smoke}"
 
-# sbatch copies the batch script into its spool directory, so BASH_SOURCE does not
-# point into the repo. Resolve the repo from TT_METAL_HOME or the submit directory,
-# and only fall back to the script's own location for a direct (salloc) run.
+# sbatch copies this script to its spool dir, so BASH_SOURCE is not in the repo.
 if [[ -z "${TT_METAL_HOME:-}" ]]; then
     for candidate in "${SLURM_SUBMIT_DIR:-}/../../../.." "$(dirname "${BASH_SOURCE[0]}")/../../../.."; do
         [[ -n "$candidate" ]] || continue
@@ -73,8 +64,7 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
 fi
 [[ -n "${TT_METAL_HOME:-}" ]] || { echo "error: set TT_METAL_HOME to the tt-metal repo root" >&2; exit 2; }
 export TT_METAL_HOME
-# What tt-metal actually reads to locate its runtime and resolve relative kernel
-# paths; TT_METAL_HOME alone is not enough.
+# tt-metal reads this, not TT_METAL_HOME, to resolve relative kernel paths.
 : "${TT_METAL_RUNTIME_ROOT:=$TT_METAL_HOME}"
 export TT_METAL_RUNTIME_ROOT
 HERE="$TT_METAL_HOME/tests/tt_metal/multihost/host_socket"
@@ -100,11 +90,8 @@ fi
 mapfile -t NODES < <(scontrol show hostnames "${SLURM_JOB_NODELIST}")
 (( ${#NODES[@]} >= 1 )) || { echo "error: empty allocation" >&2; exit 2; }
 
-# Two nodes is the real configuration: one Galaxy per host, RDMA between them.
-# With a single node both ranks run there on different chips, with rank 0 on one
-# NIC port and rank 1 on the other -- same-port self-connect would need the NIC
-# to hairpin, using the two functions does not. That mode exercises the whole
-# datapath and is far easier to schedule, so it is the fast correctness loop.
+# Two nodes is the real configuration. One node still exercises the whole
+# datapath (both ranks, different chips) and is far easier to schedule.
 if (( ${#NODES[@]} >= 2 )); then
     N0="${NODES[0]}"; N1="${NODES[1]}"
     HOSTSPEC="$N0:1,$N1:1"
@@ -118,11 +105,9 @@ fi
 MPIRUN=/opt/openmpi-v5.0.7-ulfm/bin/mpirun
 [[ -x "$MPIRUN" ]] || MPIRUN=$(command -v mpirun) || { echo "error: no mpirun" >&2; exit 2; }
 
-# MPI carries only the out-of-band control path here; the socket's data path goes
-# straight to the RDMA NIC through verbs. These hosts have a docker bridge and a
-# flannel overlay alongside the cluster NIC, and OpenMPI will otherwise try to
-# reach a peer on 172.17.0.1 and abort. Name an interface to pin it, else exclude
-# the virtual ones, which is portable across differing NIC names.
+# MPI carries only the control path; data goes to the NIC through verbs. These
+# hosts have docker and flannel interfaces, and OpenMPI will otherwise try to
+# reach a peer on 172.17.0.1 and abort.
 if [[ -n "${HOST_SOCKET_NIC_IF:-}" ]]; then
     export OMPI_MCA_btl_tcp_if_include="$HOST_SOCKET_NIC_IF"
     export OMPI_MCA_oob_tcp_if_include="$HOST_SOCKET_NIC_IF"
@@ -132,25 +117,15 @@ else
     export OMPI_MCA_oob_tcp_if_exclude="$EXCLUDE"
 fi
 
-# Open only the chip under test: constructing all 32 chips costs minutes of
-# start-up per rank and contends on other tenants' CHIP_IN_USE_* device locks.
+# Open only the chip under test: all 32 costs minutes per rank and contends on
+# other tenants' CHIP_IN_USE_* locks. TT_VISIBLE_DEVICES names the PHYSICAL chip
+# but tt-metal sees the index within the visible set, so pinning chip 5 makes it
+# device 0.
 #
-# On these Blackhole Galaxy hosts only 4 of the 32 chips have a PCIe x8 link (one
-# per tray, ASIC location 6); the NIC<->BH p2p sweep measured chips 5, 13, 21 and
-# 29 at ~11.3 GiB/s and every other chip at ~3 GiB/s. So TT_VISIBLE_DEVICES names
-# the PHYSICAL chip, while the id tt-metal sees is the index within that visible
-# set -- pinning one chip makes it device 0, not 5.
-# Candidate chips, tried in order. These nodes are shared and another tenant's
-# long-running process holds a chip's CHIP_IN_USE_<n>_PCIe lock for its lifetime,
-# which makes device open block rather than fail -- hence the timeout-and-retry in
-# run_gtest below.
-# Candidate chip assignments, tried in order. An entry may be "N" (both ranks on
-# chip N, for the two-node case) or "A:B" (rank 0 on A, rank 1 on B, needed when
-# both ranks share a host).
-# Throughput needs an x8 chip. Correctness does not, and the x8 chips are the ones
-# every other tenant wants -- and a chip whose CHIP_IN_USE_<n>_PCIe lock was left
-# wedged by an older UMD build can never be recovered, only avoided. So the
-# correctness modes get a wide candidate list and perf keeps to the x8 four.
+# Candidates are tried in order: a chip whose lock another tenant holds makes
+# device open *block* rather than fail, hence the timeout-and-retry in run_gtest.
+# An entry is "N", or "A:B" to give each rank its own chip when they share a host.
+# A lock wedged by an older UMD build can never be recovered, only avoided.
 case "$MODE" in
     perf|sweep) DEFAULT_CHIPS_2N="5,13,21,29"; DEFAULT_CHIPS_LB="5:13,21:29" ;;
     *)          DEFAULT_CHIPS_2N="5,13,21,29,0,1,2,3,4,6,7,8,9,10"
@@ -169,20 +144,16 @@ fi
 : "${TT_HOST_SOCKET_RDMA_DEV_PER_RANK:=}"
 export TT_HOST_SOCKET_DEVICE_ID="${HOST_SOCKET_DEVICE_ID:-0}"
 RUN_TIMEOUT="${HOST_SOCKET_TIMEOUT:-600}"
-# Correctness sweeps many chip pairs to get past contended devices, so keep each
-# attempt short; a working run finishes these tests in well under a minute.
+# Many chip pairs to get past contended devices, so keep each attempt short.
 case "$MODE" in smoke) RUN_TIMEOUT="${HOST_SOCKET_TIMEOUT:-120}" ;; esac
 
-# Leave the ranks unbound: the relay is a polling thread and pinning it to one
-# core alongside the test thread costs throughput. In loopback both ranks share a
-# node, which usually has only one SLURM slot, so let mpirun oversubscribe it.
+# Unbound: the relay is a polling thread and sharing one core costs throughput.
+# Loopback puts both ranks on a node with one SLURM slot, hence --oversubscribe.
 MAP_ARGS="--bind-to none"
 (( LOOPBACK )) && MAP_ARGS="$MAP_ARGS --oversubscribe"
 
-# With a world size above 1 the control plane requires each rank's mesh binding,
-# so declare two independent single-chip meshes (one per rank). The socket runs
-# over RDMA, not ethernet, so the descriptor deliberately wires nothing between
-# them. Set per rank below via mpirun's MPMD segments.
+# World size > 1 makes the control plane require a per-rank mesh binding. The
+# descriptor wires nothing between the two meshes: this runs over RDMA.
 export TT_MESH_GRAPH_DESC_PATH="${HOST_SOCKET_MGD:-$HERE/config/two_bh_single_chip_mgd.textproto}"
 [[ -f "$TT_MESH_GRAPH_DESC_PATH" ]] || { echo "error: mesh graph descriptor not found: $TT_MESH_GRAPH_DESC_PATH" >&2; exit 2; }
 # Benchmark rows land here so a sweep is machine-readable.

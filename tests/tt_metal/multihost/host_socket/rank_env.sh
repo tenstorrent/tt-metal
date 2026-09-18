@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
-# Per-rank environment shim. mpirun's -x gives every rank the same value, but some
-# settings must differ per rank, so derive them from the rank and exec the real
-# command.
+# Per-rank env shim: mpirun's -x gives every rank the same value, but TT_MESH_ID
+# must differ. Any VAR_PER_RANK="a:b" is split on ':' and the rank's element
+# exported as VAR.
 #
-# Used instead of mpirun's MPMD (colon) form, which splits the job into separate
-# app contexts and does not reliably honour one --host per segment.
-#
-# TT_MESH_ID is always the rank (the control plane needs a distinct mesh per rank).
-# Any VAR_PER_RANK="a:b" is split on ':' and the rank's element exported as VAR,
-# which is how the single-node loopback mode gives each rank its own chip and its
-# own NIC port.
+# Used instead of mpirun's MPMD (colon) form, which does not reliably honour one
+# --host per segment.
 set -u
 
 RANK="${OMPI_COMM_WORLD_RANK:-${PMIX_RANK:-${PMI_RANK:-0}}}"

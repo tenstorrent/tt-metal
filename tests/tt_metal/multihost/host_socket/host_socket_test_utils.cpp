@@ -33,10 +33,8 @@ uint64_t env_u64(const char* name, uint64_t fallback) {
     return std::strtoull(raw, nullptr, 0);
 }
 
-// One L1 buffer height-sharded across the endpoint cores, one page each. A
-// separate buffer per core would reserve its range on every core in the default
-// (non-hybrid) allocator mode and run L1 out of space at a few cores; this way
-// the cost is one page per core and every core finds its shard at the same address.
+// One buffer sharded across the cores, one page each. A buffer per core would
+// reserve its range on *every* core under the default allocator and exhaust L1.
 std::shared_ptr<MeshBuffer> make_sharded_l1_buffer(MeshDevice* device, uint32_t num_cores, uint32_t page_size) {
     auto grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_cores - 1, 0)));
     auto shard = ShardSpecBuffer(grid, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {num_cores, 1});
@@ -50,7 +48,6 @@ std::shared_ptr<MeshBuffer> make_sharded_l1_buffer(MeshDevice* device, uint32_t 
         ReplicatedBufferConfig{.size = static_cast<DeviceAddr>(page_size) * num_cores}, local, device);
 }
 
-// Worker cores (0,0)..(n-1,0) on the single device of a unit mesh.
 std::vector<SocketConnection> make_connections(uint32_t num_cores) {
     std::vector<SocketConnection> connections;
     connections.reserve(num_cores);
@@ -109,8 +106,8 @@ bool host_sockets_supported(const std::shared_ptr<MeshDevice>& mesh_device) {
 
 std::vector<uint32_t> payload_for_core(uint32_t core_index, uint64_t size_bytes) {
     std::vector<uint32_t> data(size_bytes / sizeof(uint32_t));
-    // Distinct per core and per word, so a page delivered to the wrong core or
-    // the wrong offset cannot verify as correct.
+    // Distinct per core and per word: a page delivered to the wrong place must
+    // not verify as correct.
     uint32_t word = 0x1000u * (core_index + 1);
     for (auto& v : data) {
         v = word;
@@ -152,8 +149,6 @@ void run_transfer(const Params& params, bool verify, double* gbps_out, std::vect
         socket.set_latency_sampling(true);
     }
 
-    // One page per core: the payload on the sender, the landing area the kernel
-    // pulls into on the receiver.
     const uint32_t buffer_size = static_cast<uint32_t>(verify ? data_size : page_size);
     const MeshCoordinate device_coord(0, 0);
     auto data_buffer = make_sharded_l1_buffer(mesh_device.get(), params.num_cores, buffer_size);
@@ -163,8 +158,8 @@ void run_transfer(const Params& params, bool verify, double* gbps_out, std::vect
     for (uint32_t i = 0; i < params.num_cores; i++) {
         const auto payload = payload_for_core(i, buffer_size);
         for (size_t w = 0; w < words_per_core; w++) {
-            // The receiver starts from the complement of what it should end up
-            // with, so a page that never arrives cannot verify as correct.
+            // Receiver starts from the complement, so a page that never arrives
+            // cannot pass.
             staging[i * words_per_core + w] = is_sender ? payload[w] : ~payload[w];
         }
     }
@@ -193,14 +188,13 @@ void run_transfer(const Params& params, bool verify, double* gbps_out, std::vect
     auto workload = MeshWorkload();
     workload.add_program(MeshCoordinateRange(device_coord), std::move(program));
 
-    // Both ranks reach the launch together so the measurement covers transfer only.
+    // Launch together so the measurement covers transfer only.
     context->barrier();
     const auto start = std::chrono::steady_clock::now();
     double elapsed = 0.0;
     uint64_t completed = 0;
 
-    // The socket's counters live in its L1 config and persist across launches, so
-    // re-enqueueing continues the same stream rather than restarting it.
+    // Socket counters persist in L1, so re-enqueueing continues the same stream.
     for (uint64_t iter = 0;; iter++) {
         EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
         Finish(mesh_device->mesh_command_queue());
@@ -217,13 +211,12 @@ void run_transfer(const Params& params, bool verify, double* gbps_out, std::vect
                     ASSERT_EQ(got[w], expected[w]) << "core (" << i << ",0) word " << w << ", iteration " << iter;
                 }
             }
-            // Restore the complement so the next iteration starts clean.
+            // Restore the complement for the next iteration.
             WriteShard(mesh_device->mesh_command_queue(), data_buffer, staging, device_coord, true);
         }
 
         elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-        // Both ranks must agree on when to stop, so the sender's verdict is the one
-        // that counts and is broadcast.
+        // Both ranks must agree when to stop; the sender's verdict wins.
         uint32_t keep_going = (completed < params.iterations || elapsed < params.min_seconds) ? 1u : 0u;
         context->broadcast(
             std::span<std::byte>(reinterpret_cast<std::byte*>(&keep_going), sizeof(keep_going)), kSenderRank);

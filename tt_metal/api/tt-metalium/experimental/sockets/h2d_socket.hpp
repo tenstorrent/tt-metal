@@ -96,14 +96,12 @@ public:
      * @param h2d_mode Transfer mode: HOST_PUSH or DEVICE_PULL.
      */
     /**
-     * @brief Identifies an L1 region on the receiver core that the caller has already
-     *        reserved for the socket's configuration buffer.
+     * @brief Caller-reserved L1 region for the socket's configuration buffer.
      *
-     * Mirrors D2HSocket::ExternalConfigBuffer. Lets a caller that owns the receiver
-     * core's L1 layout place the config itself, so a group of per-core sockets can
-     * share one height-sharded config buffer and therefore present a single
-     * config-buffer address to a multi-core kernel. The region must be at least
-     * required_config_buffer_size() bytes, L1-aligned, and outlive the socket.
+     * Mirrors D2HSocket::ExternalConfigBuffer. Lets per-core sockets share one
+     * height-sharded config buffer, so a multi-core kernel takes a single
+     * address. Must be at least required_config_buffer_size() bytes, L1-aligned,
+     * and outlive the socket.
      */
     struct ExternalConfigBuffer {
         uint32_t address;
@@ -227,15 +225,13 @@ public:
 
     void write(void* data, uint32_t num_pages);
 
-    // Zero-copy production, for a producer that writes the FIFO directly (for
-    // example a NIC landing RDMA payload into the pinned ring). host_fifo()
-    // exposes the ring; commit_pages() then publishes pages already resident in
-    // it, skipping write()'s memcpy. The caller owns the reserve/backpressure
-    // decision via has_space(). DEVICE_PULL only.
+    // Zero-copy production for a producer that writes the ring directly (a NIC
+    // landing RDMA payload, say): commit_pages() publishes pages already resident
+    // in it, skipping write()'s memcpy. Caller owns backpressure via has_space().
+    // DEVICE_PULL only.
     std::span<std::byte> host_fifo() const;
     void commit_pages(uint32_t num_pages);
 
-    // Cumulative bytes the device has consumed, refreshed from pinned memory.
     uint32_t bytes_acked_snapshot();
 
     void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);

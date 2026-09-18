@@ -2,9 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Responder half of the socket round-trip latency measurement: take a page off
-// the inbound socket and put it straight back on the outbound one. Times nothing
-// itself -- the initiator (host_socket_pingpong.cpp) owns the clock.
+// Round-trip latency responder: echo each page straight back. The initiator
+// owns the clock.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -34,7 +33,7 @@ void kernel_main() {
     const uint32_t tx_pcie_enc = tx.d2h.pcie_xy_enc;
     const uint64_t tx_base = (static_cast<uint64_t>(tx.d2h.data_addr_hi) << 32) | tx.downstream_fifo_addr;
 
-    // One extra lap per warmup iteration on the initiator side.
+    // Initiator does WARMUP_ITERS extra laps.
     const uint32_t laps = num_iterations + WARMUP_ITERS;
     for (uint32_t i = 0; i < laps; i++) {
         socket_wait_for_pages(rx, 1);

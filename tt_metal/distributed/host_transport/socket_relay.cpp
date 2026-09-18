@@ -19,14 +19,12 @@ namespace tt::tt_metal::distributed::host_transport {
 
 namespace {
 
-// Batches outstanding on the wire before the sender stops issuing. Bounds the
-// bookkeeping deque; the peer ring credit is the real limit.
+// Bounds the bookkeeping deque; peer ring credit is the real limit.
 constexpr size_t kMaxOutstandingBatches = 64;
 
-// Send-queue slots one batch can consume: two payload runs plus the doorbell.
+// Two payload runs plus the doorbell.
 constexpr uint32_t kSlotsPerBatch = 3;
 
-// Empty sweeps to spin before parking, then a sleep growing to this cap.
 constexpr uint32_t kSpinsBeforeSleep = 1000;
 constexpr uint32_t kSleepCapUs = 50;
 
@@ -54,7 +52,6 @@ uint64_t now_ns() {
             .count());
 }
 
-// Bounds the sampler's bookkeeping; credits normally land within a few batches.
 constexpr size_t kMaxPendingSamples = 4096;
 
 }  // namespace
@@ -89,17 +86,14 @@ RelaySender::RelaySender(
     *static_cast<volatile uint32_t*>(credit_region_.addr()) = 0;
 }
 
-uint64_t RelaySender::peer_credit() {
-    uint32_t wire = *static_cast<volatile uint32_t*>(credit_region_.addr());
-    credited_ = widen(credited_, wire);
-    return credited_;
+uint32_t RelaySender::peer_credit_wire() const {
+    return *static_cast<volatile uint32_t*>(credit_region_.addr());
 }
 
 bool RelaySender::poll() {
     bool progress = false;
 
-    // Retire batches the NIC has finished reading. pop() advances the D2H ring
-    // and acks the device, which is what lets the kernel push further.
+    // pop() acks the device, which is what lets the kernel push further.
     channel_.poll_send();
     while (!batches_.empty() && channel_.reaped() > batches_.front().wr_id) {
         socket_.pop(batches_.front().pages);
@@ -112,31 +106,29 @@ bool RelaySender::poll() {
         return progress;
     }
 
-    // Peer ring space, in pages. The credit is an absolute count, so a stale or
-    // duplicated update only costs a lap of latency.
     const uint64_t forwarded = forwarded_.load(std::memory_order_relaxed);
-    const uint64_t credited = peer_credit();
+    // Both counts are page totals and differ by at most a ring, so the subtraction
+    // is exact in 32-bit modular arithmetic even once the peer's counter wraps.
+    const uint32_t in_peer_ring = static_cast<uint32_t>(forwarded) - peer_credit_wire();
     if (sampling_) {
         std::lock_guard<std::mutex> lock(latency_mutex_);
         const uint64_t now = now_ns();
+        const uint64_t credited = forwarded - in_peer_ring;
         while (!pending_samples_.empty() && pending_samples_.front().total <= credited) {
             latencies_ns_.push_back(now - pending_samples_.front().sent_ns);
             pending_samples_.pop_front();
         }
     }
-    uint64_t in_peer_ring = forwarded - credited;
     if (in_peer_ring >= geom_.num_pages) {
         return progress;
     }
-    uint32_t room = geom_.num_pages - static_cast<uint32_t>(in_peer_ring);
+    uint32_t room = geom_.num_pages - in_peer_ring;
 
-    // pages_available() counts everything the device has produced and the host
-    // has not yet acked, and the ack only happens in pop() above. Pages already
-    // handed to the NIC are therefore still counted, so subtract them or they get
-    // sent twice.
+    // pages_available() still counts pages already handed to the NIC, since the
+    // ack only happens in pop() above. Subtract them or they go out twice.
     const uint32_t available = socket_.pages_available();
     const uint64_t awaiting_pop = forwarded - retired_.load(std::memory_order_relaxed);
-    // What a barrier needs to know: whether anything is still waiting to go out.
+    // For barrier: is anything still waiting to go out.
     unforwarded_.store(
         available > awaiting_pop ? static_cast<uint32_t>(available - awaiting_pop) : 0u, std::memory_order_release);
     if (available <= awaiting_pop) {
@@ -147,8 +139,7 @@ bool RelaySender::poll() {
         return progress;
     }
 
-    // Source and destination page indices are equal by construction, so one
-    // modulo serves both and the batch is at most two contiguous runs.
+    // Source and destination page indices are equal, so one modulo serves both.
     uint32_t index = static_cast<uint32_t>(forwarded % geom_.num_pages);
     uint32_t head_pages = std::min(n, geom_.num_pages - index);
     uint64_t head_offset = static_cast<uint64_t>(index) * geom_.page_size;
@@ -160,10 +151,8 @@ bool RelaySender::poll() {
         TT_FATAL(
             channel_.post_write(fifo_region_, 0, 0, (n - head_pages) * geom_.page_size), "send queue full mid-batch");
     }
-    // Ordered doorbell: RC delivery puts it behind the payload above, so the peer
-    // cannot observe it before those bytes have landed. It carries the absolute
-    // running total, so the peer derives the delta itself and a duplicate is a
-    // no-op.
+    // RC puts the doorbell behind the payload above, so the peer cannot see it
+    // before those bytes land.
     const uint64_t total = forwarded + n;
     forwarded_.store(total, std::memory_order_release);
     unforwarded_.store(static_cast<uint32_t>(available - awaiting_pop - n), std::memory_order_release);
@@ -181,10 +170,10 @@ bool RelaySender::poll() {
 
 std::string RelaySender::describe() const {
     return fmt::format(
-        "sender forwarded={} retired={} credited={} batches={} ring_pages={} unforwarded={} send_slots={}",
+        "sender forwarded={} retired={} credit_wire={} batches={} ring_pages={} unforwarded={} send_slots={}",
         forwarded_.load(std::memory_order_acquire),
         retired_.load(std::memory_order_acquire),
-        credited_,
+        peer_credit_wire(),
         batches_.size(),
         geom_.num_pages,
         unforwarded_.load(std::memory_order_acquire),
@@ -205,36 +194,27 @@ RelayReceiver::RelayReceiver(
     *static_cast<volatile uint32_t*>(doorbell_region_.addr()) = 0;
 }
 
-uint64_t RelayReceiver::peer_forwarded() {
-    const uint32_t wire = *static_cast<volatile uint32_t*>(doorbell_region_.addr());
-    return widen(arrived_.load(std::memory_order_relaxed), wire);
-}
-
 bool RelayReceiver::poll() {
     bool progress = false;
 
-    // Refresh the socket's cached bytes_acked first: commit_pages() bounds the
-    // publish against it, and a stale value would reject a legal commit.
-    consumed_bytes_ = widen(consumed_bytes_, socket_.bytes_acked_snapshot());
+    // Refresh first: commit_pages() bounds against the cached bytes_acked, and a
+    // stale value rejects a legal commit.
+    const uint32_t acked_wire = socket_.bytes_acked_snapshot();
+    consumed_bytes_ += acked_wire - last_acked_wire_;
+    last_acked_wire_ = acked_wire;
 
-    // The doorbell slot holds the peer's absolute forwarded-page total, written by
-    // its NIC behind the payload it describes. Reading it is a local load, and
-    // because it is absolute a repeated or coalesced update cannot inflate the
-    // count. The peer cannot have more than a ring's worth outstanding, so
-    // anything larger means the slot was misread rather than that the peer really
-    // got that far ahead.
     const uint64_t arrived = arrived_.load(std::memory_order_relaxed);
-    const uint64_t forwarded_total = peer_forwarded();
+    // Exact in 32-bit modular arithmetic: the peer is at most a ring ahead. More
+    // than that means the slot was misread, not real progress.
+    const uint32_t pages =
+        *static_cast<volatile uint32_t*>(doorbell_region_.addr()) - static_cast<uint32_t>(arrived);
     TT_FATAL(
-        forwarded_total >= arrived && forwarded_total - arrived <= geom_.num_pages,
-        "implausible doorbell: peer total {} against {} published, ring holds {} pages",
-        forwarded_total,
+        pages <= geom_.num_pages,
+        "implausible doorbell: {} pages against {} published, ring holds {}",
+        pages,
         arrived,
         geom_.num_pages);
-    const uint32_t pages = static_cast<uint32_t>(forwarded_total - arrived);
     if (pages != 0) {
-        // The payload is already resident in the pinned ring; publishing it is a
-        // counter advance plus one 4-byte write into device L1.
         try {
             socket_.commit_pages(pages);
         } catch (const std::exception& e) {
@@ -253,8 +233,6 @@ bool RelayReceiver::poll() {
         progress = true;
     }
 
-    // Credit is an absolute page count. bytes_acked is a wrapping 32-bit byte
-    // counter and the page size need not divide 2^32, so widen before dividing.
     const uint64_t consumed_pages = consumed_bytes_ / geom_.page_size;
     if (consumed_pages != credited_pages_.load(std::memory_order_relaxed) &&
         channel_.post_credit(static_cast<uint32_t>(consumed_pages))) {
@@ -304,10 +282,8 @@ void RelayLoop::remove(const std::shared_ptr<RelayEndpoint>& endpoint) {
 void RelayLoop::set_numa_node(int node) { numa_node_.store(node, std::memory_order_release); }
 
 bool RelayLoop::poll_once() {
-    // Held for the whole sweep, not just to copy the list: an endpoint only
-    // borrows its socket, so once remove() returns the owner is free to destroy
-    // that socket. Sweeping a snapshot outside the lock would let this thread
-    // poll it afterwards.
+    // Held for the whole sweep: an endpoint only borrows its socket, so once
+    // remove() returns the owner may destroy it.
     std::lock_guard<std::mutex> lock(mutex_);
     bool progress = false;
     for (auto& endpoint : endpoints_) {
@@ -344,7 +320,7 @@ void RelayLoop::ensure_thread() {
 
 void RelayLoop::run() {
     prctl(PR_SET_NAME, "tt-host-relay", 0, 0, 0);
-    // The default 50us timer slack would round every probe sleep up to the cap.
+    // Default 50us slack would round every probe sleep up to the cap.
     prctl(PR_SET_TIMERSLACK, 1000, 0, 0, 0);
 
     Backoff backoff;

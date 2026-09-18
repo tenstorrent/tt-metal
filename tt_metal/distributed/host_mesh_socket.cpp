@@ -33,11 +33,9 @@ using host_transport::RingGeometry;
 
 namespace {
 
-// Handshake tag base; distinct from MeshSocket's descriptor exchange. Each socket
-// instance takes the next tag so two sockets between the same rank pair (a
-// forward and a reverse channel, say) cannot mix up each other's endpoints. Both
-// ranks must construct their sockets in the same order, which is the same
-// assumption MeshSocket's exchange-tag counter makes.
+// One tag per socket instance, so two sockets between the same rank pair cannot
+// mix up each other's endpoints. Assumes both ranks construct in the same order,
+// as MeshSocket's exchange-tag counter also does.
 constexpr uint32_t kEndpointExchangeTagBase = 0x7248;
 
 multihost::Tag next_exchange_tag() {
@@ -45,8 +43,6 @@ multihost::Tag next_exchange_tag() {
     return multihost::Tag{static_cast<int>(kEndpointExchangeTagBase + counter.fetch_add(1))};
 }
 
-// One RDMA context per process: the device and protection domain are shared by
-// every channel, while completion queues stay per-channel.
 RdmaContext& shared_context(const HostMeshSocket::TransportConfig& transport) {
     static std::unique_ptr<RdmaContext> context;
     static std::mutex mutex;
@@ -67,11 +63,8 @@ std::span<std::byte> as_bytes(RdmaEndpoint& endpoint) {
 }  // namespace
 
 struct HostMeshSocket::Impl {
-    // One relayed connection, plus the per-core socket that terminates it.
-    // Declaration order sets teardown order (members die in reverse), and here it
-    // is load-bearing: stop polling, then destroy the queue pair so no work
-    // request can still reference a memory region, then deregister the regions,
-    // and only then free the memory they covered.
+    // Declaration order sets teardown order and is load-bearing: stop polling,
+    // destroy the queue pair, deregister the regions, then free their memory.
     struct Connection {
         std::unique_ptr<D2HSocket> d2h;           // sender endpoints only; owns its FIFO
         std::unique_ptr<H2DSocket> h2d;           // receiver endpoints only; owns its FIFO
@@ -106,7 +99,6 @@ struct HostMeshSocket::Impl {
 
 namespace {
 
-// The local endpoint cores, in connection order, deduplicated.
 std::vector<MeshCoreCoord> local_cores(const SocketConfig& config, SocketEndpoint endpoint) {
     std::vector<MeshCoreCoord> cores;
     for (const auto& connection : config.socket_connection_config) {
@@ -164,9 +156,8 @@ HostMeshSocket::HostMeshSocket(
     impl_->participates = true;
     impl_->active_cores = local_cores(config, impl_->endpoint);
 
-    // One height-sharded config buffer over the local endpoint cores, exactly as
-    // MeshSocket allocates it: one page per core, so every core finds its own
-    // metadata at the same L1 address and a multi-core kernel needs one address.
+    // One page per core, so every core finds its metadata at the same L1 address
+    // and a multi-core kernel needs only one.
     impl_->config_buffer = create_socket_config_buffer(device, config, impl_->endpoint);
     impl_->config_buffer_address = impl_->config_buffer->address();
 
@@ -193,8 +184,6 @@ HostMeshSocket::HostMeshSocket(
                 D2HSocket::ProcessScope::InProcess);
             connection.d2h->set_page_size(page_size);
 
-            // The pinned D2H ring is the NIC's source; the credit slot is where
-            // the peer reports what the far device has consumed.
             auto fifo = connection.d2h->host_fifo();
             connection.fifo_region = std::make_unique<RdmaRegion>(rdma, fifo.data(), fifo.size());
             connection.credit_slot = std::make_unique<uint32_t>(0);
@@ -213,20 +202,17 @@ HostMeshSocket::HostMeshSocket(
                 });
             connection.h2d->set_page_size(page_size);
 
-            // The pinned H2D ring is the NIC's destination.
             auto fifo = connection.h2d->host_fifo();
             connection.fifo_region = std::make_unique<RdmaRegion>(rdma, fifo.data(), fifo.size());
             local.fifo = connection.fifo_region->descriptor();
 
-            // Where the sender publishes how many pages it has forwarded.
             connection.doorbell_slot = std::make_unique<uint32_t>(0);
             connection.doorbell_region =
                 std::make_unique<RdmaRegion>(rdma, connection.doorbell_slot.get(), sizeof(uint32_t));
             local.doorbell = connection.doorbell_region->descriptor();
         }
 
-        // Exchange in opposite order on the two sides so neither blocks on a send
-        // the peer is not yet reading, mirroring MeshSocket::connect_with_peer.
+        // Opposite order on the two sides so neither blocks on an unread send.
         RdmaEndpoint remote{};
         if (is_sender) {
             context->send(as_bytes(local), config.receiver_rank, exchange_tag);
@@ -260,7 +246,6 @@ HostMeshSocket::HostMeshSocket(
         }
     }
 
-    // Both sides are wired before either kernel can run.
     context->barrier();
 
     if (transport.own_relay_thread) {
@@ -308,9 +293,8 @@ bool HostMeshSocket::poll() {
     if (!impl_->participates) {
         return false;
     }
-    // A relay endpoint is single-threaded by construction: it owns a queue pair
-    // whose completion queue must be drained by one consumer. Polling here while
-    // the relay thread polls the same endpoint double-consumes completions and
+    // An endpoint's completion queue must be drained by one consumer. Polling
+    // here while the relay thread polls it double-consumes completions and
     // corrupts the doorbell and credit accounting.
     TT_FATAL(
         !impl_->transport.own_relay_thread,
@@ -357,10 +341,8 @@ void HostMeshSocket::barrier(std::optional<uint32_t> timeout_ms) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms.value_or(30000));
     const bool drive_here = !impl_->transport.own_relay_thread;
 
-    // Snapshot what is outstanding now and wait for exactly that to drain. The
-    // peer pipelines ahead, so anything that arrives after this point is not
-    // ours to wait for -- waiting for the endpoint to fall idle would never
-    // finish on a socket that is still being fed.
+    // Wait only for what is outstanding now. The peer pipelines ahead, so waiting
+    // for full idle would never finish on a socket still being fed.
     std::vector<uint64_t> targets;
     targets.reserve(impl_->connections.size());
     for (const auto& connection : impl_->connections) {
@@ -374,8 +356,7 @@ void HostMeshSocket::barrier(std::optional<uint32_t> timeout_ms) {
         bool done = true;
         for (size_t i = 0; i < impl_->connections.size(); i++) {
             const auto& relay = impl_->connections[i].relay;
-            // An endpoint that threw was stopped by the relay rather than taking
-            // the process down, so surface it here instead of spinning out.
+            // Surface a stopped endpoint instead of spinning to the deadline.
             TT_FATAL(!relay->failed(), "HostMeshSocket relay failed: {}", relay->error());
             done = done && relay->drained(targets[i]);
         }

@@ -2,12 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Initiator half of a socket round-trip latency measurement. Sends one page and
-// waits for the echo, timing the pair on this core's own clock, so no cross-host
-// clock synchronisation is needed. Half the reported round trip is the one-way
-// transit estimate, under the assumption that the two directions are symmetric.
-//
-// The peer runs host_socket_echo.cpp.
+// Round-trip latency initiator; peer runs host_socket_echo.cpp. Timed on this
+// core's own clock, so no cross-host clock sync is needed. RTT/2 is the one-way
+// estimate, assuming the directions are symmetric.
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -68,7 +65,7 @@ void kernel_main() {
         socket_notify_sender(rx);
     };
 
-    // Untimed warmup so the first measured lap is not paying for cold state.
+    // Untimed warmup: cold state.
     for (uint32_t w = 0; w < WARMUP_ITERS; w++) {
         send_one();
         recv_one();

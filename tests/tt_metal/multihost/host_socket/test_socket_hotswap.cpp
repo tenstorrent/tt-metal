@@ -2,11 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Hot-swap check: the same test body and the same kernels, run once over a real
-// D2D MeshSocket and once over a HostMeshSocket. Only two things differ -- which
-// socket object is constructed, and the SOCKET_MODE compile-time argument that
-// selects where the FIFO lives. If this file compiles and both cases pass, the
-// host-interconnect socket is a drop-in for a D2D socket at the call site.
+// Same body and kernels over a real D2D MeshSocket and over a HostMeshSocket.
+// Only the socket type and SOCKET_MODE differ; if both pass, the host socket is
+// a drop-in at the call site.
 
 #include <gtest/gtest.h>
 
@@ -30,11 +28,8 @@ constexpr uint32_t kNumPages = 16;
 constexpr uint32_t kFifoSize = kPageSize * kNumPages;
 constexpr uint32_t kDataSize = kFifoSize;
 
-// Which end of the socket this process drives. D2D on one device drives both.
 enum class Role { Both, Sender, Receiver };
 
-// The shared body. The config addresses come from whichever socket the caller
-// built, and `mode` says which transport the kernels compile for.
 void run_case(
     const std::shared_ptr<MeshDevice>& device,
     const CoreCoord& sender_core,
@@ -71,8 +66,7 @@ void run_case(
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = sender_args});
     }
     if (role == Role::Both || role == Role::Receiver) {
-        // On one device the two kernels share a program, so the receiver takes the
-        // second data-movement processor.
+        // Sharing a program: receiver takes the second DM processor.
         const bool second = role == Role::Both;
         CreateKernel(
             program,

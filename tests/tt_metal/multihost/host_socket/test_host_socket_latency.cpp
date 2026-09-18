@@ -2,19 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Latency for HostMeshSocket, measured without any cross-host clock sync.
-//
-// Two measurements, each timed on a single clock:
-//
-//  1. Idle device-to-device round trip. Rank 0 sends a page and waits for rank 1
-//     to echo it, timing the pair with rank 0's own Tensix clock. Half of that is
-//     the one-way transit estimate, assuming the two directions are symmetric.
-//
-//  2. The streaming workload's ack round trip, timed on the sending host: from
-//     handing a batch to the NIC until the peer credits it, i.e. out through the
-//     far host, into the far device, and back. Subtracting the idle round trip's
-//     half removes the return transit and leaves the forward path under load --
-//     so the gap between that and the idle half is queueing delay, not distance.
+// Latency without cross-host clock sync: each figure is timed on one clock, and
+// one-way is RTT/2 assuming symmetry. Subtracting the idle RTT/2 from the loaded
+// ack round trip removes the return transit, so what remains is queueing.
 
 #include <gtest/gtest.h>
 
@@ -31,7 +21,6 @@
 namespace tt::tt_metal::distributed::host_socket_test {
 namespace {
 
-// Round-trip latency: one page out, the same page back, timed on the device.
 TEST(HostSocketLatencyTest, RoundTrip) {
     const auto context = multihost::DistributedContext::get_current_world();
     ASSERT_EQ(*context->size(), 2) << "needs exactly 2 ranks";
@@ -53,11 +42,10 @@ TEST(HostSocketLatencyTest, RoundTrip) {
 
     HostMeshSocket::TransportConfig transport;
     transport.page_size = page_size;
-    // Depth 1 on the wire: a latency probe should not batch.
+    // A latency probe must not batch.
     transport.max_batch_pages = 1;
 
-    // Two sockets, forward and reverse. Constructed in the same order on both
-    // ranks so their handshakes cannot be confused for one another.
+    // Same construction order on both ranks, else the handshakes cross.
     SocketConfig forward({connection}, mem_config, kSenderRank, kReceiverRank, context);
     SocketConfig reverse({connection}, mem_config, kReceiverRank, kSenderRank, context);
     HostMeshSocket fwd(device, forward, transport);
@@ -141,17 +129,12 @@ TEST(HostSocketLatencyTest, RoundTrip) {
     record_latency("d2d_one_way_estimate", page_size, one_way);
 }
 
-// Ack round trip under a streaming load, timed on the sending host, plus the
-// forward-path figure that remains once the idle return transit is removed.
 TEST(HostSocketLatencyTest, StreamingAckLatency) {
     const auto context = multihost::DistributedContext::get_current_world();
     ASSERT_EQ(*context->size(), 2) << "needs exactly 2 ranks";
 
-    // One long iteration on purpose. With several iterations the relay also
-    // samples across a kernel relaunch, where the far device is not consuming at
-    // all, and those samples measure "wait for the next launch" -- hundreds of
-    // milliseconds -- which swamps the average. A single streaming pass keeps
-    // every sample in steady state.
+    // One long iteration: across several, the relay also samples over a kernel
+    // relaunch where the far device is not consuming, giving 100s of ms samples.
     Params params = params_from_env(Params{
         .page_size = 14336,
         .fifo_pages = 64,
@@ -173,8 +156,7 @@ TEST(HostSocketLatencyTest, StreamingAckLatency) {
     for (uint64_t ns : samples) {
         us.push_back(static_cast<double>(ns) / 1000.0);
     }
-    // Drop the opening batches: the ring starts empty, so the first credits come
-    // back without the queueing the steady state has.
+    // Drop the opening batches: the ring starts empty, so no queueing yet.
     const size_t skip = std::min<size_t>(us.size() / 10, 16);
     us.erase(us.begin(), us.begin() + static_cast<long>(skip));
     const auto ack = summarize(us);

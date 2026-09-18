@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Correctness and throughput for HostMeshSocket: a device-to-device socket whose
-// peer is reached over the host interconnect. Needs a world size of 2; rank 0
-// sends and rank 1 receives.
+// Correctness and throughput for HostMeshSocket. World size 2: rank 0 sends.
 
 #include <gtest/gtest.h>
 
@@ -34,8 +32,7 @@ TEST(HostSocketTest, MultiCoreCorrectness) {
     run_transfer(params, /*verify=*/true);
 }
 
-// Page-size sweep, including sizes that are not powers of two: the FIFO pointer
-// arithmetic must be modular, not bitwise.
+// Includes non-power-of-two sizes: the FIFO pointer arithmetic must be modular.
 TEST(HostSocketTest, PageSizeSweepCorrectness) {
     require_two_ranks();
     for (uint32_t page_size : {2048u, 4096u, 14336u, 32768u}) {
@@ -49,8 +46,7 @@ TEST(HostSocketTest, PageSizeSweepCorrectness) {
     }
 }
 
-// Wraps the ring many times over, so pointer wrap and counter wrap are exercised
-// rather than just the first pass.
+// Many laps, so pointer and counter wrap are exercised.
 TEST(HostSocketTest, RingWrapCorrectness) {
     require_two_ranks();
     Params params = params_from_env();
@@ -61,7 +57,7 @@ TEST(HostSocketTest, RingWrapCorrectness) {
 
 TEST(HostSocketTest, Throughput) {
     require_two_ranks();
-    // 14 KiB pages, a deep ring, and enough volume that setup is not measured.
+    // Enough volume that setup is not measured.
     Params params = params_from_env(Params{
         .page_size = 14336,
         .fifo_pages = 64,
@@ -77,7 +73,7 @@ TEST(HostSocketTest, Throughput) {
         GTEST_LOG_(INFO) << "HostMeshSocket throughput: " << gbps << " GB/s at " << params.page_size
                          << " B pages across " << params.num_cores << " core(s)";
         record_result(params, gbps);
-        // Informational by default; set a floor to gate a run in CI.
+        // Informational unless a floor is set.
         const char* floor_env = std::getenv("TT_HOST_SOCKET_MIN_GBPS");
         if (floor_env != nullptr && *floor_env != '\0') {
             EXPECT_GE(gbps, std::strtod(floor_env, nullptr));
@@ -85,8 +81,7 @@ TEST(HostSocketTest, Throughput) {
     }
 }
 
-// Long-running correctness soak. Inert unless TT_HOST_SOCKET_SOAK_SECONDS is set,
-// so it never slows an ordinary run.
+// Inert unless TT_HOST_SOCKET_SOAK_SECONDS is set.
 TEST(HostSocketTest, Soak) {
     require_two_ranks();
     Params params = params_from_env(Params{.num_cores = 4});
