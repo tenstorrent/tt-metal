@@ -135,10 +135,11 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
 
         Hyper-connection ``fn`` first (private GCB, consumed before attention), then
         attention (its own four projections and its compressor's pair), then the FFN
-        hyper-connection, then the MoE shared expert. Attention and MoE share one GCB
-        and must stay in that FIFO order; each HC streams through its own buffer.
-        The requests queued here must be consumed by this layer's own decode before
-        any later layer queues its own.
+        hyper-connection, then the MoE (router gate on its 8-receiver ring, then the
+        shared expert). q_a's 32-receiver FIFO continues from CSA into shared-expert
+        gate/up; the shared 64-core GCB continues from o_b into shared-expert down.
+        Each HC streams through its own buffer. The requests queued here must be
+        consumed by this layer's own decode before any later layer queues its own.
         """
         self.attn_hc.prefetch_weights()
         self.self_attn.prefetch_weights()
