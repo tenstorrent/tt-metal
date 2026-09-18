@@ -92,6 +92,37 @@ STALE_SECS="${STALE_SECS:-240}"
 # Path of the Nth outer-iteration log (zero-padded): log_for 3 -> <dir>/log_03
 log_for() { printf "%s/log_%02d" "$1" "$2"; }
 
+# Epoch seconds of the FIRST line of <log> matching <pattern>, read off its loguru timestamp.
+# Empty when the pattern has not been logged yet, which is how callers detect "phase not reached".
+log_ts() {
+  local line
+  line=$(grep -m1 "$2" "$1" 2>/dev/null)
+  [[ $line =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}\ [0-9:]{8}) ]] && date -d "${BASH_REMATCH[1]}" +%s 2>/dev/null
+}
+
+# Seconds -> 1h02m03s / 49m24s / 13s
+dur() {
+  if [ "$1" -ge 3600 ]; then printf '%dh%02dm%02ds' $(($1 / 3600)) $((($1 % 3600) / 60)) $(($1 % 60))
+  elif [ "$1" -ge 60 ]; then printf '%dm%02ds' $(($1 / 60)) $(($1 % 60))
+  else printf '%ds' "$1"; fi
+}
+
+# "load 49m24s  fwd 9m13s" for <log> up to <end epoch>. Worth reading apart because the weight load
+# dominates an outer iteration (measured 49m24s load vs 9m13s forward on a 61-layer traced Kimi run),
+# so "this run is slow" is almost always "this load is slow" and the forward number is the one that
+# actually tracks the thing under test. Everything before forward_layer_0_start is still load.
+phase_split() {
+  local start fwd
+  start=$(log_ts "$1" 'Building TtPrefillTransformer')
+  [ -z "$start" ] && return
+  fwd=$(log_ts "$1" 'forward_layer_0_start')
+  if [ -z "$fwd" ]; then
+    printf 'load %s' "$(dur $(($2 - start)))"
+  else
+    printf 'load %s  fwd %s' "$(dur $((fwd - start)))" "$(dur $(($2 - fwd)))"
+  fi
+}
+
 # Decode a shell exit status into a signal name. 128+N means "killed by signal N",
 # and the distinction matters: 135 (SIGBUS) is a failed host mapping — the tt-kmd
 # pin_user_pages failure mode — while 139 (SIGSEGV) or 134 (SIGABRT) point at the
@@ -165,7 +196,7 @@ scan_log_dir() {
   pass=0; fail=0; crash=0; hang=0; running=0; pending=0
   details=()
 
-  local i f next N iter layer mtime now idle elapsed loading progress rc
+  local i f next N iter layer mtime now idle elapsed progress split rc
   for i in $(seq 1 "$LOOP"); do
     f=$(log_for "$dir" "$i")
     next=$(log_for "$dir" $((i + 1)))
@@ -174,9 +205,11 @@ scan_log_dir() {
       ((pending++))
       continue
     fi
+    mtime=$(stat -c %Y "$f" 2>/dev/null || echo 0)
+    split=$(phase_split "$f" "$mtime")
     if grep -qE 'smoke test passed|Chunked prefill no-PCC run done|^=+.*1 passed' "$f" 2>/dev/null; then
       elapsed=$(grep -oE '[0-9]+\.[0-9]+s \([0-9:]+\)' "$f" | tail -1)
-      details+=("  $N: PASS  $elapsed")
+      details+=("  $N: PASS  $elapsed  $split")
       ((pass++))
     elif grep -qE '^=+.*(1 failed|1 error)' "$f" 2>/dev/null; then
       details+=("  $N: FAIL")
@@ -198,26 +231,27 @@ scan_log_dir() {
       # "iter N done (C chunks) in ...s" once per completed outer iteration.
       iter=$(grep -cE 'Starting iteration:|iter [0-9]+ done \([0-9]+ chunks\)' "$f" 2>/dev/null)
       layer=$(grep -oE 'forward_layer_[0-9]+_(start|end)' "$f" 2>/dev/null | tail -1)
-      mtime=$(stat -c %Y "$f" 2>/dev/null || echo 0)
       now=$(date +%s)
       idle=$((now - mtime))
 
-      # Before the forward loop starts there are no forward_layer markers; show
-      # which layer's weights are currently being loaded from cache instead.
-      progress="$layer"
+      # Before the forward loop starts there are no forward_layer markers, and the run sits in the
+      # weight load for most of its wall clock. tt_prefill_transformer logs "Building layer N/M" per
+      # layer, which is the load-phase counterpart of forward_layer_N_end, so show it verbatim.
       if [ -z "$layer" ]; then
-        loading=$(grep 'Loaded cache for' "$f" 2>/dev/null | grep -oE 'layer_[0-9]+' | tail -1)
-        [ -n "$loading" ] && progress="loading weights $loading"
+        progress=$(grep -oE 'Building layer [0-9]+/[0-9]+' "$f" 2>/dev/null | tail -1)
+        [ -n "$progress" ] && progress="loading ${progress#Building }"
+      else
+        progress="$layer"
       fi
 
       if [ -f "$next" ]; then
-        details+=("  $N: HANG?  iter=$iter/$INNER_ITERS  $progress")
+        details+=("  $N: HANG?  iter=$iter/$INNER_ITERS  $progress  $split")
         ((hang++))
       elif [ "$idle" -gt "$STALE_SECS" ]; then
-        details+=("  $N: STALE ${idle}s  iter=$iter/$INNER_ITERS  $progress")
+        details+=("  $N: STALE ${idle}s  iter=$iter/$INNER_ITERS  $progress  $split")
         ((running++))
       else
-        details+=("  $N: RUN    iter=$iter/$INNER_ITERS  $progress  (idle ${idle}s)")
+        details+=("  $N: RUN    iter=$iter/$INNER_ITERS  $progress  $split  (idle ${idle}s)")
         ((running++))
       fi
     fi
