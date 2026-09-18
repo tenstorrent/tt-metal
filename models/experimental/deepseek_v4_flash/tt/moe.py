@@ -356,6 +356,7 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
         Trace-safe as it stands, so prefill and the captured decode share this one path:
         every op here allocates its own output and nothing is host-initialised.
         """
+        assert x_flat.layout == ttnn.ROW_MAJOR_LAYOUT, "x_flat must be in row-major layout"
         scores = self._scores(x_flat)  # [1, 1, T, E]
         # Ranked on the bias-corrected scores, weighted by the uncorrected ones -- which is
         # why both halves of the pair travel to the expert op instead of just the winners'
@@ -572,8 +573,8 @@ def _tp_all_reduce(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
     return ttnn.all_reduce(
         tensor,
         cluster_axis=_tp_cluster_axis(device),
-        num_links=1,
-        topology=ttnn.Topology.Linear,
+        num_links=2,
+        topology=ttnn.Topology.Ring,
     )
 
 
