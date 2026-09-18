@@ -3235,3 +3235,187 @@ def test_local_pytest_target_preserves_node_and_filter(
     )
     assert proc.returncode == 0, proc.stderr
     assert summary in proc.stdout
+
+
+@pytest.fixture
+def reviewed_candidate(tmp_path):
+    wt = tmp_path / "candidate"
+    wt.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(wt), *args], text=True).strip()
+
+    git("init", "-q")
+    git("config", "user.name", "test")
+    git("config", "user.email", "test@example.com")
+    (wt / "kernel.h").write_text("base\n")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    (wt / "kernel.h").write_text("fix\n")
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": "run-1",
+                "attempt_id": "queue-1",
+                "required_verification": {"attempt_id": "attempt-001"},
+            }
+        )
+    )
+
+    def review(action):
+        return _run(
+            logs,
+            "review",
+            "--action",
+            action,
+            "--worktree",
+            str(wt),
+            "--expected-base-sha",
+            base,
+        )
+
+    review("prepare")
+    result = {
+        "identity": json.loads((logs / "review_context.json").read_text()),
+        "reviewed": True,
+        "findings": [],
+        "findings_total": 0,
+        "blocking_total": 0,
+        "verdict": "clean",
+        "requirements_complete": True,
+        "unresolved": [],
+        "skills_used": [],
+    }
+    (logs / "review_result.json").write_text(json.dumps(result))
+    return wt, logs, git, review, result
+
+
+@pytest.mark.parametrize(
+    "mutation", ["staged", "untracked", "committed", "manifest", "run"]
+)
+def test_review_rejects_stale_candidate(reviewed_candidate, mutation):
+    wt, logs, git, review, result = reviewed_candidate
+    review("record")
+    if mutation in {"staged", "untracked", "committed"}:
+        (wt / "new.h").write_text("new fix\n")
+        if mutation != "untracked":
+            git("add", "-A")
+        if mutation == "committed":
+            git("commit", "-qm", "changed")
+    else:
+        run = json.loads((logs / "run.json").read_text())
+        if mutation == "manifest":
+            run["required_verification"]["attempt_id"] = "attempt-002"
+        else:
+            run["run_id"] = "different-run"
+        (logs / "run.json").write_text(json.dumps(run))
+    with pytest.raises(subprocess.CalledProcessError):
+        review("check")
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"reviewed": False},
+        {"blocking_total": False},
+        {"findings_total": 1},
+        {"identity": {}},
+        {"verdict": "changes_requested"},
+        {"findings": [{}]},
+        {"requirements_complete": 1},
+        {"unresolved": [None]},
+    ],
+)
+def test_review_rejects_malformed_success(reviewed_candidate, patch):
+    wt, logs, git, review, result = reviewed_candidate
+    (logs / "review_result.json").write_text(json.dumps({**result, **patch}))
+    with pytest.raises(subprocess.CalledProcessError):
+        review("record")
+
+
+def test_review_preserves_index_and_accepts_packaging_commit(reviewed_candidate):
+    wt, logs, git, review, result = reviewed_candidate
+    index = (wt / ".git/index").read_bytes()
+    review("record")
+    assert (wt / ".git/index").read_bytes() == index
+    git("add", "-A")
+    git("commit", "-qm", "package")
+    review("check")
+    assert len(list((logs / "reviews").glob("*.json"))) == 1
+    review("prepare")
+    assert not (logs / "review_result.json").exists()
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [{"requirements_complete": None}, {"unresolved": ["Need SRCB state evidence"]}],
+)
+def test_review_records_pending_evidence_but_cannot_succeed(reviewed_candidate, patch):
+    wt, logs, git, review, result = reviewed_candidate
+    (logs / "review_result.json").write_text(json.dumps({**result, **patch}))
+    review("record")
+    with pytest.raises(subprocess.CalledProcessError):
+        review("check")
+
+
+@pytest.mark.parametrize("ending", ["exit 0", "exit 1", "sleep 30"])
+def test_autodebug_launcher_is_bounded_and_archives_report(tmp_path, ending):
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    package = tmp_path / "plugin"
+    launcher = package / "skills/autodebug/scripts/autodebug.sh"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text(
+        'test -z "${CLAUDECODE:-}" || exit 9\nprintf "diagnosis" > AUTODEBUG.md\n'
+        + ending
+        + "\n"
+    )
+    (logs / "run.json").write_text(
+        json.dumps({"solver_plugins": {"tt-autodebug": {"path": str(package)}}})
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(RUN_UTILS),
+            "autodebug",
+            "--worktree",
+            str(wt),
+            "--log-dir",
+            str(logs),
+            "--problem",
+            "test failure",
+            "--timeout",
+            "1",
+        ],
+        env={**os.environ, "CLAUDECODE": "1"},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert (result.returncode == 0) == (ending == "exit 0")
+    assert not (wt / "AUTODEBUG.md").exists()
+    assert [p.read_text() for p in logs.glob("autodebug-*/AUTODEBUG.md")] == [
+        "diagnosis"
+    ]
+    (wt / "AUTODEBUG.md").write_text("unrelated")
+    refused = subprocess.run(
+        [
+            sys.executable,
+            str(RUN_UTILS),
+            "autodebug",
+            "--worktree",
+            str(wt),
+            "--log-dir",
+            str(logs),
+            "--problem",
+            "failure",
+        ],
+        capture_output=True,
+    )
+    assert refused.returncode != 0
+    assert (wt / "AUTODEBUG.md").read_text() == "unrelated"

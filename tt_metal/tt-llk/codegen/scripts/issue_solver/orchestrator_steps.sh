@@ -673,13 +673,13 @@ PY
     # Counters + limits.
     ss COMPILATION_ATTEMPTS  0 --json
     ss DEBUG_CYCLES          0 --json
-    ss MAX_DEBUG_CYCLES      5 --json
+    ss MAX_DEBUG_CYCLES      8 --json
     ss TESTS_TOTAL           0 --json
     ss TESTS_PASSED          0 --json
     ss PERF_RETRIES          0 --json
-    ss MAX_PERF_RETRIES      2 --json
+    ss MAX_PERF_RETRIES      4 --json
     ss REVIEW_RETRIES        0 --json
-    ss MAX_REVIEW_RETRIES    2 --json
+    ss MAX_REVIEW_RETRIES    4 --json
     ss PERF_GOAL             "$PERF_GOAL"
     if [ "$RUN_KIND" = "review" ]; then ss PREVIOUS_AGENT "addresser"; else ss PREVIOUS_AGENT "analyzer"; fi
     ss VERIFY_DEFERRED       0 --json
@@ -960,7 +960,7 @@ execute_step_advance_writer() {
 execute_step_record_changed_files() {
     local _L; _L="$(_LOG)"
     local wt tracked untracked cf test_changes; wt="$(_wt)"
-    tracked="$(git -C "$wt" diff --name-only 2>/dev/null || true)"
+    tracked="$(git -C "$wt" diff HEAD --name-only 2>/dev/null || true)"
     untracked="$(git -C "$wt" ls-files --others --exclude-standard 2>/dev/null || true)"
     cf="$(printf '%s\n%s\n' "$tracked" "$untracked" | sed '/^$/d' | sort -u)"
     ss CHANGED_FILES "$cf"
@@ -1290,6 +1290,7 @@ execute_step_advance_review() {
     fi
     local what="fix diff for issue #${num}"
     [ "$mode" = multi ] && what="shared fix diff for issue #${num} across ${arches}"
+    rj review --action prepare --run-kind "$(sg RUN_KIND)" --worktree "$(_wt)" --expected-base-sha "$(sg GIT_COMMIT)" || return 1
     rj advance --new-step "review" \
         --new-message "Reviewing ${what} (attempt $((rr+1))/$((mrr+1)))" \
         --prev-result "success" --prev-message "Functional tests passed" --agent "$agent"
@@ -1300,8 +1301,7 @@ execute_step_advance_review() {
 # ===========================================================================
 execute_step_record_review() {
     local _L; _L="$(_LOG)"
-    [ -f "$_L/review_result.json" ] || { echo "no review_result.json to record"; return 0; }
-    rj metric --patch-json "{\"review\": $(cat "$_L/review_result.json")}"
+    rj review --action record --run-kind "$(sg RUN_KIND)" --worktree "$(_wt)" --expected-base-sha "$(sg GIT_COMMIT)"
 }
 
 # ===========================================================================
@@ -1662,23 +1662,13 @@ PY
     fi
 
     # Functional success covers only the selected tests. The existing reviewer
-    # must also have checked that the selected fix completes the original issue.
-    if [ "$(sg RUN_KIND)" != review ] && [[ "$(sg STATUS)" =~ ^(success|compiled)$ ]]; then
+    # must cover the current candidate; issue solves also require whole-issue completion.
+    if [[ "$(sg STATUS)" =~ ^(success|compiled)$ ]]; then
         local review_error
-        review_error="$(python - "$_L/review_result.json" <<'PY'
-import json, sys
-try:
-    review = json.load(open(sys.argv[1]))
-except (OSError, ValueError):
-    review = {}
-if not isinstance(review, dict) or review.get("requirements_complete") is not True:
-    print("issue requirements are incomplete or their completion was not reviewed")
-    if isinstance(review, dict) and review.get("summary"):
-        print(review["summary"])
-elif review.get("blocking_total") != 0 or review.get("verdict") != "clean":
-    print("unresolved_review_findings")
-PY
-)" || return 1
+        review_error="$(rj review --action check --run-kind "$(sg RUN_KIND)" --worktree "$(_wt)" \
+            --expected-base-sha "$(sg GIT_COMMIT)" 2>&1)" || {
+            review_error="${review_error:-review validation failed}"
+        }
         if [ -n "$review_error" ]; then
             [ -n "$(sg OBSTACLE)" ] || ss OBSTACLE "$review_error"
             ss FINAL_MESSAGE "issue #${num} incomplete: ${review_error}"

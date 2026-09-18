@@ -71,6 +71,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import uuid
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -282,6 +283,7 @@ def cmd_init(args: argparse.Namespace) -> None:
             if os.environ.get("CODEGEN_RESUME_RUN_ID")
             else None
         ),
+        "solver_plugins": json.loads(os.environ.get("CODEGEN_SOLVER_PLUGINS", "{}")),
         "git_commit": args.git_commit,
         "git_branch": args.git_branch,
         "description": args.description or None,
@@ -748,6 +750,115 @@ def _candidate_patch_digest(worktree: Path, base: str) -> str:
         if temporary_index:
             Path(temporary_index).unlink(missing_ok=True)
     return hashlib.sha256(patch).hexdigest()
+
+
+def cmd_review(args: argparse.Namespace) -> None:
+    """Bind the existing reviewer handoff to the run, manifest and candidate."""
+    log_dir = Path(args.log_dir)
+    run = _load(log_dir)
+    context_path = log_dir / "review_context.json"
+    result_path = log_dir / "review_result.json"
+    identity = {
+        "run_id": run["run_id"],
+        "attempt_id": run.get("attempt_id"),
+        "verification_attempt_id": (run.get("required_verification") or {}).get(
+            "attempt_id"
+        ),
+        "run_kind": args.run_kind or "issue",
+        "base_commit": args.expected_base_sha,
+        "patch_sha256": _candidate_patch_digest(
+            Path(args.worktree), args.expected_base_sha
+        ),
+    }
+    if args.action == "prepare":
+        identity["review_id"] = uuid.uuid4().hex
+        result_path.unlink(missing_ok=True)
+        _atomic_write(log_dir, identity, destination=context_path)
+        return
+    # A disposition-only round has no candidate code to review. Compute this
+    # from Git, never from the agent's changed-file list.
+    if (
+        args.action == "check"
+        and args.run_kind == "review"
+        and identity["patch_sha256"] == hashlib.sha256(b"").hexdigest()
+    ):
+        return
+    context = json.loads(context_path.read_text())
+    if any(context.get(key) != value for key, value in identity.items()):
+        raise ValueError("review context is stale: run, verification or patch changed")
+    review = json.loads(result_path.read_text())
+    if not isinstance(review, dict) or review.get("identity") != context:
+        raise ValueError("review result is missing the current review identity")
+    if review.get("reviewed") is not True:
+        raise ValueError("reviewed must be true")
+    findings = review.get("findings")
+    unresolved = review.get("unresolved")
+    if not isinstance(findings, list) or not isinstance(unresolved, list):
+        raise ValueError("review findings and unresolved must be arrays")
+    severities = {
+        "completeness",
+        "correctness",
+        "hazard",
+        "propagation",
+        "parity",
+        "style",
+        "cleanup",
+    }
+    for finding in findings:
+        if (
+            not isinstance(finding, dict)
+            or type(finding.get("blocking")) is not bool
+            or finding.get("severity") not in severities
+            or any(
+                not isinstance(finding.get(key), str) or not finding[key].strip()
+                for key in ("file", "line", "title", "comment")
+            )
+        ):
+            raise ValueError("malformed review finding")
+    if any(not isinstance(item, str) or not item.strip() for item in unresolved):
+        raise ValueError("unresolved entries must name the missing evidence")
+    blockers = sum(finding["blocking"] for finding in findings)
+    for key, expected in (
+        ("findings_total", len(findings)),
+        ("blocking_total", blockers),
+    ):
+        if type(review.get(key)) is not int or review[key] != expected:
+            raise ValueError(f"review {key} does not match actual findings")
+    if review.get("verdict") != ("changes_requested" if blockers else "clean"):
+        raise ValueError("review verdict does not match actual findings")
+    if (args.run_kind != "review" and "requirements_complete" not in review) or (
+        review.get("requirements_complete") is not None
+        and type(review["requirements_complete"]) is not bool
+    ):
+        raise ValueError("review requirements_complete must be boolean or null")
+    skills = review.get("skills_used")
+    if not isinstance(skills, list) or any(
+        not isinstance(skill, str) for skill in skills
+    ):
+        raise ValueError("review skills_used must be an array of skill names")
+    if (run.get("solver_plugins") or {}).get(
+        "tt-review-skills"
+    ) and "tt-review-core" not in skills:
+        raise ValueError("configured review plugin was not consumed")
+    if args.action == "check":
+        if (
+            (
+                args.run_kind != "review"
+                and review.get("requirements_complete") is not True
+            )
+            or blockers
+            or unresolved
+        ):
+            raise ValueError(
+                "issue requirements or review evidence incomplete: "
+                + str(review.get("summary", ""))
+            )
+        return
+    _atomic_write(
+        log_dir, review, destination=log_dir / "reviews" / f"{uuid.uuid4().hex}.json"
+    )
+    run["review"] = review
+    _atomic_write(log_dir, run)
 
 
 def cmd_candidate_patch_digest(args: argparse.Namespace) -> None:
@@ -3355,6 +3466,18 @@ def _build_parser() -> argparse.ArgumentParser:
         help="candidate worktree used to reopen base-tracked waiver policy",
     )
     reduce_result.set_defaults(func=cmd_reduce_verification)
+
+    review = sub.add_parser(
+        "review", help="Prepare, record or check a candidate-bound review"
+    )
+    _add_common(review)
+    review.add_argument(
+        "--action", required=True, choices=["prepare", "record", "check"]
+    )
+    review.add_argument("--run-kind", default="issue", choices=["issue", "review", ""])
+    review.add_argument("--worktree", required=True)
+    review.add_argument("--expected-base-sha", required=True)
+    review.set_defaults(func=cmd_review)
 
     return p
 

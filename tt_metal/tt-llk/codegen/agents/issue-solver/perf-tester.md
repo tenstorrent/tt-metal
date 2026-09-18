@@ -59,6 +59,13 @@ selector and measurements for the worker to seal. Do not submit a job without
 a sealed leaf. Never drop a leaf because a hypothesis was refuted; retain its
 unexecuted requirement for the orchestrator reducer.
 
+When `run.json.solver_plugins` configures `tt-review-skills`, explicitly read
+`<path>/skills/llk-perf-audit-review/SKILL.md` for LLK performance changes and
+`tt-perf-claim-review/SKILL.md` when evaluating a speedup claim. Use them to
+interpret the sealed experiment and disassembly, not to expand the test suite.
+This role's same-board comparison and JSON result remain authoritative. Record
+which skills informed the measurement in the existing self-log.
+
 Optional environment:
 
 - `HW_TEST_DISPATCH_CMD`: submit silicon runs to the shared queue. The command

@@ -261,7 +261,16 @@ execute_step_advance_review
 ```
 
 Spawn `reviewer.md`, then call `execute_step_record_review`. Read
-`blocking_total` from `review_result.json`:
+`blocking_total` from `review_result.json` only after recording succeeds.
+If validation fails, have the reviewer correct its output; never forward a
+malformed result to the worker. A changed candidate requires
+`execute_step_advance_review` and a full review again. For `unresolved` evidence,
+spend one review retry (`execute_step_bump_review`) on the existing
+architecture/test owner, then re-review. If the budget is exhausted or evidence
+is unavailable, mark failed with the evidence gap. Do not interpret
+uncertainty as a code-change request or continue to success.
+
+For validated findings:
 
 - `0`: continue to performance.
 - Greater than zero with retry budget: call `execute_step_review_feedback`,

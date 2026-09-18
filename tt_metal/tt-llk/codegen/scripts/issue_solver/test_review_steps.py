@@ -46,6 +46,49 @@ def _bash(
     )
 
 
+def _prepare_review(worktree, log_dir, review):
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-C", str(worktree), *args], text=True
+        ).strip()
+
+    if not (worktree / ".git").exists():
+        (worktree / ".gitignore").write_text(".codegen_run_state.json\n")
+        git("init", "-q")
+        git("config", "user.name", "test")
+        git("config", "user.email", "test@example.com")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+    state_path = log_dir / "state.json"
+    state = json.loads(state_path.read_text())
+    state.setdefault("GIT_COMMIT", git("rev-parse", "HEAD"))
+    state_path.write_text(json.dumps(state))
+    prepared = _bash("execute_step_advance_review", worktree / "tt_metal/tt-llk")
+    assert prepared.returncode == 0, prepared.stderr
+    if review is not None:
+        result = {
+            "reviewed": True,
+            "findings": [],
+            "unresolved": [],
+            "skills_used": [],
+            **review,
+            "identity": json.loads((log_dir / "review_context.json").read_text()),
+        }
+        if result.get("blocking_total"):
+            result["findings"] = [
+                {
+                    "blocking": True,
+                    "severity": "completeness",
+                    "file": "fix.cpp",
+                    "line": "1",
+                    "title": "missing requirement",
+                    "comment": "R2 missing",
+                }
+            ]
+        result["findings_total"] = len(result["findings"])
+        (log_dir / "review_result.json").write_text(json.dumps(result))
+
+
 @pytest.fixture
 def worktree(tmp_path: Path) -> Path:
     """A minimal fake worktree: <wt>/tt_metal/tt-llk with local artifacts."""
@@ -675,8 +718,7 @@ def test_finalize_requires_whole_issue_review(
         }
     )
     (log_dir / "state.json").write_text(json.dumps(state))
-    if review is not None:
-        (log_dir / "review_result.json").write_text(json.dumps(review))
+    _prepare_review(worktree, log_dir, review)
     finalized = _bash(
         "refresh_cost() { :; }; execute_step_mark_status success; execute_step_finalize_run",
         worktree / "tt_metal" / "tt-llk",
@@ -723,6 +765,7 @@ def test_review_round_does_not_require_whole_original_issue_completion(
         }
     )
     (log_dir / "state.json").write_text(json.dumps(state))
+    _prepare_review(worktree, log_dir, None)
     finalized = _bash(
         "refresh_cost() { :; }; execute_step_mark_status success; execute_step_finalize_run",
         worktree / "tt_metal" / "tt-llk",
@@ -977,14 +1020,14 @@ def test_packaging_failure_and_retry_preserve_verification(
         }
     )
     state_path.write_text(json.dumps(state))
-    (log_dir / "review_result.json").write_text(
-        json.dumps(
-            {
-                "verdict": "clean",
-                "blocking_total": 0,
-                "requirements_complete": True,
-            }
-        )
+    _prepare_review(
+        worktree,
+        log_dir,
+        {
+            "verdict": "clean",
+            "blocking_total": 0,
+            "requirements_complete": True,
+        },
     )
     hook = worktree / ".git/hooks/pre-commit"
     hook.write_text("#!/bin/sh\nexit 1\n")
@@ -1024,3 +1067,46 @@ def test_packaging_failure_and_retry_preserve_verification(
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_review_round_validates_candidate_without_original_issue_completion(
+    tmp_path, worktree, stale
+):
+    result, _ = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 1,
+                "tests_passed": 1,
+            }
+        },
+    )
+    assert result.returncode == 0
+    logs = tmp_path / "combine-log"
+    state = json.loads((logs / "state.json").read_text())
+    state.update(
+        {
+            "RUN_KIND": "review",
+            "RUN_MODE": "single",
+            "ISSUE_NUMBER": "1",
+            "TARGET_ARCH": "blackhole",
+            "CHANGED_FILES_JSON": [],
+        }
+    )
+    (logs / "state.json").write_text(json.dumps(state))
+    _prepare_review(worktree, logs, None)
+    (worktree / "kernel.h").write_text("review fix\n")
+    _prepare_review(worktree, logs, {"verdict": "clean", "blocking_total": 0})
+    if stale:
+        (worktree / "kernel.h").write_text("unreviewed change\n")
+    finalized = _bash(
+        "refresh_cost() { :; }; execute_step_mark_status success; execute_step_finalize_run",
+        worktree / "tt_metal/tt-llk",
+    )
+    assert finalized.returncode == 0, finalized.stderr
+    run = json.loads((logs / "run.json").read_text())
+    assert run["status"] == ("failed" if stale else "success")

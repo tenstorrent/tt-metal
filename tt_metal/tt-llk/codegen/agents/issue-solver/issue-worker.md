@@ -202,8 +202,33 @@ runnable regression can be added inside the tt-metal worktree, return
 
    The orchestrator does not send `SIM_ISA_GAP` or `ENV_ERROR` to the worker.
    If invoked with either, return `BLOCKED` without editing.
-2. For local runs, inspect generated assembly only when it helps classify the
-   failure:
+2. For `TIMEOUT`, `DATA_MISMATCH` or `RECONFIG_ESCAPE`, use AutoDebug as the
+   first diagnostic step after classification. Read `run.json.solver_plugins`.
+   If `tt-autodebug` is configured, explicitly read
+   `<path>/skills/autodebug/SKILL.md`, then run its launcher through the existing
+   run utility (once per worker invocation, up to 30 minutes within the current
+   retry budget; wait for completion if the shell tool yields):
+
+   ```bash
+   python codegen/scripts/issue_solver_run_utils.py autodebug \
+     --log-dir "$LOG_DIR" --worktree "$WORKTREE_DIR" \
+     --problem "<failure, exact evidence paths, architecture and competing hypotheses>"
+   ```
+
+   Read the report in the printed log directory and verify its claims against
+   current source before editing. The child is inspection-only. Launcher failure
+   is an evidence gap, not a reason to disable isolation or retry unboundedly.
+   For hangs with captured state, read `autotriage/SKILL.md` from the same package
+   and interpret the native LLK triage evidence linked in `device_recovery.triage`;
+   do not invoke Metal Inspector for bare LLK or recapture a reset card.
+   Apply `autofix/SKILL.md` to the supported diagnosis: put the discriminating
+   check in the existing Test Strategy and let testers execute it. Keep one
+   writer; do not spawn repair agents or run hardware from this role. Save
+   AutoTriage/AutoFix reports under `$LOG_DIR`, never in the source tree.
+   Without a configured package, continue the evidence-led process above and
+   record that specialist diagnosis was unavailable.
+3. Make only changes justified by the failure evidence. For local runs, inspect
+   generated assembly when needed to verify the diagnosis:
 
    ```bash
    SFPI_BIN="$WORKTREE_DIR/tt_metal/tt-llk/tests/sfpi/compiler/bin"
@@ -211,7 +236,6 @@ runnable regression can be added inside the tt-metal worktree, return
    $SFPI_BIN/riscv-tt-elf-addr2line -e <elf> <addr>  # resolve address
    ```
 
-3. Make only changes justified by the failure evidence.
 4. Update the analysis and plan when evidence changes scope or routing.
    Recheck the full Requirements table after a retry; resolving the reported
    failure does not waive the other requirements.
