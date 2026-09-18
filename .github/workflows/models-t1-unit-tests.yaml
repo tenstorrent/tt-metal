@@ -88,6 +88,15 @@ on:
         type: boolean
         default: false
         description: "Enable read-write access to /mnt/MLPerf (e.g. to regenerate tensor cache). Default is read-only."
+      matmul-registry-mode:
+        description: "Matmul registry mode"
+        required: false
+        type: choice
+        default: "off"
+        options:
+          - "off"
+          - "shadow"
+          - "on"
 
 permissions:
   packages: write
@@ -155,4 +164,5 @@ jobs:
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ needs.resolve-skus.outputs.model }}
       mlperf-read-only: ${{ inputs.mlperf-write-access != true }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode || 'off' }}
       tier: "1"

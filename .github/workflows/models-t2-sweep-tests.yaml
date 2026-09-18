@@ -62,6 +62,15 @@ on:
         type: boolean
         default: true
         description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access to populate tensor caches)"
+      matmul-registry-mode:
+        description: "Matmul registry mode"
+        required: false
+        type: choice
+        default: "off"
+        options:
+          - "off"
+          - "shadow"
+          - "on"
 
 permissions:
   packages: write
@@ -115,3 +124,4 @@ jobs:
       tier: "2"
       # `!= false` so unset inputs on scheduled runs default to read-only (true)
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode || 'off' }}

@@ -6,6 +6,7 @@ run-name: >-
   Tests[${{ inputs.run-unit-tests && 'unit' || '' }}${{ inputs.run-unit-tests && inputs.run-e2e-tests && ',' || '' }}${{ inputs.run-e2e-tests && 'e2e' || '' }}${{ (inputs.run-unit-tests || inputs.run-e2e-tests) && inputs.run-sweep-tests && ',' || '' }}${{ inputs.run-sweep-tests && 'sweep' || '' }}${{ (inputs.run-unit-tests || inputs.run-e2e-tests || inputs.run-sweep-tests) && inputs.run-vllm-tests && ',' || '' }}${{ inputs.run-vllm-tests && 'vllm' || '' }}]
   Model[${{ inputs.model || 'all' }}]
   SKUs[${{ inputs.skus }}]
+  Registry[${{ inputs.matmul-registry-mode || 'off' }}]
 
 on:
   workflow_dispatch:
@@ -91,6 +92,15 @@ on:
         type: boolean
         default: true
         description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access)"
+      matmul-registry-mode:
+        description: "Matmul registry mode for model tests"
+        required: false
+        type: choice
+        default: "off"
+        options:
+          - "off"
+          - "shadow"
+          - "on"
 
 permissions:
   packages: write
@@ -370,6 +380,7 @@ jobs:
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode || 'off' }}
       tier: "1"
 
   t1-e2e-tests:
@@ -384,6 +395,7 @@ jobs:
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode || 'off' }}
       tier: "1"
 
   t1-sweep-tests:
@@ -398,6 +410,7 @@ jobs:
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode || 'off' }}
       tier: "1"
 
   # ── Tier 2 ────────────────────────────────────────────────────────
@@ -413,6 +426,7 @@ jobs:
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode || 'off' }}
       tier: "2"
 
   t2-e2e-tests:
@@ -427,6 +441,7 @@ jobs:
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode || 'off' }}
       tier: "2"
 
   t2-sweep-tests:
@@ -441,6 +456,7 @@ jobs:
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode || 'off' }}
       tier: "2"
 
   # ── Tier 3 ────────────────────────────────────────────────────────
@@ -456,6 +472,7 @@ jobs:
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode || 'off' }}
       tier: "3"
 
   t3-e2e-tests:
@@ -470,6 +487,7 @@ jobs:
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode || 'off' }}
       tier: "3"
 
   # Note: Tier 3 sweep tests not yet defined — no sweep entries with tier 3 exist in models_sweep_tests.yaml

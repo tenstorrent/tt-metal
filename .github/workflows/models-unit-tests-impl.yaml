@@ -24,6 +24,11 @@ on:
         type: boolean
         default: true
         description: "Set to false to allow write access to MLPerf mount"
+      matmul-registry-mode:
+        required: false
+        type: string
+        default: "off"
+        description: "Matmul registry mode for test processes"
       tier:
         required: true
         type: string
@@ -138,6 +143,7 @@ jobs:
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }} # used by GPT-OSS 120B to toggle --skip-model-load
+        TTNN_CONFIG_OVERRIDES: '{"matmul_registry_mode":"${{ inputs.matmul-registry-mode }}"}'
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -227,3 +233,4 @@ jobs:
       build-artifact-name: ${{ inputs.build-artifact-name }}
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       matrix: ${{ needs.load-test-matrix.outputs.matrix_multihost }}
+      matmul-registry-mode: ${{ inputs.matmul-registry-mode }}

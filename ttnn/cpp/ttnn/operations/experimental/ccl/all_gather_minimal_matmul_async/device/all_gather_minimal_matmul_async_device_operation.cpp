@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_minimal_matmul_async_device_operation.hpp"
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -11,6 +13,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
+#include "../registry/agmm_config_registry.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_config_registry.hpp"
 
 #include <tt-metalium/hal.hpp>
 
@@ -433,6 +437,162 @@ AllGatherMinimalMatmulAsyncOp::tensor_return_value_t AllGatherMinimalMatmulAsync
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
+namespace {
+
+namespace agmm_registry = ttnn::experimental::all_gather_minimal_matmul_registry;
+
+agmm_registry::compact::TensorDescriptor describe_tensor(const ttnn::Tensor& tensor) {
+    agmm_registry::compact::TensorDescriptor result;
+    const auto& logical_shape = tensor.logical_shape();
+    const auto& padded_shape = tensor.padded_shape();
+    if (logical_shape.rank() > agmm_registry::compact::kMaxTensorRank || padded_shape.rank() != logical_shape.rank()) {
+        return result;
+    }
+    result.rank = static_cast<std::uint8_t>(logical_shape.rank());
+    for (std::size_t axis = 0; axis < logical_shape.rank(); ++axis) {
+        result.logical_shape[axis] = logical_shape[axis];
+        result.padded_shape[axis] = padded_shape[axis];
+    }
+    const auto& tile = tensor.tensor_spec().tile();
+    const auto& memory_config = tensor.memory_config();
+    result.dtype = static_cast<std::uint32_t>(tensor.dtype());
+    result.layout = static_cast<std::uint32_t>(tensor.layout());
+    result.memory_layout = static_cast<std::uint32_t>(memory_config.memory_layout());
+    result.buffer_type = static_cast<std::uint32_t>(memory_config.buffer_type());
+    result.tile_height = tile.get_height();
+    result.tile_width = tile.get_width();
+    result.tile_transpose_of_faces = tile.get_transpose_of_faces();
+    result.tile_transpose_within_face = tile.get_transpose_within_face();
+    return result;
+}
+
+agmm_registry::compact::OptionalTensorDescriptor describe_optional_tensor(const std::optional<ttnn::Tensor>& tensor) {
+    return tensor
+               ? agmm_registry::compact::OptionalTensorDescriptor{.present = true, .tensor = describe_tensor(*tensor)}
+               : agmm_registry::compact::OptionalTensorDescriptor{};
+}
+
+agmm_registry::RegistryRequestFacts make_registry_facts(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    const std::optional<ttnn::Tensor>& bias_tensor,
+    const std::optional<float> scalar,
+    const std::optional<ttnn::Tensor>& ternary_input_a,
+    const std::optional<ttnn::Tensor>& ternary_input_b,
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
+    const std::vector<GlobalSemaphore>& semaphores,
+    tt::tt_fabric::Topology topology,
+    const std::optional<MemoryConfig>& output_memory_config,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<ttnn::Tensor>& persistent_output,
+    std::uint32_t num_links,
+    std::uint32_t ring_size,
+    const std::optional<std::uint32_t>& cluster_axis,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool force_transpose,
+    std::uint32_t num_workers_per_link,
+    std::uint32_t num_buffers_per_channel,
+    std::int32_t chunks,
+    std::int32_t dim,
+    const std::vector<std::uint32_t>& chunk_sizes,
+    const std::optional<std::uint32_t>& fsdp_cluster_axis,
+    std::uint32_t fsdp_ring_size,
+    const std::vector<GlobalSemaphore>& fsdp_semaphores,
+    const std::optional<ttnn::Tensor>& persistent_weight,
+    tt::tt_fabric::Topology fsdp_topology,
+    bool fuse_swiglu) {
+    auto* mesh = input_tensor.device();
+    const auto grid = mesh->compute_with_storage_grid_size();
+    const auto& input_logical = input_tensor.logical_shape();
+    const auto& input_padded = input_tensor.padded_shape();
+    const auto& weight_logical = weight_tensor.logical_shape();
+    const auto& weight_padded = weight_tensor.padded_shape();
+    std::uint64_t batch = 1;
+    for (std::size_t axis = 0; axis + 2 < input_logical.rank(); ++axis) {
+        batch *= input_logical[axis];
+    }
+
+    agmm_registry::compact::OperationDescriptor operation{
+        .topology = static_cast<std::uint32_t>(topology),
+        .fsdp_topology = static_cast<std::uint32_t>(fsdp_topology),
+        .num_links = num_links,
+        .ring_size = ring_size,
+        .cluster_axis_present = cluster_axis.has_value(),
+        .cluster_axis = cluster_axis.value_or(0),
+        .fsdp_cluster_axis_present = fsdp_cluster_axis.has_value(),
+        .fsdp_cluster_axis = fsdp_cluster_axis.value_or(0),
+        .fsdp_ring_size = fsdp_ring_size,
+        .semaphore_count = static_cast<std::uint32_t>(semaphores.size()),
+        .fsdp_semaphore_count = static_cast<std::uint32_t>(fsdp_semaphores.size()),
+        .barrier_semaphore_present = barrier_semaphore.has_value(),
+        .persistent_output_present = persistent_output.has_value(),
+        .persistent_weight_present = persistent_weight.has_value(),
+        .force_transpose = force_transpose,
+        .num_workers_per_link = num_workers_per_link,
+        .num_buffers_per_channel = num_buffers_per_channel,
+        .scalar_present = scalar.has_value(),
+        .scalar_f32_bits = scalar ? std::bit_cast<std::uint32_t>(*scalar) : 0,
+        .chunks = chunks,
+        .dim = dim,
+        .fuse_swiglu = fuse_swiglu,
+        .activation_present = fused_activation.has_value(),
+        .activation_op = fused_activation ? static_cast<std::uint32_t>(fused_activation->op_type) : 0,
+        .output_dtype_present = output_dtype.has_value(),
+        .output_dtype = output_dtype ? static_cast<std::uint32_t>(*output_dtype) : 0,
+        .output_memory_config_present = output_memory_config.has_value(),
+        .output_memory_layout =
+            output_memory_config ? static_cast<std::uint32_t>(output_memory_config->memory_layout()) : 0,
+        .output_buffer_type =
+            output_memory_config ? static_cast<std::uint32_t>(output_memory_config->buffer_type()) : 0,
+        .output_layout = static_cast<std::uint32_t>(Layout::TILE),
+        .output_tile_height = 32,
+        .output_tile_width = 32};
+    if (chunk_sizes.size() <= operation.chunk_sizes.size()) {
+        operation.chunk_size_count = static_cast<std::uint8_t>(chunk_sizes.size());
+        std::copy(chunk_sizes.begin(), chunk_sizes.end(), operation.chunk_sizes.begin());
+    } else {
+        operation.chunk_size_count = static_cast<std::uint8_t>(operation.chunk_sizes.size() + 1);
+    }
+    if (fused_activation && fused_activation->params.size() <= operation.activation_parameter_f32_bits.size()) {
+        operation.activation_parameter_count = static_cast<std::uint8_t>(fused_activation->params.size());
+        for (std::size_t index = 0; index < fused_activation->params.size(); ++index) {
+            operation.activation_parameter_f32_bits[index] =
+                std::bit_cast<std::uint32_t>(fused_activation->params[index]);
+        }
+    } else if (fused_activation) {
+        operation.activation_parameter_count =
+            static_cast<std::uint8_t>(operation.activation_parameter_f32_bits.size() + 1);
+    }
+
+    return agmm_registry::RegistryRequestFacts{
+        .device =
+            agmm_registry::compact::DeviceDescriptor{
+                .architecture = static_cast<std::uint32_t>(mesh->arch()),
+                .device_count = static_cast<std::uint16_t>(mesh->num_devices()),
+                .mesh_rows = static_cast<std::uint16_t>(mesh->num_rows()),
+                .mesh_cols = static_cast<std::uint16_t>(mesh->num_cols()),
+                .compute_grid_x = static_cast<std::uint16_t>(grid.x),
+                .compute_grid_y = static_cast<std::uint16_t>(grid.y)},
+        .workload =
+            agmm_registry::compact::WorkloadDescriptor{
+                .logical_m = input_logical[-2],
+                .logical_k = static_cast<std::uint64_t>(input_logical[-1]) * ring_size,
+                .logical_n = weight_logical[-1],
+                .padded_m = input_padded[-2],
+                .padded_k = static_cast<std::uint64_t>(input_padded[-1]) * ring_size,
+                .padded_n = weight_padded[-1],
+                .batch = batch},
+        .operation = operation,
+        .input = describe_tensor(input_tensor),
+        .weight = describe_tensor(weight_tensor),
+        .bias = describe_optional_tensor(bias_tensor),
+        .ternary_input_a = describe_optional_tensor(ternary_input_a),
+        .ternary_input_b = describe_optional_tensor(ternary_input_b),
+        .persistent_output = describe_optional_tensor(persistent_output),
+        .persistent_weight = describe_optional_tensor(persistent_weight)};
+}
+
+}  // namespace
 
 std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     const ttnn::Tensor& input_tensor,
@@ -465,14 +625,6 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     const std::vector<uint32_t>& chunk_sizes) {
     using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
 
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(),
-        compute_kernel_config,
-        tt::tt_metal::MathFidelity::HiFi2,
-        false /*approx_mode*/,
-        true /*fp32_acc*/,
-        true /*packer_acc*/);
-
     uint32_t num_devices = ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
     uint32_t fsdp_num_devices =
         fsdp_cluster_axis.has_value() ? ttnn::ccl::get_topological_dimension(input_tensor, fsdp_cluster_axis) : 1;
@@ -485,8 +637,61 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         fsdp_cluster_axis.has_value() ? ::ttnn::ccl::get_usable_topology(input_tensor, fsdp_topology, fsdp_cluster_axis)
                                       : fsdp_topology.value_or(ttnn::ccl::Topology::Ring);
 
+    const auto registry_mode = ttnn::operations::matmul::registry::current_mode();
+    const bool registry_fallback_is_error = ttnn::operations::matmul::registry::fallback_is_error(registry_mode);
+    std::optional<agmm_registry::Recipe> registry_recipe;
+    if (input_tensor.logical_shape().rank() >= 2 && weight_tensor.logical_shape().rank() >= 2) {
+        registry_recipe = agmm_registry::select_recipe(
+            registry_mode,
+            make_registry_facts(
+                input_tensor,
+                weight_tensor,
+                bias_tensor,
+                scalar,
+                addcmul_input_tensor1,
+                addcmul_input_tensor2,
+                fused_activation,
+                multi_device_global_semaphore,
+                topology_,
+                memory_config,
+                dtype,
+                persistent_output_buffer,
+                num_links,
+                num_devices,
+                cluster_axis,
+                barrier_semaphore,
+                force_transpose,
+                num_workers_per_link,
+                num_buffers_per_channel,
+                chunks,
+                dim,
+                chunk_sizes,
+                fsdp_cluster_axis,
+                fsdp_num_devices,
+                fsdp_multi_device_global_semaphore,
+                persistent_weight_buffer,
+                fsdp_topology_,
+                fuse_swiglu));
+    }
+    if (registry_fallback_is_error && !registry_recipe) {
+        TT_THROW("AGMM registry required an exact recipe, but dispatch fell back: ineligible request");
+    }
+    auto selected_config = config;
+    auto selected_kernel_config = compute_kernel_config;
+    if (registry_recipe) {
+        selected_config.emplace(registry_recipe->config);
+        selected_kernel_config = registry_recipe->compute_kernel_config;
+    }
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor.device()->arch(),
+        selected_kernel_config,
+        tt::tt_metal::MathFidelity::HiFi2,
+        false /*approx_mode*/,
+        true /*fp32_acc*/,
+        true /*packer_acc*/);
+
     auto operation_attributes = OperationType::operation_attributes_t{
-        config,
+        selected_config,
         std::move(fused_activation),
         memory_config,
         dtype,
