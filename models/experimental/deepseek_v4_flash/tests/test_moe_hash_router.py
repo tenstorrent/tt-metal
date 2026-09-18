@@ -9,10 +9,10 @@ emits. The ids are gathered on device with :func:`ttnn.embedding`, which only re
 bfloat16 table, so they arrive as bf16 values rather than integers -- exact below 256
 experts, and what the op's ``index_is_bf16`` decode expects.
 
-Checked here: the gathered ids are the table's rows for the given tokens, the scores are
-the reference ``sqrt(softplus(x @ Wᵀ))``, and the prefill (host ids) and traced (device
-ids) entry points agree. What the op then does with the pair -- normalize and scale over
-the selected scores -- is covered by ``test_fused_experts_bf16_indices``.
+Checked here: the gathered ids are the table's rows for the given tokens, and the scores
+are the reference ``sqrt(softplus(x @ Wᵀ))``. What the op then does with the pair --
+normalize and scale over the selected scores -- is covered by
+``test_fused_experts_bf16_indices``.
 """
 
 from __future__ import annotations
@@ -55,8 +55,13 @@ def test_hash_router_sparse_routing(device, reset_seeds, tokens: int) -> None:
         x.reshape(1, 1, tokens, HIDDEN), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
     input_ids = torch.randint(0, VOCAB, (tokens,), dtype=torch.int64)
+    # The router only reads persistent on-device ids; uploading them is the caller's job
+    # (the decoder layer does it once per step into ``hash_token``).
+    token_in = ttnn.from_torch(
+        input_ids.reshape(1, tokens).to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
 
-    routing = router.forward(x_flat, input_ids)
+    routing = router.forward_static(x_flat, token_in)
 
     # The ids are the table's rows, unreordered: the op pairs id j with the score it reads
     # for that expert, so only the set matters, but an exact match is the stronger check.
@@ -68,12 +73,3 @@ def test_hash_router_sparse_routing(device, reset_seeds, tokens: int) -> None:
     reference = torch.sqrt(F.softplus(x.float() @ gate_w.float().t()))
     passing, pcc_msg = comp_pcc(reference, scores, pcc=0.999)
     assert passing, f"gate scores vs reference: {pcc_msg}"
-
-    # The traced decode path gathers from persistent on-device token ids instead of
-    # uploading them, and must route identically.
-    token_in = ttnn.from_torch(
-        input_ids.reshape(1, tokens).to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-    )
-    static = router.forward_static(x_flat, token_in)
-    assert torch.equal(ttnn.to_torch(static.indices).float().reshape(tokens, TOP_K), ids)
-    assert torch.equal(ttnn.to_torch(static.scores).float().reshape(tokens, NUM_EXPERTS), scores)

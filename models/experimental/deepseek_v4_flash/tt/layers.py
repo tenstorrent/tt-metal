@@ -366,10 +366,10 @@ class Linear(DeepSeekV4Module):
 class LinearDecode(DeepSeekV4Module):
     """Bias-free ``x @ Wᵀ`` backed by ``ttnn.experimental.matmul_decode``.
 
-    Both operands stay L1 width-sharded and resident on the core grid, which is
-    the layout the decode-optimized matmul kernel expects. The (static) weight is
-    prepared and loaded once in the constructor; ``forward`` only reshards the
-    incoming activation into the matching width-sharded L1 config before the op.
+    Both operands stay L1-resident on the core grid the decode-optimized matmul
+    kernel expects. The (static) weight is prepared and loaded once in the
+    constructor. ``forward`` does not convert the activation: ``use_rm_hs``
+    selects the layout the caller must already have built.
 
     Two weight layouts are supported, selected by ``partial_width_sharded``:
 
@@ -441,8 +441,10 @@ class LinearDecode(DeepSeekV4Module):
         ring_gather: bool = False,
         tile_height: int = ttnn.TILE_SIZE,
         rectangle_b_grid: bool = False,
+        use_rm_hs: bool = False,
     ):
         self.partial_width_sharded = partial_width_sharded
+        self.use_rm_hs = use_rm_hs
         self.num_inputA_cores = num_inputA_cores
         self.dtype = dtype
         self.device = device
@@ -490,6 +492,7 @@ class LinearDecode(DeepSeekV4Module):
             self.partial_width_sharded = packed_weight_spec.k_blocks > 1
             self.k_blocks = packed_weight_spec.k_blocks
             self.n_blocks = packed_weight_spec.n_blocks
+            self._check_use_rm_hs()
             return
 
         if use_prefetcher:
@@ -508,6 +511,7 @@ class LinearDecode(DeepSeekV4Module):
                 shared_cb=global_cb,
                 shared_cb_page_bytes=global_cb_page_bytes,
             )
+            self._check_use_rm_hs()
             return
 
         if rectangle_b_grid:
@@ -549,6 +553,7 @@ class LinearDecode(DeepSeekV4Module):
                 mesh_mapper=mesh_mapper,
             )
             self._make_weights_resident()
+            self._check_use_rm_hs()
             return
 
         w = w.t().contiguous()
@@ -568,6 +573,15 @@ class LinearDecode(DeepSeekV4Module):
             mesh_mapper=mesh_mapper,
         )
         self._make_weights_resident()
+        self._check_use_rm_hs()
+
+    def _check_use_rm_hs(self):
+        """ROW_MAJOR HEIGHT_SHARDED A is full-width hub mode only."""
+        if self.use_rm_hs and not self._can_matmul_decode_rm_hs():
+            raise ValueError(
+                "use_rm_hs requires full-width hub-mode matmul_decode, "
+                f"but this weight is {'partial-width' if self.partial_width_sharded else 'ring-gathered'}"
+            )
 
     def _make_weights_resident(self):
         """Move the weight into L1 for good, under ``keep_weights_in_l1``.
@@ -606,7 +620,7 @@ class LinearDecode(DeepSeekV4Module):
         replicated-A path uses. ``N`` must be a whole number of those tiles so that no
         padded column enters the sum.
         """
-        return self._can_matmul_decode_rm_hs() and self.N % ttnn.TILE_SIZE == 0
+        return self.use_rm_hs and self._can_matmul_decode_rm_hs() and self.N % ttnn.TILE_SIZE == 0
 
     def enable_fused_rms_norm(self, eps: float, gamma, group_size: int = 0) -> bool:
         """Normalize this matmul's output in its epilogue. Returns whether it took effect.
@@ -731,6 +745,17 @@ class LinearDecode(DeepSeekV4Module):
         x = ttnn.repeat(x, ttnn.Shape(repeats))
         return ttnn.to_memory_config(x, mem_cfg)
 
+    def to_width_sharded_activation(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Tiled WIDTH_SHARDED A on this layer's input-A cores.
+
+        Callers that still hold a HEIGHT_SHARDED replica (or DRAM) use this before
+        a ``use_rm_hs=False`` matmul. ``forward`` itself does not convert.
+        """
+        if self._is_replicated_rm_hs(x):
+            x = self._unreplicate_rm_hs_activation(x)
+        tile_height = 1 if x.layout == ttnn.ROW_MAJOR_LAYOUT else x.get_tile().tile_shape[0]
+        return ttnn.to_memory_config(x, self.get_input_memory_config(x.shape[-2], x.shape[-1], tile_height))
+
     def _unreplicate_rm_hs_activation(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """One replica back as a tiled DRAM ``[..., M, K]``.
 
@@ -746,19 +771,34 @@ class LinearDecode(DeepSeekV4Module):
         x = ttnn.slice(x, starts, ends)
         return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-    def _prepare_decode_activation(self, x: ttnn.Tensor) -> tuple:
-        """``(x, M, use_rm_hs)``. M is the matmul row count (shard height when replicated)."""
-        if self._is_replicated_rm_hs(x) and self._can_matmul_decode_rm_hs():
+    def _checked_decode_activation(self, x: ttnn.Tensor) -> tuple:
+        """``(x, M)``. M is the matmul row count (shard height when replicated)."""
+        if self.use_rm_hs:
+            assert self._is_replicated_rm_hs(x), (
+                f"{self.cache_file_name}: use_rm_hs requires a HEIGHT_SHARDED replica of [M, K], "
+                f"got layout={x.layout} memory={x.memory_config()}"
+            )
             a_grid = x.memory_config().shard_spec.grid
             b_grid = self.b_core_grid()
-            # A replica on a larger grid is reusable as long as every B core already holds it
-            # (q_a and kv share one untilize+broadcast onto q_a's cores).
-            if a_grid != b_grid and not _core_grid_contains(a_grid, b_grid):
-                x = self.to_replicated_rm_hs_activation(self._unreplicate_rm_hs_activation(x))
-            return x, x.memory_config().shard_spec.shape[0], True
-        if self._is_replicated_rm_hs(x):
-            x = self._unreplicate_rm_hs_activation(x)
-        return x, x.shape[-2], False
+            assert a_grid == b_grid or _core_grid_contains(
+                a_grid, b_grid
+            ), f"{self.cache_file_name}: replicated A grid {a_grid} does not cover B cores {b_grid}"
+            return x, x.memory_config().shard_spec.shape[0]
+        assert not self._is_replicated_rm_hs(
+            x
+        ), f"{self.cache_file_name}: WIDTH_SHARDED A expected (use_rm_hs=False), got a HEIGHT_SHARDED replica"
+        assert (
+            x.is_sharded() and x.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        ), f"{self.cache_file_name}: use_rm_hs=False requires WIDTH_SHARDED L1 A, got {x.memory_config()}"
+        tile_height = 1 if x.layout == ttnn.ROW_MAJOR_LAYOUT else x.get_tile().tile_shape[0]
+        if tile_height >= ttnn.TILE_SIZE:
+            expected = self.get_input_memory_config(x.shape[-2], x.shape[-1], tile_height)
+            got_cores = _receiver_cores_in_order(x.memory_config().shard_spec.grid)
+            want_cores = _receiver_cores_in_order(expected.shard_spec.grid)
+            assert (
+                got_cores == want_cores
+            ), f"{self.cache_file_name}: WIDTH_SHARDED A cores {got_cores} != expected {want_cores}"
+        return x, x.shape[-2]
 
     def _init_prefetched_weight(
         self,
@@ -839,6 +879,9 @@ class LinearDecode(DeepSeekV4Module):
             cache_file_name=cache_file_name,
             mesh_mapper=self.mesh_mapper,
         )
+        # Tile-cache hits drop NdShardSpec. Re-apply so a full-width 8-core weight stays
+        # one [K, N/cores] slab per receiver rather than a 64-shard DRAM tensor.
+        self.weight = ttnn.to_memory_config(self.weight, dram_memory_config)
         if shared_cb is not None:
             self.global_cb = shared_cb
         else:
@@ -913,6 +956,7 @@ class LinearDecode(DeepSeekV4Module):
             return
         if self.keep_weights_in_l1:
             return
+        print(f"Blocking fetch weights for {self.cache_file_name}")
         self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
         # self.weight.deallocate()
 
@@ -931,8 +975,8 @@ class LinearDecode(DeepSeekV4Module):
 
     def forward(self, x: ttnn.Tensor, *, mesh_coords=None) -> ttnn.Tensor:
         print(f"Linear Decode with cache_file_name: {self.cache_file_name}")
-        x, m, use_rm_hs = self._prepare_decode_activation(x)
-        if self.fused_rms_norm_eps is not None and not use_rm_hs:
+        x, m = self._checked_decode_activation(x)
+        if self.fused_rms_norm_eps is not None and not self.use_rm_hs:
             # The epilogue's statistic is a scalar reduction over a whole tile, so it is this
             # row's mean of squares only while a tile holds one row. Dropping the norm here
             # instead would be a silent numerical bug.
@@ -941,21 +985,8 @@ class LinearDecode(DeepSeekV4Module):
                 "call was handed a tiled width-sharded one"
             )
         tile_height = 1 if x.layout == ttnn.ROW_MAJOR_LAYOUT else self.tile_height
-        m_out = m if use_rm_hs else ((m + tile_height - 1) // tile_height) * tile_height
+        m_out = m if self.use_rm_hs else ((m + tile_height - 1) // tile_height) * tile_height
         if self.packed_weight_tensor is not None:
-            # Packed placement is the source of truth: a preceding packed projection may
-            # have left this activation on a different zone/core count.
-            if not use_rm_hs:
-                tile_height = 1 if x.layout == ttnn.ROW_MAJOR_LAYOUT else x.get_tile().tile_shape[0]
-                input_memory_config = self.get_input_memory_config(x.shape[-2], x.shape[-1], tile_height)
-                same_core_grid = x.is_sharded() and (
-                    tile_height < ttnn.TILE_SIZE
-                    or _receiver_cores_in_order(x.memory_config().shard_spec.grid)
-                    == _receiver_cores_in_order(input_memory_config.shard_spec.grid)
-                )
-                if not same_core_grid:
-                    x = ttnn.to_memory_config(x, input_memory_config)
-                m_out = ((x.shape[-2] + tile_height - 1) // tile_height) * tile_height
             if self.partial_width_sharded:
                 receiver_cores = _receiver_cores_in_order(self.packed_weight_spec.cores)
                 output_cores = _coalesced_core_range_set(receiver_cores[: self.n_blocks])
@@ -982,11 +1013,6 @@ class LinearDecode(DeepSeekV4Module):
                 **self._epilogue_kwargs(output_memory_config),
             )
         if self.use_prefetcher:
-            if not use_rm_hs and not x.is_sharded():
-                tile_height = 1 if x.layout == ttnn.ROW_MAJOR_LAYOUT else x.get_tile().tile_shape[0]
-                x = ttnn.to_memory_config(
-                    x, self.get_input_memory_config(x.shape[-2], x.shape[-1], tile_height=tile_height)
-                )
             # Exactly one queued request per matmul: the matmul waits for one page per
             # receiver, so a missing request hangs it and a doubled one desynchronises the
             # GCB pointers. ``fetch_weights`` may already have issued this call's request.
@@ -1053,8 +1079,6 @@ class LinearDecode(DeepSeekV4Module):
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
             )
-        if not use_rm_hs and not x.is_sharded():
-            x = ttnn.to_memory_config(x, self.get_input_memory_config(x.shape[-2], x.shape[-1]))
         result = ttnn.experimental.matmul_decode(
             x,
             self.l1_weights,

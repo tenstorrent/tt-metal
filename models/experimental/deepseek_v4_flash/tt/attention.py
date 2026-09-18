@@ -32,6 +32,18 @@ from .system_config import active_system_config
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
 
 
+def _decode_activation(layer: LinearDecode, x: ttnn.Tensor) -> ttnn.Tensor:
+    """Match ``x`` to ``layer.use_rm_hs`` before ``LinearDecode.forward`` asserts it."""
+    if layer.use_rm_hs:
+        if layer._is_replicated_rm_hs(x):
+            a_grid = x.memory_config().shard_spec.grid
+            b_grid = layer.b_core_grid()
+            if a_grid == b_grid or _core_grid_contains(a_grid, b_grid):
+                return x
+        return layer.to_replicated_rm_hs_activation(x)
+    return layer.to_width_sharded_activation(x)
+
+
 # ---------------------------------------------------------------------------- #
 # DeepSeek-V4-Flash attention (decode, running KV cache)
 #
@@ -754,8 +766,8 @@ class DeepSeekV4HCACompressor:
         back the DRAM-interleaved form they expect (as ``_o_proj`` does for o_b_proj).
         """
         return (
-            ttnn.to_memory_config(self.kv_proj(tokens), ttnn.DRAM_MEMORY_CONFIG),
-            ttnn.to_memory_config(self.gate_proj(tokens), ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.to_memory_config(self.kv_proj(_decode_activation(self.kv_proj, tokens)), ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.to_memory_config(self.gate_proj(_decode_activation(self.gate_proj, tokens)), ttnn.DRAM_MEMORY_CONFIG),
         )
 
     def _pool_window(
@@ -919,8 +931,8 @@ class DeepSeekV4CSACompressor:
         :meth:`DeepSeekV4HCACompressor._project`.
         """
         return (
-            self.kv_proj(tokens),
-            self.gate_proj(tokens),
+            self.kv_proj(_decode_activation(self.kv_proj, tokens)),
+            self.gate_proj(_decode_activation(self.gate_proj, tokens)),
         )
 
     def _pool_window(
@@ -1047,6 +1059,8 @@ def _compressor_projections(
                 "packed_weight_tensor": tensor,
                 "packed_weight_spec": packed_weight_spec(packed_layout, packed_slot, f"compressor.{name}"),
             }
+        spec = packed.get("packed_weight_spec")
+        use_rm_hs = spec.k_blocks <= 1 if spec is not None else not layout.get("partial_width_sharded", False)
         return LinearDecode(
             weights[f"compressor.{name}.weight"],
             device,
@@ -1056,6 +1070,7 @@ def _compressor_projections(
             **prefetch,
             **packed,
             rectangle_b_grid=True,
+            use_rm_hs=use_rm_hs,
         )
 
     kv_proj = projection("kv_proj")
@@ -1368,6 +1383,8 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 and not packed
             ):
                 resident["keep_weights_in_l1"] = True
+            spec = packed.get("packed_weight_spec")
+            use_rm_hs = spec.k_blocks <= 1 if spec is not None else not layout.get("partial_width_sharded", False)
             return LinearDecode(
                 weights[f"{name}.weight"] if weight is None else weight,
                 device,
@@ -1379,6 +1396,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 **packed,
                 **resident,
                 rectangle_b_grid=rectangle_b_grid,
+                use_rm_hs=use_rm_hs,
             )
 
         self.q_lora_rank = DECODE_LAYOUTS["q_a_proj"]["N"]
@@ -1458,6 +1476,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                     N=self.o_lora_rank,
                     n_blocks=self.o_lora_rank // ttnn.TILE_SIZE,
                     mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1),
+                    use_rm_hs=False,
                 )
                 for slot in range(self.local_o_groups)
             ]
@@ -1580,9 +1599,11 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         and o_b_proj are left out because their weights do not fit alongside the others.
 
         On the prefetcher path it instead queues each projection configured for a GCB.
-        Shared-ring weights (q_b, o_a/o_b, ...) use one FIFO. Full-width q_a uses its
-        32-receiver FIFO; CSA kv/gate are queued on that same ring after q_a. Full-width
-        kv uses its 16-receiver FIFO; HCA kv/gate follow it there. Balanced q_a/kv instead
+        Shared-ring weights (q_b, o_a/o_b, shared down) use one FIFO. Full-width q_a
+        uses its 32-receiver FIFO; CSA kv/gate are queued on that same ring after q_a,
+        and the MoE shared expert's gate/up follow them there (queued from
+        :meth:`DeepSeekV4SparseMoeBlock.prefetch_weights`). Full-width kv uses its
+        16-receiver FIFO; HCA kv/gate follow it there. Balanced q_a/kv instead
         share :data:`HC_FN_GCB` with the hyper-connections. They are still queued here in
         decode order so each ring stays in step. Column-parallel o_b and sequential
         o_a keep a local receiver grid and stay on the transient L1 path.
@@ -1743,7 +1764,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         attn = ttnn.experimental.view(gathered, [1, groups, oa_dest.num_cores(), in_per_group])
         y = self.o_a_proj(attn)
         y = ttnn.experimental.view(y, [1, 1, y.shape[-2], groups * self.o_lora_rank])
-        output = self.o_b_proj(y)
+        output = self.o_b_proj(_decode_activation(self.o_b_proj, y))
         if self.tp_size > 1:
             if self.row_parallel_o_b:
                 gathered = ttnn.experimental.deepseek.width_sharded_all_reduce(
@@ -1826,7 +1847,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # full K on every core of :meth:`_decode_activation_grid`. q_a's B cores (and kv's,
         # a subset) already hold a replica; a partial-width weight cannot take this layout
         # (LinearDecode unreplicates).
-        q_a_raw = self.q_a_proj(tokens, mesh_coords=self.q_projection_mesh_coords)
+        q_a_raw = self.q_a_proj(_decode_activation(self.q_a_proj, tokens), mesh_coords=self.q_projection_mesh_coords)
         if self.dedicated_qkv_ranks:
             q_a_raw = _replicate_from_tp_rank(q_a_raw, self.device, self.q_projection_rank, self.tp_size)
         elif self.balanced_qkv:
@@ -1838,7 +1859,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # The grouped epilogue needs q_b's one-row replicated-A path. A fused q_a mcast
         # already has that layout; otherwise replicate here. Unsupported q_b layouts
         # keep the tiled width-sharded activation and standalone per-head norm.
-        q_b_input = self.q_b_proj.to_replicated_rm_hs_activation(q_a) if self.fuse_q_b_norm else q_a
+        q_b_input = _decode_activation(self.q_b_proj, q_a)
         q = self.q_b_proj(q_b_input)  # [1, 1, B, H*Dh]
         if q_b_input is not q_a:
             ttnn.deallocate(q_b_input)
@@ -1849,7 +1870,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         # prefetched matmul that runs out of turn pops another weight's page (see
         # ``prefetch_weights``). Reuse the same replicated activation; kv's B cores are a
         # subset of that grid. The caller still owns ``tokens`` (the compressor reads it).
-        kv_raw = self.kv_proj(tokens, mesh_coords=self.kv_projection_mesh_coords)
+        kv_raw = self.kv_proj(_decode_activation(self.kv_proj, tokens), mesh_coords=self.kv_projection_mesh_coords)
 
         if self.dedicated_qkv_ranks:
             kv_raw = _replicate_from_tp_rank(kv_raw, self.device, self.kv_projection_rank, self.tp_size)
