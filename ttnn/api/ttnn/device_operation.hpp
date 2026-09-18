@@ -277,6 +277,20 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
         program_factory);
 }
 
+template <typename WorkloadFactory, DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
+void apply_cached_workload_arguments(
+    typename WorkloadFactory::cached_mesh_workload_t& cached_workload,
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value) {
+    if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
+        WorkloadFactory::apply_descriptor(cached_workload, operation_attributes, tensor_args, tensor_return_value);
+    } else {
+        WorkloadFactory::override_runtime_arguments(
+            cached_workload, operation_attributes, tensor_args, tensor_return_value);
+    }
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void handle_mesh_adapter_cache_hit(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -303,13 +317,8 @@ void handle_mesh_adapter_cache_hit(
         auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
 
         if (!graph_capture_blocks_dispatch()) {
-            if constexpr (requires { &WorkloadFactory::apply_descriptor; }) {
-                WorkloadFactory::apply_descriptor(
-                    cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
-            } else {
-                WorkloadFactory::override_runtime_arguments(
-                    cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
-            }
+            apply_cached_workload_arguments<WorkloadFactory, mesh_device_operation_t>(
+                cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
         }
 
         enqueue_mesh_workload<mesh_device_operation_t>(
@@ -359,6 +368,8 @@ ProgramPreparationResult prepare_operation_with_adapter(
                     using cached_mesh_workload_t = typename WorkloadFactory::cached_mesh_workload_t;
                     auto& cached_workload =
                         cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
+                    apply_cached_workload_arguments<WorkloadFactory, mesh_device_operation_t>(
+                        cached_workload, operation_attributes, tensor_args, tensor_return_value);
                     result = summarize_prepared_workload(cached_workload.workload, mesh_device);
                 });
             return result;

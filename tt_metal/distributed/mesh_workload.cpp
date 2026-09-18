@@ -518,8 +518,13 @@ namespace tt::tt_metal::experimental::program_preparation {
 ProgramCapacity prepare(distributed::MeshWorkload& workload, distributed::MeshDevice* mesh_device) {
     workload.pimpl_->compile(mesh_device);
     ProgramCapacity result;
-    for (uint32_t config_size : workload.pimpl_->get_program_config_sizes()) {
-        result.max_program_config_size_bytes = std::max(result.max_program_config_size_bytes, config_size);
+    const auto& config_sizes = workload.pimpl_->get_program_config_sizes();
+    const uint32_t programmable_core_type_count =
+        MetalContext::instance(extract_context_id(mesh_device)).hal().get_programmable_core_type_count();
+    TT_ASSERT(config_sizes.size() >= programmable_core_type_count);
+    for (uint32_t core_type_index = 0; core_type_index < programmable_core_type_count; ++core_type_index) {
+        result.max_program_config_size_bytes =
+            std::max(result.max_program_config_size_bytes, config_sizes[core_type_index]);
     }
     result.max_kernel_binary_size_bytes = workload.pimpl_->get_max_program_kernels_sizeB();
     return result;

@@ -266,6 +266,26 @@ TEST_F(MeshBufferTestSuite, ShardedViewValidatesLifetimeAndBounds) {
     const ReplicatedBufferConfig view_config{.size = view_pages * page_size};
 
     EXPECT_ANY_THROW(experimental::retained_buffer_view::create(owner, view_config, view_local_config, 3 * page_size));
+    EXPECT_ANY_THROW(experimental::retained_buffer_view::create(owner, view_config, view_local_config, 1));
+
+    auto exact_boundary_view =
+        experimental::retained_buffer_view::create(owner, view_config, view_local_config, 2 * page_size);
+    EXPECT_EQ(exact_boundary_view->address(), owner->address() + 2 * page_size);
+
+    auto outside_core_config = view_local_config;
+    outside_core_config.sharding_args = BufferShardingArgs(
+        ShardSpecBuffer(
+            CoreRangeSet(CoreCoord(1, 0)), {1, view_pages}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, view_pages}),
+        TensorMemoryLayout::WIDTH_SHARDED);
+    EXPECT_ANY_THROW(experimental::retained_buffer_view::create(owner, view_config, outside_core_config, page_size));
+
+    auto unsharded_config = view_local_config;
+    unsharded_config.sharding_args = BufferShardingArgs{};
+    EXPECT_ANY_THROW(experimental::retained_buffer_view::create(owner, view_config, unsharded_config, page_size));
+
+    auto dram_config = view_local_config;
+    dram_config.buffer_type = BufferType::DRAM;
+    EXPECT_ANY_THROW(experimental::retained_buffer_view::create(owner, view_config, dram_config, page_size));
 
     auto non_owning_owner =
         MeshBuffer::create(owner->global_config(), owner_local_config, mesh_device_.get(), owner->address());
