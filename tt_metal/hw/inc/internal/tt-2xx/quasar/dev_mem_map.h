@@ -482,8 +482,9 @@
 #define MEM_CCE_L1_SIZE (4 * 1024 * 1024)
 #define MEM_CCE_RESERVED_SIZE 64
 #define MEM_CCE_MAILBOX_BASE MEM_CCE_RESERVED_SIZE
-// Must hold mailboxes_t as instantiated for CCE (COMPILE_FOR_DRISC, PROCESSOR_COUNT == 1). The
-// static_assert in qa_hal_dram.cpp fires if this is too small.
+// Must hold mailboxes_t as instantiated for CCE (COMPILE_FOR_DRISC, PROCESSOR_COUNT == 8):
+// profiler_msg_t.buffer[8], DevicePrintBuffer<1632, 8>, and watcher already sized to
+// MaxProcessorsPerCoreType. The static_assert in qa_hal_dram.cpp fires if this is too small.
 #define MEM_CCE_MAILBOX_SIZE 32768
 #define MEM_CCE_MAILBOX_END (MEM_CCE_MAILBOX_BASE + MEM_CCE_MAILBOX_SIZE)
 #define MEM_CCE_FIRMWARE_BASE MEM_CCE_MAILBOX_END
