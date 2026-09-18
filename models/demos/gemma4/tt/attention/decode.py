@@ -358,9 +358,13 @@ def decode_forward(
     )
 
     sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
-    # SDPA forbids a sharded output when local KV heads > 1 (GQA). 12B TP=8 is
-    # 1 local KV head; 31B sliding is 2, so keep DRAM there and still I2S in concat.
-    sdpa_out_mem = q_sharded_mem if l1_act and sdpa_num_local_kv_heads == 1 else ttnn.DRAM_MEMORY_CONFIG
+    # SDPA forbids a sharded output under GQA, and it decides GQA from the K
+    # cache's own head dim (``is_gqa = k_shape[1] > 1``), not from the head
+    # count we pass. Gate on the tensor for that reason: ``kv_replicated``
+    # keeps every KV head on each device, so "1 local head" above does not mean
+    # the cache has one. 31B full_attention is the case that bites --
+    # num_global_key_value_heads=4 < tp=8 replicates 4 heads per device.
+    sdpa_out_mem = q_sharded_mem if l1_act and int(k_cache.shape[1]) == 1 else ttnn.DRAM_MEMORY_CONFIG
     if page_table is not None:
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             tt_q,
