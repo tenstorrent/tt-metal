@@ -19,9 +19,9 @@
 namespace tt::tt_fabric::detail {
 
 // ── SAT engine interface ────────────────────────────────────────────────────────────────────────────────
-// The deterministic min-host solver runs on a pluggable engine. Historically the only engine was CaDiCaL
-// (CadicalSatEngine below); kissat_extras (KissatSatEngine) is a faster deterministic incremental alternative
-// selected via TT_TOPO_SAT_ENGINE=kissat. See tt_metal/fabric/KISSAT_SWAP_PLAN.md.
+// The deterministic min-host solver runs on a pluggable engine. kissat_extras (KissatSatEngine) is the default
+// — a faster deterministic incremental engine at equal placement quality; CaDiCaL (CadicalSatEngine, the
+// former sole engine) remains the explicit opt-out via TT_TOPO_SAT_ENGINE=cadical. See KISSAT_SWAP_PLAN.md.
 //
 // The interface is exactly the core the solver needs: reserve / add / assume / solve / solve_limited / val,
 // plus a one-time enumeration configure. (The CaDiCaL-only pool/learner/phase machinery is intentionally not
@@ -42,7 +42,7 @@ struct SatEngine {
     virtual void protect_variable(int var) = 0;
 };
 
-// ── CaDiCaL engine (deterministic default; formerly the only engine) ─────────────────────────────────────
+// ── CaDiCaL engine (fallback / explicit opt-out; formerly the only engine, and the default before kissat) ──
 struct CadicalSatEngine final : SatEngine {
     mutable CaDiCaL::Solver solver;
 
@@ -167,11 +167,13 @@ struct KissatSatEngine final : SatEngine {
 #endif  // TT_METAL_FABRIC_KISSAT
 
 // ── Engine selection ─────────────────────────────────────────────────────────────────────────────────────
-// TT_TOPO_SAT_ENGINE = "cadical" (default) | "kissat". Defaulting to CaDiCaL keeps the swap behind an opt-in
-// until validated (KISSAT_SWAP_PLAN.md §6); once validated the default flips and CaDiCaL becomes the fallback.
+// TT_TOPO_SAT_ENGINE = "kissat" (default) | "cadical". kissat is the default deterministic engine — faster on
+// the real min-host CNFs at equal placement quality (KISSAT_SWAP_PLAN.md §1). CaDiCaL stays available as an
+// explicit opt-out (TT_TOPO_SAT_ENGINE=cadical) and as the automatic fallback when kissat is not compiled in
+// (TT_METAL_FABRIC_KISSAT off).
 static std::unique_ptr<SatEngine> make_engine() {
     const char* env = std::getenv("TT_TOPO_SAT_ENGINE");
-    const std::string_view name = (env != nullptr && env[0] != '\0') ? env : "cadical";
+    const std::string_view name = (env != nullptr && env[0] != '\0') ? env : "kissat";
 #ifdef TT_METAL_FABRIC_KISSAT
     if (name == "kissat") {
         return std::make_unique<KissatSatEngine>();
