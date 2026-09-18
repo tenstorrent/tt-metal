@@ -133,8 +133,8 @@ TT_KERNEL void compute(uint32_t group) {
 
     kda_chronology::Topology topology{};
     if constexpr (dynamic_chronology) {
-        DataflowBuffer control(dfb::chronology_compute);
-        topology = kda_chronology::receive(control);
+        DataflowBuffer chronology(dfb::chronology_compute);
+        topology = kda_chronology::receive(chronology);
     }
     if constexpr (dynamic_chronology) {
         if (group >= topology.head_groups(G)) {

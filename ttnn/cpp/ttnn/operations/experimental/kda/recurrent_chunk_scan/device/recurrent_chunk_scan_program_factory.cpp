@@ -145,7 +145,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 .data_format_metadata = format};
         };
     const bool segmented_summary = summary && in.actual_start.has_value();
-    const uint32_t summary_wrap_kv = summary && in.actual_start.has_value() ? Vt : 1;
+    const uint32_t split_head_tiles = summary && in.actual_start.has_value() ? Vt : 1;
     const uint32_t tail_state_tiles = in.actual_start.has_value() ? kv : 1;
     constexpr uint32_t wrap_mask_tiles = 1;
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
@@ -171,9 +171,9 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         make_dfb(summary_ring_dfb_name, 2 * kv, fp32),
         // ProgramSpec names must exist even when if-constexpr discards their
         // users. Give inactive-mode buffers one tile instead of reserving every
-        // summary and recurrent wrap payload simultaneously.
-        make_dfb(summary_head_output_dfb_name, summary_wrap_kv, output_format),
-        make_dfb(summary_head_state_dfb_name, summary_wrap_kv, output_format),
+        // summary and recurrent restart payload simultaneously.
+        make_dfb(summary_head_output_dfb_name, split_head_tiles, output_format),
+        make_dfb(summary_head_state_dfb_name, split_head_tiles, output_format),
         make_dfb(tail_state_dfb_name, tail_state_tiles, fp32),
         make_dfb(wrap_mask_dfb_name, wrap_mask_tiles, fp32),
     };
@@ -210,7 +210,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
              {"Kt", Kt},
              {"Vt", Vt},
              {"Vt_full", Vt_full},
-             {"summary_pair", static_cast<uint32_t>(summary)},
+             {"summary", static_cast<uint32_t>(summary)},
              {"groups_per_head", attrs.groups_per_head}},
         .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
@@ -250,11 +250,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
             {tt::tt_metal::experimental::TensorBinding{output_tensor_name, "output"},
              tt::tt_metal::experimental::TensorBinding{final_state_tensor_name, "final_state"}},
         .compile_time_args =
-            {{"Ct", Ct},
-             {"Kt", Kt},
-             {"Vt", Vt},
-             {"Vt_full", Vt_full},
-             {"summary_pair", static_cast<uint32_t>(summary)}},
+            {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"Vt_full", Vt_full}, {"summary", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema = {.runtime_arg_names = {"head", "value_block", "num_chunks", "group"}},
         .hw_config = ttnn::create_writer_datamovement_config(arch),
     };
@@ -339,7 +335,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::experimental::ConsumerOf(tail_state_dfb_name, "tail_state"),
                 tt::tt_metal::experimental::ConsumerOf(wrap_mask_dfb_name, "wrap_mask"),
             },
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"summary_pair", static_cast<uint32_t>(summary)}},
+        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"summary", static_cast<uint32_t>(summary)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_chunks", "group"}},
         .hw_config = std::move(compute_hw),
     };

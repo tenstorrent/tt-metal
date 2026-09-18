@@ -28,16 +28,16 @@ struct Topology {
     uint32_t local_rows;
     uint32_t reserved;
     uint32_t group_chunks(uint32_t groups) const { return local_rows / 32 / groups; }
-    uint32_t wrap_group(uint32_t groups) const { return head_rows / 32 / group_chunks(groups); }
+    uint32_t split_group(uint32_t groups) const { return head_rows / 32 / group_chunks(groups); }
     uint32_t split_in_group(uint32_t groups) const { return head_rows / 32 % group_chunks(groups); }
     uint32_t reset_chunk(uint32_t group, uint32_t groups) const {
-        return local_split && group == wrap_group(groups) ? split_in_group(groups) : 0;
+        return local_split && group == split_group(groups) ? split_in_group(groups) : 0;
     }
     uint32_t reset_group(uint32_t groups) const {
-        return local_split ? wrap_group(groups) + uint32_t(split_in_group(groups) != 0) - 1 : groups;
+        return local_split ? split_group(groups) + uint32_t(split_in_group(groups) != 0) - 1 : groups;
     }
     uint32_t head_groups(uint32_t groups) const {
-        return local_split ? wrap_group(groups) + uint32_t(split_in_group(groups) != 0) : groups;
+        return local_split ? split_group(groups) + uint32_t(split_in_group(groups) != 0) : groups;
     }
 };
 inline Topology load(const volatile uint32_t* words) {

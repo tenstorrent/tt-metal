@@ -52,7 +52,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer activation(dfb::act_rm);
     Noc noc;
 
-    uint32_t device_wrap_row = 0;
+    uint32_t local_split_row = 0;
     bool initial_from_predecessor = false;
     if constexpr (dynamic_chronology) {
         const auto actual_start = TensorAccessor(tensor::actual_start);
@@ -61,7 +61,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         noc.async_read_barrier();
         const auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(activation.get_write_ptr());
         const auto topology = kda_chronology::derive(words[0], sp_rank, sp_size, local_rows);
-        device_wrap_row = topology.local_split ? topology.head_rows : 0;
+        local_split_row = topology.local_split ? topology.head_rows : 0;
         initial_from_predecessor = topology.rank != topology.first_rank;
     }
 
@@ -84,8 +84,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         }
 
         int32_t row_floor = 0;
-        if (device_wrap_row != 0 && mt * tile_height >= device_wrap_row) {
-            row_floor = static_cast<int32_t>(device_wrap_row);
+        if (local_split_row != 0 && mt * tile_height >= local_split_row) {
+            row_floor = static_cast<int32_t>(local_split_row);
         }
 
         for (uint32_t tap = 0; tap < 4; ++tap) {

@@ -472,7 +472,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
 
     pack_reconfig_data_format(dfb::scratch);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
-        // A wrap restarts the causal stream mid-group. The recurrence is affine in
+        // A chronological split restarts the causal stream mid-group. The recurrence is affine in
         // the state, so no per-chunk term changes -- only where the carry comes
         // from. reset_chunk 0 means never, which is exact rather than a sentinel:
         // r == 0 means no group straddles, and chunk 0 always seeds from `state`.
@@ -506,19 +506,19 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     }
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary_pair, uint32_t dynamic_chronology>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary, uint32_t dynamic_chronology>
 TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
     uint32_t reset_chunk = 0;
     kda_chronology::Topology topology{};
     if constexpr (dynamic_chronology) {
-        DataflowBuffer control(dfb::chronology_compute);
-        topology = kda_chronology::receive(control);
+        DataflowBuffer chronology(dfb::chronology_compute);
+        topology = kda_chronology::receive(chronology);
     }
     if constexpr (dynamic_chronology) {
         reset_chunk = topology.reset_chunk(group, topology.local_rows / 32 / num_chunks);
     }
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
-    if constexpr (summary_pair) {
+    if constexpr (summary) {
         compute_summary<Ct, Kt, Vt, dynamic_chronology>(num_chunks, reset_chunk);
     } else {
         compute_recurrent<Ct, Kt, Vt>(num_chunks, reset_chunk);
