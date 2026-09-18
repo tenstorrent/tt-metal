@@ -65,11 +65,9 @@ ALWI void reconfig_data_format_srca(LLKOperand<Format, Shape> /*new_a*/) {
     static_assert(is_legal_tile_shape(Shape), "reconfig_data_format_srca: illegal tile shape.");
     constexpr std::uint8_t RegFmt =
         static_cast<std::uint8_t>(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en));
-    constexpr std::uint32_t tile_size = tile_stride_words(Format, Shape);
     UNPACK((_llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
         static_cast<std::uint32_t>(Format),
         static_cast<std::uint32_t>(RegFmt),
-        tile_size,
         Shape.face_r_dim,
         Shape.total_num_faces())));
     MATH((_llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, false>(static_cast<std::uint32_t>(RegFmt))));
@@ -95,11 +93,9 @@ ALWI void reconfig_data_format_srcb(LLKOperand<Format, Shape> /*new_b*/) {
     static_assert(is_legal_tile_shape(Shape), "reconfig_data_format_srcb: illegal tile shape.");
     constexpr std::uint8_t RegFmt =
         static_cast<std::uint8_t>(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en));
-    constexpr std::uint32_t tile_size = tile_stride_words(Format, Shape);
     UNPACK((_llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, false>(
         static_cast<std::uint32_t>(Format),
         static_cast<std::uint32_t>(RegFmt),
-        tile_size,
         Shape.face_r_dim,
         Shape.total_num_faces())));
     MATH((_llk_math_reconfig_data_format_srcb_<is_fp32_dest_acc_en, false>(static_cast<std::uint32_t>(RegFmt))));

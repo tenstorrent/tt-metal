@@ -69,7 +69,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Victim (run-1) target geometry (compile-time).
     constexpr std::uint32_t g1_face_r_dim = VICTIM_FACE_R_DIM;
     constexpr std::uint32_t g1_num_faces  = VICTIM_NUM_FACES;
-    constexpr std::uint32_t g1_tile_size  = g1_face_r_dim * FACE_C_DIM * g1_num_faces;
 
     // ---- Run 0: real tilize "polluter" (output discarded) ----
     const std::uint32_t g0_block_ct  = _llk_unpack_tilize_block_ct_dim_wrapper_(1);
@@ -111,7 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // Z-dim from g1_num_faces). Same format both runs, so this is purely the
         // geometry/stride retarget (no data-format change).
         _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::FACE_ROW_MAJOR, false>(
-            formats_array[1].unpack_A_src, formats_array[1].unpack_A_dst, g1_tile_size, g1_face_r_dim, g1_num_faces);
+            formats_array[1].unpack_A_src, formats_array[1].unpack_A_dst, g1_face_r_dim, g1_num_faces);
     }
 
     // ---- Read back the SrcA baseline and compare against the canonical G1 state ----

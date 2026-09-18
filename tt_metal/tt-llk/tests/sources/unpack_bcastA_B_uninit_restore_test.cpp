@@ -54,9 +54,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig(&formats_array)[2] = params.formats;
 #endif
     constexpr std::uint32_t num_faces = 4;
-    // Datum count for one 32x32 tile; only used to seed the tile-size GPR (the
-    // single-tile run-1 datacopy reads tile index 0, so the exact value is moot).
-    constexpr std::uint32_t tile_size_datums = num_faces * FACE_R_DIM * FACE_C_DIM;
 
     // ---- Run 0: SDPA row-broadcast of operand A against operand B ----
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -82,7 +79,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // SrcA Y-stride (and Z-stride / Tile_x_dim / Z-dim). This is the only place
         // the new Y-stride write is exercised; the matmul tilize test uses IGNORE.
         _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::FACE_ROW_MAJOR, false>(
-            formats_array[1].unpack_A_src, formats_array[1].unpack_A_dst, tile_size_datums, FACE_R_DIM, num_faces);
+            formats_array[1].unpack_A_src, formats_array[1].unpack_A_dst, FACE_R_DIM, num_faces);
     }
     else
     {

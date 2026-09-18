@@ -37,19 +37,16 @@ def hw_configure_unpack(
 ) -> str:
     face_r_dim_a = compute_node.src_a.tile_shape.face_r_dim
     num_faces_a = compute_node.src_a.tile_shape.total_num_faces()
-    tile_size_a = compute_node.src_a.tile_size
 
     operand_b = get_operand_b(compute_node)
     face_r_dim_b = operand_b.tile_shape.face_r_dim
     num_faces_b = operand_b.tile_shape.total_num_faces()
-    tile_size_b = operand_b.tile_size
 
     return (
         f"_llk_unpack_hw_configure_<{dest_acc}>(\n"
         f"    {unpack_A_src.cpp_underlying_value}, {unpack_B_src.cpp_underlying_value},\n"
         f"    {unpack_A_dst.cpp_underlying_value}, {unpack_B_dst.cpp_underlying_value},\n"
-        f"    {face_r_dim_a}, {face_r_dim_b}, {num_faces_a}, {num_faces_b},\n"
-        f"    {tile_size_a}, {tile_size_b}\n"
+        f"    {face_r_dim_a}, {face_r_dim_b}, {num_faces_a}, {num_faces_b}\n"
         f");\n"
     )
 
@@ -86,15 +83,13 @@ def configure_unpack(
         )
         code += (
             f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, {dim_stride}, {to_from_int8}>(\n"
-            f"    {new_A_src.cpp_underlying_value}, {new_A_dst.cpp_underlying_value}, {compute_node.src_a.tile_size}"
+            f"    {new_A_src.cpp_underlying_value}, {new_A_dst.cpp_underlying_value}, "
+            f"{new_face_r_dim_a}, {new_num_faces_a}"
         )
-        if srca_tile_changed:
-            code += f", {new_face_r_dim_a}, {new_num_faces_a}"
         code += "\n);\n"
 
     if srcb_changed:
         operand_b = get_operand_b(compute_node)
-        srcb_tile_size = operand_b.tile_size
         new_face_r_dim_b = operand_b.tile_shape.face_r_dim
         new_num_faces_b = operand_b.tile_shape.total_num_faces()
 
@@ -110,10 +105,9 @@ def configure_unpack(
         )
         code += (
             f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, {dim_stride}, {to_from_int8}>(\n"
-            f"    {new_B_src.cpp_underlying_value}, {new_B_dst.cpp_underlying_value}, {srcb_tile_size}"
+            f"    {new_B_src.cpp_underlying_value}, {new_B_dst.cpp_underlying_value}, "
+            f"{new_face_r_dim_b}, {new_num_faces_b}"
         )
-        if srcb_tile_changed:
-            code += f", {new_face_r_dim_b}, {new_num_faces_b}"
         code += "\n);\n"
 
     return code

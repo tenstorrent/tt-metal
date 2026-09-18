@@ -78,21 +78,23 @@ static constexpr std::uint32_t NUM_FACES = 4;
 #include "params.h"
 
 // Unpack side of the experimental (POLLUTER-selected) op. Reads buffer_A[0]/buffer_B[0].
-static inline void unpack_experimental_(RUNTIME_PARAMETERS params, [[maybe_unused]] const ckernel::TensorShape& tensor_shape)
+static inline void unpack_experimental_(
+    RUNTIME_PARAMETERS params, [[maybe_unused]] const ckernel::TensorShape& tensor_shape, [[maybe_unused]] const FormatConfig& formats)
 {
     if constexpr (POLLUTER == 0)
     {
         // matmul_custom_no_mop (0): in0 -> SrcB, in1 -> SrcA via the regular matmul unpacker
         // (the no-mop MATH replay consumes SrcA/SrcB in the matmul dvalid pattern).
-        const std::uint32_t mm_tile_size = FACE_R_DIM * FACE_C_DIM * NUM_FACES / (is_fp32_dest_acc_en ? 1 : 2);
         _llk_unpack_AB_matmul_init_<>(0 /* transpose */, 1 /* ct_dim */, 1 /* rt_dim */, 1 /* kt_dim */);
         _llk_unpack_AB_matmul_<>(
             L1_ADDRESS(params.buffer_A[0]),
             L1_ADDRESS(params.buffer_B[0]),
             0 /* tile_index_a */,
             0 /* tile_index_b */,
-            mm_tile_size /* tile_size_a */,
-            mm_tile_size /* tile_size_b */);
+            formats.unpack_B_src /* operand A -> SrcB */,
+            formats.unpack_A_src /* operand B -> SrcA */,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, NUM_FACES),
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, NUM_FACES));
     }
     else if constexpr (POLLUTER == 1)
     {
@@ -154,7 +156,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
-        unpack_experimental_(params, tensor_shape); // FORWARD / REPEAT: experimental first
+        unpack_experimental_(params, tensor_shape, formats); // FORWARD / REPEAT: experimental first
     }
 
     // Wait until the run-0 packer has drained before touching unpacker state for run 1.
@@ -168,7 +170,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else
     {
-        unpack_experimental_(params, tensor_shape); // REVERSE / REPEAT: experimental op is the victim
+        unpack_experimental_(params, tensor_shape, formats); // REVERSE / REPEAT: experimental op is the victim
     }
 }
 

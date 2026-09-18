@@ -34,11 +34,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
-    const std::uint32_t TILE_SIZE_UNPACK_A = params.TILE_SIZE_UNPACK_A;
-    const std::uint32_t TILE_SIZE_UNPACK_B = params.TILE_SIZE_UNPACK_B;
-    const std::uint32_t num_faces_A        = params.num_faces_A;
-    const std::uint32_t num_faces_B        = params.num_faces_B;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t num_faces_A = params.num_faces_A;
+    const std::uint32_t num_faces_B = params.num_faces_B;
 
     const std::uint32_t CT_DIM        = params.CT_DIM;
     const std::uint32_t RT_DIM        = params.RT_DIM;
@@ -51,19 +49,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src,
-            formats.unpack_B_src,
-            formats.unpack_A_dst,
-            formats.unpack_B_dst,
-            FACE_R_DIM,
-            FACE_R_DIM,
-            num_faces_A,
-            num_faces_B,
-            TILE_SIZE_UNPACK_A,
-            TILE_SIZE_UNPACK_B);
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces_A, num_faces_B);
         _llk_unpack_AB_matmul_init_<>(UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM, FACE_R_DIM, FACE_R_DIM, num_faces_A, num_faces_B, false, false);
         PROFILER_SYNC();
     }
+
+    // in0 -> SrcB, in1 -> SrcA; the same geometry hw_configure programmed the unpacker with.
+    // Explicit face grid: the legacy helper always maps num_faces == 2 to 1x2 and cannot express 2x1.
+    const auto face_grid_rows = [](const std::uint32_t num_faces) { return num_faces > 2 ? 2 : 1; };
+    const auto face_grid_cols = [](const std::uint32_t num_faces) { return num_faces > 1 ? 2 : 1; };
+    const ckernel::TensorShape tensor_shape_in0 =
+        ckernel::make_tensor_shape(FACE_R_DIM, ckernel::MAX_FACE_C_DIM, face_grid_rows(num_faces_B), face_grid_cols(num_faces_B));
+    const ckernel::TensorShape tensor_shape_in1 =
+        ckernel::make_tensor_shape(FACE_R_DIM, ckernel::MAX_FACE_C_DIM, face_grid_rows(num_faces_A), face_grid_cols(num_faces_A));
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -108,8 +106,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         addr_b,
                         tile_a,
                         tile_b,
-                        TILE_SIZE_UNPACK_A,
-                        TILE_SIZE_UNPACK_B,
+                        formats.unpack_B_src /* operand A -> SrcB */,
+                        formats.unpack_A_src /* operand B -> SrcA */,
+                        tensor_shape_in0,
+                        tensor_shape_in1,
                         /* partial face */ false,
                         /* partial face */ false,
                         CT_DIM,

@@ -37,11 +37,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool PARTIAL_FACE_A = params.PARTIAL_FACE_A;
     const bool PARTIAL_FACE_B = params.PARTIAL_FACE_B;
 
-    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
-    const std::uint32_t TILE_SIZE_UNPACK_A = params.TILE_SIZE_UNPACK_A;
-    const std::uint32_t TILE_SIZE_UNPACK_B = params.TILE_SIZE_UNPACK_B;
-    const std::uint32_t num_faces_A        = params.num_faces_A;
-    const std::uint32_t num_faces_B        = params.num_faces_B;
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t num_faces_A = params.num_faces_A;
+    const std::uint32_t num_faces_B = params.num_faces_B;
 
     const std::uint32_t CT_DIM        = params.CT_DIM;
     const std::uint32_t RT_DIM        = params.RT_DIM;
@@ -62,9 +60,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
             in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
             num_faces_B, // in1
-            num_faces_A, // in0
-            TILE_SIZE_UNPACK_B,
-            TILE_SIZE_UNPACK_A);
+            num_faces_A);
         _llk_unpack_AB_matmul_init_<>(
             UNPACK_TRANSPOSE_FACES,
             CT_DIM,
@@ -78,6 +74,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             PARTIAL_FACE_A); // in0
         PROFILER_SYNC();
     }
+
+    // in0 -> SrcB, in1 -> SrcA; the same geometry hw_configure programmed the unpacker with.
+    const ckernel::TensorShape tensor_shape_in0 =
+        ckernel::make_tensor_shape_from_legacy(in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, num_faces_A);
+    const ckernel::TensorShape tensor_shape_in1 =
+        ckernel::make_tensor_shape_from_legacy(in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM, num_faces_B);
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -102,8 +104,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             L1_ADDRESS(buffer_B[0]),
                             j,
                             j * CT_DIM,
-                            TILE_SIZE_UNPACK_B,
-                            TILE_SIZE_UNPACK_A,
+                            formats.unpack_B_src, // in0 -> SrcB
+                            formats.unpack_A_src, // in1 -> SrcA
+                            tensor_shape_in0,
+                            tensor_shape_in1,
                             PARTIAL_FACE_B,
                             PARTIAL_FACE_A,
                             CT_DIM,
