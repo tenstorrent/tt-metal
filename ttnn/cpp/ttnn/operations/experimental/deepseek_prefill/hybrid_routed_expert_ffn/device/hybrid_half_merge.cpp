@@ -282,6 +282,13 @@ KernelDescriptor merge_kernel(
     reconcile_config(fused, unified, merged);
     if (run_fused_pass) {
         merged.defines.emplace_back("HYB_RUN_FUSED_PASS", "1");
+    }
+    // The barrier is a NoC rendezvous and a TRISC has no NoC, so hybrid_pass_barrier() is empty on
+    // the compute kernel. Handing it the block anyway spends ring on arguments nothing reads, and
+    // the ring is what this op is short of. The define goes with the args: without a block to
+    // point at, a base is a lie.
+    const bool runs_barrier = !std::holds_alternative<tt::tt_metal::ComputeConfigDescriptor>(merged.config);
+    if (run_fused_pass && runs_barrier) {
         // The barrier's own runtime-arg block, after both halves'. Appended per core because only
         // one core is the master; everything else in it is grid-wide.
         const uint32_t barrier_base = static_cast<uint32_t>(fused_block + unified_block);
