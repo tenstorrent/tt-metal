@@ -373,6 +373,43 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         all_to_all_cores = applyStartOffset(all_to_all_cores, grid_offset.value());
         all_to_all_workers_except_sender = applyStartOffset(all_to_all_workers_except_sender, grid_offset.value());
     }
+    // Multicast targets.
+    //
+    // The issue that we have is that shard grid is not always a single rectangle.
+    // On Galaxy, for example, the decode grids are split around the column reserved for the DRAM prefetcher.
+    // Multicasting over the bounding box of such a grid can hit cores that do not belong to this program.
+    // If one of those cores is running the prefetcher at the time, the multicast can overwrite its live runtime args,
+    // which has been observed to deadlock the prefetcher's global circular buffer.
+    //
+    // To avoid this, the grid can be split into exact rectangles and each one is multicast separately.
+    // The rectangles are passed to the kernels as runtime args where has_sender parameter marks the rectangle that
+    // contains the sender core. Only that rectangle needs the loopback / exclude-self handling.
+    constexpr uint32_t kMaxMcastRects = 8;
+    const CoreRangeSet mcast_ranges = all_cores.merge_ranges();
+    TT_FATAL(
+        mcast_ranges.size() <= kMaxMcastRects,
+        "rms_allgather: shard grid splits into {} rectangles, kernels support at most {}",
+        mcast_ranges.size(),
+        kMaxMcastRects);
+    const CoreCoord mcast_sender_core = sender_cores.start_coord;
+    auto mcast_rect_args = [&](NOC noc) {
+        std::vector<uint32_t> args;
+        args.push_back(static_cast<uint32_t>(mcast_ranges.size()));
+        for (const CoreRange& r : mcast_ranges.ranges()) {
+            CoreCoord s = mesh_device->worker_core_from_logical_core(r.start_coord);
+            CoreCoord e = mesh_device->worker_core_from_logical_core(r.end_coord);
+            if (noc == NOC::NOC_1) {
+                std::swap(s, e);
+            }
+            args.push_back(s.x);
+            args.push_back(s.y);
+            args.push_back(e.x);
+            args.push_back(e.y);
+            args.push_back(static_cast<uint32_t>(r.size()));
+            args.push_back(r.contains(mcast_sender_core) ? 1u : 0u);
+        }
+        return args;
+    };
     if (num_none_all_to_all_workers > 0) {
         // Workers that are not on the first all-to-all column. Computing this
         // as a bounding-box rectangle (the legacy path) silently includes
@@ -940,23 +977,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         }
 
         if (width_index == 0) {
-            CoreCoord mcast_start, mcast_end;
-            CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
-            CoreCoord bottom_right_core = {
-                (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
-            auto top_left_core_physical = mesh_device->worker_core_from_logical_core(top_left_core);
-            auto bottom_right_core_physical = mesh_device->worker_core_from_logical_core(bottom_right_core);
-            mcast_start = top_left_core_physical;
-            mcast_end = bottom_right_core_physical;
-            if (reader_noc == NOC::NOC_1) {
-                std::swap(mcast_start, mcast_end);
-            }
-            std::vector<uint32_t> mcast_sender_args;
-            mcast_sender_args.reserve(6 + in0_mcast_noc_x.size() + in0_mcast_noc_y.size());
-            mcast_sender_args.push_back(mcast_start.x);
-            mcast_sender_args.push_back(mcast_start.y);
-            mcast_sender_args.push_back(mcast_end.x);
-            mcast_sender_args.push_back(mcast_end.y);
+            std::vector<uint32_t> mcast_sender_args = mcast_rect_args(reader_noc);
             mcast_sender_args.push_back(core.x - start_core.x);
             mcast_sender_args.push_back(core.y - start_core.y);
             mcast_sender_args.insert(mcast_sender_args.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
@@ -1107,21 +1128,10 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
             (use_two_stage_reduce and width_index_two_stage < 1)) {
             std::vector<uint32_t> writer_mcast_sender_args = {0};
-            CoreCoord mcast_start, mcast_end;
-            CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
-            CoreCoord bottom_right_core = {
-                (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
-            auto top_left_core_physical = mesh_device->worker_core_from_logical_core(top_left_core);
-            auto bottom_right_core_physical = mesh_device->worker_core_from_logical_core(bottom_right_core);
-            mcast_start = top_left_core_physical;
-            mcast_end = bottom_right_core_physical;
-            if (writer_noc == NOC::NOC_1) {
-                std::swap(mcast_start, mcast_end);
+            {
+                const std::vector<uint32_t> rects = mcast_rect_args(writer_noc);
+                writer_mcast_sender_args.insert(writer_mcast_sender_args.end(), rects.begin(), rects.end());
             }
-            writer_mcast_sender_args.push_back(mcast_start.x);
-            writer_mcast_sender_args.push_back(mcast_start.y);
-            writer_mcast_sender_args.push_back(mcast_end.x);
-            writer_mcast_sender_args.push_back(mcast_end.y);
             if (use_two_stage_reduce && (!(width_index < 1))) {
                 writer_mcast_sender_args.push_back(cinv_one_bits);
             } else {
@@ -1157,21 +1167,10 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             writer_kernel_ids.push_back(writer_mcast_sender_kernels_id);
         } else {
             std::vector<uint32_t> writer_mcast_receiver_args = {0};
-            CoreCoord mcast_start, mcast_end;
-            CoreCoord top_left_core = {(std::size_t)start_core.x, (std::size_t)start_core.y};
-            CoreCoord bottom_right_core = {
-                (std::size_t)start_core.x + num_cores_x - 1, (std::size_t)start_core.y + num_cores_y - 1};
-            auto top_left_core_physical = mesh_device->worker_core_from_logical_core(top_left_core);
-            auto bottom_right_core_physical = mesh_device->worker_core_from_logical_core(bottom_right_core);
-            mcast_start = top_left_core_physical;
-            mcast_end = bottom_right_core_physical;
-            if (reader_noc == NOC::NOC_1) {
-                std::swap(mcast_start, mcast_end);
+            {
+                const std::vector<uint32_t> rects = mcast_rect_args(reader_noc);
+                writer_mcast_receiver_args.insert(writer_mcast_receiver_args.end(), rects.begin(), rects.end());
             }
-            writer_mcast_receiver_args.push_back(mcast_start.x);
-            writer_mcast_receiver_args.push_back(mcast_start.y);
-            writer_mcast_receiver_args.push_back(mcast_end.x);
-            writer_mcast_receiver_args.push_back(mcast_end.y);
             writer_mcast_receiver_args.push_back(cinv_pre_bits);
             writer_mcast_receiver_args.push_back(i);  // Core ID to limit number of cores to do all gather on
             writer_mcast_receiver_args.insert(
@@ -1267,14 +1266,18 @@ void RMSAllGatherMeshWorkloadFactory::override_runtime_arguments(
 
             if (writer_kernel_id == shared_vars.writer_mcast_sender_kernels_id) {
                 auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
-                runtime_args[7] = operation_attributes.semaphore.address();
-                runtime_args[9] = stats_tensor.value().buffer()->address();
+                // Layout: [0]=post-arg offset, [1]=num_mcast_rects, 6 words per rect, cinv, core id,
+                // then the all-gather args (semaphore address first, stats tensor address third).
+                const uint32_t ag_base = 4 + 6 * runtime_args[1];
+                runtime_args[ag_base] = operation_attributes.semaphore.address();
+                runtime_args[ag_base + 2] = stats_tensor.value().buffer()->address();
                 // runtime_args[0] holds the start of the post arguments, apply that offset
                 runtime_args[runtime_args[0] + 2] = gamma_address;
             } else if (writer_kernel_id == shared_vars.writer_mcast_receiver_kernels_id) {
                 auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
-                runtime_args[7] = operation_attributes.semaphore.address();
-                runtime_args[9] = stats_tensor.value().buffer()->address();
+                const uint32_t ag_base = 4 + 6 * runtime_args[1];
+                runtime_args[ag_base] = operation_attributes.semaphore.address();
+                runtime_args[ag_base + 2] = stats_tensor.value().buffer()->address();
                 runtime_args[runtime_args[0] + 2] = gamma_address;
             }
         }

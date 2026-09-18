@@ -33,7 +33,7 @@ void kernel_main() {
     // box. For non-rectangular shard grids this differs from num_blocks (the
     // worker count). The NoC ack counter must be credited against the
     // rectangle size or noc_async_write_barrier() will wait forever.
-    constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(16);
+    [[maybe_unused]] constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(16);
 
     Noc noc_obj;
     CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
@@ -47,15 +47,44 @@ void kernel_main() {
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     Semaphore<> reduce_second_stage_sem(reduce_second_stage_semaphore_id);
 
-    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(0);
-    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(1);
-    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(2);
-    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(3);
-    const uint32_t start_x = get_arg_val<uint32_t>(4);
-    const uint32_t start_y = get_arg_val<uint32_t>(5);
+    // Multicast rectangles covering exactly the program's cores (see the factory).
+    // Multicasting to the grid's bounding box instead writes into foreign cores' L1.
+    constexpr uint32_t MAX_MCAST_RECTS = 8;
+    size_t arg_idx = 0;
+    const uint32_t num_mcast_rects = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t mrect[MAX_MCAST_RECTS][6];  // x0, y0, x1, y1, num_cells, has_sender
+    for (uint32_t r = 0; r < num_mcast_rects; ++r) {
+        for (uint32_t k = 0; k < 6; ++k) {
+            mrect[r][k] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
+    const uint32_t start_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t start_y = get_arg_val<uint32_t>(arg_idx++);
 
-    tt_l1_ptr uint32_t* in0_remote_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
-    tt_l1_ptr uint32_t* in0_remote_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(6 + num_x));
+    tt_l1_ptr uint32_t* in0_remote_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
+    tt_l1_ptr uint32_t* in0_remote_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx + num_x));
+
+    // Semaphore multicast to every program core except self.
+    auto sem_mcast_excl_src = [&](Semaphore<>& sem) {
+        for (uint32_t r = 0; r < num_mcast_rects; ++r) {
+            const uint32_t dests = mrect[r][4] - mrect[r][5];
+            if (dests == 0) {
+                continue;
+            }
+            sem.set_multicast(noc_obj, mrect[r][0], mrect[r][1], mrect[r][2], mrect[r][3], dests);
+        }
+    };
+    // Semaphore multicast to every program core including self.
+    auto sem_mcast_incl_src = [&](Semaphore<>& sem) {
+        for (uint32_t r = 0; r < num_mcast_rects; ++r) {
+            if (mrect[r][5]) {
+                sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
+                    noc_obj, mrect[r][0], mrect[r][1], mrect[r][2], mrect[r][3], mrect[r][4]);
+            } else {
+                sem.set_multicast(noc_obj, mrect[r][0], mrect[r][1], mrect[r][2], mrect[r][3], mrect[r][4]);
+            }
+        }
+    };
 
     const DataFormat data_format = get_dataformat(cb_ex_partial2);
 
@@ -88,13 +117,7 @@ void kernel_main() {
             reduce_receiver_sem.set(0);
             // num_dests counts the multicast bounding-box cells excluding self,
             // not the worker count.
-            reduce_sender_sem.set_multicast(
-                noc_obj,
-                mcast_dest_noc_start_x,
-                mcast_dest_noc_start_y,
-                mcast_dest_noc_end_x,
-                mcast_dest_noc_end_y,
-                num_mcast_dests - 1);
+            sem_mcast_excl_src(reduce_sender_sem);
         }
 
         // read data from other cores - first stage reduce
@@ -140,13 +163,7 @@ void kernel_main() {
 
         // num_dests counts the multicast bounding-box cells (loopback includes
         // self), not the worker count.
-        post_reduce_sender_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
-            noc_obj,
-            mcast_dest_noc_start_x,
-            mcast_dest_noc_start_y,
-            mcast_dest_noc_end_x,
-            mcast_dest_noc_end_y,
-            num_mcast_dests);
+        sem_mcast_incl_src(post_reduce_sender_sem);
         noc_obj.async_write_barrier();
     };
 
@@ -156,18 +173,35 @@ void kernel_main() {
                                                     uint32_t l1_read_addr_ex_global = cb_ex_global_arg.get_read_ptr();
                                                     // num_dests counts the multicast bounding-box cells
                                                     // (loopback includes self), not the worker count.
-                                                    noc_obj.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                                                        CoreLocalMem<uint8_t>(l1_read_addr_ex),
-                                                        MulticastEndpoint{},
-                                                        single_tile_size_bytes,
-                                                        num_mcast_dests,
-                                                        {},
-                                                        {.noc_x_start = mcast_dest_noc_start_x,
-                                                         .noc_y_start = mcast_dest_noc_start_y,
-                                                         .noc_x_end = mcast_dest_noc_end_x,
-                                                         .noc_y_end = mcast_dest_noc_end_y,
-                                                         .addr = l1_read_addr_ex_global},
-                                                        false);
+                                                    for (uint32_t r = 0; r < num_mcast_rects; ++r) {
+                                                        if (mrect[r][5]) {
+                                                            noc_obj.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+                                                                CoreLocalMem<uint8_t>(l1_read_addr_ex),
+                                                                MulticastEndpoint{},
+                                                                single_tile_size_bytes,
+                                                                mrect[r][4],
+                                                                {},
+                                                                {.noc_x_start = mrect[r][0],
+                                                                 .noc_y_start = mrect[r][1],
+                                                                 .noc_x_end = mrect[r][2],
+                                                                 .noc_y_end = mrect[r][3],
+                                                                 .addr = l1_read_addr_ex_global},
+                                                                false);
+                                                        } else {
+                                                            noc_obj.async_write_multicast(
+                                                                CoreLocalMem<uint8_t>(l1_read_addr_ex),
+                                                                MulticastEndpoint{},
+                                                                single_tile_size_bytes,
+                                                                mrect[r][4],
+                                                                {},
+                                                                {.noc_x_start = mrect[r][0],
+                                                                 .noc_y_start = mrect[r][1],
+                                                                 .noc_x_end = mrect[r][2],
+                                                                 .noc_y_end = mrect[r][3],
+                                                                 .addr = l1_read_addr_ex_global},
+                                                                false);
+                                                        }
+                                                    }
                                                     noc_obj.async_write_barrier();
                                                 };
     cb_stats_reduced_obj.wait_front(1);

@@ -56,7 +56,7 @@ void kernel_main() {
     // box. For non-rectangular shard grids this differs from num_blocks (the
     // worker count). The NoC ack counter must be credited against the
     // rectangle size or noc_async_write_barrier() will wait forever.
-    constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(24);
+    [[maybe_unused]] constexpr uint32_t num_mcast_dests = get_compile_time_arg_val(24);
     constexpr auto gamma_args = TensorAccessorArgs<25>();
 
     Noc noc_obj;
@@ -70,10 +70,16 @@ void kernel_main() {
     size_t arg_idx = 0;
     const uint32_t base_post_rt =
         get_arg_val<uint32_t>(arg_idx++);  // RT 0 holds how many pre RTs there are (which can vary core by core)
-    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(arg_idx++);
+    // Multicast rectangles which cover exactly the program's cores (see the factory)
+    // A bounding-box multicast would write into foreign cores' L1 which is bad.
+    constexpr uint32_t MAX_MCAST_RECTS = 8;
+    const uint32_t num_mcast_rects = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t mrect[MAX_MCAST_RECTS][6];  // x0, y0, x1, y1, num_cells, has_sender
+    for (uint32_t r = 0; r < num_mcast_rects; ++r) {
+        for (uint32_t k = 0; k < 6; ++k) {
+            mrect[r][k] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_in_2,
         ckernel::PoolType::AVG,
@@ -196,13 +202,14 @@ void kernel_main() {
         stats_set_sem.set(VALID);
         // num_dests counts the multicast bounding-box cells (loopback includes
         // self), not the worker count.
-        stats_set_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
-            noc_obj,
-            mcast_dest_noc_start_x,
-            mcast_dest_noc_start_y,
-            mcast_dest_noc_end_x,
-            mcast_dest_noc_end_y,
-            num_mcast_dests);
+        for (uint32_t r = 0; r < num_mcast_rects; ++r) {
+            if (mrect[r][5]) {
+                stats_set_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
+                    noc_obj, mrect[r][0], mrect[r][1], mrect[r][2], mrect[r][3], mrect[r][4]);
+            } else {
+                stats_set_sem.set_multicast(noc_obj, mrect[r][0], mrect[r][1], mrect[r][2], mrect[r][3], mrect[r][4]);
+            }
+        }
         noc_obj.async_write_barrier();
         fabric_connection.close_finish();  // Includes a noc async write barrier
     } else {
