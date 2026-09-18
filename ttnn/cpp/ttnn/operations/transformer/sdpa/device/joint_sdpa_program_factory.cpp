@@ -144,6 +144,12 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), args.compute_kernel_config);
 
+    // The streaming compute kernel masks only the last K chunk of the concatenation, so it is taken when the
+    // spatial K segment ends on a chunk boundary; fp32 DEST accumulation keeps the legacy kernel.
+    const bool use_streaming_compute = !fp32_dest_acc_en && (padded_Nk == N);
+    const uint32_t streaming_valid_Skt = padded_Nkt + valid_Lt;
+    const uint32_t k_partial_col = use_streaming_compute ? (L % TILE_HEIGHT) : 0;
+
     CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                           : device->compute_with_storage_grid_size();
     bool exp_approx_mode =
@@ -190,7 +196,7 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
-    uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
+    uint32_t mask_tiles = use_streaming_compute ? (1u + (k_partial_col > 0 ? 1u : 0u)) : Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * DHt;
     uint32_t out0_t = Sq_chunk_t * DHt;
@@ -220,11 +226,20 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size);
+    auto [out_out_subblock_h, out_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
+    if (use_streaming_compute) {
+        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, DHt);
+        TT_FATAL(
+            Sq_chunk_t % out_out_subblock_h == 0,
+            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
+            Sq_chunk_t,
+            out_out_subblock_h);
+    }
 
     // log all values
     log_debug(tt::LogOp, "dst_size: {}", dst_size);
@@ -317,6 +332,9 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         static_cast<uint32_t>(use_joint_mask),
         mask_chunk_0,
         mask_chunk_1,
+        static_cast<uint32_t>(use_streaming_compute),  // arg 20
+        out_out_subblock_h,                            // arg 21: drain group height
+        k_partial_col,                                 // arg 22
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -345,6 +363,9 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         mask_chunk_0,
         mask_chunk_1,
         scale_packed,
+        static_cast<uint32_t>(use_streaming_compute),  // arg 23
+        streaming_valid_Skt,                           // arg 24: unpadded concatenated K tiles
+        k_partial_col,                                 // arg 25
     };
 
     std::map<std::string, std::string> defines_map;
@@ -364,7 +385,7 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
-    tt::DataFormat mask_df = tt::DataFormat::Bfp4_b;
+    tt::DataFormat mask_df = use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -546,6 +567,18 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
             .page_size = stats_tile_size,
         }}},
     });
+
+    if (use_streaming_compute) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = im_tile_size,
+            .core_ranges = core_grid,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
+                .data_format = im_df,
+                .page_size = im_tile_size,
+            }}},
+        });
+    }
 
     // Output
     desc.cbs.push_back(CBDescriptor{
