@@ -23,12 +23,11 @@ namespace ckernel::sfpu {
 //   softplus(t) = f(-t)      for t < 0
 //
 // FP32: degree-8 polynomial for f(a) on [0, 5] + inline exp + 3-term Taylor tail
-// BF16: degree-6 polynomial (bf16-accurate, <0.28 ULP) for t >= 0 (residual clamped to 0
-//       past a > 5, since it is negligible next to the dominant t term there); for t < 0,
-//       residual *is* the entire result, so the inline exp tail is used instead, bounded to
-//       a < SOFTPLUS_EXP_TAIL_BOUNDARY where the tail helper's range reduction is valid
-//       (see softplus_exp_negative below); beyond that the true value has already
-//       underflowed to 0 in bf16, so clamping to 0 remains correct.
+// BF16: degree-6 polynomial (bf16-accurate, <0.28 ULP) on [0, 5]; for a > 5 use the
+//       inline exp tail bounded to a < SOFTPLUS_EXP_TAIL_BOUNDARY (see
+//       softplus_exp_negative). For t > 0 that residual is below bf16 rounding vs t;
+//       for t < 0 it *is* the entire result. Beyond the tail bound, exp(-a) has
+//       already underflowed to 0 in bf16, so clamping to 0 remains correct.
 // ======================================================================
 
 constexpr float SOFTPLUS_POLY_BOUNDARY = 5.0f;
@@ -145,19 +144,16 @@ inline void calculate_softplus_body(const float beta, const float beta_reciproca
             SOFTPLUS_BF16_POLY_C5,
             SOFTPLUS_BF16_POLY_C6);
 
-        // Tail: the degree-6 poly diverges past its [0, 5] fit domain, while the true
-        // residual < exp(-5) = 0.0067 there. For t > 0, clamping residual to 0 is what
-        // makes the reconstructed result equal t (see below): the true residual is below
-        // bf16 rounding relative to t, so dropping it is a no-op in bf16 precision.
-        // For t < 0, residual *is* the entire result (softplus(t) = 0 + residual), so it
-        // must not be clamped to 0 there; use the inline exp tail with the same 3-term
-        // ln(1+e) correction as the FP32 path above (raw exp(-a) alone is low by ~e/2,
-        // about 1 bf16 ULP at a = 5), bounded to a < SOFTPLUS_EXP_TAIL_BOUNDARY (see
-        // comment above) -- beyond that exp(-a) has already underflowed to 0, and calling
-        // the tail there would feed values outside its valid range reduction domain.
+        // Tail: the degree-6 poly diverges past its [0, 5] fit domain. Use the same
+        // 3-term ln(1+e) exp tail as the FP32 path whenever a is in
+        // (SOFTPLUS_POLY_BOUNDARY, SOFTPLUS_EXP_TAIL_BOUNDARY). A t < 0 gate is not
+        // needed: for t > 0 the extra residual is below bf16 rounding vs t, and
+        // dropping that compare saves a CC check. Beyond the tail bound, exp(-a)
+        // has already underflowed to 0, and calling the helper would leave its
+        // range-reduction domain.
         v_if(a > SOFTPLUS_POLY_BOUNDARY) {
             residual = 0.0f;
-            v_if(t < 0.0f && a < SOFTPLUS_EXP_TAIL_BOUNDARY) {
+            v_if(a < SOFTPLUS_EXP_TAIL_BOUNDARY) {
                 sfpi::vFloat e = softplus_exp_negative(-a);
                 residual = e * (1.0f + e * (-0.5f + e * 0.333333343f));
             }
