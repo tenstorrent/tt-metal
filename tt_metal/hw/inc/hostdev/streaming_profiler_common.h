@@ -131,14 +131,14 @@ static constexpr std::uint32_t kLinkSyncCtlRun = 1, kLinkSyncCtlStop = 2;
 static constexpr std::uint32_t kLinkSyncPaceTicks = 500'000;  // a round every 10 ms
 
 // The sync's records, 8 words: [SYNC_META] kind << 8 | role; [SYNC_ROUND]; the reading and the wall clock at it as
-// two words each. A link end writes a round's two stamp averages into the ring at the end of its link L1
-// (kLinkSyncRingRecords slots) and publishes the count in its control vector (SPSC_LINK_SYNC_TAIL); it never waits
-// for a reader, so a pusher a whole ring behind loses the oldest. The pusher reads every linked core's control vector
-// each sweep regardless, reads the ring when the tail moved, keeps its own clock model's points in a ring of
-// kSyncRingRecords in its L1, and ships them all on its sync socket as sync frames: the SPSC frame prefix (w0, payload
-// words, the source core's XY) with the record count at SPSC_PREFIX_HEAD_0, then the records, the payload padded to
-// SPSC_SPAN_WIRE_CTRL_WORDS at least so the ingest's frame walk accepts it. Never a profiler record: the sync engine
-// reads its socket itself.
+// two words each; a link record also carries the refclk read with that wall clock. A link end writes a round's two
+// stamp averages into the ring at the end of its link L1 (kLinkSyncRingRecords slots) and publishes the count in its
+// control vector (SPSC_LINK_SYNC_TAIL); it never waits for a reader, so a pusher a whole ring behind loses the oldest.
+// The pusher reads every linked core's control vector each sweep regardless, reads the ring when the tail moved, keeps
+// its own clock model's points in a ring of kSyncRingRecords in its L1, and ships them all on its sync socket as sync
+// frames: the SPSC frame prefix (w0, payload words, the source core's XY) with the record count at SPSC_PREFIX_HEAD_0,
+// then the records, the payload padded to SPSC_SPAN_WIRE_CTRL_WORDS at least so the ingest's frame walk accepts it.
+// Never a profiler record: the sync engine reads its socket itself.
 static constexpr std::uint32_t kSyncRecordWords = 8;
 enum SyncRecordWord : std::uint32_t {
     SYNC_META = 0,
@@ -147,7 +147,10 @@ enum SyncRecordWord : std::uint32_t {
     SYNC_VALUE_HI,
     SYNC_WALL_LO,
     SYNC_WALL_HI,
+    SYNC_REF_LO,  // link records: the refclk read together with the wall clock above
+    SYNC_REF_HI,
 };
+static_assert(SYNC_REF_HI < kSyncRecordWords);
 // LOCAL: a point of the chip's clock model, value the refclk, wall its line there, round = k8 | n << 8. LINK: a
 // round's 1588 stamp average in kLinkSyncStampUnitsPerNs per ns.
 static constexpr std::uint32_t kSyncKindLocal = 0, kSyncKindLink = 1;

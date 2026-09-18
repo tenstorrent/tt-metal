@@ -382,7 +382,7 @@ void LinkSolver::on_stamp(const ClockSample& s) {
     LinkRounds& lr = rounds_[li];
     Round& r = lr.pending[s.round];
     r.id = s.round;
-    r.*slot = Stamp{.units = s.value, .have = true};
+    r.*slot = Stamp{.units = s.value, .wall = s.ts, .ref = s.ref, .spins = s.spins, .have = true};
     if (r.complete()) {
         lr.rounds.push_back(r);
         lr.pending.erase(s.round);
@@ -1047,8 +1047,18 @@ bool SyncEngine::round_error(
     if (!series_.has_nodes(L.dev_a) || !series_.has_nodes(L.dev_b)) {
         return false;
     }
-    const double wa = la->second.wall_at(LinkSolver::mid_a_refclk(r));
-    const double wb = lb->second.wall_at(LinkSolver::mid_b_refclk(r));
+    // Each end's wall clock at the round's midpoint, from the (wall, refclk) pair it read together when it recorded
+    // the stamp, moved to the midpoint by the model's slope over that ~1 ms: a measured AICLK instant, so the error
+    // below is AICLK to AICLK and the model enters only through that millisecond's slope. A record without the
+    // refclk falls back to the model's wall, which cancels the model out of the error.
+    const double mid_a = LinkSolver::mid_a_refclk(r), mid_b = LinkSolver::mid_b_refclk(r);
+    const bool anchored = r.t0.ref != 0 && r.t1.ref != 0;
+    const double wa = anchored ? static_cast<double>(r.t0.wall) + la->second.wall_at(mid_a) -
+                                     la->second.wall_at(static_cast<double>(r.t0.ref))
+                               : la->second.wall_at(mid_a);
+    const double wb = anchored ? static_cast<double>(r.t1.wall) + lb->second.wall_at(mid_b) -
+                                     lb->second.wall_at(static_cast<double>(r.t1.ref))
+                               : lb->second.wall_at(mid_b);
     if (wa <= 0.0 || wb <= 0.0) {
         return false;
     }

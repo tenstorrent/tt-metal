@@ -700,8 +700,9 @@ void kernel_main() {
     model::Model m;
     model::begin_acquire(m, start.refclk);
     uint64_t r_sweep = start.refclk;
-    uint32_t iter = 0;
+    uint32_t iter = 0, walk = start.wall_lo | 1u;
     while (true) {
+        eth_ptp::phase_walk(walk);
         const uint32_t ra_lo = eth_ptp::rd(eth_ptp::kPtpCfrLo);
         const uint32_t w_lo = eth_ptp::rd(eth_ptp::kWallClockLo);
         const uint32_t rb_lo = eth_ptp::rd(eth_ptp::kPtpCfrLo);

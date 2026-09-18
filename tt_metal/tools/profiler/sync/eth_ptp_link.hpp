@@ -301,6 +301,7 @@ constexpr uint32_t kRoleT2 = kernel_profiler::kSyncRoleT2;
 #if defined(ETH_PTP_LINK_TABLE)
 // The acceptance test's sink (programming_examples/profiler/test_eth_ptp_link): a count word at ETH_PTP_LINK_TABLE,
 // then {round, role, value lo, value hi} rows, ETH_PTP_LINK_TABLE_ROWS of them.
+template <bool>
 struct Ring {
     void open(uint32_t) {}
     void record_hw(uint64_t value, uint32_t round, uint32_t role) {
@@ -317,6 +318,9 @@ struct Ring {
     }
 };
 #else
+// `Bracket`: the record's (wall, refclk) pair is read at a refclk update (read_bracketed, ~5 us of spinning), so the
+// host's AICLK-to-AICLK check of the round reads the wall clock to a cycle; a router's end takes the plain pair.
+template <bool Bracket>
 struct Ring {
     uint32_t base = 0, n = 0;
     volatile uint32_t* tail = nullptr;
@@ -328,15 +332,18 @@ struct Ring {
         *tail = 0;
     }
     void record_hw(uint64_t value, uint32_t round, uint32_t role) {
-        const Instant t = read_instant();
+        const Instant t = Bracket ? read_bracketed() : read_instant();
         volatile uint32_t* r = reinterpret_cast<volatile uint32_t*>(
             base + (n % kernel_profiler::kLinkSyncRingRecords) * kernel_profiler::kSyncRecordWords * 4);
-        r[kernel_profiler::SYNC_META] = (kernel_profiler::kSyncKindLink << 8) | role;
+        r[kernel_profiler::SYNC_META] =
+            ((t.spins < 0xFFFFu ? t.spins : 0xFFFFu) << 16) | (kernel_profiler::kSyncKindLink << 8) | role;
         r[kernel_profiler::SYNC_ROUND] = round;
         r[kernel_profiler::SYNC_VALUE_LO] = static_cast<uint32_t>(value);
         r[kernel_profiler::SYNC_VALUE_HI] = static_cast<uint32_t>(value >> 32);
         r[kernel_profiler::SYNC_WALL_LO] = t.wall_lo;
         r[kernel_profiler::SYNC_WALL_HI] = t.wall_hi;
+        r[kernel_profiler::SYNC_REF_LO] = static_cast<uint32_t>(t.refclk);
+        r[kernel_profiler::SYNC_REF_HI] = static_cast<uint32_t>(t.refclk >> 32);
         asm volatile("fence" ::: "memory");
         *tail = ++n;
     }
@@ -352,7 +359,7 @@ struct Ring {
 // Both are constant-initialised: the ERISC runs no dynamic init.
 constexpr uint32_t kRatioTicks = 1000;  // 20 us before a slot: read jitter of tens of cycles is under a tenth of a step
 
-template <bool DataCache = true>
+template <bool DataCache = true, bool Bracket = true>
 struct SenderLink {
     LinkSession sess;
     uint32_t slot_base = 0, burst_ticks = 0;
@@ -371,7 +378,7 @@ struct SenderLink {
     Pacer pacer;
     StopDiag diag;
     HwRound rnd;
-    link::Ring ring;
+    link::Ring<Bracket> ring;
     uint32_t round = 0;
     bool ok = false;
 
@@ -496,12 +503,12 @@ private:
     }
 };
 
-template <bool DataCache = true>
+template <bool DataCache = true, bool Bracket = true>
 struct ReceiverLink {
     LinkSession sess;
     uint32_t slot_base = 0, diag_addr = 0;
     uint32_t round = 0, expect = 0;
-    link::Ring ring;
+    link::Ring<Bracket> ring;
     bool started = false, ok = false, mid_burst = false, armed = false;
     Anchor at;
     Instant start_at{};
@@ -632,7 +639,7 @@ private:
 
 // The end a core runs, chosen by role, with the one start(l1, ctl, pace_ticks) of both.
 template <bool Sender, bool DataCache>
-using LinkEnd = std::conditional_t<Sender, SenderLink<DataCache>, ReceiverLink<DataCache>>;
+using LinkEnd = std::conditional_t<Sender, SenderLink<DataCache, false>, ReceiverLink<DataCache, false>>;
 
 // A router's end over its LINK_SYNC_ADDR region, at the product's pace.
 template <bool Sender, bool DataCache>

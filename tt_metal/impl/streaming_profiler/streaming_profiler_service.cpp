@@ -522,11 +522,13 @@ private:
                 service_.sync_->on_clock(ClockSample{
                     .dev = dev,
                     .core = core->second,
-                    .kind = rec[kp::SYNC_META] >> 8,
+                    .kind = (rec[kp::SYNC_META] >> 8) & 0xFFu,
                     .round = rec[kp::SYNC_ROUND],
                     .role = rec[kp::SYNC_META] & 0xFFu,
                     .value = (static_cast<uint64_t>(rec[kp::SYNC_VALUE_HI]) << 32) | rec[kp::SYNC_VALUE_LO],
-                    .ts = (static_cast<uint64_t>(rec[kp::SYNC_WALL_HI]) << 32) | rec[kp::SYNC_WALL_LO]});
+                    .ts = (static_cast<uint64_t>(rec[kp::SYNC_WALL_HI]) << 32) | rec[kp::SYNC_WALL_LO],
+                    .ref = (static_cast<uint64_t>(rec[kp::SYNC_REF_HI]) << 32) | rec[kp::SYNC_REF_LO],
+                    .spins = rec[kp::SYNC_META] >> 16});
             }
             p += size_t{frame_words_[i]} * 4;
         }

@@ -35,6 +35,8 @@ struct ClockSample {
     uint32_t role;
     uint64_t value;
     uint64_t ts;
+    uint64_t ref = 0;  // link records: the refclk read with ts
+    uint32_t spins = 0;  // link records: the bracketed read's spins to the caught refclk update, plus one
 };
 
 // The chip's AICLK wall clock against its refclk, as its idle-eth pusher models it (eth_clock_pusher.cpp): one
@@ -156,6 +158,8 @@ public:
     // One end's stamp of a round: the reading, in the link's stamp units of the refclk domain.
     struct Stamp {
         uint64_t units = 0;
+        uint64_t wall = 0, ref = 0;  // the end's AICLK wall clock and refclk read together when it recorded this
+        uint32_t spins = 0;
         bool have = false;
     };
     // A round under the number the sender gave it, with both ends' stamps: the sender's frame egress and echo
@@ -427,6 +431,8 @@ private:
     // abscissa. False when a chip has no fitted run or no node to place a stamp with.
     struct RoundTerms {
         double wall_a = 0, wall_b = 0, root_a = 0, root_b = 0;
+        double res_a = 0, res_b = 0;  // each end's recorded pair against its chip's model, ns
+        uint32_t spins_a = 0, spins_b = 0;
     };
     bool round_error(
         const CaptureContext::Link& L, const Round& r, int64_t& tsc_a, double& err, RoundTerms* terms = nullptr) const;

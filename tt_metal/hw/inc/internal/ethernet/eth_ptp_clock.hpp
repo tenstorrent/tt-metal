@@ -65,6 +65,7 @@ inline __attribute__((always_inline)) uint64_t read_ptp64ns() {
 struct Instant {
     uint32_t wall_lo, wall_hi;
     uint64_t refclk;
+    uint32_t spins = 0;  // read_bracketed: iterations to the caught update plus one; 0 for a plain instant
     uint64_t wall() const { return (static_cast<uint64_t>(wall_hi) << 32) | wall_lo; }
 };
 // The wall clock's low read latches its high word for only a few cycles, and the refclk read between the two takes
@@ -84,6 +85,41 @@ inline __attribute__((always_inline)) Instant read_instant() {
             return t;
         }
     }
+}
+// The instant of one refclk update, the way the clock pusher samples (eth_clock_pusher.cpp): a wall read between two
+// refclk reads that differ is within a cycle of the update, with no read-latency term. The ERISC sees the refclk
+// move every four ticks and the three reads span a couple of cycles, so a spin catches one in ~50, about 5 us.
+// The spin is bounded only so a dead refclk cannot hold the core; then the plain instant stands.
+// Each iteration is padded by a pseudo-random 0-15 cycles (phase_walk): with a fixed iteration length, at an AICLK
+// where the 80 ns between updates is a whole number of iterations, the update lands at the same phase of every one
+// and, outside the bracket, is never caught -- whole half seconds without a sample at 1237.5 and 1306.25 MHz; a
+// short regular walk locked the same way at 1350 MHz. `x` is the walk's state, any nonzero seed.
+inline __attribute__((always_inline)) void phase_walk(uint32_t& x) {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    for (uint32_t d = x & 15u; d != 0; d--) {
+        asm volatile("nop");
+    }
+}
+inline __attribute__((always_inline)) Instant read_bracketed() {
+    Instant t = read_instant();
+    uint32_t x = t.wall_lo | 1u;
+    for (uint32_t spin = 0; spin < 65536u; spin++) {
+        phase_walk(x);
+        const uint32_t ra = rd(kPtpCfrLo);
+        const uint32_t w = rd(kWallClockLo);
+        const uint32_t rb = rd(kPtpCfrLo);
+        if (ra != rb) {
+            t.wall_hi += w < t.wall_lo;
+            t.wall_lo = w;
+            const uint32_t r_hi = static_cast<uint32_t>(t.refclk >> 32) + (rb < static_cast<uint32_t>(t.refclk));
+            t.refclk = (static_cast<uint64_t>(r_hi) << 32) | rb;
+            t.spins = spin + 1;
+            return t;
+        }
+    }
+    return t;
 }
 
 }  // namespace tt::tt_metal::eth_ptp
