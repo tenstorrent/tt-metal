@@ -15,6 +15,7 @@ from loguru import logger
 import ttnn
 
 from ._utils import clamp, is_default_value, split_list
+from .full_vocab_contract import ManagedPerSlotDrawSeeds
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
 
@@ -909,6 +910,10 @@ class SeedManager:
         # Sampling1D runtime state. The all-unseeded path is deliberately
         # untouched until an explicit request seed overlays model defaults.
         self._runtime_seed_buffer_managed = False
+        # Opt-in state for composed device samplers that need more than one
+        # random draw per token.  None preserves the legacy SeedManager path
+        # exactly; callers must enable this before admitting requests.
+        self._managed_draw_seeds: ManagedPerSlotDrawSeeds | None = None
         # Mesh mapper for sharding seeds across rows when sampling_dp > 1.
         sampling_dp = 1 if tt_sampling is None else tt_sampling._sampling_dp
         if sampling_dp > 1:
@@ -943,6 +948,29 @@ class SeedManager:
         self._reseted = False
         self._needs_skip = False
         self._runtime_seed_buffer_managed = False
+        if self._managed_draw_seeds is not None:
+            self._managed_draw_seeds.deactivate_slots_except([])
+
+    def enable_managed_draw_seeds(self) -> None:
+        """Enable request-owned per-slot/subdraw seeds for a composed sampler.
+
+        This is deliberately explicit and must happen before request admission.
+        Merely constructing SeedManager leaves the legacy device-RNG state
+        machine byte-for-byte unchanged.
+        """
+
+        if self._managed_draw_seeds is not None:
+            return
+        if self._seed_active:
+            raise RuntimeError("managed draw seeds must be enabled before request admission")
+        self._managed_draw_seeds = ManagedPerSlotDrawSeeds(self.max_batch_size)
+
+    def next_managed_draw_seed_plan(self, draws_per_slot):
+        """Return one per-subdraw seed vector without writing or sampling."""
+
+        if self._managed_draw_seeds is None:
+            raise RuntimeError("managed draw seeds are not enabled")
+        return self._managed_draw_seeds.next_plan(draws_per_slot)
 
     @property
     def seed_buffer(self):
@@ -1076,6 +1104,8 @@ class SeedManager:
         else:
             self.seed_salts[slot] = self._next_free_salt(slot, seed)
             self.rngs[slot].seed(int(seed))
+        if self._managed_draw_seeds is not None:
+            self._managed_draw_seeds.reset_slot(slot, seed, salt=self.seed_salts[slot])
 
     def deactivate_slots_except(self, live_slots) -> None:
         """Drop seed state of slots that are no longer live.
@@ -1087,6 +1117,8 @@ class SeedManager:
         reproducibility. Callers pass the current live-slot set (decode
         positions >= 0).
         """
+        if self._managed_draw_seeds is not None:
+            self._managed_draw_seeds.deactivate_slots_except([int(slot) for slot in live_slots])
         if not self._seed_active:
             return
         live = {int(slot) for slot in live_slots}
@@ -1193,15 +1225,25 @@ class SeedManager:
             def _position(_slot):
                 return int(positions)
 
+        managed_positions = [-1] * self.max_batch_size
+        managed_slots = []
         for user in user_ids:
             slot = int(user)
             seed = self._seed_from_slot_params(seeds, slot)
-            if seed is None:
+            if seed is None and self._managed_draw_seeds is None:
                 continue
             position = _position(slot)
             if position is None or position < 0:
                 continue
-            self.seed_counters[slot] = max(0, position + offset)
+            if seed is not None:
+                self.seed_counters[slot] = max(0, position + offset)
+            if self._managed_draw_seeds is not None:
+                managed_positions[slot] = position
+                managed_slots.append(slot)
+        if managed_slots:
+            self._managed_draw_seeds.align_token_counters(
+                managed_positions, managed_slots, offset=offset
+            )
 
     def has_active_request_seed(self) -> bool:
         return self._active_request_seed
@@ -1214,6 +1256,8 @@ class SeedManager:
         previously at slot *j*. Identity entries (``remap[i] == i``) are
         no-ops. Only non-identity entries trigger a move.
         """
+        if self._managed_draw_seeds is not None:
+            self._managed_draw_seeds.remap([int(remap[i]) for i in range(len(remap))])
         if not self._seed_active:
             return
         moves = [(int(remap[i]), i) for i in range(len(remap)) if int(remap[i]) != i]

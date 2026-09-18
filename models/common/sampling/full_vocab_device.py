@@ -1,0 +1,156 @@
+"""Staged public-op composition for unrestricted top-p=1 device sampling.
+
+This module is intentionally not wired into :class:`SamplingGenerator` and
+does not advertise a runtime capability.  It keeps logits, probability math,
+random variates, and the B-row token result on device while the slower
+per-row scalar-seed uniform composition is qualified.  Full-vocabulary
+nucleus sampling (top_p < 1), traces, and distributed/sharded logits fail
+closed rather than silently narrowing the distribution.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Callable, Sequence
+
+
+_INACTIVE_DEVICE_SEED = (1 << 32) - 1
+_UNIFORM_SCALE = float(1 << 24)
+
+
+@dataclass(frozen=True)
+class DeviceCategoricalPrototypeResult:
+    """Device result plus owned scratch that the caller must release."""
+
+    token_ids: object
+    valid_distribution: object
+    owned_tensors: tuple[object, ...]
+
+
+def _shape(tensor) -> tuple[int, ...]:
+    return tuple(int(dim) for dim in tensor.shape)
+
+
+def _prefix_sum_fp32(tensor, *, dim: int, ops, own: Callable[[object], object]):
+    """Inclusive Hillis-Steele scan using public FP32 add operations.
+
+    The stock cumsum path is intentionally not used: the currently qualified
+    runtime can quantize FP32 prefixes internally.  This composition retains
+    the explicit operation sequence for numerical/silicon qualification.
+    """
+
+    rank = len(_shape(tensor))
+    dim %= rank
+    transpose_back = dim == rank - 1
+    if transpose_back:
+        tensor = own(ops.transpose(tensor, dim - 1, dim))
+        dim -= 1
+    width = _shape(tensor)[dim]
+    result = tensor
+    offset = 1
+    while offset < width:
+        end = list(_shape(result))
+        end[dim] = offset
+        zeros = own(ops.multiply(own(ops.slice(result, [0] * rank, end)), 0.0))
+        begin = [0] * rank
+        end[dim] = width - offset
+        previous = own(ops.slice(result, begin, end))
+        shifted = own(ops.concat([zeros, previous], dim=dim))
+        result = own(ops.add(result, shifted, dtype=ops.float32))
+        offset *= 2
+    return own(ops.transpose(result, dim, dim + 1)) if transpose_back else result
+
+
+def _per_slot_uniform_rows(
+    *,
+    row_scratch: Sequence[object],
+    seed_values: Sequence[int],
+    active_rows: Sequence[bool],
+    ops,
+    own: Callable[[object], object],
+):
+    """Compose a [1,1,B,1] device uniform without host random variates."""
+
+    batch = len(row_scratch)
+    if len(seed_values) != batch or len(active_rows) != batch:
+        raise ValueError("scratch, seeds, and active_rows must have equal B length")
+    rows = []
+    for slot, (scratch, seed, active) in enumerate(zip(row_scratch, seed_values, active_rows)):
+        if _shape(scratch) != (1, 1, 1, 1):
+            raise ValueError(f"row_scratch[{slot}] must have logical shape [1,1,1,1]")
+        if not active:
+            if int(seed) != _INACTIVE_DEVICE_SEED:
+                raise ValueError("inactive rows must carry the TTNN all-ones seed sentinel")
+            rows.append(own(ops.multiply(scratch, 0.0)))
+            continue
+        if isinstance(seed, bool) or not isinstance(seed, int) or not 0 < seed < _INACTIVE_DEVICE_SEED:
+            raise ValueError("active uniform seeds must be uint32 values excluding zero and all-ones")
+        random_integer = own(ops.uniform(scratch, 0.0, _UNIFORM_SCALE, seed=seed))
+        rows.append(own(ops.multiply(random_integer, 1.0 / _UNIFORM_SCALE)))
+    return own(ops.concat(rows, dim=2))
+
+
+def sample_unrestricted_top_p_one(
+    logits,
+    *,
+    inverse_temperature,
+    row_scratch: Sequence[object],
+    seed_values: Sequence[int],
+    active_rows: Sequence[bool],
+    vocab_size: int,
+    ops,
+    trace_enabled: bool = False,
+) -> DeviceCategoricalPrototypeResult:
+    """Sample unrestricted categorical rows and return device token IDs.
+
+    ``logits`` must be a single-device or already-replicated FP32-compatible
+    tensor shaped ``[1,1,B,W]``.  ``W`` may include a tile tail, but every tail
+    logit at ``vocab_size:W`` must already be ``-inf``.  The prototype cannot
+    inspect device values to enforce that semantic condition; its eventual
+    admission contract must bind a producer-side tail-mask receipt.
+
+    No token or vocabulary tensor is copied to host.  Scalar request seeds are
+    host control inputs, matching the existing manual-seed ABI.  Dynamic public
+    ops allocate scratch, so trace capture is rejected until fixed buffers and
+    lifetime ownership are implemented and qualified.
+    """
+
+    if trace_enabled:
+        raise RuntimeError("unrestricted categorical prototype is not trace-safe")
+    shape = _shape(logits)
+    if len(shape) != 4 or shape[:2] != (1, 1):
+        raise ValueError("logits must have shape [1,1,B,W]")
+    batch, width = shape[2], shape[3]
+    if batch <= 0 or batch > 32 or width < 32 or width % 32:
+        raise ValueError("prototype requires 1<=B<=32 and tile-aligned W>=32")
+    if not 0 < vocab_size <= width:
+        raise ValueError("vocab_size must be in (0, W]")
+    if _shape(inverse_temperature) != (1, 1, batch, 1):
+        raise ValueError("inverse_temperature must have device shape [1,1,B,1]")
+    if len(active_rows) != batch or not any(active_rows):
+        raise ValueError("active_rows must identify at least one of the B rows")
+
+    owned: list[object] = []
+
+    def own(tensor):
+        owned.append(tensor)
+        return tensor
+
+    maximum = own(ops.max(logits, dim=-1, keepdim=True))
+    centered = own(ops.subtract(logits, maximum))
+    scaled = own(ops.multiply(centered, inverse_temperature))
+    weights = own(ops.exp(scaled))
+    cdf = _prefix_sum_fp32(weights, dim=-1, ops=ops, own=own)
+    total = own(ops.slice(cdf, [0, 0, 0, width - 1], [1, 1, batch, width]))
+    draws = _per_slot_uniform_rows(
+        row_scratch=row_scratch,
+        seed_values=seed_values,
+        active_rows=active_rows,
+        ops=ops,
+        own=own,
+    )
+    threshold = own(ops.multiply(total, draws))
+    above = own(ops.gt(cdf, threshold))
+    token_ids = own(ops.argmax(above, dim=-1, keepdim=True))
+    valid_distribution = own(ops.gt(total, 0.0))
+    return DeviceCategoricalPrototypeResult(token_ids, valid_distribution, tuple(owned))

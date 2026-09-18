@@ -167,6 +167,48 @@ def test_seed_manager_seed_params_do_not_fallback_to_slot_zero():
     assert seed_manager._seed_from_slot_params(33, 3) == 33
 
 
+def test_seed_manager_managed_draws_are_explicitly_opt_in():
+    seed_manager = _make_host_only_seed_manager()
+
+    assert seed_manager._managed_draw_seeds is None
+    with pytest.raises(RuntimeError, match="not enabled"):
+        seed_manager.next_managed_draw_seed_plan([0, 0, 0, 0])
+
+    # Legacy state remains the sole owner until the explicit enable call.
+    seed_manager.reset_seed([11], [0])
+    assert seed_manager.seeds == [11, None, None, None]
+    assert seed_manager.seed_counters == [0, 0, 0, 0]
+
+
+def test_seed_manager_managed_draws_reuse_slot_lifecycle_and_position_alignment():
+    seed_manager = _make_host_only_seed_manager()
+    seed_manager.enable_managed_draw_seeds()
+    seed_manager.reset_seed([41, 43], [0, 3])
+
+    first = seed_manager.next_managed_draw_seed_plan([1, 0, 0, 2])
+    assert len(first.seeds_by_subdraw) == 2
+    assert first.seeds_by_subdraw[1][0] == MAX_UINT32
+
+    # The same condense map must move both the legacy seed state and the
+    # opt-in composed-sampler stream without creating a second slot owner.
+    seed_manager.apply_slot_remap(torch.tensor([0, 3, 2, 3], dtype=torch.int32))
+    assert seed_manager.seeds == [41, 43, None, None]
+    moved = seed_manager.next_managed_draw_seed_plan([1, 2, 0, 0])
+
+    reference = _make_host_only_seed_manager()
+    reference.enable_managed_draw_seeds()
+    reference.reset_seed([41, 43], [0, 3])
+    reference.next_managed_draw_seed_plan([1, 0, 0, 2])
+    expected = reference.next_managed_draw_seed_plan([1, 0, 0, 2])
+    assert moved.seeds_by_subdraw[0][1] == expected.seeds_by_subdraw[0][3]
+    assert moved.seeds_by_subdraw[1][1] == expected.seeds_by_subdraw[1][3]
+
+    seed_manager.align_seed_counters_to_positions([41, 43, None, None], [0, 1], [9, 19, -1, -1])
+    aligned = seed_manager.next_managed_draw_seed_plan([1, 1, 0, 0])
+    assert aligned.seeds_by_subdraw[0][0] != moved.seeds_by_subdraw[0][0]
+    assert aligned.seeds_by_subdraw[0][1] != moved.seeds_by_subdraw[0][1]
+
+
 def test_seed_manager_updates_lazy_buffer_with_request_position_hash_and_preserves_default_source():
     class Buffer:
         def __init__(self):
