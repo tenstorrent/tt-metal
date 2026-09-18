@@ -298,3 +298,48 @@ def test_interleaved_to_sharded_rejects_pure_nd(device, tensor_shape, nd_shard_s
 
     with expect_error(RuntimeError, r"interleaved_to_sharded does not support ND sharding"):
         ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config)
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, nd_shard_shape, nd_shard_grid, output_shard_shape, output_shard_grid",
+    [
+        # Same pure-ND config as above, paired with a legal 2D-sharded pre-allocated output:
+        # 6*32 = 192 rows of 64, height-sharded 32 rows per core across 6 cores.
+        [
+            [6, 32, 64],
+            [3, 32, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+            (32, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+        ],
+    ],
+)
+def test_interleaved_to_sharded_rejects_pure_nd_with_preallocated_output(
+    device, tensor_shape, nd_shard_shape, nd_shard_grid, output_shard_shape, output_shard_grid, expect_error
+):
+    """A pure-ND output config must be rejected even when a pre-allocated output is supplied.
+
+    validate_inputs used to read the ND check off the caller's own spec, so this was wrongly accepted.
+    """
+    nd_shard_spec = ttnn.NdShardSpec(nd_shard_shape, nd_shard_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+
+    torch_input_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device)
+
+    # Valid on its own terms, so the ND output config is the only thing left to object to.
+    preallocated_output = ttnn.allocate_tensor_on_device(
+        ttnn_input_tensor.shape,
+        ttnn_input_tensor.dtype,
+        ttnn_input_tensor.layout,
+        device,
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(output_shard_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
+
+    with expect_error(RuntimeError, r"interleaved_to_sharded does not support ND sharding"):
+        ttnn.interleaved_to_sharded(ttnn_input_tensor, output_mem_config, preallocated_output=preallocated_output)

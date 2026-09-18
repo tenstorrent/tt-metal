@@ -37,7 +37,8 @@ ttnn.attach_golden_function(ttnn.angle, golden_function=_golden_function)
 def _golden_function(input_tensor_a, *args, **kwargs):
     import torch
 
-    return torch.is_imag(input_tensor_a)
+    # ttnn.is_imag is eqz(real part): true where the value is purely imaginary.
+    return torch.real(input_tensor_a) == 0
 
 
 ttnn.attach_golden_function(ttnn.is_imag, golden_function=_golden_function)
@@ -46,7 +47,8 @@ ttnn.attach_golden_function(ttnn.is_imag, golden_function=_golden_function)
 def _golden_function(input_tensor_a, *args, **kwargs):
     import torch
 
-    return torch.is_real(input_tensor_a)
+    # ttnn.is_real is eqz(imag part): true where the value is purely real.
+    return torch.isreal(input_tensor_a)
 
 
 ttnn.attach_golden_function(ttnn.is_real, golden_function=_golden_function)
@@ -82,6 +84,8 @@ ttnn.attach_golden_function(ttnn.polar, golden_function=_golden_function)
 def _golden_function(input_tensor_a, *args, **kwargs):
     import torch
 
+    # Keep reciprocal's signed infinities and NaNs intact when complex registrations are loaded last.
+    # Replacing them with finite extrema would undo the real unary golden's special-value contract.
     return torch.reciprocal(input_tensor_a)
 
 

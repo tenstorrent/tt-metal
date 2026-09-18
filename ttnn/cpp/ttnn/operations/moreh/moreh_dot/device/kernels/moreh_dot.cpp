@@ -20,7 +20,7 @@ void kernel_main() {
     DataflowBuffer dfb_c24(dfb::im0);
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        bool last_out = block == (per_core_block_cnt - 1);
+        const bool last_out = block == (per_core_block_cnt - 1);
 
         dfb_c0.wait_front(onetile);
         dfb_c1.wait_front(onetile);

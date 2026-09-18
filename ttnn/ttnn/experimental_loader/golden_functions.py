@@ -138,6 +138,18 @@ def _slice_write_golden_function(input_tensor, output_tensor, start, end, step, 
 ttnn.attach_golden_function(ttnn.experimental.slice_write, _slice_write_golden_function)
 
 
+def _broadcast_to_golden_function(input, output_shape, *args, output=None, **kwargs):
+    result = input.broadcast_to(tuple(output_shape))
+    if output is not None:
+        # Mirror output= writes so retained local and global destination goldens stay current.
+        output.copy_(result)
+        return output
+    return result
+
+
+ttnn.attach_golden_function(ttnn.experimental.broadcast_to, _broadcast_to_golden_function)
+
+
 def _indexed_fused_update_cache_golden_function(
     cache_tensor1,
     input_tensor1,

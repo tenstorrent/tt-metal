@@ -30,10 +30,6 @@ global_env:
   PREFILL_TRACE_DIR: "/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240"
 
   PREFILL_ENABLE_MIGRATION: "1"
-  # The driver drains num_layers x pushes acks before it migrates; without them it copies a half-written
-  # cache. Selects the host-callback ack transport, the only one this runtime implements — it enables no
-  # tracing, since the runtime has no capture_trace.
-  PREFILL_ENABLE_LAYER_ACK: "1"
   PREFILL_USE_TRACE: "1"
   PREFILL_MIGRATION_WAIT_READY_MS: "120000"
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/m3_kv_chunk_table.pb"

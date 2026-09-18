@@ -7,6 +7,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
+#include <algorithm>
 #include <limits>
 
 namespace ttnn::operations::experimental::topk_large_indices {
@@ -42,6 +43,26 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "topk_large_indices input must be on device");
     TT_FATAL(input.buffer() != nullptr, "topk_large_indices input must have an allocated buffer");
 
+    auto* device = input.device();
+    const auto selected_subdevice_id = attrs.subdevice_id.value_or(device->get_sub_device_ids().at(0));
+    const auto& active_subdevice_ids = device->get_sub_device_ids();
+    TT_FATAL(
+        std::find(active_subdevice_ids.begin(), active_subdevice_ids.end(), selected_subdevice_id) !=
+            active_subdevice_ids.end(),
+        "topk_large_indices subdevice_id {} is not part of active subdevice manager {}",
+        selected_subdevice_id,
+        attrs.subdevice_manager_id);
+    const auto selected_subdevice_cores =
+        device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, selected_subdevice_id);
+    TT_FATAL(
+        selected_subdevice_cores.contains(attrs.resolved_worker_core_grid),
+        "topk_large_indices resolved worker grid {} must be fully contained in TENSIX subdevice {} cores {}",
+        attrs.resolved_worker_core_grid,
+        selected_subdevice_id,
+        selected_subdevice_cores);
+    TT_FATAL(
+        attrs.resolved_worker_core_grid.num_cores() > 0, "topk_large_indices requires at least one TENSIX worker core");
+
     const auto& shape = input.logical_shape();
     TT_FATAL(shape.rank() >= 1, "topk_large_indices input must have rank >= 1");
     const uint64_t num_rows = flattened_rows_excluding_last_dim(shape);
@@ -63,6 +84,43 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
     // of the physically-wider row is ignored, not read).  A short valid prefix is legal: inactive lanes
     // are already represented as -inf by the TopK XL tail path and are materialized as 0xFFFFFFFF indices.
     // This keeps a fixed worst-case k/output shape while a serving cache grows through its early prefixes.
+    if (tensor_args.has_valid_length_metadata()) {
+        // Mutually exclusive, rather than silently preferring one: the on-device value would win and the
+        // caller's scalar would be quietly ignored.
+        TT_FATAL(
+            !attrs.valid_length.has_value(),
+            "topk_large_indices: valid_length and valid_length_tensor are mutually exclusive (the tensor form "
+            "is read on-device; a scalar supplied alongside it would be ignored)");
+        const auto& m = *tensor_args.valid_length_tensor;
+        TT_FATAL(
+            m.storage_type() == StorageType::DEVICE && m.buffer() != nullptr,
+            "topk_large_indices valid_length_tensor must be allocated on device");
+        TT_FATAL(
+            m.device() == tensor_args.input_tensor.device(),
+            "topk_large_indices valid_length_tensor must be on the same device as the input");
+        TT_FATAL(m.dtype() == DataType::UINT32, "topk_large_indices valid_length_tensor must be UINT32");
+        TT_FATAL(m.layout() == Layout::ROW_MAJOR, "topk_large_indices valid_length_tensor must be ROW_MAJOR");
+        TT_FATAL(
+            m.logical_volume() == 1,
+            "topk_large_indices valid_length_tensor must hold exactly 1 element (got {})",
+            m.logical_volume());
+        TT_FATAL(
+            m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "topk_large_indices valid_length_tensor must be interleaved (the kernel reads page 0 at a single "
+            "fixed address)");
+        TT_FATAL(
+            m.memory_config().buffer_type() == BufferType::DRAM,
+            "topk_large_indices valid_length_tensor must be in DRAM");
+        // The VALUE lives on device, so the <= n bound cannot be checked here; the offset alone can.
+        TT_FATAL(
+            attrs.valid_length_offset <= n,
+            "topk_large_indices valid_length_offset {} must be <= the input last dimension {}",
+            attrs.valid_length_offset,
+            n);
+    } else {
+        TT_FATAL(
+            attrs.valid_length_offset == 0, "topk_large_indices: valid_length_offset requires valid_length_tensor");
+    }
     if (attrs.valid_length.has_value()) {
         const uint32_t valid_length = attrs.valid_length.value();
         TT_FATAL(valid_length > 0, "topk_large_indices valid_length must be > 0");
@@ -90,16 +148,18 @@ void TopkLargeIndicesDeviceOperation::validate_on_program_cache_miss(
 ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
-    const auto grid = input.device()->compute_with_storage_grid_size();
-
     return tt::tt_metal::operation::hash_operation<TopkLargeIndicesDeviceOperation>(
+        // Metadata presence changes the reader/compute binaries (extra CBs + accessor args + the on-device
+        // derivation) and the offset is baked in as a compile arg, so both must be hashed. The per-chunk
+        // VALUE never enters the key -- that is what lets one captured program serve every chunk.
+        tensor_args.has_valid_length_metadata(),
+        attrs.valid_length_offset,
         attrs.k,
+        attrs.resolved_worker_core_grid,
         input.dtype(),
         input.layout(),
         input.memory_config().memory_layout(),
         input.memory_config().buffer_type(),
-        grid.x,
-        grid.y,
         static_cast<uint32_t>(program::compute_body_mode(attrs.k, input.logical_shape()[-1])));
 }
 
@@ -125,18 +185,67 @@ tensor_return_value_t TopkLargeIndicesDeviceOperation::create_output_tensors(
 }
 
 std::tuple<TopkLargeIndicesDeviceOperation::operation_attributes_t, TopkLargeIndicesDeviceOperation::tensor_args_t>
-TopkLargeIndicesDeviceOperation::invoke(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
-    return {operation_attributes_t{.k = k, .valid_length = valid_length}, tensor_args_t{.input_tensor = input_tensor}};
+TopkLargeIndicesDeviceOperation::invoke(
+    const Tensor& input_tensor,
+    uint32_t k,
+    std::optional<uint32_t> valid_length,
+    const std::optional<Tensor>& valid_length_tensor,
+    uint32_t valid_length_offset,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "topk_large_indices input must be on device");
+    auto* device = input_tensor.device();
+    TT_FATAL(device != nullptr, "topk_large_indices input must have a device");
+
+    const auto subdevice_manager_id = device->get_active_sub_device_manager_id();
+    const auto selected_subdevice_id = subdevice_id.value_or(device->get_sub_device_ids().at(0));
+    const auto& active_subdevice_ids = device->get_sub_device_ids();
+    TT_FATAL(
+        std::find(active_subdevice_ids.begin(), active_subdevice_ids.end(), selected_subdevice_id) !=
+            active_subdevice_ids.end(),
+        "topk_large_indices subdevice_id {} is not part of active subdevice manager {}",
+        selected_subdevice_id,
+        subdevice_manager_id);
+    const auto selected_subdevice_cores =
+        device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, selected_subdevice_id);
+    if (sub_core_grid.has_value()) {
+        TT_FATAL(
+            selected_subdevice_cores.contains(*sub_core_grid),
+            "topk_large_indices sub_core_grid {} must be fully contained in TENSIX subdevice {} cores {}",
+            *sub_core_grid,
+            selected_subdevice_id,
+            selected_subdevice_cores);
+    }
+    const auto resolved_worker_core_grid = sub_core_grid.value_or(selected_subdevice_cores);
+    TT_FATAL(resolved_worker_core_grid.num_cores() > 0, "topk_large_indices requires at least one TENSIX worker core");
+
+    return {
+        operation_attributes_t{
+            .k = k,
+            .subdevice_id = subdevice_id,
+            .sub_core_grid = sub_core_grid,
+            .subdevice_manager_id = subdevice_manager_id,
+            .resolved_worker_core_grid = resolved_worker_core_grid,
+            .valid_length = valid_length,
+            .valid_length_offset = valid_length_offset},
+        tensor_args_t{.input_tensor = input_tensor, .valid_length_tensor = valid_length_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
 
 namespace ttnn::experimental {
 
-Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
+Tensor topk_large_indices(
+    const Tensor& input_tensor,
+    uint32_t k,
+    std::optional<uint32_t> valid_length,
+    const std::optional<Tensor>& valid_length_tensor,
+    uint32_t valid_length_offset,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
     auto [operation_attributes, tensor_args] =
         operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation::invoke(
-            input_tensor, k, valid_length);
+            input_tensor, k, valid_length, valid_length_tensor, valid_length_offset, subdevice_id, sub_core_grid);
     return ttnn::device_operation::launch<
         operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation>(
         operation_attributes, tensor_args);

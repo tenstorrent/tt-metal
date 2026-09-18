@@ -6,12 +6,15 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
+#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_hardtanh.h"
+#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
+#ifndef ARCH_QUASAR
 // clang-format off
  /**
  * Performs element-wise hardtanh operation. The DST
@@ -58,5 +61,6 @@ ALWI void hardtanh_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
 ALWI void hardtanh_tile_init() { MATH(SFPU_UNARY_INIT(hardtanh)); }
 
 ALWI void hardtanh_tile_init_pack() { PACK(SFPU_UNARY_INIT(hardtanh)); }
+#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

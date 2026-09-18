@@ -205,16 +205,18 @@ def attention_forward(
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
             )
+            # Where this (user, layer) lives — the legacy packed cache, or (bounded_sliding_kv_cache)
+            # the split full/sliding caches. batch_idx is the flat slot, so the op call below passes
+            # slot_idx=batch_idx, layer_idx=0, num_layers=1 (the kernel linearizes identically).
+            cache_k, cache_v, cache_batch_idx, cache_capacity, cache_bounded = kv_cache.layer_view(user_id, layer_idx)
             tt_sdpa_out = dense_sp_attention(
                 tt_q,
-                kv_cache.k,
-                kv_cache.v,
-                tt_k,
-                tt_v,
+                cache_k,
+                cache_v,
                 kv_actual=cached_len,
                 logical_n=cached_len + seq_len * sp,
                 n_kv=config.num_kv_heads,
-                cache_global=kv_cache.max_seq_len,
+                cache_global=cache_capacity,
                 head_dim=config.head_dim,
                 mesh_device=mesh_device,
                 ccl_manager=ccl_manager,
@@ -224,11 +226,13 @@ def attention_forward(
                 cluster_axis=mesh_config.sp_axis,
                 attention_sink=weights.sinks,
                 sliding_window_size=config.sliding_window,
-                slot_idx=user_id,
-                layer_idx=layer_idx,
-                num_layers=kv_cache.num_layers,
-                # The per-layer seam wrote current K/V into the cache before this call.
-                write_chunk=False,
+                # Circular sliding cache (False on full layers / unbounded caches); the op
+                # derives the slab count from the cache/Q geometry and validates it. kv_actual /
+                # logical_n above stay TRUE ABSOLUTE lengths.
+                circular_kv_cache=cache_bounded,
+                slot_idx=cache_batch_idx,
+                layer_idx=0,
+                num_layers=1,
             )
         else:
             full_seq_len = seq_len * sp

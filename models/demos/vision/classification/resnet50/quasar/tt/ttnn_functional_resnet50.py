@@ -1024,7 +1024,7 @@ class resnet50:
         # run fold
         if is_quasar():
             # Direct data-movement fold. Input arrives channels-last (NHWC), host-padded to the aligned
-            # width (see setup_l1_sharded_input); the transpose-chain fold has no Quasar kernel. output_shape
+            # width (see setup_input); the transpose-chain fold has no Quasar kernel. output_shape
             # C == groups*C_aligned (== fold_output_shape[3]) so c_keep == c_aligned -> the fold skips the
             # per-group padding strip and returns the aligned groups*C_aligned width directly, which conv1
             # consumes (its weights are folded to groups*C_aligned input channels with zero pad channels).
