@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tilize_with_val_padding_multi_core_default_program_factory.hpp"
+#include <variant>
 
 #include <cmath>
 
@@ -165,11 +166,17 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     // unpack_to_dest_mode vector was Default everywhere except v[c_0] = UnpackToDestFp32 when
     // fp32_llk_acc, i.e. UnpackToDest on the tilize input DFB (Default == UnpackToSrc is expressed by
     // omitting the entry). Both compute KernelSpecs get the same config, as in legacy.
-    ComputeGen1Config compute_gen1{.enable_32_bit_dest = fp32_llk_acc};
+    // Quasar is Gen2 and rejects a ComputeGen1Config at program build. tt-mlir's
+    // LayoutConverter reaches this factory through mainline ttnn::to_layout, so a Gen1
+    // config here is what fails ttnn.linear on Quasar with "KernelSpec 'compute'
+    // targets Gen2". Both alternatives carry the same fields.
+    ComputeHardwareConfig compute_hw =
+        device->arch() == tt::ARCH::QUASAR
+            ? ComputeHardwareConfig{ComputeGen2Config{.enable_32_bit_dest = fp32_llk_acc}}
+            : ComputeHardwareConfig{ComputeGen1Config{.enable_32_bit_dest = fp32_llk_acc}};
     if (fp32_llk_acc) {
-        compute_gen1.unpack_modes = ComputeUnpackModes{{IN, UnpackMode::UnpackToDest}};
+        std::visit([&](auto& c) { c.unpack_modes = ComputeUnpackModes{{IN, UnpackMode::UnpackToDest}}; }, compute_hw);
     }
-    ComputeHardwareConfig compute_hw{std::move(compute_gen1)};
 
     // One KernelSpec per legacy compute KernelDescriptor: the per-group block count stays a CTA, so
     // the two groups keep their distinct specialization instead of collapsing onto a runtime arg.

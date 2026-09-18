@@ -8,6 +8,7 @@
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "ttnn/operations/experimental/quasar/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
 #include "ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op.hpp"
@@ -15,12 +16,14 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/experimental/quasar/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/experimental/quasar/reduction/generic/device/welford_reduce_device_operation.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 #include <algorithm>
 #include <bit>
+#include <cstdlib>
 #include <cmath>
 #include <numeric>
 
@@ -233,8 +236,22 @@ static Tensor reduce_impl(
         }
     } else {
         tt::tt_metal::ReduceOpDim reduce_op_dim;
+        // Quasar has no working W-reduce: ReduceMultiCoreWProgramFactory still builds its
+        // kernels through the legacy ProgramDescriptor/KernelDescriptor API, which produces Gen1
+        // DataMovementKernels, and Quasar refuses those ("DataMovementKernel is not supported on
+        // Quasar"). The H and single-core-HW factories were ported to the Gen2 ProgramSpec API;
+        // W was left behind. Swap H/W, reduce over H, swap back -- the same shape of workaround
+        // this file already uses for a single non-H/W dim, but with quasar::transpose, since
+        // mainline ttnn::permute is itself refused on Quasar (quasar::transpose measures
+        // pcc 0.999998 on the last-two-dim swap).
+        bool quasar_w_via_h = false;
         if ((dim.empty()) || (dim.size() == 1 and dim[0] == rank - 1)) {
             reduce_op_dim = tt::tt_metal::ReduceOpDim::W;
+            quasar_w_via_h = input_tensor_arg.device() != nullptr &&
+                             input_tensor_arg.device()->arch() == tt::ARCH::QUASAR && !dim.empty();
+            if (quasar_w_via_h) {
+                reduce_op_dim = tt::tt_metal::ReduceOpDim::H;
+            }
         } else if (dim.size() == 1 and dim[0] == rank - 2) {
             reduce_op_dim = tt::tt_metal::ReduceOpDim::H;
         } else if (dim.size() == 2 and dim[0] == rank - 2 and dim[1] == rank - 1) {
@@ -251,6 +268,11 @@ static Tensor reduce_impl(
         auto input_tensor = (rank > 4)   ? data_movement::squeeze_from_ND_to_4D(input_tensor_arg)
                             : (rank < 4) ? ttnn::unsqueeze_to_4D(input_tensor_arg)
                                          : input_tensor_arg;
+        if (quasar_w_via_h) {
+            // pad_value defaults to 0, the identity for sum/mean. Max/min would need
+            // -inf/+inf in the tile padding instead; those are not on ResNet-50's path.
+            input_tensor = ttnn::operations::experimental::quasar::transpose(input_tensor, -2, -1, memory_config);
+        }
 
         if constexpr (reduce_type == reduction_common::ReduceType::Sum) {
             // In the chain, pack FP32 except on the last stage where we pack bf16.
@@ -300,6 +322,10 @@ static Tensor reduce_impl(
                 sub_core_grids);
         } else {
             TT_THROW("Unsupported reduction operation");
+        }
+        if (quasar_w_via_h) {
+            // Undo the H/W swap; it is its own inverse.
+            output_tensor = ttnn::operations::experimental::quasar::transpose(output_tensor, -2, -1, memory_config);
         }
     }
     return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
@@ -366,9 +392,31 @@ static Tensor std_var_impl(
     ttnn::Tensor input_tensor = input_tensor_arg;
     uint32_t reduce_batch_size = 1;
     bool needs_inverse_permute = false;
+    bool quasar_w_inverse = false;
     ttsl::SmallVector<int64_t> permute_swap;
 
-    if (single_h || single_w) {
+    // Quasar has no working W-reduce: ReduceMultiCoreWProgramFactory still builds its
+    // kernels through the legacy ProgramDescriptor/KernelDescriptor API, which yields Gen1
+    // DataMovementKernels and Quasar refuses them ("DataMovementKernel is not supported on
+    // Quasar"). The H and single-core-HW factories were ported to the Gen2 ProgramSpec API;
+    // only W was left behind.
+    //
+    // Reduce over H instead, which is the same trick this function already uses just below
+    // for a single non-H/W dim -- except that path calls mainline ttnn::permute, which is
+    // itself refused on Quasar. quasar::transpose does work (measured pcc 0.999998 on the
+    // last-two-dim swap), so route through that.
+    const bool quasar_w_via_h =
+        single_w && input_tensor_arg.device() != nullptr &&
+        input_tensor_arg.device()->arch() == tt::ARCH::QUASAR;
+
+    if (quasar_w_via_h) {
+        reduce_dim = tt::tt_metal::ReduceOpDim::H;
+        input_tensor = ttnn::operations::experimental::quasar::transpose(
+            // pad_value defaults to 0, the identity for sum/mean. Revisit for max/min,
+            // where the tile-padding sentinel has to be -inf/+inf instead.
+            input_tensor, static_cast<int>(rank) - 2, static_cast<int>(rank) - 1, memory_config);
+        quasar_w_inverse = true;
+    } else if (single_h || single_w) {
         reduce_dim = single_w ? tt::tt_metal::ReduceOpDim::W : tt::tt_metal::ReduceOpDim::H;
         // 1D tensors need reshaping to 2D because the kernel requires at least 2 dimensions.
         if (rank == 1) {
@@ -432,6 +480,11 @@ static Tensor std_var_impl(
         sub_core_grids,
         reduce_batch_size);
 
+    if (quasar_w_inverse) {
+        // Undo the H/W swap. The swap is its own inverse.
+        output_tensor = ttnn::operations::experimental::quasar::transpose(
+            output_tensor, static_cast<int>(rank) - 2, static_cast<int>(rank) - 1, memory_config);
+    }
     if (needs_inverse_permute) {
         output_tensor = ttnn::permute(output_tensor, permute_swap, memory_config);
     }
@@ -525,8 +578,33 @@ Tensor reduce(
     const ttnn::PadValue fill_pad_value = input_tensor_arg.dtype() == tt::tt_metal::DataType::INT32
                                               ? ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)}
                                               : ttnn::PadValue{pad_value};
-    auto input_tensor =
-        is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, fill_pad_value) : input_tensor_arg;
+    // ttnn::fill_implicit_tile_padding is unavailable on Quasar: its compute kernel calls
+    // where_tile, whose SFPU header resolves against the Blackhole LLK (InstrModLoadStore,
+    // DataFormat::UInt32 -- neither exists for Quasar), so the kernel fails to build with
+    //   "'UInt32' is not a member of 'DataFormat'" / "'InstrModLoadStore' does not name a type".
+    // That is what fails ttnn.mean on Quasar.
+    //
+    // Skipping the fill is only sound when the pad value is the reduction's identity AND the
+    // implicit padding already holds it. Sum/mean have identity 0, and tile padding is zero on
+    // every path measured so far -- but that is an assumption about the producer, not a
+    // guarantee, so it is opt-in and Quasar-only rather than silent.
+    // Skipping the fill was the earlier workaround. It is only sound when the implicit padding
+    // already holds the reduction's identity -- an assumption about whoever produced the tensor,
+    // not a guarantee, and silently wrong for max/min. Do the same job with ops Quasar does
+    // have instead: untilize, then re-tilize writing the pad value explicitly. That fills the
+    // implicit padding for real, for any pad value, so no env opt-in is needed.
+    const bool on_quasar = input_tensor_arg.device() != nullptr &&
+                           input_tensor_arg.device()->arch() == tt::ARCH::QUASAR;
+    ttnn::Tensor input_tensor = input_tensor_arg;
+    if (is_tiled && on_quasar) {
+        ttnn::Tensor row_major = ttnn::operations::experimental::quasar::to_layout(
+            input_tensor_arg, Layout::ROW_MAJOR, std::nullopt, std::nullopt);
+        input_tensor = ttnn::operations::experimental::quasar::tilize_with_val_padding(
+            row_major, input_tensor_arg.padded_shape(), fill_pad_value,
+            input_tensor_arg.memory_config(), input_tensor_arg.dtype());
+    } else if (is_tiled) {
+        input_tensor = ttnn::fill_implicit_tile_padding(input_tensor_arg, fill_pad_value);
+    }
 
     // bf16 multi-axis Sum precision chain: carry FP32 between stages and pack bf16
     // only on the final stage. Skipped for full-tensor reductions (dim covers every

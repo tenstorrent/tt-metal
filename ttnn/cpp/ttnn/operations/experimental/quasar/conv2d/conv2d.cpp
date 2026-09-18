@@ -474,6 +474,44 @@ Result conv2d_L1(
             compute_config);
         auto_shard = true;
     }
+
+    // Quasar: a WIDTH_SHARDED activation is incompatible with this file's own K-spill
+    // workaround. conv2d.cpp deliberately sets in0_block_w = full_K (see the comment at the
+    // mm1d/mm2d config below) to contract K in one block, but WIDTH_SHARDED splits K across
+    // the grid, so each core holds only full_K/num_cores. quasar::matmul then rejects it:
+    //   "shard_shape[1] / in0_tile.get_width() (8) must be divisible by in0_block_w (64)"
+    // -- and 64/8 is exactly the grid width, in every observed case.
+    //
+    // The [#48552 Stage2 REVERTED-AGAIN] note above concerns BLOCK_SHARDED, which splits K
+    // across grid columns and so does not help. Its own conclusion is that "HEIGHT_SHARDED is
+    // the only single-K-block shape", which is the shape this needs. Opt-in, because the
+    // affected convs are small-spatial (14x14, 7x7) and height-sharding them across the full
+    // grid gives well under one tile row per core.
+    // Quasar conv activations must be HEIGHT_SHARDED.
+    //
+    // The Quasar conv path contracts K in a single block (in0_block_w = full_K, set below by
+    // force_conv_no_spill) to avoid the matmul K-spill accumulate bug. Only HEIGHT_SHARDED keeps
+    // K whole on each core: WIDTH_SHARDED splits K across the grid, and BLOCK_SHARDED splits it
+    // across grid columns -- both leave a core holding full_K/num_cores, and quasar::matmul then
+    // rejects the program with
+    //   "shard_shape[1] / in0_tile.get_width() (8) must be divisible by in0_block_w (64)"
+    // where the ratio is exactly the grid width. The [#48552 Stage2 REVERTED-AGAIN] note above
+    // reached the same conclusion from the block-sharded side: "HEIGHT_SHARDED is the only
+    // single-K-block shape".
+    //
+    // This used to be an opt-in env knob, which meant every caller had to know to set it. The
+    // constraint is a property of the architecture, not of a workload, so it belongs here.
+    if (device->arch() == tt::ARCH::QUASAR && conv_config.shard_layout.has_value() &&
+        (conv_config.shard_layout.value() == TensorMemoryLayout::WIDTH_SHARDED ||
+         conv_config.shard_layout.value() == TensorMemoryLayout::BLOCK_SHARDED)) {
+        log_debug(
+            tt::LogOp,
+            "conv2d: Quasar requires HEIGHT_SHARDED activations (in0_block_w = full_K needs K "
+            "whole per core); overriding {}.",
+            static_cast<int>(conv_config.shard_layout.value()));
+        conv_config.shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;
+    }
+
     const bool should_deallocate_act = conv_config.deallocate_activation && !input_tensor.memory_config().is_dram();
     auto [input_tensor_post_tm, parallel_config, output_parallel_config] = shard_or_reshard_tensor_if_required_qsr(
         device,

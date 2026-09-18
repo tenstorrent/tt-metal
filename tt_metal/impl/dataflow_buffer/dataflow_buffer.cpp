@@ -297,21 +297,48 @@ uint32_t compute_dfb_config_serialized_size(const std::vector<std::shared_ptr<Da
 void populate_dfb_global_header_participation(
     dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
     std::fill(std::begin(ghdr.participation_mask), std::end(ghdr.participation_mask), 0u);
-    ghdr.num_dfbs = static_cast<uint8_t>(dfbs_on_core.size());
+    // num_dfbs is the slot-space EXTENT on this core, not the count of DFBs on it.
+    //
+    // assign_dfb_device_slot() deliberately lets DFBs whose core ranges do not intersect reuse the
+    // same low slots, so a core that hosts only a subset of the program's DFBs legitimately sees a
+    // sparse slot set: a DFB spanning cores {X,Y} can be pushed to slot 4 by four neighbours on X
+    // and still be one of only two DFBs on Y, giving Y the slot set {0,4}. Per-core contiguity is
+    // therefore not achievable in general -- a DFB carries a single device_slot but appears on many
+    // cores with different neighbour sets. The device side walks the per-hart participation_mask
+    // sequentially (setup_local_dfb_interfaces) and never indexes a dense 0..N-1 slot table, and
+    // the slot-indexed signal region is sized for the full ::dfb::NUM_DFBS, so gaps are benign.
+    uint32_t slot_extent = 0;
+    for (const auto& dfb : dfbs_on_core) {
+        slot_extent = std::max(slot_extent, dfb->device_slot + 1);
+    }
     TT_FATAL(
-        dfbs_on_core.size() <= ::dfb::NUM_DFBS,
-        "DFB count {} exceeds maximum {}",
-        dfbs_on_core.size(),
-        ::dfb::NUM_DFBS);
+        slot_extent <= ::dfb::NUM_DFBS, "DFB slot extent {} exceeds maximum {}", slot_extent, ::dfb::NUM_DFBS);
+    ghdr.num_dfbs = static_cast<uint8_t>(slot_extent);
+    // TEMPORARY DIAGNOSTIC (quasar bringup): flag cores whose slot set is sparse, i.e. exactly the
+    // cases the removed dense-0..N-1 assert used to reject. Lets a failing op be correlated with
+    // sparse slots. Remove before upstreaming.
+    if (slot_extent != dfbs_on_core.size()) {
+        std::string slots;
+        for (const auto& dfb : dfbs_on_core) {
+            slots += fmt::format("{}{}", slots.empty() ? "" : ",", dfb->device_slot);
+        }
+        log_warning(
+            tt::LogMetal,
+            "[DFB-SPARSE] core sees {} DFBs at slots {{{}}} (extent {})",
+            dfbs_on_core.size(),
+            slots,
+            slot_extent);
+    }
     uint32_t id_mask = 0;
     for (const auto& dfb : dfbs_on_core) {
+        const uint32_t slot_bit = 1u << dfb->device_slot;
         TT_FATAL(
-            dfb->device_slot < ghdr.num_dfbs,
-            "DFB {} device slot {} out of range (num_dfbs {})",
+            (id_mask & slot_bit) == 0,
+            "DFB {} device slot {} is already claimed by another DFB on this core (id_mask=0x{:x})",
             dfb->id,
             dfb->device_slot,
-            ghdr.num_dfbs);
-        id_mask |= (1u << dfb->device_slot);
+            id_mask);
+        id_mask |= slot_bit;
         for (uint8_t hartid = 0; hartid < ::dfb::NUM_PARTICIPATING_HARTIDS; ++hartid) {
             if (dfb->risc_mask & (1u << hartid)) {
                 ghdr.participation_mask[hartid] |= (1u << dfb->device_slot);
@@ -346,12 +373,11 @@ void populate_dfb_global_header_participation(
             tc_slots,
             ::dfb::MAX_PACK_TC_SLOTS);
     }
-    const uint32_t expected_id_mask = ghdr.num_dfbs >= 32 ? ~0u : ((1u << ghdr.num_dfbs) - 1u);
-    TT_FATAL(
-        id_mask == expected_id_mask,
-        "DFB device slots must be contiguous 0..{}-1 (id_mask=0x{:x})",
-        ghdr.num_dfbs,
-        id_mask);
+    // NOTE: upstream's "DFB device slots must be contiguous 0..N-1" assert is deliberately not
+    // reinstated here. assign_dfb_device_slot() lets DFBs on disjoint core ranges reuse low slots,
+    // so a core that hosts a subset of the program's DFBs legitimately sees a sparse set (e.g.
+    // {0,4}); num_dfbs is sized by slot EXTENT above and the duplicate-slot check below is what
+    // actually needs to hold. The per-hart Pack limits above are upstream's and are kept.
 }
 
 void verify_dfb_hart_blobs(
