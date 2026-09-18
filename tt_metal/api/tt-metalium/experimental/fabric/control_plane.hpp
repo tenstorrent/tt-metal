@@ -8,7 +8,6 @@
 
 // UMD: EthCoord is a UMD type alias used in the private method
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
-#include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -336,6 +335,11 @@ private:
 
     void init_control_plane_auto_discovery();
 
+    // Gathers the FabricConfig of every rank and enforces one consistent FabricConfig per logical mesh
+    // and across all meshes connected by the mesh graph descriptor. Must run after the local mesh
+    // binding and distributed contexts are known, and before routing tables or FabricContext are built.
+    void validate_fabric_config_across_ranks();
+
     // Initialize fabric context if fabric is enabled
     void initialize_fabric_context();
 
@@ -347,6 +351,10 @@ private:
 
     // Fabric Settings
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+
+    // FabricConfig that was agreed on by all ranks in validate_fabric_config_across_ranks(). Fabric
+    // initialization is only allowed to proceed with this value.
+    std::optional<tt_fabric::FabricConfig> validated_fabric_config_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
     // is expected that any downed devices/links will result in some sort of error condition being
