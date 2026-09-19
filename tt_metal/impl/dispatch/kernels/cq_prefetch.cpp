@@ -536,7 +536,9 @@ FORCE_INLINE uint32_t read_from_pcie(
         size);
 #endif
     noc_async_read_set_trid(trid);
-    noc_async_read(host_src_addr, dst_addr, size);
+    // PCIe routing stays programmed on read_cmd_buf for the whole run of reads, so only the address and
+    // length change here. The caller opens and closes the batch, see fetch_q_get_cmds.
+    noc_async_read_with_state(static_cast<uint32_t>(host_src_addr), dst_addr, size);
     // Avoid leaking this trid to unrelated reads.
     noc_async_read_set_trid(0U);
     pending_read_size = needed_bytes;
@@ -703,6 +705,9 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
         // Issue tagged reads (up to MAX_OUTSTANDING_READS) whenever host has work and there is capacity.
         // Stop once we encounter a stall_flag entry (do not prefetch beyond it).
         if (!has_pending_stall_after) {
+            // Nothing between issues here touches read_cmd_buf, so PCIe routing is programmed once on the
+            // first read and torn down once after the last one.
+            bool pcie_state_set = false;
             while ((fetch_size != 0U) &&
                    (inflight_count < tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS)) {
                 const uint32_t this_trid = PREFETCH_TRIDS[next_trid_idx];
@@ -724,6 +729,15 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                     inflight_count,
                     stall_flag);
 #endif
+
+                if (!pcie_state_set) {
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+                    noc_async_read_set_pcie_state(get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0));
+#else
+                    noc_async_read_set_pcie_state(pcie_noc_xy);
+#endif
+                    pcie_state_set = true;
+                }
 
                 total_size = read_from_pcie<preamble_size>(
                     prefetch_q_rd_ptr, issue_fence, pcie_read_ptr, cmd_ptr, fetch_size, this_trid, queue_empty);
@@ -779,6 +793,10 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
                 fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
                 stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0U;
+            }
+
+            if (pcie_state_set) {
+                noc_async_read_clear_pcie_state();
             }
         }
 

@@ -446,6 +446,62 @@ inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr(uint32_t noc
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(ret_addr >> NOC_ADDR_COORD_SHIFT));
 }
 
+/**
+ * Sets NOC_TARG_ADDR_MID to route reads through the PCIe core. This register is sticky per command buffer,
+ * so every use must be paired with noc_cmd_buf_clear_targ_addr_mid once the reads have completed. A stale
+ * value misroutes the next unrelated read on cmd_buf to host memory.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | noc      | NOC index                                          | uint32_t  | 0 or 1      | True     |
+ * | cmd_buf  | Command buffer index                               | uint32_t  | 0 - 3       | True     |
+ * | addr     | Full NOC address from NOC_XY_PCIE_ENCODING(...)    | uint64_t  | 0..2^64-1   | True     |
+ */
+inline __attribute__((always_inline)) void noc_cmd_buf_set_targ_addr_mid_pcie(
+    uint32_t noc, uint32_t cmd_buf, uint64_t addr) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32) & NOC_PCIE_MASK);
+}
+
+// Clears NOC_TARG_ADDR_MID back to 0, so that later ordinary reads on cmd_buf are not misrouted. Call this
+// after every use of noc_cmd_buf_set_targ_addr_mid_pcie.
+inline __attribute__((always_inline)) void noc_cmd_buf_clear_targ_addr_mid(uint32_t noc, uint32_t cmd_buf) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, 0);
+}
+
+// Same as noc_cmd_buf_set_targ_addr_mid_pcie, but for NOC_RET_ADDR_MID, which holds a write's destination.
+inline __attribute__((always_inline)) void noc_cmd_buf_set_ret_addr_mid_pcie(
+    uint32_t noc, uint32_t cmd_buf, uint64_t addr) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(addr >> 32) & NOC_PCIE_MASK);
+}
+
+// Clears NOC_RET_ADDR_MID back to 0, so that later ordinary writes on cmd_buf are not misrouted. Call this
+// after every use of noc_cmd_buf_set_ret_addr_mid_pcie.
+inline __attribute__((always_inline)) void noc_cmd_buf_clear_ret_addr_mid(uint32_t noc, uint32_t cmd_buf) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, 0);
+}
+
+// Debug only: the routing register must agree with the address being issued. The plain issue paths no longer write
+// MID, so a stale value left behind by a PCIe batch would silently misroute an on-chip transaction, and a missing
+// one would send a PCIe transaction to an on-chip core. Both read as a correct address in every other register.
+// ASSERT leaves its operand unevaluated in a release build, so the register read costs nothing there.
+inline __attribute__((always_inline)) void noc_assert_targ_addr_mid_matches(
+    uint32_t noc, uint32_t cmd_buf, uint64_t addr) {
+    ASSERT(NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_MID) == ((uint32_t)(addr >> 32) & NOC_PCIE_MASK));
+}
+
+inline __attribute__((always_inline)) void noc_assert_ret_addr_mid_matches(
+    uint32_t noc, uint32_t cmd_buf, uint64_t addr) {
+    ASSERT(NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_MID) == ((uint32_t)(addr >> 32) & NOC_PCIE_MASK));
+}
+
+// Debug only: asserts that no PCIe batch is open on cmd_buf. Used by the paths that overwrite
+// NOC_TARG_ADDR_MID with an on-chip address, which would silently misroute the rest of such a batch.
+inline __attribute__((always_inline)) void noc_assert_targ_addr_mid_clear(uint32_t noc, uint32_t cmd_buf) {
+    ASSERT(NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_MID) == 0);
+}
+
 // Debug only: returns NOC_AT_LEN_BE for cmd_buf (transaction length). Requires NOC_LOGGING_ENABLED.
 inline __attribute__((always_inline)) uint32_t noc_debug_read_at_len_be(uint32_t noc, uint32_t cmd_buf) {
     return NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_LEN_BE);
@@ -495,7 +551,9 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & NOC_PCIE_MASK);
+    // NOC_TARG_ADDR_MID is not written here, since it is 0 for every on-chip src_addr. Callers targeting
+    // the PCIe core must set it with noc_cmd_buf_set_targ_addr_mid_pcie beforehand, and clear it after.
+    noc_assert_targ_addr_mid_matches(noc, cmd_buf, src_addr);
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
@@ -559,7 +617,9 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
+    // NOC_RET_ADDR_MID is not written here, since it is 0 for every on-chip dest_addr. Callers targeting
+    // the PCIe core must set it with noc_cmd_buf_set_ret_addr_mid_pcie beforehand, and clear it after.
+    noc_assert_ret_addr_mid_matches(noc, cmd_buf, dest_addr);
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
@@ -696,6 +756,7 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
         uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
 
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_CMD_BUF, NOC_TARG_ADDR_MID, 0x0);
+        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID, 0x0);
         NOC_CMD_BUF_WRITE_REG(
             noc,
             NCRISC_WR_CMD_BUF,
@@ -721,6 +782,7 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
             NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_MID, 0x0);  // get rid of this?
+        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, 0x0);
         NOC_CMD_BUF_WRITE_REG(
             noc,
             NCRISC_RD_CMD_BUF,
@@ -736,6 +798,16 @@ inline __attribute__((always_inline)) void dynamic_noc_init() {
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
         uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
+
+        // Neither MID register is programmed per transaction any more, so both halves of every command
+        // buffer start at 0 here. This also scrubs a PCIe value left behind by a previous kernel, which
+        // would otherwise misroute ordinary on-chip traffic. Buffers alias in this mode, so clearing both
+        // registers on all four covers reads, writes, register writes and atomics.
+#pragma GCC unroll 0
+        for (uint32_t cmd_buf = 0; cmd_buf < NUM_NOC_CMD_BUFS; cmd_buf++) {
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, 0x0);
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, 0x0);
+        }
 
         // program brisc cmd_buf 0
         NOC_CMD_BUF_WRITE_REG(
@@ -1164,6 +1236,11 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
         }
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
+    // Atomics always target an on-chip semaphore, so this overwrites NOC_TARG_ADDR_MID with 0. Under
+    // DM_DYNAMIC_NOC the atomic command buffer is the read command buffer, so a non-zero value here means
+    // an open PCIe read batch is about to be misrouted on-chip. Clear MID before the atomic, or batch on a
+    // different command buffer.
+    noc_assert_targ_addr_mid_clear(noc, cmd_buf);
     if constexpr (noc_mode == DM_DYNAMIC_NOC || program_ret_addr == true) {
         uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
@@ -1226,6 +1303,9 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
         uint64_t atomic_ret_addr = NOC_XY_ADDR(my_x, my_y, atomic_ret_val);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)(atomic_ret_addr & 0xFFFFFFFF));
     }
+    // Same hazard as the unicast atomic: this overwrites NOC_TARG_ADDR_MID, and under DM_DYNAMIC_NOC the
+    // atomic command buffer is the read command buffer.
+    noc_assert_targ_addr_mid_clear(noc, cmd_buf);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(addr & 0xFFFFFFFF));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(addr >> 32) & NOC_PCIE_MASK);
     NOC_CMD_BUF_WRITE_REG(
@@ -1364,16 +1444,28 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
  * | noc_mode (template parameter)       | NOC mode for the transaction                       | uint8_t   | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
  * | inc_num_issued (template parameter) | Increment enable for transaction issued counters   | bool      | true or false                                            | False    |
  * | one_packet (template parameter)     | Whether transaction size is <= NOC_MAX_BURST_SIZE  | bool      | true or false                                            | False    |
+ * | skip_cmdbuf_chk (template param)    | Skip the cmd buf ready poll (see note)             | bool      | true or false                                            | False    |
+ *
+ * Only set skip_cmdbuf_chk on the first issue after ncrisc_noc_read_set_state. That function waits for the
+ * command buffer and then writes registers that do not make it busy again, so the poll here is guaranteed
+ * to pass. Every later issue must poll, because the one before it wrote NOC_CMD_CTRL. Setting this anywhere
+ * else corrupts the transaction already in flight.
  */
 // clang-format on
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool inc_num_issued = true, bool one_packet = false>
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    bool inc_num_issued = true,
+    bool one_packet = false,
+    bool skip_cmdbuf_chk = false>
 inline __attribute__((always_inline)) void ncrisc_noc_read_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
     if constexpr (inc_num_issued && noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (!skip_cmdbuf_chk) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
@@ -1403,14 +1495,30 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_with_state(
  * | len_bytes                           | Size of transaction in bytes                       | uint32_t  | 0..1 MB                                                  | True     |
  * | noc_mode (template parameter)       | NOC mode for the transaction                       | uint8_t   | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
  * | inc_num_issued (template parameter) | Increment enable for transaction issued counters   | bool      | true or false                                            | False    |
+ * | skip_cmdbuf_chk (template param)    | Skip the cmd buf ready poll on the FIRST burst only| bool      | true or false                                            | False    |
+ *
+ * skip_cmdbuf_chk applies to the first burst issued here and to no other. Every burst after it must poll,
+ * since the one before wrote NOC_CMD_CTRL. Only set it when this call directly follows
+ * ncrisc_noc_read_set_state.
  */
 // clang-format on
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool inc_num_issued = true>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool inc_num_issued = true, bool skip_cmdbuf_chk = false>
 inline __attribute__((always_inline)) void ncrisc_noc_read_any_len_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes) {
     if (len_bytes > NOC_MAX_BURST_SIZE) {
         // Set data size for while loop
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+
+        if constexpr (skip_cmdbuf_chk) {
+            // The first burst is issued here rather than in the loop below so that the skip applies to it
+            // alone. This branch only compiles when the caller asks for the skip, so callers that do not
+            // ask keep the original code shape.
+            ncrisc_noc_read_with_state<noc_mode, inc_num_issued, true /* one_packet */, true /* skip */>(
+                noc, cmd_buf, src_local_addr, dst_local_addr);
+            len_bytes -= NOC_MAX_BURST_SIZE;
+            src_local_addr += NOC_MAX_BURST_SIZE;
+            dst_local_addr += NOC_MAX_BURST_SIZE;
+        }
 
         while (len_bytes > NOC_MAX_BURST_SIZE) {
             ncrisc_noc_read_with_state<noc_mode, inc_num_issued, true /* one_packet */>(
@@ -1420,10 +1528,15 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_any_len_with_state(
             src_local_addr += NOC_MAX_BURST_SIZE;
             dst_local_addr += NOC_MAX_BURST_SIZE;
         }
+
+        // left-over packet. The first burst above already used the skip.
+        ncrisc_noc_read_with_state<noc_mode, inc_num_issued>(noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
+        return;
     }
 
-    // left-over packet
-    ncrisc_noc_read_with_state<noc_mode, inc_num_issued>(noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
+    // Only one burst to issue, so the skip belongs to it.
+    ncrisc_noc_read_with_state<noc_mode, inc_num_issued, false /* one_packet */, skip_cmdbuf_chk>(
+        noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
 }
 
 // clang-format off
@@ -1492,9 +1605,20 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
  * | posted (template parameter)         | Whether the transaction is posted (i.e. no ack required) | bool      | true or false                                            | False    |
  * | update_counter (template parameter) | Whether to increment write counters                      | bool      | true or false                                            | False    |
  * | one_packet (template parameter)     | Whether transaction size is <= NOC_MAX_BURST_SIZE        | bool      | true or false                                            | False    |
+ * | skip_cmdbuf_chk (template param)    | Skip the cmd buf ready poll (see note)                   | bool      | true or false                                            | False    |
+ *
+ * Only set skip_cmdbuf_chk on the first issue after ncrisc_noc_write_set_state. That function waits for the
+ * command buffer and then writes registers that do not make it busy again, so the poll here is guaranteed
+ * to pass. Every later issue must poll, because the one before it wrote NOC_CMD_CTRL. Setting this anywhere
+ * else corrupts the transaction already in flight.
  */
 // clang-format on
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool posted = false, bool update_counter = true, bool one_packet = false>
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    bool posted = false,
+    bool update_counter = true,
+    bool one_packet = false,
+    bool skip_cmdbuf_chk = false>
 inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes = 0) {
     if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
@@ -1506,7 +1630,9 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
         }
     }
 
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
+    if constexpr (!skip_cmdbuf_chk) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
@@ -1542,14 +1668,34 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
  * | noc_mode (template parameter)       | NOC mode for the transaction                             | uint8_t   | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
  * | posted (template parameter)         | Whether the transaction is posted (i.e. no ack required) | bool      | true or false                                            | False    |
  * | update_counter (template parameter) | Whether to increment write counters                      | bool      | true or false                                            | False    |
+ * | skip_cmdbuf_chk (template param)    | Skip the cmd buf ready poll on the FIRST burst only      | bool      | true or false                                            | False    |
+ *
+ * skip_cmdbuf_chk applies to the first burst issued here and to no other. Every burst after it must poll,
+ * since the one before wrote NOC_CMD_CTRL. Only set it when this call directly follows
+ * ncrisc_noc_write_set_state.
  */
 // clang-format on
-template <uint8_t noc_mode = DM_DEDICATED_NOC, bool posted = false, bool update_counter = true>
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    bool posted = false,
+    bool update_counter = true,
+    bool skip_cmdbuf_chk = false>
 inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes) {
     if (len_bytes > NOC_MAX_BURST_SIZE) {
         // Set data size for while loop
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+
+        if constexpr (skip_cmdbuf_chk) {
+            // The first burst is issued here rather than in the loop below so that the skip applies to it
+            // alone. This branch only compiles when the caller asks for the skip, so callers that do not
+            // ask keep the original code shape.
+            ncrisc_noc_write_with_state<noc_mode, posted, update_counter, true /* one_packet */, true /* skip */>(
+                noc, cmd_buf, src_local_addr, dst_local_addr);
+            len_bytes -= NOC_MAX_BURST_SIZE;
+            src_local_addr += NOC_MAX_BURST_SIZE;
+            dst_local_addr += NOC_MAX_BURST_SIZE;
+        }
 
         while (len_bytes > NOC_MAX_BURST_SIZE) {
             ncrisc_noc_write_with_state<noc_mode, posted, update_counter, true /* one_packet */>(
@@ -1559,10 +1705,15 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
             src_local_addr += NOC_MAX_BURST_SIZE;
             dst_local_addr += NOC_MAX_BURST_SIZE;
         }
+
+        // left-over packet. The first burst above already used the skip.
+        ncrisc_noc_write_with_state<noc_mode, posted, update_counter>(
+            noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
+        return;
     }
 
-    // left-over packet
-    ncrisc_noc_write_with_state<noc_mode, posted, update_counter>(
+    // Only one burst to issue, so the skip belongs to it.
+    ncrisc_noc_write_with_state<noc_mode, posted, update_counter, false /* one_packet */, skip_cmdbuf_chk>(
         noc, cmd_buf, src_local_addr, dst_local_addr, len_bytes);
 }
 
@@ -1872,7 +2023,9 @@ inline __attribute__((always_inline)) void noc_read_with_state(
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & NOC_PCIE_MASK);
+        // Metal never uses address bits 32 and above here, so MID stays at its default of zero. PCIe needs bit 60,
+        // which is set and cleared around the transfer by noc_async_read_set_pcie_state.
+        ASSERT(((src_addr >> 32) & NOC_PCIE_MASK) == 0);
         NOC_CMD_BUF_WRITE_REG(
             noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     }
@@ -2016,8 +2169,9 @@ inline __attribute__((always_inline)) void noc_write_with_state(
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        // Handles writing to PCIe
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32) & NOC_PCIE_MASK);
+        // Metal never uses address bits 32 and above here, so MID stays at its default of zero. PCIe needs bit 60,
+        // which is set and cleared around the transfer by noc_async_write_set_pcie_state.
+        ASSERT(((dst_addr >> 32) & NOC_PCIE_MASK) == 0);
         NOC_CMD_BUF_WRITE_REG(
             noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     }

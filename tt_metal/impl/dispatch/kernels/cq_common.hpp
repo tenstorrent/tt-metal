@@ -258,6 +258,32 @@ FORCE_INLINE void cq_noc_async_write_init_state(
     noc_write_init_state<cmd_buf, cmd_flags>(noc, vc);
     cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size, ndests);
 }
+
+// Same as cq_noc_async_write_init_state, but for a destination routed through the PCIe core. The with_state
+// issuers no longer program NOC_RET_ADDR_MID, so the routing bit is set once here and stays for the whole
+// batch. Pair every call with noc_async_write_clear_pcie_state on the same command buffer.
+template <uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
+FORCE_INLINE void cq_noc_async_write_init_state_pcie(uint64_t dst_noc_addr, uint8_t noc = noc_index) {
+#ifdef ARCH_BLACKHOLE
+    WAYPOINT("CNIW");
+    uint32_t heartbeat = 0;
+    while (!noc_cmd_buf_ready(noc, cmd_buf)) {
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+    }
+    WAYPOINT("CNID");
+
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
+
+    noc_write_init_state<cmd_buf, CQ_NOC_mkp>(noc, NOC_UNICAST_WRITE_VC);
+    noc_cmd_buf_set_ret_addr_mid_pcie(noc, cmd_buf, dst_noc_addr);
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+#else
+    // Only Blackhole splits PCIe routing into a separate MID register, and only Blackhole dropped the
+    // per-transaction MID write, so everywhere else the ordinary init_state already programs the routing.
+    cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, cmd_buf>(0, dst_noc_addr, 0, 1, noc);
+#endif
+}
 // Similar to the above function but this one takes noc-xy coordinates as a separate argument to permit 64-bit
 // addressing at NOC tile
 template <enum CQNocFlags flags, bool mcast = false, bool linked = false, uint32_t cmd_buf = NCRISC_WR_CMD_BUF>

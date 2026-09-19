@@ -90,6 +90,13 @@ void kernel_main() {
         invalidate_l1_cache();
     }
 
+    if constexpr (pull_from_host) {
+        // read_page_from_pcie programs NOC_TARG_ADDR_MID from the 64 bit host address and the plain read
+        // path no longer rewrites it. Without this, the next kernel scheduled on this core reads host
+        // memory instead of on-chip whenever it reuses read_cmd_buf.
+        noc_async_read_clear_pcie_state(NOC_INDEX, read_cmd_buf);
+    }
+
     update_socket_config(receiver_socket);
     noc_obj.async_write_barrier();
 }
