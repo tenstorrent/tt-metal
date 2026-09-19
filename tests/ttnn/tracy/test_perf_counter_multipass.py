@@ -32,7 +32,7 @@ def test_full_blackhole_set_schedules_one_pass_per_l1_bank():
 
 def test_all_non_l1_groups_and_one_l1_bank_fit_one_pass():
     # fpu, pack, unpack, instrn plus one L1 bank is the largest single pass mask (47 with l1_0); measured to fit the
-    # BRISC firmware on Blackhole (8664 of 8704 bytes) and Wormhole (7584 of 7712).
+    # BRISC firmware on Blackhole (8684 of 8704 bytes) and Wormhole (7600 of 7712).
     passes = schedule_perf_counter_passes(["fpu", "pack", "unpack", "instrn", "l1_0"])
     assert passes == [["l1_0", "fpu", "pack", "unpack", "instrn"]]
     assert perf_counter_groups_to_bitfield(passes[0]) == 47
@@ -93,3 +93,36 @@ def test_arch_l1_groups():
     assert arch_l1_groups(True) == ["l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"]
     assert arch_l1_groups(False, is_quasar=True) == []
     assert arch_l1_groups(False) == ["l1_0", "l1_1"]
+
+
+def _zone(run_id, ts, phase, core=(1, 1)):
+    timer = {"id": 1, "zone_name": "BRISC-FW", "type": phase, "run_host_id": run_id}
+    return (timer, ts, 0, "BRISC", core)
+
+
+def _counter(run_id, ts, core=(1, 1)):
+    timer = {"id": 9090, "zone_name": "", "type": "TS_DATA", "run_host_id": run_id}
+    return (timer, ts, 7, "BRISC", core)
+
+
+def test_get_ops_keeps_merged_pass_counters_inside_their_op():
+    # a merged multipass log carries counter records from later runs, whose timestamps fall outside the
+    # FW window of the first run; they must not open a spurious op or swallow the next one
+    from tracy.process_device_log import get_ops
+
+    timeseries = [
+        _zone(1, 100, "ZONE_START"),
+        _counter(1, 150),
+        _zone(1, 200, "ZONE_END"),
+        _zone(2, 300, "ZONE_START"),
+        _counter(2, 350),
+        _zone(2, 400, "ZONE_END"),
+        _counter(1, 5000),  # from pass 2, same op, much later run
+        _counter(2, 5100),
+    ]
+    timeseries.sort(key=lambda ts: ts[1])
+    ops = get_ops(timeseries)
+    assert [op["timeseries"][0][0]["run_host_id"] for op in ops] == [1, 2]
+    counters = [sorted(ts[1] for ts in op["timeseries"] if ts[0]["type"] == "TS_DATA") for op in ops]
+    assert counters == [[150, 5000], [350, 5100]]
+    assert all(op["timeseries"][0][0]["type"] == "ZONE_START" for op in ops)
