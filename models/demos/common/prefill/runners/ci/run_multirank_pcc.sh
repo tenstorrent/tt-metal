@@ -46,8 +46,8 @@ case "${MODEL}" in
     ;;
 esac
 
-MGD="${MGD_DIR}/${MODEL}_${CONFIG}_mgd.textproto"
-[ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${MODEL}/${CONFIG} at ${MGD}" >&2; exit 2; }
+MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
+[ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
 
 manifest_env() {
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"][sys.argv[2]])' "${MANIFEST}" "$1"
