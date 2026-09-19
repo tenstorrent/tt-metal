@@ -151,17 +151,9 @@ _DEFAULT_AUDIO_T_FACTOR = 8
 # Time-packed late vocoder bands (band -> steps per row): the two narrowest bands on 32-wide rows, measured
 # 0.53 -> 0.45 s traced at unchanged PSNR (layers/audio_pack.py).
 _AUDIO_PACK_BANDS = {5: 2, 6: 4}
-# Replay a captured device graph for the audio vocoder instead of dispatching it op by op. The vocoder is the one
-# stage that is host-bound, so this is its dominant lever; it needs a trace_region_size on the mesh.
-_AUDIO_TRACE_ENV = "MINIMAX_H3_AUDIO_TRACE"
 # Separate the audio stage's phases (host prep, upload, projection, vocoder, readback). Costs a synchronize
 # between each, so the total it reports is inflated and only the shares mean anything.
 _AUDIO_PHASES_ENV = "MINIMAX_H3_AUDIO_PHASES"
-
-
-def _audio_trace_enabled() -> bool:
-    """Explicit kwarg wins; else MINIMAX_H3_AUDIO_TRACE; else on (the vocoder replays a captured graph: 0.5 -> 0.3 s)."""
-    return os.environ.get(_AUDIO_TRACE_ENV, "1").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _requested_audio_t_factor(audio_t_factor: int | None, default: int = _DEFAULT_AUDIO_T_FACTOR) -> tuple[int, bool]:
@@ -477,7 +469,8 @@ class MiniMaxH3Pipeline:
         if audio_split_mode not in ("off", "weight", "full", "kernel"):
             raise ValueError(f"audio_split_mode must be 'off', 'weight', 'full' or 'kernel', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
-        self.audio_trace = _audio_trace_enabled() if audio_trace is None else bool(audio_trace)
+        # The vocoder replays a captured device graph (0.5 -> 0.3 s); off for meshes opened without a trace region.
+        self.audio_trace = True if audio_trace is None else bool(audio_trace)
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(
             audio_t_factor, default=preset.get("audio_t_factor", _DEFAULT_AUDIO_T_FACTOR)
         )
