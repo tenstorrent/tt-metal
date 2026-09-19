@@ -1495,6 +1495,7 @@ def run_chunked_transformer_updated(
     check_pcc=False,
     check_layer_pcc=False,
     use_trace=False,
+    determinism_check=False,
     kv_pcc_threshold=None,
     seq_cache=None,
 ):
@@ -1947,6 +1948,18 @@ def run_chunked_transformer_updated(
     # into 1-element uint32 DRAM tensors the metadata ops read on-device; the token input moves into a
     # persistent buffer refreshed in place. With return_intermediates=False the forward is device-only
     # (no host readback), so it is capturable.
+    # The KDA recurrent/conv carries are the one piece of state a replay MUTATES, so they have to be
+    # zeroed in two places: after capture (which costs chunk 0 two extra forwards) and before each
+    # iteration, which would otherwise start where the previous one finished.
+    def _reset_kda_carries(reason):
+        kda_states = getattr(transformer, "kda_states", None)
+        if kda_states is None:
+            return
+        for slot in range(kda_states.num_slots):
+            kda_states.reset(slot)
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"[trace] reset {kda_states.num_slots} KDA carry slot(s) {reason}")
+
     trace_controller = None
     trace_input = None
     trace_metadata = None
@@ -2026,15 +2039,20 @@ def run_chunked_transformer_updated(
         # has absorbed chunk 0 three times instead of once, and the error rides into every later
         # chunk. Dense models never see this; Kimi-K3's KDA carries are the first recurrence here.
         # Zero them so the replay starts from the same state the untraced path starts from.
-        kda_states = getattr(transformer, "kda_states", None)
-        if kda_states is not None:
-            for slot in range(kda_states.num_slots):
-                kda_states.reset(slot)
-            ttnn.synchronize_device(mesh_device)
-            logger.info(f"[trace] reset {kda_states.num_slots} KDA carry slot(s) after capture")
+        _reset_kda_carries("after capture")
+
+    if determinism_check and num_iters < 2:
+        pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
+    det_baseline = None
+    det_failures = []
 
     profiler.start("tt_forward")
     for it in range(num_iters):
+        # Unconditional. The carry is the one piece of state an iteration MUTATES, so iteration N
+        # otherwise starts where N-1 finished: a false failure under determinism_check, and worse
+        # under check_pcc, where the post-loop KV PCC then scores a cache conditioned on the prefix
+        # twice. num_iters=1 is unaffected (the carry is already zero at this point).
+        _reset_kda_carries(f"before iter {it}")
         iter_start = time.time()
         chunk_times: list[float] = []
         for c in range(n_chunks):
@@ -2126,10 +2144,37 @@ def run_chunked_transformer_updated(
         iter_total = time.time() - iter_start
         iteration_chunk_times.append(chunk_times)
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
+        if determinism_check:
+            # Compare the whole cache the iteration just wrote, bit-exactly. PCC rounds away a single
+            # flipped element in num_layers x seq x kvpe; torch.equal does not. The cache is the right
+            # surface because it is what every later chunk attends to, so a write landing out of order
+            # inside the replay shows up here even when the final hidden state looks fine.
+            cache_now, _ = gather_cache_natural(tt_kvpe_cache.storage, mesh_device)
+            if det_baseline is None:
+                det_baseline = cache_now
+                logger.info(f"[determinism] iter {it} baseline KV cache {tuple(cache_now.shape)}")
+            elif torch.equal(det_baseline, cache_now):
+                logger.info(f"[determinism] iter {it} KV cache bit-identical to iter 0")
+            else:
+                diff = (det_baseline - cache_now).abs()
+                det_failures.append((it, int((diff > 0).sum()), float(diff.max())))
+                logger.error(
+                    f"[determinism] iter {it} KV cache DIFFERS from iter 0: "
+                    f"{det_failures[-1][1]} element(s), max abs delta {det_failures[-1][2]:.3e}"
+                )
         # Drop iter 0's per-layer MLA/FFN samples (the compile iteration), same as the chunk-time table.
         if it == 0:
             reset_block_timings()
     profiler.end("tt_forward")
+
+    if determinism_check:
+        assert not det_failures, "captured-trace replay is not deterministic: " + "; ".join(
+            f"iter {it}: {n} element(s), max abs delta {mx:.3e}" for it, n, mx in det_failures
+        )
+        logger.success(
+            f"[determinism] replay bit-identical across {num_iters} iterations "
+            f"(num_layers={num_layers}, n_chunks={n_chunks}, use_trace={use_trace})"
+        )
 
     if profile_call_counts is not None:
         expected_calls_per_layer = n_chunks * num_iters
@@ -2615,8 +2660,14 @@ def test_kimi_prefill_transformer_chunked(
 # and Kimi-K3 advances KDA recurrent/conv carries inside the captured region and seals the AttnRes
 # stream per chunk, both of which a capture has to get right.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
+# Replays the SAME captured trace num_iters times and requires the KV cache back bit-identical.
+# Needs num_iters >= 2; iteration 0 is the baseline.
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("perf_margin", [None], ids=["margin_auto"])
-@pytest.mark.parametrize("num_iters", [1, 2], ids=["iters1", "two_iters"])
+# ten_iters exists for determinism: two iterations only prove the second replay matches the first,
+# and a reordering that depends on queue depth or a race needs more attempts to show up. A replay
+# iteration is ~29 s at L24/11 chunks, nearly free next to the weight load.
+@pytest.mark.parametrize("num_iters", [1, 2, 10], ids=["iters1", "two_iters", "ten_iters"])
 @pytest.mark.parametrize("n_chunks", [2, 11], ids=["chunks2", "chunks_eleven"])
 @pytest.mark.parametrize("preload_isl", [0], ids=["preload0"])
 # Depths must END on a full-attention layer. The driver builds the last layer kv_only (a
@@ -2656,6 +2707,7 @@ def test_kimi_k3_prefill_transformer_chunked(
     num_links,
     perf_margin,
     use_trace,
+    determinism_check,
     preload_isl,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
@@ -2676,6 +2728,7 @@ def test_kimi_k3_prefill_transformer_chunked(
         preload_isl=preload_isl,
         check_pcc=True,
         use_trace=use_trace,
+        determinism_check=determinism_check,
     )
 
 
