@@ -210,3 +210,42 @@ def test_the_gate_and_the_report_agree_about_one_row():
     ):
         gate_cleared = perf_mcp._decode_gate(_prof(), [row]) is None
         assert gate_cleared == _sm._is_win(row) == expect_win, row
+
+
+# --- escalation: attempt 2+ is told to go in-place, not repeat the same flat instruction ---------
+# Unlike the per-op ladder (knob -> knob -> knob -> knob -> tt-lang -> cpp), this gate used to hand
+# out byte-identical instructions on every attempt. A real attempt on this exact target showed the
+# natural approach (allocating a new tensor per call, e.g. slice+concat) breaks trace capture's
+# requirement for a stable, pre-registered buffer address -- a hardware fact, not something specific
+# to one model's cache math, so it belongs in the gate rather than left to be rediscovered each time.
+
+
+def test_a_fresh_target_carries_no_escalation_text():
+    g = perf_mcp._decode_gate(_prof(), [])
+    assert g is not None
+    assert "did not clear" not in g["reason"]
+    assert "IN-PLACE" not in g["reason"]
+
+
+def test_one_clean_no_win_attempt_triggers_the_escalation():
+    attempts = [_kv(False)]
+    g = perf_mcp._decode_gate(_prof(), attempts)
+    assert g is not None
+    assert "did not clear" in g["reason"]
+    assert "IN-PLACE" in g["reason"]
+    # Prefers the stock ops before a hand kernel, and keeps the kernel as a fallback for whatever
+    # they don't cover (e.g. this model's Mamba SSM-state, which has no stock cache op).
+    assert "update_cache" in g["reason"]
+    assert "tt-lang" in g["reason"] or "C++" in g["reason"]
+
+
+def test_a_wedge_with_no_clean_attempt_also_triggers_the_escalation(monkeypatch):
+    monkeypatch.setattr(perf_mcp, "_load_attempts", lambda: [_wedge()])
+    g = perf_mcp._decode_gate(_prof(), [])
+    assert g is not None
+    assert "did not clear" in g["reason"]
+
+
+def test_a_win_still_clears_regardless_of_any_prior_failed_attempt():
+    attempts = [_kv(False), _kv(True)]
+    assert perf_mcp._decode_gate(_prof(), attempts) is None

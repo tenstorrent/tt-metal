@@ -6304,6 +6304,29 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
     max_kv = int(os.environ.get("PERF_MCP_MAX_KV_ATTEMPTS", "3") or "3")
     if kv_won or (len(kv_clean) + kv_wedged) >= max_kv:
         return None
+    # ESCALATE ONCE A REAL ATTEMPT HAS ALREADY BEEN SPENT WITHOUT CLEARING THE GATE. Unlike the
+    # per-op ladder (knob -> knob -> knob -> knob -> tt-lang -> cpp), this lever had no escalation
+    # at all: attempt 2 got byte-identical instructions to attempt 1, even after a real attempt
+    # showed the natural approach (allocating a new tensor per call, e.g. slice+concat) breaks
+    # trace capture's requirement that a replayed buffer sit at a stable, pre-registered address.
+    # That fix generalises across models (it's a hardware constraint, not this model's cache math),
+    # so it belongs here rather than left to be rediscovered attempt after attempt. Triggered by
+    # ATTEMPT COUNT, not by parsing which failure occurred, mirroring how the real ladder escalates
+    # purely on "has this rung been tried" -- never by inspecting why a knob failed.
+    _kv_spent = len(kv_clean) + kv_wedged
+    _kernel_escalation = (
+        " A prior attempt at this target did not clear it. This time, use an IN-PLACE cache update "
+        "-- ttnn's update_cache / paged_update_cache / fill_cache / paged_fill_cache family where one "
+        "fits (e.g. a standard attention KV-cache), or a hand-written tt-lang/C++ kernel "
+        "(ttnn.generic_op) writing into a pre-allocated fixed-address buffer where none does (e.g. an "
+        "SSM/recurrent state this model has no stock op for) -- never slice+concat or anything that "
+        "allocates a new tensor per call, which breaks trace capture's requirement for stable buffer "
+        "addresses across replays. A clean PCC pass and a passing trace are not proof this worked: "
+        "verify the per-token measurement actually reflects a single cached step, not a silently "
+        "wrong replay."
+        if _kv_spent >= 1
+        else ""
+    )
     reason = (
         "MANDATORY kv-cache — a lever SEPARATE from trace. decode is repeat_prefill: it re-runs the "
         "full prefill every token (no cached decode_step / KV-cache). Trace removes DISPATCH gaps ONLY "
@@ -6312,13 +6335,14 @@ def _decode_gate(prof: dict, attempts: list) -> dict | None:
         "(recall_knobs(op_class='attention', regime=<the stage this target names>)). Then "
         "record_kernel_attempt(op='generation_loop','kv-cache',"
         "measured_ms,beat_baseline) — this gate clears ONLY on a MEASURED per-token reduction from the cache."
+        + _kernel_escalation
         if repeat
         else "MANDATORY kv-cache — SEPARATE from trace. per-token cost scales with capacity "
         "(use_cache=False, no KV-cache write) -> O(capacity) recompute every token EVEN THOUGH it traces. "
         "Trace does NOT remove recompute; 'irreducible' is NOT accepted. Add a KV-cache + single-token "
         "decode_step (recall_knobs(op_class='attention', regime=<the stage this target names>)); "
         "record_kernel_attempt(op='generation_loop','kv-cache',"
-        "measured_ms,beat_baseline) — clears ONLY on a MEASURED per-token reduction."
+        "measured_ms,beat_baseline) — clears ONLY on a MEASURED per-token reduction." + _kernel_escalation
     )
     host_ms = 0.0
     for b in prof.get("buckets") or []:
