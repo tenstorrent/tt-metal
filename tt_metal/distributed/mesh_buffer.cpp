@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include "device.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "mesh_device_impl.hpp"
@@ -28,6 +29,7 @@
 #include <optional>
 
 namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
+namespace range_lockstep_allocation = tt::tt_metal::experimental::range_lockstep_allocation;
 
 namespace tt::tt_metal::distributed {
 namespace {
@@ -65,9 +67,20 @@ private:
     AllocatorImpl* allocator_;
 };
 
-// This rank's per-bank (per-core) reservations across the devices it drives, flattened to
-// [start, end, start, end, ...].
-std::vector<DeviceAddr> local_per_core_ranges(
+std::vector<CoreCoord> range_lockstep_cores(const BufferShardingArgs& sharding_args) {
+    if (const auto& distribution_spec = sharding_args.buffer_distribution_spec(); distribution_spec.has_value()) {
+        return distribution_spec->cores_with_data();
+    }
+    if (const auto& shard_spec = sharding_args.shard_spec(); shard_spec.has_value()) {
+        return corerange_to_cores(
+            shard_spec->tensor_shard_spec.grid,
+            std::nullopt,
+            shard_spec->tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    }
+    return {};
+}
+
+std::vector<DeviceAddr> local_all_bank_ranges(
     const std::vector<AllocatorImpl*>& device_allocators, uint32_t num_banks) {
     using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
     std::vector<DeviceAddr> flat;
@@ -80,6 +93,23 @@ std::vector<DeviceAddr> local_per_core_ranges(
         }
     }
     return flat;
+}
+
+AllocatorImpl::OccupiedRangesByCore local_ranges_by_core(
+    const std::vector<AllocatorImpl*>& device_allocators, const std::vector<CoreCoord>& selected_cores) {
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    AllocatorImpl::OccupiedRangesByCore ranges_by_core;
+    for (auto* device_allocator : device_allocators) {
+        for (const auto& core : selected_cores) {
+            if (const auto* bank_ids = device_allocator->find_bank_ids(BufferType::L1, core)) {
+                const auto ranges =
+                    device_allocator->get_l1_allocated_ranges(AllocatorID{bank_ids->front() + 1});
+                auto& destination = ranges_by_core[core];
+                destination.insert(destination.end(), ranges.begin(), ranges.end());
+            }
+        }
+    }
+    return ranges_by_core;
 }
 
 // All-gather `local` over `ctx` and return every OTHER rank's entries as ranges.
@@ -128,6 +158,65 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> allgather_remote_ranges(
         *multihost::DistributedContext::get_current_world()->rank(),
         local.size() / 2,
         remote.size(),
+        ranks.size() - 1);
+    return remote;
+}
+
+AllocatorImpl::OccupiedRangesByCore allgather_remote_ranges_by_core(
+    const AllocatorImpl::OccupiedRangesByCore& local,
+    const std::vector<int>& ranks,
+    const multihost::DistributedContext& ctx) {
+    std::vector<DeviceAddr> local_entries;
+    for (const auto& [core, ranges] : local) {
+        for (const auto& [start, end] : ranges) {
+            local_entries.insert(local_entries.end(), {core.x, core.y, start, end});
+        }
+    }
+
+    const auto world = static_cast<size_t>(*ctx.size());
+    const auto my_index = static_cast<size_t>(*ctx.rank());
+    uint64_t my_count = local_entries.size();
+    std::vector<uint64_t> counts(world, 0);
+    ctx.all_gather(
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&my_count), sizeof(my_count)),
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(counts.data()), counts.size() * sizeof(uint64_t)));
+
+    const uint64_t max_count = *std::max_element(counts.begin(), counts.end());
+    if (max_count == 0) {
+        return {};
+    }
+    std::vector<DeviceAddr> padded(max_count, 0);
+    std::copy(local_entries.begin(), local_entries.end(), padded.begin());
+    std::vector<DeviceAddr> gathered(world * max_count, 0);
+    ctx.all_gather(
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(padded.data()), padded.size() * sizeof(DeviceAddr)),
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(gathered.data()), gathered.size() * sizeof(DeviceAddr)));
+
+    AllocatorImpl::OccupiedRangesByCore remote;
+    size_t remote_range_count = 0;
+    for (size_t rank_index = 0; rank_index < world; rank_index++) {
+        if (rank_index == my_index) {
+            continue;
+        }
+        TT_FATAL(counts[rank_index] % 4 == 0, "HYBRID per-core range contribution has a truncated entry");
+        for (uint64_t entry_index = 0; entry_index < counts[rank_index]; entry_index += 4) {
+            const auto offset = rank_index * max_count + entry_index;
+            const CoreCoord core(gathered[offset], gathered[offset + 1]);
+            const DeviceAddr start = gathered[offset + 2];
+            const DeviceAddr end = gathered[offset + 3];
+            if (end > start) {
+                remote[core].emplace_back(start, end);
+                remote_range_count++;
+            }
+        }
+    }
+    log_debug(
+        tt::LogMetal,
+        "[hybrid-coowner] rank {} contributed {} core-tagged range(s), received {} from the other {} co-owner(s) "
+        "of this mesh",
+        *multihost::DistributedContext::get_current_world()->rank(),
+        local_entries.size() / 4,
+        remote_range_count,
         ranks.size() - 1);
     return remote;
 }
@@ -262,8 +351,17 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
                 if (!coowners.empty()) {
                     const auto& ctx = mesh_device->impl().coowner_context();
                     const uint32_t num_banks = mesh_allocator->get_num_banks(BufferType::L1);
-                    mesh_allocator->set_hybrid_remote_occupied_ranges(
-                        allgather_remote_ranges(local_per_core_ranges(device_allocators, num_banks), coowners, *ctx));
+                    const std::vector<CoreCoord> selected_cores =
+                        range_lockstep_allocation::is_range_lockstep_allocation(device_local_config.sharding_args)
+                            ? range_lockstep_cores(device_local_config.sharding_args)
+                            : std::vector<CoreCoord>{};
+                    if (selected_cores.empty()) {
+                        mesh_allocator->set_hybrid_remote_occupied_ranges(allgather_remote_ranges(
+                            local_all_bank_ranges(device_allocators, num_banks), coowners, *ctx));
+                    } else {
+                        mesh_allocator->set_hybrid_remote_occupied_ranges_by_core(allgather_remote_ranges_by_core(
+                            local_ranges_by_core(device_allocators, selected_cores), coowners, *ctx));
+                    }
                 }
             }
         }
@@ -335,10 +433,23 @@ void MeshBuffer::initialize_device_buffers() {
         MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
         auto* backing = get_backing_buffer();
         auto alloc_size = backing->aligned_size_per_bank();
+        const bool is_range_lockstep = range_lockstep_allocation::is_range_lockstep_allocation(*backing);
+        const std::vector<CoreCoord> selected_cores =
+            is_range_lockstep ? range_lockstep_cores(device_local_config_.sharding_args) : std::vector<CoreCoord>{};
+        const auto& core_extents = range_lockstep_allocation::core_allocation_extents(*backing);
         for (const auto& [coord, device_buffer] : buffers_) {
             if (mesh_device->impl().is_local(coord)) {
                 auto* device = mesh_device->impl().get_device(coord);
-                device->allocator_impl()->mirror_lockstep_allocation(address_, alloc_size);
+                if (is_range_lockstep) {
+                    if (core_extents.empty()) {
+                        device->allocator_impl()->mirror_range_lockstep_allocation(
+                            address_, alloc_size, selected_cores);
+                    } else {
+                        device->allocator_impl()->mirror_range_lockstep_allocation(address_, core_extents);
+                    }
+                } else {
+                    device->allocator_impl()->mirror_lockstep_allocation(address_, alloc_size);
+                }
             }
         }
     }
@@ -410,11 +521,20 @@ void MeshBuffer::deallocate() {
             // device_->is_initialized() guard in Buffer::deallocate_impl().
             if (std::holds_alternative<OwnedBufferState>(state_) &&
                 device_local_config_.buffer_type == BufferType::L1) {
+                const bool is_range_lockstep = range_lockstep_allocation::is_range_lockstep_allocation(
+                    device_local_config_.sharding_args);
+                const std::vector<CoreCoord> selected_cores =
+                    is_range_lockstep ? range_lockstep_cores(device_local_config_.sharding_args)
+                                      : std::vector<CoreCoord>{};
                 for (const auto& [coord, device_buffer] : buffers_) {
                     if (mesh_device->impl().is_local(coord)) {
                         auto* device = mesh_device->impl().get_device(coord);
                         if (device->is_initialized()) {
-                            device->allocator_impl()->unmirror_lockstep_allocation(address_);
+                            if (is_range_lockstep) {
+                                device->allocator_impl()->unmirror_range_lockstep_allocation(address_, selected_cores);
+                            } else {
+                                device->allocator_impl()->unmirror_lockstep_allocation(address_);
+                            }
                         }
                     }
                 }

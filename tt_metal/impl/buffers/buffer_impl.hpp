@@ -102,6 +102,7 @@ public:
 
     // Lockstep only across the cores this buffer occupies, rather than every core on the device.
     bool range_lockstep_allocation_ = false;
+    std::unordered_map<CoreCoord, DeviceAddr> range_lockstep_allocation_extents_;
 
     std::shared_ptr<Buffer> root_buffer_;
     DeviceAddr root_buffer_offset_ = 0;

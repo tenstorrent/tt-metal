@@ -107,6 +107,26 @@ public:
         // on the path that does not go through a mesh allocator.
         const std::optional<std::unordered_set<uint32_t>>& scoped_dependent_allocators = std::nullopt);
 
+    // Allocate one common address in every named sub-allocator. This represents a buffer that is
+    // lockstep only across a selected bank set: intersecting sets cannot overlap, while disjoint
+    // sets may reuse the same physical address.
+    DeviceAddr allocate_buffer_across_allocators(
+        DeviceAddr size_per_allocator,
+        bool bottom_up,
+        const std::vector<AllocatorDependencies::AllocatorID>& allocator_ids,
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {});
+
+    DeviceAddr allocate_buffer_across_allocators(
+        const std::vector<std::pair<AllocatorDependencies::AllocatorID, DeviceAddr>>& allocator_extents,
+        bool bottom_up,
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {});
+
+    DeviceAddr allocate_buffer_across_allocators(
+        const std::vector<std::pair<AllocatorDependencies::AllocatorID, DeviceAddr>>& allocator_extents,
+        bool bottom_up,
+        const std::unordered_map<uint32_t, std::vector<std::pair<DeviceAddr, DeviceAddr>>>&
+            additional_occupied_ranges_by_allocator);
+
     void deallocate_buffer(
         DeviceAddr address, AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
     void deallocate_all();

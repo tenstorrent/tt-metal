@@ -27,6 +27,7 @@
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
 #include "small_vector_caster.hpp"
@@ -46,6 +47,7 @@
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal;
@@ -119,6 +121,28 @@ void ttnn_device(nb::module_& mod) {
 namespace ttnn::device {
 
 void py_device_module_types(nb::module_& m_device) {
+    using VariableExtentAllocation =
+        tt::tt_metal::experimental::range_lockstep_allocation::VariableExtentAllocation;
+
+    nb::class_<VariableExtentAllocation>(
+        m_device,
+        "VariableExtentRangeLockstepAllocation",
+        "Allocation-only L1 owner with one address and an exact extent on each selected core.")
+        .def_prop_ro("is_allocation_only", [](const VariableExtentAllocation&) { return true; })
+        .def_prop_ro("address", &VariableExtentAllocation::address)
+        .def_prop_ro(
+            "core_extents",
+            [](const VariableExtentAllocation& allocation) {
+                std::vector<std::tuple<uint32_t, uint32_t, DeviceAddr>> extents;
+                extents.reserve(allocation.extents().size());
+                for (const auto& [core, extent] : allocation.extents()) {
+                    extents.emplace_back(core.x, core.y, extent);
+                }
+                std::sort(extents.begin(), extents.end());
+                return extents;
+            })
+        .def("deallocate", &VariableExtentAllocation::deallocate);
+
     nb::enum_<tt::ARCH>(m_device, "Arch", "Enum of types of Tenstorrent accelerator devices.")
         .value("WORMHOLE_B0", tt::ARCH::WORMHOLE_B0)
         .value("BLACKHOLE", tt::ARCH::BLACKHOLE)
@@ -815,6 +839,32 @@ void device_module(nb::module_& m_device) {
 
 void py_device_module(nb::module_& mod) {
     ttnn_device(mod);
+    mod.def(
+        "experimental_allocate_variable_extent_range_lockstep",
+        [](tt::tt_metal::distributed::MeshDevice* mesh_device,
+           const std::vector<std::tuple<uint32_t, uint32_t, DeviceAddr>>& core_extents,
+           bool bottom_up) {
+            tt::tt_metal::experimental::range_lockstep_allocation::CoreAllocationExtents extents;
+            extents.reserve(core_extents.size());
+            for (const auto& [core_x, core_y, extent] : core_extents) {
+                const CoreCoord core(core_x, core_y);
+                if (!extents.emplace(core, extent).second) {
+                    throw std::invalid_argument("Variable-extent allocation contains a duplicate core");
+                }
+            }
+            return tt::tt_metal::experimental::range_lockstep_allocation::VariableExtentAllocation::create(
+                mesh_device, std::move(extents), bottom_up);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("core_extents"),
+        nb::kw_only(),
+        nb::arg("bottom_up") = false,
+        R"doc(
+        Allocate one L1 base address across selected logical cores while reserving each core's exact extent.
+
+        The result owns memory but is not a tensor. It may only back descriptors whose per-core sizes do not exceed
+        the corresponding extents.
+        )doc");
     device_module(mod);
 }
 

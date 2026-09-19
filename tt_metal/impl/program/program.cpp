@@ -169,7 +169,7 @@ void generate_kernel_source_files(
     IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
     const auto& env =
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env;
-    jit_build_genfiles_descriptors(env, build_options);
+    jit_build_genfiles_descriptors(env, build_options, *kernel);
     if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
         jit_build_genfiles_triscs_src(env, *kernel, kernel->kernel_source());
     } else {
@@ -334,7 +334,7 @@ std::string ensure_kernel_binaries(
 
     jit_build_once(kernel_hash, [&] {
         try {
-            jit_build_genfiles_descriptors(build_env.build_env, build_options);
+            jit_build_genfiles_descriptors(build_env.build_env, build_options, *kernel);
             kernel->generate_binaries(device, build_options);
         } catch (std::runtime_error& ex) {
             TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());

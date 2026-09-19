@@ -20,6 +20,9 @@ namespace tt::tt_metal {
 // THREAD SAFETY: Allocator is thread safe.
 class AllocatorImpl {
 public:
+    using OccupiedRanges = std::vector<std::pair<DeviceAddr, DeviceAddr>>;
+    using OccupiedRangesByCore = std::unordered_map<CoreCoord, OccupiedRanges>;
+
     // AllocatorConfig is not in the API directory, thus Allocator currently cannot be constructed publicly,
     // this is because we are in the middle of moving Allocator into implementation details.
     // This initiative is established from our analysis that Allocator is only used to query memory profiles
@@ -50,6 +53,7 @@ public:
     // same physical L1. MeshBuffer::create collects these by all-gather over the co-owning ranks.
     // Empty on a single-rank mesh.
     void set_hybrid_remote_occupied_ranges(std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges);
+    void set_hybrid_remote_occupied_ranges_by_core(OccupiedRangesByCore ranges_by_core);
     void clear_hybrid_remote_occupied_ranges();
 
     // Claim/release the HYBRID allocation span. The two setters above pass state into
@@ -157,6 +161,14 @@ public:
     void mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size);
     void unmirror_lockstep_allocation(DeviceAddr address);
 
+    // Mirror a range-lockstep allocation only into the selected cores' sub-allocators. Disjoint
+    // ranges may then reuse an address without making the allocation visible chip-wide.
+    void mirror_range_lockstep_allocation(
+        DeviceAddr address, DeviceAddr size, const std::vector<CoreCoord>& cores);
+    void mirror_range_lockstep_allocation(
+        DeviceAddr address, const std::unordered_map<CoreCoord, DeviceAddr>& core_extents);
+    void unmirror_range_lockstep_allocation(DeviceAddr address, const std::vector<CoreCoord>& cores);
+
     // Device-global L1 arena for allocations that outlive individual programs.
     PersistentL1Arena& persistent_l1() { return persistent_l1_; }
     const PersistentL1Arena& persistent_l1() const { return persistent_l1_; }
@@ -200,6 +212,7 @@ private:
 
     // HYBRID mode: per-bank ranges occupied on co-owning ranks' devices (see the setter).
     std::vector<std::pair<DeviceAddr, DeviceAddr>> hybrid_remote_occupied_ranges_;
+    OccupiedRangesByCore hybrid_remote_occupied_ranges_by_core_;
 
     // Set while a HYBRID allocation span is open (see try_begin_hybrid_allocation). Not a mutex:
     // a same-thread re-entry must report a bug, not deadlock or hit try_lock's UB.

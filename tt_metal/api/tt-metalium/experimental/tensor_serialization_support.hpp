@@ -36,6 +36,7 @@ struct PrepopulatedShardSpecs {
     bool created_with_nd_shard_spec;
     bool per_core_allocation;
     bool range_lockstep_allocation;
+    bool bottom_up_allocation;
 };
 
 // NOLINTNEXTLINE(readability-redundant-declaration)

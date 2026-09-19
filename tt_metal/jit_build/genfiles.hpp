@@ -23,6 +23,7 @@ void jit_build_genfiles_kernel_include(
 void jit_build_genfiles_triscs_src(
     const JitBuildEnv& env, const JitBuildSettings& settings, const KernelSource& kernel_src);
 
-void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOptions& options);
+void jit_build_genfiles_descriptors(
+    const JitBuildEnv& env, const JitBuildOptions& options, const JitBuildSettings& settings);
 
 }  // namespace tt::tt_metal

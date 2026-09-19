@@ -6,6 +6,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/float8.hpp>
+#include <tt-metalium/experimental/bottom_up_allocation/memory_config.hpp>
 
 #include "tensor_impl.hpp"
 
@@ -27,6 +28,9 @@ std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
         .page_size = tensor_spec.compute_page_size_bytes(),
         .buffer_type = memory_config.buffer_type(),
         .sharding_args = tensor_spec.compute_buffer_sharding_args(),
+        .bottom_up = experimental::bottom_up_allocation::is_bottom_up_allocation(memory_config)
+                         ? std::optional<bool>{true}
+                         : std::nullopt,
     };
 
     // Use replicated buffer, which supports both working with individual shards and replicating data across all shards.

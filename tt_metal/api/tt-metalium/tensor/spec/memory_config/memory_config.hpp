@@ -56,12 +56,14 @@ public:
         "nd_shard_spec",
         "created_with_nd_shard_spec",
         "per_core_allocation",
-        "range_lockstep_allocation");
+        "range_lockstep_allocation",
+        "bottom_up_allocation");
     std::tuple<
         const TensorMemoryLayout&,
         const BufferType&,
         const std::optional<ShardSpec>&,
         const std::optional<NdShardSpec>&,
+        const bool&,
         const bool&,
         const bool&,
         const bool&>

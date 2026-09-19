@@ -501,7 +501,9 @@ BufferImpl::BufferImpl(
     shard_spec_(sharding_args.shard_spec()),
     buffer_distribution_spec_(sharding_args.buffer_distribution_spec()),
     per_core_allocation_(experimental::per_core_allocation::is_per_core_allocation(sharding_args)),
-    range_lockstep_allocation_(experimental::range_lockstep_allocation::is_range_lockstep_allocation(sharding_args)) {
+    range_lockstep_allocation_(experimental::range_lockstep_allocation::is_range_lockstep_allocation(sharding_args)),
+    range_lockstep_allocation_extents_(
+        experimental::range_lockstep_allocation::core_allocation_extents(sharding_args)) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
     // BufferShardingArgs does not know the buffer type; this is the first point where both are visible.
     TT_FATAL(
@@ -641,6 +643,10 @@ std::shared_ptr<Buffer> BufferImpl::view(Buffer& self, const BufferRegion& regio
     auto sharding_args = BufferShardingArgs(buffer_distribution_spec_, shard_spec_, buffer_layout_);
     if (range_lockstep_allocation_) {
         experimental::range_lockstep_allocation::set_range_lockstep_allocation(sharding_args, true);
+        if (!range_lockstep_allocation_extents_.empty()) {
+            experimental::range_lockstep_allocation::set_core_allocation_extents(
+                sharding_args, range_lockstep_allocation_extents_);
+        }
     }
 
     auto buffer = BufferImpl::create(

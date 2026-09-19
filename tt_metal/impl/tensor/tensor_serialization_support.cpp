@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/tensor_serialization_support.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/bottom_up_allocation/memory_config.hpp>
 
 namespace tt::tt_metal {
 
@@ -26,6 +27,9 @@ MemoryConfig create_memory_config_with_prepopulated_shard_specs(PrepopulatedShar
     }
     if (specs.range_lockstep_allocation) {
         experimental::range_lockstep_allocation::set_range_lockstep_allocation(config, true);
+    }
+    if (specs.bottom_up_allocation) {
+        experimental::bottom_up_allocation::set_bottom_up_allocation(config, true);
     }
     return config;
 }

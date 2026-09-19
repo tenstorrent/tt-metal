@@ -39,6 +39,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/bottom_up_allocation/memory_config.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/tensor/types.hpp"
@@ -534,6 +535,13 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             "takes one address, but the allocator only keeps it clear of per-core allocations on the cores the "
             "buffer occupies, rather than every core. Only safe when nothing reaches the buffer on a core it was "
             "not allocated on -- a multicast writes to every core in its rectangle, for instance.")
+        .def(
+            "experimental_set_bottom_up_allocation",
+            [](MemoryConfig& self, bool enable) {
+                experimental::bottom_up_allocation::set_bottom_up_allocation(self, enable);
+            },
+            nb::arg("enable"),
+            "Enable or disable low-to-high L1 allocation on this MemoryConfig.")
         .def_prop_ro(
             "interleaved",
             [](const MemoryConfig& memory_config) {

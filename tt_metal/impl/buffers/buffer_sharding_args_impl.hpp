@@ -7,6 +7,7 @@
 #include <tt-metalium/buffer.hpp>
 
 #include <optional>
+#include <unordered_map>
 
 namespace tt::tt_metal {
 
@@ -30,6 +31,7 @@ public:
     TensorMemoryLayout buffer_layout_ = TensorMemoryLayout::INTERLEAVED;
     bool per_core_allocation_ = false;
     bool range_lockstep_allocation_ = false;
+    std::unordered_map<CoreCoord, DeviceAddr> range_lockstep_allocation_extents_;
 };
 
 }  // namespace tt::tt_metal

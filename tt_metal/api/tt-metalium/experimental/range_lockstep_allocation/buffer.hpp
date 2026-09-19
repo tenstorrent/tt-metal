@@ -4,7 +4,14 @@
 
 #pragma once
 
+#include <memory>
+#include <unordered_map>
 #include <tt-metalium/buffer.hpp>
+
+namespace tt::tt_metal::distributed {
+class MeshBuffer;
+class MeshDevice;
+}  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal::experimental::range_lockstep_allocation {
 
@@ -25,5 +32,29 @@ namespace tt::tt_metal::experimental::range_lockstep_allocation {
 BufferShardingArgs& set_range_lockstep_allocation(BufferShardingArgs& args, bool enable);
 bool is_range_lockstep_allocation(const BufferShardingArgs& args);
 bool is_range_lockstep_allocation(const Buffer& buffer);
+
+using CoreAllocationExtents = std::unordered_map<CoreCoord, DeviceAddr>;
+
+BufferShardingArgs& set_core_allocation_extents(BufferShardingArgs& args, CoreAllocationExtents extents);
+const CoreAllocationExtents& core_allocation_extents(const BufferShardingArgs& args);
+const CoreAllocationExtents& core_allocation_extents(const Buffer& buffer);
+
+class VariableExtentAllocation {
+public:
+    static std::shared_ptr<VariableExtentAllocation> create(
+        distributed::MeshDevice* mesh_device, CoreAllocationExtents extents, bool bottom_up = false);
+
+    DeviceAddr address() const;
+    const CoreAllocationExtents& extents() const;
+    Buffer* backing_buffer() const;
+    void deallocate();
+
+private:
+    VariableExtentAllocation(
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer, CoreAllocationExtents extents);
+
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_;
+    CoreAllocationExtents extents_;
+};
 
 }  // namespace tt::tt_metal::experimental::range_lockstep_allocation

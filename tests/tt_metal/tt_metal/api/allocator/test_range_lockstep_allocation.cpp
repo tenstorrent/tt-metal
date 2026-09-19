@@ -151,6 +151,118 @@ TEST_F(HybridAllocatorTest, RefusesToPlaceBesideAPerCoreHogWhenNotScoped) {
     run_lockstep_beside_per_core_hog(this->devices_[0], shard_spec_args, /*expect_range_lockstep=*/false);
 }
 
+TEST_F(HybridAllocatorTest, DisjointRangesReuseAddressAndOverlappingRangeDoesNot) {
+    if (!MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        GTEST_SKIP() << "HYBRID allocator mode is not active in this process";
+    }
+    const auto& mesh_device = this->devices_[0];
+    auto* device = mesh_device->get_devices()[0];
+    ASSERT_GE(device->compute_with_storage_grid_size().x, 2u);
+
+    const auto stats = device->allocator()->get_statistics(BufferType::L1);
+    const DeviceAddr allocation_size =
+        (stats.largest_free_block_bytes * 4 / 10) / HYBRID_TEST_PAGE_SIZE * HYBRID_TEST_PAGE_SIZE;
+    ASSERT_GT(allocation_size, 0u);
+
+    auto make_range_buffer = [&](const CoreRangeSet& cores) {
+        auto sharding_args = BufferShardingArgs(
+            ShardSpecBuffer(cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED);
+        range_lockstep::set_range_lockstep_allocation(sharding_args, true);
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = allocation_size},
+            distributed::DeviceLocalBufferConfig{
+                .page_size = allocation_size,
+                .buffer_type = BufferType::L1,
+                .sharding_args = sharding_args,
+                .bottom_up = false,
+            },
+            mesh_device.get());
+    };
+
+    const CoreCoord first_core(0, 0);
+    const CoreCoord second_core(1, 0);
+    auto first = make_range_buffer(CoreRangeSet(first_core));
+    auto disjoint = make_range_buffer(CoreRangeSet(second_core));
+    auto overlapping = make_range_buffer(CoreRangeSet(std::vector<CoreRange>{
+        CoreRange(first_core, first_core),
+        CoreRange(second_core, second_core),
+    }));
+
+    EXPECT_EQ(first->address(), disjoint->address());
+    EXPECT_NE(overlapping->address(), first->address());
+}
+
+TEST_F(HybridAllocatorTest, VariableExtentsPreserveOneAddressWithoutReservingTheLargestExtentEverywhere) {
+    if (!MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        GTEST_SKIP() << "HYBRID allocator mode is not active in this process";
+    }
+    const auto& mesh_device = this->devices_[0];
+    auto* device = mesh_device->get_devices()[0];
+    ASSERT_GE(device->compute_with_storage_grid_size().x, 2u);
+
+    const DeviceAddr free_bytes =
+        device->allocator()->get_statistics(BufferType::L1).largest_free_block_bytes / HYBRID_TEST_PAGE_SIZE *
+        HYBRID_TEST_PAGE_SIZE;
+    const DeviceAddr large_extent = free_bytes / (2 * HYBRID_TEST_PAGE_SIZE) * HYBRID_TEST_PAGE_SIZE;
+    const DeviceAddr small_extent = large_extent / (2 * HYBRID_TEST_PAGE_SIZE) * HYBRID_TEST_PAGE_SIZE;
+    const DeviceAddr bottom_hog_bytes = free_bytes - large_extent;
+    const DeviceAddr top_hog_bytes = large_extent - small_extent;
+    ASSERT_GT(small_extent, 0u);
+
+    auto allocate_on_core = [&](const CoreCoord& core, DeviceAddr size, bool bottom_up) {
+        auto sharding_args = BufferShardingArgs(
+            ShardSpecBuffer(CoreRangeSet(core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1}),
+            TensorMemoryLayout::HEIGHT_SHARDED);
+        per_core::set_per_core_allocation(sharding_args, true);
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = size},
+            distributed::DeviceLocalBufferConfig{
+                .page_size = size,
+                .buffer_type = BufferType::L1,
+                .sharding_args = std::move(sharding_args),
+                .bottom_up = bottom_up,
+            },
+            mesh_device.get());
+    };
+
+    const CoreCoord small_core(0, 0);
+    const CoreCoord large_core(1, 0);
+    auto small_core_bottom_hog = allocate_on_core(small_core, bottom_hog_bytes, true);
+    auto small_core_top_hog = allocate_on_core(small_core, top_hog_bytes, false);
+    auto large_core_bottom_hog = allocate_on_core(large_core, bottom_hog_bytes, true);
+
+    auto uniform_args = BufferShardingArgs(
+        ShardSpecBuffer(
+            CoreRangeSet(std::vector<CoreRange>{
+                CoreRange(small_core, small_core),
+                CoreRange(large_core, large_core),
+            }),
+            {1, 1},
+            ShardOrientation::ROW_MAJOR,
+            {1, 1},
+            {1, 1}),
+        TensorMemoryLayout::HEIGHT_SHARDED);
+    range_lockstep::set_range_lockstep_allocation(uniform_args, true);
+    EXPECT_ANY_THROW(distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = large_extent},
+        distributed::DeviceLocalBufferConfig{
+            .page_size = large_extent,
+            .buffer_type = BufferType::L1,
+            .sharding_args = uniform_args,
+            .bottom_up = false,
+        },
+        mesh_device.get()));
+
+    std::shared_ptr<range_lockstep::VariableExtentAllocation> allocation;
+    ASSERT_NO_THROW(
+        allocation = range_lockstep::VariableExtentAllocation::create(
+            mesh_device.get(), {{small_core, small_extent}, {large_core, large_extent}}));
+    ASSERT_NE(allocation, nullptr);
+    EXPECT_EQ(allocation->extents().at(small_core), small_extent);
+    EXPECT_EQ(allocation->extents().at(large_core), large_extent);
+}
+
 // The mesh path and the direct path learn about per-core allocations through different
 // mechanisms: a mesh allocator gathers them from the device allocators it was handed, while a
 // device allocator has them in its own dependency graph. Narrowing only the first would make the

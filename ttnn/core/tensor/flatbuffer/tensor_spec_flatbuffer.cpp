@@ -6,6 +6,7 @@
 
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/bottom_up_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/tensor_serialization_support.hpp>
 
 namespace ttnn {
@@ -264,7 +265,8 @@ flatbuffers::Offset<flatbuffer::MemoryConfig> to_flatbuffer(
         nd_shard_spec,
         config.created_with_nd_shard_spec(),
         tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(config),
-        tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(config));
+        tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(config),
+        tt::tt_metal::experimental::bottom_up_allocation::is_bottom_up_allocation(config));
 }
 
 tt::tt_metal::MemoryConfig from_flatbuffer(const flatbuffer::MemoryConfig* config) {
@@ -284,6 +286,7 @@ tt::tt_metal::MemoryConfig from_flatbuffer(const flatbuffer::MemoryConfig* confi
         .created_with_nd_shard_spec = config->created_with_nd_shard_spec(),
         .per_core_allocation = config->per_core_allocation(),
         .range_lockstep_allocation = config->range_lockstep_allocation(),
+        .bottom_up_allocation = config->bottom_up_allocation(),
     });
 }
 

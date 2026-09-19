@@ -194,6 +194,7 @@ TEST_F(MemoryConfigEqualityTest, NdShardCreatedIgnoresLegacyField) {
         .created_with_nd_shard_spec = true,
         .per_core_allocation = false,
         .range_lockstep_allocation = false,
+        .bottom_up_allocation = false,
     });
     EXPECT_EQ(user_config, tensor_config);
 }
@@ -210,6 +211,7 @@ TEST_F(MemoryConfigEqualityTest, LegacyShardCreatedIgnoresNdField) {
         .created_with_nd_shard_spec = false,
         .per_core_allocation = false,
         .range_lockstep_allocation = false,
+        .bottom_up_allocation = false,
     });
     EXPECT_EQ(user_config, tensor_config);
 }
@@ -225,6 +227,7 @@ TEST_F(MemoryConfigEqualityTest, MixedCreationPath_BothFieldsMatch) {
         .created_with_nd_shard_spec = true,
         .per_core_allocation = false,
         .range_lockstep_allocation = false,
+        .bottom_up_allocation = false,
     });
     MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs({
         .memory_layout = TensorMemoryLayout::ND_SHARDED,
@@ -234,6 +237,7 @@ TEST_F(MemoryConfigEqualityTest, MixedCreationPath_BothFieldsMatch) {
         .created_with_nd_shard_spec = false,
         .per_core_allocation = false,
         .range_lockstep_allocation = false,
+        .bottom_up_allocation = false,
     });
     EXPECT_EQ(nd_config, legacy_config);
 }
@@ -247,6 +251,7 @@ TEST_F(MemoryConfigEqualityTest, MixedCreationPath_NdFieldDiffers) {
         .created_with_nd_shard_spec = true,
         .per_core_allocation = false,
         .range_lockstep_allocation = false,
+        .bottom_up_allocation = false,
     });
     // This is not a realistic scenario, but it's here to test the equality operator.
     MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs({
@@ -257,6 +262,7 @@ TEST_F(MemoryConfigEqualityTest, MixedCreationPath_NdFieldDiffers) {
         .created_with_nd_shard_spec = false,
         .per_core_allocation = false,
         .range_lockstep_allocation = false,
+        .bottom_up_allocation = false,
     });
     EXPECT_NE(nd_config, legacy_config);
 }
@@ -270,6 +276,7 @@ TEST_F(MemoryConfigEqualityTest, MixedCreationPath_LegacyFieldDiffers) {
         .created_with_nd_shard_spec = true,
         .per_core_allocation = false,
         .range_lockstep_allocation = false,
+        .bottom_up_allocation = false,
     });
     // This is not a realistic scenario, but it's here to test the equality operator.
     MemoryConfig legacy_config = create_memory_config_with_prepopulated_shard_specs({
@@ -280,6 +287,7 @@ TEST_F(MemoryConfigEqualityTest, MixedCreationPath_LegacyFieldDiffers) {
         .created_with_nd_shard_spec = false,
         .per_core_allocation = false,
         .range_lockstep_allocation = false,
+        .bottom_up_allocation = false,
     });
     EXPECT_NE(nd_config, legacy_config);
 }

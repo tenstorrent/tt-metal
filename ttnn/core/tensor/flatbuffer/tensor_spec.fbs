@@ -104,6 +104,7 @@ table MemoryConfig {
     created_with_nd_shard_spec: bool;
     per_core_allocation: bool = false;
     range_lockstep_allocation: bool = false;
+    bottom_up_allocation: bool = false;
 }
 
 table TensorLayout {

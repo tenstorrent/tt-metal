@@ -58,6 +58,25 @@ DeviceAddr alloc(BankManager& bm, uint32_t size, AllocatorID id, bool bottom_up 
 
 void dealloc(BankManager& bm, DeviceAddr addr, AllocatorID id) { bm.deallocate_buffer(addr, id); }
 
+DeviceAddr range_alloc(
+    BankManager& bank_manager,
+    uint32_t size,
+    std::vector<AllocatorID> allocator_ids,
+    bool bottom_up = true,
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {}) {
+    return bank_manager.allocate_buffer_across_allocators(
+        size, bottom_up, allocator_ids, additional_occupied_ranges);
+}
+
+DeviceAddr range_alloc_extents(
+    BankManager& bank_manager,
+    std::vector<std::pair<AllocatorID, DeviceAddr>> allocator_extents,
+    bool bottom_up = true,
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {}) {
+    return bank_manager.allocate_buffer_across_allocators(
+        allocator_extents, bottom_up, additional_occupied_ranges);
+}
+
 constexpr AllocatorID LOCKSTEP{0};
 constexpr AllocatorID BANK0{1};
 constexpr AllocatorID BANK1{2};
@@ -140,4 +159,99 @@ TEST(PerCoreAllocation, CPU_HundredTenBanksScaling) {
     // Lockstep must start after the largest per-bank allocation (110KB)
     auto ls = bm.allocate_buffer(1024, 1024, true, grid, std::nullopt, AllocatorID{0});
     EXPECT_EQ(ls, 110u * 1024);
+}
+
+TEST(PerCoreAllocation, CPU_RangeLockstepReusesAddressAcrossDisjointBanks) {
+    auto bank_manager = make_per_core_bank_manager(1024 * 1024, 1024, 4);
+    constexpr AllocatorID bank2{3};
+
+    EXPECT_EQ(range_alloc(bank_manager, 4096, {BANK0, BANK1}), 0u);
+    EXPECT_EQ(range_alloc(bank_manager, 4096, {bank2}), 0u);
+    EXPECT_EQ(range_alloc(bank_manager, 1024, {BANK1, bank2}), 4096u);
+}
+
+TEST(PerCoreAllocation, CPU_RangeLockstepAvoidsLocalAndDefaultLockstepAllocations) {
+    auto bank_manager = make_per_core_bank_manager(1024 * 1024, 1024, 2);
+
+    EXPECT_EQ(alloc(bank_manager, 2048, LOCKSTEP), 0u);
+    EXPECT_EQ(alloc(bank_manager, 3072, BANK1), 2048u);
+    EXPECT_EQ(range_alloc(bank_manager, 1024, {BANK0, BANK1}), 5120u);
+}
+
+TEST(PerCoreAllocation, CPU_RangeLockstepHonorsAlignmentAndAdditionalRanges) {
+    auto bank_manager = make_per_core_bank_manager(1024 * 1024, 1024, 2);
+
+    const DeviceAddr address = range_alloc(
+        bank_manager,
+        2048,
+        {BANK0, BANK1},
+        /*bottom_up=*/true,
+        {{0, 3072}});
+    EXPECT_EQ(address, 3072u);
+    EXPECT_EQ(address % 1024, 0u);
+}
+
+TEST(PerCoreAllocation, CPU_RangeLockstepPlacementIsIndependentOfBankOrder) {
+    auto forward_manager = make_per_core_bank_manager(1024 * 1024, 1024, 2);
+    auto reverse_manager = make_per_core_bank_manager(1024 * 1024, 1024, 2);
+    alloc(forward_manager, 3072, BANK0);
+    alloc(reverse_manager, 3072, BANK0);
+
+    EXPECT_EQ(
+        range_alloc(forward_manager, 2048, {BANK0, BANK1}),
+        range_alloc(reverse_manager, 2048, {BANK1, BANK0}));
+}
+
+TEST(PerCoreAllocation, CPU_RangeLockstepDeallocationRestoresEverySelectedBank) {
+    auto bank_manager = make_per_core_bank_manager(1024 * 1024, 1024, 2);
+    const DeviceAddr address = range_alloc(bank_manager, 4096, {BANK0, BANK1});
+    dealloc(bank_manager, address, BANK0);
+    dealloc(bank_manager, address, BANK1);
+
+    EXPECT_EQ(range_alloc(bank_manager, 4096, {BANK0, BANK1}), address);
+}
+
+TEST(PerCoreAllocation, CPU_VariableExtentRangeLockstepReservesOnlyEachBanksRequiredBytes) {
+    constexpr DeviceAddr bank_size = 16 * 1024;
+    auto uniform_manager = make_per_core_bank_manager(bank_size, 1024, 2);
+    auto variable_manager = make_per_core_bank_manager(bank_size, 1024, 2);
+
+    auto create_fragmented_ranges = [](BankManager& bank_manager) {
+        EXPECT_EQ(alloc(bank_manager, 8 * 1024, BANK0), 0u);
+        EXPECT_EQ(alloc(bank_manager, 4 * 1024, BANK0, /*bottom_up=*/false), 12 * 1024u);
+        EXPECT_EQ(alloc(bank_manager, 8 * 1024, BANK1), 0u);
+    };
+    create_fragmented_ranges(uniform_manager);
+    create_fragmented_ranges(variable_manager);
+
+    EXPECT_ANY_THROW(range_alloc(uniform_manager, 8 * 1024, {BANK0, BANK1}));
+    EXPECT_EQ(
+        range_alloc_extents(variable_manager, {{BANK0, 4 * 1024}, {BANK1, 8 * 1024}}),
+        8 * 1024u);
+}
+
+TEST(PerCoreAllocation, CPU_VariableExtentRangeLockstepTopDownUsesLargestValidCommonAddress) {
+    auto bank_manager = make_per_core_bank_manager(16 * 1024, 1024, 2);
+
+    EXPECT_EQ(
+        range_alloc_extents(
+            bank_manager,
+            {{BANK0, 4 * 1024}, {BANK1, 8 * 1024}},
+            /*bottom_up=*/false),
+        8 * 1024u);
+}
+
+TEST(PerCoreAllocation, CPU_VariableExtentRangeLockstepKeepsAdditionalRangesPerBank) {
+    auto bank_manager = make_per_core_bank_manager(16 * 1024, 1024, 2);
+    const std::unordered_map<uint32_t, std::vector<std::pair<DeviceAddr, DeviceAddr>>> occupied_ranges_by_bank = {
+        {BANK0.get(), {{0, 8 * 1024}, {12 * 1024, 16 * 1024}}},
+        {BANK1.get(), {{0, 8 * 1024}}},
+    };
+
+    EXPECT_EQ(
+        bank_manager.allocate_buffer_across_allocators(
+            {{BANK0, 4 * 1024}, {BANK1, 8 * 1024}},
+            /*bottom_up=*/true,
+            occupied_ranges_by_bank),
+        8 * 1024u);
 }

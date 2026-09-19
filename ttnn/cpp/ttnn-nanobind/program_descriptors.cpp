@@ -31,6 +31,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -496,6 +497,19 @@ void py_module_types(nb::module_& mod) {
 
                 Used by the build cache to update sharded CB buffer pointers
                 on cache hit without rebuilding the entire descriptor.
+            )pbdoc")
+        .def(
+            "set_buffer_from_variable_extent_allocation",
+            [](tt::tt_metal::CBDescriptor& self,
+               const tt::tt_metal::experimental::range_lockstep_allocation::VariableExtentAllocation& allocation) {
+                self.buffer = allocation.backing_buffer();
+            },
+            nb::keep_alive<1, 2>(),
+            nb::arg("allocation"),
+            R"pbdoc(
+                Bind an allocation-only range-lockstep owner to this descriptor.
+
+                The descriptor core ranges and total size must fit the owner's corresponding per-core extents.
             )pbdoc")
         .def(
             "buffer_address",

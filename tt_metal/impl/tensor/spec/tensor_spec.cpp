@@ -6,6 +6,7 @@
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
+#include <tt-metalium/experimental/bottom_up_allocation/memory_config.hpp>
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/tensor_serialization_support.hpp>
 
@@ -309,6 +310,7 @@ MemoryConfig TensorSpec::populate_nd_shard_spec_from_legacy() const {
         .created_with_nd_shard_spec = mem_config.created_with_nd_shard_spec(),
         .per_core_allocation = experimental::per_core_allocation::is_per_core_allocation(mem_config),
         .range_lockstep_allocation = experimental::range_lockstep_allocation::is_range_lockstep_allocation(mem_config),
+        .bottom_up_allocation = experimental::bottom_up_allocation::is_bottom_up_allocation(mem_config),
     });
 }
 
@@ -391,6 +393,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
             .per_core_allocation = experimental::per_core_allocation::is_per_core_allocation(mem_config),
             .range_lockstep_allocation =
                 experimental::range_lockstep_allocation::is_range_lockstep_allocation(mem_config),
+            .bottom_up_allocation = experimental::bottom_up_allocation::is_bottom_up_allocation(mem_config),
         });
     }
 
@@ -420,6 +423,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
         .created_with_nd_shard_spec = mem_config.created_with_nd_shard_spec(),
         .per_core_allocation = experimental::per_core_allocation::is_per_core_allocation(mem_config),
         .range_lockstep_allocation = experimental::range_lockstep_allocation::is_range_lockstep_allocation(mem_config),
+        .bottom_up_allocation = experimental::bottom_up_allocation::is_bottom_up_allocation(mem_config),
     });
 }
 

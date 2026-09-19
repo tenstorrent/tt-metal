@@ -20,88 +20,96 @@ constexpr bool DST_ACCUM_MODE = false;
 constexpr bool APPROX = true;
 constexpr std::int32_t MATH_FIDELITY = 255;
 
+#if defined(TTLANG_RUNTIME_DFB_RECONFIGURATION)
+#define TTLANG_DFB_DESCRIPTOR_CONST static
+#else
+#define TTLANG_DFB_DESCRIPTOR_CONST constexpr
+#endif
+
 // chlkc_descriptors.h (pack data format arrays)
-constexpr unsigned char pack_src_format[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST unsigned char pack_src_format[32] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
 };
-constexpr unsigned char pack_dst_format[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST unsigned char pack_dst_format[32] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
 };
 
 // chlkc_descriptors.h (pack tile dim arrays)
-constexpr uint8_t pack_tile_num_faces[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t pack_tile_num_faces[32] = {
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
 };
-constexpr uint8_t pack_partial_face[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t pack_partial_face[32] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 };
-constexpr uint8_t pack_tile_face_r_dim[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t pack_tile_face_r_dim[32] = {
     16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
     16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
 };
-constexpr uint8_t pack_narrow_tile[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t pack_narrow_tile[32] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 };
-constexpr uint8_t pack_tile_r_dim[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t pack_tile_r_dim[32] = {
     32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
     32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
 };
-constexpr uint8_t pack_tile_c_dim[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t pack_tile_c_dim[32] = {
     32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
     32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
 };
-constexpr uint16_t pack_tile_size[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint16_t pack_tile_size[32] = {
     1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088,
     1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088,
 };
-constexpr uint8_t pack_num_faces_r_dim[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t pack_num_faces_r_dim[32] = {
     2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
 };
-constexpr uint8_t pack_num_faces_c_dim[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t pack_num_faces_c_dim[32] = {
     2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
 };
 
 // chlkc_descriptors.h (unpack data format arrays)
-constexpr std::int32_t unpack_src_format[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST std::int32_t unpack_src_format[32] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
 };
-constexpr std::int32_t unpack_dst_format[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST std::int32_t unpack_dst_format[32] = {
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
     255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
 };
 
 // chlkc_descriptors.h (unpack tile dim arrays)
-constexpr uint8_t unpack_tile_num_faces[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t unpack_tile_num_faces[32] = {
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
 };
-constexpr uint8_t unpack_partial_face[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t unpack_partial_face[32] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 };
-constexpr uint8_t unpack_tile_face_r_dim[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t unpack_tile_face_r_dim[32] = {
     16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
     16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16,
 };
-constexpr uint8_t unpack_narrow_tile[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t unpack_narrow_tile[32] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 };
-constexpr uint8_t unpack_tile_r_dim[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t unpack_tile_r_dim[32] = {
     32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
     32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
 };
-constexpr uint8_t unpack_tile_c_dim[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t unpack_tile_c_dim[32] = {
     32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
     32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32,
 };
-constexpr uint16_t unpack_tile_size[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint16_t unpack_tile_size[32] = {
     1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088,
     1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088, 1088,
 };
-constexpr uint8_t unpack_num_faces_r_dim[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t unpack_num_faces_r_dim[32] = {
     2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
 };
-constexpr uint8_t unpack_num_faces_c_dim[32] = {
+TTLANG_DFB_DESCRIPTOR_CONST uint8_t unpack_num_faces_c_dim[32] = {
     2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
 };
+
+#undef TTLANG_DFB_DESCRIPTOR_CONST

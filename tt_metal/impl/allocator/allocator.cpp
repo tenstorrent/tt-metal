@@ -28,6 +28,23 @@
 #include "impl/allocator/allocator.hpp"
 
 namespace tt::tt_metal {
+namespace {
+
+std::vector<CoreCoord> range_lockstep_cores(const Buffer& buffer) {
+    if (const auto& distribution_spec = buffer.buffer_distribution_spec(); distribution_spec.has_value()) {
+        return distribution_spec->cores_with_data();
+    }
+    if (buffer.has_shard_spec()) {
+        const auto& shard_spec = buffer.shard_spec().tensor_shard_spec;
+        return corerange_to_cores(
+            shard_spec.grid,
+            std::nullopt,
+            shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    }
+    return {};
+}
+
+}  // namespace
 
 AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
     config_(std::make_unique<AllocatorConfig>(alloc_config)),
@@ -171,14 +188,24 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             // PrefetcherPipe / persistent L1 sit outside BankManager. Per-core placement
             // must skip this core's persistent occupancy; lockstep uses the flattened
             // all-cores list below because it picks one address for every bank.
-            addrs[core] = l1_manager_->allocate_buffer(
-                alloc_size,
-                page_size,
-                bottom_up,
-                config_->compute_grid,
-                /*num_shards=*/1,
-                AllocatorID{bank_id + 1},
-                persistent_l1_.occupied_ranges(core));
+            try {
+                addrs[core] = l1_manager_->allocate_buffer(
+                    alloc_size,
+                    page_size,
+                    bottom_up,
+                    config_->compute_grid,
+                    /*num_shards=*/1,
+                    AllocatorID{bank_id + 1},
+                    persistent_l1_.occupied_ranges(core));
+            } catch (...) {
+                log_error(
+                    tt::LogMetal,
+                    "Per-core L1 allocation failed for logical core {}, bank {}, allocator ID {}",
+                    core.str(),
+                    bank_id,
+                    bank_id + 1);
+                throw;
+            }
         }
         buffer->impl().set_per_core_addresses(std::move(addrs));
         allocated_buffers_.insert(buffer);
@@ -201,20 +228,12 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             // buffer may instead be scanned against just the cores it occupies.
             //
             // Either way the scan spans devices: a mesh buffer holds the same address on all of them.
-            std::vector<CoreCoord> cores_to_scan;
             const bool scope_to_own_cores =
                 experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer);
-            // A tensor carries both specs, so the order matters: the distribution spec wins, as it
-            // does in Buffer::num_cores(). Its cores_with_data() is the set that actually gets an
-            // allocation, which the shard grid overstates when the data does not fill it.
-            if (const auto& distribution_spec = buffer->buffer_distribution_spec();
-                scope_to_own_cores && distribution_spec.has_value()) {
-                cores_to_scan = distribution_spec->cores_with_data();
-            } else if (scope_to_own_cores && buffer->has_shard_spec()) {
-                const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
-                bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-                cores_to_scan = corerange_to_cores(grid, std::nullopt, row_major);
-            }
+            // A tensor carries both specs, so the distribution spec takes precedence, matching
+            // Buffer::num_cores(). Its cores_with_data() excludes grid entries with no allocation.
+            const std::vector<CoreCoord> cores_to_scan =
+                scope_to_own_cores ? range_lockstep_cores(*buffer) : std::vector<CoreCoord>{};
 
             // Scanning nothing is not a safe fallback -- it would place the buffer without avoiding
             // anything. set_range_lockstep_allocation() requires one of the two specs and Buffer
@@ -225,12 +244,27 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
                 "range lockstep resolved to zero cores to scan; the buffer must carry a shard spec or a "
                 "distribution spec naming the cores it occupies");
 
-            // PrefetcherPipe / persistent L1 regions sit outside BankManager, so lockstep must avoid
-            // them too. They stay unscoped under range lockstep: they are reservations this allocator
-            // cannot attribute to a core, so there is no smaller set to narrow them to.
-            std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges = persistent_l1_.occupied_ranges();
+            using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+
+            // PrefetcherPipe / persistent L1 regions sit outside BankManager. Default lockstep must
+            // avoid every reservation; range lockstep retains the core associated with each range.
+            std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_ranges;
+            std::unordered_map<uint32_t, std::vector<std::pair<DeviceAddr, DeviceAddr>>>
+                additional_ranges_by_allocator;
+            auto append_ranges_for_core = [&](const CoreCoord& core, const auto& ranges) {
+                if (const auto* bank_ids = this->find_bank_ids(BufferType::L1, core)) {
+                    auto& destination = additional_ranges_by_allocator[bank_ids->front() + 1];
+                    destination.insert(destination.end(), ranges.begin(), ranges.end());
+                }
+            };
+            if (scope_to_own_cores) {
+                for (const auto& core : cores_to_scan) {
+                    append_ranges_for_core(core, persistent_l1_.occupied_ranges(core));
+                }
+            } else {
+                additional_ranges = persistent_l1_.occupied_ranges();
+            }
             if (!hybrid_device_allocators_.empty()) {
-                using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
                 auto gather_from = [&](const AllocatorImpl* dev_alloc, uint32_t bank_id) {
                     auto ranges = dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_id + 1});
                     additional_ranges.insert(additional_ranges.end(), ranges.begin(), ranges.end());
@@ -248,48 +282,82 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
                         continue;
                     }
                     for (const auto& core : cores_to_scan) {
-                        // Resolve the core in this device's own mapping. L1 bank ids are handed out
-                        // per device, in worker-grid order over that device's ComputeAndStore cores,
-                        // so a core's bank id here is not necessarily its bank id there once the
-                        // compute/dispatch split or the harvesting differs across the mesh.
-                        //
-                        // A core with no bank contributes nothing: a service core claimed by fast
-                        // dispatch is a legal shard core with real L1, but the allocator gives it no
-                        // bank, so it holds no per-core ranges to avoid.
                         if (const auto* bank_ids = dev_alloc->find_bank_ids(BufferType::L1, core)) {
-                            gather_from(dev_alloc, bank_ids->front());
+                            append_ranges_for_core(
+                                core, dev_alloc->get_l1_allocated_ranges(AllocatorID{bank_ids->front() + 1}));
                         }
                     }
                 }
             }
-            // The scan above only covers device allocators reachable from a mesh allocator. This
-            // allocator's own per-core allocators are subtracted separately, through the dependency
-            // graph, and that path is the only one a direct Buffer::create takes. Narrow it the same
-            // way, or the same request would be range lockstep through a mesh and full lockstep
-            // through a device.
-            std::optional<std::unordered_set<uint32_t>> scoped_dependent_allocators;
+            std::vector<BankManager::AllocatorDependencies::AllocatorID> selected_allocators;
             if (scope_to_own_cores) {
-                scoped_dependent_allocators.emplace();
                 for (const auto& core : cores_to_scan) {
                     if (const auto* bank_ids = this->find_bank_ids(BufferType::L1, core)) {
-                        scoped_dependent_allocators->insert(bank_ids->front() + 1);
+                        selected_allocators.emplace_back(bank_ids->front() + 1);
                     }
                 }
+                std::sort(
+                    selected_allocators.begin(), selected_allocators.end(), [](const auto lhs, const auto rhs) {
+                        return lhs.get() < rhs.get();
+                    });
+                selected_allocators.erase(
+                    std::unique(
+                        selected_allocators.begin(), selected_allocators.end(), [](const auto lhs, const auto rhs) {
+                            return lhs.get() == rhs.get();
+                        }),
+                    selected_allocators.end());
+                TT_FATAL(!selected_allocators.empty(), "range lockstep resolved to no allocatable L1 banks");
             }
-            // The loop above reaches only local devices; co-owning ranks' per-bank reservations
-            // arrive here. compute_available_addresses() sorts and coalesces the combined list,
-            // so unsorted and overlapping ranges are fine.
-            additional_ranges.insert(
-                additional_ranges.end(), hybrid_remote_occupied_ranges_.begin(), hybrid_remote_occupied_ranges_.end());
-            address = l1_manager_->allocate_buffer(
-                size,
-                page_size,
-                bottom_up,
-                config_->compute_grid,
-                num_cores,
-                BankManager::AllocatorDependencies::AllocatorID{0},
-                additional_ranges,
-                scoped_dependent_allocators);
+            if (scope_to_own_cores) {
+                for (const auto& [core, ranges] : hybrid_remote_occupied_ranges_by_core_) {
+                    append_ranges_for_core(core, ranges);
+                }
+                const auto& core_extents =
+                    experimental::range_lockstep_allocation::core_allocation_extents(*buffer);
+                std::vector<std::pair<AllocatorID, DeviceAddr>> allocator_extents;
+                allocator_extents.reserve(selected_allocators.size());
+                if (core_extents.empty()) {
+                    for (const auto allocator_id : selected_allocators) {
+                        allocator_extents.emplace_back(allocator_id, buffer->aligned_size_per_bank());
+                    }
+                } else {
+                    TT_FATAL(
+                        core_extents.size() == cores_to_scan.size(),
+                        "Variable-extent range-lockstep allocation has {} extents for {} selected cores",
+                        core_extents.size(),
+                        cores_to_scan.size());
+                    for (const auto& core : cores_to_scan) {
+                        const auto extent = core_extents.find(core);
+                        TT_FATAL(
+                            extent != core_extents.end(),
+                            "Variable-extent range-lockstep allocation has no extent for selected core {}",
+                            core.str());
+                        if (const auto* bank_ids = this->find_bank_ids(BufferType::L1, core)) {
+                            allocator_extents.emplace_back(
+                                BankManager::AllocatorDependencies::AllocatorID{bank_ids->front() + 1},
+                                extent->second);
+                        }
+                    }
+                    TT_FATAL(
+                        allocator_extents.size() == selected_allocators.size(),
+                        "Variable-extent range-lockstep allocation resolved inconsistent selected banks");
+                }
+                address = l1_manager_->allocate_buffer_across_allocators(
+                    allocator_extents, bottom_up, additional_ranges_by_allocator);
+            } else {
+                additional_ranges.insert(
+                    additional_ranges.end(),
+                    hybrid_remote_occupied_ranges_.begin(),
+                    hybrid_remote_occupied_ranges_.end());
+                address = l1_manager_->allocate_buffer(
+                    size,
+                    page_size,
+                    bottom_up,
+                    config_->compute_grid,
+                    num_cores,
+                    BankManager::AllocatorDependencies::AllocatorID{0},
+                    additional_ranges);
+            }
             break;
         }
         case BufferType::L1_SMALL: {
@@ -324,6 +392,18 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
         for (const auto& [core, addr] : buffer->impl().per_core_addresses_) {
             auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(core).at(0);
             l1_manager_->deallocate_buffer(addr, AllocatorID{bank_id + 1});
+        }
+        allocated_buffers_.erase(buffer);
+        return;
+    }
+
+    if (experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer)) {
+        TT_FATAL(buffer_type == BufferType::L1, "range_lockstep_allocation is only supported for L1 buffers");
+        using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+        for (const auto& core : range_lockstep_cores(*buffer)) {
+            if (const auto* bank_ids = find_bank_ids(BufferType::L1, core)) {
+                l1_manager_->deallocate_buffer(address, AllocatorID{bank_ids->front() + 1});
+            }
         }
         allocated_buffers_.erase(buffer);
         return;
@@ -364,9 +444,16 @@ void AllocatorImpl::set_hybrid_remote_occupied_ranges(std::vector<std::pair<Devi
     hybrid_remote_occupied_ranges_ = std::move(ranges);
 }
 
+void AllocatorImpl::set_hybrid_remote_occupied_ranges_by_core(OccupiedRangesByCore ranges_by_core) {
+    TT_FATAL(hybrid_allocation_in_progress_, "Remote per-core ranges require an active HYBRID allocation span");
+    std::lock_guard<std::mutex> lock(mutex_);
+    hybrid_remote_occupied_ranges_by_core_ = std::move(ranges_by_core);
+}
+
 void AllocatorImpl::clear_hybrid_remote_occupied_ranges() {
     std::lock_guard<std::mutex> lock(mutex_);
     hybrid_remote_occupied_ranges_.clear();
+    hybrid_remote_occupied_ranges_by_core_.clear();
 }
 
 bool AllocatorImpl::try_begin_hybrid_allocation(const std::vector<AllocatorImpl*>& device_allocators) {
@@ -401,6 +488,39 @@ void AllocatorImpl::unmirror_lockstep_allocation(DeviceAddr address) {
     std::lock_guard<std::mutex> lock(mutex_);
     using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
     l1_manager_->mark_deallocated(AllocatorID{0}, address);
+}
+
+void AllocatorImpl::mirror_range_lockstep_allocation(
+    DeviceAddr address, DeviceAddr size, const std::vector<CoreCoord>& cores) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    for (const auto& core : cores) {
+        if (const auto* bank_ids = find_bank_ids(BufferType::L1, core)) {
+            l1_manager_->mark_allocated(AllocatorID{bank_ids->front() + 1}, address, size);
+        }
+    }
+}
+
+void AllocatorImpl::mirror_range_lockstep_allocation(
+    DeviceAddr address, const std::unordered_map<CoreCoord, DeviceAddr>& core_extents) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    for (const auto& [core, extent] : core_extents) {
+        if (const auto* bank_ids = find_bank_ids(BufferType::L1, core)) {
+            l1_manager_->mark_allocated(AllocatorID{bank_ids->front() + 1}, address, extent);
+        }
+    }
+}
+
+void AllocatorImpl::unmirror_range_lockstep_allocation(
+    DeviceAddr address, const std::vector<CoreCoord>& cores) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
+    for (const auto& core : cores) {
+        if (const auto* bank_ids = find_bank_ids(BufferType::L1, core)) {
+            l1_manager_->mark_deallocated(AllocatorID{bank_ids->front() + 1}, address);
+        }
+    }
 }
 
 std::unordered_set<Buffer*> AllocatorImpl::get_allocated_buffers() const {
