@@ -195,7 +195,7 @@ inline void get_face_data_range(
  * @note This function is invoked for subsequent tiles in a horizontal pass over the input tensor.
  *       Each call in this pass updates the max_values, arg_max arrays according to the values
  *       found in the tile.
- *       The rows_processed output parameter allows the caller to validate the the number of processed
+ *       The rows_processed output parameter allows the caller to validate the number of processed
  *       argmax values for each input tensor, as well as the number of final argmax values obtained
  *       after each horizontal pass.
  */
