@@ -73,6 +73,9 @@ RECIPES = {
     "full_pack_rsoff": {"pack": {5: 2, 6: 4}, "resamplers": "off"},
     # the same point built through the constructor path the pipeline uses
     "rsoff_built": {"pack": {5: 2, 6: 4}, "build_kwargs": {"resampler_split_mode": "off"}},
+    # the fused anti-alias SnakeBeta kernel (layers/audio_aa_snake.py) in place of every resampler/snake chain
+    "fused_pack": {"pack": {5: 2, 6: 4}, "build_kwargs": {"act_mode": "fused"}},
+    "kernel_fused_pack": {"all": "kernel", "pack": {5: 2, 6: 4}, "build_kwargs": {"act_mode": "fused"}},
 }
 RESAMPLERS_KEY = "resamplers"
 BUILD_KWARGS_KEY = "build_kwargs"  # extra constructor kwargs
@@ -179,6 +182,8 @@ def _best(fn, mesh_device, n=3):
 FIDELITY_FLOORS = {
     "full_pack": (66.0, 0.006),
     "kernel_pack": (66.0, 0.006),
+    "fused_pack": (66.0, 0.006),
+    "kernel_fused_pack": (66.0, 0.006),
     "full": (66.0, 0.006),
     "off_pack": (52.0, 0.020),
 }

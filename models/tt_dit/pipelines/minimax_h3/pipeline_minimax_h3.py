@@ -158,6 +158,9 @@ _AUDIO_RESAMPLER_SPLIT_ENV = "MINIMAX_H3_AUDIO_RESAMPLER_SPLIT"
 # Conv split mode of the audio decoder when the caller passes none ("kernel" = the in-kernel fp32 operand split,
 # same operands and fidelity as "full", 0.2 s faster on the 15 s clip).
 _AUDIO_SPLIT_ENV = "MINIMAX_H3_AUDIO_SPLIT"
+# Anti-alias SnakeBeta activations of the vocoder: "chain" (default) runs the resampler/snake op chain, "fused"
+# one generic_op kernel per activation (layers/audio_aa_snake.py), bit-identical to the chain.
+_AUDIO_ACT_ENV = "MINIMAX_H3_AUDIO_ACT"
 # Replay a captured device graph for the audio vocoder instead of dispatching it op by op. The vocoder is the one
 # stage that is host-bound, so this is its dominant lever; it needs a trace_region_size on the mesh.
 _AUDIO_TRACE_ENV = "MINIMAX_H3_AUDIO_TRACE"
@@ -177,6 +180,13 @@ def _audio_resampler_split_mode() -> str | None:
         return None
     if raw not in ("off", "weight", "act", "full"):
         raise ValueError(f"{_AUDIO_RESAMPLER_SPLIT_ENV}={raw!r} must be same, off, weight, act or full")
+    return raw
+
+
+def _audio_act_mode() -> str:
+    raw = os.environ.get(_AUDIO_ACT_ENV, "chain").strip().lower() or "chain"
+    if raw not in ("chain", "fused"):
+        raise ValueError(f"{_AUDIO_ACT_ENV}={raw!r} must be chain or fused")
     return raw
 
 
@@ -1537,13 +1547,14 @@ class MiniMaxH3Pipeline:
                 split_mode=self.audio_split_mode,
                 pack_bands=_audio_pack_bands(),
                 resampler_split_mode=_audio_resampler_split_mode(),
+                act_mode=_audio_act_mode(),
                 profile=os.environ.get(_AUDIO_PHASES_ENV, "0").strip() not in ("", "0", "false", "no"),
             )
             logger.info(
                 f"Audio trace: {'on' if self.audio_trace else 'off'} ({_AUDIO_TRACE_ENV}); "
                 f"conv split: {decoder.split_mode} ({_AUDIO_SPLIT_ENV}); packing: {decoder.pack_bands or 'off'} "
                 f"({_AUDIO_PACK_ENV}); resampler split {decoder.resampler_split_mode or 'same'} "
-                f"({_AUDIO_RESAMPLER_SPLIT_ENV})"
+                f"({_AUDIO_RESAMPLER_SPLIT_ENV}); activations: {decoder.act_mode} ({_AUDIO_ACT_ENV})"
             )
 
             def read_state() -> dict[str, torch.Tensor]:
@@ -1565,7 +1576,11 @@ class MiniMaxH3Pipeline:
                 # the cache key -- read off the module so the key cannot drift from what was built.
                 subfolder="audio_decoder"
                 + weights_variant(
-                    decoder.split_mode, decoder.max_c_in_block, decoder.pack_bands, decoder.resampler_split_mode
+                    decoder.split_mode,
+                    decoder.max_c_in_block,
+                    decoder.pack_bands,
+                    decoder.resampler_split_mode,
+                    act_mode=decoder.act_mode,
                 ),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
