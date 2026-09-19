@@ -6,13 +6,30 @@ from __future__ import annotations
 
 import os
 import shutil
-from typing import TYPE_CHECKING
 
+import pytest
 import torch
 from loguru import logger
 
-if TYPE_CHECKING:
-    import pytest
+_DEFAULT_PROMPT_IMAGE = "./prompt_image.png"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """tt_dit options. Registered whenever the run's target path is under this directory."""
+    parser.addoption(
+        "--prompt-image",
+        action="store",
+        default=None,
+        metavar="PATH_OR_URL",
+        help="Conditioning image for image-to-video tests: a local path or an http(s) URL. "
+        f"Falls back to $WAN_I2V_IMAGE, then {_DEFAULT_PROMPT_IMAGE}.",
+    )
+
+
+@pytest.fixture
+def prompt_image(request: pytest.FixtureRequest) -> str:
+    """Conditioning image for I2V: --prompt-image, else $WAN_I2V_IMAGE, else ./prompt_image.png."""
+    return request.config.getoption("--prompt-image") or os.environ.get("WAN_I2V_IMAGE") or _DEFAULT_PROMPT_IMAGE
 
 
 def pytest_configure(config: pytest.Config) -> None:
