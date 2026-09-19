@@ -914,8 +914,8 @@ class MiniMaxH3Vae:
     def _unpatchify(self, decoded: ttnn.Tensor, num_frames: int, height: int, width: int) -> ttnn.Tensor:
         """Tokens (TILE, blend dtype) to `(1, C, T*pt, H*p, W*p)` ROW_MAJOR pixels.
 
-        MINIMAX_H3_VAE_UNPATCHIFY: "gather" runs one page-remap program straight off the fp32 tiles
-        (unpatchify_minimax_h3.py; no untilize, slice or rank-8 permute); "permute" (default) is the
+        MINIMAX_H3_VAE_UNPATCHIFY: "gather" (default) runs one page-remap program straight off the fp32 tiles
+        (unpatchify_minimax_h3.py; no untilize, slice or rank-8 permute); "permute" is the
         to_layout + unpatchify_device chain. Both are bit-identical.
         """
         from .stitch_device_minimax_h3 import unpatchify_device
@@ -929,7 +929,7 @@ class MiniMaxH3Vae:
             patch_size=self.config.spatial_compression_ratio,
             patch_size_t=self.config.temporal_compression_ratio,
         )
-        mode = os.environ.get("MINIMAX_H3_VAE_UNPATCHIFY", "permute")
+        mode = os.environ.get("MINIMAX_H3_VAE_UNPATCHIFY", "gather")
         if mode not in ("gather", "permute"):
             raise ValueError(f"MINIMAX_H3_VAE_UNPATCHIFY must be 'gather' or 'permute', got {mode!r}")
         if mode == "gather" and decoded.dtype == ttnn.float32 and width == 16:

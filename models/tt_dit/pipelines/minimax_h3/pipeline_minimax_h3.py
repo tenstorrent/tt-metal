@@ -158,7 +158,7 @@ _AUDIO_RESAMPLER_SPLIT_ENV = "MINIMAX_H3_AUDIO_RESAMPLER_SPLIT"
 # Conv split mode of the audio decoder when the caller passes none ("kernel" = the in-kernel fp32 operand split,
 # same operands and fidelity as "full", 0.2 s faster on the 15 s clip).
 _AUDIO_SPLIT_ENV = "MINIMAX_H3_AUDIO_SPLIT"
-# Anti-alias SnakeBeta activations of the vocoder: "chain" (default) runs the resampler/snake op chain, "fused"
+# Anti-alias SnakeBeta activations of the vocoder: "chain" runs the resampler/snake op chain, "fused" (default)
 # one generic_op kernel per activation (layers/audio_aa_snake.py), bit-identical to the chain.
 _AUDIO_ACT_ENV = "MINIMAX_H3_AUDIO_ACT"
 # Replay a captured device graph for the audio vocoder instead of dispatching it op by op. The vocoder is the one
@@ -172,8 +172,8 @@ _AUDIO_PHASES_ENV = "MINIMAX_H3_AUDIO_PHASES"
 
 
 def _audio_trace_enabled() -> bool:
-    """Explicit kwarg wins; else MINIMAX_H3_AUDIO_TRACE; else off."""
-    return os.environ.get(_AUDIO_TRACE_ENV, "0").strip().lower() in ("1", "true", "yes", "on")
+    """Explicit kwarg wins; else MINIMAX_H3_AUDIO_TRACE; else on (the vocoder replays a captured graph: 0.5 -> 0.3 s)."""
+    return os.environ.get(_AUDIO_TRACE_ENV, "1").strip().lower() in ("1", "true", "yes", "on")
 def _audio_resampler_split_mode() -> str | None:
     raw = os.environ.get(_AUDIO_RESAMPLER_SPLIT_ENV, "same").strip()
     if raw in ("", "same"):
@@ -184,19 +184,19 @@ def _audio_resampler_split_mode() -> str | None:
 
 
 def _audio_act_mode() -> str:
-    raw = os.environ.get(_AUDIO_ACT_ENV, "chain").strip().lower() or "chain"
+    raw = os.environ.get(_AUDIO_ACT_ENV, "fused").strip().lower() or "fused"
     if raw not in ("chain", "fused"):
         raise ValueError(f"{_AUDIO_ACT_ENV}={raw!r} must be chain or fused")
     return raw
 
 
 # "1": one stereo channel per mesh row (the axis the T-shard does not use); every vocoder op then runs one batch item
-# per device instead of the replicated pair. Bit-identical per channel. Off until the 15 s A/B.
+# per device instead of the replicated pair. Bit-identical per channel; measured 0.5 -> 0.4 s eager, default on.
 _AUDIO_BSHARD_ENV = "MINIMAX_H3_AUDIO_BSHARD"
 
 
 def _audio_batch_shard() -> bool:
-    raw = os.environ.get(_AUDIO_BSHARD_ENV, "0").strip().lower()
+    raw = os.environ.get(_AUDIO_BSHARD_ENV, "1").strip().lower()
     if raw not in ("", "0", "1", "false", "true", "no", "yes"):
         raise ValueError(f"{_AUDIO_BSHARD_ENV}={raw!r} must be 0 or 1")
     return raw in ("1", "true", "yes")
