@@ -22,8 +22,6 @@ import os
 from pathlib import Path
 from typing import Callable, Optional
 
-from loguru import logger
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
@@ -105,10 +103,8 @@ class TtKimiK3Transformer(LightweightModule):
         build_tail: bool = True,
         # Model-level knobs the shared runtime passes to every transformer. Named here rather than
         # left to `**block_kwargs`, which would forward them to `TtKimiK3Block` and raise.
-        lm_head_is_column_parallel: bool = False,
         padding_side: str = "right",
         sparse_kv_cache_format=None,
-        tp_shard_kv: bool = False,
         **block_kwargs,
     ):
         super().__init__()
@@ -119,12 +115,6 @@ class TtKimiK3Transformer(LightweightModule):
             raise ValueError(
                 f"Kimi-K3 uses a dense MLA KV cache; got sparse_kv_cache_format={sparse_kv_cache_format!r}"
             )
-        # Same reason, and the same hazard: `_build_model` passes this to every transformer, so
-        # leaving it unnamed forwards it to `TtKimiK3Block` and raises on the first layer. Kimi-K3
-        # does not opt into `supports_tp_shard_kv`, so the runner already refuses a True here; this
-        # keeps a direct construction honest too.
-        if tp_shard_kv:
-            raise ValueError("Kimi-K3 does not support TP-sharded KV; its allocators are TP-replicated")
         # One number, whichever name the caller used. `slot_num` and `num_users` are the same
         # quantity and disagreeing on it is not a preference, it is a broken model: MLA would size
         # its KV slots one way and KDA its carries another, and the mismatch only surfaces on the
@@ -133,7 +123,6 @@ class TtKimiK3Transformer(LightweightModule):
             raise ValueError(f"slot_num={slot_num} and num_users={num_users} are the same quantity and must agree")
         cache_slots = max(slot_num, num_users if num_users is not None else 1)
         self.num_users = cache_slots
-        self.lm_head_is_column_parallel = lm_head_is_column_parallel
         self.padding_side = padding_side
         self.mesh_device = mesh_device
         # Resolve once, here, rather than letting `None` reach a collective. The MoE's

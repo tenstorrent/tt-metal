@@ -94,8 +94,8 @@ class KimiK3LayerSchedule:
         `kv_only_last_layer` builds the final block as attention-plus-KV-write only, to save the FFN
         on a chunk whose output nobody reads. On K3 that only makes sense if the layer writes KV at
         all: asking a KDA layer to be kv_only produces a block that computes a recurrence, discards
-        it, and writes nothing — pure cost. `PREFILL_KV_ONLY_LAST_LAYER` defaults to on in serving,
-        so this is a real configuration, not a hypothetical.
+        it, and writes nothing -- pure cost. Since #55796 the runner sets it unconditionally on the
+        last rank, so this is the serving configuration, not a hypothetical.
         """
         if self.num_layers and not self.local_is_mla(self.num_layers - 1):
             raise ValueError(
