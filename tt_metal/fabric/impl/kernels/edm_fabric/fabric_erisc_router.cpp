@@ -2694,7 +2694,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         }
     } else {
         // We are erisc1, a purely subordinate erisc. We never do anything specific to the state machine so we
-        // immediately jump into the main loop. Any time the the master erisc is not in the run state (e.g. it
+        // immediately jump into the main loop. Any time the master erisc is not in the run state (e.g. it
         // is paused, draining, retraining, etc.), we will enter a busy wait loop in the main run loop
         while (!got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
             execute_main_loop();
@@ -3553,7 +3553,7 @@ void kernel_main() {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         // This barrier is here just in case the initialization process of any of the sender/receiver channel
         // implementations require any assumptions about channel contents or anything similar. Without it there
-        // is possibility of a race. The race would be where the the risc core responsible for Ethernet level handshake
+        // is possibility of a race. The race would be where the risc core responsible for Ethernet level handshake
         // completes before the other risc finishes setup of channel/credit datastructures. If that happened, then
         // it would be possible for the other (remote) Ethernet core to start sending packets/credits to our core before
         // all of our cores are done setup, leading to potentially undefined behavior.
