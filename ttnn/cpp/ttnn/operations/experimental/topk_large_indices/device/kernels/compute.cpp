@@ -216,7 +216,8 @@ FORCE_INLINE void reduce_segmented_row(
 // Tree merge round: the child's unfused [values, indices] survivor lands as raw FP32 tiles and is
 // copied next to our own survivor, then folded in with the same unfused merge the bodies use.
 template <uint32_t K>
-FORCE_INLINE void merge_landed_survivor(CircularBuffer& landing, uint32_t survivor_slot, bool final_ascending) {
+FORCE_INLINE void merge_landed_survivor(
+    CircularBuffer& landing, uint32_t input_cb, uint32_t survivor_slot, bool final_ascending) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     constexpr uint32_t survivor_tiles = 2 * tiles_per_sequence;
     const uint32_t landing_cb = landing.get_cb_id();
@@ -229,6 +230,8 @@ FORCE_INLINE void merge_landed_survivor(CircularBuffer& landing, uint32_t surviv
         copy_tile(landing_cb, tile, incoming_slot + tile);
     }
     landing.pop_front(survivor_tiles);
+    // The integer landing format switched the FPU to int math; the rebuild transposes need the float path.
+    reconfig_data_format_srca(input_cb);
 
     topk_xl_init<K, false>();
     topk_xl_merge<K, false>(survivor_slot);
@@ -316,7 +319,7 @@ void kernel_main() {
         }
 
         for (uint32_t round = 0; round < num_recv_rounds; ++round) {
-            merge_landed_survivor<K>(landing, final_survivor, sends_survivor && round + 1 == num_recv_rounds);
+            merge_landed_survivor<K>(landing, input_cb, final_survivor, sends_survivor && round + 1 == num_recv_rounds);
         }
 
         if (sends_survivor) {
