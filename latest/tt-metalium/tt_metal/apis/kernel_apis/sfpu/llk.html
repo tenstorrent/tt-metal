@@ -462,10 +462,28 @@ format, but possibly with a restricted range. The width of this type
 depends on the target architecture. On Wormhole, Blackhole &amp; Quasar this is
 a vector of 32 32-bit values. Users should be aware that vector length
 may change with future architectures.</p>
+<p>Floating point operations are not IEEE conformant, due to hardware
+restrictions. The following does not claim to be a complete list of
+differences.</p>
+<blockquote>
+<div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">-0.0</span></code> and <code class="docutils literal notranslate"><span class="pre">+0.0</span></code> are different.</p></li>
+<li><p>Comparisions involving NaNs do not behave as IEEE specifies.</p></li>
+<li><p>Conversions of NaNs to non-floating point type produce an
+unspecified value.</p></li>
+<li><p>Other operations on NaNs produce a NaN result of unspecified sign.</p></li>
+<li><p>Some rounding is towards nearest, with ties rounding to the larger
+magnitude result.</p></li>
+</ul>
+</div>
+</blockquote>
+<p>Comparison behavior is described in more detail below.</p>
 <section id="user-visible-constants">
 <h4>User Visible Constants<a class="headerlink" href="#user-visible-constants" title="Permalink to this heading"></a>
 </h4>
-<p>Constant registers are implemented as objects which can be referenced wherever a vector can be used. On Wormhole and Blackhole the following variables are defined:</p>
+<p>Constant registers are implemented as objects which can be referenced
+wherever a vector can be used. The following variables are defined:</p>
 <blockquote>
 <div>
 <ul class="simple">
@@ -473,13 +491,10 @@ may change with future architectures.</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">vConstFloatPrgm0</span></code>, <code class="docutils literal notranslate"><span class="pre">vConstIntPrgm0</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">vConstFloatPrgm1</span></code>, <code class="docutils literal notranslate"><span class="pre">vConstIntPrgm1</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">vConstFloatPrgm2</span></code>, <code class="docutils literal notranslate"><span class="pre">vConstIntPrgm2</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">vConstFloatPrgm3</span></code>, <code class="docutils literal notranslate"><span class="pre">vConstIntPrgm3</span></code> Quasar only</p></li>
 </ul>
 </div>
 </blockquote>
-<p>Note: previously the vector constants <code class="docutils literal notranslate"><span class="pre">1.0f</span></code>, <code class="docutils literal notranslate"><span class="pre">0.0f</span></code>, <code class="docutils literal notranslate"><span class="pre">-1.0f</span></code>
-and <code class="docutils literal notranslate"><span class="pre">0.8373f</span></code> were also available as named constants. Just use the
-floating literals (possibly converted to <code class="docutils literal notranslate"><span class="pre">vFloat</span></code>), the compiler
-knows what to do.</p>
 </section>
 <section id="user-visible-objects">
 <h4>User Visible Objects<a class="headerlink" href="#user-visible-objects" title="Permalink to this heading"></a>
