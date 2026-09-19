@@ -34,8 +34,9 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(20) == 1;
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(21);
     constexpr uint32_t k_partial_col = get_compile_time_arg_val(22);
+    constexpr uint32_t n_partial_col = get_compile_time_arg_val(23);
 
-    constexpr auto out_args = TensorAccessorArgs<23>();
+    constexpr auto out_args = TensorAccessorArgs<24>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     uint32_t argidx = 0;
@@ -70,9 +71,10 @@ void kernel_main() {
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
-    // Streaming: one palette [neginf, joint tail partial tile] stays fronted; compute narrows the padded tiles.
+    // Streaming: one palette [neginf, spatial partial tile, joint tail partial tile] stays fronted; compute
+    // narrows the padded tiles.
     if constexpr (use_streaming_compute && use_joint_mask) {
-        generate_lightweight_mask_tiles<k_partial_col, 0u, cb_mask_in, false, 0u>(noc);
+        generate_lightweight_mask_tiles<n_partial_col, k_partial_col, cb_mask_in, false, 0u>(noc);
     }
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
