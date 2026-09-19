@@ -87,9 +87,9 @@ def test_kv_only_last_layer_is_rejected_at_depths_ending_on_kda(num_layers, expe
     """The shallow bring-up depths end on a KDA layer, and must say so rather than build.
 
     1 ends on layer 0 and 5 ends on layer 4, both KDA. A kv_only block there computes a full
-    recurrence, discards it, and writes no KV — pure cost with no output. `PREFILL_KV_ONLY_LAST_LAYER`
-    defaults to on in serving, so a shallow K3 run has to turn it off explicitly rather than
-    inherit it.
+    recurrence, discards it, and writes no KV -- pure cost with no output. Since #55796 the runner
+    sets kv_only_last_layer unconditionally on the last rank, so a shallow K3 run has to pass it
+    False explicitly rather than inherit it.
     """
     with expect_error(ValueError, "is KDA"):
         KimiK3LayerSchedule.build(KimiK3Config, 0, num_layers).validate_kv_only_last_layer()
