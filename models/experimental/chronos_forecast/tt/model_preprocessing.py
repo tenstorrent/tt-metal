@@ -5,8 +5,9 @@
 
 Step 0: build history V and future W, flatten variates onto the model batch axis.
 Categorical covariates are encoded next (ordinal, or per-item target encoding when
-there is a single target). This file does not import Amazon Chronos, and it does
-not run InstanceNorm / Patch / ResidualBlock.
+there is a single target). InstanceNorm then standardizes each row along time
+(optional arcsinh). This file does not import Amazon Chronos, and it does not run
+Patch / ResidualBlock.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ class Chronos2PackedInputs:
     future_covariates: torch.Tensor
     group_ids: torch.Tensor
     target_idx_ranges: list[tuple[int, int]]
+    loc_scale: tuple[torch.Tensor, torch.Tensor] | None = None
 
 
 def preprocess_model_parameters(state_dict, device):
@@ -50,6 +52,9 @@ def prepare_chronos2_inputs(
     past_covariates: ArrayLike | Sequence[ArrayLike] | None = None,
     future_covariates: ArrayLike | Sequence[ArrayLike] | None = None,
     use_target_encoding: bool = True,
+    apply_instance_norm: bool = False,
+    use_arcsinh: bool = False,
+    instance_norm_eps: float = 1e-5,
 ) -> Chronos2PackedInputs:
     """Pack targets and covariates into V/W model tensors.
 
@@ -73,6 +78,14 @@ def prepare_chronos2_inputs(
     use_target_encoding
         If True and each series has one target, categorical columns use per-item
         smoothed target means. Multivariate targets fall back to ordinal codes.
+    apply_instance_norm
+        If True, standardize each packed row along time (Amazon InstanceNorm).
+        Future rows reuse the context loc/scale. Off by default so packing can
+        be checked against Amazon preprocess, which does not normalize.
+    use_arcsinh
+        If True, apply ``arcsinh`` after standardization.
+    instance_norm_eps
+        Replacement scale when a row has zero variance.
     """
     target_is_batch = _is_nested_series_list(target)
     targets = _as_series_list(target, name="target")
@@ -138,11 +151,79 @@ def prepare_chronos2_inputs(
         target_idx_ranges.append((row_cursor, row_cursor + n_targets))
         row_cursor += n_rows
 
-    return Chronos2PackedInputs(
+    packed = Chronos2PackedInputs(
         context=_left_pad_and_cat_2d(context_parts),
         future_covariates=torch.cat(future_parts, dim=0),
         group_ids=torch.cat(group_ids_parts, dim=0),
         target_idx_ranges=target_idx_ranges,
+    )
+    if apply_instance_norm:
+        packed = normalize_chronos2_inputs(
+            packed, eps=instance_norm_eps, use_arcsinh=use_arcsinh
+        )
+    return packed
+
+
+def instance_norm(
+    x: torch.Tensor,
+    loc_scale: tuple[torch.Tensor, torch.Tensor] | None = None,
+    *,
+    eps: float = 1e-5,
+    use_arcsinh: bool = False,
+) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+    """Standardize along the last dim (Amazon Chronos InstanceNorm math)."""
+    orig_dtype = x.dtype
+    x = x.to(dtype=torch.float32)
+    if loc_scale is None:
+        loc = torch.nan_to_num(torch.nanmean(x, dim=-1, keepdim=True), nan=0.0)
+        scale = torch.nan_to_num((x - loc).square().nanmean(dim=-1, keepdim=True).sqrt(), nan=1.0)
+        scale = torch.where(scale == 0, torch.as_tensor(eps, dtype=scale.dtype, device=scale.device), scale)
+    else:
+        loc, scale = loc_scale
+        loc = loc.to(dtype=torch.float32)
+        scale = scale.to(dtype=torch.float32)
+
+    scaled_x = (x - loc) / scale
+    if use_arcsinh:
+        scaled_x = torch.arcsinh(scaled_x)
+    return scaled_x.to(orig_dtype), (loc, scale)
+
+
+def instance_norm_inverse(
+    x: torch.Tensor,
+    loc_scale: tuple[torch.Tensor, torch.Tensor],
+    *,
+    use_arcsinh: bool = False,
+    output_dtype: torch.dtype | None = None,
+) -> torch.Tensor:
+    """Undo ``instance_norm`` with the stored loc/scale."""
+    x = x.to(dtype=torch.float32)
+    loc, scale = loc_scale
+    loc = loc.to(dtype=torch.float32)
+    scale = scale.to(dtype=torch.float32)
+    if use_arcsinh:
+        x = torch.sinh(x)
+    x = x * scale + loc
+    return x if output_dtype is None else x.to(output_dtype)
+
+
+def normalize_chronos2_inputs(
+    packed: Chronos2PackedInputs,
+    *,
+    eps: float = 1e-5,
+    use_arcsinh: bool = False,
+) -> Chronos2PackedInputs:
+    """Apply InstanceNorm to packed V, then the same loc/scale to W."""
+    context, loc_scale = instance_norm(packed.context, eps=eps, use_arcsinh=use_arcsinh)
+    future, _ = instance_norm(
+        packed.future_covariates, loc_scale, eps=eps, use_arcsinh=use_arcsinh
+    )
+    return Chronos2PackedInputs(
+        context=context,
+        future_covariates=future,
+        group_ids=packed.group_ids,
+        target_idx_ranges=packed.target_idx_ranges,
+        loc_scale=loc_scale,
     )
 
 

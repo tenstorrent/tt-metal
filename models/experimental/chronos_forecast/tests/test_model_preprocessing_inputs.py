@@ -13,6 +13,9 @@ import torch
 
 from models.experimental.chronos_forecast.tt.model_preprocessing import (
     encode_categorical_covariate,
+    instance_norm,
+    instance_norm_inverse,
+    normalize_chronos2_inputs,
     prepare_chronos2_inputs,
     target_encode,
 )
@@ -317,3 +320,93 @@ def test_oracle_from_list_of_dicts_categorical():
     torch.testing.assert_close(
         packed.future_covariates, amazon["future_covariates"], equal_nan=True, atol=0, rtol=0
     )
+
+
+def test_instance_norm_matches_standardization_formula():
+    x = torch.tensor([[1.0, 2.0, 3.0, 4.0, 5.0], [2.0, 3.0, 4.0, 5.0, 6.0]])
+    normalized, (loc, scale) = instance_norm(x)
+    torch.testing.assert_close(normalized[0], normalized[1])
+    torch.testing.assert_close(loc.squeeze(), torch.tensor([3.0, 4.0]))
+    torch.testing.assert_close(scale.squeeze(), torch.tensor([1.41421, 1.41421]), atol=1e-4, rtol=1e-4)
+
+
+def test_instance_norm_preserves_nans_and_inverse():
+    x = torch.tensor([[1.0, float("nan"), 3.0, 4.0, 5.0], [2.0, 3.0, 4.0, 5.0, float("nan")]])
+    normalized, loc_scale = instance_norm(x)
+    assert torch.equal(normalized.isnan(), x.isnan())
+    restored = instance_norm_inverse(normalized, loc_scale)
+    torch.testing.assert_close(restored, x, equal_nan=True)
+
+
+def test_instance_norm_zero_variance_uses_eps():
+    x = torch.ones(1, 4)
+    _, (loc, scale) = instance_norm(x, eps=1e-5)
+    torch.testing.assert_close(loc, torch.ones(1, 1))
+    torch.testing.assert_close(scale, torch.full((1, 1), 1e-5))
+
+
+def test_instance_norm_all_nan_row():
+    x = torch.full((1, 3), float("nan"))
+    y, (loc, scale) = instance_norm(x)
+    torch.testing.assert_close(loc, torch.zeros(1, 1))
+    torch.testing.assert_close(scale, torch.ones(1, 1))
+    assert torch.isnan(y).all()
+
+
+def test_instance_norm_arcsinh_and_inverse():
+    torch.manual_seed(0)
+    x = torch.randn(2, 8)
+    y, loc_scale = instance_norm(x, use_arcsinh=True)
+    y_no, _ = instance_norm(x, use_arcsinh=False)
+    assert not torch.allclose(y, y_no)
+    restored = instance_norm_inverse(y, loc_scale, use_arcsinh=True)
+    torch.testing.assert_close(restored, x, atol=1e-5, rtol=1e-5)
+
+
+def test_instance_norm_oracle_vs_amazon():
+    from models.experimental.chronos_forecast.common.chronos_src import ensure_chronos_on_path
+
+    ensure_chronos_on_path()
+    from chronos.chronos_bolt import InstanceNorm as UpInstanceNorm
+
+    torch.manual_seed(0)
+    x = torch.randn(3, 16)
+    x[0, 3] = float("nan")
+    for use_arcsinh in (False, True):
+        up = UpInstanceNorm(use_arcsinh=use_arcsinh)
+        ref_y, ref_ls = up(x)
+        y, ls = instance_norm(x, use_arcsinh=use_arcsinh)
+        torch.testing.assert_close(y, ref_y, equal_nan=True, atol=0, rtol=0)
+        torch.testing.assert_close(ls[0], ref_ls[0], atol=0, rtol=0)
+        torch.testing.assert_close(ls[1], ref_ls[1], atol=0, rtol=0)
+        torch.testing.assert_close(
+            instance_norm_inverse(y, ls, use_arcsinh=use_arcsinh),
+            up.inverse(ref_y, ref_ls),
+            equal_nan=True,
+            atol=0,
+            rtol=0,
+        )
+
+
+def test_normalize_packed_inputs_reuses_context_loc_scale_on_future():
+    packed = prepare_chronos2_inputs(torch.arange(8, dtype=torch.float32), prediction_length=4)
+    assert packed.loc_scale is None
+    normed = normalize_chronos2_inputs(packed)
+    ctx, loc_scale = instance_norm(packed.context)
+    fut, _ = instance_norm(packed.future_covariates, loc_scale)
+    torch.testing.assert_close(normed.context, ctx, equal_nan=True)
+    torch.testing.assert_close(normed.future_covariates, fut, equal_nan=True)
+    torch.testing.assert_close(normed.loc_scale[0], loc_scale[0])
+    torch.testing.assert_close(normed.loc_scale[1], loc_scale[1])
+
+
+def test_prepare_inputs_apply_instance_norm_flag():
+    target = torch.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
+    raw = prepare_chronos2_inputs(target, prediction_length=2)
+    normed = prepare_chronos2_inputs(target, prediction_length=2, apply_instance_norm=True)
+    expected, loc_scale = instance_norm(raw.context)
+    torch.testing.assert_close(normed.context, expected)
+    torch.testing.assert_close(normed.loc_scale[0], loc_scale[0])
+    torch.testing.assert_close(normed.loc_scale[1], loc_scale[1])
+    fut, _ = instance_norm(raw.future_covariates, loc_scale)
+    torch.testing.assert_close(normed.future_covariates, fut, equal_nan=True)
