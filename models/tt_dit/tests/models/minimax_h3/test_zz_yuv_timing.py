@@ -15,12 +15,16 @@ import os
 import pytest
 from loguru import logger
 
+import ttnn
+from models.perf.benchmarking_utils import BenchmarkProfiler
+
 from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSAConfig
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....utils.test import is_global_rank_zero
 from ....utils.video import Audio, export_video_audio_yuv
 from .common import GALAXY_MESHES
-from .common_av import CALIBRATED_FOX_PROMPT, artifact_dir, log_timing_table, run_warm_generation, weights_dir
+from .common_av import CALIBRATED_FOX_PROMPT, artifact_dir, log_timing_table, weights_dir
 
 NUM_INFERENCE_STEPS = 5
 EXPECTED_FORWARDS = NUM_INFERENCE_STEPS - 1
@@ -30,9 +34,9 @@ DURATIONS_S = [5, 10, 15]
 VSA_SPARSITY = 0.9
 
 
-@pytest.mark.timeout(5400)
+@pytest.mark.timeout(7200)
 @pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"{d}s" for d in DURATIONS_S])
-@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES[:1], indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
 def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
     lora_path = os.environ.get("MINIMAX_H3_LORA_PATH")
     if not lora_path:
@@ -57,14 +61,30 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
         vae_profile=profile_phases,
     )
 
-    output = run_warm_generation(
-        pipeline,
-        CALIBRATED_FOX_PROMPT,
+    gen_kwargs = dict(
         num_frames=num_frames,
         height=height,
         width=width,
         num_inference_steps=NUM_INFERENCE_STEPS,
-        seed=SEED,
+    )
+
+    pipeline.warmup(prompt=CALIBRATED_FOX_PROMPT, **gen_kwargs)
+    warm_padded_len = pipeline.last_padded_len
+    if pipeline.trace_denoise:
+        pipeline(CALIBRATED_FOX_PROMPT, seed=SEED, **gen_kwargs)
+
+    ttnn.synchronize_device(mesh_device)
+    if ttnn.using_distributed_env():
+        ttnn.distributed_context_barrier()
+
+    profiler = BenchmarkProfiler()
+    with profiler("run", iteration=0):
+        output = pipeline(CALIBRATED_FOX_PROMPT, seed=SEED, **gen_kwargs)
+        ttnn.synchronize_device(mesh_device)
+
+    assert pipeline.last_padded_len == warm_padded_len, (
+        f"warmup ran at padded_len {warm_padded_len} but the measured call ran at "
+        f"{pipeline.last_padded_len}; this number is not warm"
     )
     assert output.video_format == "yuv420", f"asked for yuv420 but the pipeline returned {output.video_format}"
 
@@ -74,23 +94,29 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
         f"{len(report.replaced)} gates assigned for {pipeline.transformer_config['num_layers']} blocks; "
         "VSA is running partly ungated"
     )
-    logger.info(f"VSA: {len(report.replaced)} gates assigned and active")
 
     stem = f"t2va_lora_vsa_yuv420_{stitch}_{width}x{height}_{duration_s}s_{EXPECTED_FORWARDS}fwd"
-    log_timing_table(
-        pipeline,
-        stem,
-        num_forwards=EXPECTED_FORWARDS,
-        video_seconds=output.video_seconds,
-        extra=f", stitch_exchange={stitch}" + (", PHASE-SERIALIZED" if profile_phases else ""),
-    )
-
-    # Written after the timing table so the encode never lands inside a measured stage.
-    mp4 = artifact_dir("h3_lora_artifacts") / f"{stem}.mp4"
-    export_video_audio_yuv(
-        output.video,
-        str(mp4),
-        fps=output.fps,
-        audio=Audio(waveform=output.audio[0], sampling_rate=output.sampling_rate),
-    )
-    logger.info(f"wrote {mp4}")
+    if is_global_rank_zero():
+        logger.info(f"VSA: {len(report.replaced)} gates assigned and active")
+        log_timing_table(
+            pipeline,
+            stem,
+            num_forwards=EXPECTED_FORWARDS,
+            video_seconds=output.video_seconds,
+            extra=(
+                f", stitch_exchange={stitch}"
+                + (", PHASE-SERIALIZED" if profile_phases else "")
+                + f", profiler.run={profiler.get_duration('run', 0):.2f}s"
+            ),
+        )
+        mp4 = artifact_dir("h3_lora_artifacts") / f"{stem}.mp4"
+        export_video_audio_yuv(
+            output.video,
+            str(mp4),
+            fps=output.fps,
+            audio=Audio(waveform=output.audio[0], sampling_rate=output.sampling_rate),
+        )
+        logger.info(f"wrote {mp4}")
+    if ttnn.using_distributed_env():
+        ttnn.distributed_context_barrier()
+    pipeline.release_traces()

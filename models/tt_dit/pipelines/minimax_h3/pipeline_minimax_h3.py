@@ -2421,6 +2421,15 @@ class MiniMaxH3Pipeline:
             rung_requests=rung_requests,
         )
 
+    @property
+    def last_padded_len(self) -> int | None:
+        """Padded sequence length of the most recent denoise (older-API alias of last_seq_len.padded).
+
+        The 4x32 timing harness reads this to assert the measured call ran at the same padded length
+        as the warmup (i.e. is genuinely warm).
+        """
+        return None if self.last_seq_len is None else self.last_seq_len.padded
+
     def warmup(
         self,
         *,
