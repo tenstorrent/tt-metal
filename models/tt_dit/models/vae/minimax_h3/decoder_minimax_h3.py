@@ -126,26 +126,11 @@ class MiniMaxH3ViTAttention(Module):
             fp32_dest_acc_en=False,
         )
 
-        # The elementwise and norm ops all default to HiFi4, which the profile shows costs
-        # 21.5 % of layer device time (BinaryNg 13.2 %, LayerNorm 5.1 %, Typecast 3.2 %,
-        # Unary 1.6 %). None of them is a matmul; HiFi4 buys nothing here. fp32 accumulation
-        # stays on for the q/k RMS, which the reference computes in fp32.
-        self.elementwise_compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-        )
-
+        # Identity gate so the block's residual add folds into to_out's matmul epilogue.
+        # Broadcasts over the sequence dim; ones because LayerScale is already in the weights.
         self._ones_gate = bf16_tensor(torch.ones(1, 1, dim), device=mesh_device)
 
         self.rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
-        # "op": ttnn.rms_norm on q and k, then RoPE; "fused": the RMS runs as a prologue inside rotary_embedding_llama
-        # (rms_norm_eps), 72 LayerNorm launches per wave gone. Gated on RMSE vs float64 (test_rope_rms_fused_minimax_h3.py,
-        # tools/decoder_ref_probe.py).
-        self.qk_rms = os.environ.get("MINIMAX_H3_QK_RMS", "fused")
-        if self.qk_rms not in ("op", "fused"):
-            raise ValueError(f"MINIMAX_H3_QK_RMS must be 'op' or 'fused', got {self.qk_rms!r}")
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -184,17 +169,6 @@ class MiniMaxH3ViTAttention(Module):
             if key in state:
                 state[f"to_out.{suffix}"] = state.pop(key)
 
-    def _rms(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Parameter-free RMS over the head dim: bfloat16 operands, fp32 accumulation.
-
-        The reference computes this in fp32 and the port used to match it by casting up and back.
-        The upcast cannot add information -- `x` arrives bfloat16 from `nlp_create_qkv_heads` -- and
-        `elementwise_compute_kernel_config` already accumulates in fp32, so the pair bought nothing:
-        a Tracy capture of one forward billed them at 144 ops and 14.9 ms of 172.8, 9 % of the
-        decoder. `test_qk_rms_minimax_h3.py` gates that against a float64 reference at this shape.
-        """
-        return ttnn.rms_norm(x, epsilon=self.eps, compute_kernel_config=self.elementwise_compute_kernel_config)
-
     def forward(
         self,
         x: ttnn.Tensor,
@@ -221,18 +195,11 @@ class MiniMaxH3ViTAttention(Module):
             transpose_k_heads=False,
         )
 
-        fused_rms = self.qk_rms == "fused"
-        if not fused_rms:
-            query = self._rms(query)
-            key = self._rms(key)
-        rope_kwargs = {"rms_norm_eps": self.eps} if fused_rms else {}
-
-        query = ttnn.experimental.rotary_embedding_llama(
-            query, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config, **rope_kwargs
-        )
-        key = ttnn.experimental.rotary_embedding_llama(
-            key, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config, **rope_kwargs
-        )
+        # Partial RoPE with the q/k RMS normalisation as its prologue (rms_norm_eps): the load-time lane permute + permuted
+        # cos/sin tables make this a single full-width op per q/k (see rope_minimax_h3 for the (2j, 2j+1) basis).
+        rope_kwargs = dict(compute_kernel_config=self.rope_compute_kernel_config, rms_norm_eps=self.eps)
+        query = ttnn.experimental.rotary_embedding_llama(query, rope_cos, rope_sin, self.rope_trans_mat, **rope_kwargs)
+        key = ttnn.experimental.rotary_embedding_llama(key, rope_cos, rope_sin, self.rope_trans_mat, **rope_kwargs)
 
         # No mask: q/k/v are presented with the logical length of the valid tokens (same buffers,
         # padded shape unchanged), and SDPA blanks the tile-pad keys itself. The dense mask cost a

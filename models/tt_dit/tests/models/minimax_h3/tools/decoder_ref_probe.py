@@ -2,9 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""C-06 default gate on the real decoder weights: the TT decoder with MINIMAX_H3_QK_RMS=op and =fused against the pinned
-diffusers reference decoder run in float64 on the CPU (post_quant_conv applied by the reference, folded into proj_in on
-ours). The pinned module is loaded from MINIMAX_H3_REF_SRC when the installed diffusers does not ship it.
+"""The VAE decoder on its real weights against the pinned diffusers decoder run in float64 on the CPU (post_quant_conv applied
+by the reference, folded into proj_in on ours). Loads the pinned module from MINIMAX_H3_REF_SRC when diffusers lacks it.
     MINIMAX_H3_MODEL_PATH=... MINIMAX_H3_REF_SRC=.../autoencoder_kl_minimax_h3.py pytest .../decoder_ref_probe.py -s
 """
 
@@ -48,17 +47,17 @@ def _reference_module():
     return module
 
 
-def _metrics(actual: torch.Tensor, expected: torch.Tensor) -> str:
+def _metrics(actual: torch.Tensor, expected: torch.Tensor) -> tuple[float, str]:
     a = actual.double().flatten()
     e = expected.double().flatten()
     pcc = float(torch.corrcoef(torch.stack([a, e]))[0, 1])
     rel = float(torch.linalg.norm(a - e) / torch.linalg.norm(e))
-    return f"pcc {pcc:.6f}, rel-RMSE {rel:.3e}, max |diff| {float((a - e).abs().max()):.3e}"
+    return pcc, f"pcc {pcc:.6f}, rel-RMSE {rel:.3e}, max |diff| {float((a - e).abs().max()):.3e}"
 
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_qk_rms_paths_against_reference(mesh_device):
+def test_decoder_against_reference(mesh_device):
     from safetensors import safe_open
 
     from models.tt_dit.models.vae.minimax_h3.blockings_minimax_h3_vae import register_h3_vae_decoder_blockings
@@ -100,31 +99,27 @@ def test_qk_rms_paths_against_reference(mesh_device):
     mark = time.perf_counter()
     with torch.no_grad():
         expected = reference(post(z.double()))
-    logger.info(f"QKRMSREF float64 reference decode {time.perf_counter() - mark:.1f} s, output {tuple(expected.shape)}")
+    logger.info(f"DECREF float64 reference decode {time.perf_counter() - mark:.1f} s, output {tuple(expected.shape)}")
 
     register_h3_vae_decoder_blockings()
     tokens = z.permute(0, 2, 3, 4, 1).reshape(1, -1, channels)
     dev = ttnn.from_torch(tokens, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.TILE_LAYOUT)
-    outputs = {}
-    for mode in ("op", "fused"):
-        os.environ["MINIMAX_H3_QK_RMS"] = mode
-        decoder = build_visual_decoder(config, mesh_device)
-        decoder.load_torch_state_dict(prepare_decoder_state(state))
-        out = decoder(dev)
-        ttnn.synchronize_device(mesh_device)
-        mark = time.perf_counter()
-        out = decoder(dev)
-        ttnn.synchronize_device(mesh_device)
-        ms = (time.perf_counter() - mark) * 1e3
-        pixels = unpatchify(
-            ttnn.to_torch(out).float(),
-            num_frames=DECODE_LATENT_FRAMES,
-            height=LATENT_TILE,
-            width=LATENT_TILE,
-            out_channels=config["out_channels"],
-        )
-        outputs[mode] = pixels
-        logger.info(f"QKRMSREF {mode}: {_metrics(pixels, expected)}; decoder {ms:.1f} ms")
-    logger.info(f"QKRMSREF fused vs op: {_metrics(outputs['fused'], outputs['op'])}")
-    rel = {m: float(torch.linalg.norm((outputs[m].double() - expected).flatten()) / torch.linalg.norm(expected.flatten())) for m in outputs}
-    logger.info(f"QKRMSREF VERDICT fused_not_worse={rel['fused'] <= rel['op']} (rel-RMSE fused {rel['fused']:.3e} vs op {rel['op']:.3e})")
+    decoder = build_visual_decoder(config, mesh_device)
+    decoder.load_torch_state_dict(prepare_decoder_state(state))
+    out = decoder(dev)
+    ttnn.synchronize_device(mesh_device)
+    mark = time.perf_counter()
+    out = decoder(dev)
+    ttnn.synchronize_device(mesh_device)
+    ms = (time.perf_counter() - mark) * 1e3
+    pixels = unpatchify(
+        ttnn.to_torch(out).float(),
+        num_frames=DECODE_LATENT_FRAMES,
+        height=LATENT_TILE,
+        width=LATENT_TILE,
+        out_channels=config["out_channels"],
+    )
+    pcc, text = _metrics(pixels, expected)
+    logger.info(f"DECREF decoder vs float64 reference: {text}; decoder {ms:.1f} ms")
+    # Measured 2026-09-19: pcc 0.999404 / rel-RMSE 3.019e-2 (the separate rms_norm path it replaced: 0.999368 / 3.105e-2).
+    assert pcc > 0.999, f"decoder drifted from the reference: pcc {pcc:.6f}"
