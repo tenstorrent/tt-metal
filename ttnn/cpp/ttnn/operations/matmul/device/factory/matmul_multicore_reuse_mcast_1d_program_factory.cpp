@@ -4448,6 +4448,30 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     const bool reuse_in0_in_CB = (in0_B == 1 && in1_B > 1) && !in0_is_sharded && !output_is_sharded && !bcast_batch &&
                                  !fused_activation.has_value();
 
+    // The output write shares the in1 RISC with the in1 sender/receiver while the in0 RISC sits
+    // idle beside it, so the op floors at their serial sum. Move the write to the in0 RISC
+    // wherever the two threads do provably the same work: no sharding on either side, no fused
+    // op, no bias, tilized output, and the same batch count on both kernels. reuse_in0_in_CB is
+    // excluded because under it the in1 writer walks in1_B batches while the in0 sender walks
+    // in0_B. Sparsity is off on this path by construction, batchB and num_active are 0 below.
+    const bool writer_on_in0 = !in0_is_sharded && !output_is_sharded && !fuse_op && !untilize_out &&
+                               !bias_tensor.has_value() && !reuse_in0_in_CB;
+
+    // Ten scalars then the output accessor, the same values the in1 writer gets.
+    auto append_writer_ct_args = [&](std::vector<uint32_t>& args) {
+        args.push_back((std::uint32_t)1);                   // out_tensor_stride_w
+        args.push_back((std::uint32_t)N);                   // out_tensor_stride_h
+        args.push_back((std::uint32_t)out_subblock_w);      // out_tensor_next_subblock_stride_w
+        args.push_back((std::uint32_t)out_subblock_h * N);  // out_tensor_next_subblock_stride_h
+        args.push_back((std::uint32_t)out_block_w);         // out_tensor_next_w_dim_block_stride
+        args.push_back((std::uint32_t)out_block_h * N);     // out_tensor_next_h_dim_block_stride
+        args.push_back((std::uint32_t)out_subblock_w);
+        args.push_back((std::uint32_t)out_subblock_h);
+        args.push_back((std::uint32_t)(out_subblock_w * out_subblock_h));
+        args.push_back((std::uint32_t)M * N);  // MtNt
+        tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(args);
+    };
+
     std::vector<uint32_t> in0_sender_compile_time_args = {
         // in0 tensor args
         (std::uint32_t)in0_tensor_stride_w,
@@ -4489,6 +4513,9 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     tt::tt_metal::TensorAccessorArgs(in0_tensor).append_to(in0_sender_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
     in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
+    if (writer_on_in0) {
+        append_writer_ct_args(in0_sender_compile_time_args);
+    }
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -4660,6 +4687,12 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     bool has_in1_receiver_writer_kernel = false;
     KernelDescriptor compute_kernel_desc;
 
+    if (writer_on_in0) {
+        mm_kernel_in0_sender_defines["WRITER_ON_IN0"] = "1";
+        mm_kernel_in1_sender_writer_defines["WRITER_OFF_IN1"] = "1";
+        mm_kernel_in1_receiver_writer_defines["WRITER_OFF_IN1"] = "1";
+    }
+
     in0_sender_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp";
     in0_sender_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -4672,6 +4705,9 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         {"cb_sparsity", tt::CBIndex::c_6},
         {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
     };
+    if (writer_on_in0) {
+        in0_sender_kernel_desc.named_compile_time_args.push_back({"cb_out", tt::CBIndex::c_4});
+    }
     in0_sender_kernel_desc.config =
         DataMovementConfigDescriptor{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc};
 
@@ -4996,6 +5032,31 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         std::swap(start_core_noc, end_core_noc);
     }
 
+    // The writer's per-core args in the in1 receiver kernel's layout, which is the general one.
+    // The mcast sender core keeps the values the shipped sender writer gets, including its lack
+    // of an H-dim block tail, so the relocated writer does byte-for-byte the same work on every
+    // core.
+    auto writer_rt_args = [&](uint32_t output_idx_x, uint32_t output_idx_y, bool sender_core) {
+        const bool last_y = output_idx_y == num_blocks_y - 1;
+        const bool last_x = output_idx_x == num_blocks_x - 1;
+        std::vector<uint32_t> a;
+        a.push_back((std::uint32_t)0);  // out_tensor address, replaced by the tensor reference below
+        a.push_back(((std::uint32_t)output_idx_x * per_core_N) + (output_idx_y * per_core_M * N));
+        a.push_back((std::uint32_t)(out_block_h / out_subblock_h));
+        a.push_back((std::uint32_t)(last_y ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h));
+        a.push_back((std::uint32_t)(last_y ? last_subblock_of_last_block_h : out_subblock_h));
+        a.push_back((std::uint32_t)(last_y ? last_block_padded_block_tiles_h_skip : 0));
+        a.push_back((std::uint32_t)(out_block_w / out_subblock_w));
+        a.push_back((std::uint32_t)(last_x ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w));
+        a.push_back((std::uint32_t)(last_x ? last_subblock_of_last_block_w : out_subblock_w));
+        a.push_back((std::uint32_t)(last_x ? last_block_padded_subblock_tiles_addr_skip : 0));
+        a.push_back((std::uint32_t)(last_x ? last_block_padded_block_tiles_w_skip : 0));
+        a.push_back(
+            (std::uint32_t)(sender_core ? out_num_blocks_y : (last_y ? last_out_num_blocks_h : out_num_blocks_y)));
+        a.push_back((std::uint32_t)(last_x ? last_out_num_blocks_w : out_num_blocks_x));
+        return a;
+    };
+
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
@@ -5130,6 +5191,12 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
             std::vector<std::variant<uint32_t, std::reference_wrapper<const MeshTensor>>> in0_sender_variant(
                 mm_in0_sender_args.begin(), mm_in0_sender_args.end());
             in0_sender_variant[0] = in0_tensor;
+            if (writer_on_in0) {
+                const size_t base = in0_sender_variant.size();
+                const auto w = writer_rt_args(output_idx_x, output_idx_y, core == start_core);
+                in0_sender_variant.insert(in0_sender_variant.end(), w.begin(), w.end());
+                in0_sender_variant[base] = out_tensor;
+            }
             in0_sender_kernel_desc.emplace_runtime_args(core, in0_sender_variant);
         }
     }

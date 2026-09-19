@@ -17,6 +17,9 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#ifdef WRITER_ON_IN0
+#include "matmul_out_writer_in0.hpp"
+#endif
 void kernel_main() {
     uint32_t rt_args_idx = 0;
     // in0 tensor args
@@ -32,6 +35,10 @@ void kernel_main() {
     const uint32_t last_block_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     // sparsity args
     const uint32_t sparsity_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+#ifdef WRITER_ON_IN0
+    // WRITER, relocated off the in1 RISC
+    MatmulOutWriterArgs wargs = matmul_out_writer_args(rt_args_idx);
+#endif
 
     // COMPILE TIME ARGS
     // in0 tensor args
@@ -89,6 +96,13 @@ void kernel_main() {
     // See https://github.com/tenstorrent/tt-metal/issues/45943.
     [[maybe_unused]] constexpr uint32_t num_batch_compute =
         get_compile_time_arg_val(decltype(sparsity_args)::next_compile_time_args_offset());
+
+#ifdef WRITER_ON_IN0
+    // WRITER compile time args, appended after num_batch_compute by append_writer_ct_args.
+    constexpr uint32_t writer_cta_base = decltype(sparsity_args)::next_compile_time_args_offset() + 1;
+    constexpr auto out_args = TensorAccessorArgs<writer_cta_base + 10>();
+    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
+#endif
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
     // 0x1 is used to specify "VALID" state, i.e. when the batch is valid.
@@ -161,6 +175,10 @@ void kernel_main() {
     constexpr uint32_t dfb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
     DataflowBuffer dfb_sparsity(dfb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
+#ifdef WRITER_ON_IN0
+    DataflowBuffer dfb_out(dfb_id_out0);
+    const auto s_out = TensorAccessor(out_args, wargs.out_tensor_addr);
+#endif
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
@@ -238,7 +256,13 @@ void kernel_main() {
             uint32_t in0_tensor_current_h_dim_block_start_addr = noc_shard_read_start_addr;
 #endif  // IN0_SHARDED
             uint32_t in0_tensor_current_h_dim_block_tile_id = in0_tensor_start_tile_id;
+#ifdef WRITER_ON_IN0
+            uint32_t out_tensor_current_h_dim_block_tile_id = wargs.out_tensor_start_tile_id;
+#endif
             for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
+#ifdef WRITER_ON_IN0
+                uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
+#endif
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
 #ifdef IN0_SHARDED
                     uint32_t in0_tensor_current_inner_dim_block_start_addr = in0_tensor_current_h_dim_block_start_addr;
@@ -401,7 +425,15 @@ void kernel_main() {
                         // Common for sharded and interleaved paths
                         dfb_in0.push_back(in0_block_num_tiles);
                     }
+#ifdef WRITER_ON_IN0
+                    matmul_write_out_block<writer_cta_base, num_blocks_h_dim, num_blocks_w_dim>(
+                        noc, dfb_out, s_out, wargs, bh, bw, out_tensor_current_w_dim_block_tile_id);
+                    out_tensor_current_w_dim_block_tile_id += get_compile_time_arg_val(writer_cta_base + 4);
+#endif
                 }
+#ifdef WRITER_ON_IN0
+                out_tensor_current_h_dim_block_tile_id += get_compile_time_arg_val(writer_cta_base + 5);
+#endif
 #ifdef IN0_SHARDED
                 in0_tensor_current_h_dim_block_start_addr += in0_tensor_next_h_dim_block_stride_bytes;
 #endif  // IN0_SHARDED
@@ -411,6 +443,9 @@ void kernel_main() {
             if constexpr (!bcast_A) {
                 in0_tensor_start_tile_id += MtKt;
             }
+#ifdef WRITER_ON_IN0
+            wargs.out_tensor_start_tile_id += get_compile_time_arg_val(writer_cta_base + 9);
+#endif
         }
 
         if constexpr (bcast_A) {

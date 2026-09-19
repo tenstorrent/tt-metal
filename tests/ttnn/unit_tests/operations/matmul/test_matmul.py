@@ -1560,6 +1560,82 @@ def test_matmul_1d_multiple_output_blocks_per_core(
     assert device.cache_entries_counter.total == 1
 
 
+def _writer_on_in0_subblocks(per_core_M, per_core_N, max_tiles=4):
+    best = (1, 1)
+    for h in range(1, per_core_M + 1):
+        if per_core_M % h:
+            continue
+        for w in range(1, per_core_N + 1):
+            if per_core_N % w or h * w > max_tiles or h * w <= best[0] * best[1]:
+                continue
+            best = (h, w)
+    return best
+
+
+@pytest.mark.parametrize(
+    "mt, kt, nt, batch, grid, fuse_batch",
+    [
+        (100, 2, 16, 1, (8, 4), True),  # H tail: 32 cores x 4 blocks covers 128 of 100 tiles
+        (128, 4, 16, 1, (8, 4), True),  # no tail
+        (13, 3, 3, 1, (7, 1), True),  # N smaller than a full subblock width, ragged M
+        (4, 2, 8, 1, (1, 1), True),  # single core, the mcast sender core is the whole output
+        (8, 2, 8, 3, (4, 1), False),  # batch > 1 unfused, walks the per-batch output stride
+        (9, 5, 12, 2, (5, 1), False),  # batch > 1 unfused with an H tail
+    ],
+)
+def test_matmul_1d_mcast_in1_output_write_on_in0_risc(device, mt, kt, nt, batch, grid, fuse_batch):
+    """The 1D mcast_in1 program issues the output write from the in0 RISC, not the in1 RISC.
+
+    Everything the relocated writer owns is per-core state the in1 writer used to own: the block
+    tile-id walk, the H and W padding tails, and the per-batch output stride. Each case below
+    puts one of those in a regime where getting it wrong writes to the wrong page rather than
+    failing loudly. The second call with a fresh output buffer is the program-cache case: the
+    output address now lives in the in0 sender's runtime args, so a miss there writes the second
+    result into the first buffer and the second output comes back stale.
+    """
+    compute_grid = device.compute_with_storage_grid_size()
+    if grid[0] > compute_grid.x or grid[1] > compute_grid.y:
+        pytest.skip(f"device grid {compute_grid} is smaller than {grid}")
+
+    torch.manual_seed(0)
+    m, k, n = mt * 32, kt * 32, nt * 32
+    per_core_M = -(-mt // (grid[0] * grid[1]))
+    out_subblock_h, out_subblock_w = _writer_on_in0_subblocks(per_core_M, nt)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=kt,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=nt,
+        fuse_batch=fuse_batch,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+
+    in0 = torch.randn([1, batch, m, k])
+    in1 = torch.randn([k, n])
+    expected = in0 @ in1
+
+    in0_t = ttnn.from_torch(in0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    in1_t = ttnn.from_torch(in1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    outputs = []
+    for _ in range(2):
+        out_t = ttnn.matmul(in0_t, in1_t, program_config=program_config, compute_kernel_config=compute_kernel_config)
+        outputs.append(ttnn.to_torch(out_t))
+        ttnn.deallocate(out_t)
+
+    for output in outputs:
+        assert_with_pcc(expected, output, 0.999)
+    # Same inputs, same program: the second call must not come back holding the first result's
+    # buffer, which is what a missed output-address patch looks like.
+    assert torch.equal(outputs[0], outputs[1])
+
+
 @pytest.mark.parametrize("side", ["height", "width"])
 @pytest.mark.parametrize("tile_count", [1376, 1375])
 def test_padded_2d_matmul(device, side, tile_count):

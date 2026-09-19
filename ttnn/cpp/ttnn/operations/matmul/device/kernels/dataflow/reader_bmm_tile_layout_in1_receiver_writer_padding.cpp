@@ -149,7 +149,7 @@ void kernel_main() {
                 }
 #endif
 
-#ifndef OUT_SHARDED
+#if !defined(OUT_SHARDED) && !defined(WRITER_OFF_IN1)
                 // WRITER
                 const uint32_t num_blocks_h_dim_ =
                     bh >= last_num_blocks_h_dim - 1 ? last_num_blocks_h_dim : num_blocks_h_dim;
