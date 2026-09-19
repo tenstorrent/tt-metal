@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -14,7 +15,12 @@ from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache,
 from models.demos.gemma4_d_p.tt.runners.adapter import Gemma4PrefillAdapter, Gemma4ServiceConfig
 from models.demos.gemma4_d_p.tt.runners.kv_caches import Gemma4KvCaches
 from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import build_kv_chunk_address_table
-from models.demos.gemma4_d_p.tt.runners.kv_validation import cache_pcc, read_slot_kv_and_check_pcc
+from models.demos.gemma4_d_p.tt.runners.kv_validation import (
+    cache_pcc,
+    load_gpu_cache_heads,
+    read_cache_head,
+    read_slot_kv_and_check_pcc,
+)
 from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
 
 
@@ -116,16 +122,21 @@ def test_shared_producer_checks_packed_global_and_sliding_kv(caches_and_mesh, mo
     monkeypatch.setattr(prefill_producer, "ADAPTER", Gemma4PrefillAdapter())
     monkeypatch.setattr(prefill_producer, "_resolve_unique_id", lambda nodes, mapping: int(nodes[0].chip_id))
     monkeypatch.delenv("PREFILL_PCC_GOLDEN_LEN", raising=False)
+    monkeypatch.setenv("PREFILL_PCC_SUMMARY_DIR", str(tmp_path))
     (tmp_path / "kv_cache").mkdir()
     memory = {}
     for layer in range(6):
         heads, width = (4, 512) if layer == 5 else (16, 256)
         key = (torch.arange(heads * 32 * width).reshape(1, heads, 32, width) % 113 - 56).float()
         value = (key * 3 + 7).remainder(107) - 53
-        save_file(
-            {f"key_cache_layer_{layer}": key, f"value_cache_layer_{layer}": value},
-            str(tmp_path / "kv_cache" / f"layer_{layer}.safetensors"),
-        )
+        directory = tmp_path / "kv_cache" / f"layer_{layer}"
+        directory.mkdir()
+        rows = torch.cat((key[0].permute(1, 0, 2).reshape(32, -1), value[0].permute(1, 0, 2).reshape(32, -1)), dim=-1)
+        for start, end in ((0, 16), (16, 32)):
+            save_file(
+                {f"kv_post_transform_layer_{layer}": rows[start:end].contiguous()},
+                str(directory / f"rows_{start:08d}_{end:08d}.safetensors"),
+            )
         if layer == 5:
             rotary = torch.stack((torch.arange(64), torch.arange(256, 320)), dim=1).flatten()
             values = torch.cat(
@@ -148,6 +159,10 @@ def test_shared_producer_checks_packed_global_and_sliding_kv(caches_and_mesh, mo
     )
     scores = prefill_producer._read_slot_kv_and_check_pcc(table, {}, 0, 32, tmp_path)
     assert scores == {"global_k_rotary": 1.0, "global_v": 1.0, "sliding_k": 1.0, "sliding_v": 1.0}
+    report = json.loads((tmp_path / "gemma4_slot0.json").read_text())
+    assert report["tokens"] == 32 and report["slot"] == 0
+    assert report["minima"] == scores
+    assert len(report["measurements"]) == 164
     location = table.lookup(5, 0, 0, 3)
     node = table.get_device_group(location.device_group_index).fabric_node_ids[0]
     memory[int(node.chip_id), location.noc_addr] = bytes(location.size_bytes)
@@ -159,18 +174,100 @@ def test_pcc_rejects_nonfinite_values(expect_error):
         cache_pcc(torch.ones(32), torch.full((32,), float("nan")))
 
 
-def test_golden_capture_saves_tokens_before_sliding_eviction(tmp_path):
-    from safetensors.torch import load_file
+def test_gpu_trace_requires_complete_contiguous_rows(tmp_path, expect_error):
+    directory = tmp_path / "kv_cache" / "layer_0"
+    directory.mkdir(parents=True)
+    rows = torch.zeros(32, 8192)
+    save_file({"kv_post_transform_layer_0": rows}, str(directory / "rows_00000000_00000032.safetensors"))
+    with expect_error(ValueError, "covers 32/64 tokens"):
+        load_gpu_cache_heads(tmp_path, 0, 64)
+    save_file({"kv_post_transform_layer_0": rows}, str(directory / "rows_00000064_00000096.safetensors"))
+    with expect_error(ValueError, "noncontiguous GPU trace"):
+        load_gpu_cache_heads(tmp_path, 0, 64)
+    save_file(
+        {"kv_post_transform_layer_0": rows[:, :256].contiguous()}, str(directory / "rows_00000000_00000032.safetensors")
+    )
+    with expect_error(ValueError, "invalid GPU KV shape"):
+        load_gpu_cache_heads(tmp_path, 0, 32)
 
-    from models.demos.gemma4_d_p.scripts.generate_golden_kv_cache import RecordingCache
 
-    config = SimpleNamespace(layer_types=["sliding_attention"], sliding_window=4)
-    cache = RecordingCache(config, tmp_path)
-    first = torch.arange(12).reshape(1, 1, 6, 2).float()
-    cache.update(first, first + 1, 0)
-    cache.part = 1
-    second = torch.arange(6).reshape(1, 1, 3, 2).float() + 20
-    cache.update(second, second + 1, 0)
-    assert cache.layers[0].keys.shape[2] == 3
-    torch.testing.assert_close(load_file(str(tmp_path / "layer_0_part_0.safetensors"))["key"], first)
-    torch.testing.assert_close(load_file(str(tmp_path / "layer_0_part_1.safetensors"))["key"], second)
+def test_bank_reads_restore_token_order(monkeypatch, expect_error):
+    width, blocks = 64, 8
+    chunk_bytes = width // 32 * 1088
+    expected = (torch.arange(blocks * 32 * width).reshape(blocks, 32, width) % 113 - 56).float()
+    locations = {
+        block
+        * 32: SimpleNamespace(
+            noc_addr=((block % 2) << 32) | (4096 + block // 2 * chunk_bytes),
+            size_bytes=chunk_bytes,
+            device_group_index=ttnn.experimental.disaggregation.DeviceGroupIndex(0),
+        )
+        for block in range(blocks)
+    }
+    memory = {
+        (bank << 32) | 4096: b"".join(encode_integer_bfp8(expected[block]) for block in range(bank, blocks, 2))
+        for bank in range(2)
+    }
+    config = SimpleNamespace(chunk_n_tokens=32, num_layers=60, chunk_size_bytes=chunk_bytes)
+    table = SimpleNamespace(
+        config=lambda _: config,
+        lookup=lambda layer, position, slot, config_id: locations[position],
+        get_device_group=lambda _: SimpleNamespace(fabric_node_ids=[]),
+    )
+    calls = []
+
+    def read(unique_id, address, size):
+        calls.append((address, size))
+        return memory[address][:size]
+
+    monkeypatch.setattr(prefill_producer, "_resolve_unique_id", lambda nodes, mapping: 1)
+    monkeypatch.setattr(ttnn.experimental.disaggregation, "read_dram_umd", read)
+    actual = read_cache_head(table, {}, 0, 0, 4, blocks * 32, width)
+    torch.testing.assert_close(actual, expected.reshape(-1, width), rtol=0, atol=0)
+    assert len(calls) == 2
+    assert all(size == 4 * chunk_bytes for _, size in calls)
+    locations[32].size_bytes -= 1
+    with expect_error(ValueError, "Missing or invalid KV chunk"):
+        read_cache_head(table, {}, 0, 0, 4, blocks * 32, width)
+    locations[32].size_bytes += 1
+    locations[64].noc_addr += chunk_bytes
+    with expect_error(ValueError, "Noncontiguous Gemma4 KV bank"):
+        read_cache_head(table, {}, 0, 0, 4, blocks * 32, width)
+
+
+def test_command_queue_read_restores_chunk_order(monkeypatch):
+    from models.demos.gemma4_d_p.tt.runners import kv_validation
+
+    heads, width, tokens, chunk_size = 16, 32, 512, 256
+    expected = torch.arange(heads * tokens * width).reshape(heads, tokens, width).float()
+    positions = [
+        chunk + rank * 32 + row for rank in range(8) for chunk in range(0, tokens, chunk_size) for row in range(32)
+    ]
+    gathered = expected[:, positions].unsqueeze(0)
+    cache = SimpleNamespace(shape=(6, 4, 32768, width))
+    selected = object()
+    row_major = object()
+    released = []
+
+    def select(tensor, starts, ends, *, memory_config):
+        assert tensor is cache
+        assert starts == (3, 0, 0, 0)
+        assert ends == (4, 4, tokens // 8, width)
+        assert memory_config == ttnn.DRAM_MEMORY_CONFIG
+        return selected
+
+    monkeypatch.setattr(Gemma4ServiceConfig, "CHUNK_SIZE", chunk_size)
+    monkeypatch.setattr(ttnn, "slice", select)
+    monkeypatch.setattr(ttnn, "untilize", lambda tensor, memory_config: row_major)
+    monkeypatch.setattr(ttnn, "from_device", lambda tensor, blocking: gathered)
+    monkeypatch.setattr(ttnn, "deallocate", released.append)
+    shards = [
+        gathered[:, column * 4 : (column + 1) * 4, row * (tokens // 8) : (row + 1) * (tokens // 8)]
+        for row in range(8)
+        for column in range(4)
+    ]
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda tensor: shards)
+    monkeypatch.setattr(ttnn, "to_torch", lambda tensor: tensor)
+    actual = kv_validation.read_cache_tensor(cache, 3, tokens)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert released == [selected, row_major]

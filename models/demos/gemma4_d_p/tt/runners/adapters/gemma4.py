@@ -43,7 +43,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     model_config = Gemma4ServiceConfig
     hf_model_default = "google/gemma-4-31B-it"
     ttnn_cache_default = ""
-    prefill_trace_default = ""
+    prefill_trace_default = "/mnt/models/huggingface/gpu_traces/gemma4_d_p/hf-gemma4-31b-36db66e9-262144tok"
     pipeline_activation_emb_tp_sharded = False
 
     @property
