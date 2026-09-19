@@ -1218,7 +1218,8 @@ def test_demo_text(
             # host sampling only supports single sample param for all users in a batch
             sampling_params["temperature"] = sampling_params["temperature"][0]
             sampling_params["top_p"] = sampling_params["top_p"][0]
-            sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
+            if "enable_log_probs" in sampling_params:
+                sampling_params["enable_log_probs"] = sampling_params["enable_log_probs"][0]
 
         prefill_sampling_params = device_sampling_params if device_sampling_params is not None else None
 
