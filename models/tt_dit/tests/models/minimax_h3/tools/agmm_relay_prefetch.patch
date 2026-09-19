@@ -1,0 +1,136 @@
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp
+index f064d1b1f31..edd8848aceb 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp
+@@ -295,6 +295,12 @@ void kernel_main() {
+     bool k_forward = true;
+     bool reuse_block = false;
+ 
++    // Receiver prefetch: the request for the next in0 block is issued right after the current block is handed to
++    // compute, before this core waits for the downstream hop's request. Without it the request for block k+1 only
++    // goes out after block k has been forwarded, so every request is serialized behind the whole downstream chain.
++    bool in0_prefetched = false;
++    uint32_t in0_prefetched_address = 0;
++
+     uint32_t defer_write_m_tile = 0;
+     uint32_t defer_write_m_tile_end = 0;
+     uint32_t defer_write_n_tile = 0;
+@@ -371,9 +377,13 @@ void kernel_main() {
+                     reuse_block = false;
+                     continue;
+                 }
+-                cb_in0.reserve_back(in0_block_num_tiles);
+-
+-                uint32_t in0_start_address = cb_in0.get_write_ptr();
++                uint32_t in0_start_address;
++                if (in0_prefetched) {
++                    in0_start_address = in0_prefetched_address;  // slot reserved and requested last iteration
++                } else {
++                    cb_in0.reserve_back(in0_block_num_tiles);
++                    in0_start_address = cb_in0.get_write_ptr();
++                }
+ 
+                 uint32_t k_block_left_tile = 0;
+                 uint32_t k_block_right_tile = 0;
+@@ -444,15 +454,32 @@ void kernel_main() {
+                         k_block_right_tile + k_right_tiles,
+                         k_right_tiles);
+                 } else {
+-                    // Get from previous device
+-                    in0_receiver_sem.set(INVALID);
+-                    in0_sender_sem.up(noc_obj, in0_sender_noc_x, in0_sender_noc_y, 1);
++                    // Get from previous core in the chain (requested last iteration when prefetched)
++                    if (!in0_prefetched) {
++                        in0_receiver_sem.set(INVALID);
++                        in0_sender_sem.up(noc_obj, in0_sender_noc_x, in0_sender_noc_y, 1);
++                    }
+                     in0_receiver_sem.wait(VALID);
+                 }
++                in0_prefetched = false;
+ 
+                 // Critical to performance for sender to push data to compute before mcasting
+                 // This frees sender to start next read earlier
+                 cb_in0.push_back(in0_block_num_tiles);
++                if constexpr (!is_injector_core) {
++                    // Prefetch: reserve the slot for the next block and ask upstream for it now, so the transfer
++                    // overlaps compute and the downstream wait below. The last delivery of the op has no successor.
++                    const bool last_receive = (m_block_iter == M_blocks_per_core - 1) &&
++                                              (n_block_iter == N_blocks_per_core - 1) &&
++                                              (k_block_iter == K_num_blocks - 1);
++                    if (!last_receive) {
++                        cb_in0.reserve_back(in0_block_num_tiles);
++                        in0_prefetched_address = cb_in0.get_write_ptr();
++                        in0_receiver_sem.set(INVALID);
++                        in0_sender_sem.up(noc_obj, in0_sender_noc_x, in0_sender_noc_y, 1);
++                        in0_prefetched = true;
++                    }
++                }
+                 if (!is_sink_core) {
+                     in0_sender_sem.wait(1);
+                     in0_sender_sem.set(0);
+diff --git a/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in1_sender_out.cpp b/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in1_sender_out.cpp
+index 1e2b2d2e64f..8239709c1bb 100644
+--- a/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in1_sender_out.cpp
++++ b/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in1_sender_out.cpp
+@@ -284,6 +284,10 @@ void kernel_main() {
+ #endif
+ 
+     bool k_forward = true;
++    // Receiver prefetch, mirrors dm_in0_sender.cpp: request the next in1 block right after handing the current
++    // one to compute, before waiting for the downstream hop's request.
++    bool in1_prefetched = false;
++    uint32_t in1_prefetched_address = 0;
+ 
+     uint32_t defer_write_m_tile = 0;
+     uint32_t defer_write_m_tile_end = 0;
+@@ -360,9 +364,13 @@ void kernel_main() {
+                     }
+                 }
+ 
+-                cb_in1.reserve_back(in1_block_num_tiles);
+-
+-                uint32_t in1_start_address = cb_in1.get_write_ptr();
++                uint32_t in1_start_address;
++                if (in1_prefetched) {
++                    in1_start_address = in1_prefetched_address;  // slot reserved and requested last iteration
++                } else {
++                    cb_in1.reserve_back(in1_block_num_tiles);
++                    in1_start_address = cb_in1.get_write_ptr();
++                }
+ #ifdef FSDP_FUSED
+                 // Remembered for fabric send (the NOC-chain block below increments in1_start_address).
+                 uint32_t in1_send_l1_addr = in1_start_address;
+@@ -509,15 +517,31 @@ void kernel_main() {
+                         n_tile_end);
+ #endif
+                 } else {
+-                    in1_receiver_sem.set(INVALID);
+-                    in1_sender_sem.up(noc_obj, in1_sender_noc_x, in1_sender_noc_y, 1);
++                    if (!in1_prefetched) {
++                        in1_receiver_sem.set(INVALID);
++                        in1_sender_sem.up(noc_obj, in1_sender_noc_x, in1_sender_noc_y, 1);
++                    }
+                     in1_receiver_sem.wait(VALID);
+                 }
++                in1_prefetched = false;
+ 
+                 // Critical to performance for sender to push data to compute before mcasting
+                 // This frees sender to start next read earlier
+                 cb_in1.push_back(in1_block_num_tiles);
+ 
++                if constexpr (!is_injector_core) {
++                    const bool last_receive = (m_block_iter == M_blocks_per_core - 1) &&
++                                              (n_block_iter == N_blocks_per_core - 1) &&
++                                              (k_block_iter == K_num_blocks - 1);
++                    if (!last_receive) {
++                        cb_in1.reserve_back(in1_block_num_tiles);
++                        in1_prefetched_address = cb_in1.get_write_ptr();
++                        in1_receiver_sem.set(INVALID);
++                        in1_sender_sem.up(noc_obj, in1_sender_noc_x, in1_sender_noc_y, 1);
++                        in1_prefetched = true;
++                    }
++                }
++
+                 if (!is_sink_core) {
+                     in1_sender_sem.wait(1);
+                     in1_sender_sem.set(0);
