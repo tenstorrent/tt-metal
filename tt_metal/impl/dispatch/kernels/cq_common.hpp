@@ -571,7 +571,7 @@ public:
         return this->available_bytes(cmd_ptr);
     }
 
-    // Get new CB pages. If getting new pages would require switching the the next block, this will call on_boundary to
+    // Get new CB pages. If getting new pages would require switching to the next block, this will call on_boundary to
     // handle the orphan data that would otherwise be lost and will then release old pages to writer.
     //
     // The argument to on_boundary is whether the next block is the first block in the circular buffer (in which case
