@@ -167,8 +167,6 @@ _AUDIO_TRACE_ENV = "MINIMAX_H3_AUDIO_TRACE"
 # Separate the audio stage's phases (host prep, upload, projection, vocoder, readback). Costs a synchronize
 # between each, so the total it reports is inflated and only the shares mean anything.
 _AUDIO_PHASES_ENV = "MINIMAX_H3_AUDIO_PHASES"
-# Dtype of the video VAE's tile blend when the caller passes none. "fp32" is the gated default; "bf16" keeps the
-# precision the decoder emits and halves the bytes through unpatchify, the gathers and the blend.
 
 
 def _audio_trace_enabled() -> bool:

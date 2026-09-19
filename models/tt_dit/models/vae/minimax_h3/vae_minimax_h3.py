@@ -1273,8 +1273,7 @@ class MiniMaxH3Vae:
                 profile["device"] += elapsed
                 mark = time.perf_counter()
             # Same cast and layout choices as the gather form, for the same reasons (see there).
-            if self._blend_dtype == ttnn.float32:
-                decoded = ttnn.typecast(decoded, ttnn.float32)
+            decoded = ttnn.typecast(decoded, ttnn.float32)
             pixels = self._unpatchify(decoded, num_frames, height, width)
             # Stage 1: the column. A one-axis gather keeps mesh order, so gathered index r is tile
             # row r of this device's column.
