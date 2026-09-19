@@ -1454,8 +1454,8 @@ static void sdpa_inner_loop_step(
         // non-causal attention with no mask at all (uses_lightweight_mask == false).
         // uses_lightweight_mask hoisted above the kt loop.
         if constexpr (use_provided_mask) {
-            // Dense user-provided mask: the full per-position mask, applied on every K chunk (no
-            // chunk skipping); the user mask defines the visible region. begin_mask_l1_accumulate
+            // Dense user-provided mask: the full per-position mask, applied on every K chunk the reader
+            // streams (a mask block map lets it skip fully masked ones). begin_mask_l1_accumulate
             // reconfigs srcA to the mask format so block-float (bfp8/bfp4) masks decode correctly.
             // The reader streams the mask one Q-tile-row at a time; wait for / pop just this
             // subblock's row group so the wait overlaps the reader, and the mask front then sits at

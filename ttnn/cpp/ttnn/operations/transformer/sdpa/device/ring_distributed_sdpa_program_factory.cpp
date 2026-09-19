@@ -216,9 +216,9 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * 2;
-    uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
-    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;           // double buffer
-    uint32_t mask_tiles = 2;                            // lightweight: neginf + causal diagonal
+    uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
+    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
+    uint32_t mask_tiles = 2;                   // lightweight: neginf + causal diagonal
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;
@@ -295,12 +295,16 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0                   // use_streaming_compute (ring uses legacy compute)
     };
     // Semaphore placeholders (not used in ring, but kernel expects them at indices 29-32)
-    reader_compile_time_args.push_back(0);  // sender_semaphore_id
-    reader_compile_time_args.push_back(0);  // receiver_semaphore_id
-    reader_compile_time_args.push_back(0);  // valid_semaphore_id
-    reader_compile_time_args.push_back(0);  // mcast_enabled
+    reader_compile_time_args.push_back(0);                                            // sender_semaphore_id
+    reader_compile_time_args.push_back(0);                                            // receiver_semaphore_id
+    reader_compile_time_args.push_back(0);                                            // valid_semaphore_id
+    reader_compile_time_args.push_back(0);                                            // mcast_enabled
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 33
     reader_compile_time_args.push_back(0);  // arg 34: use_windowed_narrowing — ring is never windowed
+    reader_compile_time_args.push_back(0);  // arg 35: kv chain mode, ring has no chains
+    reader_compile_time_args.push_back(0);  // arg 36: mask block map, never on ring
+    reader_compile_time_args.push_back(2);  // arg 37: K/V CB depth in chunks (double buffer)
+    reader_compile_time_args.push_back(0);  // arg 38: fwd_done_semaphore_id, ring has no chains
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -312,6 +316,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     TensorAccessorArgs().append_to(reader_compile_time_args);  // chunk_start_idx_tensor (ring has no flexible chunked)
     TensorAccessorArgs().append_to(reader_compile_time_args);  // cu_window_seqlens (ring is never windowed)
     TensorAccessorArgs().append_to(reader_compile_time_args);  // windowed_q_token_offset_tensor (never windowed)
+    TensorAccessorArgs().append_to(reader_compile_time_args);  // attn_mask_block_map (never on ring)
 
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
@@ -341,6 +346,11 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,      // arg 23: k_partial_col — non-streaming, no partial mask emitted
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 24
         0,  // arg 25: use_windowed_mask — ring never uses windowed (block-diagonal) attention
+        0,  // arg 26: sender_semaphore_id, ring has no chains
+        0,  // arg 27: receiver_semaphore_id
+        0,  // arg 28: valid_semaphore_id
+        0,  // arg 29: fwd_done_semaphore_id
+        0,  // arg 30: kv chain mode
     };
     // out accessor, then the cu_window and Q-offset accessors chained right after it (mirrors the regular
     // factory so the writer's accessor offset chain stays intact). Ring is never windowed → placeholders.
@@ -451,6 +461,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     cb_ids.windowed_q_offset = cb_ids.q_in;
     cb_ids.windowed_cu_reader = cb_ids.q_in;
     cb_ids.windowed_k_range = cb_ids.q_in;
+    cb_ids.kv_fwd_ctrl = cb_ids.q_in;
     cb_ids.k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
     cb_ids.v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
     cb_ids.mask_in = allocate_tile_cb(mask_tiles, mask_tile_size, mask_df);
