@@ -3,7 +3,9 @@
 Branch `jameslee/exp_ring_sdpa_wh`. Written for whoever picks up the AGMM work next; everything below was
 measured on this 4x8 Wormhole Galaxy (UF-EV-B12-GWH02) on 2026-09-18/19. **Status 2026-09-19:** lever §4.1 A
 (bf16-grade silu) is landed in both kernels, ff1 is 15.85 → 15.29 ms on the mesh; the "mesh hang" it was
-blamed for was a semaphore-reuse race in the test tooling (exp 8/9), now fixed. Next levers: §4.2 and §4.1 C. The investigation write-up that this
+blamed for was a semaphore-reuse race in the test tooling (exp 8/9), now fixed. Per-thread zones then showed the
+K-loop gap is **pipeline issue efficiency of the 2x2 fp32 subblock** (math, unpack and pack all ~95% busy, no
+waits), not operand delivery: §4.2 is retired as a lever (exp 10-12), and what is left is in §4.3 and §5. The investigation write-up that this
 hands off from is the section *ff1 AGMM: where the other 49% goes* in `MiniMaxH3_wormhole_perf.md`; this
 file adds the SwiGLU findings made after it, the exact recipes for each lever, and the tooling.
 
@@ -47,12 +49,25 @@ Inside the K loop (per-iteration zones, first 60 of 504 iterations fit the profi
 | `matmul_blocks` on the math thread (`AGMM_MM`) | **27.3** |
 | operand wait on the unpack thread (`AGMM_OPWAIT`, `in0/in1 wait_front`) | **1.0** |
 
-So at HiFi2 the operands arrive just in time and the loss is inside `matmul_blocks`: the 2x2 subblock
-(DST holds 4 tiles under fp32 dest), the fp32 L1-accumulating pack every K_block = 7 tile-MACs, and the
-DST acquire/commit/wait/release handshake per subblock. But the data movement is only just keeping up:
-running the same kernel at LoFi (math halved, ideal 4.0 ms) only saves 1.3 ms (14.48 → 13.17 ms plain
-single-device), because the relay chain delivers ~250 KB per core per iteration at ~10 GB/s ≈ 24 us. The two
-sides are balanced co-limiters at ~24-27 us per iteration; moving one alone yields a few percent.
+So at HiFi2 the operands arrive in time and the loss is inside `matmul_blocks`. Per-thread zones on one 2x2
+subblock of every 30th K iteration (exp 12, `agmm_compute_zones.py apply sampled`; the compute kernel runs on all
+three TRISCs, so each zone is timed on each thread) pin where:
+
+| thread | zone | cycles per 2x2 subblock (7 K tiles = 28 tile-MACs) | nominal |
+|---|---|---|---|
+| MATH | `tile_regs_acquire` (wait for a free DST half) | **21** | |
+| MATH | MAC issue (`matmul_block` x 7) | **1321** | 896 (28 x 32 at HiFi2) |
+| UNPACK | unpack busy over the same 7 calls (28 tiles) | **1357** | |
+| PACK | `tile_regs_wait` (wait for math to commit) | **26** | |
+| PACK | pack 4 fp32 tiles with L1 accumulate | **1236** | |
+
+Nobody waits: math, unpack and pack are each 90-100% busy at ~1350 cycles per subblock = 20 subblocks x 1.35 us =
+27 us per iteration, the measured pace. Math issues at **47 cycles per tile-MAC instead of 32**, unpack at ~42
+per tile, pack at **309 per fp32 tile**. The K-loop gap is the issue efficiency of the 2x2 fp32 subblock pipeline
+(per-`matmul_block`-call setup on MATH and UNPACK, fp32 read-modify-write packs), and all three would have to
+speed up together. This replaces the first draft's "operand delivery co-limits" reading: the LoFi result (only
+-1.65 ms when FPU work halves, exp 11) is the unpacker pacing at LoFi, and a relay-protocol prefetch that removes
+the request/forward serialization changes nothing at either fidelity (exp 10).
 
 Inside the SwiGLU epilogue (single-device A/B on the identical `swiglu_block`, HiFi2, blocks (8,7,10)):
 
@@ -76,8 +91,8 @@ bf16 anyway, so bf16-grade silu loses nothing measurable.
 | component | ms | lever |
 |---|---|---|
 | FPU work at HiFi2 peak | 8.0 | none (the roofline) |
-| K-loop overhead: compute-thread structure and operand delivery, balanced | 4.9 | §4.2 + §4.3 together |
-| SwiGLU epilogue, of which ~2.2 is `silu` | 2.8 | §4.1 |
+| K-loop pipeline issue efficiency at 2x2/fp32 (math 47 vs 32 cyc per tile-MAC, unpack 42, pack 309 per fp32 tile; no waits) | 5.0 | §4.3 only; delivery is not a factor (§4.2) |
+| SwiGLU epilogue (2.19 ms after §4.1 A; ~1.8 of the 2.6 kcycles per pair is the bf16-grade `silu`) | 2.2 | §4.1 B/C, both precision or design trade-offs |
 | waits, fabric, dispatch | <0.1 | none |
 
 ## 3. Experiments already run (do not repeat)
@@ -92,6 +107,10 @@ bf16 anyway, so bf16-grade silu loses nothing measurable.
 | 6 | per-block zones | K loop 12.9 ms, SwiGLU 2.8 ms, waits 0 |
 | 7 | SwiGLU attribution and variants, single device | table in §2: silu 2.16 ms; batching 0.1 ms; `silu_tile<false>` -0.93 ms with PCC intact |
 | 8 | `silu_tile<false>` in the AGMM kernel on the mesh, through the sweep harness | hung 3 of 3 times. **Root-caused 2026-09-19: not the kernel.** The harness reused one semaphore pair and one gathered-in0 buffer for every call, and its warm-up enqueues calls back to back (`sync=False`): a device that finishes call i early starts call i+1 and signals ring semaphores a neighbour is still consuming in call i. Reproduced with the **unmodified** kernel: 5 back-to-back calls with one shared set hang after the first completes. The model never sees this: `CCLManager.get_ag_ping_pong_semaphore/buffer` alternates two sets. Harness fixed to ping-pong (§6) |
+| 10 | relay prefetch: in0/in1 receivers request block k+1 right after pushing block k to compute, before waiting for the downstream hop's request (60-line reorder of `dm_in0_sender.cpp` / `dm_in1_sender_out.cpp`, `tools/agmm_relay_prefetch.patch`) | correct (PCC identical, no hang) and **no gain**: HiFi2 16.08 → 16.06 ms, LoFi 14.52 → 14.68. Delivery does not pace the loop. Not landed |
+| 11 | blocking sweep with the bench, HiFi2 host ms: (8,7,10) 2x2 **16.06**; (8,7,10) **4x1 18.28** (same 4 DST tiles, 5 unpacks per K step instead of 4); (4,7,10) 23.68; (4,14,10) 23.37 (doubling K_block = halving fp32 L1-acc pack passes: -1.3%); plain (8,7,10) 14.30; plain LoFi 12.65 | non-math time scales with tile-MACs and with the unpack count, not with iterations or pack passes → issue-bound pipeline, see §2 |
+| 12 | per-thread sampled zones (`agmm_compute_zones.py apply sampled`) | table in §2: ACQ 21 / MAC 1321 / UNPACK 1357 / PWAIT 26 / PACK 1236 cycles per subblock |
+| 13 | block zones after §4.1 A (`apply block`) | KLOOP **13,034** us, SWIGLU **2,191** us per core (was 12,934 / 2,809): the silu change removed 618 us on the mesh; 2,608 cycles per gate/up pair remain |
 | 9 | `silu_tile<false>` on the mesh with ping-pong semaphores (`agmm_ff1_mesh_bench.py`, 10 back-to-back calls) and through the fixed harness | **runs.** Host 16.58 → 16.08 ms per call; device kernel (harness, Tracy) **15,852 → 15,289 us (-563 us, -3.6%)**; PCC 0.9999838 → 0.9999834, rel-RMSE 0.00806 → 0.00828 (bar 0.9995 / 0.02); `test_linear_swiglu` 4/4 at 0.99998. **Landed** in both `compute.cpp` |
 
 Numerics baseline (perf doc, ff1 real ring op at M=13664): pcc 0.9999843, rel-RMSE 0.00837; bar pcc > 0.9995,
@@ -135,69 +154,68 @@ kernel first.
 
 Not worth it: two pairs per DST acquire with hoisted inits (-0.1 ms, measured).
 
-### 4.2 Operand delivery (the ~24 us per K-iteration floor; 2.4 GB of relay + 1 GB of DRAM re-reads per op)
+### 4.2 Operand delivery — measured, not a lever (exp 5, 10, 12)
 
-Facts from the kernels (all in `all_gather_minimal_matmul_async/device/`):
+The store-and-forward relay (in0 down a column chain of 8 cores, in1 across a row chain, one request/response
+semaphore round-trip per hop per K block; head cores read DRAM; `dm_in0_sender.cpp:446-476`,
+`dm_in1_sender_out.cpp:511-541`) keeps up: `in0/in1 wait_front` is 1 us per iteration (exp 5), and a prefetching
+receiver that decouples the upstream request from the downstream forward is correct but changes nothing at HiFi2 or
+LoFi (exp 10; the patch is kept at `tools/agmm_relay_prefetch.patch` in case a faster compute pipeline ever exposes
+delivery). Two ideas in the first draft do not survive the numbers: **double-buffering the out CB** (the out-CB
+reserve wait is 0-26 us total, exp 6) and **keeping in1 resident across M blocks** (that needs the whole
+K x N_block panel, 168 x 10 tiles = 3.4 MB per N block at K = 5376, not one 140 KB block; L1 is 1.4 MB). Multicast
+would cut relay traffic but the loop is not waiting on it. Revisit only if §4.3 lowers the compute pace below ~20 us
+per iteration.
 
-- No multicast. in0 goes down a column chain of 8 cores, in1 across a row chain of 8, each hop a
-  request/response semaphore round-trip per K-block (`dm_in0_sender.cpp:446-476`,
-  `dm_in1_sender_out.cpp:511-541`); only the chain head reads DRAM, tile by tile with one barrier per block
-  (`matmul_dataflow_common.hpp:436-489`).
-- Loop order m → n → k (`dm_in0_sender.cpp:304-317`, `compute.cpp:460-483`): in0 re-read from DRAM once per
-  N block (3x), in1 once per M block (7x); ~1.0 GB DRAM per device per op on the 16 head cores.
-- out CB single-buffered (`program_factory.cpp:392`); the plain and fabric-bound factories double-buffer it.
+### 4.3 Compute pipeline (the 27 us per iteration vs 18 us of math): what is left
 
-Changes, smallest first:
+The pace is set by three ~equally loaded threads (§2), so any single fix moves the pace only as far as the next
+thread. In order of evidence:
 
-1. **Resident in1 across M blocks.** The fabric-bound factory already does this with a `c_7` in1 scratch CB
-   (`minimal_matmul/device/minimal_matmul_fabric_bound_program_factory.cpp:347-357`, "so the in1 injector can
-   read it once and re-present it to compute across M blocks"). Port that CB and the reader logic to the AGMM
-   factory (`program_factory.cpp:371-394` CB sizing; `dm_in1_sender_out.cpp:497-510` reader). L1: one
-   K_block x N_block bf16 block = 140 KB at (8,7,10); the current footprint is ~904 KB of 1464 KB.
-   Expected: in1 DRAM/relay traffic 7x → 1x per N block. The (12,7,8) result (fewer M blocks, -13% plain)
-   bounds what traffic reduction is worth.
-2. **Double-buffer the out CB** (`program_factory.cpp:392`, mirror `minimal_matmul_program_factory.cpp:321`).
-   +80 KB L1. Removes the compute→writer sync point at every output block.
-3. **Spread head-core DRAM reads**: each of the 8 chain cores reads 1/8 of the block and forwards, instead
-   of one head reading all of it (`read_in0_block_sync` / `read_in1_block_sync` callers at
-   `dm_in0_sender.cpp:425-445`, `dm_in1_sender_out.cpp:497-510`).
-4. **Multicast** in place of store-and-forward (the `matmul_2d` pattern, `noc_async_write_multicast` +
-   semaphore). Removes 7 serialized hops and the per-hop handshakes. Largest change.
-
-How to test: `minimal_matmul` shares the data-movement design, so iterate on
-`minimal_matmul/device/` with `agmm_ff1_single_device_bench.py --fidelity LoFi,HiFi2` — the **LoFi time is
-the data-movement floor** (13.17 ms today at (8,7,10)); a delivery fix shows up there first, then at HiFi2
-once the compute side (§4.3) is also lowered. Port to the AGMM factory afterwards and confirm on the mesh
-with the sweep harness (§6). Check operand waits with the `AGMM_OPWAIT` zone (§6) — they should stay near zero.
-
-### 4.3 Compute-thread structure (the 27 us per iteration vs 18 us of math)
-
-- **fp32 dest off** for ff1 only. `ParallelFeedForward.forward` (`models/tt_dit/layers/feedforward.py:125-131`)
-  hands one compute config to ff1 and ff2; give ff1 its own (`fp32_dest_acc_en=False`) or set
-  `self.ff.ff1.compute_config` (`linear.py:232`, used at `:442`). Then the blocking can move to an 8-tile
-  subblock: swept best (8,7,16) sb 2x4 at 14,475 us (`matmul.py:140` entry). Roofline unchanged; accumulator
-  error doubles (rel-RMSE 0.0087 → 0.0169 on the single-device SwiGLU output, bar 0.02) — needs a
-  model-level check (CLIP/VBench), not only op PCC. Pays off fully only together with §4.2.
-- **Larger K_block** does not help while delivery co-limits (exp 1); revisit after §4.2.
-- `packer_l1_acc` is hard-coded on in the factory (`program_factory.cpp:1085-1090` passes only fidelity,
-  fp32 and approx); `dst_full_sync_en` is never plumbed, so DST is always half-banked. Plumbing
-  `dst_full_sync_en=True` would give 8 fp32 tiles per acquire without giving up fp32 — untested, worth one
-  single-device run.
+- **fp32 dest off for ff1 only.** DST then holds 8 bf16 tiles per half, so the subblock can be 2x4 (fewer
+  `matmul_block` calls per tile-MAC, better in0 reuse on the unpacker) and the partial packs are 2 KB bf16 instead
+  of 4 KB fp32 with L1 accumulate. Measured on the mesh: (8,7,16) 2x4 **14,475 us (-8%)** before the silu change.
+  `ParallelFeedForward.forward` (`models/tt_dit/layers/feedforward.py:125-131`) hands one compute config to ff1 and
+  ff2; give ff1 its own or set `self.ff.ff1.compute_config` (`linear.py:232`, used at `:442`), and pick the
+  (8,7,16) 2x4 entry in `matmul.py:140`. Roofline unchanged; accumulator error doubles (rel-RMSE 0.0087 → 0.0169
+  on the single-device SwiGLU output, bar 0.02) — a precision decision that needs a model-level check (CLIP /
+  VBench), not only op PCC.
+- **`dst_full_sync_en`** (8 fp32 tiles, one bank) is not a lever: it removes the math/pack overlap, so a subblock
+  costs MAC issue + pack serially (~2240 + 2470 cycles per 8 tiles = 590 per tile vs 340 today). Not worth a run.
+- **Larger K_block** does not help while the pace is per tile-MAC (exp 1, exp 11); only relevant if the pack
+  became the pacer.
+- **LLK-level:** the per-call setup of `matmul_block` for ct=rt=2 on MATH (47 vs 32 cycles per tile-MAC) and on
+  UNPACK (~42 per tile) is where the 5 ms sits. Options are a `kt_dim`-looping variant so one call covers the 7 K
+  tiles of a subblock (today `compute.cpp:matmul_blocks` calls `matmul_block` once per K tile with `kt_dim` used
+  only as an index stride), or MOP/REPLAY programming across the K loop. This is tt-llk work on
+  `llk_math_matmul` / `llk_unpack_AB_matmul` for Wormhole, not a kernel edit; the sampled zones above are the
+  measurement to hold it against.
+- **The epilogue (2.19 ms).** Change B (LUT sigmoid, `calculate_sigmoid_appx`) is the only remaining large cut
+  (~5 SFPU instructions per vector vs ~25); its ~1e-2 error on the sigmoid is a precision decision like fp32 off.
+  Change C (pack-thread SFPU overlap) does not fit under fp32 dest: the 2x2 matmul subblock uses all 4 fp32 tiles
+  of a DST half, so there is no DST room to hold a gate/up pair alongside the MACs; it becomes possible only
+  together with fp32 off (8 bf16 tiles per half).
 
 ### 4.4 Not levers (measured or bounded)
 
-K_block (exp 1); the ring gather (hidden, exp 3/5); fabric bandwidth (1.1 ms bound, 7% used); aggregate DRAM
-(0.78 ms bound); LoFi (halves the bar); the grid (mux row fixed by the op).
+K_block (exp 1, 11); operand delivery and the relay protocol (exp 5, 10, 12); out-CB depth (exp 6); the ring
+gather (hidden, exp 3/5); fabric bandwidth (1.1 ms bound, 7% used); aggregate DRAM (0.78 ms bound); LoFi (halves
+the bar); `dst_full_sync_en` (serializes math and pack); the grid (mux row fixed by the op).
 
 ## 5. Path to roofline
 
-| step | K loop | epilogue | total | util |
-|---|---|---|---|---|
-| 2026-09-18 | 12.9 | 2.8 | 15.7 | 51% |
-| **§4.1 A landed (2026-09-19)** | 12.9 | ~2.3 | **15.3** (device 15,289 us) | 53% |
-| §4.1 C (epilogue hidden behind the next K loop) | 12.9 | ~0 | ~12.9 | 62% |
-| §4.2 + §4.3 (delivery and compute side both lowered) | ~9-10 | ~0 | **~9-10** | 80-90% |
-| roofline | 8.0 | 0 | 8.0 | 100% |
+| step | K loop | epilogue | total | util | status |
+|---|---|---|---|---|---|
+| 2026-09-18 | 12.9 | 2.8 | 15.7 | 51% | |
+| **§4.1 A landed (2026-09-19)** | 13.0 | 2.2 | **15.3** (device 15,289 us) | 53% | done, numerics unchanged |
+| + fp32 dest off, (8,7,16) 2x4 | ~11 | ~1.5 | **~13** (14,475 measured before A) | ~60% | precision decision, model-level check needed |
+| + LUT sigmoid (§4.1 B) | ~11 | ~0.5 | ~12 | ~65% | precision decision |
+| + LLK `matmul_block` issue efficiency to ~35 cyc/tile-MAC | ~9.5 | | ~10-11 | 75% | tt-llk work |
+| roofline | 8.0 | 0 | 8.0 | 100% | |
+
+Without a precision decision the kernel is at its practical floor for this blocking: the remaining 5 ms of K loop is
+the per-tile issue cost of the 2x2 fp32 subblock on all three TRISCs, and the 2.2 ms epilogue is SFPU-bound with the
+accurate-enough sigmoid.
 
 Per forward (50 blocks) each ms per call is 50 ms; 15.7 → 10 ms is ~0.29 s of the 12.4 s forward, 2.3%.
 The same three levers apply to to_qkv (10.4 ms, 58%) and to_out (4.3 ms, 46%), which share the kernel
@@ -233,8 +251,10 @@ happens for the AGMM; the non-AGMM branches were already safe, they have no ring
 kernel changes. Note the harness passes a **bias** for `ff1_swiglu` (the model does not) and runs
 `math_approx_mode=False` (the model runs True; silu ignores it).
 
-**Device zones.** Include `"tools/profiler/kernel_profiler.hpp"` in `compute.cpp` and wrap regions in
-`{ DeviceZoneScopedN("NAME"); ... }`; the sweep harness already runs under `tracy -p`, so zones land in
+**Device zones.** `models/tt_dit/tests/models/minimax_h3/tools/agmm_compute_zones.py apply block|sampled` edits the
+AGMM `compute.cpp` in place (exact-match, asserts if the kernel moved on), `revert` restores it, `parse <csv>` prints
+per-thread mean cycles and per-core sums. By hand: include `"tools/profiler/kernel_profiler.hpp"` in `compute.cpp`
+and wrap regions in `{ DeviceZoneScopedN("NAME"); ... }`; the sweep harness already runs under `tracy -p`, so zones land in
 `generated/profiler/mm_sweep_wh_4x8_ring_13664_5376_7168_8x8_agmm_ff1_swiglu/reports/<ts>/profile_log_device.csv`.
 The per-core buffer holds ~120 zone events per RISC, so use per-output-block zones (21 blocks x 3 zones) for
 the full op and per-iteration zones only to sample the first ~60 iterations. Parse: skip the first header line,

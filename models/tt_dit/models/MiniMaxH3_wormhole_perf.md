@@ -476,6 +476,7 @@ consistent with `is_causal=False`. Observed: `(6,24)` 1,602,880 B; `(8,20)` 1,63
 | 13 | TP/SP axes and factors at 15 s / 16:9 (`test_parallel_sweep_minimax_h3.py`) | **done** | Only three configurations exist on this mesh and the shipped TP4/SP8 is the fastest: TP8/SP4 is **+4.1%** ms/fwd (untuned blockings), TP1/SP32 **hangs deterministically** in its first forward. See the section below |
 | 14 | ff1 AGMM utilization (51% of HiFi2 peak) | **measured** | Roofline + six on-device experiments. The 15.7 ms splits into 8.0 ms of FPU work, **2.8 ms of serialized SwiGLU epilogue** and 4.9 ms of K-loop overhead where the compute-thread structure (4-tile DST, fp32 L1-acc pack every 7 MACs) and the operand delivery (~10 GB/s per core through the store-and-forward relay) are balanced co-limiters. fp32 dest off measures -4% alone, -8% with 8-tile subblocks, at 2x the numerical error; K_block >= 14 gives nothing. See *ff1 AGMM: where the other 49% goes* |
 | 15 | ff1 AGMM SwiGLU epilogue: bf16-grade `silu_tile<false>` (2026-09-19) | **landed** | Device kernel 15,852 → **15,289 us (-3.6%)** on the mesh, PCC 0.99998 unchanged to the 4th decimal; the mesh "hang" it was first blamed for was a semaphore-reuse race in `sweep_mm_block_sizes.py` (one semaphore pair for back-to-back calls; the model ping-pongs two), fixed. Details and next levers in `MiniMaxH3_wormhole_agmm_ff1_handoff.md` |
+| 16 | ff1 AGMM K-loop attribution with per-thread device zones (2026-09-19) | **measured** | The 5 ms above the FPU time is **pipeline issue efficiency**, not delivery: on a 2x2 fp32 subblock the MATH thread issues at 47 cycles per tile-MAC (nominal 32), UNPACK is busy 42 per tile and PACK 309 per fp32 L1-acc tile, with 21-26 cycles of DST waits — all three ~95% busy. A relay-protocol prefetch changed nothing (16.08 → 16.06 ms); 4x1 subblocks cost +2.2 ms; doubling K_block -1.3%. Remaining levers are precision decisions (fp32 dest off + 2x4: -8% measured; LUT sigmoid) or tt-llk work on `matmul_block`. Handoff §2-§5 rewritten accordingly |
 
 ## Exp ring joint SDPA on Wormhole — brought up and measured (2026-09-18)
 
@@ -732,7 +733,8 @@ relay binds.
    intermediate. Hoisting the inits (all silu tiles of a block, then all multiplies), or a single fused
    SFPU pass, or applying the epilogue while the last K block's result is still in DST, would bring it
    towards the ~0.8 ms a plain copy epilogue costs. Kernel work in `compute.cpp`, no config change.
-2. **Operand delivery (the ~24 us per K-block floor).** Any of: multicast instead of the 8-deep
+2. **Operand delivery (the ~24 us per K-block floor).** *Retired 2026-09-19 (row 16): the loop does not wait on
+   delivery; the ~24 us is the compute pipeline's own issue pace.* Any of: multicast instead of the 8-deep
    store-and-forward relay; keep an in1 block resident across M blocks so the weight is read once per N block
    (the fabric-bound factory already has this `c_7` scratch CB, `minimal_matmul_fabric_bound_program_factory.cpp:347-357`,
    but that path has no Wormhole grid entry in `fabric_agmm_configs`); spread the head-core DRAM reads over

@@ -53,6 +53,9 @@ def main() -> None:
         "when calls are enqueued back to back -- the model alternates two of each via CCLManager)",
     )
     p.add_argument("--sync-each", action="store_true", help="synchronize the mesh after every timed call")
+    p.add_argument(
+        "--fidelity", default="HiFi2", choices=["LoFi", "HiFi2", "HiFi4"], help="LoFi = delivery-floor diagnostic"
+    )
     args = p.parse_args()
     mb, kb, nb, sh, sw = (int(v) for v in args.blocks.split(","))
 
@@ -97,7 +100,7 @@ def main() -> None:
     call_idx = [0]
     compute = ttnn.init_device_compute_kernel_config(
         mesh.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=getattr(ttnn.MathFidelity, args.fidelity),
         math_approx_mode=True,
         fp32_dest_acc_en=bool(args.fp32_dest),
         packer_l1_acc=True,
@@ -144,7 +147,7 @@ def main() -> None:
     ttnn.synchronize_device(mesh)
     dt = (time.perf_counter() - t0) / args.iters
     tag = "plain" if args.no_swiglu else "swiglu"
-    mode = f"{'1 set' if args.no_pingpong else 'ping-pong'}{', sync each' if args.sync_each else ''}"
+    mode = f"{args.fidelity}, {'1 set' if args.no_pingpong else 'ping-pong'}{', sync each' if args.sync_each else ''}"
     log(
         f"AGMM ff1 {tag} blocks ({mb},{kb},{nb}) sb ({sh},{sw}) fp32_dest={bool(args.fp32_dest)} [{mode}]: "
         f"{dt * 1e3:.2f} ms per call, host-timed over {args.iters} back-to-back calls"
