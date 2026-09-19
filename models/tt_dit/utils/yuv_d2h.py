@@ -61,6 +61,24 @@ def _warn_once_about_the_fallback() -> None:
     )
 
 
+# The YUV planes leave rgb_to_yuv as (1, h, w, T) uint8: 28-byte pages, each padded to the 64 B DRAM alignment and read one
+# NoC transaction at a time. rgb_to_yuv's wide_rows emits the same bytes as (1, h, w*T) rows, 4.7 KB pages, and the D2H is
+# 2.7x faster (4x8 bench 2026-09-19: 6.2 -> 2.3 ms per wave, 5.4 -> 2.0 ms of it device-side); the host half views the
+# shards back. Off until the 15 s A/B.
+_YUV_WIDE_ENV = "MINIMAX_H3_YUV_WIDE"
+
+
+def _wide_pages_enabled() -> bool:
+    return os.environ.get(_YUV_WIDE_ENV, "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _as_hwt(shard: torch.Tensor, T: int) -> torch.Tensor:
+    """A wide (1, h, w*T) host shard back to the kernel-native (1, h, w, T) view; a 4-D shard passes through."""
+    if shard.dim() == 4:
+        return shard
+    return shard.reshape(shard.shape[0], shard.shape[1], shard.shape[2] // T, T)
+
+
 def _get_planar_out_buf(T: int, row_stride: int) -> np.ndarray:
     global _PLANAR_OUT_BUF, _PLANAR_OUT_SHAPE
     shape = (T, row_stride)
@@ -173,7 +191,7 @@ def _yuv_planar_d2h(
                         continue
                     buf = distributed_buf.get_shard(c)
                     if buf is not None:
-                        coords_and_shards.append((c, _host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim]))
+                        coords_and_shards.append((c, _as_hwt(_host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim], T)))
                 return coords_and_shards
 
             Y_coords_shards = _extract_local(host_Y)
@@ -208,7 +226,7 @@ def _yuv_planar_d2h(
                 host_shards = ttnn.get_device_tensors(host_tensor)
                 logical_shape = list(host_shards[0].shape)
                 trim = tuple(slice(0, d) for d in logical_shape)
-                return [_to_torch_zero_copy(s)[trim] for s in host_shards]
+                return [_as_hwt(_to_torch_zero_copy(s)[trim], T) for s in host_shards]
 
             Y_shards = _extract(host_Y)  # each (1, h_per_y, w_per_y, T)
             Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
@@ -484,7 +502,9 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
 
     # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
-    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients)
+    # Only ask for wide rows when enabled, so a library without the argument still serves the plain layout.
+    wide_kwargs = {"wide_rows": True} if _wide_pages_enabled() else {}
+    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, **wide_kwargs)
     if debug:
         print(f"  [yuv-d2h] yuv outputs per-shard:")
         print(f"  [yuv-d2h]   Y : {list(tt_Y.shape)}")
