@@ -1,9 +1,9 @@
 {
  "last_run": {
-  "run_id": "35443093172",
-  "timestamp": "2026-09-19T12:36:57Z"
+  "run_id": "35461161503",
+  "timestamp": "2026-09-19T18:41:00Z"
  },
- "run_id": "35443093172",
+ "run_id": "35461161503",
  "open_prs": {
   "52106": {
    "issue": 51660,
@@ -208,6 +208,16 @@
   "56880_gather_rank": {
    "issue": 56880,
    "status": "investigated for fixability 2026-09-19; too architecturally risky for quick auto-fix (4 program factories + codegen route, TILE-layout slicing, transpose reorders fold order vs scatter's simpler ROW_MAJOR-only fix in #56875); labeled bug only, no PR opened"
+  },
+  "57088_prefill_producer_num_layers": {
+   "issue": 57088,
+   "branch": "repo-assist/fix-issue-57088-prefill-producer-num-layers-default",
+   "status": "opened this run; default NUM_LAYERS from ADAPTER.model_config.NUM_LAYERS mirroring prefill_runner.py's existing pattern instead of a hardcoded 61; Python-only, no build needed"
+  },
+  "57090_dedupe_mgd": {
+   "issue": 57090,
+   "branch": "repo-assist/fix-issue-57090-dedupe-mesh-graph-descriptors",
+   "status": "opened this run, [skip ci] docs/config-only; collapsed glm52/kimi27 mgd textprotos (verified byte-identical) to shared sc1_mgd/sc4_mgd, updated run_multirank_pcc.sh + RUN_COMMANDS.md"
   }
  },
  "issues_labeled": [
@@ -557,7 +567,9 @@
   "56414": "BF16 trunc/floor/ceil/frac return +-inf instead of NaN (_trunc_body_ in ckernel_sfpu_rounding_ops.h has no NaN/inf guard before bit-mask path); confirmed root cause against current source, labeled bug + commented, but explicitly deferred fix to maintainer - raw SFPU intrinsic kernel (SFPEXEXP/SFPIADD/SFPSHFT2/SFPAND) shared by 3+ other LLKs, no sfpi.h vendored in this checkout to safely verify a bit-level change; 2026-09-13",
   "56776": "2026-09-19: Quasar V2 posted multicast dword-write loss on emulator; already labeled bug, self-driving reporter with candidate hypotheses listed, needs emulator/HW access",
   "56701": "2026-09-19: Quasar trace-capture DFB config snapshot missing (0 vs N payloads), already labeled bug, needs dispatch/serialization expertise",
-  "56702": "2026-09-19: Quasar cached-program re-enqueue doesn't refresh DFB configs (WH/BH-only refresh), already labeled bug, needs dispatch/serialization expertise, sibling of 56701"
+  "56702": "2026-09-19: Quasar cached-program re-enqueue doesn't refresh DFB configs (WH/BH-only refresh), already labeled bug, needs dispatch/serialization expertise, sibling of 56701",
+  "57055": "CMake TT::Metalium::Private refactor -- genuine, 47 occurrences/32 files, too large/architectural for a surgical repo-assist fix",
+  "57003": "T3K dispatch pipeline retirement -- gated to on-or-after 31 October 2026, not actionable yet"
  },
  "stale_pr_nudges": {
   "34933": {
@@ -1109,7 +1121,7 @@
   }
  },
  "backlog_cursor": {
-  "task1_task2_latest": "2026-09-19 run: reviewed #55670(=55605_alias PR) CI failure, #56880/#56876/#56853/#56738/#56776/#56701/#56702 (gather/scatter/pow rank-fold family + Quasar multicast/DFB issues), confirmed no duplicates needed for 56738/56876/56853; labeled #56880 bug. Next run continue newest-scan below #56914 (unchanged from prior cursor since this run focused on CI/PR maintenance + targeted issue family).",
+  "task1_task2_latest": "2026-09-19 later run: reviewed newest ~30 issues from #57090 down through #56874 (continuation of prior scan, most already covered/labeled). Confirmed fresh bugs #57088 (prefill_producer NUM_LAYERS hardcoded default) and #57090 (duplicate mesh-graph descriptors) -- both labeled bug and fixed via PR this run. #57055 (CMake include-path refactor, 47 sites across 32 files) confirmed genuine but too large/architectural, left unlabeled. #57003 (T3K pipeline retirement) confirmed time-gated to 31-Oct-2026, not actionable yet. Cursor continues below #56874 next run.",
   "task6_latest": "2026-09-19: nudged 3 never-previously-nudged PRs from page2 (draft:false sort:updated-asc): #52367 (codeowners re-ping, pending since 08-11), #52340 (author nudge, unaddressed review comment), #52326 (author nudge, dirty + scope-overlap flag). Hit 3-action cap. Candidates further down (52375, 52404, 52418, 52419, 52420...) not yet checked."
  },
  "labeled_issues": {
@@ -1387,7 +1399,9 @@
    "label": "bug",
    "date": "2026-09-18",
    "note": "unary elementwise silent float-bitpattern-in-int32-tensor bug, confirmed against current unary_op_utils.cpp, fixed this run via TT_FATAL validation + test"
-  }
+  },
+  "57088": "bug",
+  "57090": "bug"
  },
  "issues_commented": {
   "53922": {
@@ -1449,6 +1463,11 @@
   }
  },
  "run_history": [
+  {
+   "run_id": "35461161503",
+   "date": "2026-09-19T18:41:00Z",
+   "summary": "Task1/3/4: investigated fresh issue #57088 (prefill_producer.py hardcoded PREFILL_NUM_LAYERS default to 61=Kimi-K2.7's depth; verified against current reference/glm_5_2_config.py (78), glm_5_1_config.py (78), mistral_small_4_config.py (36), and all 5 manifests under deepseek_v3_d_p/tt/runners/manifests/ -- none set PREFILL_NUM_LAYERS) -- confirmed GLM-5.2/GLM-5.1/Mistral-4 silently scored only their first 61 layers on sc4. Fixed by defaulting from ADAPTER.model_config.NUM_LAYERS, mirroring prefill_runner.py:77's existing pattern; labeled bug, opened ready-for-review PR (Python-only, no build). Also investigated #57090 (per-model prefill CI mesh-graph descriptors identical across models) -- verified glm52_{sc1,sc4} and kimi27_{sc1,sc4} textprotos are byte-identical via diff/md5sum; collapsed to shared sc1_mgd.textproto/sc4_mgd.textproto, updated run_multirank_pcc.sh's path derivation and RUN_COMMANDS.md; labeled bug, opened [skip ci] ready-for-review PR (shell+docs+data only). Task5: spot-checked CI on 3 recent repo-assist PRs (#56997/#56943/#57052) -- pre-checks green, pr-gate.yaml still shows zero runs, same repo-side gating pattern as prior runs, no action needed. Investigated #57055 (CMake TT::Metalium::Private refactor, 47 sites/32 files) -- genuine but too large for a surgical fix, left unlabeled pending maintainer scoping. Confirmed #57003 (T3K dispatch pipeline retirement) is gated to on-or-after 31 October 2026, not actionable yet. Task7: verified #57090's reporter kgrujcic-tt has 30 merged PRs -- established contributor, no welcome. Task8: refreshed monthly summary #55015 with this run's entry and updated suggested actions."
+  },
   {
    "run_id": "35443093172",
    "date": "2026-09-19T12:36:57Z",
