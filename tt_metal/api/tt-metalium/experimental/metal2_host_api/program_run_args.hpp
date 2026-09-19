@@ -123,13 +123,18 @@ struct ProgramRunArgs {
     using PrefetcherPipeArgument = std::reference_wrapper<PrefetcherPipe>;
 
     // A PrefetcherPipeArgument must be specified:
-    //  For EVERY PrefetcherPipeParameter in the ProgramSpec, when calling SetProgramRunArgs.
-    //  It MAY be omitted when calling UpdateProgramRunArgs (the binding is stateful).
+    //  For EVERY PrefetcherPipeParameter in the ProgramSpec that is not yet bound, when calling
+    //  SetProgramRunArgs. The binding is sticky (see below), so a later SetProgramRunArgs on the same
+    //  Program MAY omit a parameter it already bound; the first call must supply them all.
+    //  It MAY be omitted when calling UpdateProgramRunArgs.
     //
-    // The supplied pipe's geometry (sender, receivers, ring size) MUST match the parameter's, and its
-    // ring must accommodate the parameter's entry_size. A Program binds a given parameter to one pipe
-    // object for its lifetime: re-supplying the same pipe is a no-op, supplying a different one is
-    // rejected.
+    // The supplied pipe MUST live on the MeshDevice the Program was built for, and its geometry
+    // (sender, receivers, ring size) MUST match the parameter's; its ring must accommodate the
+    // parameter's entry_size. A Program binds a given parameter to one pipe object for its lifetime:
+    // re-supplying the same pipe is a no-op, supplying a different one is rejected.
+    //
+    // Binding is all-or-nothing per call: every supplied pipe is checked before any is bound, so a
+    // rejected call leaves the Program exactly as it was and can be retried with corrected arguments.
     //
     // Parameters that share a kernel accessor (one KernelSpec::PrefetcherPipeBinding naming several
     // pipes) resolve to one device slot, filled per node from whichever pipe is present there. When

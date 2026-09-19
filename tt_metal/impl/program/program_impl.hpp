@@ -37,6 +37,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -357,7 +358,7 @@ public:
 
     // Per-core PrefetcherPipe slot record. A slot is reserved (geometry only) before the program
     // compiles and bound to a live pipe object afterwards: `pipe` / `config_page_addr` stay
-    // null / 0 until bind_prefetcher_pipe_to_slot runs for this core. Dispatch reads the record only when a
+    // null / 0 until commit_prefetcher_pipe_slot_bind runs for this core. Dispatch reads the record only when a
     // program is enqueued, by which point every participant must be bound.
     struct PrefetcherPipeParticipant {
         uint8_t prefetcher_pipe_id;
@@ -423,12 +424,29 @@ public:
         uint32_t entry_size,
         uint32_t num_credit_lanes);
 
-    // Bind a live pipe to a reserved slot on `cores` (a subset of the slot's cores whose sender /
-    // receiver split matches the pipe's). Validates the pipe against the slot geometry, arms the
-    // pipe's credit lanes when receivers are bound, points the slot's relay DFB (if any) at the
-    // pipe ring, and fills the per-core records. Rebinding the same pipe is a no-op; a different
-    // pipe on an already-bound core is rejected. Legal after compile.
-    void bind_prefetcher_pipe_to_slot(
+    // Binding a live pipe to a reserved slot on `cores` (a subset of the slot's cores whose sender /
+    // receiver split matches the pipe's) is split in two so a batch of bindings can be checked in
+    // full before any of it lands (a rejected SetProgramRunArgs must leave the program untouched):
+    //   check_prefetcher_pipe_slot_bind validates the pipe against the slot geometry, the sticky
+    //     per-core binding, the credit-lane transition and the relay ring agreement. No mutation.
+    //     `preflight` accumulates what earlier checks in the same batch would commit (lanes armed
+    //     per pipe, ring address per relay slot) so two bindings in one batch are checked against
+    //     each other as well as against committed state.
+    //   commit_prefetcher_pipe_slot_bind arms the pipe's credit lanes when receivers are bound,
+    //     points the slot's relay DFB (if any) at the pipe ring, and fills the per-core records.
+    //     Only valid right after a successful check of the same batch.
+    // Rebinding the same pipe is a no-op; a different pipe on an already-bound core is rejected.
+    // Legal after compile.
+    struct PrefetcherPipeBindPreflight {
+        std::unordered_map<const experimental::PrefetcherPipeImpl*, uint32_t> armed_lanes;
+        std::unordered_map<uint8_t, DeviceAddr> relay_rings;
+    };
+    void check_prefetcher_pipe_slot_bind(
+        uint8_t prefetcher_pipe_id,
+        const CoreRangeSet& cores,
+        const experimental::PrefetcherPipeImpl& prefetcher_pipe,
+        PrefetcherPipeBindPreflight& preflight) const;
+    void commit_prefetcher_pipe_slot_bind(
         uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, experimental::PrefetcherPipeImpl& prefetcher_pipe);
 
     // The slot whose relay DFB is `relay_dfb_host_id`, if that DFB relays a pipe.
@@ -451,6 +469,9 @@ public:
     // several slots (one per accessor group that names it), on the cores where that group's
     // kernel runs and the parameter's pipe is present.
     struct PrefetcherPipeParameterBinding {
+        // Mesh the program was built for; a bound pipe must live on it (its config pages and ring
+        // are L1 on that mesh).
+        distributed::MeshDevice* device = nullptr;
         CoreCoord sender;
         CoreRangeSet receivers;
         uint32_t ring_size = 0;
@@ -462,13 +483,18 @@ public:
         // Pipe object bound by SetProgramRunArgs; sticky for the program's lifetime.
         experimental::PrefetcherPipeImpl* bound_pipe = nullptr;
     };
-    void register_prefetcher_pipe_parameter(const std::string& name, PrefetcherPipeParameterBinding binding);
+    void register_prefetcher_pipe_parameter(const std::string& name, PrefetcherPipeParameterBinding&& binding);
     const PrefetcherPipeParameterBinding* get_prefetcher_pipe_parameter(const std::string& name) const;
     std::vector<std::string> get_registered_prefetcher_pipe_parameter_names() const;
-    // Bind `prefetcher_pipe` to every slot the parameter feeds. Validates the pipe's geometry
-    // against the parameter, then bind_prefetcher_pipe_to_slot per slot. Same pipe again: no-op;
-    // a different pipe: rejected.
-    void bind_prefetcher_pipe_parameter(const std::string& name, experimental::PrefetcherPipeImpl& prefetcher_pipe);
+    // Bind each named parameter to its pipe, on every slot the parameter feeds. All-or-nothing:
+    // every pair is validated (pipe geometry against the parameter, then every slot bind) before
+    // the first mutation, so a rejected batch leaves the program and the pipes as they were. A
+    // parameter already bound to the same pipe is a no-op; to a different pipe: rejected.
+    struct PrefetcherPipeParameterBind {
+        std::string name;
+        experimental::PrefetcherPipeImpl* pipe;
+    };
+    void bind_prefetcher_pipe_parameters(std::span<const PrefetcherPipeParameterBind> binds);
 
     // Allocates TCs and remapper configs, cannot be done on creation because we need to determine if a set of DFBs on a
     // core require remapper being enabled

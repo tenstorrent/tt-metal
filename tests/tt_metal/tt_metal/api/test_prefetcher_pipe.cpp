@@ -929,11 +929,24 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_ConfigRejects) {
     EXPECT_THROW(
         m2::CreatePrefetcherPipeSpace(mesh_device.get(), with([](auto& c) { c.max_receivers_per_pipe = 0; })),
         std::exception);
+    // A pipe cannot have more receivers than the domain it is carved from.
+    EXPECT_THROW(
+        m2::CreatePrefetcherPipeSpace(
+            mesh_device.get(), with([](auto& c) { c.max_receivers_per_pipe = c.receiver_domain.num_cores() + 1; })),
+        std::exception);
+    // No receiver domain: nothing could ever be carved.
+    EXPECT_THROW(
+        m2::CreatePrefetcherPipeSpace(mesh_device.get(), with([](auto& c) { c.receiver_domain = CoreRangeSet{}; })),
+        std::exception);
     EXPECT_THROW(
         m2::CreatePrefetcherPipeSpace(mesh_device.get(), with([](auto& c) {
                                           c.sender_cores = CoreRangeSet{};
                                           c.receiver_domain = CoreRangeSet{};
                                       })),
+        std::exception);
+    // DRAM-sender capacity is not carvable yet (tt-metal#55285).
+    EXPECT_THROW(
+        m2::CreatePrefetcherPipeSpace(mesh_device.get(), with([](auto& c) { c.num_dram_senders = 1; })),
         std::exception);
     EXPECT_NO_THROW(m2::CreatePrefetcherPipeSpace(mesh_device.get(), config));
 }

@@ -129,6 +129,10 @@ public:
     // persistent L1 is written. May upgrade from the carve-time default of 1, or no-op if
     // already equal. Reprogramming to a different value after arming is rejected.
     void set_active_credit_lanes(uint32_t num_lanes);
+    // The checks set_active_credit_lanes(num_lanes) would apply if the pipe were currently armed
+    // with `from_lanes`; throws on rejection, no state change. Lets a program preflight a batch of
+    // bindings (which may arm the same pipe more than once) before committing any of them.
+    void validate_credit_lane_transition(uint32_t from_lanes, uint32_t num_lanes) const;
     // Lane mode (num_lanes > 1) needs an exact entry ring whose entry count is a multiple of
     // num_lanes; throws otherwise. Call before set_active_credit_lanes so a rejected bind
     // does not leave the persistent pipe re-armed.

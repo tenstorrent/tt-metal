@@ -122,9 +122,13 @@ def test_space_config_rejects(device, expect_error):
         ttnn.experimental.create_prefetcher_pipe_space(
             device, sender_cores, receiver_domain, ring_size=RING_SIZE, max_receivers_per_pipe=0
         )
-    with expect_error(RuntimeError, "is empty; nothing to reserve"):
+    with expect_error(RuntimeError, "exceeds the 1 cores in receiver_domain"):
         ttnn.experimental.create_prefetcher_pipe_space(
-            device, ttnn.CoreRangeSet([]), ttnn.CoreRangeSet([]), ring_size=RING_SIZE, max_receivers_per_pipe=1
+            device, sender_cores, receiver_domain, ring_size=RING_SIZE, max_receivers_per_pipe=2
+        )
+    with expect_error(RuntimeError, "receiver_domain is empty"):
+        ttnn.experimental.create_prefetcher_pipe_space(
+            device, sender_cores, ttnn.CoreRangeSet([]), ring_size=RING_SIZE, max_receivers_per_pipe=1
         )
     with expect_error(RuntimeError, "persistent-arena allocations require BufferType::L1"):
         ttnn.experimental.create_prefetcher_pipe_space(

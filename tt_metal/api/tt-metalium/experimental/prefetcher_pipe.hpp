@@ -111,13 +111,15 @@ struct PrefetcherPipeSpaceConfig {
     // Worker cores that may act as pipe senders. Never DRAM coordinates.
     CoreRangeSet sender_cores;
     // Capacity for DRAM-sender endpoints (0 = worker-only space). Names no cores; exact DRAM
-    // sender cores are bound through impl-only helpers, not through this public surface.
+    // sender cores are bound through impl-only helpers, not through this public surface. Only 0
+    // is accepted until DRAM-sender pipes land (tt-metal#55285).
     uint32_t num_dram_senders = 0;
-    // Worker cores that may act as pipe receivers.
+    // Worker cores that may act as pipe receivers. Non-empty: every pipe has at least one receiver.
     CoreRangeSet receiver_domain;
     // Per-core data ring size in bytes, shared by every pipe carved here. Multiple of L1 alignment.
     uint32_t ring_size = 0;
-    // Largest receiver count of any pipe carved here; sizes every core's config page.
+    // Largest receiver count of any pipe carved here; sizes every core's config page. In
+    // [1, receiver_domain.num_cores()].
     uint32_t max_receivers_per_pipe = 0;
     BufferType buffer_type = BufferType::L1;
 };

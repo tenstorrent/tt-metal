@@ -220,13 +220,14 @@ void RejectPrefetcherPipeRelayResize(
 // Shared by the full path (SetProgramRunArgs; require_all=true) and the partial-update path
 // (UpdateProgramRunArgs; require_all=false).
 //   - Every entry references a PrefetcherPipeParameter declared in the ProgramSpec.
+//   - The supplied pipe lives on the MeshDevice the Program was built for.
 //   - The supplied pipe's geometry (sender node, receiver nodes, ring size) matches the parameter's.
 //   - The binding is sticky: a parameter already bound to a different pipe object is rejected
 //     (re-supplying the same object is a no-op).
 //   - When require_all is true: every declared parameter must be supplied, unless it is already
 //     bound (the binding is program-lifetime state, so a later full SetProgramRunArgs may omit it).
 // Pipe-object-dependent checks that need the slot (lane capacity, relay ring agreement) run at
-// bind time in ProgramImpl::bind_prefetcher_pipe_parameter.
+// bind time in ProgramImpl::bind_prefetcher_pipe_parameters.
 void ValidatePrefetcherPipeArgs(
     const Program& program,
     const Table<PrefetcherPipeParamName, ProgramRunArgs::PrefetcherPipeArgument>& pipe_args,
@@ -243,6 +244,12 @@ void ValidatePrefetcherPipeArgs(
             "PrefetcherPipeParameter of that name.",
             param_name);
         const PrefetcherPipe& pipe = pipe_arg.get();
+        TT_FATAL(
+            pipe.get_device() == binding->device,
+            "PrefetcherPipeArgument for '{}' supplies a pipe allocated on a different MeshDevice than the one this "
+            "Program was built for. A pipe's ring and config pages are L1 on its own mesh; create the pipe on the "
+            "Program's mesh.",
+            param_name);
         TT_FATAL(
             binding->bound_pipe == nullptr || binding->bound_pipe == &pipe.impl(),
             "PrefetcherPipeArgument for '{}' supplies a different PrefetcherPipe object than the one this Program "
@@ -287,14 +294,20 @@ void ValidatePrefetcherPipeArgs(
     }
 }
 
-// Bind every supplied PrefetcherPipe to its parameter's slots. Sticky: an already-bound parameter
-// re-supplied with the same object is a no-op (validation rejected a different object).
+// Bind every supplied PrefetcherPipe to its parameter's slots, as one all-or-nothing batch: the
+// program preflights every binding (slot geometry, lane capacity, relay ring agreement) before it
+// mutates anything, so a rejected SetProgramRunArgs leaves no parameter half-bound. Sticky: an
+// already-bound parameter re-supplied with the same object is a no-op (validation rejected a
+// different object).
 void BindPrefetcherPipeArgs(
     detail::ProgramImpl& program_impl,
     const Table<PrefetcherPipeParamName, ProgramRunArgs::PrefetcherPipeArgument>& pipe_args) {
+    std::vector<detail::ProgramImpl::PrefetcherPipeParameterBind> binds;
+    binds.reserve(pipe_args.size());
     for (const auto& [param_name, pipe_arg] : pipe_args) {
-        program_impl.bind_prefetcher_pipe_parameter(param_name.get(), pipe_arg.get().impl());
+        binds.push_back({.name = param_name.get(), .pipe = &pipe_arg.get().impl()});
     }
+    program_impl.bind_prefetcher_pipe_parameters(binds);
 }
 
 // Internal validation function - validates ProgramRunArgs against the Program's schema.

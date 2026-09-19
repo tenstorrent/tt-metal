@@ -82,7 +82,8 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def(
             "create_pipes",
-            [](PrefetcherPipeSpace& self, const std::vector<std::pair<CoreCoord, CoreRangeSet>>& pipes) {
+            [](PrefetcherPipeSpace& self,
+               const std::vector<std::pair<tt::tt_metal::CoreCoord, tt::tt_metal::CoreRangeSet>>& pipes) {
                 return self.create_pipes(pipes);
             },
             nb::keep_alive<0, 1>(),
@@ -106,8 +107,8 @@ void py_module(nb::module_& mod) {
     mod.def(
         "create_prefetcher_pipe_space",
         [](tt::tt_metal::distributed::MeshDevice* mesh_device,
-           const CoreRangeSet& sender_cores,
-           const CoreRangeSet& receiver_domain,
+           const tt::tt_metal::CoreRangeSet& sender_cores,
+           const tt::tt_metal::CoreRangeSet& receiver_domain,
            uint32_t ring_size,
            uint32_t max_receivers_per_pipe,
            tt::tt_metal::BufferType buffer_type) {
@@ -142,8 +143,10 @@ void py_module(nb::module_& mod) {
                 sender_cores (CoreRangeSet): worker cores that may act as pipe senders.
                 receiver_domain (CoreRangeSet): worker cores that may act as pipe receivers.
                 ring_size (int): per-core data ring size in bytes (multiple of the L1 alignment).
-                max_receivers_per_pipe (int): largest receiver count of any pipe carved here.
-                buffer_type (BufferType): L1 (default) or L1_SMALL.
+                max_receivers_per_pipe (int): largest receiver count of any pipe carved here, at
+                    most receiver_domain.num_cores().
+                buffer_type (BufferType): must be L1 (the default); the persistent arena lives in
+                    worker L1 and no other buffer type is accepted.
 
             Returns:
                 PrefetcherPipeSpace

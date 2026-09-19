@@ -84,12 +84,28 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(distributed::MeshDevice* device
         "PrefetcherPipeSpace: ring_size {} must be a multiple of L1_ALIGNMENT {}",
         config_.ring_size,
         l1_alignment);
-    TT_FATAL(config_.max_receivers_per_pipe >= 1, "PrefetcherPipeSpace: max_receivers_per_pipe must be >= 1");
-    reservation_cores_ = config_.sender_cores.merge(config_.receiver_domain);
-    // Receivers are always worker cores, so even a DRAM-sender-only space reserves a worker domain.
+    // Receivers are always worker cores drawn from receiver_domain, so a space with no receiver
+    // domain could never carve a pipe, and a pipe never has more receivers than the domain holds.
+    // Bounding the per-pipe maximum by the domain also keeps the config-page layout arithmetic
+    // (receivers x lanes x slot bytes) far from 32-bit overflow.
     TT_FATAL(
-        reservation_cores_.num_cores() > 0,
-        "PrefetcherPipeSpace: sender_cores ∪ receiver_domain is empty; nothing to reserve");
+        config_.receiver_domain.num_cores() > 0,
+        "PrefetcherPipeSpace: receiver_domain is empty; every pipe needs at least one worker receiver");
+    TT_FATAL(config_.max_receivers_per_pipe >= 1, "PrefetcherPipeSpace: max_receivers_per_pipe must be >= 1");
+    TT_FATAL(
+        config_.max_receivers_per_pipe <= config_.receiver_domain.num_cores(),
+        "PrefetcherPipeSpace: max_receivers_per_pipe {} exceeds the {} cores in receiver_domain; a pipe cannot have "
+        "more receivers than the domain it is carved from",
+        config_.max_receivers_per_pipe,
+        config_.receiver_domain.num_cores());
+    // DRAM-sender endpoints are capacity-only until the DRISC-resident sender page lands
+    // (tt-metal#55285); reject the field rather than reserve for something that cannot be carved.
+    TT_FATAL(
+        config_.num_dram_senders == 0,
+        "PrefetcherPipeSpace: num_dram_senders = {} is not supported yet (DRAM-sender pipes are blocked on "
+        "tt-metal#55285); pass 0",
+        config_.num_dram_senders);
+    reservation_cores_ = config_.sender_cores.merge(config_.receiver_domain);
     // Worker-only public surface: sender_cores / receiver_domain are logical worker coordinates,
     // which the persistent arena validates against the worker grid on allocate.
     layout_ =
@@ -389,7 +405,7 @@ const std::vector<uint32_t>& PrefetcherPipeImpl::config_page(const CoreCoord& co
     return it->second;
 }
 
-void PrefetcherPipeImpl::set_active_credit_lanes(uint32_t num_lanes) {
+void PrefetcherPipeImpl::validate_credit_lane_transition(uint32_t from_lanes, uint32_t num_lanes) const {
     TT_FATAL(num_lanes >= 1, "active credit lanes must be >= 1");
     TT_FATAL(
         num_lanes <= credit_lane_capacity(),
@@ -397,14 +413,18 @@ void PrefetcherPipeImpl::set_active_credit_lanes(uint32_t num_lanes) {
         "(Quasar spaces reserve PREFETCHER_PIPE_MAX_CREDIT_LANES per receiver slot)",
         num_lanes,
         credit_lane_capacity());
+    TT_FATAL(
+        num_lanes == from_lanes || from_lanes == 1,
+        "PrefetcherPipe credit lanes already set to {}, cannot reprogram to {}",
+        from_lanes,
+        num_lanes);
+}
+
+void PrefetcherPipeImpl::set_active_credit_lanes(uint32_t num_lanes) {
+    validate_credit_lane_transition(active_credit_lanes_, num_lanes);
     if (num_lanes == active_credit_lanes_) {
         return;
     }
-    TT_FATAL(
-        active_credit_lanes_ == 1,
-        "PrefetcherPipe credit lanes already set to {}, cannot reprogram to {}",
-        active_credit_lanes_,
-        num_lanes);
     // Host state only. P reaches the device packed into each program's kernel-config slot
     // (build_prefetcher_pipe_config_payload), so it is ordered with the program that uses it;
     // nothing in the persistent config page is touched after carve. The one-shot 1 -> P guard

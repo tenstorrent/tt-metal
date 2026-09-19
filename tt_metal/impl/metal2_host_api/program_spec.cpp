@@ -210,6 +210,20 @@ bool nodes_intersect(const Nodes& a, const Nodes& b) {
     return a_set.intersects(b_set);
 }
 
+// Set equality that is independent of how the two sets decompose into ranges (NodeRangeSet's
+// operator== compares the range lists, so equal sets with different range splits compare unequal).
+bool same_node_set(const NodeRangeSet& a, const NodeRangeSet& b) {
+    return a.num_cores() == b.num_cores() && a.intersection(b).num_cores() == a.num_cores();
+}
+
+// A kernel binding a PrefetcherPipe accessor group is the group's sender when its nodes are exactly
+// the group's sender nodes; otherwise it is the receiver (ValidateProgramSpec proves the nodes then
+// equal the group's receiver nodes). ValidateProgramSpec and ReservePrefetcherPipeSlots both derive
+// the role through this one definition.
+bool is_prefetcher_pipe_sender_role(const NodeRangeSet& kernel_nodes, const NodeRangeSet& group_senders) {
+    return same_node_set(kernel_nodes, group_senders);
+}
+
 // Helper: return a DFB's alias-with list.
 const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
     return dfb.advanced_options.alias_with;
@@ -1810,8 +1824,8 @@ void ValidateProgramSpec(
                 }
 
                 // Role: the kernel's nodes are exactly the group's senders or exactly its receivers.
-                const bool is_sender_role = (nodes == group_senders);
-                const bool is_receiver_role = (nodes == group_receivers);
+                const bool is_sender_role = is_prefetcher_pipe_sender_role(nodes, group_senders);
+                const bool is_receiver_role = same_node_set(nodes, group_receivers);
                 if (!is_sender_role && !is_receiver_role) {
                     const uint32_t on_senders = nodes.intersection(group_senders).num_cores();
                     const uint32_t on_receivers = nodes.intersection(group_receivers).num_cores();
@@ -3399,6 +3413,7 @@ using PrefetcherPipeHandlesByKernel =
     std::unordered_map<const KernelSpec*, std::vector<tt::tt_metal::PrefetcherPipeBindingHandle>>;
 
 PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
+    distributed::MeshDevice& mesh_device,
     const ProgramSpec& spec,
     const CollectedSpecData& collected,
     detail::ProgramImpl& program_impl,
@@ -3412,6 +3427,7 @@ PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
     std::unordered_map<PrefetcherPipeParamName, detail::ProgramImpl::PrefetcherPipeParameterBinding> placements;
     for (const auto& pipe : spec.prefetcher_pipe_parameters) {
         placements[pipe.unique_id] = detail::ProgramImpl::PrefetcherPipeParameterBinding{
+            .device = &mesh_device,
             .sender = pipe.sender,
             .receivers = to_node_range_set(pipe.receivers),
             .ring_size = pipe.ring_size,
@@ -3451,8 +3467,7 @@ PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
                 const PrefetcherPipeParameter* pipe = collected.prefetcher_pipe_by_name.at(pipe_name);
                 group_senders = group_senders.merge(NodeRangeSet(NodeRange(pipe->sender, pipe->sender)));
             }
-            const bool is_sender_role = nodes.num_cores() == group_senders.num_cores() &&
-                                        nodes.intersection(group_senders).num_cores() == nodes.num_cores();
+            const bool is_sender_role = is_prefetcher_pipe_sender_role(nodes, group_senders);
 
             const NodeRangeSet receiver_cores = is_sender_role ? NodeRangeSet() : nodes;
             const uint32_t num_credit_lanes = is_sender_role ? 1u : kernel.num_threads;
@@ -3654,7 +3669,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     // precede kernel creation: the slot id is baked into the kernel's `pipe::<accessor>` token and
     // a relay DFB's `dfb::` token.
     const PrefetcherPipeHandlesByKernel prefetcher_pipe_handles =
-        ReservePrefetcherPipeSlots(spec, collected, *program_impl, dfb_name_to_id);
+        ReservePrefetcherPipeSlots(mesh_device, spec, collected, *program_impl, dfb_name_to_id);
 
     std::unordered_map<DFBSpecName, uint8_t> dfb_name_to_prefetcher_pipe_id;
     for (const auto& [dfb_name, dfb_id] : dfb_name_to_id) {

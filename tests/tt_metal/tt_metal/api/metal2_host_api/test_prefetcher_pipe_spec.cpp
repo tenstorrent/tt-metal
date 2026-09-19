@@ -1032,10 +1032,33 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeRelayWithDifferentRingsFails) 
     PrefetcherPipe filler = MakePipeFor(*mesh_device_, MakeOtherPipeParameter());
     PrefetcherPipe other = MakePipeFor(*mesh_device_, MakeOtherPipeParameter());
     ASSERT_NE(weights.buffer_address(), other.buffer_address());
-    Program program = MakeProgramFromSpec(*mesh_device_, MakeTwoPipeReceiverSpec());
+    ASSERT_EQ(weights.buffer_address(), filler.buffer_address());
+    Program program = MakeProgramFromSpec(*mesh_device_, MakeTwoPipeReceiverSpec(/*receiver_threads=*/2));
     EXPECT_THROWS_WITH(
         SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &weights}, {other_param_name, &other}})),
         "relays several pipes through DFB");
+
+    // All-or-nothing: the ring mismatch is only detectable once both pipes are in hand, and it
+    // must not leave `weights` (checked first) bound, its receivers armed, or the relay pointed.
+    const auto& impl = program.impl();
+    EXPECT_EQ(impl.get_prefetcher_pipe_parameter(pipe_param_name.get())->bound_pipe, nullptr);
+    EXPECT_EQ(impl.get_prefetcher_pipe_parameter(other_param_name.get())->bound_pipe, nullptr);
+    for (const CoreCoord& core :
+         corerange_to_cores(NodeRangeSet(pipe_receiver_nodes).merge(NodeRangeSet(other_receiver_nodes)))) {
+        EXPECT_EQ(ParticipantOn(program, core, 0)->pipe, nullptr) << core.str();
+    }
+    EXPECT_EQ(weights.impl().num_credit_lanes(), 1u);
+    EXPECT_EQ(other.impl().num_credit_lanes(), 1u);
+    EXPECT_EQ(impl.get_dataflow_buffer(impl.get_dfb_handle(relay_dfb_name.get()))->borrowed_addr_, 0u);
+
+    // So the caller can retry with a pipe that does share the ring.
+    EXPECT_NO_THROW(SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &weights}, {other_param_name, &filler}})));
+    EXPECT_EQ(impl.get_prefetcher_pipe_parameter(pipe_param_name.get())->bound_pipe, &weights.impl());
+    EXPECT_EQ(impl.get_prefetcher_pipe_parameter(other_param_name.get())->bound_pipe, &filler.impl());
+    EXPECT_EQ(weights.impl().num_credit_lanes(), 2u);
+    EXPECT_EQ(filler.impl().num_credit_lanes(), 2u);
+    EXPECT_EQ(
+        impl.get_dataflow_buffer(impl.get_dfb_handle(relay_dfb_name.get()))->borrowed_addr_, weights.buffer_address());
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeReceiverWithoutRelayBindsBothPipes) {
@@ -1110,6 +1133,57 @@ TEST_F(PrefetcherPipeSpecTestGen1, CPU_TwoDMKernelsOnSenderFails) {
     spec.work_units = {MakeMinimalWorkUnit("sender_wu", pipe_sender_node, {"brisc", "ncrisc"})};
     EXPECT_SPEC_REJECTED(
         spec, "Kernels 'brisc' and 'ncrisc' both bind PrefetcherPipeParameter 'weights' as its sender");
+}
+
+// ============================================================================
+// Two chips (Wormhole N300 mock): a pipe binds only to a Program on its own mesh
+// ============================================================================
+
+class PrefetcherPipeSpecTestGen1TwoChips : public ::testing::Test {
+protected:
+    void SetUp() override {
+        slow_dispatch_override_.emplace();
+        experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, 2);
+        auto meshes = distributed::MeshDevice::create_unit_meshes({0, 1});
+        ASSERT_EQ(meshes.size(), 2u);
+        mesh_a_ = meshes.at(0);
+        mesh_b_ = meshes.at(1);
+    }
+    void TearDown() override {
+        for (auto* mesh : {&mesh_a_, &mesh_b_}) {
+            if (*mesh) {
+                (*mesh)->close();
+                mesh->reset();
+            }
+        }
+        experimental::disable_mock_mode();
+        slow_dispatch_override_.reset();
+    }
+
+    std::shared_ptr<distributed::MeshDevice> mesh_a_;
+    std::shared_ptr<distributed::MeshDevice> mesh_b_;
+    std::optional<ScopedSlowDispatchOverride> slow_dispatch_override_;
+};
+
+TEST_F(PrefetcherPipeSpecTestGen1TwoChips, CPU_PipeFromAnotherMeshFails) {
+    // The pipe's ring and config pages are L1 on mesh B; a Program built for mesh A would pack
+    // those addresses into its own dispatch payload and touch uninitialized L1.
+    ProgramSpec spec;
+    spec.name = "gen1_sender_only";
+    auto sender = MakeMinimalGen1DMKernel("sender", DataMovementProcessor::RISCV_0);
+    sender.prefetcher_pipe_bindings.push_back(BindPipe());
+    spec.kernels = {sender};
+    spec.prefetcher_pipe_parameters = {MakePipeParameter()};
+    spec.work_units = {MakeMinimalWorkUnit("sender_wu", pipe_sender_node, {"sender"})};
+
+    PrefetcherPipe on_a = MakePipeFor(*mesh_a_, MakePipeParameter());
+    PrefetcherPipe on_b = MakePipeFor(*mesh_b_, MakePipeParameter());
+    Program program = MakeProgramFromSpec(*mesh_a_, spec);
+    EXPECT_THROWS_WITH(
+        SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &on_b}})),
+        "supplies a pipe allocated on a different MeshDevice than the one this Program was built for");
+    EXPECT_EQ(program.impl().get_prefetcher_pipe_parameter(pipe_param_name.get())->bound_pipe, nullptr);
+    EXPECT_NO_THROW(SetProgramRunArgs(program, PipeArgs({{pipe_param_name, &on_a}})));
 }
 
 }  // namespace
