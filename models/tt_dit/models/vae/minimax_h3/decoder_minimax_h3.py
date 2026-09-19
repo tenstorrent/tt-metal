@@ -113,10 +113,12 @@ class MiniMaxH3ViTAttention(Module):
         # Chosen by a min-of-20 op benchmark; whole-decoder wall clock jitters too much to
         # resolve it. q=k=192 with HiFi2 is ~2.95x the default blocking, 128 is slightly worse,
         # and 256 and above hang the sweep. SDPA is ~40 % of layer device time.
+        # Single-op sweep 2026-09-19 (tools/decoder_block_probe.py, logical-1797 view): q192/k192 0.460 ms, q192/k256
+        # 0.399 ms; the k-chunk changes the bf16 accumulation order, so 256 is PSNR-gated (MINIMAX_H3_SDPA_KCHUNK).
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=192,
-            k_chunk_size=192,
+            k_chunk_size=int(os.environ.get("MINIMAX_H3_SDPA_KCHUNK", "192")),
             exp_approx_mode=False,  # False is more correct, matching wan/ltx
         )
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -140,6 +142,11 @@ class MiniMaxH3ViTAttention(Module):
         self._ones_gate = bf16_tensor(torch.ones(1, 1, dim), device=mesh_device)
 
         self.rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+        # "heads": SDPA writes (B, H, S, D) and nlp_concat_heads reorders it; "op": SDPA writes the concat layout
+        # itself (output_concat_heads), one program less per layer. Bit-identical.
+        self.sdpa_concat = os.environ.get("MINIMAX_H3_SDPA_CONCAT", "heads")
+        if self.sdpa_concat not in ("heads", "op"):
+            raise ValueError(f"MINIMAX_H3_SDPA_CONCAT must be 'heads' or 'op', got {self.sdpa_concat!r}")
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -234,6 +241,7 @@ class MiniMaxH3ViTAttention(Module):
             logical = ttnn.Shape([batch, self.num_heads, valid_len, self.head_dim])
             query, key, value = (ttnn.reshape(t, logical, padded) for t in (query, key, value))
 
+        concat_in_op = self.sdpa_concat == "op"
         attended = ttnn.transformer.scaled_dot_product_attention(
             query,
             key,
@@ -242,12 +250,20 @@ class MiniMaxH3ViTAttention(Module):
             is_causal=False,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
+            **({"output_concat_heads": True} if concat_in_op else {}),
         )
-        if attended.shape[-2] != seq_len:
-            attended = ttnn.reshape(attended, padded, padded)
-        attended = ttnn.reshape(
-            ttnn.experimental.nlp_concat_heads(attended), (batch, seq_len, self.num_heads * self.head_dim)
-        )
+        dim = self.num_heads * self.head_dim
+        if concat_in_op:
+            # Already (batch, 1, S, H*D); view back to the padded length, then drop the unit dim.
+            full = ttnn.Shape([batch, 1, seq_len, dim])
+            if attended.shape[-2] != seq_len:
+                attended = ttnn.reshape(attended, full, full)
+            attended = ttnn.reshape(attended, (batch, seq_len, dim))
+        else:
+            if attended.shape[-2] != seq_len:
+                attended = ttnn.reshape(attended, padded, padded)
+            attended = ttnn.reshape(ttnn.experimental.nlp_concat_heads(attended), (batch, seq_len, dim))
+        # When the block hands us its residual, fold the residual add into to_out's epilogue.
         if residual is not None:
             return _proj_add_residual(self.to_out, attended, residual, self._ones_gate, self.mesh_device)
         return self.to_out(attended)
