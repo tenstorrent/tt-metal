@@ -74,6 +74,7 @@ class MiniMaxH3AudioDecoder(Module):
         pack_bands: dict[int, int] | None = None,
         resampler_split_mode: str | None = None,
         act_mode: str = "chain",
+        batch_shard_axis: int | None = None,
         profile: bool = False,
     ) -> None:
         super().__init__()
@@ -96,6 +97,15 @@ class MiniMaxH3AudioDecoder(Module):
         self.pack_bands = dict(pack_bands or {})
         self.resampler_split_mode = resampler_split_mode
         self.act_mode = act_mode
+        # One stereo channel per row of the mesh along this axis (the T-shard runs along the other), so every
+        # vocoder op sees one batch item instead of the replicated pair. None: both items on every device.
+        self.batch_shard_axis = batch_shard_axis
+        if batch_shard_axis is not None:
+            mesh_shape = tuple(mesh_device.shape)
+            if parallel_config is None or parallel_config.mesh_axis == batch_shard_axis:
+                raise ValueError("batch_shard_axis needs a T-sharded decoder and must differ from the T-shard axis")
+            if mesh_shape[batch_shard_axis] < 2:
+                raise ValueError(f"mesh axis {batch_shard_axis} has length {mesh_shape[batch_shard_axis]}; nothing to shard")
         # `profile` synchronizes between the stage's phases to separate them, which also serializes
         # them: the total it reports is inflated and only the shares are readable.
         self.profile = bool(profile)
@@ -141,6 +151,7 @@ class MiniMaxH3AudioDecoder(Module):
             resampler_split_mode=resampler_split_mode,
             act_mode=act_mode,
         )
+        self.decoder.batch_shard_axis = batch_shard_axis
 
     def _project_latents_device(self, latents_BCT: torch.Tensor) -> torch.Tensor:
         """``(B, 32, T)`` -> ``(B, 2048, T)`` through ``dec_in_proj`` on device.
@@ -185,7 +196,11 @@ class MiniMaxH3AudioDecoder(Module):
         if self.profile:
             profile["host_prep"] = time.perf_counter() - mark
             mark = time.perf_counter()
-        x_dev = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
+        if self.batch_shard_axis is None:
+            x_dev = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
+        else:
+            x_dev = self._upload_batch_sharded(x)
+            self.decoder.batch_shard = (self.batch_shard_axis, x.shape[0])
         if self.profile:
             ttnn.synchronize_device(self.mesh_device)
             profile["upload"] = time.perf_counter() - mark
@@ -213,6 +228,20 @@ class MiniMaxH3AudioDecoder(Module):
             )
             logger.info(f"    audio decode phases (serialized, {total:.2f} s accounted): {shares}")
         return waveform
+
+    def _upload_batch_sharded(self, x_BTC: torch.Tensor) -> ttnn.Tensor:
+        """Row r of the mesh along ``batch_shard_axis`` gets batch item ``r % B`` (rows past B hold replicas)."""
+        axis = self.batch_shard_axis
+        mesh_shape = tuple(self.mesh_device.shape)
+        batch = x_BTC.shape[0]
+        assert mesh_shape[axis] >= batch, f"mesh axis {axis} ({mesh_shape[axis]} devices) is shorter than the batch {batch}"
+        rows = torch.cat([x_BTC[i % batch : i % batch + 1] for i in range(mesh_shape[axis])], dim=0)
+        dims = [None, None]
+        dims[axis] = 0
+        mapper = ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=mesh_shape, dims=dims)
+        return ttnn.from_torch(
+            rows, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype, mesh_mapper=mapper
+        )
 
     def _pad_row_mask(self, t_total: int, t_pad: int) -> ttnn.Tensor:
         key = (t_total, t_pad)

@@ -54,6 +54,24 @@ def _reshape_rows(x: ttnn.Tensor, shape) -> ttnn.Tensor:
     return y
 
 
+
+def _batch_sharded_to_torch(x_dev: ttnn.Tensor, axis: int, batch: int) -> torch.Tensor:
+    """Batch item b lives on the devices whose coordinate along ``axis`` is b (T already gathered on each): read one
+    local device per item and stack them."""
+    mesh_device = x_dev.device()
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
+    coords = list(x_dev.tensor_topology().mesh_coords())
+    shards = ttnn.get_device_tensors(x_dev)
+    parts = []
+    for b in range(batch):
+        for coord, shard in zip(coords, shards):
+            if int(coord[axis]) == b and (view is None or view.is_local(coord)):
+                parts.append(ttnn.to_torch(shard))
+                break
+        else:
+            raise RuntimeError(f"no local device holds batch item {b} along mesh axis {axis}")
+    return torch.cat(parts, dim=0)
+
 class DilatedConv1d(_AlignedOutConv1d):
     """Symmetric ("same") zeros-pad ``Conv1dViaConv3d`` with ``dilation``. For the AMP
     block's even ``(k-1)*d``, the base's ``eff_k // 2`` halo equals the symmetric pad."""
@@ -242,6 +260,9 @@ class Vocoder(Module):
         # "chain": UpSample1d -> SnakeBeta -> DownSample1d as separate ops; "fused": one kernel per activation
         # (layers/audio_aa_snake.py), bit-identical to the chain.
         self.act_mode = act_mode
+        # Set by MiniMaxH3AudioDecoder when the batch is sharded over a mesh axis: (axis, batch) for the readback.
+        self.batch_shard_axis = None
+        self.batch_shard = None
 
         if resblock_kernel_sizes is None:
             resblock_kernel_sizes = [3, 7, 11]
@@ -590,7 +611,10 @@ class Vocoder(Module):
     def _device_to_host(self, x_dev: ttnn.Tensor) -> torch.Tensor:
         """Readback + host crop. Trims padded out-channels and the upsampled image of the
         input T-padding (``self._t_pad``), then returns ``(B, out_channels, T_out)``."""
-        x_host = local_device_to_torch(x_dev)
+        if self.batch_shard is not None:
+            x_host = _batch_sharded_to_torch(x_dev, *self.batch_shard)
+        else:
+            x_host = local_device_to_torch(x_dev)
         if self.out_channels == 1 and x_host.shape[-1] == TILE_HEIGHT:
             x_host = x_host.reshape(x_host.shape[0], -1, 1)  # packed mono output (see _forward_device)
         x_host = x_host[..., : self.out_channels]  # trim any padded out channels

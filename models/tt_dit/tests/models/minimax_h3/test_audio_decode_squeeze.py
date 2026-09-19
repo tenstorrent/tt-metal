@@ -76,6 +76,12 @@ RECIPES = {
     # the fused anti-alias SnakeBeta kernel (layers/audio_aa_snake.py) in place of every resampler/snake chain
     "fused_pack": {"pack": {5: 2, 6: 4}, "build_kwargs": {"act_mode": "fused"}},
     "kernel_fused_pack": {"all": "kernel", "pack": {5: 2, 6: 4}, "build_kwargs": {"act_mode": "fused"}},
+    # one stereo channel per mesh row (batch_shard_axis=0); must equal kernel_fused_pack bit for bit
+    "kernel_fused_pack_bshard": {
+        "all": "kernel",
+        "pack": {5: 2, 6: 4},
+        "build_kwargs": {"act_mode": "fused", "batch_shard_axis": 0},
+    },
 }
 RESAMPLERS_KEY = "resamplers"
 BUILD_KWARGS_KEY = "build_kwargs"  # extra constructor kwargs
@@ -184,6 +190,7 @@ FIDELITY_FLOORS = {
     "kernel_pack": (66.0, 0.006),
     "fused_pack": (66.0, 0.006),
     "kernel_fused_pack": (66.0, 0.006),
+    "kernel_fused_pack_bshard": (66.0, 0.006),
     "full": (66.0, 0.006),
     "off_pack": (52.0, 0.020),
 }

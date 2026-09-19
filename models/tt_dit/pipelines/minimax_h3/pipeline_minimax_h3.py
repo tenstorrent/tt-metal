@@ -190,6 +190,18 @@ def _audio_act_mode() -> str:
     return raw
 
 
+# "1": one stereo channel per mesh row (the axis the T-shard does not use); every vocoder op then runs one batch item
+# per device instead of the replicated pair. Bit-identical per channel. Off until the 15 s A/B.
+_AUDIO_BSHARD_ENV = "MINIMAX_H3_AUDIO_BSHARD"
+
+
+def _audio_batch_shard() -> bool:
+    raw = os.environ.get(_AUDIO_BSHARD_ENV, "0").strip().lower()
+    if raw not in ("", "0", "1", "false", "true", "no", "yes"):
+        raise ValueError(f"{_AUDIO_BSHARD_ENV}={raw!r} must be 0 or 1")
+    return raw in ("1", "true", "yes")
+
+
 def _audio_pack_bands() -> dict[int, int]:
     raw = os.environ.get(_AUDIO_PACK_ENV, _DEFAULT_AUDIO_PACK).strip()
     if raw in ("", "0", "off"):
@@ -1533,6 +1545,13 @@ class MiniMaxH3Pipeline:
                 else None
             )
             audio_ccl = self.audio_ccl_manager if audio_parallel_config is not None else None
+            batch_shard_axis = None
+            if _audio_batch_shard() and audio_parallel_config is not None:
+                other = 1 - self._audio_t_axis
+                if tuple(self.mesh_device.shape)[other] >= 2:
+                    batch_shard_axis = other
+                else:
+                    logger.warning(f"{_AUDIO_BSHARD_ENV}=1 ignored: mesh axis {other} has one device")
             decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
@@ -1548,13 +1567,15 @@ class MiniMaxH3Pipeline:
                 pack_bands=_audio_pack_bands(),
                 resampler_split_mode=_audio_resampler_split_mode(),
                 act_mode=_audio_act_mode(),
+                batch_shard_axis=batch_shard_axis,
                 profile=os.environ.get(_AUDIO_PHASES_ENV, "0").strip() not in ("", "0", "false", "no"),
             )
             logger.info(
                 f"Audio trace: {'on' if self.audio_trace else 'off'} ({_AUDIO_TRACE_ENV}); "
                 f"conv split: {decoder.split_mode} ({_AUDIO_SPLIT_ENV}); packing: {decoder.pack_bands or 'off'} "
                 f"({_AUDIO_PACK_ENV}); resampler split {decoder.resampler_split_mode or 'same'} "
-                f"({_AUDIO_RESAMPLER_SPLIT_ENV}); activations: {decoder.act_mode} ({_AUDIO_ACT_ENV})"
+                f"({_AUDIO_RESAMPLER_SPLIT_ENV}); activations: {decoder.act_mode} ({_AUDIO_ACT_ENV}); "
+                f"batch shard axis {decoder.batch_shard_axis} ({_AUDIO_BSHARD_ENV})"
             )
 
             def read_state() -> dict[str, torch.Tensor]:
