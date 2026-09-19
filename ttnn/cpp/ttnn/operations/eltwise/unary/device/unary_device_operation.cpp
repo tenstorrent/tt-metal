@@ -14,6 +14,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::unary {
 namespace {
 
+// is_integer_dtype doesn't include INT8 as of now because no unary op has native INT8 implementation yet.
 bool is_integer_dtype(DataType dtype) {
     return dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16 ||
            dtype == DataType::UINT8;
