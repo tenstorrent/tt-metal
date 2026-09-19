@@ -247,7 +247,8 @@ def run_demo_inference(
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
-    ((50),),
+    (50, 20),
+    ids=["steps50", "steps20"],
 )
 @pytest.mark.parametrize(
     "guidance_scale",
