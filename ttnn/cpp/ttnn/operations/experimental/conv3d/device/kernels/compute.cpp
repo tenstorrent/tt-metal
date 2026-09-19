@@ -12,6 +12,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/dataflow/circular_buffer.h"
@@ -88,6 +89,114 @@ ALWI void pack_tile_with_wh_destination_wait(uint32_t tile, uint32_t out_cb, uin
     }
 #endif
     pack_tile(tile, out_cb);
+}
+
+// The operand-split form of `matmul_blocks`: three K passes accumulate into one DST subblock,
+// x_hi*W_hi + x_hi*W_lo + x_lo*W_hi, so the sum is formed in fp32 DST instead of three separate
+// convs and two fp32 SFPU adds. The dropped x_lo*W_lo term is below fp32's own resolution of the
+// products. All four CBs share the fp32 format, so one init and one reconfig serve every pass.
+void matmul_blocks_split(
+    const uint32_t in0_hi_cb,
+    const uint32_t in0_lo_cb,
+    const uint32_t in1_hi_cb,
+    const uint32_t in1_lo_cb,
+    const uint32_t out_cb,
+    const uint32_t M,
+    const uint32_t N,
+    const uint32_t K,
+    const uint32_t in0_num_subblocks,
+    const uint32_t in1_num_subblocks,
+    const uint32_t in0_block_w,
+    const uint32_t subblock_h,
+    const uint32_t subblock_w,
+    const bool transpose) {
+    matmul_block_init(
+        in0_hi_cb, in1_hi_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
+
+    uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
+    uint32_t in0_index_offset = 0;
+
+    reconfig_data_format(in1_hi_cb, in0_hi_cb);
+
+    CircularBuffer out_cb_obj(out_cb);
+
+    const uint32_t in0_cbs[3] = {in0_hi_cb, in0_hi_cb, in0_lo_cb};
+    const uint32_t in1_cbs[3] = {in1_hi_cb, in1_lo_cb, in1_hi_cb};
+
+    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
+        uint32_t in1_index_offset = 0;
+        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
+            tile_regs_acquire();
+
+            for (uint32_t pass = 0; pass < 3; ++pass) {
+                uint32_t dst_index = 0;
+                uint32_t in0_index = in0_index_offset;
+                uint32_t in1_index = in1_index_offset;
+                for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                    matmul_block(
+                        in0_cbs[pass],
+                        in1_cbs[pass],
+                        in0_index,
+                        in1_index,
+                        dst_index,
+                        transpose,
+                        subblock_w,
+                        subblock_h,
+                        in0_block_w);
+                    in0_index++;
+                    in1_index += N;
+                }
+            }
+            tile_regs_commit();
+
+            out_cb_obj.reserve_back(out_subblock_num_tiles);
+            tile_regs_wait();
+            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                pack_tile(i, out_cb);
+            }
+            out_cb_obj.push_back(out_subblock_num_tiles);
+            tile_regs_release();
+            in1_index_offset += subblock_w;
+        }
+        in0_index_offset += subblock_h * in0_block_w;
+    }
+}
+
+// Split `num_tiles` tilized fp32 activation tiles into hi = bf16(x) (kept as masked fp32) and the exact
+// residual lo = x - hi. `in_cb` must be UnpackToDestFp32 so `copy_tile` lands the tile in DST unchanged;
+// the typecast is the same RNE routine `ttnn.typecast` uses and the subtract is exact in fp32, so the two
+// outputs are bit-identical to the host-side `_split_operand`. DST: 2 tiles.
+template <uint32_t num_tiles>
+void split_operand_block(uint32_t in_cb, uint32_t hi_cb, uint32_t lo_cb) {
+    CircularBuffer in_cb_obj(in_cb);
+    CircularBuffer hi_cb_obj(hi_cb);
+    CircularBuffer lo_cb_obj(lo_cb);
+    constexpr uint32_t DST_LO = 0;
+    constexpr uint32_t DST_HI = 1;
+    in_cb_obj.wait_front(num_tiles);
+    hi_cb_obj.reserve_back(num_tiles);
+    lo_cb_obj.reserve_back(num_tiles);
+    // SrcA was last configured for the row-major input; the exact copy needs the fp32 tile format on it.
+    reconfig_data_format_srca(in_cb);
+    copy_init(in_cb);
+    pack_reconfig_data_format(hi_cb);
+    typecast_tile_init<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Float16_b>();
+    sub_binary_tile_init();
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        copy_tile(in_cb, i, DST_LO);
+        copy_tile(in_cb, i, DST_HI);
+        typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Float16_b>(DST_HI);
+        sub_binary_tile(DST_LO, DST_HI, DST_LO);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile_with_wh_destination_wait(DST_HI, hi_cb, 2 * i);
+        pack_tile_with_wh_destination_wait(DST_LO, lo_cb, 2 * i + 1);
+        tile_regs_release();
+    }
+    hi_cb_obj.push_back(num_tiles);
+    lo_cb_obj.push_back(num_tiles);
+    in_cb_obj.pop_front(num_tiles);
 }
 
 template <uint32_t rows, uint32_t cols, uint32_t add_dst_tiles>
@@ -362,6 +471,13 @@ void kernel_main() {
     constexpr uint32_t cb_reduction_acc_tiled = get_compile_time_arg_val(29);
     // fp32-exact output path: SFPU reduction/bias + UnpackToDestFp32 CB reads (fp32 dtype + fp32 dest).
     constexpr bool use_fp32_exact = get_compile_time_arg_val(30) == 1;
+    // In-kernel operand split (see matmul_blocks_split / split_operand_block); 32 (invalid) when off.
+    constexpr uint32_t cb_x_hi_tiled = get_compile_time_arg_val(31);
+    constexpr uint32_t cb_x_lo_tiled = get_compile_time_arg_val(32);
+    constexpr uint32_t cb_weight_lo_tiled = get_compile_time_arg_val(33);
+    constexpr bool operand_split = get_compile_time_arg_val(34) == 1;
+    // The matmul's in0: the split halves when splitting, the tilized activation otherwise.
+    constexpr uint32_t cb_matmul_in0 = operand_split ? cb_x_hi_tiled : cb_vol2col_tiled;
 
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
@@ -376,9 +492,13 @@ void kernel_main() {
     CircularBuffer cb_matmul_result_rm_cb(cb_matmul_result_rm);
     CircularBuffer cb_reduction_tiled_cb(cb_reduction_tiled);
     CircularBuffer cb_worker_ack_back_cb(cb_worker_ack_back);
+    // Alias the weight CB when the split is off, so these are always valid CB objects.
+    CircularBuffer cb_weight_lo_tiled_cb(operand_split ? cb_weight_lo_tiled : cb_weight_tiled);
+    CircularBuffer cb_x_hi_tiled_cb(operand_split ? cb_x_hi_tiled : cb_vol2col_tiled);
+    CircularBuffer cb_x_lo_tiled_cb(operand_split ? cb_x_lo_tiled : cb_vol2col_tiled);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
-    matmul_init(cb_vol2col_tiled, cb_weight_tiled);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_matmul_in0, cb_weight_tiled, cb_matmul_interm_tiled);
+    matmul_init(cb_matmul_in0, cb_weight_tiled);
     MATH((llk_math_reconfig_remap(true)));
 
     // Load range parameters
@@ -451,21 +571,48 @@ void kernel_main() {
                                     cb_weight_tiled_cb.wait_front(weight_tiles);
 
                                     // Phase 2: matmul the batch
-                                    cb_vol2col_tiled_cb.wait_front(batch_tiles);
-                                    matmul_blocks(
-                                        cb_vol2col_tiled,
-                                        cb_weight_tiled,
-                                        cb_matmul_interm_tiled,
-                                        subblock_h,
-                                        matmul_N_t,
-                                        matmul_K_t,
-                                        in0_num_subblocks,
-                                        in1_num_subblocks,
-                                        in0_block_w,
-                                        subblock_h,
-                                        subblock_w,
-                                        false /* transpose */);
-                                    cb_vol2col_tiled_cb.pop_front(batch_tiles);
+                                    if constexpr (operand_split) {
+                                        // Split the tilized batch into hi/lo, then three K passes into one
+                                        // fp32 DST accumulation against W_hi and W_lo.
+                                        cb_weight_lo_tiled_cb.wait_front(weight_tiles);
+                                        split_operand_block<batch_tiles>(cb_vol2col_tiled, cb_x_hi_tiled, cb_x_lo_tiled);
+                                        pack_reconfig_data_format(cb_matmul_interm_tiled);
+                                        cb_x_hi_tiled_cb.wait_front(batch_tiles);
+                                        cb_x_lo_tiled_cb.wait_front(batch_tiles);
+                                        matmul_blocks_split(
+                                            cb_x_hi_tiled,
+                                            cb_x_lo_tiled,
+                                            cb_weight_tiled,
+                                            cb_weight_lo_tiled,
+                                            cb_matmul_interm_tiled,
+                                            subblock_h,
+                                            matmul_N_t,
+                                            matmul_K_t,
+                                            in0_num_subblocks,
+                                            in1_num_subblocks,
+                                            in0_block_w,
+                                            subblock_h,
+                                            subblock_w,
+                                            false /* transpose */);
+                                        cb_x_hi_tiled_cb.pop_front(batch_tiles);
+                                        cb_x_lo_tiled_cb.pop_front(batch_tiles);
+                                    } else {
+                                        cb_vol2col_tiled_cb.wait_front(batch_tiles);
+                                        matmul_blocks(
+                                            cb_vol2col_tiled,
+                                            cb_weight_tiled,
+                                            cb_matmul_interm_tiled,
+                                            subblock_h,
+                                            matmul_N_t,
+                                            matmul_K_t,
+                                            in0_num_subblocks,
+                                            in1_num_subblocks,
+                                            in0_block_w,
+                                            subblock_h,
+                                            subblock_w,
+                                            false /* transpose */);
+                                        cb_vol2col_tiled_cb.pop_front(batch_tiles);
+                                    }
 
                                     if constexpr (enable_streaming_output) {
                                         // Streaming emits subblocks before cb_matmul_interm_tiled is physically full,
@@ -545,6 +692,9 @@ void kernel_main() {
                 }
                 // Free space for next block of weights
                 cb_weight_tiled_cb.pop_front(weight_tiles);
+                if constexpr (operand_split) {
+                    cb_weight_lo_tiled_cb.pop_front(weight_tiles);
+                }
                 if constexpr (use_bias) {
                     if (is_reducer) {
                         cb_bias_tiled_cb.pop_front(matmul_N_t);

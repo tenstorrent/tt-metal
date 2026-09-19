@@ -24,7 +24,8 @@ struct Conv3dConfig {
         uint32_t C_in_block_ = 0,
         std::array<uint32_t, 3> dilation_ = {1, 1, 1},
         uint32_t alignment_ = 32,
-        tt::tt_metal::CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
+        tt::tt_metal::CoreCoord compute_with_storage_grid_size_ = {1, 1},
+        bool operand_split_ = false) :
         weights_dtype(weights_dtype_),
         output_layout(output_layout_),
         T_out_block(T_out_block_),
@@ -34,7 +35,8 @@ struct Conv3dConfig {
         C_in_block(C_in_block_),
         dilation(dilation_),
         alignment(alignment_),
-        compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
+        compute_with_storage_grid_size(compute_with_storage_grid_size_),
+        operand_split(operand_split_) {}
 
     tt::tt_metal::DataType weights_dtype;
     tt::tt_metal::Layout output_layout;
@@ -46,6 +48,12 @@ struct Conv3dConfig {
     std::array<uint32_t, 3> dilation;
     uint32_t alignment;
     tt::tt_metal::CoreCoord compute_with_storage_grid_size;
+    // fp32 operand split inside the kernel: each tilized activation tile is split into hi = bf16(x)
+    // and the exact residual lo = x - hi on the SFPU, and the matmul accumulates x_hi*W_hi + x_hi*W_lo
+    // + x_lo*W_hi in one fp32 DST pass, with W_lo supplied as `weight_lo_tensor`. Recovers the mantissa
+    // bits the matrix engine's TF32 operand path drops, in one launch and one vol2col gather instead
+    // of three convs plus the host-side split and adds. Requires fp32 data, fp32 dest accumulation.
+    bool operand_split;
 
     static constexpr auto attribute_names = std::make_tuple(
         "weights_dtype",
@@ -57,7 +65,8 @@ struct Conv3dConfig {
         "C_in_block",
         "dilation",
         "alignment",
-        "compute_with_storage_grid_size");
+        "compute_with_storage_grid_size",
+        "operand_split");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -70,7 +79,8 @@ struct Conv3dConfig {
             this->C_in_block,
             this->dilation,
             this->alignment,
-            this->compute_with_storage_grid_size);
+            this->compute_with_storage_grid_size,
+            this->operand_split);
     }
 };
 
@@ -102,6 +112,8 @@ struct Conv3dInputs {
     std::optional<const Tensor> bias_tensor;
     std::optional<const Tensor> halo_buffer;
     std::optional<const Tensor> pad_offset_tensor;
+    // Prepared like `weight_tensor`; the residual W - bf16(W) for `Conv3dConfig::operand_split`.
+    std::optional<const Tensor> weight_lo_tensor;
 };
 
 namespace detail {

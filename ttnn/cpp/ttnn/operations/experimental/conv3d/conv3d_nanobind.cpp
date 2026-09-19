@@ -42,6 +42,7 @@ void bind_conv3d(nb::module_& mod) {
             bias_tensor (ttnn.Tensor, optional): Bias tensor.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output of the Conv3D operation.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the Conv3D operation.
+            weight_lo_tensor (ttnn.Tensor, optional): With ``config.operand_split``, the prepared residual ``W - bf16(W)``; the kernel splits the fp32 activation into ``bf16(x)`` and its residual and accumulates ``x_hi*W_hi + x_hi*W_lo + x_lo*W_hi`` in one fp32 pass.
 
         Returns:
             ttnn.Tensor: Output tensor after applying the Conv3D operation.
@@ -68,7 +69,8 @@ void bind_conv3d(nb::module_& mod) {
         nb::arg("logical_w_mask") = 0u,
         nb::arg("pad_offset_tensor") = nb::none(),
         nb::arg("output_pad_h") = 0u,
-        nb::arg("output_pad_w") = 0u);
+        nb::arg("output_pad_w") = 0u,
+        nb::arg("weight_lo_tensor") = nb::none());
 
     // Register to ttnn.experimental namespace
     ttnn::bind_function<"prepare_conv3d_weights", "ttnn.experimental.">(
@@ -103,7 +105,8 @@ void bind_conv3d(nb::module_& mod) {
                                         uint32_t,
                                         std::array<uint32_t, 3>,
                                         uint32_t,
-                                        CoreCoord>(),
+                                        CoreCoord,
+                                        bool>(),
                                     nb::kw_only(),
                                     nb::arg("weights_dtype") = DataType::BFLOAT16,
                                     nb::arg("output_layout") = Layout::ROW_MAJOR,
@@ -114,7 +117,8 @@ void bind_conv3d(nb::module_& mod) {
                                     nb::arg("C_in_block") = 0,
                                     nb::arg("dilation") = std::array<uint32_t, 3>{1, 1, 1},
                                     nb::arg("alignment") = 32,
-                                    nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
+                                    nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}),
+                                    nb::arg("operand_split") = false);
 
     py_conv3d_config.def_rw("weights_dtype", &ttnn::experimental::prim::Conv3dConfig::weights_dtype, "");
     py_conv3d_config.def_rw("output_layout", &ttnn::experimental::prim::Conv3dConfig::output_layout, "");
@@ -127,6 +131,7 @@ void bind_conv3d(nb::module_& mod) {
     py_conv3d_config.def_rw("dilation", &ttnn::experimental::prim::Conv3dConfig::dilation, "");
     py_conv3d_config.def_rw(
         "compute_with_storage_grid_size", &ttnn::experimental::prim::Conv3dConfig::compute_with_storage_grid_size, "");
+    py_conv3d_config.def_rw("operand_split", &ttnn::experimental::prim::Conv3dConfig::operand_split, "");
 
     py_conv3d_config.def(
         "__repr__", [](const ttnn::experimental::prim::Conv3dConfig& config) { return fmt::format("{}", config); });
