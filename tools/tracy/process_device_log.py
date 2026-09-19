@@ -4,21 +4,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
+import json
 import os
 import sys
-import inspect
-import csv
-import json
-from datetime import datetime
 
-import pandas as pd
-import numpy as np
-import seaborn as sns
 import click
-from loguru import logger
-
-from tracy.common import PROFILER_ARTIFACTS_DIR
+import numpy as np
+import pandas as pd
 import tracy.device_post_proc_config as device_post_proc_config
+from loguru import logger
+from tracy.common import PROFILER_ARTIFACTS_DIR
 
 SUM_MARKER_ID_START = 3000
 
@@ -238,6 +234,14 @@ def get_ops(timeseries):
         op = opsDict[opID]
         opCores = {}
 
+        # Perf-counter records (TS_DATA) never mark an op boundary. A multipass capture
+        # merges records from several runs into one log, so their timestamps can fall
+        # outside this run's FW window; walk the boundary rows without them and attach
+        # them to the op afterwards.
+        counterRows = [ts for ts in op if ts[0]["type"] == "TS_DATA"]
+        op = [ts for ts in op if ts[0]["type"] != "TS_DATA"]
+        opEntry = ops[-1]
+
         op.sort(key=lambda ts: ts[1])
         for ts in op:
             if len(ts) == 5:
@@ -291,6 +295,7 @@ def get_ops(timeseries):
                 ops.append({"timeseries": []})
                 for core in opCores:
                     opCores[core] = None
+        opEntry["timeseries"].extend(counterRows)
     ops.pop()
     return ops
 
