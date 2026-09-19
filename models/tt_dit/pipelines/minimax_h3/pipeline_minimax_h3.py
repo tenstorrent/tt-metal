@@ -148,10 +148,9 @@ AUDIO_SHIFT = 3.0
 
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _DEFAULT_AUDIO_T_FACTOR = 8
-# Time-packed late vocoder bands ("band:k,band:k"; "0" disables). Default: the two narrowest bands on 32-wide rows,
-# measured 0.53 -> 0.45 s traced at unchanged PSNR (layers/audio_pack.py).
-_AUDIO_PACK_ENV = "MINIMAX_H3_AUDIO_PACK"
-_DEFAULT_AUDIO_PACK = "5:2,6:4"
+# Time-packed late vocoder bands (band -> steps per row): the two narrowest bands on 32-wide rows, measured
+# 0.53 -> 0.45 s traced at unchanged PSNR (layers/audio_pack.py).
+_AUDIO_PACK_BANDS = {5: 2, 6: 4}
 # Split mode of the packed bands' anti-alias resamplers ("same" = the convs' mode). "off" is the measured 65 dB /
 # -72 ms point (layers/audio_pack.py).
 _AUDIO_RESAMPLER_SPLIT_ENV = "MINIMAX_H3_AUDIO_RESAMPLER_SPLIT"
@@ -185,16 +184,6 @@ def _audio_batch_shard() -> bool:
     if raw not in ("", "0", "1", "false", "true", "no", "yes"):
         raise ValueError(f"{_AUDIO_BSHARD_ENV}={raw!r} must be 0 or 1")
     return raw in ("1", "true", "yes")
-
-
-def _audio_pack_bands() -> dict[int, int]:
-    raw = os.environ.get(_AUDIO_PACK_ENV, _DEFAULT_AUDIO_PACK).strip()
-    if raw in ("", "0", "off"):
-        return {}
-    try:
-        return {int(b): int(k) for b, k in (item.split(":") for item in raw.split(","))}
-    except ValueError:
-        raise ValueError(f"{_AUDIO_PACK_ENV}={raw!r} must look like '5:2,6:4' or '0'") from None
 
 
 def _requested_audio_t_factor(audio_t_factor: int | None, default: int = _DEFAULT_AUDIO_T_FACTOR) -> tuple[int, bool]:
@@ -1545,7 +1534,7 @@ class MiniMaxH3Pipeline:
                 parallel_config=audio_parallel_config,
                 ccl_manager=audio_ccl,
                 split_mode=self.audio_split_mode,
-                pack_bands=_audio_pack_bands(),
+                pack_bands=_AUDIO_PACK_BANDS,
                 resampler_split_mode=_audio_resampler_split_mode(),
                 act_mode="fused",  # one kernel per anti-aliased SnakeBeta activation (layers/audio_aa_snake.py)
                 batch_shard_axis=batch_shard_axis,
