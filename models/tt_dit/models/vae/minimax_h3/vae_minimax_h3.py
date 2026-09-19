@@ -1114,11 +1114,16 @@ class MiniMaxH3Vae:
         decoder = self.decoder
         profile = self._profile
 
-        canvases = []
-        pending: list = []
-        for group_start in range(0, len(chunk_latents), chunks_per_wave):
-            group = chunk_latents[group_start : group_start + chunks_per_wave]
+        # The wave's host work -- tiling, the grid-aligned batch, the upload -- runs while the previous
+        # wave is still on the device (MINIMAX_H3_VAE_PREFETCH: "upload" stages both, "host" stages the
+        # torch work and uploads after the readback, "0" is the serial order). The readback's device sync
+        # is where the host used to wait with the next wave's tokens still unprepared.
+        prefetch = os.environ.get("MINIMAX_H3_VAE_PREFETCH", "upload")
+        if prefetch not in ("0", "host", "upload"):
+            raise ValueError(f"MINIMAX_H3_VAE_PREFETCH must be '0', 'host' or 'upload', got {prefetch!r}")
+        groups = [chunk_latents[i : i + chunks_per_wave] for i in range(0, len(chunk_latents), chunks_per_wave)]
 
+        def prepare_host(group):
             mark = time.perf_counter()
             units_by_chunk = [self._latent_tiles(latents) for latents in group]
             profile["tiling"] += time.perf_counter() - mark
@@ -1148,7 +1153,9 @@ class MiniMaxH3Vae:
             ]
             batch = torch.cat(wave, dim=0)
             profile["host_prep"] += time.perf_counter() - mark
+            return units_by_chunk, (num_frames, height, width), batch
 
+        def upload(batch):
             mark = time.perf_counter()
             tokens = ttnn.from_torch(
                 batch,
@@ -1158,6 +1165,20 @@ class MiniMaxH3Vae:
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             )
             profile["upload"] += time.perf_counter() - mark
+            return tokens
+
+        def stage(group):
+            units_by_chunk, shape, batch = prepare_host(group)
+            return units_by_chunk, shape, batch, (upload(batch) if prefetch == "upload" else None)
+
+        canvases = []
+        pending: list = []
+        staged = stage(groups[0])
+        for group_index, group in enumerate(groups):
+            units_by_chunk, (num_frames, height, width), batch, tokens = staged
+            if tokens is None:
+                tokens = upload(batch)
+            staged = None
 
             mark = time.perf_counter()
             decoded = decoder(tokens)
@@ -1215,6 +1236,10 @@ class MiniMaxH3Vae:
             profile["waves"] += 1
             profile["units"] += sum(len(units) for units in units_by_chunk)
 
+            # Stage the next wave now, before this wave's readback blocks on the device.
+            if prefetch != "0" and group_index + 1 < len(groups):
+                staged = stage(groups[group_index + 1])
+
             strips_shape = list(strips.shape)
             edges_shape = list(edges.shape) if edges is not None else None
 
@@ -1269,6 +1294,8 @@ class MiniMaxH3Vae:
             ttnn.deallocate(strips)
             if edges is not None:
                 ttnn.deallocate(edges)
+            if staged is None and group_index + 1 < len(groups):
+                staged = stage(groups[group_index + 1])
         if pending:
             mark = time.perf_counter()
             canvases.extend(future.result() for future in pending)
