@@ -739,11 +739,13 @@ std::vector<std::optional<Tensor>> div_bw(
 
     if (rounding_mode == std::nullopt) {
         if (are_required_outputs.at(0)) {
+            // reciprocal(+-0) already produces exact IEEE signed infinity / NaN; eliminating 6 dead dispatches
             ttnn::multiply(
                 grad_tensor, ttnn::reciprocal(other, output_mem_config), std::nullopt, output_mem_config, input_grad);
             result[0] = input_grad;
         }
         if (are_required_outputs.at(1)) {
+            // square(+-0) -> +0; reciprocal(+0) -> +inf; eliminating 10 dead dispatches while preserving IEEE sign semantics
             ttnn::multiply(
                 ttnn::neg(grad_tensor, output_mem_config),
                 (ttnn::multiply(
