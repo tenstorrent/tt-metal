@@ -836,12 +836,14 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         + (f"; {len(unreferenced)} layers carry no KV golden (hybrid stack): {unreferenced}" if unreferenced else "")
     )
     if missing_golden:
-        # These layers DO own a slab, so the golden should have covered them. Naming them is the
-        # difference between a partial trace and a gate that quietly narrowed itself.
-        logger.warning(
-            f"[producer] slot {slot_id}: {len(missing_golden)} slab-owning layer(s) have no KV golden "
-            f"under {trace_dir} and were not scored: {missing_golden}. The trace is partial or "
-            f"PREFILL_TRACE_DIR is wrong; the PCC below covers only the rest."
+        # These layers DO own a slab, so the golden must have covered them. Warning and scoring the
+        # rest is exactly the gate quietly narrowing itself: a partial or mispointed trace then
+        # reports a passing min PCC over whichever layers happened to be present, and the layers
+        # that go missing are the deep ones that carry the minimum. Fail instead.
+        raise RuntimeError(
+            f"slot {slot_id}: {len(missing_golden)} slab-owning layer(s) have no KV golden under "
+            f"{trace_dir} and cannot be scored: {missing_golden}. The trace is partial or "
+            f"PREFILL_TRACE_DIR is wrong."
         )
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
