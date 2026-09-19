@@ -1208,12 +1208,8 @@ class MiniMaxH3Vae:
                 ttnn.synchronize_device(self.mesh_device)
                 profile["assemble"] += time.perf_counter() - mark
                 mark = time.perf_counter()
-            column_shape = list(column.shape)
-            tiles = [ttnn.slice(column, [r, 0, 0, 0, 0], [r + 1, *column_shape[1:]]) for r in range(grid_rows)]
-            strip, edge = stitcher.column(tiles, y_overlaps, edge_width)
+            strip, edge = stitcher.column(column, grid_rows, y_overlaps, edge_width)
             ttnn.deallocate(column)
-            for tile in tiles:
-                ttnn.deallocate(tile)
             if self.profile:
                 ttnn.synchronize_device(self.mesh_device)
                 profile["stitch_blend"] += time.perf_counter() - mark
@@ -1240,23 +1236,9 @@ class MiniMaxH3Vae:
             if prefetch != "0" and group_index + 1 < len(groups):
                 staged = stage(groups[group_index + 1])
 
-            strips_shape = list(strips.shape)
-            edges_shape = list(edges.shape) if edges is not None else None
-
-            def strip_at(index: int) -> ttnn.Tensor:
-                return ttnn.slice(strips, [index, 0, 0, 0, 0], [index + 1, *strips_shape[1:]])
-
-            def edge_at(index: int) -> ttnn.Tensor:
-                return ttnn.slice(edges, [index, 0, 0, 0, 0], [index + 1, *edges_shape[1:]])
-
             for chunk_index in range(len(group)):
                 mark = time.perf_counter()
-                first = chunk_index * grid_cols
-                canvas_rows = stitcher.row(
-                    [strip_at(first + j) for j in range(grid_cols)],
-                    [edge_at(first + j) for j in range(grid_cols - 1)] if edges is not None else [],
-                    x_overlaps,
-                )
+                canvas_rows = stitcher.row(strips, edges, chunk_index * grid_cols, grid_cols, x_overlaps)
                 if self.profile:
                     ttnn.synchronize_device(self.mesh_device)
                 elapsed = time.perf_counter() - mark
