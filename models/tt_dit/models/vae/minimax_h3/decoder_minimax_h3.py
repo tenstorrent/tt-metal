@@ -113,13 +113,10 @@ class MiniMaxH3ViTAttention(Module):
         # Chosen by a min-of-20 op benchmark; whole-decoder wall clock jitters too much to
         # resolve it. q=k=192 with HiFi2 is ~2.95x the default blocking, 128 is slightly worse,
         # and 256 and above hang the sweep. SDPA is ~40 % of layer device time.
-        # Single-op sweep 2026-09-19 (tools/decoder_block_probe.py, logical-1797 view): q192/k192 0.460 ms, q192/k256
-        # 0.399 ms; the k-chunk changes the bf16 accumulation order, so 256 is PSNR-gated (MINIMAX_H3_SDPA_KCHUNK).
-        # q-chunk 128 (exact 4 chunks per core) was probed 2026-09-19: not bit-identical to 192 and slower (0.437 vs 0.407 ms).
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=192,
-            k_chunk_size=int(os.environ.get("MINIMAX_H3_SDPA_KCHUNK", "192")),
+            k_chunk_size=192,
             exp_approx_mode=False,  # False is more correct, matching wan/ltx
         )
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
