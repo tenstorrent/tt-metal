@@ -41,7 +41,10 @@ static_assert(sizeof(PerfCounter) == sizeof(std::uint64_t) * 2, "PerfCounter mus
 #if defined(PROFILE_PERF_COUNTERS) && (COMPILE_FOR_TRISC == 1 || defined(COMPILE_FOR_BRISC))
 
 #include <array>
+#include <type_traits>
 #include <utility>
+
+#include "core_config.h"
 
 #include "kernel_profiler.hpp"
 #include "perf_counters/inventory.h"
@@ -116,7 +119,10 @@ constexpr std::array<const llk::perf::BankRegs*, 10> regs_for_group = [] {
 }();
 
 #if COMPILE_FOR_TRISC == 1
-// --- TRISC1-only: start/stop counters around the compute kernel ------------
+// --- TRISC1-only: start the counters when the compute kernel starts --------
+// The stop lives on BRISC, after every TRISC has finished. TRISC1 only knows when its own kernel ends,
+// and the math thread exits early on unpack or pack only kernels (fast tilize, untilize, transpose,
+// typecast, one tile eltwise), which left those ops with a few hundred cycle window and all zero counts.
 
 __attribute__((noinline)) void start_single_group(PerfCounterGroup counter_group) {
     if (bank_for_group[counter_group] == llk::perf::Bank::L1) {
@@ -147,11 +153,6 @@ void stop_perf_counter() {
     }
 }
 
-struct PerfCounterWrapper {
-    PerfCounterWrapper() { kernel_profiler::start_perf_counter(); }
-    ~PerfCounterWrapper() { kernel_profiler::stop_perf_counter(); }
-};
-
 #endif  // COMPILE_FOR_TRISC == 1
 
 #if defined(COMPILE_FOR_BRISC)
@@ -170,23 +171,30 @@ constexpr std::array<llk::perf::Table, 10> table_for_group = [] {
 // size limit, and the poll never fails on hardware.
 __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group) {
     const llk::perf::BankRegs& regs = *regs_for_group[counter_group];
+    // Freeze the group now that all three TRISCs are done, so the window spans the whole compute kernel.
+    // The next start on TRISC1 zeroes the counts, so no clear is needed after the read.
+    llk::perf::stop(regs);
     llk::perf::read_table<0>(
         regs, table_for_group[counter_group], [](PerfCounterType type, std::uint32_t ref_cnt, std::uint32_t value) {
             PerfCounter counter(value, ref_cnt, type);
+            // A TS_DATA_16B record is three marker slots (marker, data, trailer); asking for two let a record be
+            // dropped when exactly two slots were left.
             kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-                kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2);
+                kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
             kernel_profiler::timeStampedData<
                 PERF_COUNTER_PROFILER_ID,
                 kernel_profiler::DoingDispatch::DISPATCH,
                 kernel_profiler::PacketTypes::TS_DATA_16B>(counter.raw_data_1, counter.raw_data_2);
         });
-    // Toggle start bit to clear the counters for this group
-    llk::perf::start(regs);
 }
 
 // One L1 group per pass at most; its mux position is routed here so passes without L1 carry no mux code.
-void read_perf_counters() {
-    if (kernel_profiler::get_profiler_zone_invalid()) {
+// Only a launch with a compute kernel starts the counters (TRISC1), so a data movement only op is skipped
+// instead of reporting the values latched by the previous op.
+void read_perf_counters(std::uint32_t enables) {
+    if (kernel_profiler::get_profiler_zone_invalid() ||
+        !(enables &
+          (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0)))) {
         return;
     }
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_FPU
@@ -234,7 +242,7 @@ void read_perf_counters() {
 #if COMPILE_FOR_TRISC == 1
 #define StartPerfCounters() kernel_profiler::start_perf_counter();
 #define StopPerfCounters() kernel_profiler::stop_perf_counter();
-#define RecordPerfCounters() kernel_profiler::PerfCounterWrapper _perf_counter_wrapper_;
+#define RecordPerfCounters() kernel_profiler::start_perf_counter();
 #else
 #define StartPerfCounters()
 #define StopPerfCounters()
@@ -242,9 +250,9 @@ void read_perf_counters() {
 #endif
 
 #if defined(COMPILE_FOR_BRISC)
-#define ReadPerfCounters() kernel_profiler::read_perf_counters();
+#define ReadPerfCounters(enables) kernel_profiler::read_perf_counters(enables);
 #else
-#define ReadPerfCounters()
+#define ReadPerfCounters(enables)
 #endif
 
 #else
@@ -252,7 +260,7 @@ void read_perf_counters() {
 // null macros when perf counters are disabled
 #define StartPerfCounters()
 #define StopPerfCounters()
-#define ReadPerfCounters()
+#define ReadPerfCounters(enables)
 #define RecordPerfCounters()
 
 #endif
