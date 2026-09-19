@@ -36,6 +36,8 @@ neutral -- they would corrupt every softmax.
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -194,6 +196,7 @@ class MiniMaxH3ViTAttention(Module):
         rope_sin: ttnn.Tensor,
         attention_mask: ttnn.Tensor | None = None,
         residual: ttnn.Tensor | None = None,
+        valid_len: int | None = None,
     ) -> ttnn.Tensor:
         batch, seq_len, _ = x.shape
         qkv = self.to_qkv(x)
@@ -222,6 +225,15 @@ class MiniMaxH3ViTAttention(Module):
             key, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config
         )
 
+        # No mask: q/k/v are presented with the logical length of the valid tokens (same buffers,
+        # padded shape unchanged), and SDPA blanks the tile-pad keys itself. The dense mask cost a
+        # hidden multiply per layer and ~213 MB of reader traffic per layer; single-op probe at this
+        # shape: 1.48 ms -> 0.48 ms, valid rows bit-identical (tools/sdpa_mask_probe.py).
+        padded = ttnn.Shape([batch, self.num_heads, seq_len, self.head_dim])
+        if attention_mask is None and valid_len is not None and valid_len < seq_len:
+            logical = ttnn.Shape([batch, self.num_heads, valid_len, self.head_dim])
+            query, key, value = (ttnn.reshape(t, logical, padded) for t in (query, key, value))
+
         attended = ttnn.transformer.scaled_dot_product_attention(
             query,
             key,
@@ -231,6 +243,8 @@ class MiniMaxH3ViTAttention(Module):
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )
+        if attended.shape[-2] != seq_len:
+            attended = ttnn.reshape(attended, padded, padded)
         attended = ttnn.reshape(
             ttnn.experimental.nlp_concat_heads(attended), (batch, seq_len, self.num_heads * self.head_dim)
         )
@@ -308,8 +322,9 @@ class MiniMaxH3TransformerBlock(Module):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         attention_mask: ttnn.Tensor | None = None,
+        valid_len: int | None = None,
     ) -> ttnn.Tensor:
-        x = self.attn(self.norm1(x), rope_cos, rope_sin, attention_mask, residual=x)
+        x = self.attn(self.norm1(x), rope_cos, rope_sin, attention_mask, residual=x, valid_len=valid_len)
         return _proj_add_residual(self.ff2, self.ff1(self.norm2(x)), x, self._ones_gate, self.mesh_device)
 
 
@@ -403,6 +418,10 @@ class MiniMaxH3ViTDecoder3d(Module):
             mask[..., valid:] = float("-inf")
         self.attention_mask = Parameter(total_shape=[1, 1, self.seq_len, self.seq_len], device=mesh_device, dtype=dtype)
         self._mask_host = mask
+        # "view": SDPA gets logical-length q/k/v and no mask (default). "dense": this mask, as the tip did.
+        self.sdpa_mask = os.environ.get("MINIMAX_H3_SDPA_MASK", "view")
+        if self.sdpa_mask not in ("view", "dense"):
+            raise ValueError(f"MINIMAX_H3_SDPA_MASK must be 'view' or 'dense', got {self.sdpa_mask!r}")
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Build the fused suffix constant, and the RoPE / mask constants.
@@ -436,8 +455,10 @@ class MiniMaxH3ViTDecoder3d(Module):
         if suffix.shape[0] != hidden.shape[0]:
             suffix = ttnn.repeat(suffix, ttnn.Shape([hidden.shape[0], 1, 1]))
         hidden = ttnn.concat([hidden, suffix], dim=1)
+        mask = self.attention_mask.data if self.sdpa_mask == "dense" else None
+        valid_len = self.num_patches + self.num_suffix_tokens
         for block in self.transformer_blocks:
-            hidden = block(hidden, self.rope_cos.data, self.rope_sin.data, self.attention_mask.data)
+            hidden = block(hidden, self.rope_cos.data, self.rope_sin.data, mask, valid_len=valid_len)
         return self.proj_out(self.norm_out(hidden))
 
 
