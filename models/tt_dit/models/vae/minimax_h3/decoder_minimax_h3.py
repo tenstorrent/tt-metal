@@ -140,17 +140,12 @@ class MiniMaxH3ViTAttention(Module):
         self._ones_gate = bf16_tensor(torch.ones(1, 1, dim), device=mesh_device)
 
         self.rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
-        # "heads": SDPA writes (B, H, S, D) and nlp_concat_heads reorders it; "op": SDPA writes the concat layout
-        # itself (output_concat_heads), one program less per layer. Bit-identical.
-        self.sdpa_concat = os.environ.get("MINIMAX_H3_SDPA_CONCAT", "op")
         # "op": ttnn.rms_norm on q and k, then RoPE; "fused": the RMS runs as a prologue inside rotary_embedding_llama
         # (rms_norm_eps), 72 LayerNorm launches per wave gone. Gated on RMSE vs float64 (test_rope_rms_fused_minimax_h3.py,
         # tools/decoder_ref_probe.py).
         self.qk_rms = os.environ.get("MINIMAX_H3_QK_RMS", "fused")
         if self.qk_rms not in ("op", "fused"):
             raise ValueError(f"MINIMAX_H3_QK_RMS must be 'op' or 'fused', got {self.qk_rms!r}")
-        if self.sdpa_concat not in ("heads", "op"):
-            raise ValueError(f"MINIMAX_H3_SDPA_CONCAT must be 'heads' or 'op', got {self.sdpa_concat!r}")
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -248,7 +243,7 @@ class MiniMaxH3ViTAttention(Module):
             logical = ttnn.Shape([batch, self.num_heads, valid_len, self.head_dim])
             query, key, value = (ttnn.reshape(t, logical, padded) for t in (query, key, value))
 
-        concat_in_op = self.sdpa_concat == "op"
+        # SDPA writes the concat-heads layout (batch, 1, S, H*D) itself: one program less per layer than nlp_concat_heads.
         attended = ttnn.transformer.scaled_dot_product_attention(
             query,
             key,
@@ -257,19 +252,13 @@ class MiniMaxH3ViTAttention(Module):
             is_causal=False,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
-            **({"output_concat_heads": True} if concat_in_op else {}),
+            output_concat_heads=True,
         )
         dim = self.num_heads * self.head_dim
-        if concat_in_op:
-            # Already (batch, 1, S, H*D); view back to the padded length, then drop the unit dim.
-            full = ttnn.Shape([batch, 1, seq_len, dim])
-            if attended.shape[-2] != seq_len:
-                attended = ttnn.reshape(attended, full, full)
-            attended = ttnn.reshape(attended, (batch, seq_len, dim))
-        else:
-            if attended.shape[-2] != seq_len:
-                attended = ttnn.reshape(attended, padded, padded)
-            attended = ttnn.reshape(ttnn.experimental.nlp_concat_heads(attended), (batch, seq_len, dim))
+        full = ttnn.Shape([batch, 1, seq_len, dim])
+        if attended.shape[-2] != seq_len:
+            attended = ttnn.reshape(attended, full, full)
+        attended = ttnn.reshape(attended, (batch, seq_len, dim))
         # When the block hands us its residual, fold the residual add into to_out's epilogue.
         if residual is not None:
             return _proj_add_residual(self.to_out, attended, residual, self._ones_gate, self.mesh_device)
