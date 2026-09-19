@@ -240,6 +240,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/pch.h
     inc/internal/risc_attribs.h
     inc/internal/runtime_reload.h
+    inc/internal/scoped_lock_cache_ops.h
     inc/internal/template_string.h
     inc/internal/tensix_functions.h
     inc/internal/vptr_uint.h
