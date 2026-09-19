@@ -29,12 +29,19 @@ these shapes need an entry rather than falling back.
 
 from __future__ import annotations
 
+import os
+
 # The op derives its worker grid from the device, reserving the mux axis: M parallelizes over 12
 # cores when transposed (narrow output, M > N) and 10 otherwise. per_core_M -- the M-tiles each core
 # walks -- follows.
 _TILE = 32
 _M_CORES_TRANSPOSED = 12
 _M_CORES_NON_TRANSPOSED = 10
+
+# A swept entry is a measurement at one operating point; reusing it at another per_core_M means
+# reusing a block shape swept for a different tile count, or in the other grid orientation. Off
+# the swept points the v3 rules fit the shape better than the nearest divisor entry does.
+_EXACT_ONLY = os.environ.get("MINIMAX_H3_AGMM_EXACT_ONLY", "1") == "1"
 
 
 def _per_core_m(m: int, n: int) -> int:
@@ -94,6 +101,11 @@ AGMM_BLOCK_SIZES: dict[tuple[int, int, int], tuple[int, int, int]] = {
     (7168, 1344, 10): (10, 8, 6),
     (7168, 1344, 11): (6, 8, 6),
     (7168, 1344, 12): (6, 8, 8),
+    # (5376, 1792) attention to_gate_compress (VSA) is deliberately absent. Its sweep at M = 4768
+    # put the global best at (8, 7, 7) with subblock (4, 1) -- 746.6 us against 755.5 us for the
+    # best combo at subblock (2, 2), which is all a `default_block_size` can be (it forces (2, 2),
+    # and 7 is not divisible by subblock_w = 2). The v3 rules emit an explicit subblock, so leaving
+    # this shape to them lands the sweep's actual winner instead of the expressible runner-up.
 }
 
 
@@ -106,6 +118,8 @@ def agmm_block_size(k: int, n: int, m: int) -> tuple[int, int, int] | None:
     into whole blocks with no wasteful partial last block -- and return its block shape.
     """
     per_core_m = _per_core_m(m, n)
+    if _EXACT_ONLY:
+        return AGMM_BLOCK_SIZES.get((k, n, per_core_m))
     swept = [pcm for (kk, nn, pcm) in AGMM_BLOCK_SIZES if kk == k and nn == n]
     divisors = [pcm for pcm in swept if per_core_m % pcm == 0]
     if not divisors:

@@ -490,6 +490,34 @@ def artifact_dir(name: str) -> Path:
     return directory
 
 
+def log_timing_table(pipeline, label: str, num_forwards: int, video_seconds: float, expected_total_s=None, extra=""):
+    """The MEASUREMENT block; `expected_total_s`, when given, asserts the total. Returns the total."""
+    rows = pipeline.last_timings
+    total = sum(seconds for _, seconds in rows)
+    shape = tuple(pipeline.mesh_device.shape)
+    logger.info(
+        f"MEASUREMENT {label} fully warm | mesh {shape[0]}x{shape[1]} Blackhole, "
+        f"TP={pipeline.tp_factor} axis {pipeline.tp_axis} / SP={pipeline.sp_factor} axis {pipeline.sp_axis}, "
+        f"{pipeline.ccl_manager.topology}, {pipeline.ccl_manager.num_links} links{extra} "
+        f"| warm window: one full warmup generation at this shape, prepares and export excluded"
+    )
+    for row_label, seconds in rows:
+        logger.info(f"  {row_label:<18} {seconds:8.1f} s  ({100 * seconds / total:4.1f} %)")
+    logger.info(f"  {'Total (compute)':<18} {total:8.1f} s")
+    denoise = dict(rows).get("Denoise")
+    if denoise:
+        logger.info(
+            f"  per forward        {denoise / num_forwards * 1000:8.1f} ms  "
+            f"({num_forwards} forwards over {denoise:.1f} s)"
+        )
+    logger.info(f"  realtime factor    {total / video_seconds:8.1f} x  (compute / video seconds)")
+    if expected_total_s is not None:
+        assert (
+            total < expected_total_s
+        ), f"fully-warm total {total:.1f} s exceeds the {expected_total_s:.0f} s floor bar"
+    return total
+
+
 def run_warm_generation(pipeline, prompt: str, *, seed: int, profiler=None, profiler_iteration: int = 0, **gen_kwargs):
     """A quiet compile pass then the timed generation with identical kwargs; asserts padded-length agreement (programs are keyed on it).
 

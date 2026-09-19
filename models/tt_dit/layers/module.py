@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import time
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple, overload
 
@@ -23,6 +25,31 @@ if TYPE_CHECKING:
     from typing import Any
 
     import torch
+
+
+_ROUTING = ContextVar("preparing_for_routing", default=False)
+
+
+@contextmanager
+def preparing_for_routing():
+    """Mark the enclosing `_prepare_torch_state` calls as routing rather than loading."""
+    token = _ROUTING.set(True)
+    try:
+        yield
+    finally:
+        _ROUTING.reset(token)
+
+
+def is_preparing_for_routing() -> bool:
+    """Whether the running `_prepare_torch_state` is resolving layouts rather than loading weights.
+
+    A hook that *synthesises* a key the checkpoint omits -- a zero-init default for a parameter the
+    base architecture does not carry -- must not do so while routing. Routing hands the pipeline a
+    partial state on purpose, and a synthesised key there becomes a destination no supplied source
+    accounts for, which the caller then has no way to attribute. Renames and fusions are unaffected;
+    only invention is.
+    """
+    return _ROUTING.get()
 
 
 class IncompatibleKeys(NamedTuple):

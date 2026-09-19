@@ -153,15 +153,26 @@ class LoRAMixin:
         B_torch: torch.Tensor,
         scale: float = 1.0,
         name: str = "",
+        prepared: bool = False,
     ) -> int:
-        # swiglu doubles out_features AND head-permutes W in _prepare_torch_state;
-        # the LoRA delta would not undergo the same permutation, so the merged
-        # weight's gate/value split would be wrong. Refuse rather than silently
-        # corrupt — and avoid the confusing 2*out validation error.
-        if getattr(self, "fused_activation_fn", None) is None and getattr(self, "activation_fn", None) == "swiglu":
+        """Add an adapter to the bank and return its index.
+
+        ``prepared`` asserts that ``B`` has already been through this layer's own
+        ``_prepare_torch_state`` — fused-SwiGLU tile pairing, head interleaving, rotary channel
+        permutation — and so is in the same layout as the base weight it will merge into. The
+        generic loader (``lora/apply.py``) routes every ``B`` that way. A caller passing raw
+        checkpoint-order factors leaves it False.
+        """
+        # Unprepared, the delta skips the gate/up tile interleave prepare_for_fused_swiglu applies
+        # to W, so the merge would land gate deltas on up columns. Refuse rather than corrupt.
+        if (
+            not prepared
+            and getattr(self, "fused_activation_fn", None) is None
+            and (getattr(self, "activation_fn", None) == "swiglu" or getattr(self, "fuse_swiglu", False))
+        ):
             raise ValueError(
-                "LoRA adapters are not supported on swiglu layers; the merged "
-                "delta would not match the swiglu head-permuted weight layout"
+                "LoRA adapters on swiglu layers require a B already in the fused-swiglu layout; "
+                "route it through the layer's _prepare_torch_state and pass prepared=True"
             )
 
         rank = A_torch.shape[0]

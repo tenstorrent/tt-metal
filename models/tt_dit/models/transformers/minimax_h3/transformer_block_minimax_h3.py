@@ -66,6 +66,7 @@ class MiniMaxH3TransformerBlock(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        vsa_config=None,
     ) -> None:
         super().__init__()
 
@@ -102,6 +103,7 @@ class MiniMaxH3TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
+            vsa_config=vsa_config,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
