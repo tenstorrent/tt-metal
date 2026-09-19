@@ -155,9 +155,6 @@ _DEFAULT_AUDIO_PACK = "5:2,6:4"
 # Split mode of the packed bands' anti-alias resamplers ("same" = the convs' mode). "off" is the measured 65 dB /
 # -72 ms point (layers/audio_pack.py).
 _AUDIO_RESAMPLER_SPLIT_ENV = "MINIMAX_H3_AUDIO_RESAMPLER_SPLIT"
-# Anti-alias SnakeBeta activations of the vocoder: "chain" runs the resampler/snake op chain, "fused" (default)
-# one generic_op kernel per activation (layers/audio_aa_snake.py), bit-identical to the chain.
-_AUDIO_ACT_ENV = "MINIMAX_H3_AUDIO_ACT"
 # Replay a captured device graph for the audio vocoder instead of dispatching it op by op. The vocoder is the one
 # stage that is host-bound, so this is its dominant lever; it needs a trace_region_size on the mesh.
 _AUDIO_TRACE_ENV = "MINIMAX_H3_AUDIO_TRACE"
@@ -175,13 +172,6 @@ def _audio_resampler_split_mode() -> str | None:
         return None
     if raw not in ("off", "weight", "act", "full"):
         raise ValueError(f"{_AUDIO_RESAMPLER_SPLIT_ENV}={raw!r} must be same, off, weight, act or full")
-    return raw
-
-
-def _audio_act_mode() -> str:
-    raw = os.environ.get(_AUDIO_ACT_ENV, "fused").strip().lower() or "fused"
-    if raw not in ("chain", "fused"):
-        raise ValueError(f"{_AUDIO_ACT_ENV}={raw!r} must be chain or fused")
     return raw
 
 
@@ -1557,7 +1547,7 @@ class MiniMaxH3Pipeline:
                 split_mode=self.audio_split_mode,
                 pack_bands=_audio_pack_bands(),
                 resampler_split_mode=_audio_resampler_split_mode(),
-                act_mode=_audio_act_mode(),
+                act_mode="fused",  # one kernel per anti-aliased SnakeBeta activation (layers/audio_aa_snake.py)
                 batch_shard_axis=batch_shard_axis,
                 profile=os.environ.get(_AUDIO_PHASES_ENV, "0").strip() not in ("", "0", "false", "no"),
             )
