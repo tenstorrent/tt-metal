@@ -19,7 +19,7 @@ is a performance-pass job -- these exist only so the correctness gates can run.
 
 from __future__ import annotations
 
-from ....layers.audio_ops import DEFAULT_MAX_C_IN_BLOCK
+from ....layers.audio_ops import DEFAULT_MAX_C_IN_BLOCK, legacy_kernel_table
 from ....utils.conv3d import _FP32_BLOCKINGS, aligned_channels
 
 # 16 overshoots L1 by 1.26x (1979264 B against 1572864 B) at the widest audio convs.
@@ -93,10 +93,14 @@ def register_h3_audio_blockings(*, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
     """Seed ``_FP32_BLOCKINGS`` for every H3 audio conv shape. Returns the number added.
 
     ``setdefault``, so a swept value that later lands in ``conv3d.py`` wins over these.
-    Kernels cover every size the model uses: 1 and 3 (projections), 4/7/8/9/10/11 (AMP
-    blocks, strided encoder convs and transposed upsamplers).
+    Kernels cover every size the model can present: 1 and 3 (projections), 4/7/8/9/10/11 (AMP
+    blocks, strided encoder convs and transposed upsamplers), and the packed bands' effective
+    kernels (5, 15, 17, 27 for the packed AMP convs and resamplers), which used to miss every
+    table and fall to the (32, 32, 1) default -- a one-row temporal block instead of eight.
+    Registering every size up to 32 costs dict entries only, so no packing factor can miss again.
+    ``MINIMAX_H3_AUDIO_KERNEL_TABLE=legacy`` keeps the old tuple for A/B runs.
     """
-    kernels = (1, 3, 4, 7, 8, 9, 10, 11)
+    kernels = (1, 3, 4, 7, 8, 9, 10, 11) if legacy_kernel_table() else tuple(range(1, 33))
     added = 0
     for in_channels, out_channels in h3_audio_channel_widths(**config):
         for kernel in kernels:
