@@ -62,10 +62,14 @@ def _load_kv_pt_trace(pt_path: str) -> dict:
     return cached
 
 
-def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Tensor":
+def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int, start: int = 0) -> "torch.Tensor":
     """[total_len, 576] golden kv_post_transform for one layer, format-agnostic:
     - DeepSeek: a single kv_cache/layer_N.safetensors holding the full tensor.
     - Kimi (vllm): kv_cache/layer_N/rows_<start>_<end>.safetensors shards, concatenated by start row.
+
+    `start` skips that many golden rows first. A head+tail capture stores the two windows back to
+    back, so its tail begins at the head length rather than at the prompt position it represents:
+    reaching it needs a row offset, not a longer read.
     """
     import torch
     from safetensors import safe_open
@@ -74,8 +78,12 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int) -> "torch.Te
     single = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}.safetensors"
     if single.exists():
         with safe_open(single, framework="pt") as f:
-            return f.get_slice(key)[:total_len].to(torch.float32)
+            return f.get_slice(key)[start : start + total_len].to(torch.float32)
     layer_dir = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}"
+    if start:
+        # The sharded layout would need the offset resolved against each shard's row range; no
+        # head+tail capture ships sharded, so refuse rather than silently score the wrong rows.
+        raise NotImplementedError(f"start={start} is not supported for the sharded layout at {layer_dir}")
     shards = sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1]))
     rows, have = [], 0
     for shard in shards:

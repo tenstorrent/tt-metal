@@ -728,6 +728,37 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     tokens_per_block = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
 
+    # PREFILL_PCC_TAIL_WINDOW=W scores the LAST W tokens instead of the first real_len. A head+tail
+    # capture holds only two windows of a long prompt, so at 1M context the golden has no rows for
+    # the middle and [0,real_len) cannot be scored at all -- but the tail is exactly the interesting
+    # part, since it is the only evidence the model is still correct at full context depth. The
+    # device holds every position, so only the read has to move; PREFILL_PCC_GOLDEN_OFFSET says
+    # where the golden's tail window starts (the head length, not the prompt position).
+    tail_window = int(os.environ.get("PREFILL_PCC_TAIL_WINDOW", "0"))
+    golden_offset = int(os.environ.get("PREFILL_PCC_GOLDEN_OFFSET", "0"))
+    # An explicit [START, END) beats the "last W tokens" form, because the interesting window does
+    # not always end at real_len. At 1M with 5120-token chunks it must not: 1,048,576 = 204*5120 +
+    # 4096, so the final chunk carries 1024 padding tokens, and a window ending at real_len scores
+    # KV that was produced in a padded chunk. Scoring only whole, fully-real chunks means
+    # [993280, 1044480) -- chunks 194..203 -- which also drops chunk 193, of which just 1024 tokens
+    # fall inside the tail.
+    win_start = int(os.environ.get("PREFILL_PCC_WINDOW_START", "0"))
+    win_end = int(os.environ.get("PREFILL_PCC_WINDOW_END", "0"))
+    if win_end:
+        for name, v in (("PREFILL_PCC_WINDOW_START", win_start), ("PREFILL_PCC_WINDOW_END", win_end)):
+            if v % tokens_per_block:
+                raise ValueError(f"{name}={v} must be a multiple of {tokens_per_block} (the DRAM block)")
+        first_pos, last_pos = win_start, min(win_end, real_len)
+        cmp_len, skip_rows = last_pos - first_pos, 0
+    elif tail_window:
+        cmp_len = min(tail_window, real_len)
+        first_pos = ((real_len - cmp_len) // tokens_per_block) * tokens_per_block
+        last_pos = real_len
+        skip_rows = (real_len - cmp_len) - first_pos
+    else:
+        cmp_len, first_pos, skip_rows, last_pos = real_len, 0, 0, real_len
+    read_end = ((last_pos + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
+
     # Which layers own a KV slab according to the MODEL, not according to what happens to be on
     # disk. A hybrid stack legitimately has goldens for only some layers, but a mispointed or partial
     # PREFILL_TRACE_DIR looks exactly the same from a file-presence check, and skipping both leaves a
@@ -754,12 +785,12 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             continue
 
         decoded_rows = []
-        for pos in range(0, read_len, tokens_per_block):
+        for pos in range(first_pos, read_end, tokens_per_block):
             loc = table.lookup(layer, pos, slot_id)
             unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
             raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
             decoded_rows.append(_decode_kv_chunk(raw, HEAD_DIM))
-        device_kv = torch.cat(decoded_rows, dim=0)[:real_len]
+        device_kv = torch.cat(decoded_rows, dim=0)[skip_rows : skip_rows + cmp_len]
 
         # A single PCC scalar per half per layer cannot separate a static per-column error from one
         # that accumulates per token, which is the question the depth curve actually poses. The
@@ -776,7 +807,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             except Exception as exc:  # diagnostics must never fail the gate
                 logger.warning(f"[producer] KV dump for layer {layer} failed: {exc}")
 
-        golden = _load_golden_kv_post(trace_dir, layer, real_len)
+        golden = _load_golden_kv_post(trace_dir, layer, cmp_len, start=golden_offset)
         # Re-base the pe half only if the model rotates it. Kimi-K3 is NoPE (`mla_use_nope`): its 64
         # rope dims pass through unrotated, so applying the half-split re-interleave scores the
         # transform instead of the cache -- 0.02 against a nope half of 0.998.
@@ -787,7 +818,10 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         logger.info(f"[producer] slot {slot_id} layer {layer:>2} KV PCC: nope={pcc_nope:.5f} pe={pcc_pe:.5f}")
 
     logger.info(
-        f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {checked}/{len(expected_slabs)} "
+        f"[producer] slot {slot_id} KV PCC over "
+        f"[{first_pos + skip_rows},{first_pos + skip_rows + cmp_len}) vs golden "
+        f"[{golden_offset},{golden_offset + cmp_len}) "
+        f"across {checked}/{len(expected_slabs)} "
         f"slab-owning layers -> {min_pcc:.6f}"
         + (f"; {len(unreferenced)} layers carry no KV golden (hybrid stack): {unreferenced}" if unreferenced else "")
     )
