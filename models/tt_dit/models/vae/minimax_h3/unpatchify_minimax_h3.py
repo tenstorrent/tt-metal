@@ -49,7 +49,9 @@ def _build(mesh_device, *, s_pad: int, d: int, num_frames: int, height: int, out
         reader_ct=ct + ttnn.TensorAccessorArgs(x).get_compile_time_args(),
         writer_ct=ct + ttnn.TensorAccessorArgs(out).get_compile_time_args(),
         cbs=[cb],
-        hash=(0xC13 << 48) | (s_pad << 28) | (d << 12) | (num_frames << 6) | height,
+        # Deterministic across processes (ints only, no str hashing); every compile-time and work-split input is in it,
+        # since generic_op trusts the hash on a program-cache hit.
+        hash=(0xC13 << 52) | (hash((s_pad, d, num_frames, height, out_channels, pt, p, tuple(ct), len(cores))) & ((1 << 52) - 1)),
     )
 
 
