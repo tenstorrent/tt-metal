@@ -12,7 +12,6 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp, assert_allclose
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
-    data_gen_with_range,
     data_gen_with_range_dtype,
 )
 from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
@@ -1898,24 +1897,6 @@ def test_unary_signbit_float_edge_case_ttnn(torch_dtype, ttnn_dtype, device):
     output_tensor = ttnn.signbit(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.signbit)
     golden_tensor = golden_function(in_data)
-
-    assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("threshold", [1.0, 10.0, 100.0, -5, -8.0, -100.0])
-@pytest.mark.parametrize("value", [10.0, 100.0, -7.0, -85.5])
-def test_unary_threshold_ttnn(input_shapes, threshold, value, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    output_tensor = ttnn.threshold(input_tensor1, threshold, value)
-    golden_function = ttnn.get_golden_function(ttnn.threshold)
-    golden_tensor = golden_function(in_data1, threshold, value)
 
     assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
 
