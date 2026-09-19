@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import os
 import torch
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 
@@ -27,6 +28,11 @@ if TYPE_CHECKING:
 
     from ...parallel.config import VAEParallelConfig
     from ...parallel.manager import CCLManager
+
+
+# SD35_VAE_BARRIER=1: use the CCL barrier semaphore in the VAE all-gathers instead of a host
+# synchronize_device before each one (the host sync forbids tracing).
+_VAE_USE_BARRIER = os.environ.get("SD35_VAE_BARRIER", "0") == "1"
 
 
 class ResnetBlock(Module):
@@ -68,7 +74,7 @@ class ResnetBlock(Module):
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            use_barrier=False,
+            use_barrier=_VAE_USE_BARRIER,
         )
         self.conv2 = Conv2d(
             out_channels,
@@ -78,7 +84,7 @@ class ResnetBlock(Module):
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            use_barrier=False,
+            use_barrier=_VAE_USE_BARRIER,
         )
         self.conv_shortcut = (
             Conv2d(
@@ -89,7 +95,7 @@ class ResnetBlock(Module):
                 mesh_device=mesh_device,
                 out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
-                use_barrier=False,
+                use_barrier=_VAE_USE_BARRIER,
             )
             if in_channels != out_channels
             else None
@@ -151,7 +157,7 @@ class Upsample2D(Module):
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            use_barrier=False,
+            use_barrier=_VAE_USE_BARRIER,
         )
 
     # Fix to align with constructor
@@ -292,7 +298,9 @@ class Attention(Module):
     # TODO: Standardize this usage
     def gather_if_sharded(self, x):
         if x.shape[3] < self.to_q.in_features:
-            x = vae_all_gather(self.ccl_manager, x, self.parallel_config.tensor_parallel.mesh_axis, use_barrier=False)
+            x = vae_all_gather(
+                self.ccl_manager, x, self.parallel_config.tensor_parallel.mesh_axis, use_barrier=_VAE_USE_BARRIER
+            )
         return x
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -424,7 +432,7 @@ class VAEDecoder(Module):
             mesh_device=mesh_device,
             out_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
-            use_barrier=False,
+            use_barrier=_VAE_USE_BARRIER,
         )
         self.mid_block = UnetMidBlock2D(
             in_channels=block_out_channels[-1],
@@ -504,7 +512,7 @@ class VAEDecoder(Module):
             x = up_block(x)
         x = self.conv_norm_out(x)
         x = ttnn.silu(x)
-        x = vae_all_gather(self._ccl_manager, x, cluster_axis=self._tp_axis, use_barrier=False)
+        x = vae_all_gather(self._ccl_manager, x, cluster_axis=self._tp_axis, use_barrier=_VAE_USE_BARRIER)
         x = self.conv_out(x)
         return x
 

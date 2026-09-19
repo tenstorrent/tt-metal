@@ -435,6 +435,87 @@ SHAPES = [
     (1152, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # SNG proj_mlp / xc-merged
     (1024, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # DBL ff spatial
     (128, 6144, 4608, 12, 7, True, "ff1_swiglu", "sagmm"),  # DBL ff_context (prompt)
+    # -----------------------------------------------------------------------
+    # SD3.5-Large @1024px on a 4-chip Blackhole column, tp4 / sp1 (bh_4x8_sp1_tp0, ring of 4 on
+    # axis 0). The CFG pair runs as batch 2 on dim 1 of the [1, B, N, D] activation and the fused
+    # ops need a unit batch, so the model flattens it to M = 2 * 4096 = 8192 rows. D = 2432
+    # (K_per_device = 19 tiles, prime: K_block is 19 or 1), padded inner dim 40 heads * 64 = 2560.
+    #
+    # Fabric-bound shapes (per the AGMM roofline N* = 2240 at tp4 / 2 links) run through the
+    # strided AGMM. All have M > N, so the fabric-bound factory TRANSPOSES the grid: M across
+    # cgx=12, N across cgy=8, strided-AG workers on rows 8-9. N is the per-device weight width.
+    # -----------------------------------------------------------------------
+    (8192, 2432, 1920, 12, 8, True, "plain", "sagmm"),  # attn to_qkv (3 * 640 per device)
+    (8192, 2560, 608, 12, 8, True, "to_out_exact", "sagmm"),  # attn to_out + fused gate/residual
+    (8192, 2432, 64, 12, 8, True, "plain", "sagmm"),  # proj_out (patch 2x2 * 16 channels)
+    (
+        8192,
+        2432,
+        2432,
+        12,
+        8,
+        True,
+        "ff1_gelu",
+        "sagmm",
+    ),  # ff1 on the strided op (K blocks may straddle the 19-tile slices)
+    # ff1 is compute-bound (N = 2432 > N*): all_gather_minimal_matmul_async with fused tanh-GELU on
+    # the model's default 12x9 worker grid (one row reserved for the AG workers).
+    (8192, 2432, 2432, 12, 9, True, "ff1_gelu"),  # ff1 (GELU tanh), 9728 / tp4 = 2432 per device
+    # ff2: fused matmul + strided reduce-scatter + addcmul. K is already per-device (9728 / 4).
+    (8192, 2432, 2432, 12, 8, False, "mmrs"),  # ff2 (N = 2432 scattered to 608 per device)
+    # Alternate matmul heights for the same SD3.5 ops: one AG-worker row (12x9) / three (12x7) for
+    # the strided AGMM, one reduce-scatter row for the MMRS.
+    (8192, 2432, 1920, 12, 9, True, "plain", "sagmm"),
+    (8192, 2560, 608, 12, 9, True, "to_out_exact", "sagmm"),
+    (8192, 2432, 64, 12, 9, True, "plain", "sagmm"),
+    (8192, 2432, 1920, 12, 7, True, "plain", "sagmm"),
+    (8192, 2560, 608, 12, 7, True, "to_out_exact", "sagmm"),
+    (8192, 2432, 2432, 12, 9, False, "mmrs"),
+    # ff2 MMRS at one CFG branch (M = 4096): Mt/core = 16, so M_block 16 is a single block per core
+    # and takes the DRAM handoff; smaller M blocks take the windowed L1 handoff.
+    (4096, 2432, 2432, 12, 8, False, "mmrs"),
+    # MMRS hang triage variants for the SD3.5 ff2 shape: N padded to 80 tiles (20 per device instead
+    # of the prime 19), K padded to 80 tiles, and a short M.
+    (8192, 2432, 2560, 12, 8, False, "mmrs"),
+    (8192, 2560, 2432, 12, 8, False, "mmrs"),
+    (1024, 2432, 2432, 12, 8, False, "mmrs"),
+    # ff2 MMRS on 11- and 10-column matmul grids. With N = 76 tiles a 12-column grid pads to 7
+    # tiles/core, so the reduce-scatter's div_up(76, 7) = 11 matmul columns disagrees with the 12
+    # the matmul actually runs (the 12th column holds only ghost tiles) and the fused op deadlocks
+    # (device-confirmed 2026-09-17: N = 80 tiles runs, N = 76 hangs). 11 columns -> 7/core ->
+    # div_up(76, 7) = 11; 10 columns -> 8/core -> div_up(76, 8) = 10: both consistent.
+    (8192, 2432, 2432, 11, 8, False, "mmrs"),
+    (8192, 2432, 2432, 11, 9, False, "mmrs"),
+    (8192, 2432, 2432, 10, 8, False, "mmrs"),
+    # SD3.5 plain (non-CCL) matmuls on the full 12x10 grid, currently on the warned default
+    # blocking in the model: M = 8192 (fused path, CFG pair flattened) and M = 4096 (legacy path,
+    # batch 2 on dim 1 so the op sees 4096 rows per batch).
+    (8192, 2432, 2432, 12, 10, False, "plain"),  # ff1 on the gathered input
+    # SD3.5 VAE mid-block attention on the shared spatial-parallel decoder (no TP): fused QKV and
+    # out projection over the 128x128 latent grid (16384 tokens), 512 channels.
+    (16384, 512, 1536, 12, 10, False, "plain"),
+    (16384, 512, 512, 12, 10, False, "plain"),
+    (8192, 2432, 1920, 12, 10, False, "plain"),  # to_qkv on the gathered input
+    (8192, 2560, 608, 12, 10, False, "plain"),  # to_out on the gathered input
+    (4096, 2432, 2432, 12, 10, False, "plain"),  # ff1 (legacy, per batch) / ff2 matmul
+    (4096, 2432, 1920, 12, 10, False, "plain"),  # to_qkv (legacy)
+    (4096, 2560, 608, 12, 10, False, "plain"),  # to_out (legacy)
+    (4096, 2432, 64, 12, 10, False, "plain"),  # proj_out (legacy)
+    # SD3.5 sp4 tp1 (full weights per chip, 1024 tokens per chip per CFG branch): every spatial
+    # matmul is a plain single-device matmul at M = 1024 with the full K and N.
+    (1024, 2432, 7296, 12, 10, False, "plain"),  # to_qkv (3 x 2432)
+    (1024, 2432, 2432, 12, 10, False, "plain"),  # to_out
+    (1024, 2432, 9728, 12, 10, False, "plain"),  # ff1
+    (1024, 9728, 2432, 12, 10, False, "plain"),  # ff2
+    (1024, 2432, 64, 12, 10, False, "plain"),  # proj_out
+    # K-block experiment: the SD3.5 AGMM shapes with K padded from 2432 (19 tiles/device, prime) to
+    # 2560 (20 tiles/device -> K blocks 2/4/5/10/20), fused and separate, to isolate the prime-K cost.
+    (8192, 2560, 1920, 12, 8, True, "plain", "sagmm"),  # to_qkv strided, K 2560
+    (8192, 2560, 64, 12, 8, True, "plain", "sagmm"),  # proj_out strided, K 2560
+    (8192, 2560, 2432, 12, 9, True, "ff1_gelu"),  # ff1 AGMM, K 2560
+    (8192, 2560, 1920, 12, 10, False, "plain"),  # to_qkv plain on gathered input, K 2560
+    (8192, 2560, 2432, 12, 10, False, "plain"),  # ff1 plain on gathered input, K 2560
+    (8192, 2560, 64, 12, 10, False, "plain"),  # proj_out plain on gathered input, K 2560
 ]
 
 
@@ -471,6 +552,13 @@ USE_CASE_CONFIGS = {
     },
     "ff1_gelu": {
         "fused_activation": (ttnn.UnaryOpType.GELU, True),
+    },
+    # to_out with the fused gate/residual (addcmul) epilogue but exact math, as the bf16 SD3.5
+    # model runs it. Under op_kind "sagmm" this drives strided_all_gather_minimal_matmul_async's
+    # fused_ternary_input_a/b (residual and full-M gate), mirroring the model's to_out call.
+    "to_out_exact": {
+        "scalar": 1.0,
+        "use_addcmul": True,
     },
     # Like "plain" but with exact (non-approx) GELU fused — matches the
     # activation="gelu" config in test_all_gather_minimal_matmul_async.py.
@@ -589,7 +677,12 @@ def get_k_block_candidates(K_per_device):
     dispatch-overhead-bound; there's no upper cap because dividing K cleanly
     never adds padding even at larger block sizes.
     """
-    return sorted(d for d in range(K_BLOCK_MIN, K_per_device + 1) if K_per_device % d == 0)
+    cands = sorted(d for d in range(K_BLOCK_MIN, K_per_device + 1) if K_per_device % d == 0)
+    if cands == [K_per_device] and K_per_device > 8:
+        # A prime per-device K (SD3.5: 2432 / tp4 = 19 tiles) leaves only the whole shard as a
+        # block; also offer the single-tile block so the L1 filter is not the only voice.
+        cands = [1] + cands
+    return cands
 
 
 def get_per_core_dims(shape, cluster_size):
@@ -598,25 +691,27 @@ def get_per_core_dims(shape, cluster_size):
     For "mm"/"agmm" this assumes force_transpose=True (the only mode those paths run):
     in0 parallelizes M across grid_x cores, in1 parallelizes N across grid_y cores.
 
-    "sagmm" is the opposite. Its factory sets transpose_core_grid = (M > N), and every
-    shape swept here has M < N, so in0 (M) parallelizes across grid_y and in1 (N) across
-    grid_x. See minimal_matmul_fabric_bound_program_factory.cpp:238-271.
+    "sagmm" follows its factory's own rule, transpose_core_grid = (M > N): with M < N in0 (M)
+    parallelizes across grid_y and in1 (N) across grid_x; with M > N (the SD3.5 shapes) the
+    grid is transposed. See minimal_matmul_fabric_bound_program_factory.cpp:238-271.
     """
     M, K, N, cgx, cgy, is_agmm, use_case, op_kind = unpack_shape(shape)
     M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
 
     if op_kind == "sagmm":
-        assert M < N, f"sagmm sweep assumes no core-grid transpose, but M={M} >= N={N}"
+        # The fabric-bound factory transposes the grid when M > N (no force_transpose knob): M then
+        # parallelizes across grid_x and N across grid_y. M < N keeps M on grid_y, N on grid_x.
+        m_cores, n_cores = (cgx, cgy) if M > N else (cgy, cgx)
         if USE_CASE_CONFIGS.get(use_case, {}).get("fuse_swiglu", False):
             # Cores are handed whole gate/up tile PAIRS, so padding happens on the output
             # width and the per-core weight width is twice the per-core output width.
             out_N_tiles = N_tiles // 2
-            N_per_core = 2 * (-(-out_N_tiles // cgx))
+            N_per_core = 2 * (-(-out_N_tiles // n_cores))
         else:
-            N_per_core = -(-N_tiles // cgx)
+            N_per_core = -(-N_tiles // n_cores)
         # K_block must divide the pre-gather shard: the ring delivers K_per_device tiles
         # per device in K_block-sized chunks, same rule as the agmm path.
-        return -(-M_tiles // cgy), K_tiles // cluster_size, N_per_core
+        return -(-M_tiles // m_cores), K_tiles // cluster_size, N_per_core
 
     M_per_core = -(-M_tiles // cgx)  # ceiling
     N_per_core = -(-N_tiles // cgy)
@@ -727,6 +822,10 @@ def generate_kn_combos(K_per_device, N_per_core, m_block=1, use_case="plain", op
     are skipped pre-sweep to avoid hard asserts that would abort the program.
     """
     k_candidates = get_k_block_candidates(K_per_device)
+    if op_kind == "sagmm":
+        # The strided (fabric-bound) op tracks per-k-block device dependencies, so blocks may straddle
+        # device slices; the divisor rule only applies to the Ring plain AGMM. Offer small blocks too.
+        k_candidates = sorted(set(k_candidates) | {k for k in (1, 2, 3, 4, 5, 6, 8) if k <= K_per_device})
     n_candidates = get_mn_block_candidates(N_per_core)
     require_even_n = USE_CASE_CONFIGS.get(use_case, {}).get("fuse_swiglu", False)
     combos = []
@@ -1056,6 +1155,34 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
         ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_cores, 0) for _ in range(n_sems)]
         ag_core_grid_offset = (0, core_grid.y)
 
+        # Fused gate/residual epilogue (the model's to_out): out = a + scalar * mm * b, with the
+        # residual a at the matmul output shape and the gate b materialized at full M as well
+        # (per-batch-row gates: the CFG pair carries two different gates through one flat M).
+        ternary_kwargs = {}
+        if uc_cfg.get("use_addcmul", False):
+            out_N = N // 2 if fuse_swiglu else N
+            tt_ternary_a = ttnn.from_torch(
+                torch.randn((1, 1, M, out_N), dtype=torch.float32),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=dram,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            tt_ternary_b = ttnn.from_torch(
+                torch.randn((1, 1, M, out_N), dtype=torch.float32),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=dram,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            ternary_kwargs = {
+                "fused_ternary_input_a": tt_ternary_a,
+                "fused_ternary_input_b": tt_ternary_b,
+                "fused_ternary_scalar": scalar if scalar is not None else 1.0,
+            }
+
         def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
             ttnn.experimental.strided_all_gather_minimal_matmul_async(
                 tt_input,
@@ -1078,6 +1205,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 read_local_slice_from_input=True,
                 chunks=chunks,
                 fuse_swiglu=fuse_swiglu,
+                **ternary_kwargs,
             )
             if sync:
                 ttnn.synchronize_device(mesh_device)
@@ -1087,7 +1215,9 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     if is_agmm:
         sp_axis = cfg["sp_axis"]
         tp_axis = cfg["tp_axis"]
-        sp_size = cfg["mesh_shape"][sp_axis]
+        # open_mesh hands the worker a 1xN / Nx1 cluster submesh, so the SP axis is 1 wide here and
+        # M is already the per-device M (the parent mesh's SP extent must not multiply it).
+        sp_size = mesh_shape[sp_axis]
         full_M = M * sp_size
 
         tt_input = ttnn.from_torch(

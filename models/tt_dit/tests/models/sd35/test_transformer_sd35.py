@@ -32,8 +32,9 @@ from ....utils.test import line_params_req_exact_devices
         [(2, 4), (2, 4), 0, 1, 1],
         [(2, 4), (2, 4), 1, 0, 1],
         [(4, 8), (4, 4), 0, 1, 4],
+        [(2, 2), (2, 2), 0, 1, 1],
     ],
-    ids=["1x2sp0tp1", "2x1sp1tp0", "2x2sp0tp1", "2x2sp1tp0", "2x4sp0tp1", "2x4sp1tp0", "4x4sp0tp1"],
+    ids=["1x2sp0tp1", "2x1sp1tp0", "2x2sp0tp1", "2x2sp1tp0", "2x4sp0tp1", "2x4sp1tp0", "4x4sp0tp1", "phys2x2sp0tp1"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
@@ -175,8 +176,9 @@ def test_sd35_transformer_block(
         [(2, 4), (2, 4), 0, 1, 1],
         [(2, 4), (2, 4), 1, 0, 1],
         [(4, 8), (4, 4), 0, 1, 4],
+        [(2, 2), (2, 2), 0, 1, 1],
     ],
-    ids=["1x2sp0tp1", "2x1sp1tp0", "2x2sp0tp1", "2x2sp1tp0", "2x4sp0tp1", "2x4sp1tp0", "4x4sp0tp1"],
+    ids=["1x2sp0tp1", "2x1sp1tp0", "2x2sp0tp1", "2x2sp1tp0", "2x4sp0tp1", "2x4sp1tp0", "4x4sp0tp1", "phys2x2sp0tp1"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(

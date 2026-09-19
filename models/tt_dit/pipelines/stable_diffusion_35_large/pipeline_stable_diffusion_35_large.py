@@ -19,6 +19,7 @@ import ttnn
 # NOTE: SD35Transformer is the new tt-dit implementation
 from models.tt_dit.models.transformers.transformer_sd35 import SD35Checkpoint
 from models.tt_dit.models.vae.vae_sd35 import VAEDecoderAdapter
+from models.tt_dit.models.vae.vae_sd35_spatial import SD35SpatialVaeAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, distribute_cfg
@@ -26,7 +27,7 @@ from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, Se
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.pipelines.stable_diffusion_35_large.text_encoder import TextEncoder
 from models.tt_dit.solvers import EulerSolver
-from models.tt_dit.utils.mesh import reshape_device
+from models.tt_dit.utils.mesh import reshape_device, settle_reshape_labeling
 from models.tt_dit.utils.tensor import from_torch_to_devices
 from models.tt_dit.utils.tracing import Tracer
 
@@ -41,8 +42,16 @@ _VAE_SCALE_FACTOR = 8
 _DEFAULT_CHECKPOINT = "stabilityai/stable-diffusion-3.5-large"
 
 _PRESETS: dict[tuple[int, ...], dict] = {
+    # 4-chip (single 4-chip cfg-submesh): cfg is disabled (factor 1) because the
+    # encoder/VAE require the cfg-submesh to be exactly 4 chips (reshaped to 1x4).
+    # DiT runs sp2 x tp2 on the 2x2 mesh. T5 is auto-disabled (reshape path).
+    (2, 2): {"cfg": (1, 0), "sp": (2, 0), "tp": (2, 1), "num_links": 2},
     (2, 4): {"cfg": (2, 1), "sp": (2, 0), "tp": (2, 1), "num_links": 1},
     (4, 8): {"cfg": (2, 1), "sp": (4, 0), "tp": (4, 1), "num_links": 4},
+    # Four chips in a line (a Galaxy column / row or a QuietBox relabeled): tensor parallel x4, CFG as
+    # batch 2, no sequence parallelism. The fastest 4-chip layout measured (0.233 s/step bf16).
+    (4, 1): {"cfg": (1, 0), "sp": (1, 1), "tp": (4, 0), "num_links": 2},
+    (1, 4): {"cfg": (1, 0), "sp": (1, 0), "tp": (4, 1), "num_links": 2},
 }
 
 
@@ -63,13 +72,18 @@ class StableDiffusion3PipelineConfig:
     max_t5_sequence_length: int
 
     checkpoint_name: str
+    # Spatial-parallel VAE decoder on the shared VAE library (vae_sd35_spatial.py): the image is split
+    # across the VAE submesh by width/height with halo exchange, unpatchify and uint8 conversion run on
+    # device, and the decode traces. Off: the channel-TP decoder on the reshaped 1x4 mesh.
+    vae_spatial: bool = True
+    vae_use_conv3d: bool = True
 
     @classmethod
     def default(
         cls,
         *,
         mesh_shape: ttnn.MeshShape,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: ttnn.Topology = ttnn.Topology.Ring,
         num_links: int | None = None,
         dit_parallel_config: DiTParallelConfig | None = None,
         encoder_parallel_config: EncoderParallelConfig | None = None,
@@ -80,6 +94,8 @@ class StableDiffusion3PipelineConfig:
         cfg_enabled: bool = True,
         max_t5_sequence_length: int = 256,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        vae_spatial: bool = True,
+        vae_use_conv3d: bool = True,
     ) -> StableDiffusion3PipelineConfig:
         preset = _PRESETS.get(tuple(mesh_shape), {})
 
@@ -114,6 +130,8 @@ class StableDiffusion3PipelineConfig:
             cfg_enabled=cfg_enabled,
             max_t5_sequence_length=max_t5_sequence_length,
             checkpoint_name=checkpoint_name,
+            vae_spatial=vae_spatial,
+            vae_use_conv3d=vae_use_conv3d,
         )
 
 
@@ -173,13 +191,21 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
             assert encoder_shape[0] * encoder_shape[1] == 4, f"Cannot reshape {encoder_shape} to a 1x4 mesh"
             self.encoder_mesh_shape = ttnn.MeshShape(1, 4)
         else:
-            vae_submesh_idx = 1
+            # With cfg-parallel there are two submeshes and the VAE takes the second; on a single
+            # (native 1x4) submesh it shares submesh 0 with the encoder.
+            vae_submesh_idx = 1 if len(self.submesh_devices) > 1 else 0
             self.encoder_mesh_shape = ttnn.MeshShape(*encoder_shape)
         vae_device = self.submesh_devices[vae_submesh_idx]
 
         self.encoder_device = encoder_device
         self.vae_device = vae_device
         self.vae_submesh_idx = vae_submesh_idx
+
+        # The encoder/VAE reshape relabels the mesh and the return trip may not restore the original
+        # labeling (it transposes the 2x2 on a Blackhole Galaxy submesh). Settle the labeling at its
+        # fixed point now, before any weights are placed, so the DiT and the encoder each keep seeing
+        # the labeling they were loaded under.
+        settle_reshape_labeling(encoder_device, self.encoder_mesh_shape)
 
         logger.info("creating TT-NN transformer...")
         checkpoint_name = config.checkpoint_name
@@ -212,13 +238,27 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
                 max_t5_sequence_length=config.max_t5_sequence_length,
             )
 
-            logger.info("creating VAE decoder...")
-            self._vae = VAEDecoderAdapter(
+            if not config.vae_spatial:
+                logger.info("creating VAE decoder...")
+                self._vae = VAEDecoderAdapter(
+                    checkpoint_name=checkpoint_name,
+                    parallel_config=self.vae_parallel_config,
+                    ccl_manager=self.ccl_managers[vae_submesh_idx],
+                    use_torch=False,
+                )
+
+        self._vae_spatial = config.vae_spatial
+        if config.vae_spatial:
+            # Built on the VAE submesh's native shape (no 1x4 reshape); the spatial split follows the
+            # mesh axes with more than one device.
+            logger.info("creating spatial-parallel VAE decoder...")
+            self._vae = SD35SpatialVaeAdapter(
                 checkpoint_name=checkpoint_name,
-                parallel_config=self.vae_parallel_config,
+                mesh_device=vae_device,
                 ccl_manager=self.ccl_managers[vae_submesh_idx],
-                use_torch=False,
+                use_conv3d=config.vae_use_conv3d,
             )
+            logger.info(f"spatial VAE parallel config: {self._vae.parallel_config}")
 
         ttnn.synchronize_device(self.encoder_device)
 
@@ -243,7 +283,7 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         guidance_scale: float = 3.5,
         traced: bool = False,
         # currently defaults to off due to ttnn.synchronize_device inside vae_all_gather
-        vae_traced: bool | None = False,
+        vae_traced: bool | None = None,
         encoder_traced: bool | None = None,
         clip_skip: int | None = None,
         on_event: PipelineEventCallback | None = None,
@@ -255,7 +295,8 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         negative_prompts_2 = negative_prompts_2 if negative_prompts_2 is not None else negative_prompts
         negative_prompts_3 = negative_prompts_3 if negative_prompts_3 is not None else negative_prompts
 
-        vae_traced = vae_traced if vae_traced is not None else traced
+        # The spatial VAE traces; the legacy decoder synchronizes the host inside its all-gathers and cannot.
+        vae_traced = vae_traced if vae_traced is not None else (traced and self._vae_spatial)
         encoder_traced = encoder_traced if encoder_traced is not None else traced
         if guidance_scale > 1 and not self._cfg_enabled:
             msg = "guidance_scale > 1 requires CFG to be enabled"
@@ -360,7 +401,10 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
 
     def _traced_step(self, *, cfg_enabled: bool, submesh_idx: int, latents: ttnn.Tensor, **kwargs: Any) -> ttnn.Tensor:
         if cfg_enabled and not self.dit_parallel_config.cfg_parallel.factor > 1:
-            latents = ttnn.concat([latents, latents])
+            # Single-mesh CFG (no cfg-parallel submesh split): run uncond+cond as a batch of 2.
+            # The DiT convention is [1, batch, N, C] (dim0==1, batch at dim1), so the CFG pair
+            # must be stacked on dim1 -- NOT dim0, which the fused distributed norm rejects.
+            latents = ttnn.concat([latents, latents], dim=1)
 
         return self.transformers[submesh_idx](spatial=latents, **kwargs)
 
@@ -388,6 +432,15 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         tt_latents = self.ccl_managers[self.vae_submesh_idx].all_gather_persistent_buffer(
             tt_latents, dim=2, mesh_axis=self.dit_parallel_config.sequence_parallel.mesh_axis
         )
+
+        if self._vae_spatial:
+            images_u8 = self._vae.decode_device(
+                tt_latents,
+                height=self._height // _VAE_SCALE_FACTOR,
+                width=self._width // _VAE_SCALE_FACTOR,
+                traced=traced,
+            )
+            return [Image.fromarray(image.numpy()) for image in images_u8]
 
         torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
         torch_latents = self.transformers[0].unpatchify(
