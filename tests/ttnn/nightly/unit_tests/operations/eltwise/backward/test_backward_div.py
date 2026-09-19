@@ -332,3 +332,52 @@ def test_bw_binary_div_inf_cases(input_shapes, rounding_mode, device):
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+    ),
+)
+def test_bw_binary_div_signed_zeros(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -50, 50, device, True, seed=0)
+    grad_data, grad_tensor = data_gen_with_range(input_shapes, -50, 50, device, True, seed=1)
+
+    # Examine zero divisor cases covered in #55392: mixed positive (+0.0) and negative (-0.0) zeros
+    other_data = torch.zeros(input_shapes, dtype=torch.bfloat16, requires_grad=True)
+    other_data[:, :, :, : input_shapes[-1] // 2] = -0.0
+    other_tensor = ttnn.from_torch(other_data, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, other_tensor)
+
+    golden_function = ttnn.get_golden_function(ttnn.div_bw)
+    golden_tensor = golden_function(grad_data, in_data, other_data)
+
+    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    assert comp_pass
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+    ),
+)
+def test_bw_binary_div_zero_grad_with_signed_zero_divisor(input_shapes, device):
+    in_data, input_tensor = data_gen_with_range(input_shapes, -50, 50, device, True, seed=0)
+    grad_data = torch.zeros(input_shapes, dtype=torch.bfloat16, requires_grad=True)
+    grad_tensor = ttnn.from_torch(grad_data, layout=ttnn.TILE_LAYOUT, device=device)
+
+    other_data = torch.zeros(input_shapes, dtype=torch.bfloat16, requires_grad=True)
+    other_data[:, :, :, : input_shapes[-1] // 2] = -0.0
+    other_tensor = ttnn.from_torch(other_data, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_output_tensor_on_device = ttnn.div_bw(grad_tensor, input_tensor, other_tensor)
+
+    golden_function = ttnn.get_golden_function(ttnn.div_bw)
+    golden_tensor = golden_function(grad_data, in_data, other_data)
+
+    comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
+    assert comp_pass
