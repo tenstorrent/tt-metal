@@ -61,17 +61,6 @@ def _warn_once_about_the_fallback() -> None:
     )
 
 
-# The YUV planes leave rgb_to_yuv as (1, h, w, T) uint8: 28-byte pages, each padded to the 64 B DRAM alignment and read one
-# NoC transaction at a time. rgb_to_yuv's wide_rows emits the same bytes as (1, h, w*T) rows, 4.7 KB pages, and the D2H is
-# 2.7x faster (4x8 bench 2026-09-19: 6.2 -> 2.3 ms per wave, 5.4 -> 2.0 ms of it device-side); the host half views the
-# shards back. Default on (15 s A/B: bit-identical, VAE 2.4 -> 2.3 s); MINIMAX_H3_YUV_WIDE=0 keeps the 28 B pages.
-_YUV_WIDE_ENV = "MINIMAX_H3_YUV_WIDE"
-
-
-def _wide_pages_enabled() -> bool:
-    return os.environ.get(_YUV_WIDE_ENV, "1").strip().lower() in ("1", "true", "yes", "on")
-
-
 # A deferred readback used to end in a full device sync that idled the device until the next wave's first program landed.
 # By default the three reads are followed by a recorded event that the deferred host half waits on instead, so the host
 # enqueues the next wave while this one drains (one command queue keeps the reads ahead of the next wave); 15 s A/B
@@ -519,9 +508,9 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
 
     # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
-    # Only ask for wide rows when enabled, so a library without the argument still serves the plain layout.
-    wide_kwargs = {"wide_rows": True} if _wide_pages_enabled() else {}
-    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, **wide_kwargs)
+    # Wide rows: the planes come out as (1, h, w*T) 4.7 KB pages instead of 28-byte (1, h, w, T) sticks, which read 2.7x
+    # faster over the NoC; `_as_hwt` views the host shards back.
+    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, wide_rows=True)
     if debug:
         print(f"  [yuv-d2h] yuv outputs per-shard:")
         print(f"  [yuv-d2h]   Y : {list(tt_Y.shape)}")
