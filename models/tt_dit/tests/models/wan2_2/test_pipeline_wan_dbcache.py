@@ -20,7 +20,9 @@ see ``_parse_custom_config``). The ``*_traced`` parametrizations run the traced 
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import time
 
 import numpy as np
@@ -116,6 +118,17 @@ def _parse_custom_config(name: str) -> WanDBCacheConfig:
     )
 
 
+def _prompt_tag(prompt: str, seed: int) -> str:
+    """Filesystem-safe tag so runs with different prompts or seeds do not overwrite each other.
+
+    A readable (truncated) slug plus a short digest of the full prompt, so two prompts sharing
+    their first 40 characters still get distinct filenames.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", prompt.lower()).strip("-")[:40].strip("-")
+    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:6]
+    return f"_{slug}-{digest}_seed{seed}" if slug else f"_{digest}_seed{seed}"
+
+
 def _save_frame_strip(frames: np.ndarray, path: str, *, count: int = 5, scale: int = 2) -> None:
     """Save `count` evenly spaced frames side by side (downscaled) for a quick visual check."""
     from PIL import Image
@@ -159,8 +172,16 @@ _TRACE_REGION_SIZE = 256 * 1024 * 1024
         ],
         [(4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False, False],
         [(2, 4), 1, 0, 2, True, line_params_req_exact_devices, ttnn.Topology.Linear, False, False],
+        # 4-chip BH box (2x2 system mesh); matches the (2, 2) BH preset in pipeline_wan.py.
+        [(2, 2), 0, 1, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, True, False],
     ],
-    ids=["bh_4x8sp1tp0nl2_ring", "bh_4x8sp1tp0nl2_traced_ring", "bh_4x8sp1tp0nl2_linear", "bh_2x4sp1tp0nl2_linear"],
+    ids=[
+        "bh_4x8sp1tp0nl2_ring",
+        "bh_4x8sp1tp0nl2_traced_ring",
+        "bh_4x8sp1tp0nl2_linear",
+        "bh_2x4sp1tp0nl2_linear",
+        "bh_2x2sp0tp1nl2_linear_is_fsdp1",
+    ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("width, height", [(832, 480), (1280, 720)], ids=["480p", "720p"])
@@ -297,7 +318,10 @@ def test_wan_dbcache_ab(
         if int(ttnn.distributed_context_get_rank()) == 0:
             safe = name.replace(":", "_").replace("&", "_").replace("=", "")
             shift_tag = f"_fs{flow_shift:g}" if flow_shift is not None else ""
-            stem = f"wan_dbcache_{safe}_{width}x{height}_s{num_inference_steps}{shift_tag}{'_traced' if traced else ''}"
+            stem = (
+                f"wan_dbcache_{safe}_{width}x{height}_s{num_inference_steps}"
+                f"{shift_tag}{_prompt_tag(prompt, seed)}{'_traced' if traced else ''}"
+            )
             _save_frame_strip(frames, f"{stem}_strip.png")
             try:
                 from models.tt_dit.utils.video import export_to_video
