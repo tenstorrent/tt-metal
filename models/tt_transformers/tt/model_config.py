@@ -1378,7 +1378,7 @@ class ModelArgs:
         """Get the sharded memory config for MLP input."""
         if mode == Mode.DECODE:
             if self.is_galaxy:
-                return self.get_mlp_act_mem_config("decode")
+                return self.get_mlp_act_mem_config(Mode.DECODE)
             elif prefetcher is not None:
                 return ttnn.create_sharded_memory_config(
                     shape=(32, self.dim // prefetcher.ring_size),

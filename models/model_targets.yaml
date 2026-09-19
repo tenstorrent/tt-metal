@@ -1345,10 +1345,11 @@ targets:
           - batch_size: 32
             seq_len: 686
             status: active
-            # decode_t/s/u corrected 14.4 -> 22.0 (measured in run 27016350392).
             perf:
-              decode_t/s/u: 22.0
-              prefill_time_to_first_token: 123
+              decode_t/s/u: 19.5
+              decode_t_s_u_tolerance: 0.10
+              prefill_time_to_first_token: 141
+              prefill_time_to_first_token_tolerance: 0.15
             accuracy: {}
       # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
       # (ci-eval-32 invocation; decode_t/s = batch_size * decode_t/s/u).

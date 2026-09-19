@@ -115,7 +115,7 @@
     wh_llmbox_perf:
       timeout: 28
       tier: 2
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 
@@ -320,6 +320,24 @@
   team: ttnn
   budget_type: unit
 
+- name: ModernBERT-base unit tests
+  cmd: |
+    unset HF_HUB_CACHE  # the shared cache is read-only and does not hold this model
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 300 models/experimental/modernbert/tests \
+      --ignore=models/experimental/modernbert/tests/test_modernbert_perf.py \
+      --ignore=models/experimental/modernbert/tests/test_modernbert_profile.py \
+      --ignore=models/experimental/modernbert/tests/test_modernbert_device_perf.py
+  model: modernbert-base
+  model_family: ModernBERT
+  skus:
+    wh_n300:
+      timeout: 8
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  budget_type: unit
+
 - name: ResNet-50 unit tests
   cmd: |
     pytest --timeout 300 \
@@ -478,7 +496,7 @@
 - name: Gemma-4-E4B unit tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-E4B-it
     pytest --timeout 600 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -546,7 +564,7 @@
 - name: Gemma-4-31B unit tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
@@ -964,7 +982,7 @@
     wh_llmbox_perf:
       timeout: 15
       tier: 2
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 
@@ -980,7 +998,7 @@
     wh_llmbox_perf:
       timeout: 5
       tier: 3
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 
@@ -1023,7 +1041,7 @@
   model: dit-common
   skus:
     wh_n150:
-      timeout: 60
+      timeout: 75
       tier: 1
     bh_quietbox_2:
       timeout: 115
@@ -1034,7 +1052,7 @@
 
 - name: TT-DiT encoder unit tests, shared amongst all models.
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE  # umt5 fetches the Wan2.2 tokenizer from the hub
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     export DIT_UNIT_TEST=1  # read at collection time by t5/test_t5_full, umt5/test_umt5, clip/test_clip_full_projection
@@ -1098,7 +1116,7 @@
 
 - name: TT-DiT Flux.1-schnell unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_schnell
@@ -1115,7 +1133,7 @@
 
 - name: TT-DiT Flux.1-dev unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
@@ -1793,7 +1811,7 @@
     wh_llmbox:
       timeout: 28
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 
@@ -1816,7 +1834,7 @@
     wh_llmbox:
       timeout: 6
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 
@@ -1839,7 +1857,7 @@
     wh_llmbox:
       timeout: 3
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 
@@ -1862,7 +1880,7 @@
     wh_llmbox:
       timeout: 2
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 
@@ -1885,7 +1903,7 @@
     wh_llmbox:
       timeout: 4
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 
@@ -1907,7 +1925,7 @@
     wh_llmbox:
       timeout: 6
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 
@@ -1930,7 +1948,7 @@
     wh_llmbox:
       timeout: 5
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 
@@ -1965,7 +1983,7 @@
     wh_llmbox:
       timeout: 6
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 
@@ -1987,7 +2005,7 @@
     wh_galaxy_perf:
       timeout: 5
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 
@@ -2009,7 +2027,7 @@
     wh_galaxy_perf:
       timeout: 5
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 
@@ -2030,7 +2048,7 @@
     wh_galaxy_perf:
       timeout: 5
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: unit
 

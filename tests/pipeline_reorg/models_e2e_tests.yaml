@@ -175,7 +175,7 @@
       timeout: 25
       tier: 2
       release_ready: false
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: e2e
 
@@ -235,13 +235,14 @@
 - name: Qwen3-32B e2e tests
   # TTTv2 substitution (wh_llmbox_perf / T3K only — the TTTv2 qwen3_32b demo is T3K-only: 64 attn / 8 KV
   # heads need 8-way TP and the 32B weights don't fit < 8 devices). ci-token-matching -> token-accuracy,
-  # ci-eval-32 -> eval-32; both under the performance optimization, matching the TTTv1 leg's cases.
+  # ci-eval-32 -> eval-32-perf-report (the perf-gated parity case: traced prefill, on-device top-k,
+  # telemetry + perf floor); both under the performance optimization, matching the TTTv1 leg's cases.
   # One pytest process per case (matching the Qwen2.5-Coder-32B leg below): grouping demo configs in a
   # single process on the 8-device Wormhole mesh has wedged an ETH core, so each case opens its own mesh.
   cmd: |
     export HF_MODEL=Qwen/Qwen3-32B HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen3-32B MESH_DEVICE=T3K
     pytest --timeout 1800 models/common/tests/demos/qwen3_32b/demo.py -k "token-accuracy and performance"
-    pytest --timeout 1800 models/common/tests/demos/qwen3_32b/demo.py -k "eval-32 and performance"
+    pytest --timeout 1800 models/common/tests/demos/qwen3_32b/demo.py -k "eval-32-perf-report and performance"
   model: qwen3-32b
   model_family: Qwen
   skus:
@@ -432,7 +433,7 @@
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: e2e
 
@@ -452,7 +453,7 @@
       timeout: 15
       tier: 3
       release_ready: false
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: e2e
 
@@ -807,7 +808,7 @@
       timeout: 6
       tier: 3
       release_ready: false
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: e2e
 
@@ -1341,6 +1342,21 @@
       tier: 3
   owner_id: U024A4EFV6U # Brian Liu
   team: ttnn
+  budget_type: e2e
+
+- name: ModernBERT-base e2e tests
+  cmd: |
+    unset HF_HUB_CACHE  # the shared cache is read-only and does not hold this model
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 120 models/experimental/modernbert/demo/demo.py
+  model: modernbert-base
+  model_family: ModernBERT
+  skus:
+    wh_n300:
+      timeout: 4
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
   budget_type: e2e
 
 - name: DistilBERT e2e tests

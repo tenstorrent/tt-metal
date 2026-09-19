@@ -196,6 +196,7 @@ private:
     // Throws if the tracker is null (e.g., on remote-only MeshDevices).
     void validate_sub_device_manager_tracker() const;
     std::vector<AllocatorImpl*> trace_allocators() const;
+    std::vector<AllocatorImpl*> trace_allocators(SubDeviceManagerId manager_id) const;
     // Resolves the mesh-wide device properties that are fixed once the devices are open. Called
     // during initialization and again after a reshape swaps the view.
     void establish_device_property_caches();
@@ -242,9 +243,9 @@ public:
 
     // Unsafe allocation tracking
     std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshTraceId& trace_id) const;
+    std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(
+        SubDeviceManagerId manager_id, const MeshTraceId& trace_id) const;
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
-    static std::vector<size_t> drain_pending_traceback_ids();
-    static std::vector<size_t> drain_retired_traceback_ids();
     void push_corruptible_allocation_scope();
     void pop_corruptible_allocation_scope();
 

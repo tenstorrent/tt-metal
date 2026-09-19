@@ -44,6 +44,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/binary_shift.h
     inc/api/compute/blank.h
     inc/api/compute/cb_api.h
+    inc/api/compute/clamped_silu_glu.h
     inc/api/compute/common.h
     inc/api/compute/common_globals.h
     inc/api/compute/compute_kernel_api_debug.h
@@ -335,4 +336,7 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-app-sections.ld
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
+    ckernels/common/llk_sfpu/ckernel_sfpu_abs_bf16_blackhole.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_abs_bf16_wormhole_b0.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_abs_value.h
 )
