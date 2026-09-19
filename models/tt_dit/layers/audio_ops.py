@@ -89,11 +89,20 @@ def kernel_split_max_k() -> int:
     return int(os.environ.get("MINIMAX_H3_KERNEL_SPLIT_MAX_K", "7"))
 
 
+# Transposed convs as polyphase convs over the unstuffed rows (ConvTranspose1dViaConv3d); opt-in with
+# MINIMAX_H3_AUDIO_POLYPHASE=1 until its pipeline A/B.
+def polyphase_env() -> bool:
+    import os
+
+    return os.environ.get("MINIMAX_H3_AUDIO_POLYPHASE", "0") == "1"
+
+
 def weights_variant(
     split_mode: str,
     max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
     pack_bands: dict[int, int] | None = None,
     resampler_split_mode: str | None = None,
+    act_mode: str = "chain",
 ) -> str:
     """Cache-key suffix for the precision levers that change the prepared parameter set.
 
@@ -123,6 +132,12 @@ def weights_variant(
             suffix += f"_rs-{rs_variant}"
     if legacy_kernel_table():
         suffix += "_ktlegacy"
+    if polyphase_env():
+        # The transposed convs' prepared weights are the polyphase packed form, a different tensor set.
+        suffix += "_pp"
+    if act_mode != "chain":
+        # The fused activation keeps alpha/beta as one prepared block (layers/audio_aa_snake.py).
+        suffix += f"_act-{act_mode}"
     return f"{suffix}_wp{_WEIGHT_PREP_REVISION}"
 
 
@@ -1416,6 +1431,7 @@ class ConvTranspose1dViaConv3d(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
+        polyphase: bool | None = None,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -1427,14 +1443,38 @@ class ConvTranspose1dViaConv3d(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        # Polyphase: y[s*t + p] = sum_j x[t - j] * W_p[j] is a stride-1 "same" conv with s*out_channels outputs and
+        # K' taps over the UNSTUFFED rows, whose (T, s*out) rows reshape to (s*T, out). The dense packed weight is
+        # read off the transposed conv's impulse responses (`audio_pack.packed_weight`), exact to fp32 weight
+        # rounding including the sequence ends because k - s is even. K' = 3 for H3's (9, 5) and (4, 2): a third
+        # and three quarters of the zero-stuffed form's multiplies, and no stuff/pad/slice ops.
+        self.polyphase = polyphase_env() if polyphase is None else polyphase
+        if self.polyphase:
+            from .audio_pack import packed_weight
+
+            probe = packed_weight(
+                lambda x: torch.nn.functional.conv_transpose1d(
+                    x,
+                    torch.ones(1, 1, kernel_size, dtype=torch.float64),
+                    stride=stride,
+                    padding=(kernel_size - stride) // 2,
+                ),
+                c_in=1,
+                c_out=1,
+                k_in=1,
+                k_out=stride,
+                support=kernel_size,
+            )
+            self.poly_kernel = int(probe.shape[-1])
+            assert self.poly_kernel % 2 == 1, f"polyphase kernel must be odd for 'same' padding, got {self.poly_kernel}"
 
         # Inner conv stays UNSHARDED; forward gathers T, runs unsharded, then re-partitions.
         self.conv = _AlignedOutConv1d(
             in_channels=in_channels,
-            out_channels=out_channels,
-            kernel_size=kernel_size,
+            out_channels=(stride * out_channels) if self.polyphase else out_channels,
+            kernel_size=self.poly_kernel if self.polyphase else kernel_size,
             stride=1,
-            padding_mode="causal",
+            padding_mode="zeros" if self.polyphase else "causal",
             bias=bias,
             mesh_device=mesh_device,
             dtype=dtype,
@@ -1442,8 +1482,9 @@ class ConvTranspose1dViaConv3d(Module):
             ccl_manager=None,
             split_mode=split_mode,
         )
-        # forward() supplies its own symmetric padding, so the inner conv's causal front pad is disabled.
-        self.conv.external_pad_front = 0
+        if not self.polyphase:
+            # forward() supplies its own symmetric padding, so the inner conv's causal front pad is disabled.
+            self.conv.external_pad_front = 0
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Reshape ConvTranspose1d weight ``(in, out, k)`` → Conv1d ``(out, in, k)`` (flipped along k)."""
@@ -1453,11 +1494,28 @@ class ConvTranspose1dViaConv3d(Module):
                 f"expected ConvTranspose1d weight shape ({self.in_channels}, {self.out_channels}, "
                 f"{self.kernel_size}), got {tuple(w.shape)}"
             )
-            w_flipped = torch.flip(w, dims=[-1])
-            w_conv1d = w_flipped.permute(1, 0, 2).contiguous()
-            state["conv.weight"] = w_conv1d
+            if self.polyphase:
+                from .audio_pack import packed_weight
+
+                k, s = self.kernel_size, self.stride
+                w64 = w.double()
+                state["conv.weight"] = packed_weight(
+                    lambda x: torch.nn.functional.conv_transpose1d(x, w64, stride=s, padding=(k - s) // 2),
+                    c_in=self.in_channels,
+                    c_out=self.out_channels,
+                    k_in=1,
+                    k_out=s,
+                    support=k,
+                    q_half=self.poly_kernel // 2,
+                )
+            else:
+                w_flipped = torch.flip(w, dims=[-1])
+                w_conv1d = w_flipped.permute(1, 0, 2).contiguous()
+                state["conv.weight"] = w_conv1d
         if "bias" in state:
-            state["conv.bias"] = state.pop("bias")
+            bias = state.pop("bias")
+            # Polyphase rows are phase-major, (p, c): the same per-channel bias for every phase slot.
+            state["conv.bias"] = bias.repeat(self.stride) if self.polyphase else bias
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         assert x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -1477,9 +1535,14 @@ class ConvTranspose1dViaConv3d(Module):
 
         # Input C must match the aligned-C the conv weight was allocated for.
         x_BTC = _pad_channels_to_aligned(x_BTC, self.mesh_device)
-        x_zs = _zero_stuff_t(x_BTC, stride=self.stride, mesh_device=self.mesh_device)
-        x_padded = _zero_pad_t(x_zs, self.external_pad_each, self.external_pad_each, self.mesh_device)
-        y = self.conv(x_padded)
+        if self.polyphase:
+            y = self.conv(x_BTC)  # (B, T, s*out): the aligned trim leaves exactly s*out columns
+            B, T, C = y.shape
+            y = ttnn.reshape(y, (B, T * self.stride, C // self.stride))
+        else:
+            x_zs = _zero_stuff_t(x_BTC, stride=self.stride, mesh_device=self.mesh_device)
+            x_padded = _zero_pad_t(x_zs, self.external_pad_each, self.external_pad_each, self.mesh_device)
+            y = self.conv(x_padded)
 
         if sharded:
             y = _partition_t(y, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed

@@ -80,9 +80,10 @@ def h3_audio_channel_widths(
     pairs.add((latent_channels, latent_dim))  # dec_in_proj
     pairs.add((latent_dim, decoder_dim))  # conv_pre
     channels = decoder_dim
-    for _ in decoder_rates:
+    for rate in decoder_rates:
         nxt = channels // 2
-        pairs.add((channels, nxt))  # upsampler inner conv
+        pairs.add((channels, nxt))  # upsampler inner conv (zero-stuffed form)
+        pairs.add((channels, rate * nxt))  # upsampler inner conv (polyphase form: s*out outputs over unstuffed rows)
         pairs.add((aligned_channels(nxt), aligned_channels(nxt)))  # AMP convs
         channels = nxt
     pairs.add((aligned_channels(channels), aligned_channels(1)))  # conv_post -> mono
