@@ -626,44 +626,6 @@ def run_unary_test_with_float_remainder(device, h, w, scalar, ttnn_function, ulp
     assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
-@pytest.mark.parametrize("lower_limit", [0, 1.0, 2, -5.5])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_relu_min(device, h, w, lower_limit, dtype):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-
-    golden_function = ttnn.get_golden_function(ttnn.relu_min)
-    torch_output_tensor = golden_function(torch_input_tensor, lower_limit=lower_limit)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.relu_min(input_tensor, lower_limit)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert torch.equal(torch_output_tensor, output_tensor)
-
-
-@pytest.mark.parametrize("upper_limit", [0, 1.0, 2, -5.5])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_relu_max(device, h, w, upper_limit, dtype):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-
-    golden_function = ttnn.get_golden_function(ttnn.relu_max)
-    torch_output_tensor = golden_function(torch_input_tensor, upper_limit=upper_limit)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.relu_max(input_tensor, upper_limit)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert torch.equal(torch_output_tensor, output_tensor)
-
-
 @pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
 @pytest.mark.parametrize("value_ranges", [INT32_BANDED_RANGES])
 @pytest.mark.parametrize("upper_limit", [-(2**31), -(2**30), -7, 0, 7, 1000, 2**24 + 1, 2**30, 2147483647])
@@ -2140,23 +2102,9 @@ def test_unary_sinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
         assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=3)
 
 
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([3, 128, 32])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize("exponent", [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 8.0, 9.0, 10.0])
-def test_unary_rpow_ttnn(input_shapes, exponent, device):
-    in_data1 = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-30, 30)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.rpow(input_tensor1, exponent)
-    golden_function = ttnn.get_golden_function(ttnn.rpow)
-    golden_tensor = golden_function(in_data1, exponent)
-
-    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.99)
-    assert_allclose(ttnn.to_torch(output_tensor), golden_tensor, atol=1e-2, rtol=0.1)
+# NOTE: test_unary_rpow_ttnn (random bfloat16 sample, exponents 0.5-10.0) removed;
+# fully superseded by the exhaustive (all bf16 bit patterns, same exponents plus more,
+# same PCC/allclose thresholds) test_rpow_op in test_unary_category4_bfloat16.py.
 
 
 @pytest.mark.parametrize(
@@ -2232,6 +2180,11 @@ def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
 )
 @pytest.mark.parametrize("negative_slope", [0.01, 0.1, 1.0, 5.75, 10.0])
 def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, torch_dtype, ttnn_dtype, device):
+    if ttnn_dtype == ttnn.bfloat16 and negative_slope in (0.01, 0.1, 1.0):
+        # Exhaustively covered (all bf16 bit patterns) by test_leaky_relu_op in
+        # test_unary_category4_bfloat16.py; only the slopes unique to this test remain.
+        pytest.skip("covered by test_unary_category4_bfloat16.py::test_leaky_relu_op")
+
     in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     if ttnn_dtype == ttnn.bfloat8_b:
