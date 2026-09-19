@@ -213,7 +213,7 @@
 # benchmark gate gates on request *completion* only — the WH corruption class
 # returns well-formed garbage with completed == num_prompts and sails straight
 # through. Verified passing on T3K.
-- name: "Gemma4-31B"
+- name: "Gemma4-31B (T3K)"
   model: google/gemma-4-31B-it
   coherence-test: true
   server-timeout: 45
@@ -232,7 +232,7 @@
   team: models
   budget_type: vllm
 
-- name: "Gemma4-31B"
+- name: "Gemma4-31B (P150x4)"
   model: google/gemma-4-31B-it
   coherence-test: true
   server-timeout: 20
@@ -343,7 +343,7 @@
 
 # ── Llama ──────────────────────────────────────────────────────────
 
-- name: "Llama-3.1-8B-Instruct with sampling-tests"
+- name: "Llama-3.1-8B-Instruct with sampling-tests (T3K)"
   model: meta-llama/Llama-3.1-8B-Instruct
   server-timeout: 20
   benchmark-timeout: 5
@@ -408,7 +408,7 @@
   team: models
   budget_type: vllm
 
-- name: "Llama-3.1-8B-Instruct with sampling-tests"
+- name: "Llama-3.1-8B-Instruct with sampling-tests (P150x8)"
   model: meta-llama/Llama-3.1-8B-Instruct
   server-timeout: 35
   benchmark-timeout: 10
