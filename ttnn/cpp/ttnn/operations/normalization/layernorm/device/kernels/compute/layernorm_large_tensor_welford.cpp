@@ -8,6 +8,7 @@
 #define BCAST_DIM BroadcastType::COL
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
@@ -20,6 +21,12 @@
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
+
+namespace ckl = compute_kernel_lib;
 
 namespace generic = norm::kernel_util::generic;
 
@@ -90,29 +97,16 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 #endif
 
     for (auto block : generic::blocks(Wt, blk)) {
-        // Fused pre-add
-        reconfig_data_format(dfb_in, dfb_inb);
-        add_init(dfb_in, dfb_inb);
-        dfb_in_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
-        dfb_inb_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
-        tile_regs_acquire();
-        for (auto i : block.local()) {
-            add_tiles(dfb_in, dfb_inb, i, i, i);
-        }
-        tile_regs_commit();
-        dfb_in_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
-        dfb_inb_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
-
-        // Pack to an intermediate buffer (needed
-        // to workaround transpose_dest bug)
-        pack_reconfig_data_format(dfb_interm_pre_add);
-        dfb_interm_pre_add_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
-        tile_regs_wait();
-        for (auto i : block.local()) {
-            pack_tile(i, dfb_interm_pre_add);
-        }
-        tile_regs_release();
-        dfb_interm_pre_add_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
+        const auto block_shape =
+            ckl::IterationShape::tiles(block.size()).block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
+        // Keep pre-add in a separate DFB to avoid the transpose_dest aliasing issue.
+        ckl::add<
+            ckl::input(
+                dfb_in, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
+            ckl::input(
+                dfb_inb, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
+            ckl::output(dfb_interm_pre_add, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+            block_shape);
 
         // Now run Welfords in these blk number of tiles
         dfb_interm_pre_add_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
@@ -194,8 +188,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     dfb_ex2_welford_obj.wait_front(1);
 #endif
     tile_regs_acquire();
-    // Final reload before welford_finalize_to_row: same fp32-via-Dst rationale as the
-    // per-block reload above.
+    // Reload through the FP32 alias before finalizing.
     copy_init(dfb_ex_welford);
     copy_tile(dfb_ex_welford, 0, mean_dst);
     reconfig_data_format_srca(dfb_ex_welford, dfb_ex2_welford);
@@ -212,16 +205,18 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     dfb_ex2_welford_obj.pop_front(1);
 #endif
 }
-#else
 
+#endif
+
+#ifndef FUSE_PRE_ADD
 /* @brief: Welford's algorithm for no fused pre-add
- * @param: dfb_in: input buffer
+ * @param: dfb_in: input DFB
  * @param: input_dst: input tile for Welford's algorithm
  * @param: mean_dst: mean tile for Welford's algorithm
  * @param: Wt: width of the input in tiles
  * @param: tile_width: width of each tile
  * @param: W: width of the input
- * @param: reciprocal_lut: the reciprocal LUT
+ * @param: p_reciprocals: pointer to the reciprocal LUT
  */
 template <
     uint32_t dfb_in,
@@ -235,8 +230,6 @@ template <
     uint32_t blk>
 void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     DataflowBuffer dfb_in_obj(dfb_in);
-    // Only built when the alias is active; otherwise dfb_x_welford names dfb_in itself and the
-    // waits and pops below fall to dfb_in_obj.
 #ifdef WELFORD_FP32_ALIAS
     DataflowBuffer dfb_x_welford_obj(dfb_x_welford);
 #endif
@@ -250,7 +243,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     uint32_t sample_idx = 0;
     reconfig_data_format_srca(dfb_x_welford);
-    // Reconfigure the transpose op for the welford intake buffer. When the alias is active,
+    // Reconfigure the transpose op for the welford intake DFB. When the alias is active,
     // dfb_x_welford has UnpackToDest mode so transpose_tile preserves fp32 precision.
     transpose_init(dfb_x_welford);
     tile_regs_acquire();
@@ -271,7 +264,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         // Welford's needs transposed input tile
         transpose_tile(dfb_x_welford, 0, input_dst);
 #ifdef WELFORD_FP32_ALIAS
-        // transpose_tile took the UnpackToDest fp32 path. Its math-side init clobbered
+        // transpose_tile took the UnpackToDest path. Its math-side init clobbered
         // the welford recurrence at SFPU replay slots [16, 32).
         // welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots with the
         // welford recurrence; PreserveStats keeps the running mean / M2 accumulator in
@@ -321,6 +314,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 #endif
     dfb_in_obj.pop_front(num_to_sync);
 }
+
 #endif
 
 void kernel_main() {
@@ -334,7 +328,6 @@ void kernel_main() {
     constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dest_acc_en) == 1;
     constexpr auto W = get_arg(args::W);
     constexpr auto tile_width = get_arg(args::tile_width);
-
     // Note that the entire W dimension must fit in the xmm buffer for this kernel to be correct.
     // Buffer handles come from the host-side bindings; the kernel never sees an index.
     constexpr auto dfb_eps = dfb::eps;  // single tile generated by the reader
@@ -350,7 +343,8 @@ void kernel_main() {
 #ifdef FUSE_BETA
     constexpr auto dfb_beta = dfb::beta;
 #endif
-    uint32_t dfb_xmm = dfb::xmm;            // x - E[x]
+    constexpr auto dfb_xmm = dfb::xmm;
+    constexpr uint32_t dfb_xmm_runtime = (do_gamma == 1 || do_beta == 1) ? dfb_xmm : dfb_out;
     constexpr auto dfb_ex = dfb::ex;        // E[x]
     constexpr auto dfb_ex2 = dfb::ex2;      // Var[x] = E[(x-E[x])^2]
     constexpr auto dfb_ex2pe = dfb::ex2pe;  // Var[x]+ε
@@ -366,7 +360,6 @@ void kernel_main() {
 #else
     constexpr auto dfb_x = dfb_in;
 #endif
-
     // welford_fp32_alias: when active, dfb_x_welford is a second buffer index over dfb_x's SRAM
     // configured with UnpackToDest so the welford section reads full fp32 into DEST
     // while the post-welford eltwise still reads dfb_x via SrcA (Tf32).
@@ -376,7 +369,6 @@ void kernel_main() {
 #else
     constexpr auto dfb_x_welford = dfb_x;
 #endif
-
     // welford_state_fp32_alias: when active, dfb_ex_welford / dfb_ex2_welford are second buffer
     // indices over dfb_ex / dfb_ex2's SRAM configured for UnpackToDest.
     // The fused welford path's per-block copy_tile reads of the running mean / M2 use
@@ -395,16 +387,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_inb_obj(dfb_inb);
 #endif
-    DataflowBuffer dfb_out_obj(dfb_out);
-#ifdef FUSE_GAMMA
-    DataflowBuffer dfb_gamma_obj(dfb_gamma);
-#endif
-#ifdef FUSE_BETA
-    DataflowBuffer dfb_beta_obj(dfb_beta);
-#endif
     DataflowBuffer dfb_ex_obj(dfb_ex);
     DataflowBuffer dfb_ex2_obj(dfb_ex2);
     DataflowBuffer dfb_ex2pe_obj(dfb_ex2pe);
+    DataflowBuffer dfb_xmm_runtime_obj(dfb_xmm_runtime);
 
     constexpr uint32_t onetile = 1;
 
@@ -417,7 +403,6 @@ void kernel_main() {
     // Init for transpose
     constexpr auto first_out_dfb = dfb_ex;
     compute_kernel_hw_startup(dfb_in, first_out_dfb);
-    copy_init(dfb_in);
 #endif
 
     dfb_eps_obj.wait_front(onetile);  // comes from the reader
@@ -495,40 +480,22 @@ void kernel_main() {
         // =====================================
         // Calculate 1/(√(Var(X) + ε))
         // =====================================
-        reconfig_data_format(dfb_ex2, dfb_eps);
-        add_init(dfb_ex2, dfb_eps);
-
-        dfb_ex2_obj.wait_front(onetile);
-        tile_regs_acquire();
-        add_tiles(dfb_ex2, dfb_eps, 0, 0, dst0);
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
-        tile_regs_commit();
-        dfb_ex2_obj.pop_front(onetile);
-
-        dfb_ex2pe_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, dfb_ex2pe);
-        tile_regs_release();
-        dfb_ex2pe_obj.push_back(onetile);
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(onetile),
+            ckl::BinaryFpu<
+                ckl::BinaryFpuOp::Add,
+                ckl::input(dfb_ex2),
+                ckl::input(dfb_eps, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::PackTile<ckl::output(
+                dfb_ex2pe,
+                ckl::ReservePolicy::PerTile,
+                ckl::PushPolicy::PerTile,
+                ckl::DataFormatReconfig::Disabled)>{});
 
         // broadcasts the tile since dfb_ex2pe is a column vector that contains the important data
-        dfb_ex2pe_obj.wait_front(onetile);
-        tile_regs_acquire();
-        reconfig_data_format_srca(dfb_ex2pe);
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
-        // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-        compute_kernel_hw_startup(dfb_ex2pe, dfb_ex2pe);
-        unary_bcast_init<BroadcastType::COL>(dfb_ex2pe);
-        unary_bcast<BroadcastType::COL>(dfb_ex2pe, 0, dst0);
-        dfb_ex2pe_obj.pop_front(onetile);
-        tile_regs_commit();
-
-        dfb_ex2pe_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, dfb_ex2pe);
-        tile_regs_release();
-        dfb_ex2pe_obj.push_back(onetile);
+        ckl::unary_bcast<ckl::BroadcastDim::Col, ckl::input(dfb_ex2pe), ckl::output(dfb_ex2pe)>(
+            ckl::IterationShape::tiles(onetile));
 
         // =====================================
         // Second pass over the input.
@@ -540,17 +507,18 @@ void kernel_main() {
         dfb_ex2pe_obj.wait_front(onetile);
         dfb_ex_obj.wait_front(onetile);
 
-        // Lockstep the dfb_x_welford alias's read/write pointers with dfb_in's across the eltwise
-        // pass. The reader pushes dfb_x_welford in pass 2 to match its pass 1 push (see
+        // Lockstep the dfb_x_welford alias's read/write pointers with dfb_in's across the eltwise pass.
+        // The reader pushes dfb_x_welford in pass 2 to match its pass 1 push (see
         // reader_unary_interleaved_ln_large_tensor_welford.cpp); compute pops it here to match
-        // dfb_in's pop. Both share SRAM but have independent state; popping dfb_x_welford keeps it
-        // aligned with dfb_in so the next NCHt Welford iteration reads from the correct SRAM
-        // offset after the buffer wraps.
+        // dfb_in's pop. Both share SRAM but have independent state; popping dfb_x_welford keeps it aligned
+        // with dfb_in so the next NCHt Welford iteration reads from the correct SRAM offset after DFB wrap.
 #if defined(WELFORD_FP32_ALIAS) && !defined(FUSE_PRE_ADD)
         DataflowBuffer dfb_x_welford_obj_eltwise(dfb_x_welford);
 #endif
 
         for (auto block : generic::blocks(Wt, blk)) {
+            const auto block_shape = ckl::IterationShape::tiles(block.size())
+                                         .block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
             // Last block may only be partially-filled,
             // and only tiles that have data in them are
             // processed, but need to sync with reader on full blocks
@@ -597,90 +565,57 @@ void kernel_main() {
             }
             tile_regs_commit();
 
-            if constexpr (!(do_gamma == 1 or do_beta == 1)) {
-                dfb_xmm = dfb_out;
-            }
-
-            pack_reconfig_data_format(dfb_xmm);
+            pack_reconfig_data_format(dfb_xmm_runtime);
             // Sync with writer on full blocks
-            DataflowBuffer(static_cast<uint16_t>(dfb_xmm)).reserve_back(static_cast<uint16_t>(block.full_block_size()));
+            dfb_xmm_runtime_obj.reserve_back(block.full_block_size());
             tile_regs_wait();
             for (auto i : block.local()) {
-                pack_tile(i, dfb_xmm);
+                pack_tile(i, dfb_xmm_runtime);
             }
-            DataflowBuffer(static_cast<uint16_t>(dfb_xmm)).push_back(static_cast<uint16_t>(block.full_block_size()));
+            dfb_xmm_runtime_obj.push_back(block.full_block_size());
             tile_regs_release();
 
 #ifdef FUSE_GAMMA
-            {
+            if constexpr (do_gamma == 1) {
+                constexpr auto dfb_gamma_out = do_beta ? dfb_fusion : dfb_out;
                 // Multiply by gamma
-                reconfig_data_format(dfb_xmm, dfb_gamma);
-                tile_regs_acquire();
-                dfb_gamma_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
-                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                    .wait_front(static_cast<uint16_t>(block.full_block_size()));
-                mul_bcast_rows_init(dfb_xmm, dfb_gamma);
-                for (auto i : block.local()) {
-                    mul_tiles_bcast_rows(dfb_xmm, dfb_gamma, i, i, i);
-                }
-                tile_regs_commit();
-                dfb_gamma_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
-                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                    .pop_front(static_cast<uint16_t>(block.full_block_size()));
-
-#ifndef FUSE_BETA
-                pack_reconfig_data_format(dfb_out);
-#endif
-                tile_regs_wait();
-#ifndef FUSE_BETA
-                dfb_out_obj.reserve_back(block.full_block_size());
-                for (auto i : block.local()) {
-                    pack_tile(i, dfb_out);
-                }
-                dfb_out_obj.push_back(block.full_block_size());
-#else
-                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                    .reserve_back(static_cast<uint16_t>(block.full_block_size()));
-                for (auto i : block.local()) {
-                    pack_tile(i, dfb_xmm);
-                }
-                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                    .push_back(static_cast<uint16_t>(block.full_block_size()));
-#endif
-                tile_regs_release();
+                ckl::mul<
+                    ckl::input(
+                        dfb_xmm,
+                        ckl::WaitPolicy::PerBlockSize,
+                        ckl::PopPolicy::PerBlockSize,
+                        ckl::InputTileMapping::Block),
+                    ckl::input(
+                        dfb_gamma,
+                        ckl::BroadcastDim::Row,
+                        ckl::WaitPolicy::PerBlockSize,
+                        ckl::PopPolicy::PerBlockSize,
+                        ckl::InputTileMapping::Block),
+                    ckl::output(dfb_gamma_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+                    block_shape);
             }
 #endif
 
 #ifdef FUSE_BETA
-            {
-                // Add beta
-                tile_regs_acquire();
-                reconfig_data_format(dfb_xmm, dfb_beta);
-                add_bcast_rows_init(dfb_xmm, dfb_beta);
-                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                    .wait_front(static_cast<uint16_t>(block.full_block_size()));
-                dfb_beta_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
-                for (auto i : block.local()) {
-                    add_tiles_bcast_rows(dfb_xmm, dfb_beta, i, i, i);
-                }
-                tile_regs_commit();
-                dfb_beta_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
-                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                    .pop_front(static_cast<uint16_t>(block.full_block_size()));
-
-                pack_reconfig_data_format(dfb_out);
-                dfb_out_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
-                tile_regs_wait();
-                for (auto i : block.local()) {
-                    pack_tile(i, dfb_out);
-                }
-                tile_regs_release();
-                dfb_out_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
+            if constexpr (do_beta == 1) {
+                constexpr auto dfb_beta_input = do_gamma ? dfb_fusion : dfb_xmm;
+                ckl::add<
+                    ckl::input(
+                        dfb_beta_input,
+                        ckl::WaitPolicy::PerBlockSize,
+                        ckl::PopPolicy::PerBlockSize,
+                        ckl::InputTileMapping::Block),
+                    ckl::input(
+                        dfb_beta,
+                        ckl::BroadcastDim::Row,
+                        ckl::WaitPolicy::PerBlockSize,
+                        ckl::PopPolicy::PerBlockSize,
+                        ckl::InputTileMapping::Block),
+                    ckl::output(dfb_out, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(block_shape);
             }
 #endif
         }
 
-        dfb_xmm = dfb::xmm;  // x minus mean
         dfb_ex2pe_obj.pop_front(onetile);
         dfb_ex_obj.pop_front(onetile);
     }  // NCHt loop

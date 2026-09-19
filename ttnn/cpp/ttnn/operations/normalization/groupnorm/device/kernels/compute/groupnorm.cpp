@@ -17,8 +17,13 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 #include "api/dataflow/dataflow_buffer.h"
+
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     // clang-format off
@@ -52,12 +57,12 @@ void kernel_main() {
     //       Local Reduce:
     //           First we apply an input mask
     //           This is where we sum up our core's subtensor
-    //           After summing up, we pass our scalar tile to cb_ex_partial_id
+    //           After summing up, we pass our scalar tile to dfb_ex_partial_id
     //           The reader kernels then aggregate all of the local scalars into a single tile
     //       Global Reduce:
-    //           This single tile (cb_ex_external_id) is a tile that contains each partial reduce from all the other cores
+    //           This single tile (dfb_ex_external_id) is a tile that contains each partial reduce from all the other cores
     //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
-    //           The reader core then sends this data out to all other cores as cb_ex_global_id
+    //           The reader core then sends this data out to all other cores as dfb_ex_global_id
     //
     //     Variance Calc: ∑(x-E[x])^2
     //     This follows the same pattern as the average calculation
@@ -65,15 +70,15 @@ void kernel_main() {
     //           First we subtract each value from our core's subtensor by the average value
     //           We next apply our input mask to zero our the values we wish to ignore
     //           Next we square our residuals to obtain the squared residuals
-    //           After summing up, we pass our scalar tile to cb_ex2_partial_id
+    //           After summing up, we pass our scalar tile to dfb_ex2_partial_id
     //           The reader kernels then aggregate all of the local scalars into a single tile
     //       Global Reduce:
-    //           This single tile (cb_ex_external_id) is a tile that contains each partial reduce from all the other cores
+    //           This single tile (dfb_ex_external_id) is a tile that contains each partial reduce from all the other cores
     //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
-    //           The reader core then sends this data out to all other cores as cb_ex2_global_id
+    //           The reader core then sends this data out to all other cores as dfb_ex2_global_id
     //
-    //     cb_ex2pe_id Calculation:
-    //       First we add cb_ex2_global_id with cb_eps_id
+    //     dfb_ex2pe_id Calculation:
+    //       First we add dfb_ex2_global_id with dfb_eps_id
     //       Then we take the sqrt
     //       Lastly we take the reciprocal and he have the denominator of our calculation
     //     Final Val Calc:
@@ -194,8 +199,6 @@ void kernel_main() {
 #endif
 
     // tile offset
-    std::uint32_t index_subblock_w_offset = 0;
-    std::uint32_t index_h_offset = 0;
     const std::uint32_t index_w_offset = 0;
     std::uint32_t index_g_offset = 0;
     std::uint32_t row_offset = num_cols_per_group;
@@ -205,6 +208,9 @@ void kernel_main() {
     bool copy_or_add = true;
     std::uint32_t group_reset_index = 0;
     std::uint32_t index_block_w = 0;
+    // tile offset
+    std::uint32_t index_subblock_w_offset = 0;
+    std::uint32_t index_h_offset = 0;
     bool apply_gamma_beta[block_w];
     constexpr std::uint32_t data_per_core_N_per_group = (per_core_N * tile_width / group);
 
@@ -226,14 +232,10 @@ void kernel_main() {
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
     DataflowBuffer dfb_ex2(dfb_ex2_id);
-    DataflowBuffer dfb_ex2_global(dfb_ex2_global_id);
-    const DataflowBuffer dfb_ex2_partial(dfb_ex2_partial_id);
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
-    const DataflowBuffer dfb_ex_external(dfb_ex_external_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_gamma(dfb_gamma_id);
-    const DataflowBuffer dfb_in(dfb_in_id);
 #ifdef TILIZE_IN
     DataflowBuffer dfb_in_resident(dfb_in_resident_id);
 #endif
@@ -244,8 +246,6 @@ void kernel_main() {
     DataflowBuffer dfb_outgamma(dfb_outgamma_id);
     DataflowBuffer dfb_reread_out(dfb_reread_out_id);
     DataflowBuffer dfb_reread_write_out(dfb_reread_write_out_id);
-    const DataflowBuffer dfb_scaler(dfb_scaler_id);
-    const DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_x(dfb_x_id);
     DataflowBuffer dfb_xmm(dfb_xmm_id);
 
@@ -263,6 +263,73 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in0_id, dfb_input_mask_id, dfb_x_id);
     constexpr std::uint32_t dfb_input_id = dfb_in0_id;
 #endif
+    constexpr auto input_strided_block_input = ckl::input(
+        dfb_input_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Block,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
+    constexpr auto xmm_strided_col_input = ckl::input(
+        dfb_xmm_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Col,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
+    constexpr auto reread_out_strided_col_input = ckl::input(
+        dfb_reread_out_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Col,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
+    constexpr auto reread_write_out_strided_col_input = ckl::input(
+        dfb_reread_write_out_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Col,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
+    constexpr auto inbeta_strided_col_input = ckl::input(
+        dfb_inbeta_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Col,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
+    constexpr auto gamma_scalar_offset_input = ckl::input(
+        dfb_gamma_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto beta_scalar_offset_input = ckl::input(
+        dfb_beta_id,
+        ckl::WaitPolicy::None,
+        ckl::PopPolicy::None,
+        ckl::InputTileMapping::Scalar,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Offset);
+    constexpr auto reread_write_out_strided_output = ckl::output(
+        dfb_reread_write_out_id,
+        ckl::ReservePolicy::None,
+        ckl::PushPolicy::None,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
+    constexpr auto outgamma_strided_output = ckl::output(
+        dfb_outgamma_id,
+        ckl::ReservePolicy::None,
+        ckl::PushPolicy::None,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
+    constexpr auto outbeta_strided_output = ckl::output(
+        dfb_outbeta_id,
+        ckl::ReservePolicy::None,
+        ckl::PushPolicy::None,
+        ckl::DataFormatReconfig::Disabled,
+        ckl::TileAddressing::Strided);
 
     constexpr std::uint32_t out_block_h_normal = block_h / num_out_blocks;
     const std::uint32_t out_block_hw_normal = out_block_h_normal * block_w;
@@ -405,7 +472,7 @@ void kernel_main() {
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required));
-                if (num_cores_per_mcast_group > 1) {
+                if constexpr (num_cores_per_mcast_group > 1) {
                     dfb_ex.reserve_back(1);
                     dfb_ex.push_back(1);
                 }
@@ -428,7 +495,7 @@ void kernel_main() {
 #ifndef TILIZE_IN
                 dfb_in0.wait_front(static_cast<uint16_t>(out_block_hw_normal));
 #endif
-                // x - E[x]
+                dfb_ex_global.wait_front(1);
                 // fp32: reset both srcs so fp32 input/mean aren't read through the stale bf16 scaler format.
                 // The reconfig has to precede the init: the init's LLK assert checks that the unpack config
                 // registers already describe these operands. (The MOP is built from the init's static
@@ -437,41 +504,51 @@ void kernel_main() {
                     reconfig_data_format_srca(dfb_input_id);
                     reconfig_data_format_srcb(dfb_ex_global_id);
                 }
-                sub_bcast_scalar_init(dfb_input_id, dfb_ex_global_id);
-
-                dfb_xmm.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
-                dfb_ex_global.wait_front(1);
-                for (std::uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
 #ifdef TILIZE_IN
-                    std::uint32_t row_base = out_block_index * out_block_hw_normal + i * block_w;
+                ckl::eltwise_chain(
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w),
+                    ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Sub,
+                        input_strided_block_input,
+                        ckl::input(
+                            dfb_ex_global_id,
+                            ckl::BroadcastDim::Scalar,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::DataFormatReconfig::Disabled)>{
+                        ckl::StridedTileRange{out_block_index * out_block_hw_normal, block_w}},
+                    ckl::PackTile<ckl::output(
+                        dfb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled)>{});
 #else
-                    constexpr std::uint32_t row_base = 0;
+                ckl::sub<
+                    ckl::input(
+                        dfb_in0_id,
+                        ckl::WaitPolicy::PerTile,
+                        ckl::PopPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        dfb_ex_global_id,
+                        ckl::BroadcastDim::Scalar,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::output(
+                        dfb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled)>(
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
 #endif
-                    for (std::uint32_t j = 0; j < num_subblocks_w; j++) {
-                        tile_regs_acquire();
-                        for (std::uint32_t w = 0; w < subblock_w; w++) {
-                            const std::uint32_t index = w + index_subblock_w_offset + row_base;
-                            sub_tiles_bcast_scalar(dfb_input_id, dfb_ex_global_id, index, 0, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (std::uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
-                            pack_tile(dst_i, dfb_xmm_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
-                    }
-#ifndef TILIZE_IN
-                    dfb_in0.pop_front(block_w);
-#endif
-                }
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
 #ifndef TILIZE_IN
                     dfb_in0.pop_front(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
 #endif
+                    dfb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
+                    dfb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                 }
-                dfb_xmm.push_back(static_cast<uint16_t>(out_block_hw_normal));
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(dfb_ex_global_id, dfb_input_mask_id);
@@ -516,31 +593,24 @@ void kernel_main() {
                 dfb_x.push_back(static_cast<uint16_t>(out_block_hw_normal));
 
                 reconfig_data_format_srcb(dfb_input_mask_id, dfb_x_id);
-                // (x - E[x])^2
-                index_h_offset = 0;
-                mul_init(dfb_x_id, dfb_x_id);
-                dfb_xmm.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
-                dfb_x.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                for (std::uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (std::uint32_t j = 0; j < num_subblocks_w; j++) {
-                        tile_regs_acquire();
-                        for (std::uint32_t w = 0; w < subblock_w; w++) {
-                            const std::uint32_t index = w + index_subblock_w_offset + index_h_offset;
-                            mul_tiles(dfb_x_id, dfb_x_id, index, index, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (std::uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
-                            pack_tile(dst_i, dfb_xmm_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
-                    }
-                    index_h_offset += block_w;
+                ckl::square<
+                    ckl::input(
+                        dfb_x_id,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::InputTileMapping::Block,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::output(
+                        dfb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled)>(
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
+                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+                    dfb_x.pop_front(out_block_hw_normal - out_block_hw_last);
+                    dfb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
+                    dfb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                 }
-                dfb_x.pop_front(static_cast<uint16_t>(out_block_hw_normal));
-                dfb_xmm.push_back(static_cast<uint16_t>(out_block_hw_normal));
 
                 // Partial-Var(x)
                 dfb_xmm.wait_front(static_cast<uint16_t>(out_block_hw_normal));
@@ -567,7 +637,7 @@ void kernel_main() {
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
                     compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required));
-                if (num_cores_per_mcast_group > 1) {
+                if constexpr (num_cores_per_mcast_group > 1) {
                     dfb_ex2.reserve_back(1);
                     dfb_ex2.push_back(1);
                 }
@@ -577,30 +647,32 @@ void kernel_main() {
             // Start Variance Calc
             //  global reduce results
             dfb_eps.wait_front(1);
-            dfb_ex2_global.wait_front(1);
-            dfb_ex2pe.reserve_back(1);
 
-            // The row mask keeps the padding out of both sums, so this is already the variance over
-            // the real rows; no back-correction needed.
-            // (Var + eps)
-            tile_regs_acquire();
             // fp32: reset both srcs so fp32 variance / bf16 eps aren't read through the stale square/reduce format.
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_ex2_global_id);
                 reconfig_data_format_srcb(dfb_eps_id);
             }
-            add_init(dfb_ex2_global_id, dfb_eps_id);
-            add_tiles(dfb_ex2_global_id, dfb_eps_id, 0, 0, dst0);
-            tile_regs_wait();
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, dfb_ex2pe_id);
-            tile_regs_release();
-            dfb_ex2pe.push_back(1);
-            dfb_ex2_global.pop_front(1);
+            // The row mask keeps the padding out of both sums, so this is already the variance over
+            // the real rows; no back-correction needed.
+            // (Var + eps)
+            ckl::eltwise_chain(
+                ckl::IterationShape::one_tile(),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Add,
+                    ckl::input(
+                        dfb_ex2_global_id,
+                        ckl::WaitPolicy::PerTile,
+                        ckl::PopPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled)>{},
+                ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+                ckl::PackTile<ckl::output(
+                    dfb_ex2pe_id,
+                    ckl::ReservePolicy::PerTile,
+                    ckl::PushPolicy::PerTile,
+                    ckl::DataFormatReconfig::Disabled)>{});
             // End Variance Calc
 
             const bool start_copy_or_add = copy_or_add;
@@ -620,108 +692,120 @@ void kernel_main() {
 #ifndef TILIZE_IN
                 dfb_in0.wait_front(static_cast<uint16_t>(out_block_hw_normal));
 #endif
-                // x - E[x]
+                dfb_ex_global.wait_front(1);
                 // fp32: reset both srcs so fp32 input/mean aren't read through the stale rsqrt/eps format.
                 if constexpr (enable_fp32_reconfig) {
                     reconfig_data_format_srca(dfb_input_id);
                     reconfig_data_format_srcb(dfb_ex_global_id);
                 }
-                sub_bcast_scalar_init(dfb_input_id, dfb_ex_global_id);
-                dfb_xmm.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
-                dfb_ex_global.wait_front(1);
-                for (std::uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
 #ifdef TILIZE_IN
-                    std::uint32_t row_base = out_block_index * out_block_hw_normal + i * block_w;
+                ckl::eltwise_chain(
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w),
+                    ckl::BinaryFpu<
+                        ckl::BinaryFpuOp::Sub,
+                        input_strided_block_input,
+                        ckl::input(
+                            dfb_ex_global_id,
+                            ckl::BroadcastDim::Scalar,
+                            ckl::WaitPolicy::None,
+                            ckl::PopPolicy::None,
+                            ckl::DataFormatReconfig::Disabled)>{
+                        ckl::StridedTileRange{out_block_index * out_block_hw_normal, block_w}},
+                    ckl::PackTile<ckl::output(
+                        dfb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled)>{});
 #else
-                    constexpr std::uint32_t row_base = 0;
+                ckl::sub<
+                    ckl::input(
+                        dfb_in0_id,
+                        ckl::WaitPolicy::PerTile,
+                        ckl::PopPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        dfb_ex_global_id,
+                        ckl::BroadcastDim::Scalar,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::output(
+                        dfb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled)>(
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
 #endif
-                    for (std::uint32_t j = 0; j < num_subblocks_w; j++) {
-                        tile_regs_acquire();
-                        for (std::uint32_t w = 0; w < subblock_w; w++) {
-                            const std::uint32_t index = w + index_subblock_w_offset + row_base;
-                            sub_tiles_bcast_scalar(dfb_input_id, dfb_ex_global_id, index, 0, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (std::uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
-                            pack_tile(dst_i, dfb_xmm_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
-                    }
-#ifndef TILIZE_IN
-                    dfb_in0.pop_front(block_w);
-#endif
-                }
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
 #ifndef TILIZE_IN
                     dfb_in0.pop_front(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
 #endif
+                    dfb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
+                    dfb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                 }
-                dfb_xmm.push_back(static_cast<uint16_t>(out_block_hw_normal));
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(dfb_ex_global_id, dfb_input_mask_id);
-                mul_bcast_rows_init(dfb_xmm_id, dfb_input_mask_id);
-                dfb_x.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
-                dfb_xmm.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                for (std::uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (std::uint32_t j = 0; j < num_subblocks_w; ++j) {
-                        tile_regs_acquire();
-                        for (std::uint32_t w = 0; w < subblock_w; ++w) {
-                            const std::uint32_t index = w + index_subblock_w_offset;
-                            const std::uint32_t index_mask = index;
-                            mul_tiles_bcast_rows(dfb_xmm_id, dfb_input_mask_id, index, index_mask, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (std::uint32_t dst_i = 0; dst_i < subblock_w; ++dst_i) {
-                            pack_tile(dst_i, dfb_x_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
-                    }
-                    dfb_xmm.pop_front(block_w);
-                }
+                ckl::mul<
+                    ckl::input(
+                        dfb_xmm_id,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::InputTileMapping::Block,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        dfb_input_mask_id,
+                        ckl::BroadcastDim::Row,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::InputTileMapping::Row,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::output(
+                        dfb_x_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled)>(
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+                    dfb_xmm.wait_front(out_block_hw_normal - out_block_hw_last);
                     dfb_xmm.pop_front(static_cast<uint16_t>(out_block_hw_normal - out_block_hw_last));
+                    dfb_x.reserve_back(out_block_hw_normal - out_block_hw_last);
+                    dfb_x.push_back(out_block_hw_normal - out_block_hw_last);
                 }
-                dfb_x.push_back(static_cast<uint16_t>(out_block_hw_normal));
-                reconfig_data_format_srcb(dfb_input_mask_id, dfb_x_id);
 
-                // (x - Ex) * 1/[sqrt(Var + eps)]
-                index_h_offset = 0;
+                dfb_ex2pe.wait_front(1);
+                reconfig_data_format_srcb(dfb_input_mask_id, dfb_x_id);
                 // fp32: reset both srcs so fp32 x/rstd aren't read through the stale mask/eps format.
                 if constexpr (enable_fp32_reconfig) {
                     reconfig_data_format_srca(dfb_x_id);
                     reconfig_data_format_srcb(dfb_ex2pe_id);
                 }
-                mul_bcast_scalar_init(dfb_x_id, dfb_ex2pe_id);
-                dfb_xmm.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
-                dfb_ex2pe.wait_front(1);
-                dfb_x.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                for (std::uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (std::uint32_t j = 0; j < num_subblocks_w; j++) {
-                        tile_regs_acquire();
-                        for (std::uint32_t w = 0; w < subblock_w; w++) {
-                            const std::uint32_t index = w + index_subblock_w_offset + index_h_offset;
-                            mul_tiles_bcast_scalar(dfb_x_id, dfb_ex2pe_id, index, 0, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (std::uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
-                            pack_tile(dst_i, dfb_xmm_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
-                    }
-                    index_h_offset += block_w;
+                // (x - Ex) * 1/[sqrt(Var + eps)]
+                ckl::mul<
+                    ckl::input(
+                        dfb_x_id,
+                        ckl::WaitPolicy::Upfront,
+                        ckl::PopPolicy::AtEnd,
+                        ckl::InputTileMapping::Block,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::input(
+                        dfb_ex2pe_id,
+                        ckl::BroadcastDim::Scalar,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::output(
+                        dfb_xmm_id,
+                        ckl::ReservePolicy::Upfront,
+                        ckl::PushPolicy::AtEnd,
+                        ckl::DataFormatReconfig::Disabled)>(
+                    ckl::IterationShape::grid(out_block_h_actual, block_w).block_size(subblock_w));
+                if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+                    dfb_x.wait_front(out_block_hw_normal - out_block_hw_last);
+                    dfb_x.pop_front(out_block_hw_normal - out_block_hw_last);
+                    dfb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
+                    dfb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                 }
-                dfb_x.pop_front(static_cast<uint16_t>(out_block_hw_normal));
-                dfb_xmm.push_back(static_cast<uint16_t>(out_block_hw_normal));
                 dfb_xmm.wait_front(static_cast<uint16_t>(out_block_hw_normal));
 
                 copy_or_add = start_copy_or_add;
@@ -747,32 +831,19 @@ void kernel_main() {
                 dfb_reread_out.wait_front(static_cast<uint16_t>(out_block_hw_normal));
                 dfb_reread_write_out.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
                 for (std::uint32_t w = 0; w < block_w_curr; ++w) {
-                    std::uint32_t index_reread_h_offset = 0;
-                    std::uint32_t index_h1_offset = 0;
-
+                    const ckl::StridedTileRange input_range{w, block_w};
+                    const ckl::StridedTileRange output_range{w, block_w_curr};
                     if (copy_or_add) {
-                        copy_init(dfb_xmm_id);
+                        ckl::eltwise_chain(
+                            ckl::IterationShape::col(out_block_h_actual),
+                            ckl::CopyTile<xmm_strided_col_input>{input_range},
+                            ckl::PackTile<reread_write_out_strided_output>{output_range});
                     } else {
-                        add_init(dfb_reread_out_id, dfb_xmm_id);
-                    }
-
-                    for (std::uint32_t i = 0; i < out_block_h_actual; ++i) {
-                        tile_regs_acquire();
-                        const std::uint32_t index_reread_out = w + index_reread_h_offset;
-                        const std::uint32_t index_xmm = w + index_h1_offset;
-
-                        if (copy_or_add) {
-                            copy_tile(dfb_xmm_id, index_xmm, dst0);
-                        } else {
-                            add_tiles(dfb_reread_out_id, dfb_xmm_id, index_reread_out, index_xmm, dst0);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile<true>(dst0, dfb_reread_write_out_id, index_reread_out);
-                        tile_regs_release();
-
-                        index_reread_h_offset += block_w_curr;
-                        index_h1_offset += block_w;
+                        ckl::eltwise_chain(
+                            ckl::IterationShape::col(out_block_h_actual),
+                            ckl::BinaryFpu<ckl::BinaryFpuOp::Add, reread_out_strided_col_input, xmm_strided_col_input>{
+                                output_range, input_range},
+                            ckl::PackTile<reread_write_out_strided_output>{output_range});
                     }
 
                     // update group tile offset
@@ -803,37 +874,31 @@ void kernel_main() {
 
                 // Start Optional Gamma:
                 if constexpr (do_gamma) {
-                    index_h_offset = 0;
                     dfb_outgamma.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
                     dfb_gamma.wait_front(per_core_N);
                     dfb_reread_write_out.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                    for (std::uint32_t i = 0; i < out_block_h_actual; ++i) {
-                        for (std::uint32_t j = 0; j < block_w_curr; ++j) {
-                            if (apply_gamma_beta[j]) {
-                                // fp32: reset both srcs so bf16 gamma isn't read through the reread stage's fp32
-                                // format.
-                                if constexpr (enable_fp32_reconfig) {
-                                    reconfig_data_format_srca(dfb_reread_write_out_id);
-                                    reconfig_data_format_srcb(dfb_gamma_id);
-                                }
-                                mul_bcast_rows_init(dfb_reread_write_out_id, dfb_gamma_id);
-                            } else {
-                                copy_init(dfb_reread_write_out_id);
+                    for (std::uint32_t j = 0; j < block_w_curr; ++j) {
+                        if (apply_gamma_beta[j]) {
+                            // fp32: reset both srcs so bf16 gamma isn't read through the reread stage's fp32 format.
+                            if constexpr (enable_fp32_reconfig) {
+                                reconfig_data_format_srca(dfb_reread_write_out_id);
+                                reconfig_data_format_srcb(dfb_gamma_id);
                             }
-                            tile_regs_acquire();
-                            const std::uint32_t index = j + index_h_offset;
-                            const std::uint32_t index_gamma = j + index_g_offset;
-                            if (apply_gamma_beta[j]) {
-                                mul_tiles_bcast_rows(dfb_reread_write_out_id, dfb_gamma_id, index, index_gamma, dst0);
-                            } else {
-                                copy_tile(dfb_reread_write_out_id, index, dst0);
-                            }
-                            tile_regs_commit();
-                            tile_regs_wait();
-                            pack_tile(dst0, dfb_outgamma_id);
-                            tile_regs_release();
+                            ckl::eltwise_chain(
+                                ckl::IterationShape::col(out_block_h_actual),
+                                ckl::BinaryFpu<
+                                    ckl::BinaryFpuOp::Mul,
+                                    reread_write_out_strided_col_input,
+                                    ckl::input(gamma_scalar_offset_input, ckl::BroadcastDim::Row)>{
+                                    ckl::StridedTileRange{j, block_w_curr}, j + index_g_offset},
+                                ckl::PackTile<outgamma_strided_output>{ckl::StridedTileRange{j, block_w_curr}});
+                        } else {
+                            ckl::eltwise_chain(
+                                ckl::IterationShape::col(out_block_h_actual),
+                                ckl::CopyTile<reread_write_out_strided_col_input>{
+                                    ckl::StridedTileRange{j, block_w_curr}},
+                                ckl::PackTile<outgamma_strided_output>{ckl::StridedTileRange{j, block_w_curr}});
                         }
-                        index_h_offset += block_w_curr;
                     }
                     dfb_outgamma.push_back(static_cast<uint16_t>(out_block_hw_normal));
                     dfb_reread_write_out.pop_front(static_cast<uint16_t>(out_block_hw_normal));
@@ -843,35 +908,29 @@ void kernel_main() {
                 //
                 // Start Optional Beta
                 if constexpr (do_beta) {
-                    index_h_offset = 0;
                     dfb_outbeta.reserve_back(static_cast<uint16_t>(out_block_hw_normal));
                     dfb_beta.wait_front(per_core_N);
-                    for (std::uint32_t i = 0; i < out_block_h_actual; ++i) {
-                        for (std::uint32_t j = 0; j < block_w_curr; ++j) {
-                            if (apply_gamma_beta[j]) {
-                                // fp32: reset both srcs so bf16 beta isn't read through the fp32 dfb_inbeta format.
-                                if constexpr (enable_fp32_reconfig) {
-                                    reconfig_data_format_srca(dfb_inbeta_id);
-                                    reconfig_data_format_srcb(dfb_beta_id);
-                                }
-                                add_bcast_rows_init(dfb_inbeta_id, dfb_beta_id);
-                            } else {
-                                copy_init(dfb_inbeta_id);
+                    for (std::uint32_t j = 0; j < block_w_curr; ++j) {
+                        if (apply_gamma_beta[j]) {
+                            // fp32: reset both srcs so bf16 beta isn't read through the fp32 dfb_inbeta format.
+                            if constexpr (enable_fp32_reconfig) {
+                                reconfig_data_format_srca(dfb_inbeta_id);
+                                reconfig_data_format_srcb(dfb_beta_id);
                             }
-                            tile_regs_acquire();
-                            const std::uint32_t index = j + index_h_offset;
-                            const std::uint32_t index_beta = j + index_g_offset;
-                            if (apply_gamma_beta[j]) {
-                                add_tiles_bcast_rows(dfb_inbeta_id, dfb_beta_id, index, index_beta, dst0);
-                            } else {
-                                copy_tile(dfb_inbeta_id, index, dst0);
-                            }
-                            tile_regs_commit();
-                            tile_regs_wait();
-                            pack_tile(dst0, dfb_outbeta_id);
-                            tile_regs_release();
+                            ckl::eltwise_chain(
+                                ckl::IterationShape::col(out_block_h_actual),
+                                ckl::BinaryFpu<
+                                    ckl::BinaryFpuOp::Add,
+                                    inbeta_strided_col_input,
+                                    ckl::input(beta_scalar_offset_input, ckl::BroadcastDim::Row)>{
+                                    ckl::StridedTileRange{j, block_w_curr}, j + index_g_offset},
+                                ckl::PackTile<outbeta_strided_output>{ckl::StridedTileRange{j, block_w_curr}});
+                        } else {
+                            ckl::eltwise_chain(
+                                ckl::IterationShape::col(out_block_h_actual),
+                                ckl::CopyTile<inbeta_strided_col_input>{ckl::StridedTileRange{j, block_w_curr}},
+                                ckl::PackTile<outbeta_strided_output>{ckl::StridedTileRange{j, block_w_curr}});
                         }
-                        index_h_offset += block_w_curr;
                     }
                     dfb_outbeta.push_back(static_cast<uint16_t>(out_block_hw_normal));
                     dfb_inbeta.pop_front(static_cast<uint16_t>(out_block_hw_normal));
