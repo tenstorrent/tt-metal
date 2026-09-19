@@ -5,6 +5,7 @@
 #include "tt_metal/distributed/multihost/single_host_context.hpp"
 
 #include <array>
+#include <cstddef>
 #include <stdexcept>
 
 #include <gtest/gtest.h>
@@ -33,6 +34,15 @@ TEST(SingleHostContextTest, AllReduceRejectsMismatchedBufferSizes) {
     std::array<uint32_t, 2> input = {1, 3};
     std::array<uint32_t, 1> output = {};
     EXPECT_THROW(distributed_context.all_reduce<uint32_t>(input, output, ReduceOp::MAX), std::runtime_error);
+}
+
+TEST(SingleHostContextTest, AllReduceRejectsBufferNotMultipleOfElementSize) {
+    const SingleHostContext single_host_context;
+    const DistributedContext& distributed_context = single_host_context;
+
+    std::array<std::byte, 6> buffer = {};
+    const ttsl::Span<std::byte> bytes{buffer.data(), buffer.size()};
+    EXPECT_THROW(distributed_context.all_reduce(bytes, bytes, ReduceOp::MAX, DType::UINT32), std::runtime_error);
 }
 
 }  // namespace

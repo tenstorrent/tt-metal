@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "single_host_context.hpp"
+#include "dtype_size.hpp"
 #include <tt_stl/assert.hpp>
 #include <algorithm>
 #include <cstring>
@@ -73,15 +74,18 @@ void SingleHostContext::broadcast(ttsl::Span<std::byte> buf [[maybe_unused]], Ra
 }
 
 void SingleHostContext::all_reduce(
-    ttsl::Span<std::byte> send_buf,
-    ttsl::Span<std::byte> recv_buf,
-    ReduceOp op [[maybe_unused]],
-    DType dtype [[maybe_unused]]) const {
+    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op [[maybe_unused]], DType dtype) const {
     TT_FATAL(
         recv_buf.size() == send_buf.size(),
         "all_reduce: recv buffer {} bytes, expected {}",
         recv_buf.size(),
         send_buf.size());
+    const std::size_t element_size = dtype_size(dtype);
+    TT_FATAL(
+        send_buf.size() % element_size == 0,
+        "all_reduce: buffer size {} is not a multiple of element size {}",
+        send_buf.size(),
+        element_size);
 
     if (send_buf.data() != recv_buf.data()) {
         std::copy(send_buf.begin(), send_buf.end(), recv_buf.begin());
