@@ -35,6 +35,13 @@ def test_parse_and_verify_policy_marker():
     assert policies == [{"idle": (5, 5, 5), "active": (0, 1, 5), "dynamic": True}]
 
 
+def test_parse_policy_rejects_invalid_dynamic_value():
+    output = "TENSOR_PREFETCHER_MPFE_POLICY idle=0/1/5 active=0/1/5 dynamic=false\n"
+
+    with pytest.raises(ValueError, match="invalid dynamic"):
+        MODULE.parse_policy_markers(output)
+
+
 def test_parse_timer_sums_multiple_lifetimes():
     output = "\n".join(
         [
@@ -81,3 +88,13 @@ def test_resume_rejects_manifest_mismatch(tmp_path):
         MODULE.validate_or_write_manifest(
             path, {"schema_version": 1, "command": ["different.py"]}, resume=True
         )
+
+
+def test_resume_retries_failed_run():
+    candidate = MODULE._candidate_dict(MODULE.Candidate(False, 0, 1, 5))
+    records = [
+        {"phase": "search", "candidate": candidate, "run_index": 0, "status": "failed"},
+        {"phase": "search", "candidate": candidate, "run_index": 1, "status": "passed"},
+    ]
+
+    assert MODULE._completed_keys(records) == {("search", "static-015", 1)}

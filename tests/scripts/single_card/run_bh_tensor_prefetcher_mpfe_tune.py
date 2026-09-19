@@ -108,6 +108,8 @@ def parse_policy_markers(output: str) -> list[dict[str, object]]:
                 fields[key] = value
         if not {"idle", "active", "dynamic"} <= fields.keys():
             raise ValueError(f"incomplete policy marker: {line}")
+        if fields["dynamic"] not in {"0", "1"}:
+            raise ValueError(f"invalid dynamic policy value: {line}")
         policies.append(
             {
                 "idle": _parse_weight_tuple(fields["idle"]),
@@ -292,7 +294,9 @@ def _append_record(path: Path, record: dict[str, object]) -> None:
 
 def _completed_keys(records: Iterable[dict[str, object]]) -> set[tuple[str, str, int]]:
     return {
-        (str(record["phase"]), str(record["candidate"]["label"]), int(record["run_index"])) for record in records
+        (str(record["phase"]), str(record["candidate"]["label"]), int(record["run_index"]))
+        for record in records
+        if record.get("status") == "passed"
     }
 
 
@@ -394,6 +398,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ]
     _run_jobs(rank_jobs, args.command, records, results_path, log_dir, rng)
     final_ranking = rank_candidates(records, "rank")
+    if not final_ranking:
+        raise RuntimeError("ranking produced no successful candidates")
     write_ranking(args.output_dir / "ranking.csv", final_ranking)
     print(f"Best policy: {final_ranking[0]['label']} ({final_ranking[0]['median_us']:.1f} us median)")
     return 0
