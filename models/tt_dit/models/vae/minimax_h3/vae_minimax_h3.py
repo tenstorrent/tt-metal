@@ -372,7 +372,7 @@ class MiniMaxH3Vae:
         pixel_norm: tuple[Sequence[float], Sequence[float]] | None = None,
         readback_uint8: bool = False,
         waves_per_device: int = 1,
-        stitch_exchange: str = "gather",
+        stitch_exchange: str = "strips",
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
@@ -398,15 +398,9 @@ class MiniMaxH3Vae:
         # Blend the tile grid on device and read back the assembled canvas, instead of reading
         # overlapping tiles and blending them on host.
         self.device_stitch = device_stitch
-        # How a device-stitched wave shares tiles. "gather" all-gathers every wave slot to every
-        # device and blends the whole canvas redundantly -- simple, but the traffic scales with
-        # mesh size (wave_size tiles per device). "strips" is the same blend factored along the
-        # mesh: gather a tile column, H-blend it, keep this device's rows; gather those row strips,
-        # W-blend, keep this device's columns -- bit-identical to "gather" at ~1/4 of its programs
-        # and ~1/4 of its gather bytes. "neighbor" exchanges only the two overlap strips
-        # each tile actually reads and blends in place, so traffic scales with the ~80 px overlap
-        # instead; the trims and canvas placement move to a host that only slices and concatenates
-        # (float reads fp32 tiles, yuv420 converts per tile and crops the planar atlas on host).
+        # How a device-stitched wave shares tiles: "strips" (default) is the gather blend factored along the mesh, bit-identical
+        # to "gather" at ~1/4 of its programs and bytes, falling back to it where the grid does not fit; "neighbor" exchanges
+        # only the overlap strips and blends in place.
         self.stitch_exchange = stitch_exchange
         # `(mean, std)` of the ImageNet normalization the decoder's pixels are still in. Set it and
         # the de-normalization is folded into `proj_out`, so `decode` emits `[-1, 1]` pixels and the
@@ -997,8 +991,27 @@ class MiniMaxH3Vae:
         if self.stitch_exchange == "neighbor":
             return self._decode_clips_neighbor_stitched(chunk_latents, output_type)
         if self.stitch_exchange == "strips":
-            return self._decode_clips_strip_stitched(chunk_latents, output_type)
+            reason = self._strips_unserved(chunk_latents[0].shape[-2], chunk_latents[0].shape[-1], output_type)
+            if reason is None:
+                return self._decode_clips_strip_stitched(chunk_latents, output_type)
+            if not getattr(self, "_warned_strips_fallback", False):
+                self._warned_strips_fallback = True
+                logger.warning(f"strips stitch: {reason}; using the gather stitch")
         return self._decode_clips_gather_stitched(chunk_latents, output_type)
+
+    def _strips_unserved(self, latent_h: int, latent_w: int, output_type: str) -> str | None:
+        """Why the strips stitch cannot serve this decode, or None when it can."""
+        (y_starts, y_lengths, _), (x_starts, x_lengths, _) = self._decode_tile_grid(latent_h, latent_w)
+        grid_rows, grid_cols = len(y_lengths), len(x_lengths)
+        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
+        if grid_rows > mesh_rows or grid_cols > mesh_cols:
+            return f"the {grid_rows}x{grid_cols} tile grid does not fit the {mesh_rows}x{mesh_cols} mesh"
+        canvas_h, canvas_w = y_starts[-1] + y_lengths[-1], x_starts[-1] + x_lengths[-1]
+        if canvas_h % mesh_rows or canvas_w % mesh_cols:
+            return f"the {canvas_h}x{canvas_w} canvas does not split over the {mesh_rows}x{mesh_cols} mesh"
+        if output_type != "yuv420" and ttnn.using_distributed_env() and self.ccl_manager is None:
+            return "the float readback needs a CCLManager on a multi-host mesh"
+        return None
 
     def _unpatchify(self, decoded: ttnn.Tensor, num_frames: int, height: int, width: int) -> ttnn.Tensor:
         """Tokens (TILE, fp32) to `(1, C, T*pt, H*p, W*p)` ROW_MAJOR pixels: one page-remap program off the tiles

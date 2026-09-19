@@ -73,7 +73,7 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
 
     # MINIMAX_H3_VAE_PHASES synchronizes between the decode's phases to separate them, which also
     # serializes them: the stage total it reports is inflated and only the shares are readable.
-    stitch = os.environ.get("MINIMAX_H3_VAE_STITCH", "gather")
+    stitch = os.environ.get("MINIMAX_H3_VAE_STITCH")  # unset: the pipeline's default
     profile_phases = bool(int(os.environ.get("MINIMAX_H3_VAE_PHASES", "0")))
 
     height, width = resolve_canvas_size(*ASPECT_RATIO)
@@ -86,9 +86,10 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
         lora_strength=float(os.environ.get("FASTH3_LORA_STRENGTH", 1.0)),
         vsa_config=MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY),
         vae_output_type="yuv420",
-        vae_stitch_exchange=stitch,
         vae_profile=profile_phases,
+        **({"vae_stitch_exchange": stitch} if stitch else {}),
     )
+    stitch = pipeline.vae_stitch_exchange
 
     output = run_warm_generation(
         pipeline,
