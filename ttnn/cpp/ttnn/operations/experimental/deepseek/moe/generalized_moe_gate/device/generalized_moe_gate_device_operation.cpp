@@ -68,7 +68,9 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(output_tensor.dtype() == DataType::BFLOAT16, "output_tensor must be BFLOAT16");
     TT_FATAL(output_indices_tensor.dtype() == DataType::UINT16, "output_indices_tensor must be UINT16");
 
-    TT_FATAL(input_tensor.is_sharded(), "input_tensor must be sharded");
+    // The input is either one 256 block tile per core (sharded), or the [.., tokens, 256] tile tensor the
+    // router matmul produces, from which the reader gathers one token row per core.
+    const bool input_interleaved = !input_tensor.is_sharded();
     TT_FATAL(bias_tensor.is_sharded(), "bias_tensor must be sharded");
     TT_FATAL(input_indices_tensor.is_sharded(), "input_indices_tensor must be sharded");
     TT_FATAL(output_tensor.is_sharded(), "output_tensor must be sharded");
@@ -80,19 +82,27 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
     const auto& in_idx_shape = input_indices_tensor.logical_shape();
     const auto& out_idx_shape = output_indices_tensor.logical_shape();
 
-    TT_FATAL(bias_shape == in_shape, "Bias and input tensors must have the same shape");
     TT_FATAL(out_idx_shape == out_shape, "Output indices and output tensors must have the same shape");
 
     TT_FATAL(in_shape.size() >= 2, "input_tensor must have rank >= 2");
     uint32_t h = in_shape[in_shape.size() - 2];
     uint32_t w = in_shape[in_shape.size() - 1];
-    TT_FATAL(h * w == 256, "Input tensor must have 256 elements per block (last two dims = one 256-block)");
+    if (input_interleaved) {
+        TT_FATAL(input_tensor.layout() == Layout::TILE, "interleaved input_tensor must be TILE layout");
+        TT_FATAL(w == 256, "interleaved input_tensor must have 256 columns, one block per token row");
+        TT_FATAL(
+            h >= bias_tensor.shard_spec()->grid.num_cores(),
+            "interleaved input_tensor needs a token row for every core of the bias shard grid");
+    } else {
+        TT_FATAL(bias_shape == in_shape, "Bias and input tensors must have the same shape");
+        TT_FATAL(h * w == 256, "Input tensor must have 256 elements per block (last two dims = one 256-block)");
+    }
     // input_indices holds one tile per 256-block, each uploaded with GLOBAL expert ids (block b = arange + b*256).
     uint32_t idx_h = in_idx_shape[in_idx_shape.size() - 2];
     uint32_t idx_w = in_idx_shape[in_idx_shape.size() - 1];
     TT_FATAL(idx_h * idx_w == 256, "input_indices must have 256 elements (one block, last two dims)");
 
-    const auto& input_shard = input_tensor.shard_spec().value();
+    const auto& input_shard = (input_interleaved ? bias_tensor : input_tensor).shard_spec().value();
     const auto& output_shard = output_tensor.shard_spec().value();
     const auto& bias_shard = bias_tensor.memory_config().shard_spec().value();
     const auto& in_indices_shard = input_indices_tensor.memory_config().shard_spec().value();
@@ -137,6 +147,7 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
     // descriptor builder derives num_blocks the same way for CB sizing and assumes these bounds hold.
     const uint32_t num_blocks = (input_shard.shape[0] / 32) * (input_shard.shape[1] / 32);
     TT_FATAL(num_blocks >= 1, "input shard must hold at least one 32x32 tile");
+    TT_FATAL(!input_interleaved || num_blocks == 1, "interleaved input is single block only (up to 256 experts)");
     TT_FATAL(num_blocks <= 2, "generalized_moe_gate supports up to 2 blocks (<=512 experts), got {}", num_blocks);
     TT_FATAL(
         !attrs.grouped || num_blocks == 1,
