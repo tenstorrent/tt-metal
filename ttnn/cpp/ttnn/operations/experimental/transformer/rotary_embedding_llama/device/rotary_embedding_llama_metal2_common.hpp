@@ -36,6 +36,11 @@ inline const DFBSpecName COS_INTERM_DFB{"cos_interm"};          // c_25
 inline const DFBSpecName SIN_INTERM_DFB{"sin_interm"};          // c_26
 inline const DFBSpecName OUT_DFB{"out"};                        // c_16
 inline const DFBSpecName ZERO_DFB{"zero"};                      // c_27
+// Fused q/k RMS prologue (rms_norm_eps): x^2 tiles, the per-row rsqrt scale, the normalised x, the 1/W reduce scaler.
+inline const DFBSpecName XX_DFB{"xx"};
+inline const DFBSpecName EX2PE_DFB{"ex2pe"};
+inline const DFBSpecName XN_DFB{"xn"};
+inline const DFBSpecName SCALER_DFB{"scaler"};
 
 // Tensor parameters
 inline const TensorParamName INPUT_PARAM{"input"};

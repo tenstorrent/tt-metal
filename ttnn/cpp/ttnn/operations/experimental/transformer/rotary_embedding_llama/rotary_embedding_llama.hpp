@@ -18,6 +18,8 @@ ttnn::Tensor rotary_embedding_llama(
     const Tensor& trans_mat,
     bool is_decode_mode = false,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    /// Fold the q/k RMS normalisation (x * rsqrt(mean_head_dim(x^2) + eps)) into the kernel; prefill interleaved only.
+    std::optional<float> rms_norm_eps = std::nullopt);
 
 }  // namespace ttnn::experimental

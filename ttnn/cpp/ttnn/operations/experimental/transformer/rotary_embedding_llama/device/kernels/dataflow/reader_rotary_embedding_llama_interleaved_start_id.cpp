@@ -9,6 +9,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
     Noc noc;
@@ -56,6 +57,11 @@ void kernel_main() {
         s3, CoreLocalMem<uint32_t>(trans_mat_l1_write_addr), trans_mat_tile_bytes, {.page_id = trans_mat_curr_idx}, {});
     noc.async_read_barrier();
     dfb_trans_mat.push_back(onetile);
+    if constexpr (get_arg(args::fuse_rms) == 1) {
+        // The RMS prologue's reduce multiplies by this tile: 1/W with W = Wt * 32 (the head dim).
+        dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            1.0f / static_cast<float>(Wt * 32));
+    }
 
     /*
         Read a ublock of tiles from src to CB, and then push the ublock to unpacker
