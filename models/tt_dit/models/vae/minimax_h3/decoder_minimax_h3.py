@@ -36,6 +36,8 @@ neutral -- they would corrupt every softmax.
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -117,10 +119,13 @@ class MiniMaxH3ViTAttention(Module):
         # Chosen by a min-of-20 op benchmark; whole-decoder wall clock jitters too much to
         # resolve it. q=k=192 with HiFi2 is ~2.95x the default blocking, 128 is slightly worse,
         # and 256 and above hang the sweep. SDPA is ~40 % of layer device time.
+        # Single-op sweep 2026-09-19 (tools/decoder_block_probe.py, logical-1797 view): q192/k192 0.460 ms, q192/k256
+        # 0.399 ms; the k-chunk changes the bf16 accumulation order, so 256 is PSNR-gated (MINIMAX_H3_SDPA_KCHUNK).
+        # q-chunk 128 (exact 4 chunks per core) was probed 2026-09-19: not bit-identical to 192 and slower (0.437 vs 0.407 ms).
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=192,
-            k_chunk_size=192,
+            k_chunk_size=int(os.environ.get("MINIMAX_H3_SDPA_KCHUNK", "192")),
             exp_approx_mode=False,  # False is more correct, matching wan/ltx
         )
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -149,6 +154,17 @@ class MiniMaxH3ViTAttention(Module):
         # alt_complex_rotate90 does, so the already-permuted cos/sin tables feed
         # rotary_embedding_llama unchanged -- x*cos + rot90(x)*sin in one op per q/k.
         self.rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+        # "heads": SDPA writes (B, H, S, D) and nlp_concat_heads reorders it; "op": SDPA writes the concat layout
+        # itself (output_concat_heads), one program less per layer. Bit-identical.
+        self.sdpa_concat = os.environ.get("MINIMAX_H3_SDPA_CONCAT", "op")
+        # "op": ttnn.rms_norm on q and k, then RoPE; "fused": the RMS runs as a prologue inside rotary_embedding_llama
+        # (rms_norm_eps), 72 LayerNorm launches per wave gone. Gated on RMSE vs float64 (test_rope_rms_fused_minimax_h3.py,
+        # tools/decoder_ref_probe.py).
+        self.qk_rms = os.environ.get("MINIMAX_H3_QK_RMS", "fused")
+        if self.qk_rms not in ("op", "fused"):
+            raise ValueError(f"MINIMAX_H3_QK_RMS must be 'op' or 'fused', got {self.qk_rms!r}")
+        if self.sdpa_concat not in ("heads", "op"):
+            raise ValueError(f"MINIMAX_H3_SDPA_CONCAT must be 'heads' or 'op', got {self.sdpa_concat!r}")
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -188,12 +204,15 @@ class MiniMaxH3ViTAttention(Module):
                 state[f"to_out.{suffix}"] = state.pop(key)
 
     def _rms(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """Parameter-free RMS over the head dim, computed in fp32 like the reference."""
-        original = x.get_dtype()
-        if original != ttnn.float32:
-            x = ttnn.typecast(x, ttnn.float32)
-        x = ttnn.rms_norm(x, epsilon=self.eps, compute_kernel_config=self.elementwise_compute_kernel_config)
-        return ttnn.typecast(x, original) if original != ttnn.float32 else x
+        """Parameter-free RMS over the head dim: bfloat16 operands, fp32 accumulation.
+
+        The reference computes this in fp32 and the port used to match it by casting up and back.
+        The upcast cannot add information -- `x` arrives bfloat16 from `nlp_create_qkv_heads` -- and
+        `elementwise_compute_kernel_config` already accumulates in fp32, so the pair bought nothing:
+        a Tracy capture of one forward billed them at 144 ops and 14.9 ms of 172.8, 9 % of the
+        decoder. `test_qk_rms_minimax_h3.py` gates that against a float64 reference at this shape.
+        """
+        return ttnn.rms_norm(x, epsilon=self.eps, compute_kernel_config=self.elementwise_compute_kernel_config)
 
     def forward(
         self,
@@ -202,6 +221,7 @@ class MiniMaxH3ViTAttention(Module):
         rope_sin: ttnn.Tensor,
         attention_mask: ttnn.Tensor | None = None,
         residual: ttnn.Tensor | None = None,
+        valid_len: int | None = None,
     ) -> ttnn.Tensor:
         batch, seq_len, _ = x.shape
         qkv = self.to_qkv(x)
@@ -220,18 +240,31 @@ class MiniMaxH3ViTAttention(Module):
             transpose_k_heads=False,
         )
 
-        query = self._rms(query)
-        key = self._rms(key)
+        fused_rms = self.qk_rms == "fused"
+        if not fused_rms:
+            query = self._rms(query)
+            key = self._rms(key)
+        rope_kwargs = {"rms_norm_eps": self.eps} if fused_rms else {}
 
         # Partial RoPE, fused: the load-time lane permute + permuted cos/sin tables make this a
         # single full-width op per q/k (see rope_minimax_h3 for the (2j, 2j+1) basis).
         query = ttnn.experimental.rotary_embedding_llama(
-            query, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+            query, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config, **rope_kwargs
         )
         key = ttnn.experimental.rotary_embedding_llama(
-            key, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+            key, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config, **rope_kwargs
         )
 
+        # No mask: q/k/v are presented with the logical length of the valid tokens (same buffers,
+        # padded shape unchanged), and SDPA blanks the tile-pad keys itself. The dense mask cost a
+        # hidden multiply per layer and ~213 MB of reader traffic per layer; single-op probe at this
+        # shape: 1.48 ms -> 0.48 ms, valid rows bit-identical (tools/sdpa_mask_probe.py).
+        padded = ttnn.Shape([batch, self.num_heads, seq_len, self.head_dim])
+        if attention_mask is None and valid_len is not None and valid_len < seq_len:
+            logical = ttnn.Shape([batch, self.num_heads, valid_len, self.head_dim])
+            query, key, value = (ttnn.reshape(t, logical, padded) for t in (query, key, value))
+
+        concat_in_op = self.sdpa_concat == "op"
         attended = ttnn.transformer.scaled_dot_product_attention(
             query,
             key,
@@ -240,10 +273,19 @@ class MiniMaxH3ViTAttention(Module):
             is_causal=False,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
+            **({"output_concat_heads": True} if concat_in_op else {}),
         )
-        attended = ttnn.reshape(
-            ttnn.experimental.nlp_concat_heads(attended), (batch, seq_len, self.num_heads * self.head_dim)
-        )
+        dim = self.num_heads * self.head_dim
+        if concat_in_op:
+            # Already (batch, 1, S, H*D); view back to the padded length, then drop the unit dim.
+            full = ttnn.Shape([batch, 1, seq_len, dim])
+            if attended.shape[-2] != seq_len:
+                attended = ttnn.reshape(attended, full, full)
+            attended = ttnn.reshape(attended, (batch, seq_len, dim))
+        else:
+            if attended.shape[-2] != seq_len:
+                attended = ttnn.reshape(attended, padded, padded)
+            attended = ttnn.reshape(ttnn.experimental.nlp_concat_heads(attended), (batch, seq_len, dim))
         # When the block hands us its residual, fold the residual add into to_out's epilogue.
         if residual is not None:
             return _proj_add_residual(self.to_out, attended, residual, self._ones_gate, self.mesh_device)
@@ -321,9 +363,10 @@ class MiniMaxH3TransformerBlock(Module):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         attention_mask: ttnn.Tensor | None = None,
+        valid_len: int | None = None,
     ) -> ttnn.Tensor:
         # Both residual adds fold into the preceding projection's matmul epilogue.
-        x = self.attn(self.norm1(x), rope_cos, rope_sin, attention_mask, residual=x)
+        x = self.attn(self.norm1(x), rope_cos, rope_sin, attention_mask, residual=x, valid_len=valid_len)
         return _proj_add_residual(self.ff2, self.ff1(self.norm2(x)), x, self._ones_gate, self.mesh_device)
 
 
@@ -418,6 +461,10 @@ class MiniMaxH3ViTDecoder3d(Module):
             mask[..., valid:] = float("-inf")
         self.attention_mask = Parameter(total_shape=[1, 1, self.seq_len, self.seq_len], device=mesh_device, dtype=dtype)
         self._mask_host = mask
+        # "view": SDPA gets logical-length q/k/v and no mask (default). "dense": this mask, as the tip did.
+        self.sdpa_mask = os.environ.get("MINIMAX_H3_SDPA_MASK", "view")
+        if self.sdpa_mask not in ("view", "dense"):
+            raise ValueError(f"MINIMAX_H3_SDPA_MASK must be 'view' or 'dense', got {self.sdpa_mask!r}")
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Build the fused suffix constant, and the RoPE / mask constants.
@@ -453,8 +500,10 @@ class MiniMaxH3ViTDecoder3d(Module):
         if suffix.shape[0] != hidden.shape[0]:
             suffix = ttnn.repeat(suffix, ttnn.Shape([hidden.shape[0], 1, 1]))
         hidden = ttnn.concat([hidden, suffix], dim=1)
+        mask = self.attention_mask.data if self.sdpa_mask == "dense" else None
+        valid_len = self.num_patches + self.num_suffix_tokens
         for block in self.transformer_blocks:
-            hidden = block(hidden, self.rope_cos.data, self.rope_sin.data, self.attention_mask.data)
+            hidden = block(hidden, self.rope_cos.data, self.rope_sin.data, mask, valid_len=valid_len)
         return self.proj_out(self.norm_out(hidden))
 
 

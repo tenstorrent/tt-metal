@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -43,6 +45,52 @@ _PLANAR_OUT_BUF: np.ndarray | None = None
 _PLANAR_OUT_SHAPE: tuple[int, int] | None = None
 
 
+_FALLBACK_WARNED = False
+
+
+def _warn_once_about_the_fallback() -> None:
+    """The AVX2 concat is roughly 1.7x the torch scatter at the served chunk, but nothing in the
+    build compiles it -- `models/tt_dit/utils/cpp/build.sh` has to be run by hand -- so a serving
+    process can lose that quietly. Say it once per process rather than per frame."""
+    global _FALLBACK_WARNED
+    if _FALLBACK_WARNED:
+        return
+    _FALLBACK_WARNED = True
+    logger.warning(
+        "yuv readback is using the torch scatter: the AVX2 planar concat is not built "
+        "(run models/tt_dit/utils/cpp/build.sh to get it; ~1.7x on this step)"
+    )
+
+
+# The YUV planes leave rgb_to_yuv as (1, h, w, T) uint8: 28-byte pages, each padded to the 64 B DRAM alignment and read one
+# NoC transaction at a time. rgb_to_yuv's wide_rows emits the same bytes as (1, h, w*T) rows, 4.7 KB pages, and the D2H is
+# 2.7x faster (4x8 bench 2026-09-19: 6.2 -> 2.3 ms per wave, 5.4 -> 2.0 ms of it device-side); the host half views the
+# shards back. Default on (15 s A/B: bit-identical, VAE 2.4 -> 2.3 s); MINIMAX_H3_YUV_WIDE=0 keeps the 28 B pages.
+_YUV_WIDE_ENV = "MINIMAX_H3_YUV_WIDE"
+
+
+def _wide_pages_enabled() -> bool:
+    return os.environ.get(_YUV_WIDE_ENV, "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+# A deferred readback used to end in a full device sync that idled the device until the next wave's first program landed.
+# By default the three reads are followed by a recorded event that the deferred host half waits on instead, so the host
+# enqueues the next wave while this one drains (one command queue keeps the reads ahead of the next wave); 15 s A/B
+# 2026-09-19: bit-identical, VAE 2.36 -> 2.29 s. MINIMAX_H3_YUV_SYNC=device restores the sync.
+_YUV_SYNC_ENV = "MINIMAX_H3_YUV_SYNC"
+
+
+def _event_sync_enabled() -> bool:
+    return os.environ.get(_YUV_SYNC_ENV, "event").strip().lower() == "event"
+
+
+def _as_hwt(shard: torch.Tensor, T: int) -> torch.Tensor:
+    """A wide (1, h, w*T) host shard back to the kernel-native (1, h, w, T) view; a 4-D shard passes through."""
+    if shard.dim() == 4:
+        return shard
+    return shard.reshape(shard.shape[0], shard.shape[1], shard.shape[2] // T, T)
+
+
 def _get_planar_out_buf(T: int, row_stride: int) -> np.ndarray:
     global _PLANAR_OUT_BUF, _PLANAR_OUT_SHAPE
     shape = (T, row_stride)
@@ -50,6 +98,19 @@ def _get_planar_out_buf(T: int, row_stride: int) -> np.ndarray:
         _PLANAR_OUT_BUF = np.empty(shape, dtype=np.uint8)
         _PLANAR_OUT_SHAPE = shape
     return _PLANAR_OUT_BUF
+
+
+def _all_contiguous(*shard_groups) -> bool:
+    """True when every shard is C-contiguous, for torch tensors and numpy arrays alike."""
+    for group in shard_groups:
+        for shard in group:
+            flags = getattr(shard, "flags", None)
+            if flags is not None:
+                if not flags.c_contiguous:
+                    return False
+            elif not shard.is_contiguous():
+                return False
+    return True
 
 
 def _bt601_yuv_coefficients():
@@ -71,7 +132,9 @@ def _yuv_planar_d2h(
     view=None,
     pool: ThreadPoolExecutor | None = None,
     timings: dict | None = None,
-) -> np.ndarray:
+    reuse_out_buffer: bool = False,
+    defer: bool = False,
+) -> np.ndarray | Callable[[], np.ndarray]:
     """Batched D2H of three YUV ttnn tensors into ffmpeg yuv420p planar uint8.
 
     Per-shard input shapes (kernel-native BHWT with C=1):
@@ -83,14 +146,20 @@ def _yuv_planar_d2h(
     ``[Y plane | Cb plane | Cr plane]`` in row-major.
 
     Kicks off all three ``cpu(blocking=False)`` calls before a single
-    ``synchronize_device`` so the reads overlap.  Per-shard scatters then
-    take one of two paths:
+    ``synchronize_device`` so the reads overlap.  With ``defer=True`` the
+    transfer still completes here and everything after it comes back as a
+    callable instead: pulling each device's shards out of the host tensors
+    and scattering them into the planar frame is host work, and both halves
+    release the GIL, so a caller can run it while the device moves on to the
+    next frame.  Per-shard scatters take one of two paths:
 
       * **C++/AVX2 fast path** (when ``HAS_CPP_PLANAR_CONCAT`` is True and
-        the local mesh is rectangular): one ``planar_concat_cpp`` call into
-        a module-level persistent output buffer.  ~2× faster than the
-        Python path on warm calls, but the returned buffer is **reused
-        across calls** — copy out (or feed ffmpeg) before the next call.
+        the local mesh is rectangular): one ``planar_concat_cpp`` call,
+        ~1.7× the Python path at the H3 chunk shape (43 MB: 10.4 -> 6.3 ms).
+        Allocates per call, so the result is the caller's, exactly as the
+        fallback's is.  ``reuse_out_buffer=True`` instead writes into a
+        module-level buffer (3.6 ms), which every later call overwrites:
+        only for a caller that consumes the frame before the next one.
       * **Python fallback**: per-shard ``_write`` tasks on the shared
         reassembly ThreadPoolExecutor (torch's strided-copy backend).
         Each scatter is a strided->strided copy; allocates a fresh output
@@ -117,131 +186,162 @@ def _yuv_planar_d2h(
     host_Y = tt_Y.cpu(blocking=False)
     host_Cb = tt_Cb.cpu(blocking=False)
     host_Cr = tt_Cr.cpu(blocking=False)
-    ttnn.synchronize_device(mesh_device)
+    read_event = None
+    if defer and _event_sync_enabled():
+        read_event = ttnn.record_event(mesh_device, 0)
+    else:
+        ttnn.synchronize_device(mesh_device)
     if timings is not None:
         timings["yuv_dma"] = timings.get("yuv_dma", 0.0) + (time.perf_counter() - mark)
         mark = time.perf_counter()
 
-    if view is not None:
-        # --- Multi-host: extract local shards via host_buffer/get_shard ---
-        def _extract_local(host_tensor):
-            host_mesh_coords = list(host_tensor.tensor_topology().mesh_coords())
-            distributed_buf = host_tensor.host_buffer()
-            tt_dtype = host_tensor.dtype
-            padded_shape = list(host_tensor.padded_shape)
-            logical_shape = list(host_tensor.shape)
-            trim = tuple(slice(0, d) for d in logical_shape)
+    def _host_half():
+        if read_event is not None:
+            ttnn.event_synchronize(read_event)
+        # Timed from here so a deferred run measures its own work, not how long it waited.
+        mark = time.perf_counter()
+        if view is not None:
+            # --- Multi-host: extract local shards via host_buffer/get_shard ---
+            def _extract_local(host_tensor):
+                host_mesh_coords = list(host_tensor.tensor_topology().mesh_coords())
+                distributed_buf = host_tensor.host_buffer()
+                tt_dtype = host_tensor.dtype
+                padded_shape = list(host_tensor.padded_shape)
+                logical_shape = list(host_tensor.shape)
+                trim = tuple(slice(0, d) for d in logical_shape)
 
-            coords_and_shards = []
-            for c in host_mesh_coords:
-                if not view.is_local(c):
-                    continue
-                buf = distributed_buf.get_shard(c)
-                if buf is not None:
-                    coords_and_shards.append((c, _host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim]))
-            return coords_and_shards
+                coords_and_shards = []
+                for c in host_mesh_coords:
+                    if not view.is_local(c):
+                        continue
+                    buf = distributed_buf.get_shard(c)
+                    if buf is not None:
+                        coords_and_shards.append((c, _as_hwt(_host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim], T)))
+                return coords_and_shards
 
-        Y_coords_shards = _extract_local(host_Y)
-        Cb_coords_shards = _extract_local(host_Cb)
-        Cr_coords_shards = _extract_local(host_Cr)
+            Y_coords_shards = _extract_local(host_Y)
+            Cb_coords_shards = _extract_local(host_Cb)
+            Cr_coords_shards = _extract_local(host_Cr)
 
-        # Remap global mesh coordinates to 0-based local coordinates.
-        all_local_coords = [c for c, _ in Y_coords_shards]
-        local_row_positions = sorted({int(c[0]) for c in all_local_coords})
-        local_col_positions = sorted({int(c[1]) for c in all_local_coords})
-        row_remap = {pos: i for i, pos in enumerate(local_row_positions)}
-        col_remap = {pos: i for i, pos in enumerate(local_col_positions)}
-        TP_eff = len(local_row_positions)
-        SP_eff = len(local_col_positions)
+            # Remap global mesh coordinates to 0-based local coordinates.
+            all_local_coords = [c for c, _ in Y_coords_shards]
+            local_row_positions = sorted({int(c[0]) for c in all_local_coords})
+            local_col_positions = sorted({int(c[1]) for c in all_local_coords})
+            row_remap = {pos: i for i, pos in enumerate(local_row_positions)}
+            col_remap = {pos: i for i, pos in enumerate(local_col_positions)}
+            TP_eff = len(local_row_positions)
+            SP_eff = len(local_col_positions)
 
-        h_per_y, w_per_y = H // TP_eff, W // SP_eff
-        h_per_uv, w_per_uv = Hu // TP_eff, Wu // SP_eff
+            h_per_y, w_per_y = H // TP_eff, W // SP_eff
+            h_per_uv, w_per_uv = Hu // TP_eff, Wu // SP_eff
 
-        mesh_coords = [(row_remap[int(c[0])], col_remap[int(c[1])]) for c in all_local_coords]
-        Y_shards = [s for _, s in Y_coords_shards]
-        Cb_shards = [s for _, s in Cb_coords_shards]
-        Cr_shards = [s for _, s in Cr_coords_shards]
-    else:
-        # --- Single-host: extract all shards via get_device_tensors ---
-        TP_eff, SP_eff = tuple(mesh_device.shape)
-        h_per_y, w_per_y = H // TP_eff, W // SP_eff
-        h_per_uv, w_per_uv = Hu // TP_eff, Wu // SP_eff
+            mesh_coords = [(row_remap[int(c[0])], col_remap[int(c[1])]) for c in all_local_coords]
+            Y_shards = [s for _, s in Y_coords_shards]
+            Cb_shards = [s for _, s in Cb_coords_shards]
+            Cr_shards = [s for _, s in Cr_coords_shards]
+        else:
+            # --- Single-host: extract all shards via get_device_tensors ---
+            TP_eff, SP_eff = tuple(mesh_device.shape)
+            h_per_y, w_per_y = H // TP_eff, W // SP_eff
+            h_per_uv, w_per_uv = Hu // TP_eff, Wu // SP_eff
 
-        mesh_coords = list(tt_Y.tensor_topology().mesh_coords())
+            mesh_coords = list(tt_Y.tensor_topology().mesh_coords())
 
-        def _extract(host_tensor):
-            host_shards = ttnn.get_device_tensors(host_tensor)
-            logical_shape = list(host_shards[0].shape)
-            trim = tuple(slice(0, d) for d in logical_shape)
-            return [_to_torch_zero_copy(s)[trim] for s in host_shards]
+            def _extract(host_tensor):
+                host_shards = ttnn.get_device_tensors(host_tensor)
+                logical_shape = list(host_shards[0].shape)
+                trim = tuple(slice(0, d) for d in logical_shape)
+                return [_as_hwt(_to_torch_zero_copy(s)[trim], T) for s in host_shards]
 
-        Y_shards = _extract(host_Y)  # each (1, h_per_y, w_per_y, T)
-        Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
-        Cr_shards = _extract(host_Cr)
+            Y_shards = _extract(host_Y)  # each (1, h_per_y, w_per_y, T)
+            Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
+            Cr_shards = _extract(host_Cr)
 
-    # --- C++/AVX2 fast path --------------------------------------------- Drop-in replacement for the torch_threaded
-    if HAS_CPP_PLANAR_CONCAT and len(mesh_coords) == TP_eff * SP_eff:
-        triples = sorted(
-            zip(mesh_coords, Y_shards, Cb_shards, Cr_shards),
-            key=lambda t: (int(t[0][0]), int(t[0][1])),
+        if timings is not None:
+            timings["yuv_extract"] = timings.get("yuv_extract", 0.0) + (time.perf_counter() - mark)
+            mark = time.perf_counter()
+
+        # --- C++/AVX2 fast path --------------------------------------------- Drop-in replacement for the torch_threaded
+        # `planar_concat_cpp` requires C-contiguous shards and makes them so itself, one at a time
+        # on this thread: hand it trimmed views of padded tensors and the 43 MB chunk takes 25.9 ms
+        # against the torch scatter's 6.7. Row-major uint8 carries no padding at these shapes, so
+        # the guard should never fire; it is here so that if that changes the readback loses
+        # nothing rather than running 4x slower.
+        use_cpp = (
+            HAS_CPP_PLANAR_CONCAT
+            and len(mesh_coords) == TP_eff * SP_eff
+            and _all_contiguous(Y_shards, Cb_shards, Cr_shards)
         )
+        if use_cpp:
+            triples = sorted(
+                zip(mesh_coords, Y_shards, Cb_shards, Cr_shards),
+                key=lambda t: (int(t[0][0]), int(t[0][1])),
+            )
+            out_Hu, out_Wu = out_H // 2, out_W // 2
+            out_row = out_H * out_W + 2 * out_Hu * out_Wu
+            # Reusing one buffer aliases every result to the newest frame, and the H3 decode keeps
+            # all 21 chunks of a clip, so opt in only when the frame is consumed before the next.
+            out = _get_planar_out_buf(T, out_row) if reuse_out_buffer else None
+            assembled = _planar_concat_cpp_impl(
+                [t[1] for t in triples],
+                [t[2] for t in triples],
+                [t[3] for t in triples],
+                "CHWT",
+                (TP_eff, SP_eff),
+                out=out,
+                out_H=out_H,
+                out_W=out_W,
+            )
+            if timings is not None:
+                timings["yuv_scatter"] = timings.get("yuv_scatter", 0.0) + (time.perf_counter() - mark)
+            return assembled
+
+        _warn_once_about_the_fallback()
+
+        # --- Python fallback (torch_threaded scatter) ------------------------ Assemble directly into the logical-sized
         out_Hu, out_Wu = out_H // 2, out_W // 2
-        out_row = out_H * out_W + 2 * out_Hu * out_Wu
-        out = _get_planar_out_buf(T, out_row)
-        assembled = _planar_concat_cpp_impl(
-            [t[1] for t in triples],
-            [t[2] for t in triples],
-            [t[3] for t in triples],
-            "CHWT",
-            (TP_eff, SP_eff),
-            out=out,
-            out_H=out_H,
-            out_W=out_W,
-        )
+        out_hw, out_uv = out_H * out_W, out_Hu * out_Wu
+        out_row = out_hw + 2 * out_uv
+
+        out = np.empty((T, out_row), dtype=np.uint8)
+        out_t = torch.from_numpy(out)
+        y_view = out_t.as_strided((T, out_H, out_W), (out_row, out_W, 1), 0)
+        u_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw)
+        v_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw + out_uv)
+
+        if pool is None:
+            pool = _get_default_reassemble_pool()
+
+        def _write(view, shard, r, c, h_per, w_per, bound_h, bound_w):
+            r0, c0 = r * h_per, c * w_per
+            vh = min(h_per, bound_h - r0)
+            vw = min(w_per, bound_w - c0)
+            if vh <= 0 or vw <= 0:
+                return  # shard lies entirely in the padded tail
+            # shard (1, h_per, w_per, T) -> squeeze(0).permute(2, 0, 1) -> (T, h_per, w_per).
+            src = shard.squeeze(0).permute(2, 0, 1)[:, :vh, :vw]
+            view[:, r0 : r0 + vh, c0 : c0 + vw].copy_(src)
+
+        futures = []
+        for coord, shard in zip(mesh_coords, Y_shards):
+            r, c = int(coord[0]), int(coord[1])
+            futures.append(pool.submit(_write, y_view, shard, r, c, h_per_y, w_per_y, out_H, out_W))
+        for coord, shard in zip(mesh_coords, Cb_shards):
+            r, c = int(coord[0]), int(coord[1])
+            futures.append(pool.submit(_write, u_view, shard, r, c, h_per_uv, w_per_uv, out_Hu, out_Wu))
+        for coord, shard in zip(mesh_coords, Cr_shards):
+            r, c = int(coord[0]), int(coord[1])
+            futures.append(pool.submit(_write, v_view, shard, r, c, h_per_uv, w_per_uv, out_Hu, out_Wu))
+        for f in futures:
+            f.result()
+
         if timings is not None:
             timings["yuv_scatter"] = timings.get("yuv_scatter", 0.0) + (time.perf_counter() - mark)
-        return assembled
+        return out
 
-    # --- Python fallback (torch_threaded scatter) ------------------------ Assemble directly into the logical-sized
-    out_Hu, out_Wu = out_H // 2, out_W // 2
-    out_hw, out_uv = out_H * out_W, out_Hu * out_Wu
-    out_row = out_hw + 2 * out_uv
-
-    out = np.empty((T, out_row), dtype=np.uint8)
-    out_t = torch.from_numpy(out)
-    y_view = out_t.as_strided((T, out_H, out_W), (out_row, out_W, 1), 0)
-    u_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw)
-    v_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw + out_uv)
-
-    if pool is None:
-        pool = _get_default_reassemble_pool()
-
-    def _write(view, shard, r, c, h_per, w_per, bound_h, bound_w):
-        r0, c0 = r * h_per, c * w_per
-        vh = min(h_per, bound_h - r0)
-        vw = min(w_per, bound_w - c0)
-        if vh <= 0 or vw <= 0:
-            return  # shard lies entirely in the padded tail
-        # shard (1, h_per, w_per, T) -> squeeze(0).permute(2, 0, 1) -> (T, h_per, w_per).
-        src = shard.squeeze(0).permute(2, 0, 1)[:, :vh, :vw]
-        view[:, r0 : r0 + vh, c0 : c0 + vw].copy_(src)
-
-    futures = []
-    for coord, shard in zip(mesh_coords, Y_shards):
-        r, c = int(coord[0]), int(coord[1])
-        futures.append(pool.submit(_write, y_view, shard, r, c, h_per_y, w_per_y, out_H, out_W))
-    for coord, shard in zip(mesh_coords, Cb_shards):
-        r, c = int(coord[0]), int(coord[1])
-        futures.append(pool.submit(_write, u_view, shard, r, c, h_per_uv, w_per_uv, out_Hu, out_Wu))
-    for coord, shard in zip(mesh_coords, Cr_shards):
-        r, c = int(coord[0]), int(coord[1])
-        futures.append(pool.submit(_write, v_view, shard, r, c, h_per_uv, w_per_uv, out_Hu, out_Wu))
-    for f in futures:
-        f.result()
-
-    if timings is not None:
-        timings["yuv_scatter"] = timings.get("yuv_scatter", 0.0) + (time.perf_counter() - mark)
-    return out
+    if defer:
+        return _host_half
+    return _host_half()
 
 
 def fast_device_to_host_yuv(
@@ -256,7 +356,9 @@ def fast_device_to_host_yuv(
     logical_h: int | None = None,
     logical_w: int | None = None,
     timings: dict | None = None,
-) -> np.ndarray | None:
+    reuse_out_buffer: bool = False,
+    defer: bool = False,
+) -> np.ndarray | Callable[[], np.ndarray] | None:
     """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
 
     Takes a sharded BCTHW bf16 row-major tensor with values in ``[-1, 1]`` —
@@ -303,9 +405,10 @@ def fast_device_to_host_yuv(
         pool: Optional ``ThreadPoolExecutor`` for the host-side reassembly.
             If ``None``, the module-level lazy default pool is used.
         timings: Optional dict accumulating a ``yuv_convert`` / ``yuv_dma`` /
-            ``yuv_scatter`` breakdown in seconds.  Separating the on-device
-            conversion from the transfer needs a ``synchronize_device``
-            between them, which also serializes them, so it is opt-in.
+            ``yuv_extract`` / ``yuv_scatter`` breakdown in seconds.  Separating
+            the on-device conversion from the transfer needs a
+            ``synchronize_device`` between them, which also serializes them, so
+            it is opt-in.
         debug: If ``True``, print diagnostic shape information.
         logical_h: Optional logical (un-padded) height of the output.  When
             the VAE pads ``H`` to a coarser size, pass the true logical height
@@ -316,6 +419,14 @@ def fast_device_to_host_yuv(
         logical_w: Optional logical (un-padded) width of the output, trimming
             the right columns of each plane exactly as ``logical_h`` trims the
             bottom rows.  Must be even and ``<= W``.  Defaults to ``None``.
+        defer: Return a zero-argument callable that finishes the readback
+            rather than the frame itself.  The transfer is complete when it
+            returns; what is left is host work the caller can overlap with the
+            next frame's device work.  Calling it yields the frame.
+        reuse_out_buffer: Write the AVX2 path's result into a module-level
+            buffer instead of a fresh one.  Saves ~2.7 ms per 43 MB frame and
+            invalidates every previously returned array, so it is only for a
+            caller that consumes each frame before asking for the next.
 
     Returns:
         ``np.ndarray`` of shape ``(T, H'*W' + 2*(H'/2 * W'/2))``, dtype uint8,
@@ -430,7 +541,9 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
 
     # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
-    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients)
+    # Only ask for wide rows when enabled, so a library without the argument still serves the plain layout.
+    wide_kwargs = {"wide_rows": True} if _wide_pages_enabled() else {}
+    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, **wide_kwargs)
     if debug:
         print(f"  [yuv-d2h] yuv outputs per-shard:")
         print(f"  [yuv-d2h]   Y : {list(tt_Y.shape)}")
@@ -457,6 +570,8 @@ def fast_device_to_host_yuv(
         view=d2h_view,
         pool=pool,
         timings=timings,
+        reuse_out_buffer=reuse_out_buffer,
+        defer=defer,
     )
 
     return out

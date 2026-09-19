@@ -136,6 +136,77 @@ AUDIO_SHIFT = 3.0
 
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
 _DEFAULT_AUDIO_T_FACTOR = 8
+# Time-packed late vocoder bands ("band:k,band:k"; "0" disables). Default: the two narrowest bands on 32-wide rows,
+# measured 0.53 -> 0.45 s traced at unchanged PSNR (layers/audio_pack.py).
+_AUDIO_PACK_ENV = "MINIMAX_H3_AUDIO_PACK"
+_DEFAULT_AUDIO_PACK = "5:2,6:4"
+# Split mode of the packed bands' anti-alias resamplers ("same" = the convs' mode). "off" is the measured 65 dB /
+# -72 ms point (layers/audio_pack.py).
+_AUDIO_RESAMPLER_SPLIT_ENV = "MINIMAX_H3_AUDIO_RESAMPLER_SPLIT"
+# Conv split mode of the audio decoder when the caller passes none ("kernel" = the in-kernel fp32 operand split,
+# same operands and fidelity as "full", 0.2 s faster on the 15 s clip).
+_AUDIO_SPLIT_ENV = "MINIMAX_H3_AUDIO_SPLIT"
+# Anti-alias SnakeBeta activations of the vocoder: "chain" runs the resampler/snake op chain, "fused" (default)
+# one generic_op kernel per activation (layers/audio_aa_snake.py), bit-identical to the chain.
+_AUDIO_ACT_ENV = "MINIMAX_H3_AUDIO_ACT"
+# Replay a captured device graph for the audio vocoder instead of dispatching it op by op. The vocoder is the one
+# stage that is host-bound, so this is its dominant lever; it needs a trace_region_size on the mesh.
+_AUDIO_TRACE_ENV = "MINIMAX_H3_AUDIO_TRACE"
+# Separate the audio stage's phases (host prep, upload, projection, vocoder, readback). Costs a synchronize
+# between each, so the total it reports is inflated and only the shares mean anything.
+_AUDIO_PHASES_ENV = "MINIMAX_H3_AUDIO_PHASES"
+# Dtype of the video VAE's tile blend when the caller passes none. "fp32" is the gated default; "bf16" keeps the
+# precision the decoder emits and halves the bytes through unpatchify, the gathers and the blend.
+_VAE_BLEND_DTYPE_ENV = "MINIMAX_H3_VAE_BLEND_DTYPE"
+_DEFAULT_VAE_BLEND_DTYPE = "fp32"
+
+
+def _audio_trace_enabled() -> bool:
+    """Explicit kwarg wins; else MINIMAX_H3_AUDIO_TRACE; else on (the vocoder replays a captured graph: 0.5 -> 0.3 s)."""
+    return os.environ.get(_AUDIO_TRACE_ENV, "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _vae_blend_dtype() -> str:
+    """Explicit kwarg wins; else MINIMAX_H3_VAE_BLEND_DTYPE; else fp32."""
+    return os.environ.get(_VAE_BLEND_DTYPE_ENV, _DEFAULT_VAE_BLEND_DTYPE).strip().lower()
+
+
+def _audio_resampler_split_mode() -> str | None:
+    raw = os.environ.get(_AUDIO_RESAMPLER_SPLIT_ENV, "same").strip()
+    if raw in ("", "same"):
+        return None
+    if raw not in ("off", "weight", "act", "full"):
+        raise ValueError(f"{_AUDIO_RESAMPLER_SPLIT_ENV}={raw!r} must be same, off, weight, act or full")
+    return raw
+
+
+def _audio_act_mode() -> str:
+    raw = os.environ.get(_AUDIO_ACT_ENV, "fused").strip().lower() or "fused"
+    if raw not in ("chain", "fused"):
+        raise ValueError(f"{_AUDIO_ACT_ENV}={raw!r} must be chain or fused")
+    return raw
+
+
+# "1": one stereo channel per mesh row (the axis the T-shard does not use); every vocoder op then runs one batch item
+# per device instead of the replicated pair. Bit-identical per channel; measured 0.5 -> 0.4 s eager, default on.
+_AUDIO_BSHARD_ENV = "MINIMAX_H3_AUDIO_BSHARD"
+
+
+def _audio_batch_shard() -> bool:
+    raw = os.environ.get(_AUDIO_BSHARD_ENV, "1").strip().lower()
+    if raw not in ("", "0", "1", "false", "true", "no", "yes"):
+        raise ValueError(f"{_AUDIO_BSHARD_ENV}={raw!r} must be 0 or 1")
+    return raw in ("1", "true", "yes")
+
+
+def _audio_pack_bands() -> dict[int, int]:
+    raw = os.environ.get(_AUDIO_PACK_ENV, _DEFAULT_AUDIO_PACK).strip()
+    if raw in ("", "0", "off"):
+        return {}
+    try:
+        return {int(b): int(k) for b, k in (item.split(":") for item in raw.split(","))}
+    except ValueError:
+        raise ValueError(f"{_AUDIO_PACK_ENV}={raw!r} must look like '5:2,6:4' or '0'") from None
 
 
 def _requested_audio_t_factor(audio_t_factor: int | None) -> tuple[int, bool]:
@@ -304,11 +375,13 @@ class MiniMaxH3Pipeline:
         vsa_config=None,
         lora_path: str | os.PathLike | None = None,
         lora_strength: float = 1.0,
-        audio_split_mode: str = "full",
+        audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         vae_output_type: str = "float",
         vae_stitch_exchange: str = "gather",
         vae_profile: bool = False,
+        vae_blend_dtype: str | None = None,
+        audio_trace: bool | None = None,
     ) -> None:
         # VSA (video sparse attention, VSA_SCOPE.md): None (default) leaves the dense paths
         # untouched; a MiniMaxH3VSAConfig selects the sparse path and runs the whole packed
@@ -360,9 +433,14 @@ class MiniMaxH3Pipeline:
         # operands for the fp32-exact kernels' best accuracy (~67 dB vs CPU); "off" skips the split
         # for a lower-fidelity decode (~42 dB). Keys the device-weight cache via `weights_variant`.
         # audio_t_factor=4 timings: 2.2 s (full) / 1.6 s (off) on 4x8; default is 8 (~1.4 s full).
-        if audio_split_mode not in ("off", "weight", "full"):
-            raise ValueError(f"audio_split_mode must be 'off', 'weight', or 'full', got {audio_split_mode!r}")
+        if audio_split_mode is None:
+            audio_split_mode = os.environ.get(_AUDIO_SPLIT_ENV, "kernel").strip() or "kernel"
+        if audio_split_mode not in ("off", "weight", "act", "full", "stack", "kernel"):
+            raise ValueError(
+                f"audio_split_mode must be 'off', 'weight', 'act', 'full', 'stack' or 'kernel', got {audio_split_mode!r}"
+            )
         self.audio_split_mode = audio_split_mode
+        self.audio_trace = _audio_trace_enabled() if audio_trace is None else bool(audio_trace)
         # Audio T-shard factor/axis: explicit kwarg > MINIMAX_H3_AUDIO_T_FACTOR env > default 8, then the
         # 8->4->1 fallback (32 opt-in); logged before decode.
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(audio_t_factor)
@@ -417,6 +495,7 @@ class MiniMaxH3Pipeline:
         # inflates the stage -- diagnostics only, never a measurement configuration.
         self.vae_stitch_exchange = vae_stitch_exchange
         self.vae_profile = bool(vae_profile)
+        self.vae_blend_dtype = vae_blend_dtype or _vae_blend_dtype()
         self._video_processor = None
         self._vision_tower = None
         self._vision_config = None
@@ -454,11 +533,13 @@ class MiniMaxH3Pipeline:
         vsa_config=None,
         lora_path: str | os.PathLike | None = None,
         lora_strength: float | None = None,
-        audio_split_mode: str = "full",
+        audio_split_mode: str | None = None,
         audio_t_factor: int | None = None,
         vae_output_type: str = "float",
         vae_stitch_exchange: str = "gather",
         vae_profile: bool = False,
+        vae_blend_dtype: str | None = None,
+        audio_trace: bool | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
@@ -490,10 +571,12 @@ class MiniMaxH3Pipeline:
             lora_path=lora_path,
             lora_strength=lora_strength,
             audio_split_mode=audio_split_mode,
+            audio_trace=audio_trace,
             audio_t_factor=audio_t_factor,
             vae_output_type=vae_output_type,
             vae_stitch_exchange=vae_stitch_exchange,
             vae_profile=vae_profile,
+            vae_blend_dtype=vae_blend_dtype,
         )
 
     @staticmethod
@@ -1328,6 +1411,7 @@ class MiniMaxH3Pipeline:
                 ccl_manager=self.ccl_manager,
                 device_stitch=yuv,
                 stitch_exchange=self.vae_stitch_exchange,
+                blend_dtype=self.vae_blend_dtype,
                 profile=self.vae_profile,
                 # Folded into `proj_out`, so the decoder emits the `[-1, 1]` both the colour kernel
                 # and the uint8 cast take, and `_decode_video` is left with at most a range shift.
@@ -1452,6 +1536,13 @@ class MiniMaxH3Pipeline:
                 if self.audio_t_factor > 1
                 else None
             )
+            batch_shard_axis = None
+            if _audio_batch_shard() and audio_parallel_config is not None:
+                other = 1 - self._audio_t_axis
+                if tuple(self.mesh_device.shape)[other] >= 2:
+                    batch_shard_axis = other
+                else:
+                    logger.warning(f"{_AUDIO_BSHARD_ENV}=1 ignored: mesh axis {other} has one device")
             decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
@@ -1464,6 +1555,18 @@ class MiniMaxH3Pipeline:
                 ccl_manager=self.ccl_manager,
                 parallel_config=audio_parallel_config,
                 split_mode=self.audio_split_mode,
+                pack_bands=_audio_pack_bands(),
+                resampler_split_mode=_audio_resampler_split_mode(),
+                act_mode=_audio_act_mode(),
+                batch_shard_axis=batch_shard_axis,
+                profile=os.environ.get(_AUDIO_PHASES_ENV, "0").strip() not in ("", "0", "false", "no"),
+            )
+            logger.info(
+                f"Audio trace: {'on' if self.audio_trace else 'off'} ({_AUDIO_TRACE_ENV}); "
+                f"conv split: {decoder.split_mode} ({_AUDIO_SPLIT_ENV}); packing: {decoder.pack_bands or 'off'} "
+                f"({_AUDIO_PACK_ENV}); resampler split {decoder.resampler_split_mode or 'same'} "
+                f"({_AUDIO_RESAMPLER_SPLIT_ENV}); activations: {decoder.act_mode} ({_AUDIO_ACT_ENV}); "
+                f"batch shard axis {decoder.batch_shard_axis} ({_AUDIO_BSHARD_ENV})"
             )
 
             def read_state() -> dict[str, torch.Tensor]:
@@ -1483,7 +1586,14 @@ class MiniMaxH3Pipeline:
                 model_name=MODEL_NAME,
                 # The audio precision levers change the module's parameter set, so they are part of
                 # the cache key -- read off the module so the key cannot drift from what was built.
-                subfolder="audio_decoder" + weights_variant(decoder.split_mode, decoder.max_c_in_block),
+                subfolder="audio_decoder"
+                + weights_variant(
+                    decoder.split_mode,
+                    decoder.max_c_in_block,
+                    decoder.pack_bands,
+                    decoder.resampler_split_mode,
+                    act_mode=decoder.act_mode,
+                ),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
@@ -1983,6 +2093,9 @@ class MiniMaxH3Pipeline:
         A trace holds device buffers for the whole request and nothing else drops them. A no-op when
         nothing was traced.
         """
+        decoder = self._audio_decoder
+        if decoder is not None:
+            decoder.release_trace()
         transformer = self._transformer
         if transformer is None:
             return
@@ -2253,6 +2366,8 @@ class MiniMaxH3Pipeline:
         assert rows.shape[0] == expected, f"expected {expected} target audio rows to decode, got {rows.shape[0]}"
         latents = unpack_audio_tokens(rows, num_audio_latents)
         latents = self._denormalize(latents, self.audio_config["latents_mean"], self.audio_config["latents_std"])
-        waveform = audio_decoder(latents)
+        # The first call at a shape captures and every later one replays, so the warm-up generation
+        # pays the capture and the measured one does not. Each served length gets its own trace.
+        waveform = audio_decoder(latents, traced=self.audio_trace)
         # The audio VAE is mono and took the two stereo channels as two batch items.
         return waveform.float().permute(1, 0, 2)

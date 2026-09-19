@@ -14,9 +14,10 @@ asymmetric**. For an interior tile the corner region is `b*L + (1-b)*(a*A + (1-a
 O(1) error over roughly a ninth of every frame, which surfaces as visible seams. So this mirrors the
 reference order exactly, tile by tile, rather than reformulating it.
 
-The blend runs in **float32** on device even though the decoder emits bfloat16, because the host path
-it replaces blends in float32 (`.float()` before `stitch_tiles`). Keeping the same precision is what
-lets the existing PCC and roundtrip-PSNR gates carry over unchanged.
+The blend runs in whatever dtype its tiles carry. float32 is what the host path it replaces used
+(`.float()` before `stitch_tiles`), which is how the existing PCC and roundtrip-PSNR gates carried
+over unchanged. bfloat16 is what the decoder actually emits and halves the bytes the blend moves;
+both are gated in `test_stitch_device_minimax_h3.py`.
 """
 
 from __future__ import annotations
@@ -37,20 +38,25 @@ class DeviceTileStitcher:
     of 32 -- and `ttnn.slice` drops to untilize -> row-major -> retilize for exactly that case. The
     trims then hand `ttnn.concat` extents of 80 and 176, which is tile padding on the concat dim and
     triggers the same fallback again. `binary_ng` takes ROW_MAJOR operands and keeps the layout on
-    output, so the arithmetic is unaffected and the blend stays float32.
+    output, so the arithmetic is unaffected.
+
+    The ramp is built in its tiles' own dtype. bfloat16 tiles meeting a float32 ramp is what produced
+    garbage-scale output on this ttnn, so the two are never allowed to disagree.
     """
 
     def __init__(self, mesh_device: ttnn.MeshDevice) -> None:
         self.mesh_device = mesh_device
         self._ramps: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
 
-    def _ramp_pair(self, shape: tuple[int, ...], extent: int, dim: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def _ramp_pair(
+        self, shape: tuple[int, ...], extent: int, dim: int, dtype: ttnn.DataType
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """`(weight_a, weight_b)` broadcast to `shape`, where `weight_a = 1 - i/extent` along `dim`.
 
         Materialized at full tile shape rather than relying on ttnn broadcast semantics: a few MB,
         built once, and it removes any question of which operand broadcasts.
         """
-        key = (shape, extent, dim)
+        key = (shape, extent, dim, dtype)
         if key not in self._ramps:
             positions = torch.arange(extent, dtype=torch.float32)
             view = [1] * len(shape)
@@ -60,7 +66,7 @@ class DeviceTileStitcher:
             weight_a = (1 - positions / extent).view(view).expand(slab).contiguous()
             weight_b = (positions / extent).view(view).expand(slab).contiguous()
             self._ramps[key] = tuple(
-                ttnn.from_torch(w, dtype=ttnn.float32, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.from_torch(w, dtype=dtype, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
                 for w in (weight_a, weight_b)
             )
         return self._ramps[key]
@@ -84,9 +90,12 @@ class DeviceTileStitcher:
         axis = dim % rank
         blend_extent = min(a.shape[axis], b.shape[axis], blend_extent)
 
-        tail_a = self._slice(a, axis, a.shape[axis] - blend_extent, a.shape[axis])
+        # An operand the extent covers whole is used as is; slicing it would only copy it.
+        tail_a = (
+            a if blend_extent == a.shape[axis] else self._slice(a, axis, a.shape[axis] - blend_extent, a.shape[axis])
+        )
         head_b = self._slice(b, axis, 0, blend_extent)
-        weight_a, weight_b = self._ramp_pair(tuple(head_b.shape), blend_extent, axis)
+        weight_a, weight_b = self._ramp_pair(tuple(head_b.shape), blend_extent, axis, head_b.dtype)
         blended = ttnn.add(ttnn.multiply(tail_a, weight_a), ttnn.multiply(head_b, weight_b))
 
         if blend_extent == b.shape[axis]:
@@ -120,6 +129,112 @@ class DeviceTileStitcher:
                 result_row.append(tile)
             result_rows.append(ttnn.concat(result_row, dim=-1))
         return ttnn.concat(result_rows, dim=-2)
+
+
+class StripTileStitcher(DeviceTileStitcher):
+    """`stitch` split along the mesh, so no device blends canvas it will never read back.
+
+    `stitch` needs every tile on every device, and every device then blends the whole canvas: on a
+    4x8 mesh that is 32 identical copies of ~400 programs to keep 1/32 of the result each. The
+    reference order factors along the grid axes -- the H-blend of tile (i, j) reads tiles (i-1, j)
+    and (i, j), its own column; the W-blend reads the ORIGINAL tile (i, j-1) and the H-blended
+    (i, j), its own row. So: gather a column, H-blend and trim it, keep only the rows this device
+    reads back; gather those row strips across the mesh row, W-blend and trim, keep only the
+    columns it reads back. The W-blend's left operand is an un-blended edge strip that travels with
+    the H-blended one, so the reference's asymmetry survives. Every output pixel meets the same
+    fp32 mul, mul, add on the same operands as `stitch`, so the two agree bit for bit
+    (`test_strip_stitch_matches_gather_stitch_bitwise`).
+    """
+
+    # Both stages work straight off the gathered stacks (tile index in dim 0), slicing each blend operand
+    # and each kept run once, and concatenating each column or row once. The first version copied every
+    # gathered tile out, blended, concatenated the blend with the rest and then trimmed the result again;
+    # same bytes and arithmetic, ~30 fewer programs per wave (measured by the review of the first cut).
+
+    @staticmethod
+    def _sub(stack: ttnn.Tensor, index: int, dim: int, start: int, stop: int) -> ttnn.Tensor:
+        """Entry `index` of a stacked tensor (dim 0), sliced to `[start, stop)` along `dim`."""
+        rank = len(stack.shape)
+        dim = dim % rank
+        starts = [0] * rank
+        stops = list(stack.shape)
+        starts[0], stops[0] = index, index + 1
+        starts[dim], stops[dim] = start, stop
+        return ttnn.slice(stack, starts, stops)
+
+    @staticmethod
+    def _corner(stack: ttnn.Tensor, index: int, rows: int, cols: int) -> ttnn.Tensor:
+        """Entry `index`: the top `rows` rows of the last `cols` columns."""
+        rank = len(stack.shape)
+        starts = [0] * rank
+        stops = list(stack.shape)
+        starts[0], stops[0] = index, index + 1
+        starts[-1] = stack.shape[-1] - cols
+        stops[-2] = rows
+        return ttnn.slice(stack, starts, stops)
+
+    def _blend_pieces(
+        self, a: ttnn.Tensor, a_index: int, b: ttnn.Tensor, b_index: int, extent: int, axis: int, keep: int
+    ) -> list[ttnn.Tensor]:
+        """The pieces of `blend(a[a_index], b[b_index])` along `axis` with `b` kept to `keep`: no concat, no trim.
+
+        Same operands and ops as `blend`: a's tail, b's head, the cached ramps, mul, mul, add; then b's
+        `[extent, keep)` run as its own slice instead of a concat that a trim would cut again.
+        """
+        axis = axis % len(b.shape)
+        extent = min(a.shape[axis], b.shape[axis], extent)
+        tail_a = self._sub(a, a_index, axis, a.shape[axis] - extent, a.shape[axis])
+        head_b = self._sub(b, b_index, axis, 0, extent)
+        weight_a, weight_b = self._ramp_pair(tuple(head_b.shape), extent, axis, head_b.dtype)
+        pieces = [ttnn.add(ttnn.multiply(tail_a, weight_a), ttnn.multiply(head_b, weight_b))]
+        if keep > extent:
+            pieces.append(self._sub(b, b_index, axis, extent, keep))
+        return pieces
+
+    def column(
+        self, column: ttnn.Tensor, rows: int, height_overlaps: list[int], edge_width: int
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        """H-blend one gathered tile column (entries `0..rows`) and trim it as `stitch` would; `(strip, edge)`.
+
+        `strip` is the column at canvas height. `edge` is the last `edge_width` columns of the
+        ORIGINAL tiles at the same rows -- what the W-blend of the column to the right reads in
+        place of `strip` (`stitch` blends against `row[j - 1]`, never the blended tile). `None`
+        when `edge_width` is 0, i.e. a single-column grid with no W seam.
+        """
+        height = column.shape[-2]
+        pieces, edges = [], []
+        for i in range(rows):
+            keep = height - (height_overlaps[i] if i < rows - 1 else 0)
+            if i == 0:
+                pieces.append(self._sub(column, 0, -2, 0, keep))
+            else:
+                pieces.extend(self._blend_pieces(column, i - 1, column, i, height_overlaps[i - 1], -2, keep))
+            if edge_width:
+                edges.append(self._corner(column, i, rows=keep, cols=edge_width))
+        strip = pieces[0] if len(pieces) == 1 else ttnn.concat(pieces, dim=-2)
+        if not edges:
+            return strip, None
+        return strip, edges[0] if len(edges) == 1 else ttnn.concat(edges, dim=-2)
+
+    def row(
+        self, strips: ttnn.Tensor, edges: ttnn.Tensor | None, first: int, cols: int, width_overlaps: list[int]
+    ) -> ttnn.Tensor:
+        """W-blend gathered row strips `first..first+cols` left to right and trim, as `stitch` would.
+
+        `edges` holds the matching un-blended edge strips (same indices); the blend of column j reads
+        `edges[first + j - 1]` as its left operand.
+        """
+        width = strips.shape[-1]
+        pieces = []
+        for j in range(cols):
+            keep = width - (width_overlaps[j] if j < cols - 1 else 0)
+            if j == 0:
+                pieces.append(self._sub(strips, first, -1, 0, keep))
+            else:
+                pieces.extend(
+                    self._blend_pieces(edges, first + j - 1, strips, first + j, width_overlaps[j - 1], -1, keep)
+                )
+        return pieces[0] if len(pieces) == 1 else ttnn.concat(pieces, dim=-1)
 
 
 class NeighborTileBlender:

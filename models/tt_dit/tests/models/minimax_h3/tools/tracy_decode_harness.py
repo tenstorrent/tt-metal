@@ -16,6 +16,7 @@ another device-SRAM consumer is still set.
 """
 
 import os
+import time
 
 import pytest
 import torch
@@ -164,6 +165,9 @@ def test_tracy_visual_stitch_wave(mesh_device):
     config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
     torch.manual_seed(3)
 
+    # MINIMAX_H3_VAE_STITCH picks the exchange, as the timing test does, so the same capture covers
+    # "gather" and "strips".
+    stitch_exchange = os.environ.get("MINIMAX_H3_VAE_STITCH", "gather")
     ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
     vae = MiniMaxH3Vae(
         config,
@@ -171,6 +175,7 @@ def test_tracy_visual_stitch_wave(mesh_device):
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         device_stitch=True,
+        stitch_exchange=stitch_exchange,
         pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
     )
 
@@ -204,14 +209,112 @@ def test_tracy_visual_stitch_wave(mesh_device):
     vae._profile = vae._empty_profile()
     vae._decode_clips_device_stitched([chunk], "yuv420")
     ttnn.synchronize_device(mesh_device)
+    # A warm wall-clock number alongside the capture: the profiler inflates device time, and this
+    # is the per-wave cost the pipeline's stitch and readback buckets see.
+    warm = []
+    for _ in range(3):
+        vae._profile = vae._empty_profile()
+        mark = time.perf_counter()
+        vae._decode_clips_device_stitched([chunk], "yuv420")
+        ttnn.synchronize_device(mesh_device)
+        warm.append(time.perf_counter() - mark)
+    logger.info(
+        f"tracy: stitch_exchange={stitch_exchange}, warm wall per chunk (3 repeats, ms): "
+        f"{' '.join(f'{v * 1000:.1f}' for v in warm)}"
+    )
 
     logger.info(
         f"tracy: device stitch, one chunk of {num_frames}x{latent_h}x{latent_w} latents "
-        f"-> {seq_len}x{row_width} tokens/device, decoder stubbed"
+        f"-> {seq_len}x{row_width} tokens/device, decoder stubbed, stitch_exchange={stitch_exchange}"
     )
     vae._profile = vae._empty_profile()
     signpost("start")
     vae._decode_clips_device_stitched([chunk], "yuv420")
+    ttnn.synchronize_device(mesh_device)
+    signpost("stop")
+    ttnn.ReadDeviceProfiler(mesh_device)
+
+
+@pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8_RING, indirect=["mesh_device", "device_params"])
+def test_tracy_visual_decoder_wave(mesh_device):
+    """One decoder forward at the served work unit, real weights, signposted for Tracy.
+
+        timeout 2400 ./python_env/bin/python -m tracy -p -r -v --op-support-count 4000 -m pytest \\
+          models/tt_dit/tests/models/minimax_h3/tools/tracy_decode_harness.py -k tracy_visual_decoder_wave \\
+          -s --timeout 1200 &> tracy_decoder.log
+
+    `test_tracy_visual_decode_unit` builds its weights through the reference implementation, which
+    needs a diffusers carrying `autoencoder_kl_minimax_h3`; this one loads the same bytes the
+    pipeline does, out of the TT_DIT weight cache, so it runs wherever a served decode runs. Values
+    do not matter for a timing capture, but shapes and blockings do, and those come from the cache
+    key rather than from this file.
+    """
+    from loguru import logger
+    from tracy import signpost
+
+    from models.tt_dit.models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
+    from models.tt_dit.parallel.config import ParallelFactor, VAEParallelConfig
+    from models.tt_dit.parallel.manager import CCLManager
+    from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3 import MODEL_NAME
+    from models.tt_dit.utils import cache
+    from models.tt_dit.utils.conv3d import conv3d_blocking_hash
+
+    weights_dir = weights_subdir("vae")
+    if weights_dir is None:
+        pytest.skip("MiniMax-H3 vae not found; set MINIMAX_H3_MODEL_PATH")
+    config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
+    torch.manual_seed(4)
+
+    parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(mesh_axis=0, factor=1))
+
+    def load_cached(module, subfolder, state):
+        blocking = conv3d_blocking_hash(module)
+        cache.load_model(
+            module,
+            model_name=MODEL_NAME,
+            subfolder=f"{subfolder}_{blocking}" if blocking else subfolder,
+            parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
+            mesh_device=mesh_device,
+            dtype="fp32",
+            get_torch_state_dict=lambda: (_ for _ in ()).throw(
+                RuntimeError(f"cache miss for {subfolder}; run a served decode first to populate it")
+            ),
+        )
+
+    vae = MiniMaxH3Vae(
+        config,
+        task="t2va",
+        mesh_device=mesh_device,
+        ccl_manager=CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring),
+        device_stitch=True,
+        weight_loader=load_cached,
+        pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD),
+    )
+    # Straight to the cache, not through `_ensure_loaded`: that materializes the host checkpoint
+    # first even on a hit, and a timing capture has no use for the tensors' values.
+    load_cached(vae.decoder, vae._decoder_subfolder(), {})
+
+    num_frames, height, width = vae.decoder.latent_shape
+    patches = num_frames * height * width
+    tokens = ttnn.from_torch(
+        torch.randn(mesh_device.get_num_devices(), patches, config.latent_channels),
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    # Warm the program cache OUTSIDE the window: a cold forward measures compilation.
+    _ = vae.decoder(tokens)
+    ttnn.synchronize_device(mesh_device)
+
+    logger.info(
+        f"tracy: video VAE decoder, {num_frames}x{height}x{width} latents -> {patches} patches per device, "
+        f"one tile on each of {mesh_device.get_num_devices()} devices"
+    )
+    signpost("start")
+    _ = vae.decoder(tokens)
     ttnn.synchronize_device(mesh_device)
     signpost("stop")
     ttnn.ReadDeviceProfiler(mesh_device)

@@ -19,20 +19,53 @@ from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VS
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....utils.video import Audio, export_video_audio_yuv
-from .common import GALAXY_MESHES
+from .common import GALAXY_MESHES, MESH_4X8_RING
 from .common_av import CALIBRATED_FOX_PROMPT, artifact_dir, log_timing_table, run_warm_generation, weights_dir
 
 NUM_INFERENCE_STEPS = 5
 EXPECTED_FORWARDS = NUM_INFERENCE_STEPS - 1
-SEED = 0
+# MINIMAX_H3_SEED overrides it, so a sweep can move off seed 0 -- the audio a seed produces is part of the
+# generation, not the decoder, so comparing decoder configurations does not require keeping it.
+SEED = int(os.environ.get("MINIMAX_H3_SEED", "0"))
+# MINIMAX_H3_PROMPT swaps the prompt. The calibrated one is what the timing numbers were taken on, so a
+# different prompt is for listening to or looking at a clip, not for comparing against those numbers.
+PROMPT = os.environ.get("MINIMAX_H3_PROMPT") or CALIBRATED_FOX_PROMPT
 ASPECT_RATIO = (16, 9)
 DURATIONS_S = [5, 10, 15]
 VSA_SPARSITY = 0.9
 
+# 4x8's parameters carry no trace region -- only the quad's, for `trace_denoise` -- so the audio vocoder has
+# nowhere to capture into. Reserving costs address space rather than working DRAM, and this is the size
+# `test_audio_decode_squeeze.py` captures this same vocoder graph in.
+_MESH_4X8_TRACE = pytest.param(
+    MESH_4X8_RING.values[0],
+    {**MESH_4X8_RING.values[1], "trace_region_size": 1_200_000_000},
+    id=MESH_4X8_RING.id,
+)
+SERVING_MESHES = [_MESH_4X8_TRACE, *GALAXY_MESHES[1:]]
+
+
+
+def _write_frame_crcs(video, height: int, path: str) -> None:
+    """One line per frame: crc32 of the planar frame, then of the four row bands of its Y plane (the
+    strip stitch's mesh rows), so two runs compare at the raw level and a difference has a location."""
+    import zlib
+
+    import numpy as np
+
+    frames = np.asarray(video)
+    band = height // 4
+    with open(path, "w") as handle:
+        for index, frame in enumerate(frames):
+            luma = frame[:height]
+            bands = " ".join(f"{zlib.crc32(np.ascontiguousarray(luma[r : r + band]).tobytes()):08x}" for r in range(0, height, band))
+            handle.write(f"{index} {zlib.crc32(np.ascontiguousarray(frame).tobytes()):08x} {bands}\n")
 
 @pytest.mark.timeout(5400)
 @pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"{d}s" for d in DURATIONS_S])
-@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES[:1], indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"), SERVING_MESHES[:1], indirect=["mesh_device", "device_params"]
+)
 def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
     lora_path = os.environ.get("MINIMAX_H3_LORA_PATH")
     if not lora_path:
@@ -59,7 +92,7 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
 
     output = run_warm_generation(
         pipeline,
-        CALIBRATED_FOX_PROMPT,
+        PROMPT,
         num_frames=num_frames,
         height=height,
         width=width,
@@ -67,6 +100,12 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
         seed=SEED,
     )
     assert output.video_format == "yuv420", f"asked for yuv420 but the pipeline returned {output.video_format}"
+    if os.environ.get("MINIMAX_H3_FRAME_CRC"):
+        _write_frame_crcs(output.video, height, os.environ["MINIMAX_H3_FRAME_CRC"])
+    if os.environ.get("MINIMAX_H3_FRAME_DUMP"):
+        import numpy as np
+
+        np.save(os.environ["MINIMAX_H3_FRAME_DUMP"], np.asarray(output.video))
 
     report = pipeline._lora_report
     assert report is not None and report.bound, "the transformer was built without an adapter bound"
