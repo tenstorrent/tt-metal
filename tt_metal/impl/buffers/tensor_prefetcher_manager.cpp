@@ -534,7 +534,8 @@ void TensorPrefetcherManager::build_and_launch_programs(
             const uint32_t bank_sender_base = 2 * bank_id;
             const uint32_t first_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base]);
             const uint32_t second_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base + 1]);
-            const bool controls_mpfe = s == bank_sender_base;
+            const bool controls_ordinary_mpfe = s == bank_sender_base;
+            const uint32_t own_mpfe_port = controls_ordinary_mpfe ? first_sender_port : second_sender_port;
             const uint32_t ordinary_operation_mpfe_port = kMpfePortSum - first_sender_port - second_sender_port;
 
             std::vector<uint32_t> compile_args = {
@@ -543,12 +544,9 @@ void TensorPrefetcherManager::build_and_launch_programs(
                 kRemoteCBId,
                 socket_page_size,
                 cq_signal_l1_addr_,
-                static_cast<uint32_t>(controls_mpfe),
-                mpfe_policy.idle.free_sender,
-                mpfe_policy.idle.noc1_sender,
-                mpfe_policy.idle.ordinary,
-                mpfe_policy.active.free_sender,
-                mpfe_policy.active.noc1_sender,
+                static_cast<uint32_t>(controls_ordinary_mpfe),
+                controls_ordinary_mpfe ? mpfe_policy.idle.free_sender : mpfe_policy.idle.noc1_sender,
+                controls_ordinary_mpfe ? mpfe_policy.active.free_sender : mpfe_policy.active.noc1_sender,
                 mpfe_policy.active.ordinary,
             };
 
@@ -559,8 +557,7 @@ void TensorPrefetcherManager::build_and_launch_programs(
             std::vector<uint32_t> rt_args = {
                 bank_id,
                 socket_addr,
-                first_sender_port,
-                second_sender_port,
+                own_mpfe_port,
                 ordinary_operation_mpfe_port,
             };
             SetRuntimeArgs(*program, kernel_id, sender_logical, rt_args);
@@ -594,9 +591,15 @@ void TensorPrefetcherManager::start() {
             mpfe_policy.active.ordinary <= kMaxMpfeWeight,
         "Tensor prefetcher MPFE weights must be in [0, {}]",
         kMaxMpfeWeight);
+    TT_FATAL(
+        mpfe_policy.idle.ordinary == mpfe_policy.active.ordinary,
+        "Independent Tensor prefetcher MPFE control requires a static ordinary-operation weight, got idle {} and "
+        "active {}",
+        mpfe_policy.idle.ordinary,
+        mpfe_policy.active.ordinary);
     log_info(
         tt::LogMetal,
-        "[mpfe_model_benchmark] controller=primary idle={}/{}/{} active={}/{}/{}",
+        "[mpfe_model_benchmark] controller=independent idle={}/{}/{} active={}/{}/{}",
         mpfe_policy.idle.free_sender,
         mpfe_policy.idle.noc1_sender,
         mpfe_policy.idle.ordinary,

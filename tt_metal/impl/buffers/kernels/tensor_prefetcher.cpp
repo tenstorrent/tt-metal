@@ -204,18 +204,6 @@ FORCE_INLINE void store_sender_state(
     sb->fifo_wr_ptr = iface.fifo_wr_ptr;
 }
 
-FORCE_INLINE void set_mpfe_weights(
-    uint32_t free_sender_port,
-    uint32_t noc1_sender_port,
-    uint32_t ordinary_operation_port,
-    uint32_t free_sender_weight,
-    uint32_t noc1_sender_weight,
-    uint32_t ordinary_operation_weight) {
-    gddr_mc_write_mpfe_weight(free_sender_port, free_sender_weight);
-    gddr_mc_write_mpfe_weight(noc1_sender_port, noc1_sender_weight);
-    gddr_mc_write_mpfe_weight(ordinary_operation_port, ordinary_operation_weight);
-}
-
 }  // namespace
 
 void kernel_main() {
@@ -232,17 +220,10 @@ void kernel_main() {
     // WaitForCqOnTensorPrefetcher writes an incrementing value here from the
     // dispatcher; a WAIT_CQ request blocks until the requested slot reaches it.
     constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(4);
-    constexpr bool controls_mpfe = get_compile_time_arg_val(5) != 0;
-    constexpr uint32_t free_sender_idle_mpfe_weight = get_compile_time_arg_val(6);
-    constexpr uint32_t noc1_sender_idle_mpfe_weight = get_compile_time_arg_val(7);
-    constexpr uint32_t ordinary_idle_mpfe_weight = get_compile_time_arg_val(8);
-    constexpr uint32_t free_sender_active_mpfe_weight = get_compile_time_arg_val(9);
-    constexpr uint32_t noc1_sender_active_mpfe_weight = get_compile_time_arg_val(10);
-    constexpr uint32_t ordinary_active_mpfe_weight = get_compile_time_arg_val(11);
-    constexpr bool dynamic_mpfe =
-        free_sender_idle_mpfe_weight != free_sender_active_mpfe_weight ||
-        noc1_sender_idle_mpfe_weight != noc1_sender_active_mpfe_weight ||
-        ordinary_idle_mpfe_weight != ordinary_active_mpfe_weight;
+    constexpr bool controls_ordinary_mpfe = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t own_idle_mpfe_weight = get_compile_time_arg_val(6);
+    constexpr uint32_t own_active_mpfe_weight = get_compile_time_arg_val(7);
+    constexpr uint32_t ordinary_mpfe_weight = get_compile_time_arg_val(8);
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
@@ -260,8 +241,7 @@ void kernel_main() {
     const uint32_t bank_id = get_arg_val<uint32_t>(rt_idx++);
     (void)bank_id;
     const uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_idx++);
-    const uint32_t free_sender_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
-    const uint32_t noc1_sender_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t own_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t ordinary_operation_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
 
     // ---- Init ----
@@ -269,16 +249,12 @@ void kernel_main() {
     set_receiver_socket_page_size(socket, socket_page_size);
 
     experimental::drisc_set_stream_mode();
-    // The free/low sender is the sole MPFE writer for its bank. The NOC1/middle
-    // sender never touches these shared registers and never waits on its peer.
-    if constexpr (controls_mpfe) {
-        set_mpfe_weights(
-            free_sender_mpfe_port,
-            noc1_sender_mpfe_port,
-            ordinary_operation_mpfe_port,
-            free_sender_idle_mpfe_weight,
-            noc1_sender_idle_mpfe_weight,
-            ordinary_idle_mpfe_weight);
+    // Each sender owns and transitions only its private MPFE slot. The free/low
+    // sender sets the shared ordinary-operation slot once; it never changes at
+    // request boundaries, so the two senders require no coordination.
+    gddr_mc_write_mpfe_weight(own_mpfe_port, own_idle_mpfe_weight);
+    if constexpr (controls_ordinary_mpfe) {
+        gddr_mc_write_mpfe_weight(ordinary_operation_mpfe_port, ordinary_mpfe_weight);
     }
 
     RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
@@ -310,14 +286,10 @@ void kernel_main() {
             socket_pop_pages(socket, 1);
             socket_notify_sender(socket);
 
-            if constexpr (controls_mpfe) {
-                set_mpfe_weights(
-                    free_sender_mpfe_port,
-                    noc1_sender_mpfe_port,
-                    ordinary_operation_mpfe_port,
-                    GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT,
-                    GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT,
-                    GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
+            gddr_mc_write_mpfe_weight(own_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
+            if constexpr (controls_ordinary_mpfe) {
+                gddr_mc_write_mpfe_weight(
+                    ordinary_operation_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
             }
             break;
         }
@@ -334,14 +306,8 @@ void kernel_main() {
             continue;
         }
         // DRAM_PREFETCHER_CMD_PREFETCH
-        if constexpr (controls_mpfe && dynamic_mpfe) {
-            set_mpfe_weights(
-                free_sender_mpfe_port,
-                noc1_sender_mpfe_port,
-                ordinary_operation_mpfe_port,
-                free_sender_active_mpfe_weight,
-                noc1_sender_active_mpfe_weight,
-                ordinary_active_mpfe_weight);
+        if constexpr (own_idle_mpfe_weight != own_active_mpfe_weight) {
+            gddr_mc_write_mpfe_weight(own_mpfe_port, own_active_mpfe_weight);
         }
 
         const uint32_t req_num_entries = req->prefetch.num_entries;
@@ -853,14 +819,8 @@ void kernel_main() {
         // resumes at the right ring offset.
         store_sender_state(state, iface);
 
-        if constexpr (controls_mpfe && dynamic_mpfe) {
-            set_mpfe_weights(
-                free_sender_mpfe_port,
-                noc1_sender_mpfe_port,
-                ordinary_operation_mpfe_port,
-                free_sender_idle_mpfe_weight,
-                noc1_sender_idle_mpfe_weight,
-                ordinary_idle_mpfe_weight);
+        if constexpr (own_idle_mpfe_weight != own_active_mpfe_weight) {
+            gddr_mc_write_mpfe_weight(own_mpfe_port, own_idle_mpfe_weight);
         }
 
         socket_pop_pages(socket, 1);
