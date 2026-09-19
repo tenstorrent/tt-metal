@@ -72,7 +72,6 @@ class MiniMaxH3AudioDecoder(Module):
         split_mode: str = "full",
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
         pack_bands: dict[int, int] | None = None,
-        resampler_split_mode: str | None = None,
         act_mode: str = "chain",
         batch_shard_axis: int | None = None,
         profile: bool = False,
@@ -95,7 +94,6 @@ class MiniMaxH3AudioDecoder(Module):
         self.split_mode = split_mode
         self.max_c_in_block = max_c_in_block
         self.pack_bands = dict(pack_bands or {})
-        self.resampler_split_mode = resampler_split_mode
         self.act_mode = act_mode
         # One stereo channel per row of the mesh along this axis (the T-shard runs along the other), so every
         # vocoder op sees one batch item instead of the replicated pair. None: both items on every device.
@@ -148,7 +146,6 @@ class MiniMaxH3AudioDecoder(Module):
             # H3-only opt-in: LTX's vocoder keeps its default single-conv weights.
             split_mode=split_mode,
             pack_bands=pack_bands,
-            resampler_split_mode=resampler_split_mode,
             act_mode=act_mode,
         )
         self.decoder.batch_shard_axis = batch_shard_axis
