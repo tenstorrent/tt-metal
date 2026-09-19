@@ -46,36 +46,41 @@ def test_sdpa_chunk_sweep(mesh_device):
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
     )
     grid = mesh_device.compute_with_storage_grid_size()
-    ref = None
+
+    def sdpa(qc, kc):
+        cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid, q_chunk_size=qc, k_chunk_size=kc, exp_approx_mode=False
+        )
+        return ttnn.transformer.scaled_dot_product_attention(
+            qv, kv, vv, attn_mask=None, is_causal=False, program_config=cfg, compute_kernel_config=kernel_config
+        )
+
+    # Reference = today's config (q192/k192). A q-chunk change only moves query rows between cores, so it must be
+    # bit-identical; a k-chunk change reorders the bf16 accumulation and is not.
+    ref = ttnn.to_torch(_timed(mesh_device, lambda: sdpa(192, 192))[0])[..., :VALID, :]
     rows = []
-    for qc in (96, 128, 160, 192, 224, 256):
+    for qc in (64, 96, 128, 160, 192, 224, 256):
         for kc in (96, 128, 192, 256):
-            cfg = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=grid, q_chunk_size=qc, k_chunk_size=kc, exp_approx_mode=False
-            )
             try:
-                out, ms = _timed(
-                    mesh_device,
-                    lambda: ttnn.transformer.scaled_dot_product_attention(
-                        qv, kv, vv, attn_mask=None, is_causal=False, program_config=cfg, compute_kernel_config=kernel_config
-                    ),
-                )
+                out, ms = _timed(mesh_device, lambda: sdpa(qc, kc))
             except Exception as exc:  # noqa: BLE001
                 print(f"sdpa q{qc} k{kc}: FAILED {type(exc).__name__}: {str(exc)[:120]}")
                 continue
             got = ttnn.to_torch(out)[..., :VALID, :]
-            if ref is None:
-                ref = got
             maxdiff = (got.float() - ref.float()).abs().max().item()
-            rows.append((qc, kc, ms, maxdiff))
-            print(f"sdpa q{qc} k{kc}: {ms:.3f} ms  max|diff| vs q96k96 {maxdiff:.2e}")
+            equal = bool(torch.equal(got, ref))
+            rows.append((qc, kc, ms, maxdiff, equal))
+            print(f"sdpa q{qc} k{kc}: {ms:.3f} ms  max|diff| vs q192k192 {maxdiff:.2e}  bit-identical {equal}")
     rows.sort(key=lambda r: r[2])
     print("\nsdpa best 5:")
-    for qc, kc, ms, md in rows[:5]:
-        print(f"  q{qc} k{kc}: {ms:.3f} ms")
+    for qc, kc, ms, md, eq in rows[:5]:
+        print(f"  q{qc} k{kc}: {ms:.3f} ms  bit-identical {eq}")
     today = [r for r in rows if r[0] == 192 and r[1] == 192]
     if today:
         print(f"  today (q192 k192): {today[0][2]:.3f} ms")
+    q128 = [r for r in rows if r[0] == 128 and r[1] == 192]
+    if q128 and today:
+        print(f"SDPA_Q128: {q128[0][2]:.3f} ms vs today {today[0][2]:.3f} ms, bit-identical {q128[0][4]}")
 
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
