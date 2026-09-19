@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import importlib.util
 import itertools
 import os
 
@@ -71,6 +72,10 @@ def create_fractal_image(width: int, height: int) -> Image.Image:
         "resolution_720p",
     ],
 )
+# pytest.ini's global timeout is 300s, which a single 40-step video already exceeds on a small
+# mesh (a 2x2 480p run takes ~5 min of denoising alone), and the interactive loop then waits on
+# stdin between videos. Budget for a session rather than a single generation.
+@pytest.mark.timeout(6 * 3600)
 def test_pipeline_inference(
     mesh_device,
     mesh_shape,
@@ -193,13 +198,19 @@ def test_pipeline_inference(
     }
 
     def check_output_with_vbench(prompt, output_filename):
-        if int(ttnn.distributed_context_get_rank()) == 0:
-            # The gate itself refuses to no-op without vbench (models/tt_dit/utils/vbench.py), so
-            # skip here instead: the video is already written, and an interactive generation run
-            # should not be reported as a failure just because the optional scorer is absent.
-            pytest.importorskip("vbench", reason="VBench quality gate needs the `vbench` package")
-            thresholds = vbench_thresholds_by_height[height]
-            assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
+        if int(ttnn.distributed_context_get_rank()) != 0:
+            return
+        # assert_vbench_quality refuses to no-op without vbench, which would fail a run whose
+        # video is already written. Skip it instead -- but only where nobody is watching: raising
+        # Skipped out of the interactive loop below would end the session after one video, so
+        # there we warn and carry on.
+        if importlib.util.find_spec("vbench") is None:
+            if no_prompt:
+                pytest.skip("VBench quality gate needs the `vbench` package")
+            logger.warning("VBench quality gate skipped: `vbench` is not installed")
+            return
+        thresholds = vbench_thresholds_by_height[height]
+        assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
 
     if no_prompt:
         check_output_with_vbench(prompt, run(prompt=prompt, seed=42))

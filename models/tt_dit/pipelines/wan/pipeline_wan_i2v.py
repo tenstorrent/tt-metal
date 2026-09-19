@@ -35,6 +35,10 @@ _CHECKPOINT_DIR_ENV = "WAN22_I2V_CHECKPOINT_DIR"
 # the two are numerically identical and full-T is faster. A mesh absent here uses full-T
 # forward and the fallback conv3d blocking table.
 _ENCODER_T_CHUNK_BY_MESH = {
+    # A 2x2 mesh splits the frame 4 ways where 4x8 splits it 32 ways, so each device holds 8x
+    # the spatial activation; without an entry here the fallback full-T encode of all 81 frames
+    # asks for a single ~1.5 GB buffer and dies against the resident weights.
+    (2, 2): 4,
     (4, 8): 16,
     (4, 32): 40,
 }
