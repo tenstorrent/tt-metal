@@ -386,7 +386,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
              {"gamma_is_row_major", gamma_is_row_major},
              {"beta_is_row_major", beta_is_row_major},
              {"dfb_length", cb_length},
-             {"Wt", Wt},
+             // The reader walks this core's own column slice, so it needs the slice width
+             // (tiles_per_core_y) and the full row stride (Wt) as two separate values. Passing the
+             // full width as Wt made every 2D row read past this core's slice into columns owned
+             // by a neighbouring core. On the 1D path tiles_per_core_y == Wt, so this is a no-op.
+             {"Wt", tiles_per_core_y},
+             {"Wt_full", Wt},
              {"reduce_factor", reduce_factor}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),

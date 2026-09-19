@@ -589,7 +589,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         .compile_time_args = {{"blk", block_size}, {"num_cores_to_wait", cores_y}},
         .runtime_arg_schema =
             {.runtime_arg_names =
-                 {"NCHt", "Wt", "tile_offset", "is_merge_core", "reduce_core_noc_x", "reduce_core_noc_y", "y"}},
+                 {"NCHt", "Wt", "Wt_full", "tile_offset", "is_merge_core", "reduce_core_noc_x", "reduce_core_noc_y", "y"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
     if (fuse_pre_add) {
@@ -735,6 +735,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
 
             uint32_t num_tile_rows_per_core = tiles_per_core_x;
 
+            // Row-major placement: row x of the core grid starts at x * Wt (the full global row
+            // width), column slice y starts at y * tiles_per_core_y. The reader needs both: Wt is
+            // its slice width, Wt_full is the stride it must apply between local rows.
             uint32_t in_tile_offset = (x * Wt) + (y * tiles_per_core_y);
             uint32_t out_tile_offset = x * out0_tiles;
 
@@ -743,6 +746,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                 core,
                 {{"NCHt", tiles_per_core_x},
                  {"Wt", tiles_per_core_y},
+                 {"Wt_full", Wt},
                  {"tile_offset", in_tile_offset},
                  {"is_merge_core", static_cast<uint32_t>(is_merge_core)},
                  {"reduce_core_noc_x", static_cast<uint32_t>(merge_core.x)},

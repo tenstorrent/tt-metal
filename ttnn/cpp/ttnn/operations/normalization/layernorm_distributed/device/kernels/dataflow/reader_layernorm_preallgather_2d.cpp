@@ -21,7 +21,12 @@
 
 void kernel_main() {
     const auto NCHt = get_arg(args::NCHt);                // Number of NCH tiles
-    const auto Wt = get_arg(args::Wt);                    // Width in tiles
+    const auto Wt = get_arg(args::Wt);                    // Width in tiles of this core's column slice
+    // Full global row width in tiles. In the 1D path this equals Wt, so the per-row rebase below
+    // collapses to the previous linear behaviour. In the 2D path Wt is only the core's slice
+    // width (Wt_full / cores_y), and rows must be rebased by the full width or the reader walks
+    // into tiles owned by a neighbouring core.
+    const auto Wt_full = get_arg(args::Wt_full);
     const auto tile_offset = get_arg(args::tile_offset);  // Tile offset for this core
     const bool is_merge_core = get_arg(args::is_merge_core);
     const auto reduce_core_noc_x = get_arg(args::reduce_core_noc_x);
@@ -67,6 +72,12 @@ void kernel_main() {
     uint32_t inp_tile_idx = tile_offset;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+        // Rebase to this local row's first tile. Row ncht of this core starts at
+        // tile_offset + ncht * Wt_full. The previous code advanced inp_tile_idx linearly across
+        // the whole loop, which only lands on a correct row start when Wt == Wt_full (the 1D
+        // path). With tiles_per_core_x > 1 and Wt < Wt_full every row after the first was read
+        // from a tile owned by a neighbouring core, silently corrupting the row statistics.
+        inp_tile_idx = tile_offset + ncht * Wt_full;
         // read input tiles
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             dfb_inp_buf.reserve_back(blk);
