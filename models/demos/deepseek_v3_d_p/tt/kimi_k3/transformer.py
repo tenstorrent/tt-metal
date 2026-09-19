@@ -169,8 +169,9 @@ class TtKimiK3Transformer(LightweightModule):
                 # that depth on its FIRST layer (it inherits `first_layer_idx // 12` snapshots),
                 # where a single-rank run of the same width never would — 36 layers tops out at 3.
                 # Exposed so the fold can be taken out of the picture when diagnosing an L1
-                # placement failure at depth 4+, which is otherwise indistinguishable from one
-                # caused by the sealed set's own size.
+                # placement failure. #54876's author later corrected its cause to layers-per-rank
+                # (40 fails, 36 passes even at sealed depth 6); the earlier depth-4 reproductions
+                # were contaminated by un-reset devices.
                 fold_stats=os.environ.get("PREFILL_ATTN_RES_FOLD_STATS", "1") == "1",
                 weights=load_attn_res_weights(
                     mesh_device,

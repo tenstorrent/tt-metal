@@ -595,9 +595,9 @@
 
 
 - name: "(Kimi-K3-2.8T) prefill transformer accuracy L12, L24 vs golden trace"
-  # FABRIC_2D, never a torus: attn_res_gather_softmax deadlocks under Topology::Ring (#54835), so
-  # this leg must not carry fabric_profile: torus_xy. The depth ladder scores decoder_output per
-  # layer against the 1M trace, which covers layers 0..24 of 93.
+  # The fabric comes from the test's own device_params, not from fabric_profile: adding that key
+  # here would swap the mesh descriptor and change nothing else. The depth ladder scores
+  # decoder_output per layer against the 1M trace, which covers layers 0..24 of 93.
   cmd: |
     export LOGURU_LEVEL=INFO
     export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
@@ -1536,7 +1536,8 @@
 # multiple of ATTN_RES_BLOCK_SIZE=12, or a rank inherits a partial sealed set and its local layer 0
 # seals a block that is not there; the adapter's layer_split_boundaries snaps the even split there,
 # so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
-# No fabric_profile: torus_xy -- attn_res_gather_softmax deadlocks under Topology::Ring (#54835).
+# Fabric comes from the manifest and the descriptor from run_multirank_pcc.sh, so this leg carries
+# no fabric_profile -- same as the Kimi-K2.7 and GLM-5.2 disagg legs beside it.
 # Own test_type per rung, unlike the Kimi-K2.7 and GLM-5.2 pairs that share prefill_runner_kv_pcc:
 # four galaxies is the scarcest resource in the pool, so this leg has to be dispatchable without
 # also claiming a single-galaxy one. The `runner` and `kv_cache` tags still select both rungs.

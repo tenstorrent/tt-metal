@@ -60,7 +60,7 @@ PLACEMENTS = [
         (8, 4),
         # 4096: see test_transformer_depth.py. 1152 fails once the sealed set has two blocks, 24576
         # breaks MLA's chunked attention. Both regimes are live here.
-        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 4096},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-8x4",
     )

@@ -2648,10 +2648,10 @@ def test_kimi_prefill_transformer_chunked(
 # Kimi-K3. Separate from the K2.6 test above for three reasons, each of which would break if the
 # two shared a parametrization:
 #
-#   * FABRIC_2D, never torus. `attn_res_gather_softmax` deadlocks under Topology::Ring (#54835),
-#     so the K2.6 test's torus_xy profile hangs here rather than failing.
-#   * l1_small_size 4096. 1152 fails `inter_block`'s statistics collective once the sealed set has
-#     two blocks; 24576 starves MLA chunked attention of circular buffers (#54834).
+#   * FABRIC_2D. #54835's deadlock was fixed at source by #53318, so this is now a choice rather
+#     than a constraint -- a torus arm would be a straight addition, not a migration.
+#   * l1_small_size from KimiK3Config. 24576 starves MLA chunked attention of circular buffers;
+#     the AttnRes floor that used to bound it from below is gone (#54834).
 #   * depths stop at 24. The 1M golden records decoder_output for layers 0..24 of 93, so 61 has no
 #     oracle and `check_pcc=True` would be scoring against nothing.
 #

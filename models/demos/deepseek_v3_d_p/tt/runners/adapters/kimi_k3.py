@@ -1,30 +1,28 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-"""Kimi-K3 MLA + MoE adapter (test-only).
+"""Kimi-K3 MLA + MoE adapter.
 
 Kimi-K3 is a **hybrid**: 93 layers, of which only 24 are full-attention (MLA) layers and 69 are KDA
-linear-attention layers. No KDA module exists in this package, so K3 cannot yet be served end to
-end; a serving adapter would have to subclass ``PrefillModelAdapter`` directly and build its own
-runtime with a hybrid layer schedule.
+linear-attention layers. Both arms exist here now, so the model is served end to end: this adapter
+is registered in ``models/demos/common/prefill/adapter.py:ADAPTER_PATHS`` and ``PREFILL_MODEL=kimi_k3``
+selects it.
 
-This adapter therefore exists to give the MLA and MoE layers a first-class ``variant`` fixture: the
-test suite's ``TEST_VARIANTS`` registers it locally (the same test-only pattern GLM-5.2 uses) and it
-is deliberately **absent** from ``models/demos/common/prefill/adapter.py:ADAPTER_PATHS``, so nothing
-can select it with ``PREFILL_MODEL=kimi_k3`` and get a half-built model.
-
-It subclasses ``MLAPrefillAdapter`` for the config/cache/reference plumbing only. ``build_runtime``
-and ``allocate_kv_cache`` are inherited but would size the KV cache to ``params.num_layers``, which
-is wrong for 24-of-93; they are overridden to fail loudly rather than mislead.
+It subclasses ``MLAPrefillAdapter`` for the config/cache/reference plumbing. The inherited
+``allocate_kv_cache`` would size the cache to ``params.num_layers``, which is wrong for a stack
+where only 24 of 93 layers own a slab, so this class overrides it -- along with ``build_runtime``,
+``num_kv_cache_layers``, ``kv_slot_layer_ids``, ``layer_split_boundaries`` and
+``pipeline_activation_planes`` -- to answer in MLA-slot space.
 
 MoE scope (issue #51336): the latent-MoE structure -- routed experts at the reduced 3584 hidden,
 896 experts / top-16, a latent RMSNorm, and one shared expert at 6144. Every FFN site runs the
 checkpoint's **SiTU-GLU** on device: the routed experts through the fused kernel (#51351), the
 shared expert and the layer-0 dense FFN through ttnn-level softcap/sigmoid/multiply (#53625), which
 is correct but not yet tuned at their 6144 / 33792 widths. One deliberate limit remains:
-  * only the **gate** uses real checkpoint weights. Experts, shared expert and the latent
-    projections use seeded random weights, because everything routed is MXFP4 and no dequantizer
-    exists yet. Device PCC is therefore TT-vs-torch on identical seeded weights.
+  * in the MoE unit tests only the **gate** uses real checkpoint weights; experts, shared expert
+    and the latent projections use seeded random weights, because everything routed is MXFP4 in
+    the published checkpoint. Device PCC there is TT-vs-torch on identical seeded weights. The
+    served model reads the dequantized export, which is why ``supports_pretrained`` is True.
 """
 
 from __future__ import annotations
