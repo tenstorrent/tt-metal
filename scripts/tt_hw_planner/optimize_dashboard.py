@@ -369,6 +369,14 @@ def collect_state(run_dir: Path, state_dirs: list, slug: str | None = None) -> d
             stage_unit = d.get("unit") or stage_unit
             break
     stages_base = (fullpipe or {}).get("stages") or {}
+    # THE BAR'S OWN SPLIT WINS PER STAGE, same reasoning as summary._measured_stage_ms: it lives in
+    # the SAME file as the fullpipe headline this dashboard already treats as ground truth (the
+    # "current"/"baseline" throughput just below reads straight off it), so it cannot disagree with
+    # that headline the way the per-run doc above can -- that one only updates when a measurement
+    # happens to pass the optional stages_json argument to record_kernel_attempt, and was observed
+    # showing a stage's timing from hours before the run's actual current committed-best. Falls back
+    # to the per-run doc's own reading only for a stage the bar has not covered yet.
+    stages_cur = {**stages_cur, **stages_base}
 
     stage_names = sorted(
         set(stages_cur) | set(stages_base), key=lambda n: -(stages_cur.get(n) or stages_base.get(n) or 0)

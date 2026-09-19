@@ -287,13 +287,19 @@ def test_server_serves_html_and_state(tmp_path):
 def test_serving_metrics_are_derived_from_values_not_names(tmp_path):
     """TTFT/TPOT/E2EL must come out of the numbers: the per-token stage is the one matching the
     banked per-token pipeline time, the first-token stage is the dominant one-shot — no stage NAME
-    is ever consulted (the fixture's names are deliberately not prefill/decode)."""
+    is ever consulted (the fixture's names are deliberately not prefill/decode).
+
+    audio_encode's "ms" is 14.0, not the per-run doc's 12.0: the fixture deliberately has the two
+    sources disagree (perf_mcp_stage_ms says 12.0, the 1cq baseline's own stages say 14.0), and the
+    1cq bar wins per stage -- it shares a file with the fullpipe headline this same view already
+    treats as ground truth, so it cannot silently disagree with it the way the per-run doc can.
+    e2e_latency is the sum of the (now bar-preferring) per-stage values: 30.0 + 14.0."""
     repo, run_dir, state, slug = _make_run(tmp_path)
     s = collect_state(run_dir, [state], slug)
     sv = s["serving"]
     assert sv["per_token"]["stage"] == "lm_head" and sv["per_token"]["ms"] == 30.0
-    assert sv["first_token"]["stage"] == "audio_encode" and sv["first_token"]["ms"] == 12.0
-    assert sv["e2e_latency"]["ms"] == 42.0
+    assert sv["first_token"]["stage"] == "audio_encode" and sv["first_token"]["ms"] == 14.0
+    assert sv["e2e_latency"]["ms"] == 44.0
     assert abs(sv["throughput"]["per_s"] - (1000.0 / 30.0)) < 1e-6
     # headroom: ledger modeled_floor (none in this fixture) -> absent, never fabricated
     assert s["headroom"] is None
