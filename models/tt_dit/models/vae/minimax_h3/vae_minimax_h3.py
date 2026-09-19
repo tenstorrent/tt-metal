@@ -934,6 +934,12 @@ class MiniMaxH3Vae:
             raise ValueError(f"MINIMAX_H3_VAE_UNPATCHIFY must be 'gather' or 'permute', got {mode!r}")
         if mode == "gather" and decoded.dtype == ttnn.float32 and width == 16:
             return unpatchify_tiled(decoded, **dims)
+        if mode == "gather" and not getattr(self, "_warned_unpatchify_fallback", False):
+            self._warned_unpatchify_fallback = True
+            logger.warning(
+                f"MINIMAX_H3_VAE_UNPATCHIFY=gather needs fp32 tokens 16 patches wide (got {decoded.dtype}, width {width}); "
+                "using the permute chain"
+            )
         # Row-major from here to the DMA: the rank-8 intermediate has trailing dims of 16, which a tiled
         # reshape would pad to 32x32, and the stitch's slices land off tile boundaries.
         return unpatchify_device(ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT), **dims)
