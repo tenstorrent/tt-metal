@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": "35411011460",
-    "timestamp": "2026-09-19T01:15:00Z"
+    "run_id": "35427004707",
+    "timestamp": "2026-09-19T06:41:00Z"
   },
-  "run_id": "35411011460",
+  "run_id": "35427004707",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -434,7 +434,9 @@
     "56371": "already labeled bug/community; open external fix PR #56386, no repo-assist dup needed",
     "56375_dispatch_log": "confirmed this run: issue #56348 already closed by merged PR #56676 (same fix, log correct alignment); repo-assist's own open PR #56375 is now redundant/superseded -- flagged in monthly summary for maintainer to close, not closed unilaterally.",
     "56853": "ttnn.pow int scalar exponent 0-3 reads int32 bits as float; already has open PR #56860 (heroxcreed/community), no dup needed",
-    "56881": "confirmed no existing open PR fixes this before opening #56896 (checked search_pull_requests + issue thread + PR #56875 notes, which explicitly calls out 56881 as NOT fixed there)"
+    "56881": "confirmed no existing open PR fixes this before opening #56896 (checked search_pull_requests + issue thread + PR #56875 notes, which explicitly calls out 56881 as NOT fixed there)",
+    "56945": "confirmed still covered by open PR #56932 (2026-09-19 re-check)",
+    "56954": "confirmed still covered by open PR #56953 (2026-09-19 re-check)"
   },
   "dropped_fix_targets": {
     "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
@@ -565,10 +567,22 @@
       "note": "re-pinged, approved by mgajewskiTT but still pending required CODEOWNERS"
     },
     "46419": "2026-08-19: author nudge (approved but blocked mergeable_state, stale ~5wk, checked_state)",
-    "50131": "2026-08-19: author nudge (behind main, stale since 2026-07-20, Zero Flags HAL attempt)",
+    "50131": {
+      "last_ping": "2026-09-19",
+      "type": "re-ping",
+      "note": "still dirty/behind, no author response since 2026-08-19"
+    },
     "30797": "2026-08-20: author nudge (unresolved reviewer question from philei-tt re: zero-init padding assumptions, ~4mo stale)",
-    "50150": "2026-08-20: author nudge (behind main, small cleanup, ~1mo stale)",
-    "50149": "2026-08-20 nudged (sdpa share_cache=True fix, blocked/no reviews)",
+    "50150": {
+      "last_ping": "2026-09-19",
+      "type": "re-ping",
+      "note": "still behind, no author response since 2026-08-20"
+    },
+    "50149": {
+      "last_ping": "2026-09-19",
+      "type": "re-ping",
+      "note": "still blocked, no author response since 2026-08-20"
+    },
     "50411": {
       "date": "2026-08-21",
       "note": "commented asking author to rebase/confirm status; mergeable_state dirty/behind, no reviews yet or reviewer-blocked pending rebase"
@@ -1071,8 +1085,8 @@
     }
   },
   "backlog_cursor": {
-    "task1_task2_latest": "reviewed newest issues #57042 down to #56998 (fresh since prior cursor #56876); labeled 57042/57023/57022 bug (build failure, DFB credit underflow, constraint-query fatal), 57018 feature-request (TeaCache telemetry); fixed #56998 (prefill runner docs missing capture_trace hook) with docs-only PR; confirmed 56945/56954 already covered by external PRs 56932/56953 per memory; 57009 (MiniMax hang) already well-labeled/documented, needs HW bisect beyond budget; 57028/57012/57011/57001/57004 are sfpi/codegen suggestions already labeled or too speculative for action. Next run continue newest-scan below #56998.",
-    "task6_latest": "switched to draft:false sort:updated-asc page1; nudged 51533 and 51991 (both dirty, never-nudged, author-blocked) -- hit natural stop after finding 2 candidates on page1; page2 starts at PR 52152 (52xxx range), continue scanning there next run"
+    "task1_task2_latest": "reviewed newest ~40 open issues down through #56914 (below prior cursor #56998); labeled+commented on #57083 (fabric packet size 4352B suboptimal vs validator-computed 8192B ideal for BH CCL, confirmed root cause against ccl_common.cpp/validate_packet_size and erisc_datamover_builder.hpp defaults) with `performance monitoring`; re-confirmed #56945/#56954 remain covered by external PRs #56932/#56953 (no dup); most other issues in range (#56993/56986/56976/56973/56972/56967/56959/56955/56944/56941/56938/56921/56919/56914) already labeled/tracked, already-commented (56941), or are speculative sfpi/perf suggestions without a confirmed actionable defect this run. Next run continue newest-scan below #56914.",
+    "task6_latest": "re-pinged 3 stale never-recently-nudged PRs from page2 (draft:false sort:updated-asc): #50131 (dirty, quiet since prior 2026-08-19 nudge), #50149 (blocked, quiet since 2026-08-20), #50150 (behind, quiet since 2026-08-20) -- all unchanged mergeable_state and no author response since last nudge, hit 3-action cap. Also spot-checked #49787/#50277/#50519/#50661/#50764/#50993/#51119 (all also >3 weeks since last nudge but skipped this run due to cap) -- candidates for next run."
   },
   "labeled_issues": {
     "53866": {
@@ -1412,6 +1426,11 @@
   },
   "run_history": [
     {
+      "run_id": "35427004707",
+      "date": "2026-09-19T06:41:00Z",
+      "summary": "Task1/2: reviewed newest ~40 open issues below prior cursor #56998 down through #56914; labeled #57083 (fabric CCL packet size 4352B vs validator-computed 8192B ideal on Blackhole) `performance monitoring` and commented with root-cause confirmation against current ccl_common.cpp/erisc_datamover_builder.hpp, noting the existing FabricRouterConfig workaround and that the reporter's bandwidth numbers are unverified by Repo Assist. Re-confirmed #56945/#56954 still covered by external PRs #56932/#56953 (no duplicate). Most other issues in range already labeled/tracked or are speculative sfpi/perf suggestions without a confirmed defect. Task5: checked CI on 4 recently-opened repo-assist PRs (#56943/#56956/#56997/#57052) -- pre-checks (RTL Sim + Cycode) all green, but pr-gate.yaml itself has zero runs for these branches (0 workflow runs found via list_workflow_runs), confirming the previously-noted action_required pattern is a repo-side gating state, not a code defect; no fix needed, just waiting on maintainer approval to trigger the real build. Also checked reviews on #56396 (maintainer already approved a prior revision, no new activity since last run's fix) and #56817 (no new human review since last run). Task6: re-pinged 3 stale PRs (#50131, #50149, #50150) from page2 of draft:false sort:updated-asc, all unchanged mergeable_state and quiet since their prior nudge ~1 month ago; hit the 3-action cap. Task7: checked contributor history for #57083's author (L-Beale-NZ) -- has a prior issue (#55125), not a new contributor, no welcome posted. Task8: rewrote monthly summary #55015 (body had regrown to ~253KB); trimmed to canonical current-state format with updated suggested actions."
+    },
+    {
       "run_id": "35411011460",
       "date": "2026-09-19T01:15:00Z",
       "summary": "Task2 (investigate/comment, least-recently-run task): commented on 3 fresh open issues without prior repo-assist engagement. #56941 (Quasar BFD datacopy DFB race) -- verified the AI-suggested fix snippet against current dataflow_buffer.inl and found the file already has an additional read_acked/ctxn_id_loop_cnt_ modular-comparison guard not present in the issue's quoted code; couldn't determine from static reading whether this closes the race, asked reporter to re-verify repro against current main. #56616 (gelu accurate-mode CDF bug) -- confirmed via merged PR #56338's body/docstrings that this was a misattribution: the failing element (x=-5.34375) traces to torch's own fp32 golden cancellation, not a device defect; fix (float64 golden) is already merged and the PR explicitly says to close #56616 as a misattribution -- suggested maintainer close it. #56526 (ttnn.quantize Int32 output can't represent -128) -- verified root cause against current ckernel_sfpu_quant.h (WH+BH): Int32 output routes through FP32_TO_INT8's 7-bit sign-magnitude saturation at +-127, confirmed via the kernel's own comments; reporter supplied a well-tested but non-trivial SFPU replay-buffer rewrite patch (gist) that also touches a companion RNE-rounding issue (#56525) -- too architecturally risky to port blind without hardware, encouraged reporter to submit it as their own PR. Task1 spot-check: reviewed newest ~13 issues below prior cursor (#56993 down to #56913), most already labeled/maintainer-tracked or are perf/feature investigations without confirmed-defect status; #56945 already covered by merged PR #56932 (no dup); #56976 (matmul L1-interleaved 4x slowdown) confirmed root cause but is an architectural perf issue, left unlabeled/uncommented pending maintainer triage. Task7: checked all issues/PRs from the last 24h (#57081, 57066, 57055, 57042, 57028 and recent PRs) -- all authors are established maintainers/contributors (rtawfik01, blozano-tt, bbradelTT, nathan-TT etc), no new-contributor welcomes needed. Task8: updated monthly summary #55015 with this run's entry."
@@ -1513,7 +1532,8 @@
     "56880: gather rank>4 independent-fold silent-wrong-data bug, sibling of fixed #56876/PR#56875; confirmed genuine but issue's own scoping notes gather's fix needs checking multiple program factories (SingleRowSingleCore/SingleRowMultiCore/wide-Wt) + codegen route for hard 4D assumptions, more invasive than scatter's fix; deferred, flagged in monthly summary (2026-09-18)",
     "56945: fix PR #56932 already merged/open, closes issue (2026-09-19)",
     "56976: matmul L1-interleaved 4x slowdown, unlabeled, confirmed root cause (create_simple_matmul_program_config all_dram_interleaved gate) but architectural perf issue, too risky for quick fix, left for maintainer (2026-09-19)",
-    "57081/57066/57055/57042/57028: newest issues all from established maintainers (rtawfik01, blozano-tt, bbradelTT, nathan-TT), no welcome needed, already labeled or maintainer-tracked (2026-09-19)"
+    "57081/57066/57055/57042/57028: newest issues all from established maintainers (rtawfik01, blozano-tt, bbradelTT, nathan-TT), no welcome needed, already labeled or maintainer-tracked (2026-09-19)",
+    "57083 (labeled performance monitoring + commented root cause; left fix to maintainer, architectural fabric config change)"
   ],
   "resolved": {
     "52673": {
