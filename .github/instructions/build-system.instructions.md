@@ -43,7 +43,7 @@ add_library(TTNN::Ops::Reduction ALIAS ttnn_op_reduction)
 
 `TT::Metalium` carries Metalium's *public* API. Internal tests, tools and benchmarks that are
 deliberately coupled to the implementation get its private header roots and private third-party
-dependencies from the `TT::Metalium::Private` interface target (`cmake/metalium_private.cmake`):
+dependencies from the `TT::Metalium::Private` interface target (defined in `tt_metal/CMakeLists.txt`):
 
 ```cmake
 target_link_libraries(my_internal_test PRIVATE TT::Metalium TT::Metalium::Private)
