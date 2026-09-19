@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "dataflow_common.hpp"
 
 void kernel_main() {
@@ -24,7 +27,10 @@ void kernel_main() {
     constexpr uint32_t padded_Lkt = get_compile_time_arg_val(11);
     constexpr uint32_t num_cores = get_compile_time_arg_val(12);
 
-    constexpr auto q_args = TensorAccessorArgs<13>();
+    constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(13);
+    constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(14);
+    constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(15);
+    constexpr auto q_args = TensorAccessorArgs<16>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto joint_q_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -44,6 +50,17 @@ void kernel_main() {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_q_end = get_arg_val<uint32_t>(argidx++);
+    const bool participates = get_arg_val<uint32_t>(argidx++) == 1;
+    const bool is_injector = get_arg_val<uint32_t>(argidx++) == 1;
+    const bool is_sink = get_arg_val<uint32_t>(argidx++) == 1;
+    const uint32_t prev_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t prev_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t next_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t next_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
+    if (participates) {
+        Semaphore<>(valid_semaphore_id).set(VALID);
+    }
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -52,6 +69,56 @@ void kernel_main() {
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
+
+    constexpr uint32_t kv_chunk_tiles = Sk_chunk_t * DHt;
+    CircularBuffer cb_k(cb_k_in);
+    CircularBuffer cb_v(cb_v_in);
+
+    // Chained K or V chunk: receive it from the previous core, or read it and hand it on to the next core
+    // at the same CB address. The receiver signals readiness on the sender's semaphore first, so the write
+    // lands in a slot the receiver has reserved.
+    auto chained_read = [&](CircularBuffer& cb,
+                            uint32_t cb_id,
+                            const auto& generator,
+                            const Slice& slice,
+                            uint32_t end_tile,
+                            uint32_t tile_bytes,
+                            bool transpose,
+                            bool should_receive,
+                            bool should_forward) {
+        uint32_t addr = 0;
+        if (should_receive) {
+            cb.reserve_back(kv_chunk_tiles);
+            addr = cb.get_write_ptr();
+            Semaphore<> receiver_sem(receiver_semaphore_id);
+            receiver_sem.set(INVALID);
+            Semaphore<>(sender_semaphore_id).up(noc, prev_x, prev_y, 1);
+            receiver_sem.wait(VALID);
+            cb.push_back(kv_chunk_tiles);
+        } else if (should_forward) {
+            cb.reserve_back(kv_chunk_tiles);
+            addr = cb.get_write_ptr();
+            fetch_block(generator, slice, end_tile, cb_id, addr, tile_bytes, transpose);
+        } else {
+            read_block(generator, slice, end_tile, cb_id, tile_bytes, transpose);
+        }
+        if (should_forward) {
+            Semaphore<> sender_sem(sender_semaphore_id);
+            sender_sem.wait(1);
+            sender_sem.set(0);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(addr),
+                UnicastEndpoint{},
+                kv_chunk_tiles * tile_bytes,
+                {},
+                {.noc_x = next_x, .noc_y = next_y, .addr = addr});
+            noc.async_writes_flushed();
+            if (!should_receive) {
+                cb.push_back(kv_chunk_tiles);
+            }
+            Semaphore<>(valid_semaphore_id).relay_unicast(noc, Semaphore<>(receiver_semaphore_id), next_x, next_y);
+        }
+    };
 
     const auto q_reader = TensorAccessor(q_args, q_addr);
     const auto k_reader = TensorAccessor(k_args, k_addr);
@@ -80,18 +147,33 @@ void kernel_main() {
                     cat_q_generator, q_slice, q_row_end_tile, cb_q_in, q_tile_bytes, false /*transpose*/
                 );
 
+                const bool should_forward = participates && !is_sink && (q_chunk - local_q_start) < next_core_q_chunks;
+                const bool should_receive = participates && !is_injector;
                 for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
                     const auto kv_row_start_tile = k_chunk * Sk_chunk_t;
                     const auto kv_row_end_tile = kv_row_start_tile + Sk_chunk_t;
                     const auto kv_slice = Slice(nb, nq, kv_row_start_tile, kv_row_end_tile, 0, DHt);
 
-                    read_block(
-                        cat_k_generator, kv_slice, kv_row_end_tile, cb_k_in, k_tile_bytes, true /*transpose*/
-                    );
-
-                    read_block(
-                        cat_v_generator, kv_slice, kv_row_end_tile, cb_v_in, v_tile_bytes, false /*transpose*/
-                    );
+                    chained_read(
+                        cb_k,
+                        cb_k_in,
+                        cat_k_generator,
+                        kv_slice,
+                        kv_row_end_tile,
+                        k_tile_bytes,
+                        true,
+                        should_receive,
+                        should_forward);
+                    chained_read(
+                        cb_v,
+                        cb_v_in,
+                        cat_v_generator,
+                        kv_slice,
+                        kv_row_end_tile,
+                        v_tile_bytes,
+                        false,
+                        should_receive,
+                        should_forward);
                 }
             }
         }
