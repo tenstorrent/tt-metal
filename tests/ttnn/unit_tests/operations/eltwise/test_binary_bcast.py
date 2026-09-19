@@ -4910,3 +4910,151 @@ def test_resnet50_residual_add_bfloat8b_sharded(
     )
     out_tt = ttnn.to_torch(out_tt)
     assert_with_pcc(out_pt, out_tt, pcc=0.998)
+
+
+# Specless sharded output must shrink CoreRangeSet to populated shard count.
+
+
+def _assert_binary_shrink_h_or_w(device, result_mc, n_used):
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y <= n_used:
+        pytest.skip(f"Device grid too small to observe shrink (need > {n_used} cores)")
+    grid = result_mc.shard_spec.grid
+    assert grid.num_cores() == n_used, f"Expected {n_used} populated cores, got {grid.num_cores()}"
+    expected = ttnn.num_cores_to_corerangeset(n_used, compute_grid, True)
+    assert grid == expected, f"Expected row-wise CoreRangeSet {expected}, got {grid}"
+
+
+def _binary_add(a, b, device, out_mc):
+    tt_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    return ttnn.add(tt_a, tt_b, memory_config=out_mc)
+
+
+def test_binary_specless_sharded_output_grid_shrinks_height(device):
+    """HEIGHT_SHARDED no-spec output: shape=(2,2,32,64) TILE → tensor_h=128, shard_h=32 → 4 populated cores."""
+    shape = (2, 2, 32, 64)
+    torch.manual_seed(0)
+    a = torch.rand(shape, dtype=torch.bfloat16)
+    b = torch.rand(shape, dtype=torch.bfloat16)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    result = _binary_add(a, b, device, out_mc)
+    _assert_binary_shrink_h_or_w(device, result.memory_config(), n_used=4)
+    assert_with_ulp(expected_result=torch.add(a, b), actual_result=ttnn.to_torch(result))
+
+
+def test_binary_specless_sharded_output_grid_shrinks_width(device):
+    """WIDTH_SHARDED no-spec output: shape=(1,1,32,128) TILE → tensor_w=128, shard_w=32 → 4 populated cores."""
+    shape = (1, 1, 32, 128)
+    torch.manual_seed(0)
+    a = torch.rand(shape, dtype=torch.bfloat16)
+    b = torch.rand(shape, dtype=torch.bfloat16)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+    result = _binary_add(a, b, device, out_mc)
+    _assert_binary_shrink_h_or_w(device, result.memory_config(), n_used=4)
+    assert_with_ulp(expected_result=torch.add(a, b), actual_result=ttnn.to_torch(result))
+
+
+def test_binary_specless_sharded_output_grid_shrinks_block(device):
+    """BLOCK_SHARDED no-spec output: 64x64 TILE → 2x2 rectangle = 4 cores."""
+    shape = (1, 1, 64, 64)
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 2 or compute_grid.y < 2:
+        pytest.skip("Device grid too small for 2x2 BLOCK shrink test")
+    torch.manual_seed(0)
+    a = torch.rand(shape, dtype=torch.bfloat16)
+    b = torch.rand(shape, dtype=torch.bfloat16)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    result = _binary_add(a, b, device, out_mc)
+    grid = result.memory_config().shard_spec.grid
+    assert grid.num_cores() == 4, f"Expected 2x2 = 4 populated cores, got {grid.num_cores()}"
+    expected = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    assert grid == expected, f"Expected rectangular BLOCK grid {expected}, got {grid}"
+    assert_with_ulp(expected_result=torch.add(a, b), actual_result=ttnn.to_torch(result))
+
+
+def test_binary_specless_sharded_output_grid_multi_range_height(device):
+    """HEIGHT_SHARDED multi-range: shape=(1,1,1088,64) → n_used=34, non-rectangular on WH/BH."""
+    shape = (1, 1, 1088, 64)
+    n_used = 34
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y < n_used:
+        pytest.skip(f"Device grid too small (need ≥{n_used} cores, have {compute_grid.x * compute_grid.y})")
+    torch.manual_seed(0)
+    a = torch.rand(shape, dtype=torch.bfloat16)
+    b = torch.rand(shape, dtype=torch.bfloat16)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    result = _binary_add(a, b, device, out_mc)
+    grid = result.memory_config().shard_spec.grid
+    assert grid.num_cores() == n_used, f"Expected {n_used} populated cores, got {grid.num_cores()}"
+    assert len(grid.ranges()) > 1, f"Expected multi-range CoreRangeSet, got single range {grid}"
+    assert_with_ulp(expected_result=torch.add(a, b), actual_result=ttnn.to_torch(result))
+
+
+@pytest.mark.parametrize(
+    "shape, layout",
+    [
+        ((1, 1, 0, 64), ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ((1, 1, 32, 0), ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+    ],
+    ids=["height_sharded_zero_h", "width_sharded_zero_w"],
+)
+def test_binary_specless_sharded_output_zero_volume(device, shape, layout):
+    """Zero-vol mirror cases: HEIGHT+zero-h and WIDTH+zero-w return well-formed sharded specs; skip_launch absorbs."""
+    a = torch.empty(shape, dtype=torch.bfloat16)
+    b = torch.empty(shape, dtype=torch.bfloat16)
+    out_mc = ttnn.MemoryConfig(layout, ttnn.BufferType.L1)
+    result = _binary_add(a, b, device, out_mc)
+    result_mc = result.memory_config()
+    assert result_mc.memory_layout == layout
+    assert result_mc.shard_spec is not None, "guard must produce a sharded spec, not fall back to interleaved"
+    result_torch = ttnn.to_torch(result)
+    assert result_torch.numel() == 0, f"Expected zero-volume result, got shape {result_torch.shape}"
+
+
+def test_binary_specless_sharded_output_zero_volume_crossover_fatal(device):
+    """HEIGHT_SHARDED + zero last dim has no positive shard_w == 0; synth guard must FATAL with caller_tag."""
+    shape = (1, 1, 32, 0)
+    a = torch.empty(shape, dtype=torch.bfloat16)
+    b = torch.empty(shape, dtype=torch.bfloat16)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    with pytest.raises(RuntimeError, match="zero-volume specless-sharded is only representable"):
+        _binary_add(a, b, device, out_mc)
+
+
+def test_binary_specless_sharded_output_row_major_row_granular_shrink(device):
+    """Both inputs RM → output_layout=RM → is_tile=false; is_tile=false shrinks at row granularity, not tile."""
+    shape = (2, 2, 32, 64)
+    torch.manual_seed(0)
+    a = torch.rand(shape, dtype=torch.bfloat16)
+    b = torch.rand(shape, dtype=torch.bfloat16)
+    tt_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    result = ttnn.add(tt_a, tt_b, memory_config=out_mc)
+    compute_grid = device.compute_with_storage_grid_size()
+    total = compute_grid.x * compute_grid.y
+    padded_h = 2 * 2 * 32
+    shard_h = -(-padded_h // total)
+    expected_cores = min(-(-padded_h // shard_h), total)
+    grid = result.memory_config().shard_spec.grid
+    assert (
+        grid.num_cores() == expected_cores
+    ), f"expected {expected_cores} cores on {total}-core grid, got {grid.num_cores()}"
+    assert list(result.memory_config().shard_spec.shape) == [shard_h, 64], (
+        f"is_tile=false pins shard shape at row granularity; expected [{shard_h}, 64], "
+        f"got {list(result.memory_config().shard_spec.shape)}"
+    )
+    assert_with_ulp(expected_result=torch.add(a, b), actual_result=ttnn.to_torch(result))
+
+
+def test_binary_specless_sharded_output_tensor_scalar(device):
+    """TS overload reaches synthesizer via compute_output_specs only (mem_config_actual is never rewritten)."""
+    shape = (2, 2, 32, 64)
+    torch.manual_seed(0)
+    a = torch.rand(shape, dtype=torch.bfloat16)
+    tt_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    result = ttnn.add(tt_a, 3.0, memory_config=out_mc)
+    _assert_binary_shrink_h_or_w(device, result.memory_config(), n_used=4)
+    assert_with_ulp(expected_result=torch.add(a, 3.0), actual_result=ttnn.to_torch(result))
