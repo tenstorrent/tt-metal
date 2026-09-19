@@ -50,11 +50,33 @@ constexpr uint32_t wave_trid0 = 1;                    // waves use trids {1, 2};
 
 // Zero rows [lr0, lr1) of one staged half. elem_bytes = 2 (bf16 values / u16 indices) or
 // 4 (u32 indices); face/row strides scale with it (see off16 above: u32 doubles every term).
+// Decodes a work unit into its tile position and the face-pair columns it covers. With four
+// units per tile a unit is one face, so col0 is 16 for the odd units.
+struct UnitPos {
+    uint32_t row_tile;
+    uint32_t kt;
+    uint32_t half;
+    uint32_t col0;
+    uint32_t ncols;
+};
+
+inline UnitPos decode_unit(uint32_t u, uint32_t k_tiles, uint32_t units_per_tile) {
+    const uint32_t rem = u % (k_tiles * units_per_tile);
+    const uint32_t sub = rem % units_per_tile;
+    const bool face_units = units_per_tile == 4;
+    return {
+        u / (k_tiles * units_per_tile),
+        rem / units_per_tile,
+        face_units ? sub >> 1 : sub,
+        face_units ? (sub & 1) * 16 : 0,
+        face_units ? 16 : tile_width};
+}
+
 template <uint32_t elem_bytes>
-inline void zero_half_rows(uint32_t base, uint32_t lr0, uint32_t lr1) {
+inline void zero_half_rows(uint32_t base, uint32_t lr0, uint32_t lr1, uint32_t face0, uint32_t face1) {
     constexpr uint32_t row_bytes = 16 * elem_bytes;  // 16 elements per face row
     constexpr uint32_t face_bytes = 16 * row_bytes;  // 16 rows per face
-    for (uint32_t face = 0; face < 2; ++face) {
+    for (uint32_t face = face0; face < face1; ++face) {
         volatile tt_l1_ptr uint32_t* p =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + face * face_bytes + lr0 * row_bytes);
         for (uint32_t w = 0; w < (lr1 - lr0) * row_bytes / 4; ++w) {
@@ -83,7 +105,8 @@ inline void gather_unit_rows(
     uint32_t half,
     uint32_t lr_begin,
     uint32_t nrows,
-    uint32_t valid_cols) {
+    uint32_t col_begin,
+    uint32_t col_end) {
     // In-flight bookkeeping, one set per wave parity (RISC-private; never a NoC target).
     uint16_t pend_off16[2][gather_wave];  // output staging offset (bf16/u16 flavor)
     uint8_t pend_sub[2][gather_wave];     // element offset within the 64 B bounce slot
@@ -111,7 +134,7 @@ inline void gather_unit_rows(
     noc_async_read_set_trid(wave_trid0, noc.get_noc_id());
     for (uint32_t j = 0; j < nrows; ++j) {
         const uint32_t lr = lr_begin + j;
-        for (uint32_t c = 0; c < valid_cols; ++c) {
+        for (uint32_t c = col_begin; c < col_end; ++c) {
             const uint32_t index_value = stick_l1[j * tile_width + c];
             // Source: wr = half*16 + lr, wc = index_value & 31 (see the reader's face math).
             const uint32_t src_page = row_tile * width_tiles + (index_value >> 5);
