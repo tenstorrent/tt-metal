@@ -1177,4 +1177,31 @@ ALWI void clear_compute_special_value_flags() { MATH((llk_math_clear_compute_spe
 
 #endif
 
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void sigmoid_tt_poly_bf16_tile(uint32_t idst) {
+#if defined(TT_POLY_LLK_DISABLE) || !(defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
+    sigmoid_tile<vec_mode, fast_and_approx, is_fp32_dest_acc_en>(idst);
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sigmoid_tt_poly_bf16, (8 /* ITERATIONS */), idst, vec_mode));
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+template <bool fast_and_approx = false>
+ALWI void sigmoid_tt_poly_bf16_tile_init() {
+#if defined(TT_POLY_LLK_DISABLE) || !(defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
+    sigmoid_tile_init<fast_and_approx>();
+#else
+
+#ifdef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(sigmoid));
+#else
+    MATH(SFPU_UNARY_INIT_FN(sigmoid, sfpu::init_sigmoid_tt_poly_bf16, (fast_and_approx)));
+#endif
+
+#endif
+}
+
 }  // namespace ckernel
