@@ -49,7 +49,7 @@ class Case:
 
     @property
     def active_weights(self) -> tuple[int, int, int]:
-        return self.idle_weights if self.mode == "static" else (0, 0, self.high)
+        return self.idle_weights if self.mode == "static" else (0, 1, self.high)
 
     @property
     def label(self) -> str:
