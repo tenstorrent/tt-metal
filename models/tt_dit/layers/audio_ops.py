@@ -89,8 +89,8 @@ def kernel_split_max_k() -> int:
     return int(os.environ.get("MINIMAX_H3_KERNEL_SPLIT_MAX_K", "7"))
 
 
-# Transposed convs as polyphase convs over the unstuffed rows (ConvTranspose1dViaConv3d); opt-in with
-# MINIMAX_H3_AUDIO_POLYPHASE=1 until its pipeline A/B.
+# Transposed convs as polyphase convs over the unstuffed rows (ConvTranspose1dViaConv3d), the default;
+# MINIMAX_H3_AUDIO_POLYPHASE=0 keeps the zero-stuffed form.
 def polyphase_env() -> bool:
     import os
 
