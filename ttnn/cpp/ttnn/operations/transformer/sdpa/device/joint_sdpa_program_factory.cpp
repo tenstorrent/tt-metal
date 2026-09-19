@@ -145,11 +145,13 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), args.compute_kernel_config);
 
-    // The streaming compute kernel masks only the last K chunk of the concatenation, so it is taken when the
-    // spatial K segment ends on a chunk boundary; fp32 DEST accumulation keeps the legacy kernel.
-    const bool use_streaming_compute = !fp32_dest_acc_en && (padded_Nk == N);
+    // fp32 DEST accumulation keeps the legacy compute kernel. The streaming kernel narrows the padded tiles of
+    // the chunk where the spatial segment ends and of the last chunk, and stamps their partial tiles.
+    const bool use_streaming_compute = !fp32_dest_acc_en;
     const uint32_t streaming_valid_Skt = padded_Nkt + valid_Lt;
     const uint32_t k_partial_col = use_streaming_compute ? (L % TILE_HEIGHT) : 0;
+    const uint32_t n_partial_col = use_streaming_compute ? (N % TILE_HEIGHT) : 0;
+    const uint32_t mid_padded_tiles = padded_Nkt - valid_Nt;
 
     CoreCoord grid_size = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                           : device->compute_with_storage_grid_size();
@@ -200,7 +202,8 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
-    uint32_t mask_tiles = use_streaming_compute ? (1u + (k_partial_col > 0 ? 1u : 0u)) : Sq_chunk_t * Sk_chunk_t;
+    uint32_t mask_tiles = use_streaming_compute ? (1u + (n_partial_col > 0 ? 1u : 0u) + (k_partial_col > 0 ? 1u : 0u))
+                                                : Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * DHt;
     uint32_t out0_t = Sq_chunk_t * DHt;
@@ -342,6 +345,7 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         static_cast<uint32_t>(use_streaming_compute),  // arg 20
         out_out_subblock_h,                            // arg 21: drain group height
         k_partial_col,                                 // arg 22
+        n_partial_col,                                 // arg 23
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -373,6 +377,8 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         static_cast<uint32_t>(use_streaming_compute),  // arg 23
         streaming_valid_Skt,                           // arg 24: unpadded concatenated K tiles
         k_partial_col,                                 // arg 25
+        n_partial_col,                                 // arg 26
+        mid_padded_tiles,                              // arg 27
     };
 
     std::map<std::string, std::string> defines_map;
