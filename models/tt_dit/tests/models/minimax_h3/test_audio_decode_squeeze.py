@@ -170,11 +170,8 @@ def _best(fn, mesh_device, n=3):
     return best, out
 
 
-# PSNR against the CPU reference and log-mel distance, for the recipes whose fidelity is a contract
-# rather than an experiment. `full_pack` is what the pipeline ships (MINIMAX_H3_AUDIO_SPLIT unset,
-# MINIMAX_H3_AUDIO_PACK at its default), measured 67.31 dB / 0.0034 at 600lat_b2 on 2026-09-18; the
-# floors sit a little under that so ordinary run-to-run movement does not trip them, while a real
-# regression in the packed default does.
+# PSNR against the CPU reference and log-mel distance for the recipes whose fidelity is a contract (the packed
+# kernel-split forms the pipeline ships measured 67.3 dB / 0.0034 at 600lat_b2); floors sit a little under that.
 FIDELITY_FLOORS = {
     "full_pack": (66.0, 0.006),
     "kernel_pack": (66.0, 0.006),

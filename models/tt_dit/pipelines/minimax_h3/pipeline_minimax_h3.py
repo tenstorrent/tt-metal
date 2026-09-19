@@ -155,9 +155,6 @@ _DEFAULT_AUDIO_PACK = "5:2,6:4"
 # Split mode of the packed bands' anti-alias resamplers ("same" = the convs' mode). "off" is the measured 65 dB /
 # -72 ms point (layers/audio_pack.py).
 _AUDIO_RESAMPLER_SPLIT_ENV = "MINIMAX_H3_AUDIO_RESAMPLER_SPLIT"
-# Conv split mode of the audio decoder when the caller passes none ("kernel" = the in-kernel fp32 operand split,
-# same operands and fidelity as "full", 0.2 s faster on the 15 s clip).
-_AUDIO_SPLIT_ENV = "MINIMAX_H3_AUDIO_SPLIT"
 # Anti-alias SnakeBeta activations of the vocoder: "chain" runs the resampler/snake op chain, "fused" (default)
 # one generic_op kernel per activation (layers/audio_aa_snake.py), bit-identical to the chain.
 _AUDIO_ACT_ENV = "MINIMAX_H3_AUDIO_ACT"
@@ -516,16 +513,12 @@ class MiniMaxH3Pipeline:
         self.tp_factor, self.sp_factor = shape[tp_axis], shape[sp_axis]
         # The only residency control; see `_make_resident` for the measurements behind the default.
         self.coresident = coresident
-        # Audio fidelity/latency trade, same weights on disk: "full" (default) splits the dense-conv
-        # operands for the fp32-exact kernels' best accuracy (~67 dB vs CPU); "off" skips the split
-        # for a lower-fidelity decode (~42 dB). Keys the device-weight cache via `weights_variant`.
-        # audio_t_factor=4 timings: 2.2 s (full) / 1.6 s (off) on 4x8; default is 8 (~1.4 s full).
+        # Audio conv split, same weights on disk: "kernel" (default) runs the fp32 hi/lo operand split inside conv3d
+        # (~67 dB vs CPU), "full" is the same split as three convs, "weight" and "off" trade fidelity for speed.
         if audio_split_mode is None:
-            audio_split_mode = os.environ.get(_AUDIO_SPLIT_ENV, "kernel").strip() or "kernel"
-        if audio_split_mode not in ("off", "weight", "act", "full", "stack", "kernel"):
-            raise ValueError(
-                f"audio_split_mode must be 'off', 'weight', 'act', 'full', 'stack' or 'kernel', got {audio_split_mode!r}"
-            )
+            audio_split_mode = "kernel"
+        if audio_split_mode not in ("off", "weight", "full", "kernel"):
+            raise ValueError(f"audio_split_mode must be 'off', 'weight', 'full' or 'kernel', got {audio_split_mode!r}")
         self.audio_split_mode = audio_split_mode
         self.audio_trace = _audio_trace_enabled() if audio_trace is None else bool(audio_trace)
         audio_t_factor, self._audio_t_factor_from_env = _requested_audio_t_factor(
@@ -1569,11 +1562,9 @@ class MiniMaxH3Pipeline:
                 profile=os.environ.get(_AUDIO_PHASES_ENV, "0").strip() not in ("", "0", "false", "no"),
             )
             logger.info(
-                f"Audio trace: {'on' if self.audio_trace else 'off'} ({_AUDIO_TRACE_ENV}); "
-                f"conv split: {decoder.split_mode} ({_AUDIO_SPLIT_ENV}); packing: {decoder.pack_bands or 'off'} "
-                f"({_AUDIO_PACK_ENV}); resampler split {decoder.resampler_split_mode or 'same'} "
-                f"({_AUDIO_RESAMPLER_SPLIT_ENV}); activations: {decoder.act_mode} ({_AUDIO_ACT_ENV}); "
-                f"batch shard axis {decoder.batch_shard_axis} ({_AUDIO_BSHARD_ENV})"
+                f"Audio trace: {'on' if self.audio_trace else 'off'}; conv split: {decoder.split_mode}; "
+                f"packing: {decoder.pack_bands or 'off'}; resampler split {decoder.resampler_split_mode or 'same'}; "
+                f"activations: {decoder.act_mode}; batch shard axis {decoder.batch_shard_axis}"
             )
 
             def read_state() -> dict[str, torch.Tensor]:

@@ -58,33 +58,13 @@ WEIGHT_SPLIT_MODES = ("weight", "full", "kernel")
 DEFAULT_MAX_C_IN_BLOCK = 128
 
 
-# Bumped whenever `prepare_conv3d_weight_state` changes the bytes it writes for an unchanged file
-# set, because `cache.load_model` will otherwise serve an old cache to new code. Revision 2: the
-# no-residual path began rounding weights to bf16 on the host, which moved the bytes of every
-# configuration that carries a conv without a residual term (off, act, resampler-split off). It is
-# applied to every variant, not just those, so the rule stays "changed the bytes, bump the token".
-# Revision 3: the H3 audio blocking table covers every kernel size up to 32, so the packed bands'
-# convs (K' 5/15/17/27) get a real C_in_block instead of the 32-wide default, which re-blocks their
-# prepared weights.
+# Bumped whenever `prepare_conv3d_weight_state` changes the bytes it writes for an unchanged file set, so
+# `cache.load_model` never serves an old cache to new code (2: bf16-rounded no-residual weights; 3: kernel table to 32).
 _WEIGHT_PREP_REVISION = 3
 
-# The legacy (pre-revision-3) kernel table, kept behind MINIMAX_H3_AUDIO_KERNEL_TABLE=legacy for A/B runs;
-# its prepared bytes differ for the packed shapes, so it carries its own cache-key term.
-LEGACY_KERNEL_TABLE_ENV = "MINIMAX_H3_AUDIO_KERNEL_TABLE"
-
-
-def legacy_kernel_table() -> bool:
-    import os
-
-    return os.environ.get(LEGACY_KERNEL_TABLE_ENV, "full") == "legacy"
-
-
-# Largest conv kernel size the in-kernel operand split (`split_mode="kernel"`) is used for; larger kernels
-# take the three-conv host split. MINIMAX_H3_KERNEL_SPLIT_MAX_K overrides (99 = every conv in-kernel).
-def kernel_split_max_k() -> int:
-    import os
-
-    return int(os.environ.get("MINIMAX_H3_KERNEL_SPLIT_MAX_K", "7"))
+# Largest conv kernel the in-kernel operand split is used for: k3/k7 shapes ran 14-27 % faster in-kernel, the k11 AMP
+# convs 36 % slower, so they take the three-conv host split.
+_KERNEL_SPLIT_MAX_K = 7
 
 
 # Transposed convs as polyphase convs over the unstuffed rows (ConvTranspose1dViaConv3d), the default;
@@ -138,8 +118,6 @@ def weights_variant(
         rs_variant = "full" if resampler_split_mode == "kernel" else resampler_split_mode
         if rs_variant is not None and rs_variant != variant:
             suffix += f"_rs-{rs_variant}"
-    if legacy_kernel_table():
-        suffix += "_ktlegacy"
     if polyphase_env():
         # The transposed convs' prepared weights are the polyphase packed form, a different tensor set.
         suffix += "_pp"
@@ -181,11 +159,8 @@ def conv3d_maybe_split(
 
     ``bias`` is applied to exactly one term, since it is not a factor of the product being split.
     """
-    # The in-kernel split re-splits every input element once per tap position (the split runs on the
-    # tilized im2col rows), so its cost grows with the kernel size while the matmul work per split tile stays
-    # fixed by the 32-wide C_out block. Measured on one chip (min of 10): k3 and k7 shapes 14-27 % faster than
-    # the three-conv form, the k11 AMP conv 36 % slower. Above the threshold the call takes the host split.
-    if split_mode == "kernel" and max(conv_kwargs.get("kernel_size", (1,))) > kernel_split_max_k():
+    # The in-kernel split re-splits every input element once per tap, so its cost grows with the kernel size.
+    if split_mode == "kernel" and max(conv_kwargs.get("kernel_size", (1,))) > _KERNEL_SPLIT_MAX_K:
         split_mode = "full"
     # The config is hashed into the program, so the flag must agree with the mode the caller picked for this
     # call (the squeeze harness flips `split_mode` after construction).
