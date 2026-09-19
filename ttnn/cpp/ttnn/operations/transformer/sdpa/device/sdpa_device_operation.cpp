@@ -26,6 +26,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             tensors.v.has_value(),
             "Non-MLA SDPA requires V tensor to be provided (Q, K, V). V tensor not provided in tensor_args.");
     }
+    if (attrs.output_concat_heads) {
+        TT_FATAL(
+            !tensors.page_table.has_value() && !attrs.chunk_start_idx.has_value() &&
+                !tensors.chunk_start_idx_tensor.has_value(),
+            "output_concat_heads is supported for the plain (non-chunked, non-paged) SDPA only");
+    }
 
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;
@@ -536,6 +542,9 @@ SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
     if (attrs.use_mla) {
         shape[3] = attrs.head_dim_v.value_or(shape[3]);
     }
+    if (attrs.output_concat_heads) {
+        shape = ttnn::Shape({shape[0], 1, shape[2], shape[1] * shape[3]});
+    }
     return tt::tt_metal::TensorSpec(
         shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
 }
@@ -647,7 +656,8 @@ Tensor sdpa(
     const std::optional<Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    bool output_concat_heads) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -665,6 +675,7 @@ Tensor sdpa(
             .windowed_q_token_offset = windowed_q_token_offset,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
+            .output_concat_heads = output_concat_heads,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,
