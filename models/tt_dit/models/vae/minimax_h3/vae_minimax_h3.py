@@ -1148,8 +1148,9 @@ class MiniMaxH3Vae:
         # Wave plan. Plain: `chunks_per_wave` chunks per wave, idle mesh columns carry a filler tile. Dense (one idle column):
         # in wave w of a run of grid_cols waves the idle column decodes tile column w of an extra chunk; its column stitch
         # rides the normal stages, every device keeps that column's row strip out of the axis-1 gather, and after the run
-        # the extra chunk's row stage runs on the kept strips. Same tiles and blend operands, so the bits do not change.
-        pack = os.environ.get("MINIMAX_H3_VAE_PACK", "plain")
+        # the extra chunk's row stage runs on the kept strips. Same tiles and blend operands, so the bits do not change
+        # (15 s A/B 2026-09-19: VAE 2.6 -> 2.4 s, bit-identical; default).
+        pack = os.environ.get("MINIMAX_H3_VAE_PACK", "dense")
         if pack not in ("plain", "dense"):
             raise ValueError(f"MINIMAX_H3_VAE_PACK must be 'plain' or 'dense', got {pack!r}")
         dense = pack == "dense" and chunks_per_wave == 1 and mesh_cols == grid_cols + 1
