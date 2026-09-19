@@ -167,7 +167,7 @@ jobs:
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       include-test-group: disagg_prefill
       resource-prefix: sc1-runner
-      hang-detection-timeout: 0
+      hang-detection-timeout: 600
 
   prefill-scaling-summary:
     name: ${{ matrix.title }}
