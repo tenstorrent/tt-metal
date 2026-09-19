@@ -9,6 +9,7 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     pairwise_inputs,
     run_binary,
+    to_tt_tensor,
 )
 
 pytestmark = pytest.mark.use_module_device
@@ -31,8 +32,9 @@ Accuracy criteria
   eq, ne, lt, le, gt, ge : exact  (SFPU comparison; result is 0 or 1)
   isclose                : exact vs torch.isclose after two documented
                            dest-precision exceptions (see test_isclose)
-  minimum, maximum       : exact on finite values and ±inf; NaN operands
-                           follow SFPSWAP, not torch (see test_minmax_ops)
+  minimum, maximum       : exact on finite values, ±0, and ±inf
+                           (see test_minmax_ops). NaN / signed-zero / inf
+                           edge cases live in test_minmax_special_values.
 """
 
 
@@ -71,22 +73,14 @@ def test_minmax_ops(device, ttnn_op):
     """Pairwise coverage of ttnn.minimum / ttnn.maximum over the stratified grid.
 
     Output is a select of one operand, so finite values, ±0, and ±inf match
-    torch at 0 ULP. SFPSWAP does not propagate NaN the way torch does:
-
-      min(x, NaN) → torch NaN, device x
-      max(x, NaN) → torch NaN, device +inf  (NaN compared as +inf)
-
-    Example: min(2.35e-38, qNaN 0x7FC0) → torch NaN, device 2.35e-38.
-             max(2.35e-38, qNaN 0x7FC0) → torch NaN, device +inf.
-    Those lanes are rewritten to golden; a finite-only regression still fails.
+    torch at 0 ULP. NaN pairs are excluded here — SFPSWAP does not propagate
+    NaN the way torch does; that contract is asserted independently in
+    test_minmax_special_values.
     """
-    input_a, input_b = pairwise_inputs(include_spl_values=True)
+    input_a, input_b = pairwise_inputs(include_spl_values=False)
     golden, result = run_binary(device, ttnn_op, input_a, input_b)
 
-    nan_operand = torch.isnan(input_a) | torch.isnan(input_b)
-    result = torch.where(nan_operand, golden, result)
-
-    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=0, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=0)
 
 
 @pytest.mark.parametrize(
@@ -138,6 +132,51 @@ def test_isclose(device, rtol, atol, equal_nan):
     assert_equal(golden, result)
 
 
+@pytest.mark.parametrize("ttnn_op, is_max", [(ttnn.minimum, False), (ttnn.maximum, True)])
+@pytest.mark.parametrize("dtype", ["bfloat16"])
+def test_minmax_special_values(device, ttnn_op, is_max, dtype):
+    """Cross product of ±0, ±1, ±inf, NaN for ttnn.minimum / ttnn.maximum.
+
+    SFPSWAP compares in sign-magnitude and treats NaN as +inf, so it does not
+    propagate NaN the way torch.minimum / torch.maximum do. Operand order
+    does not change this: minimum(nan, x) matches minimum(x, nan).
+
+    call                                  torch    ttnn
+    ------------------------------------  -------  --------
+    minimum(x, nan)   x finite or -inf    NaN      x
+    minimum(+inf, nan)                    NaN      +inf
+    minimum(nan, nan)                     NaN      +inf
+    maximum(x, nan)   any x               NaN      +inf
+
+    Dest packing also drops the zero sign bit: IEEE min(+0, -0) is -0 and
+    max(-0, -0) is -0, but the device writes +0. Expected values are built
+    from those two rules.
+    """
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    special_values = [0.0, -0.0, 1.0, -1.0, float("inf"), float("-inf"), float("nan")]
+    x_vals = [x for x in special_values for _ in special_values]
+    y_vals = [y for _ in special_values for y in special_values]
+
+    input_a = torch.tensor(x_vals, dtype=torch_dtype)
+    input_b = torch.tensor(y_vals, dtype=torch_dtype)
+
+    inf = torch.tensor(float("inf"), dtype=torch_dtype)
+    a_cmp = torch.where(torch.isnan(input_a), inf, input_a)
+    b_cmp = torch.where(torch.isnan(input_b), inf, input_b)
+    expected = torch.maximum(a_cmp, b_cmp) if is_max else torch.minimum(a_cmp, b_cmp)
+    expected = torch.where(expected == 0, torch.zeros_like(expected), expected)
+
+    tt_a = to_tt_tensor(input_a, device)
+    tt_b = to_tt_tensor(input_b, device)
+    result = ttnn.to_torch(ttnn_op(tt_a, tt_b))
+
+    assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=0, allow_nonfinite=True)
+    zero = result == 0
+    assert not torch.signbit(result[zero]).any()
+
+
 @pytest.mark.parametrize(
     "op_name",
     [
@@ -178,12 +217,8 @@ def test_special_values(device, op_name, dtype):
     y_torch = torch.tensor(y_vals, dtype=torch_dtype)
     z_torch = torch_fn(x_torch, y_torch)
 
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt = ttnn_fn(
-        x_tt,
-        y_tt,
-    )
-    tt_out = ttnn.to_torch(z_tt)
+    x_tt = to_tt_tensor(x_torch, device)
+    y_tt = to_tt_tensor(y_torch, device)
+    z_tt = run_binary(device, ttnn_fn, x_tt, y_tt)
 
-    assert torch.equal(z_torch, tt_out), "Mismatches found"
+    assert_equal(z_torch, z_tt)
