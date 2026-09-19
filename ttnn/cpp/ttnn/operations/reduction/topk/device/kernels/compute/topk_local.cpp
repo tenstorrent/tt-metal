@@ -42,10 +42,14 @@
  * - Results in locally sorted TopK values and indices for each chunk
  * - Outputs Kt tiles (ceil(K/32)) of sorted data per height row
  *
- * PHASE 3: GLOBAL AGGREGATION (topk_final.cpp)
- * - Final core receives Kt tiles from each local core
- * - Performs final bitonic merge across all received chunks
- * - Produces globally optimal TopK results
+ * PHASE 3: TREE MERGE (this kernel together with writer_local_topk.cpp)
+ * - log2(num_local_cores) rounds; in round r core i with i % 2^(r+1) == 0 receives the Kt tiles of
+ *   core i + 2^r next to its own and keeps the top Kt of the pair with one bitonic merge step
+ * - The kept sequence's sort direction alternates so the partners of the next round are bitonic
+ *
+ * PHASE 4: GLOBAL AGGREGATION (topk_final.cpp)
+ * - The tree survivor(s) send their Kt tiles to the final core
+ * - With the tree run to the root the final core is a pass through (Wt_final == Kt)
  *
  * BITONIC SORTING STRATEGY:
  *
@@ -73,7 +77,7 @@
  * - Optimized buffer sizes based on L1 memory constraints
  *
  * INTER-CORE COMMUNICATION:
- * - Semaphore-based synchronization between local and final cores
+ * - Semaphore-based synchronization between local cores (credit/data per tree round) and with the final core
  * - Direct NoC transfers for efficient data movement
  * - Flow control to prevent buffer overflow
  *
@@ -83,13 +87,42 @@
  * - Scales efficiently with number of available cores
  * - Memory bandwidth optimized through tiled processing
  *
- * EXAMPLE WORKFLOW (K=128, 4 local cores):
- * Core 0: Processes tiles [0-15]   → Local TopK(128) → Send to final core
- * Core 1: Processes tiles [16-31]  → Local TopK(128) → Send to final core
- * Core 2: Processes tiles [32-47]  → Local TopK(128) → Send to final core
- * Core 3: Processes tiles [48-63]  → Local TopK(128) → Send to final core
- * Final:  Receives 4×128 elements → Global TopK(128) → Output final result
+ * EXAMPLE WORKFLOW (K=64, 4 local cores):
+ * Core 0: Processes tiles [0-15]   → Local TopK(64) → merges core 1's, then core 2's → Send to final core
+ * Core 1: Processes tiles [16-31]  → Local TopK(64) → Send to core 0 (round 0)
+ * Core 2: Processes tiles [32-47]  → Local TopK(64) → merges core 3's → Send to core 0 (round 1)
+ * Core 3: Processes tiles [48-63]  → Local TopK(64) → Send to core 2 (round 0)
+ * Final:  Receives 64 elements → Output final result
  */
+
+// Copies the first num_tiles tiles of src_dfb_index into dst_dfb_index one tile at a time, packing with the
+// destination CB format, then releases src_pop tiles from the source.
+void copy_front_tiles(
+    std::uint32_t src_dfb_index, std::uint32_t dst_dfb_index, std::uint32_t num_tiles, std::uint32_t src_pop) {
+    DataflowBuffer src_dfb(static_cast<uint16_t>(src_dfb_index));
+    DataflowBuffer dst_dfb(static_cast<uint16_t>(dst_dfb_index));
+
+    reconfig_data_format_srca(src_dfb_index);
+    copy_init(src_dfb_index);
+    pack_reconfig_data_format(dst_dfb_index);
+
+    src_dfb.wait_front(static_cast<uint16_t>(num_tiles));
+    for (std::uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        copy_tile(src_dfb_index, i, 0);
+        tile_regs_commit();
+
+        dst_dfb.reserve_back(1);
+
+        tile_regs_wait();
+        pack_tile(0, dst_dfb_index);
+        tile_regs_release();
+
+        dst_dfb.push_back(1);
+    }
+    src_dfb.wait_front(static_cast<uint16_t>(src_pop));
+    src_dfb.pop_front(static_cast<uint16_t>(src_pop));
+}
 
 void kernel_main() {
     // Compile time args
@@ -114,9 +147,17 @@ void kernel_main() {
     constexpr bool fused_keys = get_compile_time_arg_val(15) == 1;
     // The packed key IS the stable tie-break; the network itself runs unstable in fused mode.
     constexpr bool network_stable = stable_sort && !fused_keys;
+    // Tree merge: the writer lands [own Kt | partner Kt] tiles in the landing CBs; the merge CBs are the
+    // 2*Kt-tile in-place workspace of the one bitonic merge step per round.
+    constexpr std::uint32_t landing_values_dfb_index = get_compile_time_arg_val(16);
+    constexpr std::uint32_t landing_indices_dfb_index = get_compile_time_arg_val(17);
+    constexpr std::uint32_t merge_values_dfb_index = get_compile_time_arg_val(18);
+    constexpr std::uint32_t merge_indices_dfb_index = get_compile_time_arg_val(19);
 
     // Runtime args
     std::uint32_t direction_init = get_arg_val<std::uint32_t>(0);
+    const std::uint32_t core_id = get_arg_val<std::uint32_t>(1);          // Index among the local cores
+    const std::uint32_t num_recv_rounds = get_arg_val<std::uint32_t>(2);  // Tree rounds this core receives in
 
     // Constants
     // Dest indices for where to unpack the tiles for the llk
@@ -133,11 +174,6 @@ void kernel_main() {
     compute_kernel_hw_startup(input_dfb_index, index_dfb_index, input_transposed_dfb_index);
     ckernel::topk_tile_init<fused_keys>();
     constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(largest != 0);
-
-    DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
-    DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
-    DataflowBuffer values_dfb(values_dfb_index);
-    DataflowBuffer output_ind_dfb(output_ind_dfb_index);
 
     const bool switch_dir = (K == 64);
     uint32_t seq_per_2tiles = std::max<uint32_t>((2 * 32) / K, 2);
@@ -185,65 +221,46 @@ void kernel_main() {
                 largest);                    // Find largest (true) or smallest (false)
         }  // m_iter loop
 
-        // Extract and prepare local TopK results for transmission
-        // After bitonic merging, the top Kt tiles contain the locally optimal
-        // TopK elements. Extract these and prepare for sending to the final core.
-
-        // Configure data formats for tile copying and prepare value tiles.
-        // Pack using values_dfb format: input_transposed_dfb may be bf16 (higher-precision
-        // intermediate) while values_dfb is the original bfp8/bfp4 output format. In fused mode
-        // both CBs are the packed UInt32 format and the keys move as raw bits.
-        reconfig_data_format_srca(input_transposed_dfb_index);
-        copy_init(input_transposed_dfb_index);
-        pack_reconfig_data_format(values_dfb_index);
-
-        // Extract local TopK values (first Kt tiles contain best values)
-        input_transposed_dfb.wait_front(Kt);
-        for (std::uint32_t i = 0; i < Kt; ++i) {
-            tile_regs_acquire();
-            copy_tile(input_transposed_dfb_index, i, 0);  // Copy i-th sorted value tile
-            tile_regs_commit();
-
-            values_dfb.reserve_back(1);
-
-            tile_regs_wait();
-            pack_tile(0, values_dfb_index);  // Pack for output transmission
-            tile_regs_release();
-
-            values_dfb.push_back(1);
-        }
-        // Clean up remaining tiles in transposed buffer
-        input_transposed_dfb.wait_front(Wt);
-        input_transposed_dfb.pop_front(Wt);
-
+        // The first Kt tiles of the transposed buffers hold the local top k; repack them in the output formats.
+        copy_front_tiles(input_transposed_dfb_index, values_dfb_index, Kt, Wt);
         if constexpr (!fused_keys) {
-            // Extract local TopK indices (corresponding to the best values). In fused mode the
-            // indices ride inside the packed value tiles already sent above; there is no separate
-            // index stream (and no index-transposed CB).
-            reconfig_data_format_srca(index_transposed_dfb_index);
-            copy_init(index_transposed_dfb_index);
-            pack_reconfig_data_format(index_transposed_dfb_index);
-            index_transposed_dfb.wait_front(Kt);
-            for (std::uint32_t i = 0; i < Kt; ++i) {
-                tile_regs_acquire();
-                copy_tile(index_transposed_dfb_index, i, 0);  // Copy i-th sorted index tile
-                tile_regs_commit();
-
-                output_ind_dfb.reserve_back(1);
-
-                tile_regs_wait();
-                pack_tile(0, output_ind_dfb_index);  // Pack for output transmission
-                tile_regs_release();
-
-                output_ind_dfb.push_back(1);
-            }
-            // Clean up remaining tiles in transposed buffer
-            index_transposed_dfb.wait_front(Wt);
-            index_transposed_dfb.pop_front(Wt);
+            // In fused mode the indices ride inside the packed value tiles; there is no index stream.
+            copy_front_tiles(index_transposed_dfb_index, output_ind_dfb_index, Kt, Wt);
         }
 
-        // NOTE: At this point, values_cb_index and output_ind_cb_index contain
-        // the locally optimal TopK results for this core's width chunk.
-        // The writer kernel will send these to the final aggregation core.
+        // Per round: [own Kt | partner Kt] from the landing CB, one merge step in place, survivors to the writer.
+        for (std::uint32_t r = 0; r < num_recv_rounds; ++r) {
+            copy_front_tiles(landing_values_dfb_index, merge_values_dfb_index, 2 * Kt, 2 * Kt);
+            if constexpr (!fused_keys) {
+                copy_front_tiles(landing_indices_dfb_index, merge_indices_dfb_index, 2 * Kt, 2 * Kt);
+            }
+
+            // Partners of the next round must be sorted in opposite directions, like direction_init does locally.
+            const bool merge_ascending = (largest == 0) != (((core_id >> (r + 1)) & 1) == 1);
+            std::uint32_t merge_num_k_sequences = (2 * Kt * 32) / K;
+            uint32_t merge_seq_per_2tiles = std::max<uint32_t>((2 * 32) / K, 2);
+            process_iteration<network_stable, fused_keys, tie_order>(
+                0,                      // Single merge step: at m_iter 0 tile t is paired with tile t + Kt
+                K,                      // TopK value
+                2 * Kt,                 // Own Kt tiles followed by the partner's Kt tiles
+                merge_num_k_sequences,  // Two K-element sequences
+                tiles_per_seq,          // Tiles per sequence (ceil(K/32))
+                merge_values_dfb_index,
+                merge_indices_dfb_index,
+                input_dest_start,
+                input_dest_end,
+                index_dest_start,
+                index_dest_end,
+                !merge_ascending,  // process_iteration rebuilds the kept sequence with ascending = !largest
+                switch_dir,
+                logk,
+                merge_seq_per_2tiles,
+                largest);
+
+            copy_front_tiles(merge_values_dfb_index, values_dfb_index, Kt, 2 * Kt);
+            if constexpr (!fused_keys) {
+                copy_front_tiles(merge_indices_dfb_index, output_ind_dfb_index, Kt, 2 * Kt);
+            }
+        }
     }  // ht loop
 }
