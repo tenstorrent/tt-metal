@@ -244,9 +244,20 @@ def test_wan_dbcache_ab(
     results: dict[str, dict] = {}
     for name in runs:
         cache_config = _parse_custom_config(name) if name.startswith("custom:") else configs[name]
+        # Repeating a name brackets the sequence, e.g. WAN_DBCACHE_RUNS=baseline,dbcache,baseline.
+        # Denoising time on a small mesh drifts with how long the machine has been under load
+        # (measured: a 2x2 480p baseline is 431s on a cool box and 507s after hours of running),
+        # which is the same size as the effects this test reports. A second copy of one config
+        # separates real speedup from drift; without it, every run after the first is penalized.
+        label = name
+        if label in results:
+            repeat = 2
+            while f"{name}#{repeat}" in results:
+                repeat += 1
+            label = f"{name}#{repeat}"
         timer = _Timer()
         logger.info(
-            f"=== run '{name}' (steps={num_inference_steps}, flow_shift={flow_shift}, traced={traced}, cache={cache_config}) ==="
+            f"=== run '{label}' (steps={num_inference_steps}, flow_shift={flow_shift}, traced={traced}, cache={cache_config}) ==="
         )
         with torch.no_grad():
             frames = pipeline(
@@ -266,7 +277,7 @@ def test_wan_dbcache_ab(
 
         summary = pipeline.cache_summary() if cache_config is not None else []
         cached_steps = sum(len(b) for s in summary for b in s["cached_steps"])
-        results[name] = {
+        results[label] = {
             "frames": frames,
             "denoising_s": timer.durations.get("denoising", float("nan")),
             "vae_s": timer.durations.get("vae", float("nan")),
@@ -275,8 +286,8 @@ def test_wan_dbcache_ab(
             "summary": summary,
         }
         logger.info(
-            f"run '{name}': denoising {results[name]['denoising_s']:.1f}s, "
-            f"vae {results[name]['vae_s']:.1f}s, cached branch-steps {cached_steps}"
+            f"run '{label}': denoising {results[label]['denoising_s']:.1f}s, "
+            f"vae {results[label]['vae_s']:.1f}s, cached branch-steps {cached_steps}"
         )
         offset = 0
         cached_global: set[int] = set()
@@ -303,7 +314,7 @@ def test_wan_dbcache_ab(
             )
 
         if int(ttnn.distributed_context_get_rank()) == 0:
-            safe = name.replace(":", "_").replace("&", "_").replace("=", "")
+            safe = label.replace(":", "_").replace("&", "_").replace("=", "").replace("#", "r")
             shift_tag = f"_fs{flow_shift:g}" if flow_shift is not None else ""
             stem = (
                 f"wan_dbcache_{safe}_{width}x{height}_s{num_inference_steps}"

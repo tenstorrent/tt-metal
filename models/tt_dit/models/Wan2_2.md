@@ -224,6 +224,42 @@ pairs) and the pipeline reaches 1.6x while staying near or above PCC 0.9, i.e. t
 are now the pipeline defaults; note that `flow_shift=5` changes the generated video relative to the official
 `flow_shift=12` schedule independently of caching.
 
+### DBCache on a Blackhole Quiet Box (2x2, 4 chips)
+
+Measured with `bh_2x2sp0tp1nl2_linear_is_fsdp1`, 832x480, 81 frames, 40 steps, `flow_shift=5`,
+threshold 0.08, `is_fsdp=True`, one prompt, seed 0:
+
+| Run | Denoising | Cached steps per branch (high / low) | PSNR vs. baseline | PCC vs. baseline |
+|---|---|---|---|---|
+| baseline | 431.4s | 0 | - | - |
+| split path, caching disabled | 447.0s | 0 | inf (bit-exact) | 1.0000 |
+| DBCache (default preset) | 306.5s | 6 / 10 | 21.5 dB | 0.9521 |
+
+A cached step costs 3.66s against 10.14s computed. The cached step *indices* are identical to the
+4x8 run's, so the residual-diff decisions do not depend on the mesh; only the speedup does.
+
+**Absolute denoise times on this box drift with sustained load, by more than the effects this
+table reports.** The same baseline measures 431.4s on a box that has been idle and 506.8s after
+several hours of running (a fresh process each time, so this is the machine, not accumulated
+process state; no clock telemetry was available to confirm the mechanism). Consequences:
+
+- Compare runs only at the same machine state, back to back. `WAN_DBCACHE_RUNS` accepts a
+  repeated name for exactly this (`baseline,dbcache,baseline`) -- the repeat is reported as
+  `baseline#2`, and the gap between the two copies is the drift.
+- The A/B test runs its configs sequentially, so a later config is penalized against an earlier
+  baseline. Reversing the order turns the split path's apparent 3.6% cost into an apparent 15%
+  *gain* (447.0s first vs 478.4s second, against 431.4s first vs 513.7s second). The split path
+  has no reliable overhead on this mesh; a per-piece profile
+  (`WAN_DBCACHE_PROFILE=1`) puts 97% of a branch-call in the transformer block loop
+  (`body=5053ms`) against 2.6% in the cache head (`head=136ms`, of which the residual-diff
+  reduction is ~6ms).
+- The 1.41x above therefore *understates* DBCache: it divides a cool-box baseline by a run
+  measured third. Against a same-state baseline the speedup is nearer 1.65x.
+
+I2V on the same mesh (`test_pipeline_wan_i2v.py`, one conditioning image at frame 0, 40 steps,
+DBCache on by default): 480p 4.84 s/step, 335s per video; 720p 26.23 s/step, 1217s per video and
+requires `dynamic_load` (both experts resident at 720p fragment DRAM past the warmup step).
+
 The traced path (`traced=True`, three traces per expert) makes the same cache decisions and produces the same
 video as the untraced path (PCC 0.974 vs. the untraced baseline); the split-without-caching traced run is
 bit-exact as well.
