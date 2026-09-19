@@ -49,22 +49,16 @@ RECIPES = {
     "off_ge3": {"bands_ge": (3, "off"), "post": "off"},
     "off_ge5": {"bands_ge": (5, "off"), "post": "off"},
     "weight_ge3": {"bands_ge": (3, "weight"), "post": "weight"},
-    "act": {"all": "act"},
-    "act_off_ge3": {"all": "act", "bands_ge": (3, "off"), "post": "off"},
-    "act_off_ge5": {"all": "act", "bands_ge": (5, "off"), "post": "off"},
     # time-packed late bands (layers/audio_pack.py): 2 steps/row at 16 ch, 4 steps/row at 8 ch
     "full_pack": {"pack": {5: 2, 6: 4}},
     # the full split done inside conv3d (Conv3dConfig.operand_split): same operands, one launch per conv
     "kernel": {"all": "kernel"},
     "kernel_pack": {"all": "kernel", "pack": {5: 2, 6: 4}},
-    "act_pack": {"all": "act", "pack": {5: 2, 6: 4}},
     "off_pack": {"all": "off", "pack": {5: 2, 6: 4}},
-    "act_off_ge3_pack": {"all": "act", "bands_ge": (3, "off"), "post": "off", "pack": {5: 2, 6: 4}},
     # pack 1 = dense resamplers on unpacked rows (bands 3-4 keep their dilated convs)
     "full_pack4": {"pack": {4: 1, 5: 2, 6: 4}},
     "full_pack34": {"pack": {3: 1, 4: 1, 5: 2, 6: 4}},
     "off_pack34": {"all": "off", "pack": {3: 1, 4: 1, 5: 2, 6: 4}},
-    "act_off_ge3_pack34": {"all": "act", "bands_ge": (3, "off"), "post": "off", "pack": {3: 1, 4: 1, 5: 2, 6: 4}},
     # packed resamplers (fixed kaiser taps) with a cheaper split than the convs
     "full_pack_rsact": {"pack": {5: 2, 6: 4}, "resamplers": "act"},
     "full_pack_rsoff": {"pack": {5: 2, 6: 4}, "resamplers": "off"},

@@ -48,7 +48,7 @@ def _warn_padded_out_channels(unpadded: int, padded: int) -> None:
         _warn_once(("padded_out", unpadded, padded), f"Padding out_channels from {unpadded} to {padded}")
 
 
-CONV_SPLIT_MODES = ("off", "weight", "act", "full", "kernel")
+CONV_SPLIT_MODES = ("off", "weight", "full", "kernel")
 # Modes that carry a prepared weight residual (``weight_lo``). "kernel" is the full split done inside conv3d
 # (Conv3dConfig.operand_split): one launch, one gather, three K passes into one fp32 accumulation.
 WEIGHT_SPLIT_MODES = ("weight", "full", "kernel")
@@ -175,9 +175,9 @@ def conv3d_maybe_split(
     reduction depth -- the operands are being truncated, not the sum drifting, so ``fp32_dest_acc_en``
     cannot help. Conv is linear in both arguments, so splitting an operand into ``hi = bf16(v)`` plus
     the exact residual ``lo = v - hi`` lets a second conv carry the dropped mantissa bits.
-    ``split_mode="weight"`` splits the weight only (2 convs, measured 1.5x less error on ``conv_pre``);
-    ``"act"`` splits the activation only (2 convs); ``"full"`` splits both (3 convs -- the ``lo*lo`` term is
-    negligible and omitted; 1.9x).
+    ``split_mode="weight"`` splits the weight only (2 convs, measured 1.5x less error on ``conv_pre``); ``"full"``
+    splits both (3 convs -- the ``lo*lo`` term is negligible and omitted; 1.9x); ``"kernel"`` is the full split
+    inside one conv3d launch.
 
     ``bias`` is applied to exactly one term, since it is not a factor of the product being split.
     """
@@ -206,17 +206,6 @@ def conv3d_maybe_split(
             weight_lo_tensor=weight_lo_tensor,
             bias_tensor=bias_tensor,
             **conv_kwargs,
-        )
-    if split_mode == "act":
-        # Activation-only split (2 convs): measured on the H3 decoder, the weight split adds nothing the
-        # activation split does not already give (weight-only 50.8 dB vs off 51.3 dB; full 67.4 dB).
-        x_hi, x_lo = _split_operand(input_tensor)
-        out = ttnn.experimental.conv3d(
-            input_tensor=x_hi, weight_tensor=weight_tensor, bias_tensor=bias_tensor, **conv_kwargs
-        )
-        return ttnn.add(
-            out,
-            ttnn.experimental.conv3d(input_tensor=x_lo, weight_tensor=weight_tensor, bias_tensor=None, **conv_kwargs),
         )
     assert weight_lo_tensor is not None, f"split_mode={split_mode!r} needs a prepared weight residual"
 
