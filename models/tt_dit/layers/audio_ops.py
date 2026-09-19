@@ -67,29 +67,12 @@ _WEIGHT_PREP_REVISION = 3
 _KERNEL_SPLIT_MAX_K = 7
 
 
-# Transposed convs as polyphase convs over the unstuffed rows (ConvTranspose1dViaConv3d), the default;
-# MINIMAX_H3_AUDIO_POLYPHASE=0 keeps the zero-stuffed form.
-def polyphase_env() -> bool:
-    import os
-
-    return os.environ.get("MINIMAX_H3_AUDIO_POLYPHASE", "1") == "1"
-
-
-def ups_local_env() -> bool:
-    """With the polyphase form, run each transposed conv on the local T shard with a one-row zero halo from the neighbours
-    instead of gathering T, running replicated and re-partitioning (same per-row arithmetic: bit-identical; 3.5-6x per conv).
-    """
-    import os
-
-    return os.environ.get("MINIMAX_H3_AUDIO_UPS_LOCAL", "1") == "1"
-
-
-
 def weights_variant(
     split_mode: str,
     max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
     pack_bands: dict[int, int] | None = None,
     act_mode: str = "chain",
+    polyphase: bool = False,
 ) -> str:
     """Cache-key suffix for the precision levers that change the prepared parameter set.
 
@@ -114,9 +97,8 @@ def weights_variant(
     if pack_bands:
         # Time-packed bands hold dense packed weights of other shapes (layers/audio_pack.py).
         suffix += "_pack" + "-".join(f"{b}x{k}" for b, k in sorted(pack_bands.items()))
-    if polyphase_env():
-        # The transposed convs' prepared weights are the polyphase packed form, a different tensor set.
-        suffix += "_pp"
+    if polyphase:
+        suffix += "_pp"  # the transposed convs' prepared weights are the polyphase packed form
     if act_mode != "chain":
         # The fused activation keeps alpha/beta as one prepared block (layers/audio_aa_snake.py).
         suffix += f"_act-{act_mode}"
@@ -1363,7 +1345,7 @@ class ConvTranspose1dViaConv3d(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
-        polyphase: bool | None = None,
+        polyphase: bool = False,
     ) -> None:
         super().__init__()
         self.in_channels = in_channels
@@ -1375,16 +1357,13 @@ class ConvTranspose1dViaConv3d(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
-        # Polyphase: y[s*t + p] = sum_j x[t - j] * W_p[j] is a stride-1 "same" conv with s*out_channels outputs and
-        # K' taps over the UNSTUFFED rows, whose (T, s*out) rows reshape to (s*T, out). The dense packed weight is
-        # read off the transposed conv's impulse responses (`audio_pack.packed_weight`), exact to fp32 weight
-        # rounding including the sequence ends because k - s is even. K' = 3 for H3's (9, 5) and (4, 2): a third
-        # and three quarters of the zero-stuffed form's multiplies, and no stuff/pad/slice ops.
-        self.polyphase = polyphase_env() if polyphase is None else polyphase
+        # Polyphase: a stride-1 "same" conv with s*out_channels outputs and K' taps over the UNSTUFFED rows, whose
+        # (T, s*out) rows reshape to (s*T, out); the packed weight is read off the transposed conv's impulse responses.
+        self.polyphase = polyphase
         sharded = parallel_config is not None and parallel_config.factor > 1
-        # Polyphase on the local T shard: the inner conv is itself T-sharded (one-row zero halo, no internal padding), so
-        # forward skips the T gather and the re-partition. The zero-stuffed form keeps the gathered path.
-        self.local_shard = self.polyphase and sharded and ups_local_env()
+        # Polyphase on the local T shard: the inner conv is itself T-sharded (one-row zero halo), so forward skips the
+        # T gather and the re-partition; the zero-stuffed form keeps the gathered path.
+        self.local_shard = self.polyphase and sharded
         if self.polyphase:
             from .audio_pack import packed_weight
 

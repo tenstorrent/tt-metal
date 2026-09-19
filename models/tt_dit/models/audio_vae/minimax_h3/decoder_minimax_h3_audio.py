@@ -70,6 +70,7 @@ class MiniMaxH3AudioDecoder(Module):
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
         pack_bands: dict[int, int] | None = None,
         act_mode: str = "chain",
+        polyphase_ups: bool = True,
         batch_shard_axis: int | None = None,
     ) -> None:
         super().__init__()
@@ -91,6 +92,7 @@ class MiniMaxH3AudioDecoder(Module):
         self.max_c_in_block = max_c_in_block
         self.pack_bands = dict(pack_bands or {})
         self.act_mode = act_mode
+        self.polyphase_ups = polyphase_ups
         # One stereo channel per row of the mesh along this axis (the T-shard runs along the other), so every
         # vocoder op sees one batch item instead of the replicated pair. None: both items on every device.
         self.batch_shard_axis = batch_shard_axis
@@ -139,6 +141,7 @@ class MiniMaxH3AudioDecoder(Module):
             split_mode=split_mode,
             pack_bands=pack_bands,
             act_mode=act_mode,
+            polyphase_ups=polyphase_ups,
         )
         self.decoder.batch_shard_axis = batch_shard_axis
 

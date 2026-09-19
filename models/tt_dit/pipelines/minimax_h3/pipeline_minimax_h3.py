@@ -1536,6 +1536,7 @@ class MiniMaxH3Pipeline:
                     decoder.max_c_in_block,
                     decoder.pack_bands,
                     act_mode=decoder.act_mode,
+                    polyphase=decoder.polyphase_ups,
                 ),
                 parallel_config=self.vae_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
