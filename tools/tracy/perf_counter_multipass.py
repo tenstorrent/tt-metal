@@ -3,15 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Multi-pass perf counter capture: group tables, pass scheduling (one L1 bank per pass, the BRISC firmware
-fits three groups), per-pass workload replay and the device log merge. tracy/__main__.py only calls in here."""
+fits every group), per-pass workload replay and the device log merge. tracy/__main__.py only calls in here."""
 
 import math
 import os
+import subprocess
+import sys
 from pathlib import Path
 from shutil import copyfile
 
 from loguru import logger
-
 from tracy.common import PROFILER_DEVICE_SIDE_LOG, generate_logs_folder
 
 # Bit positions match PROFILE_PERF_COUNTERS_* in tt_metal/tools/profiler/perf_counters.hpp.
@@ -30,8 +31,11 @@ PERF_COUNTER_GROUP_BITS = {
 }
 PERF_COUNTER_L1_GROUPS = {"l1_0", "l1_1", "l1_2", "l1_3", "l1_4", "l1_5"}
 PERF_COUNTER_BH_ONLY_GROUPS = {"l1_2", "l1_3", "l1_4", "l1_5"}
-# Measured on Blackhole BRISC firmware: 3 groups of readout code fit, 4 overflow .text.
-PERF_COUNTER_MAX_GROUPS_PER_PASS = 3
+# The table driven readout costs a few bytes per group, so every group fits one pass next to one L1 bank.
+# Measured BRISC .text with the five group mask (fpu, pack, unpack, instrn and one L1 bank): Blackhole 8684 of
+# 8704 bytes, Wormhole 7600 of 7712. The cap is the number of groups such a mask holds; the one L1 bank per
+# pass rule below is the hardware limit that still forces several passes.
+PERF_COUNTER_MAX_GROUPS_PER_PASS = 5
 # PERF_COUNTER_PROFILER_ID in perf_counters.hpp: the timer_id the firmware tags counter rows with.
 PERF_COUNTER_MARKER_ID = "9090"
 # Environment variables that name the device architecture without opening the device.
@@ -75,16 +79,22 @@ def perf_counter_groups_to_bitfield(groups):
 
 
 def detect_device_arch():
-    """The device architecture name in lower case, from the environment or by opening device 0; None if unknown."""
+    """The device architecture name in lower case, from the environment or from ttnn in a child process; None if
+    unknown. A child process on purpose: this runs in the capture process, and a ttnn import that touches the
+    device there keeps the device handle until the capture process exits, so the workload it then launches
+    blocks in its own open_device."""
     declared = next((os.environ.get(v) for v in ARCH_ENV_VARS if os.environ.get(v)), None)
     if declared is None:
         try:
-            import ttnn
-
-            device = ttnn.open_device(device_id=0)
-            declared = str(device.arch()).split(".")[-1]
-            ttnn.close_device(device)
-        except Exception:
+            probe = subprocess.run(
+                [sys.executable, "-c", "import ttnn; print(ttnn.get_arch_name())"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=True,
+            )
+            declared = probe.stdout.strip().splitlines()[-1]
+        except (subprocess.SubprocessError, OSError, IndexError):
             logger.debug("Failed to detect device arch via ttnn")
     return declared.strip().lower() if declared is not None else None
 
@@ -125,24 +135,80 @@ def resolve_perf_counter_groups(requested_groups, arch):
     return resolved
 
 
-def describe_passes(passes):
-    return "\n".join(
-        f"  pass {i + 1}: {', '.join(p)}  (bitfield {perf_counter_groups_to_bitfield(p)})" for i, p in enumerate(passes)
+# Device profiler capacity per RISC between host reads: the DRAM buffer is 48 bytes per supported program
+# (TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT, default 1000, the tracy --op-support-count option), a counter record is
+# 24 bytes and an op leaves about 48 bytes of zone markers on BRISC next to them. Past that the tail of the run is
+# dropped and the ops report fails with a host/device op count mismatch, so say how many ops a pass holds.
+PROFILER_BYTES_PER_PROGRAM = 48
+PROFILER_DEFAULT_PROGRAM_SUPPORT_COUNT = 1000
+PROFILER_BYTES_PER_COUNTER_RECORD = 24
+PROFILER_ZONE_BYTES_PER_OP = 48
+
+
+def records_per_pass(passes, arch):
+    """Counter records one op leaves per core for each pass, from the shared select tables; None off tt-1xx."""
+    try:
+        from tt_llk_perf.headers import bank_tables
+
+        tables = bank_tables(arch)
+    except Exception:
+        return None
+    if not tables:
+        return None
+    bank_of = {"fpu": "FPU", "pack": "TDMA_PACK", "unpack": "TDMA_UNPACK", "instrn": "INSTRN"}
+    counts = []
+    for p in passes:
+        n = 0
+        for g in p:
+            if g in PERF_COUNTER_L1_GROUPS:
+                mux = int(g.split("_")[1])
+                n += sum(1 for e in tables.get("L1", []) if e.l1_mux == mux)
+            else:
+                n += len(tables.get(bank_of[g], []))
+        counts.append(n)
+    return counts
+
+
+def ops_per_run(records, support_count=None):
+    """How many ops per core the profiler buffer holds for a pass of `records` counter records."""
+    support_count = support_count or int(
+        os.environ.get("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT", PROFILER_DEFAULT_PROGRAM_SUPPORT_COUNT)
     )
+    return (PROFILER_BYTES_PER_PROGRAM * support_count) // (
+        PROFILER_BYTES_PER_COUNTER_RECORD * records + PROFILER_ZONE_BYTES_PER_OP
+    )
+
+
+def describe_passes(passes, arch=None):
+    counts = records_per_pass(passes, arch) if arch else None
+    lines = []
+    for i, p in enumerate(passes):
+        line = f"  pass {i + 1}: {', '.join(p)}  (bitfield {perf_counter_groups_to_bitfield(p)})"
+        if counts:
+            line += f"  {counts[i]} records per op per core, about {ops_per_run(counts[i])} ops per run before the profiler buffer fills"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def plan_perf_counter_capture(requested_groups, multipass, can_replay):
     """Per-pass bitfields for a counter request. One pass is also exported via TT_METAL_PROFILE_PERF_COUNTERS;
     several passes need ``multipass`` and ``can_replay`` (this process launches the workload), else ValueError."""
-    resolved = resolve_perf_counter_groups(requested_groups, detect_device_arch())
+    arch = detect_device_arch()
+    resolved = resolve_perf_counter_groups(requested_groups, arch)
     passes = schedule_perf_counter_passes(resolved)
     bitfields = [perf_counter_groups_to_bitfield(p) for p in passes]
     if len(passes) <= 1:
         if bitfields and bitfields[0] > 0:
             os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfields[0])
             logger.info(f"Setting performance counter groups: {resolved} (bitfield: {bitfields[0]})")
+            counts = records_per_pass(passes, arch)
+            if counts:
+                logger.info(
+                    f"{counts[0]} counter records per op per core; the profiler buffer holds about "
+                    f"{ops_per_run(counts[0])} ops per run at this size, raise --op-support-count for longer runs"
+                )
         return bitfields
-    plan = describe_passes(passes)
+    plan = describe_passes(passes, arch)
     if not can_replay:
         raise ValueError(
             f"--no-capture-tool cannot replay the workload; these groups need {len(passes)} passes:\n{plan}"
@@ -150,8 +216,8 @@ def plan_perf_counter_capture(requested_groups, multipass, can_replay):
     if not multipass:
         raise ValueError(
             f"Requested counter groups {resolved} need {len(passes)} capture passes "
-            f"(L1 banks share one mux; BRISC firmware fits <= {PERF_COUNTER_MAX_GROUPS_PER_PASS} "
-            f"groups/pass):\n{plan}\n"
+            f"(L1 banks share one mux, so each bank needs its own pass; at most "
+            f"{PERF_COUNTER_MAX_GROUPS_PER_PASS} groups per pass):\n{plan}\n"
             "Re-run with --perf-counter-multipass to replay the workload once per pass and merge "
             "the results, or request fewer groups."
         )

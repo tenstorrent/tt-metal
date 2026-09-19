@@ -22,7 +22,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
-from helpers.counters import _metal_root, _parse_perf_cfg
+from helpers.counters import LLK_COUNTERS_HEADER, _parse_perf_cfg
 from helpers.llk_params import ApproximationMode, DestAccumulation, PerfRunType
 from helpers.perf.core import (
     PerfConfig,
@@ -814,8 +814,8 @@ def _cfg_header(*lines):
 
 def test_perf_cfg_matches_the_device_header():
     # Parity with the values counters.py used to hand-copy from counters.h.
-    header = _metal_root() / "tt_metal/tt-llk/tests/helpers/include/counters.h"
-    assert _parse_perf_cfg(header.read_text()) == {
+    assert LLK_COUNTERS_HEADER.is_file(), LLK_COUNTERS_HEADER
+    assert _parse_perf_cfg(LLK_COUNTERS_HEADER.read_text()) == {
         "VALID_BIT": 1 << 31,
         "L1_MUX_SHIFT": 17,
         "L1_MUX_MASK": 0x7,

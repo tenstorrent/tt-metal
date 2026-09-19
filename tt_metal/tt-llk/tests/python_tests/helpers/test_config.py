@@ -565,8 +565,6 @@ class TestConfig:
                 "-Ifirmware/riscv/common",
                 "-Ihelpers/include",
                 "-I../../hostdevcommon/api",
-                # perf_counters.hpp: the PerfCounterType enum that hw_counters.h needs
-                "-I../../tools/profiler",
             ]
             + hw_specific_includes
             + [

@@ -541,8 +541,8 @@ int main() {
 
             wait_ncrisc_trisc();
 
-            // BRISC reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
-            ReadPerfCounters();
+            // BRISC stops and reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
+            ReadPerfCounters(enables);
 
             trigger_sync_register_init();
 
