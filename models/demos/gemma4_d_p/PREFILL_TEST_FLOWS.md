@@ -8,7 +8,7 @@ From the tt-metal repository root, in both terminals for loopback:
 
 ```bash
 source python_env/bin/activate
-export PYTHONPATH="$PWD" TT_METAL_HOME="$PWD" OMP_NUM_THREADS=4
+export PYTHONPATH="$PWD" TT_METAL_HOME="$PWD" OMP_NUM_THREADS=16
 export \
     HF_MODEL=google/gemma-4-31B-it \
     HF_HOME=/mnt/models/huggingface \
@@ -16,6 +16,8 @@ export \
     HF_HUB_OFFLINE=1
 export PREFILL_TTNN_CACHE="$TT_CACHE_PATH"
 ```
+
+The default GPU reference is already in validation channel order. See [Prepared GPU reference](PREFILL_MIGRATION.md#prepared-gpu-reference) to create another copy.
 
 ### Mock, 16K
 

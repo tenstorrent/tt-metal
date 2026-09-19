@@ -14,7 +14,12 @@ import pytest
 
 import ttnn
 from models.demos.gemma4_d_p.tt.runners.adapter import Gemma4PrefillAdapter, Gemma4ServiceConfig
-from models.demos.gemma4_d_p.tt.runners.kv_validation import check_table_samples, compare_slot_cache, read_cache_tensor
+from models.demos.gemma4_d_p.tt.runners.kv_validation import (
+    PREPARED_GPU_TRACE_LAYOUT,
+    check_table_samples,
+    compare_slot_cache,
+    read_cache_tensor,
+)
 
 GPU_PCC_THRESHOLD = 0.91
 
@@ -29,12 +34,12 @@ def migration_environment(request, tmp_path):
         pytest.skip(f"GPU trace not found: {trace_dir}")
     metadata = json.loads((trace_dir / "metadata.json").read_text())
     assert metadata["model_id"] == Gemma4PrefillAdapter().hf_model_id
-    assert metadata["layout"] == "chunked_group_a_v1"
+    assert metadata["layout"] in ("chunked_group_a_v1", PREPARED_GPU_TRACE_LAYOUT)
     assert metadata["n_layers"] == Gemma4ServiceConfig.NUM_LAYERS
     assert len(metadata["token_ids"]) >= Gemma4ServiceConfig.MAX_SEQ_LEN
     directory = tmp_path
     env = {key: value for key, value in os.environ.items() if not key.startswith("PREFILL_")}
-    env.setdefault("OMP_NUM_THREADS", "4")
+    env.setdefault("OMP_NUM_THREADS", "16")
     env.update(
         {
             key: os.environ[key]
