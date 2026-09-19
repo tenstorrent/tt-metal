@@ -77,21 +77,10 @@ The producer defaults to keeping the service alive. Set `PREFILL_SEND_SHUTDOWN=1
 
 ## Gate 2: loopback migration
 
-Provision the tt-llm-engine migration endpoint and workers against this checkout as described in the [shared migration guide](../common/prefill/docs/PREFILL_MIGRATION_TESTING.md), then start the endpoint:
+Follow the [loopback setup and commands](PREFILL_TEST_FLOWS.md#loopback-16k) to clone and build tt-llm-engine, start its endpoint, wait for readiness, and run the 16K test. Keep the endpoint running to test more contexts. With the same environment, run all four loopback cases:
 
 ```bash
-# In the tt-llm-engine checkout:
-cd disaggregation/migration
-./launch_migration_endpoints.sh --name_server_host "$(hostname)" \
-    --prefill_hosts "$(hostname)" --prefill_endpoint_id 1
-```
-
-In the tt-metal terminal:
-
-```bash
-export PREFILL_MIGRATION_CLIENT_DIR=/path/to/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
-export GEMMA4_TEST_LOOPBACK=1
-pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py \
+GEMMA4_TEST_LOOPBACK=1 pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py \
     -k loopback -sv --basetemp=/tmp/gemma4-migration-loopback
 ```
 
