@@ -356,7 +356,7 @@ class MiniMaxH3Vae:
         pixel_norm: tuple[Sequence[float], Sequence[float]] | None = None,
         readback_uint8: bool = False,
         waves_per_device: int = 1,
-        stitch_exchange: str = "gather",
+        stitch_exchange: str = "strips",
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
@@ -907,8 +907,27 @@ class MiniMaxH3Vae:
         if self.stitch_exchange == "neighbor":
             return self._decode_clips_neighbor_stitched(chunk_latents, output_type)
         if self.stitch_exchange == "strips":
-            return self._decode_clips_strip_stitched(chunk_latents, output_type)
+            reason = self._strips_unserved(chunk_latents[0].shape[-2], chunk_latents[0].shape[-1], output_type)
+            if reason is None:
+                return self._decode_clips_strip_stitched(chunk_latents, output_type)
+            if not getattr(self, "_warned_strips_fallback", False):
+                self._warned_strips_fallback = True
+                logger.warning(f"strips stitch: {reason}; using the gather stitch")
         return self._decode_clips_gather_stitched(chunk_latents, output_type)
+
+    def _strips_unserved(self, latent_h: int, latent_w: int, output_type: str) -> str | None:
+        """Why the strips stitch cannot serve this decode, or None when it can."""
+        (y_starts, y_lengths, _), (x_starts, x_lengths, _) = self._decode_tile_grid(latent_h, latent_w)
+        grid_rows, grid_cols = len(y_lengths), len(x_lengths)
+        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
+        if grid_rows > mesh_rows or grid_cols > mesh_cols:
+            return f"the {grid_rows}x{grid_cols} tile grid does not fit the {mesh_rows}x{mesh_cols} mesh"
+        canvas_h, canvas_w = y_starts[-1] + y_lengths[-1], x_starts[-1] + x_lengths[-1]
+        if canvas_h % mesh_rows or canvas_w % mesh_cols:
+            return f"the {canvas_h}x{canvas_w} canvas does not split over the {mesh_rows}x{mesh_cols} mesh"
+        if output_type != "yuv420" and ttnn.using_distributed_env() and self.ccl_manager is None:
+            return "the float readback needs a CCLManager on a multi-host mesh"
+        return None
 
     def _unpatchify(self, decoded: ttnn.Tensor, num_frames: int, height: int, width: int) -> ttnn.Tensor:
         """Tokens (TILE, fp32) to `(1, C, T*pt, H*p, W*p)` ROW_MAJOR pixels: one page-remap program off the tiles
