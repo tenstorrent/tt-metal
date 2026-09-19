@@ -176,6 +176,7 @@ def run_model(
     tokenizer,
     request,
     thresholds: PrefillTransformerThresholds | None = None,
+    serve_hook=None,
 ):
     # The routing family this row drives must match the one the adapter declares; crossing
     # families applies a different affinity function with no error (see the assert).
@@ -492,6 +493,31 @@ def run_model(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, None)),
     )
+
+    # --- Caller-owned forward (demo / disaggregation export) ---
+    # Hand the fully-built, validated model to a caller-supplied callback instead of running the
+    # test's own forward. A callback (rather than an import of the caller) keeps the dependency
+    # one-directional: this test module knows nothing about its callers.
+    # See models/demos/deepseek_v3_d_p/demo/dump_mistral4_prefill_kv.py.
+    if serve_hook is not None:
+        ttnn.deallocate(tt_tokens)  # the caller owns the token window and uploads its own
+        serve_hook(
+            transformer=transformer,
+            mesh_device=mesh_device,
+            kvpe_cache=tt_kvpe_cache,
+            index_kv_cache=tt_index_kv_cache,
+            tokenizer=tokenizer,
+            config=config,
+            isl_total=isl_total,
+            sp_factor=sp_factor,
+            isl_per_chip=isl_per_chip,
+            # Only the balanced branch above defines chunk_order; the contiguous full-window path
+            # has none, and the exporter's readback asserts on exactly that.
+            chunk_order=chunk_order if is_balanced else None,
+            padding_side=padding_side,
+        )
+        profiler.end("total_test_time")
+        return
 
     # --- Determinism check (isolated from the pcc_validation path below) ---
     # Run num_iterations forwards on identical input and compare every iteration's per-stage
