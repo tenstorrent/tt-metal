@@ -1,4 +1,6 @@
 set(HW_JIT_API_HEADERS
+    ckernels/common/llk_sfpu/ckernel_sfpu_erfinv_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_log_square_factorized_odd.h
     inc/experimental/drisc_mode.h
     inc/experimental/gddr_dma.h
     inc/experimental/blaze_rt_arg.h
