@@ -126,7 +126,55 @@ def load_model(
     if create_cache:
         logger.info(f"Writing cache to '{cache_dir}'.")
         tt_model.save(cache_dir)
+        # Opt-in (TT_DIT_CACHE_VERIFY=1): only a cache that reads back exactly is marked complete.
+        # Without this a handful of flipped bytes on the way to disk is reused on every later run,
+        # and nothing downstream can tell a damaged weight from a real one. Off by default because
+        # it re-reads the whole cache once at creation.
+        if _verify_env_enabled() and not verify_saved_model(tt_model, cache_dir):
+            logger.error(f"cache at '{cache_dir}' did not verify; leaving it unmarked so it is rebuilt next time.")
+            return
         _mark_cache_complete(cache_dir)
+
+
+def verify_saved_model(tt_model: Module, cache_dir: str | Path, /, *, prefix: str = "") -> bool:
+    """Reload every tensor `tt_model.save(cache_dir)` wrote and compare it, shard by shard, with the
+    resident one. Returns `False` and logs each mismatch rather than raising: the resident weights
+    are still good, so the run can go on; only the cache is untrustworthy.
+
+    Costs one read of the cache and one device round trip per tensor, at cache creation only.
+    """
+    import torch
+
+    cache_dir = Path(cache_dir)
+    ok = True
+    for name, child in tt_model.named_children():
+        ok &= verify_saved_model(child, cache_dir, prefix=f"{prefix}{name}.")
+    for name, parameter in tt_model.named_parameters():
+        path = cache_dir / f"{prefix}{name}.tensorbin"
+        if not path.is_file():
+            # Subclasses may persist a parameter their own way (Mochi/Wan keep torch fallbacks
+            # beside the tensorbins); only what `Module.save` wrote is checked here.
+            logger.warning(f"cache verify: no tensorbin for '{prefix}{name}', skipping it")
+            continue
+        reloaded = ttnn.load_tensor(path, device=None if parameter.on_host else parameter.device)
+        try:
+            resident = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(parameter.data)]
+            fresh = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(reloaded)]
+            bad = [i for i, (a, b) in enumerate(zip(resident, fresh)) if a.shape != b.shape or not torch.equal(a, b)]
+            if len(resident) != len(fresh) or bad:
+                ok = False
+                logger.error(
+                    f"cache mismatch in '{path.name}': shards {bad or 'count'} differ "
+                    f"({len(resident)} resident vs {len(fresh)} reloaded)"
+                )
+        finally:
+            if not parameter.on_host:
+                ttnn.deallocate(reloaded)
+    return ok
+
+
+def _verify_env_enabled() -> bool:
+    return os.environ.get("TT_DIT_CACHE_VERIFY", "0") in ("1", "true", "True")
 
 
 def model_cache_dir(

@@ -6,7 +6,7 @@
 
 Keyed on `(K, N)` only. `get_matmul_config` keys its own tables on `(M, K, N)`, but in
 this model M is the per-device packed sequence length, which changes with the requested video
-duration -- 4768 / 9216 / 13632 at 768P for 5s / 10s / 15s, and anything else a caller asks for. K and
+duration -- 4736 / 9184 / 13664 at 768P for 5s / 10s / 15s with the gate's prompt, and anything else a caller asks for. K and
 N are fixed by the architecture and the TP factor. M only sets how many blocks each core walks
 through, and it is large enough at every duration that the block shape does not want to change with
 it, so keying on `(K, N)` gives one entry per matmul instead of one per matmul per duration.

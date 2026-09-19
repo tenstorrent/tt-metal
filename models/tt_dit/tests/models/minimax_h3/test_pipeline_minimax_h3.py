@@ -118,8 +118,10 @@ def test_requested_audio_t_factor_precedence(monkeypatch, expect_error):
 
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize(("aspect_ratio", "duration_s"), SWEEP)
-@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
-def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
+@pytest.mark.parametrize(
+    ("mesh_device", "num_links", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"]
+)
+def test_t2va_end_to_end(mesh_device, num_links, reset_seeds, aspect_ratio, duration_s):
     weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
     artifacts = artifact_dir("h3_t2va_artifacts")
     prompt = PROMPT
@@ -139,7 +141,7 @@ def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
             "from the total either way, but the run will take far longer than the reported compute."
         )
 
-    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights)
+    pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights, num_links=num_links)
 
     output = run_warm_generation(
         pipeline,

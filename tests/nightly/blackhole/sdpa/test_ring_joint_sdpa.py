@@ -370,6 +370,59 @@ def generate_ring_joint_perf_model_configs(
         seq_len=4096,
     )
 
+    # MiniMax-H3 t2va at 768P, TP=4 / SP=8 on a Galaxy. 56 attention heads / TP 4 = 14 per device,
+    # head_dim 128, full (non-causal) attention. `seq_len` is the per-device packed sequence length
+    # the pipeline produces at each duration -- text + audio + video in one packed stream -- which
+    # `generate_test_configs` scales by sp_size for the global length. The model drives this op
+    # through the joint entry point with zero-length joint inputs, which is what the harness already
+    # does (it passes None for joint q/k/v), so these measure the path the model actually runs.
+    #
+    # These configs back `MiniMaxH3Attention.measured_sdpa_chunk_sizes`. They were previously cited
+    # by that table's docstring but never committed, so the numbers in it were not reproducible from
+    # the tree; that is what this restores.
+    #
+    # The chunk-size lists deliberately bracket the currently-shipped pick so a sweep produces the
+    # baseline and the candidates in one table. The optimum tracks SDPA core-slot efficiency, and
+    # the core count is architecture-dependent: `MeshConfig` gives 11x10 = 110 SDPA cores on a
+    # Blackhole Galaxy but 7x9 = 63 on Wormhole. At 4768 the shipped q=320 wastes 4.5% of the slots
+    # on 110 cores and 16.7% on 63 (210 work items, 4 passes, 42 idle slots), while q=544/576 divide
+    # 63 exactly -- so Wormhole is where the candidate list is widest. 9216 and 13632 already land
+    # clean on both, and carry a narrower list to confirm rather than to search.
+    for _name, _seq_len, _q_chunks, _k_chunks in (
+        # seq_len is the pipeline's rows/device with the gate's 39-token prompt (4736 / 9184 / 13664),
+        # not the 4768 / 9216 / 13632 an audio-undercounting harness used to report. Slot arithmetic is
+        # unchanged to the tile, and padding buckets prompt length, so these are the stable values.
+        ("minimax_h3_5s_768p", 4736, [256, 320, 384, 544, 576], [256, 384, 512]),
+        ("minimax_h3_10s_768p", 9184, [256, 352, 512], [256, 512]),
+        # 15 s carries the widened list. The first pass here swept q in {256, 384, 512} x k in
+        # {256, 512} and found the shipped (256, 512) already best, with every larger-q candidate
+        # L1-infeasible. That search was bounded on the wrong axis: the CB footprint is dominated by
+        # Sq_chunk_t * Sk_chunk_t, but Sq carries the heavier linear term (q, out_im, out0 and the
+        # statistics FIFO all scale with it, against K/V's two buffers on Sk), which is why
+        # (512, 256) fails while (256, 512) fits at the same product. The unexplored direction is
+        # therefore SMALLER q with LARGER k -- which also halves the ring's K-loop iterations, the
+        # thing that made k=512 win in the first place. q is restricted to the values that tile 63
+        # cores well at seq 13664: 256 (0.0% slot waste), 192 (0.0%) and 128 (0.9%).
+        # q=128 excluded: hung twice on 2026-09-17 on one Wormhole galaxy (seq_local 13632, k=512), did not
+        # reproduce on another the same day (6/6), and is slower than q=192 at every feasible k regardless.
+        ("minimax_h3_15s_768p", 13664, [192, 256], [512, 640, 768, 1024]),
+    ):
+        perf_configs[_name] = ModelConfig(
+            name=_name,
+            nhq=14,
+            nhk=14,
+            nhv=14,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            is_causal=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat16,
+            q_chunk_sizes=_q_chunks,
+            k_chunk_sizes=_k_chunks,
+            seq_len=_seq_len,
+        )
+
     return perf_configs
 
 

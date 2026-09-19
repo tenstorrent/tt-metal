@@ -18,7 +18,8 @@ frame of conditioning rows pinned at `t = 0.999` for every denoising step.
 What runs where
 ---------------
 The packed sequence holds all three modalities at once and is denoised by one 50-layer stack on
-the mesh (TP=4 on axis 0, SP on axis 1 -- 8 on a Galaxy, 32 on a quad; see `_PRESETS_BH`).
+the mesh (TP=4 on axis 0, SP on axis 1 -- 8 on a Galaxy, 32 on a quad; see `_PRESETS_BH` /
+`_PRESETS_WH`).
 Everything that decides *which* row gets which treatment is host-side and
 already gated bit-exact against the reference --- the layout, the fp64 rotary grid, the per-row
 timestep plan, both schedulers. That split is deliberate: those values are checkpoint contracts
@@ -54,6 +55,7 @@ from loguru import logger
 from PIL import Image, ImageOps
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ...encoders.qwen3vl.loader_minimax_h3 import (
     MINIMAX_H3_TEXT_ENCODER_LAYER,
@@ -94,6 +96,7 @@ from .packing import (
     build_packed_sequence,
     build_rope_tables,
     build_row_timesteps,
+    padded_sequence_length,
     patchify_video_latents,
     prepare_keyframe_image,
     resolve_canvas_size,
@@ -110,6 +113,7 @@ from .packing_ref2va import (
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
+from .weights_minimax_h3 import resolve_weights_dir
 
 # ImageNet statistics; the video VAE emits normalized RGB and the pipeline reverts it. Imported from
 # `conditioning` rather than restated: the keyframe path normalizes *into* the VAE with these and the
@@ -163,8 +167,9 @@ def _resolve_audio_t_shard(
 # the parallel config, the mesh shape, the dtype and the FSDP flag.
 MODEL_NAME = "minimax-h3"
 
-# Per-mesh-shape defaults, following `pipelines/wan/pipeline_wan.py`'s `_PRESETS_BH`. An unlisted
-# shape raises rather than defaulting, so it cannot silently ring-collective over a line fabric.
+# Per-mesh-shape defaults, following `pipelines/wan/pipeline_wan.py`'s `_PRESETS_BH`. Selected by
+# architecture in `resolve_mesh_preset`, since the same shape means different memory on each. An
+# unlisted shape raises rather than defaulting, so it cannot silently ring-collective over a line fabric.
 #
 # TP stays on axis 0 at factor 4 and SP absorbs every extra device: TP does a per-layer collective and
 # axis 0 is intra-host, while SP hides its KV all-gather inside ring attention and tolerates the
@@ -190,22 +195,44 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
     },
 }
 
+# Wormhole Galaxy. Same axes as Blackhole -- the shape arguments for TP=4 are architectural, not
+# per-chip -- but two things differ and both are memory, not parallelism:
+#
+#   * `coresident: False`. A Wormhole chip has 12 GB of DRAM against Blackhole's 32 GB, and the DiT
+#     alone fills it. Keeping the text encoder resident beside it (~1.6 GB/device) overflows by a
+#     couple of MB, so each stage is evicted before the next loads. The cost is a text-encoder
+#     reload per request, which is the trade the Residency note above describes.
+#   * `num_links: 4`, matching the 4 KB router payload the Wormhole Galaxy meshes open with.
+#
+# There is no (4, 32) entry: the quad is a Blackhole configuration.
+_PRESETS_WH: dict[tuple[int, ...], dict] = {
+    (4, 8): {"tp_axis": 0, "sp_axis": 1, "num_links": 4, "topology": ttnn.Topology.Ring, "coresident": False},
+}
+
 
 def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -> dict:
-    """The measured defaults for this mesh shape, or `{}` when unlisted and `required` is False.
+    """The measured defaults for this mesh shape on this architecture, or `{}` when unlisted and
+    `required` is False.
+
+    Keyed on architecture as well as shape, following `pipelines/flux1/pipeline_flux1.py`: a Wormhole
+    and a Blackhole Galaxy are both `(4, 8)`, and the residency that fits 32 GB/chip does not fit 12,
+    so a shape lookup alone would hand Wormhole a Blackhole-sized config and OOM in the first matmul.
 
     An unlisted shape is only an error when something is left to the preset to fill in; a caller that
     passes every parallel setting explicitly is running an untuned shape deliberately.
     """
     shape = tuple(mesh_shape)
-    preset = _PRESETS_BH.get(shape)
+    blackhole = is_blackhole()
+    presets = _PRESETS_BH if blackhole else _PRESETS_WH
+    preset = presets.get(shape)
     if preset is None:
         if not required:
             return {}
-        known = ", ".join(str(s) for s in _PRESETS_BH)
+        arch = "Blackhole" if blackhole else "Wormhole"
+        known = ", ".join(str(s) for s in presets)
         msg = (
-            f"no MiniMax-H3 preset for mesh shape {shape}; known shapes are {known}. Pass tp_axis, "
-            "sp_axis, num_links and topology explicitly to run an untuned shape."
+            f"no MiniMax-H3 preset for mesh shape {shape} on {arch}; known {arch} shapes are {known}. "
+            "Pass tp_axis, sp_axis, num_links and topology explicitly to run an untuned shape."
         )
         raise ValueError(msg)
     return preset
@@ -305,6 +332,15 @@ class MiniMaxH3Pipeline:
         topology = preset["topology"] if topology is None else topology
         coresident = preset.get("coresident", True) if coresident is None else coresident
         self.trace_denoise = preset.get("trace_denoise", False)
+        # FSDP shards the DiT's weights over the SP axis and all-gathers them per layer, the same
+        # trade the text encoder already takes. It costs a per-layer gather and buys back most of
+        # the ~10 GB/device the unsharded weights hold, which is what a 12 GB part needs to fit
+        # anything longer than 5 s. Off by default so the measured Blackhole configuration is
+        # unchanged; `MINIMAX_H3_DIT_FSDP=1` overrides either way for A/B measurement.
+        self.dit_fsdp = preset.get("dit_fsdp", False)
+        _fsdp_env = os.environ.get("MINIMAX_H3_DIT_FSDP")
+        if _fsdp_env is not None:
+            self.dit_fsdp = _fsdp_env not in ("0", "false", "False")
         # Denoise generations completed. Tracing engages only after one untraced pass; see `_denoise`.
         # The request a live trace was captured at: shapes plus the AdaLN cache object. A capture is
         # only valid for that exact request, so both are compared before reusing it.
@@ -408,18 +444,21 @@ class MiniMaxH3Pipeline:
         task: str = "t2va",
         audio_split_mode: str = "full",
         audio_t_factor: int | None = None,
+        coresident: bool | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
 
         The parallel configuration defaults to this mesh shape's entry in `_PRESETS_BH`; pass any of
         `tp_axis`/`sp_axis`/`num_links`/`topology` to override it.
         """
-        weights_dir = weights_dir or os.environ.get("MINIMAX_H3_MODEL_PATH")
-        if not weights_dir:
-            raise ValueError(
-                "MiniMax-H3 weights directory not set: pass weights_dir=... or set MINIMAX_H3_MODEL_PATH "
-                "to a diffusers snapshot holding transformer/, text_encoder/, vae/ and audio_vae/."
-            )
+        transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
+        weights_dir = resolve_weights_dir(
+            transformer_subfolder,
+            "text_encoder",
+            "vae",
+            "audio_vae",
+            weights_dir=weights_dir,
+        )
         return cls(
             mesh_device=mesh_device,
             weights_dir=weights_dir,
@@ -430,6 +469,7 @@ class MiniMaxH3Pipeline:
             task=task,
             audio_split_mode=audio_split_mode,
             audio_t_factor=audio_t_factor,
+            coresident=coresident,
         )
 
     @staticmethod
@@ -528,7 +568,22 @@ class MiniMaxH3Pipeline:
             logger.info("releasing the video VAE")
             self._vae._encoders.clear()
             self._vae._decoders.clear()
+            self._release_audio()
         self._resident = stage
+
+    def _release_audio(self) -> None:
+        """Drop the audio codec's device weights; they belong to the decode stage.
+
+        The audio VAE is small next to the DiT (~157 MiB/device here) and is built once, so on a mesh
+        where everything is co-resident it is never worth evicting. On a 12 GB part it is: it is
+        allocated *after* the DiT's first load, so it lands in the middle of the arena, and what it
+        costs the next DiT load is not its 157 MiB but the contiguous run it sits across.
+        """
+        for name in ("_audio_decoder", "_audio_encoder"):
+            module = getattr(self, name)
+            if module is not None:
+                module.deallocate_weights()
+                setattr(self, name, None)
 
     # ------------------------------------------------------------------ text
 
@@ -906,6 +961,7 @@ class MiniMaxH3Pipeline:
             parallel_config=self.dit_parallel_config,
             precomputed_adaln=True,
             cache_padding=self.trace_denoise,
+            is_fsdp=self.dit_fsdp,
         )
 
         # Cache-aware: on a hit this reads pre-sharded device tensors instead of 62 GB of
@@ -923,6 +979,9 @@ class MiniMaxH3Pipeline:
             parallel_config=self.dit_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             mesh_device=self.mesh_device,
+            # Must match the constructor: the cache key covers FSDP, so a mismatch would read
+            # unsharded tensors into a sharded model.
+            is_fsdp=self.dit_fsdp,
             get_torch_state_dict=lambda: self._read_safetensors(self.transformer_subfolder),
         )
         self._transformer = model
@@ -1825,8 +1884,7 @@ class MiniMaxH3Pipeline:
         t_preamble = time.time()
         anchor_rows = video_rows[:num_cond].clone() if num_cond else None
         anchor_audio_rows = audio_rows[:num_cond_audio].clone() if num_cond_audio else None
-        alignment = self.sp_factor * ttnn.TILE_SIZE
-        padded_len = ((layout.sequence_length + alignment - 1) // alignment) * alignment
+        padded_len = padded_sequence_length(layout.sequence_length, self.sp_factor)
         self.last_padded_len = padded_len
         logger.info(
             f"packed sequence {layout.sequence_length} -> {padded_len} padded, "
@@ -1884,6 +1942,10 @@ class MiniMaxH3Pipeline:
             transformer.traced_adaln_cache = adaln_cache
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
+        # Every-10 logging bounds a hang to a 10-step window, which is not enough to localize one.
+        # Opt in to per-step logging when hunting the intermittent device hang; off by default so
+        # ordinary runs keep their quiet logs.
+        _log_every_step = os.environ.get("TT_DIT_LOG_EVERY_STEP", "0") not in ("0", "", "false", "False")
         for i, t in enumerate(timesteps):
             t_step = time.time()
             # Per-row noise levels, reduced to the (distinct timesteps, per-row index) pair the
@@ -1939,6 +2001,13 @@ class MiniMaxH3Pipeline:
                     adaln_cache=adaln_cache,
                 )
 
+            # Host dispatch of the 50 blocks is asynchronous and takes ~0.3 s; the readback below is
+            # the only blocking point in the loop, so it absorbs the whole step's device time. That
+            # makes the two indistinguishable in a hang: log between them so a stalled run says
+            # which side it died on. See MiniMaxH3_wormhole_hang.md.
+            if _log_every_step:
+                logger.info(f"  step {i + 1}/{len(timesteps)} dispatched, reading back")
+
             # The model returns the *target* rows only, so reshape to the row width rather than to
             # `video_rows.shape`, which still counts the condition rows.
             v = local_device_to_torch(video_velocity).reshape(-1, video_rows.shape[-1]).float()
@@ -1957,8 +2026,8 @@ class MiniMaxH3Pipeline:
                 t_first = t_step
             else:
                 t_steady += t_step
-            if i % 10 == 0 or i == len(timesteps) - 1:
-                logger.info(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f}")
+            if _log_every_step or i % 10 == 0 or i == len(timesteps) - 1:
+                logger.info(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f} ({t_step:.2f}s)")
 
         # This request is now warm: a later call with the same signature may trace.
         self._trace_signature = signature

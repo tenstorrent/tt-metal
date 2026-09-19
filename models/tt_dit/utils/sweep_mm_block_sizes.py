@@ -157,20 +157,70 @@ SHAPES = [
     (3072, 5120, 1280, 8, 8, True, "plain"),
     (3072, 5120, 3456, 8, 8, True, "plain_gelu"),
     # MiniMax-H3 AGMM shapes, BH Galaxy TP=4 / SP=8, 12x9 grid (the model reserves one core column
-    # for CCL). M is the per-device packed sequence length at 768P; 4768 is the 5s case and is used
+    # for CCL). M is the per-device packed sequence length at 768P; 4736 is the 5s case (with the perf
+    # gate's 39-token prompt -- these were 4768/9216/13632 from an audio-undercounting harness until
+    # 2026-09-17; same M_per_core, so prior measurements stand) and is used
     # for all three because the model keys its block sizes on (K, N) only -- M changes with the
     # requested duration while K and N are fixed by the architecture and the TP factor.
     #   to_qkv  K_tiles_per_device = 42
     #   to_out  K_tiles_per_device = 56
     #   ff1     K_tiles_per_device = 42, fused SwiGLU
-    (4768, 5376, 5376, 12, 9, True, "qkv"),
-    (4768, 7168, 1344, 12, 9, True, "plain"),
-    (4768, 5376, 7168, 12, 9, True, "ff1_swiglu"),
+    (4736, 5376, 5376, 12, 9, True, "qkv"),
+    (4736, 7168, 1344, 12, 9, True, "plain"),
+    (4736, 5376, 7168, 12, 9, True, "ff1_swiglu"),
     # MiniMax-H3 fused MM+RS+addcmul (ff2). K = 14336 / tp = 3584 is already per-device. The core grid
     # is the *matmul* grid; the reduce-scatter takes the rows above it, so one entry per candidate grid.
-    (4768, 3584, 5376, 12, 7, False, "mmrs"),
-    (4768, 3584, 5376, 12, 8, False, "mmrs"),
-    (4768, 3584, 5376, 12, 9, False, "mmrs"),
+    (4736, 3584, 5376, 12, 7, False, "mmrs"),
+    (4736, 3584, 5376, 12, 8, False, "mmrs"),
+    (4736, 3584, 5376, 12, 9, False, "mmrs"),
+    # -----------------------------------------------------------------------
+    # MiniMax-H3 on WH Galaxy (device config wh_4x8_ring), TP=4 / SP=8.
+    #
+    # The Wormhole compute grid is 8x9 = 72 cores against Blackhole's 12x10, so none of the H3
+    # blockings above apply here: the AGMM worker grid is 8x8 (force_transpose=True reserves the
+    # last row for the in0 mux -- `agmm_worker_grid`) rather than 12x9, and `grid_89_configs` holds
+    # no H3 entry at all. M = 4768 is the 5 s @ 768P per-device packed length, the same anchor the
+    # Blackhole rows use; (K, N) are fixed by the architecture and TP=4, which is the reason the model
+    # keys `AGMM_BLOCK_SIZES` on (K, N) alone -- an assumption the duration entries below disprove
+    # on this grid.
+    # -----------------------------------------------------------------------
+    (4736, 5376, 5376, 8, 8, True, "qkv"),
+    (4736, 7168, 1344, 8, 8, True, "plain"),
+    (4736, 5376, 7168, 8, 8, True, "ff1_swiglu"),
+    # The 10 s and 15 s per-device lengths for the same three shapes. `AGMM_BLOCK_SIZES` is keyed on
+    # (K, N) alone on the argument that the block shape does not want to change with M -- but that was
+    # established on Blackhole's 120-core grid, and it does NOT hold here: ff2 at M=4768 picks
+    # (6, 8, 12), which at M=9216 ranks 71st and is 14.6% off that length's best -- worse even than
+    # the untuned (8, 8, 8) default. Landing an M=4768 blocking through a (K, N)-keyed table would
+    # therefore speed up 5 s and regress 10 s. Sweep each duration before keying anything.
+    (9184, 5376, 5376, 8, 8, True, "qkv"),
+    (13664, 5376, 5376, 8, 8, True, "qkv"),
+    (9184, 7168, 1344, 8, 8, True, "plain"),
+    (13664, 7168, 1344, 8, 8, True, "plain"),
+    (9184, 5376, 7168, 8, 8, True, "ff1_swiglu"),
+    (13664, 5376, 7168, 8, 8, True, "ff1_swiglu"),
+    # ff2 unfused on the FULL 8x9 grid. This is the path Wormhole takes today: `has_mmrs_config`
+    # now declines to fuse, so ff2 runs RowParallelLinear.forward -> get_matmul_config(4736, 3584,
+    # 5376, CoreCoord(8, 9)), misses every table and lands on the hardcoded (8, 8, 8) at subblock
+    # (2, 2). Fifty of these per denoise step, on a default blocking.
+    (4736, 3584, 5376, 8, 9, False, "ff2"),
+    # The other two durations at the same (K, N). M=4768 measured (8, 8, 8) -> (6, 8, 12), saving 15.2%,
+    # but `get_matmul_config` keys on (M, K, N), so that entry would only serve 5 s. Swept rather than
+    # assumed: the "block shape does not want to change with M" argument behind the (K, N)-keyed
+    # `AGMM_BLOCK_SIZES` was made for Blackhole's 120-core grid, and 72 cores tile M differently
+    # (M_per_core goes 19 -> 36 -> 54 across these three).
+    (9184, 3584, 5376, 8, 9, False, "ff2"),
+    (13664, 3584, 5376, 8, 9, False, "ff2"),
+    # ff2 fused MM+RS on WH, worth re-testing now the silent fallback is gone. The matmul grid must
+    # leave the reduce-scatter enough rows: at num_links=4 the runner's own `rs_zone_capacity //
+    # (2 * num_links) - 1` gives 1 worker/link at 8x7, 2 at 8x6 and 3 at 8x5. Measured: 3134.7 us at
+    # 8x7, 3610.2 at 8x6, 3996.7 at 8x5 -- monotonically worse as the RS zone grows, since every core
+    # handed to the reduce-scatter costs the matmul more than it returns. All are far off the 2373.0 us
+    # unfused matmul, so keeping Wormhole off the fused path is right. (Not a like-for-like total: the
+    # unfused figure excludes the separate reduce-scatter and addcmul, leaving them a 762 us budget.)
+    (4736, 3584, 5376, 8, 7, False, "mmrs"),
+    (4736, 3584, 5376, 8, 6, False, "mmrs"),
+    (4736, 3584, 5376, 8, 5, False, "mmrs"),
     # LTX / Wan2.2 MMRS ff2 shapes on BH 4x8 sp1tp0 (TP ring of 4 on axis 0), 12x8 matmul grid —
     # resweep under the windowed L1 handoff (see the mmrs runner: combos with >= 2 M blocks per
     # core run windowed, the rest via the DRAM handoff). LTX ff2: K = 16384/tp4, N = 4096;
@@ -189,7 +239,7 @@ SHAPES = [
     # (M = 9216 / 13632) reuse its blocking rather than being swept -- warmup compiles one program per
     # combo and compile time grows with M, so M=9216 alone is ~75 min against ~9 min here, for a block
     # shape that has little reason to change with M. To check that assumption, add
-    #   (9216, 3584, 5376, 12, 8, False, "mmrs"),
+    #   (9184, 3584, 5376,12, 8, False, "mmrs"),
     # -----------------------------------------------------------------------
     # Flux2 BH 4×8 — TP8_SP4 (bh_4x8_sp0_tp1): K_per_device = 6144/8 = 768,
     # SP=4 halves M relative to global token count. Core grid 12×9 (AGMM).
@@ -532,6 +582,12 @@ K_BLOCK_MIN = 2
 #              + M*N tiles intermediate (single-buffered, f32 = 4KB/tile)
 #              + N tiles bias (single-buffered, bf16 = 2KB/tile)
 # to_out adds: M*N tiles ternary_a (bf16) + N tiles ternary_c (bf16)
+#
+# Measured to hold on Wormhole too, despite its physically smaller L1 (1,499,136 B against
+# Blackhole's 1,572,864 B): combos estimated at up to ~1424 KB build and run on a WH Galaxy. An
+# earlier attempt to scale this down to 1328 for Wormhole was a mistake -- it excluded ff1's actual
+# optimum (10, 7, 10) at an estimated 1380 KB, and qkv's shipped (8, 7, 12) at 1352 KB, so the sweep
+# could not even measure the baseline it was supposed to beat.
 L1_BUDGET_KB = 1400
 
 # Fabric-bound strided AGMM ("sagmm") fabric parameters. Held fixed across the block
@@ -1229,7 +1285,13 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     return run_op
 
 
-PROFILER_DUMP_EVERY = 10  # call ReadDeviceProfiler every N combos to avoid buffer overflow
+# Call ReadDeviceProfiler every N combos to avoid buffer overflow. Overridable so the flush cadence
+# can be isolated when diagnosing: on a Wormhole Galaxy the sweep reproducibly stops making progress
+# at the FIRST flush boundary (combo 10) for every shape tried, including pre-existing ones, which
+# points at this call rather than at any particular blocking. Set high to take the flush out of the
+# picture -- warmup data is not measured (the signposts wrap only the measure phase), so the warmup
+# flush exists purely to keep the buffer from overflowing.
+PROFILER_DUMP_EVERY = int(os.environ.get("MM_SWEEP_PROFILER_DUMP_EVERY", "10"))
 
 
 def _execute_sweep(mesh_device, run_op, combos):
