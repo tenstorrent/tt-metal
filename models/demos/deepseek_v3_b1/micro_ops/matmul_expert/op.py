@@ -1451,7 +1451,12 @@ class ExpertKernel:
         # --- Collect all live tensors ---
         # Lockstep mesh tensors: one tensor each across the whole mesh.  Keep
         # them alive via a single reference (not per-device per-core).
-        all_ct_data = [t for ct in (sram_cts + dram_cts) for t in ct.get_data_tensors()]
+        # Operand-safe CT data only.  Per-core-allocated CTs (the SRAM hot
+        # experts) hold one single-coordinate tensor per (device, core); as
+        # operands they would narrow this op's dispatch coordinates to a single
+        # device, leaving every other device running an empty program.  The CTs
+        # themselves keep those buffers alive for the duration of this call.
+        all_ct_data = [t for ct in (sram_cts + dram_cts) for t in ct.get_operand_data_tensors()]
         all_sram_fmt = [sram_fmt_tensor] if sram_fmt_tensor is not None else []
         all_sram_base = [sram_base_addr_tensor] if sram_base_addr_tensor is not None else []
         per_device_dram = []

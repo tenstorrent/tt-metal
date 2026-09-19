@@ -6672,9 +6672,18 @@ class MoeOp:
         # Expert tensors kept alive through the backing/fmt/meta tensors added below
         # (per-projection). The CT data tensors themselves are already uploaded to L1
         # as CompressedTensors.
+        #
+        # Operand-safe accessor, as a guard: ttnn derives a mesh op's dispatch
+        # coordinates from its operands, and extract_tensor_coordinates() narrows to the
+        # smallest operand's coordinate set — so a per-core-allocated CT, which holds one
+        # SINGLE-COORDINATE tensor per (device, core), would pin the whole workload to one
+        # device and leave every other device running an empty program.  These routed CTs
+        # are lockstep today and the per-core SRAM hot-expert CTs (weights/sram_slots.py)
+        # never enter this list, so this is currently equivalent to get_data_tensors();
+        # it keeps the invariant true if hot experts are ever added here.
         for wt in [ctx.gate_proj_weights_tensor, ctx.up_proj_weights_tensor, ctx.down_proj_weights_tensor]:
             for ct in wt:
-                for data_t in ct.get_data_tensors():
+                for data_t in ct.get_operand_data_tensors():
                     io_tensors += [data_t]
         # MatmulExpertCompressedDRAM backing + meta/fmt/table_idx tensors
         for proj_params in (
