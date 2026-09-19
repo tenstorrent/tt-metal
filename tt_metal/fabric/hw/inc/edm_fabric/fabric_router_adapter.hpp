@@ -212,7 +212,7 @@ private:
     std::array<uint32_t, EDM_NUM_BUFFER_SLOTS> edm_buffer_slot_addrs;
 
     uint32_t worker_credits_stream_id;
-    // Local copy of the the free slots on the downstream router
+    // Local copy of the free slots on the downstream router
     // Downstream router will increment this when it frees up a slot
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_read_ptr;
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_update_ptr;
