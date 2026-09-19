@@ -72,6 +72,16 @@ def _wide_pages_enabled() -> bool:
     return os.environ.get(_YUV_WIDE_ENV, "0").strip().lower() in ("1", "true", "yes", "on")
 
 
+# A deferred readback ends in a full device sync that idles the device until the next wave's first program lands. With
+# MINIMAX_H3_YUV_SYNC=event the three reads are followed by a recorded event that the deferred host half waits on instead,
+# so the host enqueues the next wave while this one drains (one command queue keeps the reads ahead of the next wave).
+_YUV_SYNC_ENV = "MINIMAX_H3_YUV_SYNC"
+
+
+def _event_sync_enabled() -> bool:
+    return os.environ.get(_YUV_SYNC_ENV, "device").strip().lower() == "event"
+
+
 def _as_hwt(shard: torch.Tensor, T: int) -> torch.Tensor:
     """A wide (1, h, w*T) host shard back to the kernel-native (1, h, w, T) view; a 4-D shard passes through."""
     if shard.dim() == 4:
@@ -172,9 +182,15 @@ def _yuv_planar_d2h(
     host_Y = tt_Y.cpu(blocking=False)
     host_Cb = tt_Cb.cpu(blocking=False)
     host_Cr = tt_Cr.cpu(blocking=False)
-    ttnn.synchronize_device(mesh_device)
+    read_event = None
+    if defer and _event_sync_enabled():
+        read_event = ttnn.record_event(mesh_device, 0)
+    else:
+        ttnn.synchronize_device(mesh_device)
 
     def _host_half():
+        if read_event is not None:
+            ttnn.event_synchronize(read_event)
         if view is not None:
             # --- Multi-host: extract local shards via host_buffer/get_shard ---
             def _extract_local(host_tensor):
