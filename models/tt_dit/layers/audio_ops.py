@@ -64,7 +64,20 @@ DEFAULT_MAX_C_IN_BLOCK = 128
 # no-residual path began rounding weights to bf16 on the host, which moved the bytes of every
 # configuration that carries a conv without a residual term (off, act, resampler-split off). It is
 # applied to every variant, not just those, so the rule stays "changed the bytes, bump the token".
-_WEIGHT_PREP_REVISION = 2
+# Revision 3: the H3 audio blocking table covers every kernel size up to 32, so the packed bands'
+# convs (K' 5/15/17/27) get a real C_in_block instead of the 32-wide default, which re-blocks their
+# prepared weights.
+_WEIGHT_PREP_REVISION = 3
+
+# The legacy (pre-revision-3) kernel table, kept behind MINIMAX_H3_AUDIO_KERNEL_TABLE=legacy for A/B runs;
+# its prepared bytes differ for the packed shapes, so it carries its own cache-key term.
+LEGACY_KERNEL_TABLE_ENV = "MINIMAX_H3_AUDIO_KERNEL_TABLE"
+
+
+def legacy_kernel_table() -> bool:
+    import os
+
+    return os.environ.get(LEGACY_KERNEL_TABLE_ENV, "full") == "legacy"
 
 
 def weights_variant(
@@ -96,6 +109,8 @@ def weights_variant(
         suffix += "_pack" + "-".join(f"{b}x{k}" for b, k in sorted(pack_bands.items()))
         if resampler_split_mode is not None and resampler_split_mode != split_mode:
             suffix += f"_rs-{resampler_split_mode}"
+    if legacy_kernel_table():
+        suffix += "_ktlegacy"
     return f"{suffix}_wp{_WEIGHT_PREP_REVISION}"
 
 
