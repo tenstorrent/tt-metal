@@ -145,8 +145,8 @@ class MiniMaxH3ViTAttention(Module):
         self.rope_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
         # "heads": SDPA writes (B, H, S, D) and nlp_concat_heads reorders it; "op": SDPA writes the concat layout
         # itself (output_concat_heads), one program less per layer. Bit-identical.
-        self.sdpa_concat = os.environ.get("MINIMAX_H3_SDPA_CONCAT", "heads")
-        self.rope_view = os.environ.get("MINIMAX_H3_ROPE_VIEW", "heads")
+        self.sdpa_concat = os.environ.get("MINIMAX_H3_SDPA_CONCAT", "op")
+        self.rope_view = os.environ.get("MINIMAX_H3_ROPE_VIEW", "batch")
         # "op": ttnn.rms_norm on q and k, then RoPE; "fused": the RMS runs as a prologue inside rotary_embedding_llama
         # (rms_norm_eps), 72 LayerNorm launches per wave gone. Gated on RMSE vs float64 (tools/rope_rms_probe.py).
         self.qk_rms = os.environ.get("MINIMAX_H3_QK_RMS", "op")
