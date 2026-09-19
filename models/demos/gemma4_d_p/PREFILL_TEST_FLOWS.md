@@ -2,6 +2,8 @@
 
 ## Run the tests
 
+Both tests require a Blackhole 8×4 mesh, a [tt-metal source build](../../../INSTALLING.md#source) with its Python environment, the Gemma4-31B-it checkpoint, and the [GPU capture](PREFILL_MIGRATION.md#gpu-reference). The checkpoint and capture are separate from the repository; provision them before running. The commands below use the canonical model paths.
+
 From the tt-metal repository root, in both terminals for loopback:
 
 ```bash
@@ -17,7 +19,7 @@ export PREFILL_TTNN_CACHE="$TT_CACHE_PATH"
 
 ### Mock, 16K
 
-The test starts the runner and producer automatically.
+The test starts the runner and producer automatically. It does not require tt-llm-engine.
 
 ```bash
 pytest 'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[mock-16k]' -sv
@@ -25,16 +27,49 @@ pytest 'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_mi
 
 ### Loopback, 16K
 
-The test starts the model runner and migration driver. Start the migration endpoint separately and keep it running until the test finishes. These commands use the compatible temporary tt-llm-engine build on this machine, OpenMPI at `/opt/openmpi-v5.0.7-ulfm`, and TCP over `eth0`.
+The test starts the model runner and migration driver. Build the external migration dependency, then start its endpoint separately and keep it running until the test finishes.
+
+**Loopback environment — both terminals:**
+
+Use OpenMPI 5 with ULFM and PRRTE, provided by tt-metal's [dependency installer](../../../install_dependencies.sh). These commands use its default installation path. The tt-llm-engine checkout lives alongside tt-metal; set `TT_LLM_ENGINE_DIR` to another location if needed.
+
+```bash
+export TT_LLM_ENGINE_DIR="$TT_METAL_HOME/../tt-llm-engine"
+export MIGRATION_BUILD_DIR="$TT_LLM_ENGINE_DIR/disaggregation/migration/build_RelWithDebInfo"
+export PREFILL_MIGRATION_CLIENT_DIR="$MIGRATION_BUILD_DIR/python"
+export MPI_HOME=/opt/openmpi-v5.0.7-ulfm
+export PATH="$MPI_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$MPI_HOME/lib:$TT_METAL_HOME/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+**One-time setup — clone and build tt-llm-engine:**
+
+This requires GitHub access to `tenstorrent/tt-llm-engine`, the tt-metal build toolchain, and Protobuf and libibverbs development packages. On Ubuntu, from the tt-metal root with `python_env` active:
+
+```bash
+sudo apt-get install protobuf-compiler libprotobuf-dev libibverbs-dev
+git clone git@github.com:tenstorrent/tt-llm-engine.git "$TT_LLM_ENGINE_DIR"
+(
+    cd "$TT_LLM_ENGINE_DIR"
+    export TT_METAL_DIR="$TT_METAL_HOME" TT_METAL_BUILD_DIR="$TT_METAL_HOME/build"
+    export CC=clang-20 CXX=clang++-20
+    ./build_migration_layer.sh --build-type=RelWithDebInfo --no-device-tests \
+        --targets='migration_endpoint migration_worker _migration_client' --jobs=8
+)
+```
+
+The build uses this tt-metal checkout and its existing libraries. `--no-device-tests` skips the dependency's own tests; the migration worker still supports real hardware. It produces the endpoint and worker under `$MIGRATION_BUILD_DIR/bin` and the Python client under `$MIGRATION_BUILD_DIR/python`.
 
 **Terminal 1 — start the endpoint:**
 
+Set `MIGRATION_NETWORK_INTERFACE` to this host's network interface; `eth0` below is an example. This single-host test uses TCP transport.
+
 ```bash
-export MIGRATION_BUILD_DIR=/tmp/gemma4-loopback-tt-llm-engine/disaggregation/migration/build_RelWithDebInfo
-export PATH=/opt/openmpi-v5.0.7-ulfm/bin:$PATH
-export LD_LIBRARY_PATH=/opt/openmpi-v5.0.7-ulfm/lib:$TT_METAL_HOME/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-export OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,tcp OMPI_MCA_btl_tcp_if_include=eth0
-export PRTE_MCA_oob_tcp_if_include=eth0 PMIX_MCA_ptl_tcp_if_include=eth0
+export MIGRATION_NETWORK_INTERFACE=eth0
+export OMPI_MCA_pml=ob1 OMPI_MCA_btl=self,tcp
+export OMPI_MCA_btl_tcp_if_include="$MIGRATION_NETWORK_INTERFACE"
+export PRTE_MCA_oob_tcp_if_include="$MIGRATION_NETWORK_INTERFACE"
+export PMIX_MCA_ptl_tcp_if_include="$MIGRATION_NETWORK_INTERFACE"
 export MIGRATION_DEVICE_BACKEND=umd
 
 "$MIGRATION_BUILD_DIR/bin/migration_endpoint" \
@@ -47,9 +82,6 @@ export MIGRATION_DEVICE_BACKEND=umd
 **Terminal 2 — wait for endpoint readiness, then run the test:**
 
 ```bash
-export MIGRATION_BUILD_DIR=/tmp/gemma4-loopback-tt-llm-engine/disaggregation/migration/build_RelWithDebInfo
-export PREFILL_MIGRATION_CLIENT_DIR="$MIGRATION_BUILD_DIR/python"
-
 python "$MIGRATION_BUILD_DIR/../_migration_endpoint_driver.py" \
     --client-dir "$PREFILL_MIGRATION_CLIENT_DIR" \
     --cmd-queue /mig_ep1_cmd --table-queue /mig_ep1_table --resp-queue /mig_ep1_resp \
