@@ -76,7 +76,10 @@ int main(int argc, char** argv) {
     const auto sub =
         experimental::streaming_profiler::RegisterCallback("zones-example", [&](const Batch<RecordType::All>& b) {
             totals.zones += b.zones().size();
-            totals.points += b.events().size() + std::ranges::distance(b.timestamped_data());
+            // The profiler's own stack markers (STACK-FREE per launch, STACK-OVERFLOW) are not the workload's points.
+            const auto ours = [](const auto& r) { return !r.site().name.starts_with("STACK-"); };
+            totals.points +=
+                std::ranges::count_if(b.events(), ours) + std::ranges::count_if(b.timestamped_data(), ours);
             totals.stalls += b.stall_count();
         });
 

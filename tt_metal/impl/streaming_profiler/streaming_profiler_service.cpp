@@ -288,8 +288,90 @@ void Service::warn_missed(const Consumer& c) {
     }
 }
 
+namespace {
+// The kernels' stack canary (kernel_profiler_streaming.hpp stackCanaryScope): each kernel zone reports, as a
+// STACK-FREE marker, how much of the painted floor region its stack left untouched and the region's size, or a
+// STACK-OVERFLOW event when it crossed the floor. Kept per RISC and logged at the end: a kernel near its floor is
+// what turns the next instrumentation change into corrupted data.
+struct StackWatch {
+    using Batch = api::Batch<api::RecordType::TimestampedData | api::RecordType::Events>;
+    std::array<uint64_t, 5> min_free{};
+    std::array<uint64_t, 5> region{};  // the least painted floor region
+    std::array<bool, 5> inside{};      // some launch's stack reached into the painted region
+    std::array<uint64_t, 5> reports{};
+    std::array<uint64_t, 5> overflows{};
+    StackWatch() {
+        min_free.fill(~0ull);
+        region.fill(~0ull);
+    }
+    void operator()(const Batch& b) {
+        for (const api::TimestampedData& d : b.timestamped_data()) {
+            if (d.site().name != "STACK-FREE" || d.payload().empty()) {
+                continue;
+            }
+            const size_t r = static_cast<size_t>(d.core().risc);
+            if (r < min_free.size()) {
+                const uint64_t v = d.payload().front();
+                const uint64_t free = v & 0xFFFFFFFFu, painted = v >> 32;
+                min_free[r] = std::min(min_free[r], free);
+                region[r] = std::min(region[r], painted);
+                inside[r] = inside[r] || free < painted;
+                reports[r]++;
+            }
+        }
+        for (const api::Event& e : b.events()) {
+            if (e.site().name == "STACK-OVERFLOW") {
+                const size_t r = static_cast<size_t>(e.core().risc);
+                if (r < overflows.size()) {
+                    overflows[r]++;
+                }
+            }
+        }
+    }
+    void report() const {
+        static constexpr const char* kRisc[5] = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
+        for (size_t r = 0; r < 5; r++) {
+            if (reports[r] == 0 && overflows[r] == 0) {
+                continue;
+            }
+            if (overflows[r] != 0) {
+                log_warning(
+                    tt::LogMetal,
+                    "[streaming profiler] {}: {} kernel launches overwrote the stack floor word (stack overflow); "
+                    "least headroom reported {} B over {} launches",
+                    kRisc[r],
+                    overflows[r],
+                    min_free[r] == ~0ull ? 0 : min_free[r],
+                    reports[r]);
+            } else if (inside[r]) {
+                log_info(
+                    tt::LogMetal,
+                    "[streaming profiler] {}: least stack headroom {} B over {} kernel launches",
+                    kRisc[r],
+                    min_free[r],
+                    reports[r]);
+            } else {
+                log_info(
+                    tt::LogMetal,
+                    "[streaming profiler] {}: the stack never came within {} B of its floor over {} kernel launches",
+                    kRisc[r],
+                    region[r],
+                    reports[r]);
+            }
+        }
+    }
+};
+}  // namespace
+
 void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptions) {
     std::call_once(builtins_once_, [&] {
+        {
+            auto w = std::make_shared<StackWatch>();
+            add_consumer("stack-watch", [w](const api::Batch<api::RecordType::All>& full, uint64_t) {
+                (*w)(StackWatch::Batch(full));
+            });
+            file_sinks_.push_back([w] { w->report(); });
+        }
         if (rtoptions.get_streaming_profiler_tracy_enabled()) {
             tracy_ = std::make_unique<TracySink>(*this);
         }

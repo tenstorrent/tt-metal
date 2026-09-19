@@ -528,19 +528,39 @@ PROFILER_INLINE_ATTR void record_event(uint32_t data_id) {
 }
 
 // Watcher-off net for a globals-heavy kernel whose loader-guaranteed stack floor is only MEM_*_STACK_MIN_SIZE
-// (192-256 B): plant one word at __stack_base when the kernel zone opens, check it at close, emit a named
-// PP_EVENT if frame data overwrote it. The pattern is the watcher's stack_usage_pattern on purpose, so an
-// intact canary reads as painted-and-unused to measure_stack_usage(). Compiled out for firmware
-// (__stack_base is a kernel-link symbol) and active ERISC (stack guarded by -Werror=stack-usage).
+// (192-256 B): the kernel zone's open paints the floor region with the watcher's pattern, its close finds the deepest
+// word the kernel reached there and reports as a STACK-FREE marker the bytes left untouched and the bytes painted
+// (the service logs the minimum per RISC), or a STACK-OVERFLOW event when the floor word itself was overwritten.
+// Compiled out for
+// firmware (__stack_base is a kernel-link symbol) and active ERISC (stack guarded by -Werror=stack-usage).
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_ERISC)
 TT_ZONE_DEFINE_ID(STACK_CANARY_DEAD_ID, "STACK-OVERFLOW");
+TT_ZONE_DEFINE_ID(STACK_FREE_ID, "STACK-FREE");
 constexpr uint32_t STACK_CANARY_PATTERN = 0xBABABABA;  // == watcher stack_usage_pattern
 struct stackCanaryScope {
-    inline __attribute__((always_inline)) stackCanaryScope() { ::__stack_base[0] = STACK_CANARY_PATTERN; }
+    uint32_t painted = 0;  // words painted, from the floor up to just under the frame live at the open
+    inline __attribute__((always_inline)) stackCanaryScope() {
+        uint32_t sp;
+        asm volatile("mv %0, sp" : "=r"(sp));
+        // The floor region only (MEM_*_STACK_MIN_SIZE is at most 256 B): a kernel deeper than that is the one to know
+        // about, and 64 stores per launch cost nothing.
+        const uint32_t base = reinterpret_cast<uint32_t>(::__stack_base);
+        painted = sp > base + 64 ? (sp - 64 - base) / 4 : 1;
+        painted = painted > 64 ? 64 : painted;
+        for (uint32_t i = 0; i < painted; i++) {
+            ::__stack_base[i] = STACK_CANARY_PATTERN;
+        }
+    }
     inline __attribute__((always_inline)) ~stackCanaryScope() {
         if (__builtin_expect(::__stack_base[0] != STACK_CANARY_PATTERN, 0)) {
             record_event(STACK_CANARY_DEAD_ID);
+            return;
         }
+        uint32_t untouched = 1;
+        while (untouched < painted && ::__stack_base[untouched] == STACK_CANARY_PATTERN) {
+            untouched++;
+        }
+        time_stamped_data(STACK_FREE_ID, (uint64_t{painted} << 32 | untouched) * 4);
     }
 };
 #else
