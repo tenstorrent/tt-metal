@@ -13,15 +13,26 @@
 
 namespace ttnn::operations::experimental::topk_large_indices::program {
 
+// One core's work: a contiguous block of rows, or, when the rows are fewer than the cores, one column
+// segment (a run of whole K chunks, the last one carrying the row tail) of one row.
 struct CoreRowAssignment {
     CoreCoord core{};
     uint32_t start_row{};
     uint32_t num_rows{};
+    // Row chunks [seg_first_chunk, seg_end_chunk) of every assigned row; the kernels clip the end to the
+    // valid length. seg_end_chunk is UINT32_MAX for whole rows.
+    uint32_t seg_first_chunk{};
+    uint32_t seg_end_chunk{};
+    // Position among the num_segments column segments of the row (0 when the row is not split).
+    uint32_t segment_index{};
+    uint32_t num_segments{1};
 };
 
 // This is the canonical mapping used to populate reader/writer runtime arguments. Keeping it visible
-// allows a host-only unit test to pin ordering across discontiguous CoreRangeSets.
-std::vector<CoreRowAssignment> derive_core_row_assignments(const CoreRangeSet& core_grid, uint32_t num_rows);
+// allows a host-only unit test to pin ordering across discontiguous CoreRangeSets. num_chunks is the
+// number of K chunks in the searched row prefix and bounds the column split.
+std::vector<CoreRowAssignment> derive_core_row_assignments(
+    const CoreRangeSet& core_grid, uint32_t num_rows, uint32_t num_chunks);
 
 struct TopkLargeIndicesSharedVariables {
     tt::tt_metal::KernelHandle reader_kernel_id{};
@@ -31,7 +42,10 @@ struct TopkLargeIndicesSharedVariables {
     std::vector<CoreCoord> cores{};
     ttnn::Shape input_shape;
     std::optional<uint32_t> valid_length;
+    uint32_t llk_k = 0;
+    uint32_t max_tree_rounds = 0;
     uint32_t num_rows = 0;
+    uint32_t num_chunks = 0;
 };
 
 struct TopkLargeIndicesProgramFactory {
