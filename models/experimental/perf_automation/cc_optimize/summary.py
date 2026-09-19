@@ -574,12 +574,27 @@ def _measured_stage_ms(model: str = "", task: str = "") -> dict:
 
     These come from the PIPELINE_STAGES the MODEL declares -- prefill/decode measured by the
     harness -- so they are the only phase numbers in this report that are not prose.
+
+    TWO SOURCES, ONE OF WHICH CANNOT DISAGREE WITH THE HEADLINE. read_stage_ms comes from a
+    per-run doc that only updates when a measurement happens to pass stages_json (an optional
+    argument on record_kernel_attempt); fullpipe_bar_stages comes from the SAME file as the
+    headline full_pipeline_ms, ratcheted alongside it on every real commit. Read independently,
+    the two update on different triggers and neither is authoritative -- observed diverging in
+    both directions (one run's stage_ms ahead of its 1cq bar, another's behind), which is a report
+    printing two different numbers for the same "current" measurement with nothing flagging it.
+    The bar's own split wins per stage since it is definitionally in sync with itself; the legacy
+    doc only fills in a stage the bar has not covered (e.g. before any 1cq measurement exists).
     """
     m = _perf_mcp()
     try:
-        return (m.read_stage_ms(model=model, task=task) or {}) if m else {}
+        legacy = (m.read_stage_ms(model=model, task=task) or {}) if m else {}
     except Exception:  # noqa: BLE001
-        return {}
+        legacy = {}
+    try:
+        authoritative = (m.fullpipe_bar_stages() or {}) if m else {}
+    except Exception:  # noqa: BLE001
+        authoritative = {}
+    return {**legacy, **authoritative}
 
 
 def _pinned_stage_bytes(stage, model: str = "", task: str = ""):

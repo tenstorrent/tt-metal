@@ -6817,6 +6817,22 @@ def _reliable_forward_unit() -> str:
         return ""
 
 
+def fullpipe_bar_stages() -> dict:
+    """The committed-best per-stage split carried in the SAME file as the headline, or {}.
+
+    _record_fullpipe_candidate stamps every declared stage here on each real measurement, and
+    _promote_fullpipe_pending ratchets it (_min_stages) alongside the headline it shares a file
+    with -- so it can never disagree with the headline the way a value read from a separate file,
+    updated on its own trigger, can. Read by summary._measured_stage_ms as the preferred source for
+    the report's MEASURED stage timings, over the legacy per-run stage_ms doc.
+    """
+    try:
+        d = json.loads(_FULLPIPE_BASELINE_1CQ_PATH.read_text()).get("stages") or {}
+        return {str(k): float(v) for k, v in d.items() if isinstance(v, (int, float)) and v > 0}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 # Set once the facts rebuild has been attempted in this process -- see _load_perf_target_inputs.
 _PTIN_REBUILD_TRIED = False
 
