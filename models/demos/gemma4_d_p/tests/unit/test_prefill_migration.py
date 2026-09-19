@@ -16,11 +16,13 @@ from models.demos.gemma4_d_p.tt.runners.adapter import Gemma4PrefillAdapter, Gem
 from models.demos.gemma4_d_p.tt.runners.kv_caches import Gemma4KvCaches
 from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import build_kv_chunk_address_table
 from models.demos.gemma4_d_p.tt.runners.kv_validation import (
+    PREPARED_GPU_TRACE_LAYOUT,
     cache_pcc,
     load_gpu_cache_heads,
     read_cache_head,
     read_slot_kv_and_check_pcc,
 )
+from models.demos.gemma4_d_p.tt.runners.prepare_gpu_reference import prepare_layer
 from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
 
 
@@ -169,9 +171,32 @@ def test_shared_producer_checks_packed_global_and_sliding_kv(caches_and_mesh, mo
     assert read_slot_kv_and_check_pcc(table, {}, 0, 32, tmp_path)["global_v"] == 0.0
 
 
-def test_pcc_rejects_nonfinite_values(expect_error):
+@pytest.mark.parametrize("nonfinite", [float("nan"), float("inf")])
+def test_pcc_rejects_nonfinite_values(expect_error, nonfinite):
+    expected = torch.ones(4097, 256)
+    actual = expected.clone()
+    actual[-1, -1] = nonfinite
     with expect_error(ValueError, "finite"):
-        cache_pcc(torch.ones(32), torch.full((32,), float("nan")))
+        cache_pcc(expected, actual)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_pcc_matches_float64_across_blocks(dtype):
+    values = (torch.arange(5003 * 640).reshape(5003, 640) % 257 - 128).float()
+    offsets = torch.arange(5003).reshape(-1, 1).remainder(997)
+    expected = values.to(dtype)[:, 128:]
+    actual = (values * 0.75 + offsets).to(dtype)[:, 128:]
+    reference = torch.corrcoef(torch.stack((expected, actual)).double().reshape(2, -1))[0, 1]
+    assert cache_pcc(expected, actual) == pytest.approx(float(reference), rel=0, abs=1e-10)
+
+
+def test_pcc_constant_and_identical_inputs():
+    values = torch.full((4097, 256), 1e9)
+    assert cache_pcc(values, values) == 1.0
+    assert cache_pcc(values, values * 2) == 0.0
+    varying = torch.arange(4097).reshape(-1, 1).float()
+    assert cache_pcc(varying, -varying) == pytest.approx(-1.0)
+    assert cache_pcc(varying, torch.ones_like(varying)) == 0.0
 
 
 def test_gpu_trace_requires_complete_contiguous_rows(tmp_path, expect_error):
@@ -235,11 +260,12 @@ def test_bank_reads_restore_token_order(monkeypatch, expect_error):
         read_cache_head(table, {}, 0, 0, 4, blocks * 32, width)
 
 
-def test_command_queue_read_restores_chunk_order(monkeypatch):
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_command_queue_read_restores_chunk_order(monkeypatch, dtype):
     from models.demos.gemma4_d_p.tt.runners import kv_validation
 
     heads, width, tokens, chunk_size = 16, 32, 512, 256
-    expected = torch.arange(heads * tokens * width).reshape(heads, tokens, width).float()
+    expected = (torch.arange(heads * tokens * width).reshape(heads, tokens, width) % 113).to(dtype)
     positions = [
         chunk + rank * 32 + row for rank in range(8) for chunk in range(0, tokens, chunk_size) for row in range(32)
     ]
@@ -271,3 +297,44 @@ def test_command_queue_read_restores_chunk_order(monkeypatch):
     actual = kv_validation.read_cache_tensor(cache, 3, tokens)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
     assert released == [selected, row_major]
+
+
+@pytest.mark.parametrize("layer", [0, 5])
+def test_prepared_gpu_reference_preserves_heads_and_prefixes(tmp_path, layer):
+    source, prepared = tmp_path / "source", tmp_path / "prepared"
+    directory = source / "kv_cache" / f"layer_{layer}"
+    directory.mkdir(parents=True)
+    (prepared / "kv_cache").mkdir(parents=True)
+    width = 4096 if layer == 5 else 8192
+    rows = (torch.arange(32 * width).reshape(32, width) % 251 - 125).bfloat16()
+    for start in (0, 16):
+        save_file(
+            {f"kv_post_transform_layer_{layer}": rows[start : start + 16].contiguous()},
+            str(directory / f"rows_{start:08d}_{start + 16:08d}.safetensors"),
+        )
+    prepare_layer(source, prepared, layer, 32)
+    for tokens in (16, 23, 32):
+        expected = load_gpu_cache_heads(source, layer, tokens)
+        actual = load_gpu_cache_heads(prepared, layer, tokens)
+        assert actual.keys() == expected.keys()
+        for config in expected:
+            assert actual[config].is_contiguous()
+            assert torch.equal(actual[config], expected[config])
+
+
+@pytest.mark.parametrize(
+    "head_count,tokens,dtype,message",
+    [(3, 32, torch.bfloat16, "head names"), (4, 16, torch.bfloat16, "shape"), (4, 32, torch.float32, "BF16")],
+)
+def test_prepared_gpu_reference_rejects_invalid_tensors(tmp_path, expect_error, head_count, tokens, dtype, message):
+    from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import CONFIG_NAMES
+
+    directory = tmp_path / "kv_cache"
+    directory.mkdir()
+    save_file(
+        {CONFIG_NAMES[head]: torch.zeros(tokens, 640, dtype=dtype) for head in range(head_count)},
+        str(directory / "layer_5.safetensors"),
+        metadata={"layout": PREPARED_GPU_TRACE_LAYOUT},
+    )
+    with expect_error(ValueError, message):
+        load_gpu_cache_heads(tmp_path, 5, 32)
