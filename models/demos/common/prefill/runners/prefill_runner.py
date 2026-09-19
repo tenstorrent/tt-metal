@@ -603,9 +603,27 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         teardown_timeout_ms=30000,
     )
     if use_d2h:
-        first_layer_idx, num_my_layers = compute_layer_split(
-            NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
-        )[rank]
+        # ACK space, not layer space. LayerAckService derives every record's identity from a plain
+        # counter -- seq = (k // local_layers) * num_layers + first_layer_idx + k % local_layers --
+        # so it must be told how many records this rank actually EMITS, not how many layers it
+        # holds. A hybrid stack acks only on KV-writing layers (`block.py` gates the ack on
+        # `attention.writes_kv`), so a 24-layer Kimi-K3 rank emits 6 records per chunk against a
+        # configured 24: four real chunks are then labelled as one, every layer_idx and request_id
+        # is fabricated, and the reorder buffer strands the tail because the ranks fill their
+        # blocks at different rates (the 21-layer rank needs 3.5 chunks per block, the others 4).
+        # Dense models have one ack per layer, so acks == layers and this is a no-op for them.
+        splits = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS))
+        ack_layer_ids = getattr(ADAPTER, "kv_slot_layer_ids", lambda n: None)(NUM_LAYERS)
+        if ack_layer_ids is None:
+            acks_per_rank = [count for _, count in splits]
+        else:
+            ack_layer_ids = sorted(ack_layer_ids)
+            acks_per_rank = [
+                sum(1 for layer in ack_layer_ids if first <= layer < first + count) for first, count in splits
+            ]
+        num_ack_layers = sum(acks_per_rank)
+        first_layer_idx = sum(acks_per_rank[:rank])
+        num_my_layers = acks_per_rank[rank]
         d2h_service = ttnn.D2HStreamService(
             mesh_device,
             global_spec=None,
@@ -617,7 +635,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             d2h_service,
             ring_shm_name,
             source_rank=rank,
-            num_layers=NUM_LAYERS,
+            num_layers=num_ack_layers,
             first_layer_idx=first_layer_idx,
             local_layers=num_my_layers,
         )
