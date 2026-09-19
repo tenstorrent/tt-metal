@@ -155,20 +155,11 @@ _AUDIO_TRACE_ENV = "MINIMAX_H3_AUDIO_TRACE"
 # Separate the audio stage's phases (host prep, upload, projection, vocoder, readback). Costs a synchronize
 # between each, so the total it reports is inflated and only the shares mean anything.
 _AUDIO_PHASES_ENV = "MINIMAX_H3_AUDIO_PHASES"
-# Dtype of the video VAE's tile blend when the caller passes none. "fp32" is the gated default; "bf16" keeps the
-# precision the decoder emits and halves the bytes through unpatchify, the gathers and the blend.
-_VAE_BLEND_DTYPE_ENV = "MINIMAX_H3_VAE_BLEND_DTYPE"
-_DEFAULT_VAE_BLEND_DTYPE = "fp32"
 
 
 def _audio_trace_enabled() -> bool:
     """Explicit kwarg wins; else MINIMAX_H3_AUDIO_TRACE; else on (the vocoder replays a captured graph: 0.5 -> 0.3 s)."""
     return os.environ.get(_AUDIO_TRACE_ENV, "1").strip().lower() in ("1", "true", "yes", "on")
-
-
-def _vae_blend_dtype() -> str:
-    """Explicit kwarg wins; else MINIMAX_H3_VAE_BLEND_DTYPE; else fp32."""
-    return os.environ.get(_VAE_BLEND_DTYPE_ENV, _DEFAULT_VAE_BLEND_DTYPE).strip().lower()
 
 
 def _audio_resampler_split_mode() -> str | None:
@@ -380,7 +371,6 @@ class MiniMaxH3Pipeline:
         vae_output_type: str = "float",
         vae_stitch_exchange: str = "gather",
         vae_profile: bool = False,
-        vae_blend_dtype: str | None = None,
         audio_trace: bool | None = None,
     ) -> None:
         # VSA (video sparse attention, VSA_SCOPE.md): None (default) leaves the dense paths
@@ -495,7 +485,6 @@ class MiniMaxH3Pipeline:
         # inflates the stage -- diagnostics only, never a measurement configuration.
         self.vae_stitch_exchange = vae_stitch_exchange
         self.vae_profile = bool(vae_profile)
-        self.vae_blend_dtype = vae_blend_dtype or _vae_blend_dtype()
         self._video_processor = None
         self._vision_tower = None
         self._vision_config = None
@@ -538,7 +527,6 @@ class MiniMaxH3Pipeline:
         vae_output_type: str = "float",
         vae_stitch_exchange: str = "gather",
         vae_profile: bool = False,
-        vae_blend_dtype: str | None = None,
         audio_trace: bool | None = None,
     ) -> "MiniMaxH3Pipeline":
         """`task="t2va"` serves both t2va and fl2va; `task="ref2va"` loads `transformer_ref/`.
@@ -576,7 +564,6 @@ class MiniMaxH3Pipeline:
             vae_output_type=vae_output_type,
             vae_stitch_exchange=vae_stitch_exchange,
             vae_profile=vae_profile,
-            vae_blend_dtype=vae_blend_dtype,
         )
 
     @staticmethod
@@ -1411,7 +1398,6 @@ class MiniMaxH3Pipeline:
                 ccl_manager=self.ccl_manager,
                 device_stitch=yuv,
                 stitch_exchange=self.vae_stitch_exchange,
-                blend_dtype=self.vae_blend_dtype,
                 profile=self.vae_profile,
                 # Folded into `proj_out`, so the decoder emits the `[-1, 1]` both the colour kernel
                 # and the uint8 cast take, and `_decode_video` is left with at most a range shift.
