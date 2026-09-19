@@ -54,6 +54,9 @@ RECIPES = {
     "act_off_ge5": {"all": "act", "bands_ge": (5, "off"), "post": "off"},
     # time-packed late bands (layers/audio_pack.py): 2 steps/row at 16 ch, 4 steps/row at 8 ch
     "full_pack": {"pack": {5: 2, 6: 4}},
+    # the full split done inside conv3d (Conv3dConfig.operand_split): same operands, one launch per conv
+    "kernel": {"all": "kernel"},
+    "kernel_pack": {"all": "kernel", "pack": {5: 2, 6: 4}},
     "act_pack": {"all": "act", "pack": {5: 2, 6: 4}},
     "off_pack": {"all": "off", "pack": {5: 2, 6: 4}},
     "act_off_ge3_pack": {"all": "act", "bands_ge": (3, "off"), "post": "off", "pack": {5: 2, 6: 4}},
@@ -175,6 +178,7 @@ def _best(fn, mesh_device, n=3):
 # regression in the packed default does.
 FIDELITY_FLOORS = {
     "full_pack": (66.0, 0.006),
+    "kernel_pack": (66.0, 0.006),
     "full": (66.0, 0.006),
     "off_pack": (52.0, 0.020),
 }
@@ -207,6 +211,13 @@ def test_audio_decode_squeeze(mesh_device, num_latent_frames, batch):
         finally:
             decoder.release_trace()
         assert out.shape == expected.shape, f"{name}: shape {tuple(out.shape)} != reference {tuple(expected.shape)}"
+        if os.environ.get("SQZ_DUMP_DIR"):
+            # Raw device output, for A/Bs that live in separate processes (e.g. env-selected blocking tables).
+            os.makedirs(os.environ["SQZ_DUMP_DIR"], exist_ok=True)
+            tag = os.environ.get("SQZ_DUMP_TAG", "")
+            torch.save(
+                out.cpu(), os.path.join(os.environ["SQZ_DUMP_DIR"], f"{name}_{num_latent_frames}lat_b{batch}{tag}.pt")
+            )
         db_ref = psnr(expected, out)
         mel = _log_mel_distance(expected, out)
         if baseline_out is None:

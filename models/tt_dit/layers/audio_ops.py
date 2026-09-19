@@ -48,9 +48,10 @@ def _warn_padded_out_channels(unpadded: int, padded: int) -> None:
         _warn_once(("padded_out", unpadded, padded), f"Padding out_channels from {unpadded} to {padded}")
 
 
-CONV_SPLIT_MODES = ("off", "weight", "act", "full", "stack")
-# Modes that carry a prepared weight residual (``weight_lo``).
-WEIGHT_SPLIT_MODES = ("weight", "full")
+CONV_SPLIT_MODES = ("off", "weight", "act", "full", "stack", "kernel")
+# Modes that carry a prepared weight residual (``weight_lo``). "kernel" is the full split done inside conv3d
+# (Conv3dConfig.operand_split): one launch, one gather, three K passes into one fp32 accumulation.
+WEIGHT_SPLIT_MODES = ("weight", "full", "kernel")
 # Operand blocks of the stacked split: one conv over [x_hi | x_hi | x_lo] against [W_hi ; W_lo ; W_hi].
 STACK_BLOCKS = 3
 
@@ -80,6 +81,14 @@ def legacy_kernel_table() -> bool:
     return os.environ.get(LEGACY_KERNEL_TABLE_ENV, "full") == "legacy"
 
 
+# Largest conv kernel size the in-kernel operand split (`split_mode="kernel"`) is used for; larger kernels
+# take the three-conv host split. MINIMAX_H3_KERNEL_SPLIT_MAX_K overrides (99 = every conv in-kernel).
+def kernel_split_max_k() -> int:
+    import os
+
+    return int(os.environ.get("MINIMAX_H3_KERNEL_SPLIT_MAX_K", "7"))
+
+
 def weights_variant(
     split_mode: str,
     max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
@@ -101,14 +110,17 @@ def weights_variant(
     ``"_split-full_tap1"``, so it can never collide with a stale cache from either. The caller
     must pass the same values it constructed its modules with.
     """
-    suffix = "" if split_mode == "off" else f"_split-{split_mode}"
+    # "kernel" consumes exactly the prepared set "full" writes (W_hi + W_lo), so it shares that cache.
+    variant = "full" if split_mode == "kernel" else split_mode
+    suffix = "" if variant == "off" else f"_split-{variant}"
     if max_c_in_block != DEFAULT_MAX_C_IN_BLOCK:
         suffix += f"_cinb{max_c_in_block}"
     if pack_bands:
         # Time-packed bands hold dense packed weights of other shapes (layers/audio_pack.py).
         suffix += "_pack" + "-".join(f"{b}x{k}" for b, k in sorted(pack_bands.items()))
-        if resampler_split_mode is not None and resampler_split_mode != split_mode:
-            suffix += f"_rs-{resampler_split_mode}"
+        rs_variant = "full" if resampler_split_mode == "kernel" else resampler_split_mode
+        if rs_variant is not None and rs_variant != variant:
+            suffix += f"_rs-{rs_variant}"
     if legacy_kernel_table():
         suffix += "_ktlegacy"
     return f"{suffix}_wp{_WEIGHT_PREP_REVISION}"
@@ -154,9 +166,31 @@ def conv3d_maybe_split(
 
     ``bias`` is applied to exactly one term, since it is not a factor of the product being split.
     """
+    # The in-kernel split re-splits every input element once per tap position (the split runs on the
+    # tilized im2col rows), so its cost grows with the kernel size while the matmul work per split tile stays
+    # fixed by the 32-wide C_out block. Measured on one chip (min of 10): k3 and k7 shapes 14-27 % faster than
+    # the three-conv form, the k11 AMP conv 36 % slower. Above the threshold the call takes the host split.
+    if split_mode == "kernel" and max(conv_kwargs.get("kernel_size", (1,))) > kernel_split_max_k():
+        split_mode = "full"
+    # The config is hashed into the program, so the flag must agree with the mode the caller picked for this
+    # call (the squeeze harness flips `split_mode` after construction).
+    config = conv_kwargs.get("config")
+    if config is not None and config.operand_split != (split_mode == "kernel"):
+        config.operand_split = split_mode == "kernel"
     if split_mode in ("off", "stack"):  # stack: the caller already stacked the input (stack_operand)
         return ttnn.experimental.conv3d(
             input_tensor=input_tensor, weight_tensor=weight_tensor, bias_tensor=bias_tensor, **conv_kwargs
+        )
+    if split_mode == "kernel":
+        # The whole split in one conv3d: the kernel splits the tilized activation, and the writer streams W_lo
+        # next to W_hi. `config` must carry operand_split=True (set where the module builds its config).
+        assert weight_lo_tensor is not None, "split_mode='kernel' needs a prepared weight residual"
+        return ttnn.experimental.conv3d(
+            input_tensor=input_tensor,
+            weight_tensor=weight_tensor,
+            weight_lo_tensor=weight_lo_tensor,
+            bias_tensor=bias_tensor,
+            **conv_kwargs,
         )
     if split_mode == "act":
         # Activation-only split (2 convs): measured on the H3 decoder, the weight split adds nothing the
@@ -957,6 +991,8 @@ class Conv2dViaConv3d(Module):
             h_factor=1,
             w_factor=1,
         )
+        if split_mode == "kernel" and dtype == ttnn.float32:
+            self.conv_config.operand_split = True
 
         from models.common.utility_functions import is_blackhole
 
@@ -1143,6 +1179,8 @@ class Conv1dViaConv3d(Module):
         self.conv_config = get_conv3d_config(
             self.in_channels, self.out_channels, self.kernel_size, dtype, grid_size=grid, h_factor=1, w_factor=1
         )
+        if self.split_mode == "kernel":
+            self.conv_config.operand_split = True
         if self.conv_in_channels != self.in_channels:
             cores = grid.x * grid.y
             c_in_block = self.conv_config.C_in_block
@@ -1171,6 +1209,7 @@ class Conv1dViaConv3d(Module):
                 C_out_block=_pick_c_out_block_shard(full=self.conv_config.C_out_block, shard=self.out_channels_shard),
                 C_in_block=self.conv_config.C_in_block,
                 compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+                operand_split=self.conv_config.operand_split,
             )
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(

@@ -501,9 +501,9 @@ class MiniMaxH3Pipeline:
         # audio_t_factor=4 timings: 2.2 s (full) / 1.6 s (off) on 4x8; default is 8 (~1.4 s full).
         if audio_split_mode is None:
             audio_split_mode = os.environ.get(_AUDIO_SPLIT_ENV, "full").strip() or "full"
-        if audio_split_mode not in ("off", "weight", "act", "full", "stack"):
+        if audio_split_mode not in ("off", "weight", "act", "full", "stack", "kernel"):
             raise ValueError(
-                f"audio_split_mode must be 'off', 'weight', 'act', 'full' or 'stack', got {audio_split_mode!r}"
+                f"audio_split_mode must be 'off', 'weight', 'act', 'full', 'stack' or 'kernel', got {audio_split_mode!r}"
             )
         self.audio_split_mode = audio_split_mode
         self.audio_trace = _audio_trace_enabled() if audio_trace is None else bool(audio_trace)
