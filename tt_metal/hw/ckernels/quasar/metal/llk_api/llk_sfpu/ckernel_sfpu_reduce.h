@@ -440,7 +440,7 @@ inline void init_reduce([[maybe_unused]] const std::uint32_t block_ct_dim = 1) {
  * call once for the whole block - which must be resident in Dest.
  *
  * @tparam POOL_TYPE: Reduction operator, values = <SUM/AVG/MAX/MIN>
- * @tparam REDUCE_DIM: Axis to collapse, values = <REDUCE_COL/REDUCE_ROW>
+ * @tparam reduce_dim: Axis to collapse, values = <REDUCE_COL/REDUCE_ROW>
  * @tparam FORMAT: Math-side data format of the operand
  * @tparam IS_FP32_DEST_ACC_EN: Whether Dest holds 32-bit words
  * @tparam DST_SYNC: Dest sync mode; with @p IS_FP32_DEST_ACC_EN it gives the Dest tile capacity
@@ -452,9 +452,11 @@ inline void init_reduce([[maybe_unused]] const std::uint32_t block_ct_dim = 1) {
  *       leaves the Int32 range wraps silently.
  * @note Call @ref init_reduce before this.
  */
+// reduce_dim is lower case on purpose: kernels that reduce are built with -DREDUCE_DIM=..., so a
+// template parameter spelled REDUCE_DIM is macro-expanded away before the compiler sees it.
 template <
     PoolType POOL_TYPE,
-    ReduceDim REDUCE_DIM,
+    ReduceDim reduce_dim,
     DataFormat FORMAT,
     bool IS_FP32_DEST_ACC_EN,
     DstSync DST_SYNC = DstSync::SyncHalf>
@@ -463,7 +465,7 @@ inline void calculate_reduce(
     static_assert(
         is_supported_reduce_format(FORMAT), "Unsupported reduce format: expected Float32, Float16_b, Float16 or Int32");
     static_assert(
-        REDUCE_DIM == ReduceDim::REDUCE_COL || REDUCE_DIM == ReduceDim::REDUCE_ROW,
+        reduce_dim == ReduceDim::REDUCE_COL || reduce_dim == ReduceDim::REDUCE_ROW,
         "Unsupported reduce_dim: expected REDUCE_COL or REDUCE_ROW");
     static_assert(
         !reduce_is_32_bit_format<FORMAT>() || IS_FP32_DEST_ACC_EN,
@@ -473,11 +475,11 @@ inline void calculate_reduce(
     // of two, which only the float reciprocal-multiply handles, to within fp32 rounding of 1/num_cols.
     // So integer AVG is column-only.
     static_assert(
-        !(REDUCE_DIM == ReduceDim::REDUCE_ROW && POOL_TYPE == PoolType::AVG && reduce_is_int_format<FORMAT>()),
+        !(reduce_dim == ReduceDim::REDUCE_ROW && POOL_TYPE == PoolType::AVG && reduce_is_int_format<FORMAT>()),
         "Integer row AVG is not supported: the row divisor is a runtime column count. Integer AVG is "
         "column-only; reduce as a float format if you need the row axis.");
 
-    if constexpr (REDUCE_DIM == ReduceDim::REDUCE_COL) {
+    if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
         LLK_ASSERT(
             block_ct_dim == 1 && block_rt_dim == 1,
             "column reduce works a single tile (block_ct_dim == block_rt_dim == 1); call it once per tile");
