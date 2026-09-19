@@ -1145,11 +1145,37 @@ class MiniMaxH3Vae:
         prefetch = os.environ.get("MINIMAX_H3_VAE_PREFETCH", "upload")
         if prefetch not in ("0", "host", "upload"):
             raise ValueError(f"MINIMAX_H3_VAE_PREFETCH must be '0', 'host' or 'upload', got {prefetch!r}")
-        groups = [chunk_latents[i : i + chunks_per_wave] for i in range(0, len(chunk_latents), chunks_per_wave)]
+        # Wave plan. Plain: `chunks_per_wave` chunks per wave, idle mesh columns carry a filler tile. Dense (one idle column):
+        # in wave w of a run of grid_cols waves the idle column decodes tile column w of an extra chunk; its column stitch
+        # rides the normal stages, every device keeps that column's row strip out of the axis-1 gather, and after the run
+        # the extra chunk's row stage runs on the kept strips. Same tiles and blend operands, so the bits do not change.
+        pack = os.environ.get("MINIMAX_H3_VAE_PACK", "plain")
+        if pack not in ("plain", "dense"):
+            raise ValueError(f"MINIMAX_H3_VAE_PACK must be 'plain' or 'dense', got {pack!r}")
+        dense = pack == "dense" and chunks_per_wave == 1 and mesh_cols == grid_cols + 1
+        waves: list[dict] = []
+        if dense:
+            run = grid_cols + 1
+            full_runs = len(chunk_latents) // run
+            for g in range(full_runs):
+                for w in range(grid_cols):
+                    waves.append({"mains": [g * run + w], "extra": (g * run + grid_cols, w), "flush": w == grid_cols - 1})
+            for k in range(full_runs * run, len(chunk_latents)):
+                waves.append({"mains": [k], "extra": None, "flush": False})
+        else:
+            for i in range(0, len(chunk_latents), chunks_per_wave):
+                waves.append({"mains": list(range(i, min(i + chunks_per_wave, len(chunk_latents)))), "extra": None, "flush": False})
+        extra_tiles: dict[int, list[torch.Tensor]] = {}
 
-        def prepare_host(group):
+        def prepare_host(wave):
             mark = time.perf_counter()
-            units_by_chunk = [self._latent_tiles(latents) for latents in group]
+            units_by_chunk = [self._latent_tiles(chunk_latents[k]) for k in wave["mains"]]
+            extra_units = None
+            if wave["extra"] is not None:
+                e, _ = wave["extra"]
+                if e not in extra_tiles:
+                    extra_tiles[e] = self._latent_tiles(chunk_latents[e])
+                extra_units = extra_tiles[e]
             profile["tiling"] += time.perf_counter() - mark
 
             _, _, num_frames, height, width = units_by_chunk[0][0].shape
@@ -1168,6 +1194,10 @@ class MiniMaxH3Vae:
                 for index, unit in enumerate(units):
                     r, c = divmod(index, grid_cols)
                     slots[r * mesh_cols + k * grid_cols + c] = unit
+            if extra_units is not None:
+                _, w = wave["extra"]
+                for r in range(grid_rows):
+                    slots[r * mesh_cols + grid_cols] = extra_units[r * grid_cols + w]
             filler = units_by_chunk[0][0]
             wave = [
                 (unit if unit is not None else filler)
@@ -1177,7 +1207,8 @@ class MiniMaxH3Vae:
             ]
             batch = torch.cat(wave, dim=0)
             profile["host_prep"] += time.perf_counter() - mark
-            return units_by_chunk, (num_frames, height, width), batch
+            n_units = sum(len(units) for units in units_by_chunk) + (grid_rows if extra_units is not None else 0)
+            return n_units, (num_frames, height, width), batch
 
         def upload(batch):
             mark = time.perf_counter()
@@ -1191,15 +1222,64 @@ class MiniMaxH3Vae:
             profile["upload"] += time.perf_counter() - mark
             return tokens
 
-        def stage(group):
-            units_by_chunk, shape, batch = prepare_host(group)
-            return units_by_chunk, shape, batch, (upload(batch) if prefetch == "upload" else None)
+        def stage(wave):
+            n_units, shape, batch = prepare_host(wave)
+            return n_units, shape, batch, (upload(batch) if prefetch == "upload" else None)
 
         canvases = []
         pending: list = []
-        staged = stage(groups[0])
-        for group_index, group in enumerate(groups):
-            units_by_chunk, (num_frames, height, width), batch, tokens = staged
+        held_strips: list = []
+        held_edges: list = []
+
+        def entry(stack, index):
+            starts = [0] * len(stack.shape)
+            stops = list(stack.shape)
+            starts[0], stops[0] = index, index + 1
+            return ttnn.slice(stack, starts, stops)
+
+        def row_stage(strips_t, edges_t, first):
+            mark = time.perf_counter()
+            canvas_rows = stitcher.row(strips_t, edges_t, first, grid_cols, x_overlaps)
+            if self.profile:
+                ttnn.synchronize_device(self.mesh_device)
+            elapsed = time.perf_counter() - mark
+            profile["device"] += elapsed
+            profile["stitch_blend"] += elapsed
+            profile["device_each"].append(elapsed)
+            return canvas_rows
+
+        def readback(canvas_rows, dtype_name):
+            mark = time.perf_counter()
+            rows_shape = tuple(canvas_rows.shape)
+            canvas_shape = (*rows_shape[:-2], canvas_h, rows_shape[-1])
+            if output_type == "yuv420":
+                finish = self._read_canvas_yuv(canvas_rows, defer=True, rows_partitioned=True)
+                ttnn.deallocate(canvas_rows)
+                read_bytes = canvas_shape[-3] * canvas_shape[-2] * canvas_shape[-1] * 3 // 2
+                pending.append(self._yuv_finish_pool.submit(finish))
+            else:
+                # Each device holds its rows of every column; split the columns too and let the
+                # 2-D reassembly put the canvas back together.
+                patch = ttnn.mesh_partition(canvas_rows, dim=-1, cluster_axis=1)
+                out = fast_device_to_host(patch, self.mesh_device, [3, 4], ccl_manager=self.ccl_manager).float()
+                ttnn.deallocate(patch)
+                ttnn.deallocate(canvas_rows)
+                read_bytes = out.numel() * out.element_size()
+                canvases.append(out)
+            elapsed = time.perf_counter() - mark
+            profile["readback"] += elapsed
+            profile["readback_each"].append(elapsed)
+            profile["shape"] = canvas_shape
+            profile["dtype"] = dtype_name
+            profile["readback_mb"] += read_bytes / 1e6
+            if len(pending) > 1:
+                mark = time.perf_counter()
+                canvases.append(pending.pop(0).result())
+                profile["readback_join"] += time.perf_counter() - mark
+
+        staged = stage(waves[0])
+        for wave_index, wave in enumerate(waves):
+            n_units, (num_frames, height, width), batch, tokens = staged
             if tokens is None:
                 tokens = upload(batch)
             staged = None
@@ -1245,54 +1325,36 @@ class MiniMaxH3Vae:
             elapsed = time.perf_counter() - mark
             profile["device"] += elapsed
             profile["waves"] += 1
-            profile["units"] += sum(len(units) for units in units_by_chunk)
+            profile["units"] += n_units
 
             # Stage the next wave now, before this wave's readback blocks on the device.
-            if prefetch != "0" and group_index + 1 < len(groups):
-                staged = stage(groups[group_index + 1])
+            if prefetch != "0" and wave_index + 1 < len(waves):
+                staged = stage(waves[wave_index + 1])
 
-            for chunk_index in range(len(group)):
-                mark = time.perf_counter()
-                canvas_rows = stitcher.row(strips, edges, chunk_index * grid_cols, grid_cols, x_overlaps)
-                if self.profile:
-                    ttnn.synchronize_device(self.mesh_device)
-                elapsed = time.perf_counter() - mark
-                profile["device"] += elapsed
-                profile["stitch_blend"] += elapsed
-                profile["device_each"].append(elapsed)
-
-                mark = time.perf_counter()
-                rows_shape = tuple(canvas_rows.shape)
-                canvas_shape = (*rows_shape[:-2], canvas_h, rows_shape[-1])
-                if output_type == "yuv420":
-                    finish = self._read_canvas_yuv(canvas_rows, defer=True, rows_partitioned=True)
-                    ttnn.deallocate(canvas_rows)
-                    read_bytes = canvas_shape[-3] * canvas_shape[-2] * canvas_shape[-1] * 3 // 2
-                    pending.append(self._yuv_finish_pool.submit(finish))
-                else:
-                    # Each device holds its rows of every column; split the columns too and let the
-                    # 2-D reassembly put the canvas back together.
-                    patch = ttnn.mesh_partition(canvas_rows, dim=-1, cluster_axis=1)
-                    out = fast_device_to_host(patch, self.mesh_device, [3, 4], ccl_manager=self.ccl_manager).float()
-                    ttnn.deallocate(patch)
-                    ttnn.deallocate(canvas_rows)
-                    read_bytes = out.numel() * out.element_size()
-                    canvases.append(out)
-                elapsed = time.perf_counter() - mark
-                profile["readback"] += elapsed
-                profile["readback_each"].append(elapsed)
-                profile["shape"] = canvas_shape
-                profile["dtype"] = str(pixels.dtype)
-                profile["readback_mb"] += read_bytes / 1e6
-                if len(pending) > 1:
-                    mark = time.perf_counter()
-                    canvases.append(pending.pop(0).result())
-                    profile["readback_join"] += time.perf_counter() - mark
+            for k in range(len(wave["mains"])):
+                readback(row_stage(strips, edges, k * grid_cols), str(pixels.dtype))
+            if wave["extra"] is not None:
+                # The idle column's row strip is the extra chunk's tile column w for this device's rows: keep it.
+                held_strips.append(entry(strips, grid_cols))
+                if edges is not None:
+                    held_edges.append(entry(edges, grid_cols))
             ttnn.deallocate(strips)
             if edges is not None:
                 ttnn.deallocate(edges)
-            if staged is None and group_index + 1 < len(groups):
-                staged = stage(groups[group_index + 1])
+            if wave["flush"]:
+                # The extra chunk: its grid_cols row strips are all here already, so the row stage needs no gather.
+                strips_e = ttnn.concat(held_strips, dim=0)
+                edges_e = ttnn.concat(held_edges, dim=0) if held_edges else None
+                for kept in held_strips + held_edges:
+                    ttnn.deallocate(kept)
+                held_strips, held_edges = [], []
+                canvas_rows = row_stage(strips_e, edges_e, 0)
+                ttnn.deallocate(strips_e)
+                if edges_e is not None:
+                    ttnn.deallocate(edges_e)
+                readback(canvas_rows, str(pixels.dtype))
+            if staged is None and wave_index + 1 < len(waves):
+                staged = stage(waves[wave_index + 1])
         if pending:
             mark = time.perf_counter()
             canvases.extend(future.result() for future in pending)
