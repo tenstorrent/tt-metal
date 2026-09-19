@@ -1,4 +1,7 @@
 set(HW_JIT_API_HEADERS
+    ckernels/common/llk_sfpu/ckernel_sfpu_sigmoid_bf16_blackhole.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_sigmoid_bf16_wormhole_b0.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_exp2_reciprocal.h
     inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
