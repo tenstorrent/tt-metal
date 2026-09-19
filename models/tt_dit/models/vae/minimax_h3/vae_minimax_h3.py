@@ -911,6 +911,33 @@ class MiniMaxH3Vae:
             return self._decode_clips_strip_stitched(chunk_latents, output_type)
         return self._decode_clips_gather_stitched(chunk_latents, output_type)
 
+    def _unpatchify(self, decoded: ttnn.Tensor, num_frames: int, height: int, width: int) -> ttnn.Tensor:
+        """Tokens (TILE, blend dtype) to `(1, C, T*pt, H*p, W*p)` ROW_MAJOR pixels.
+
+        MINIMAX_H3_VAE_UNPATCHIFY: "gather" runs one page-remap program straight off the fp32 tiles
+        (unpatchify_minimax_h3.py; no untilize, slice or rank-8 permute); "permute" (default) is the
+        to_layout + unpatchify_device chain. Both are bit-identical.
+        """
+        from .stitch_device_minimax_h3 import unpatchify_device
+        from .unpatchify_minimax_h3 import unpatchify_tiled
+
+        dims = dict(
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            out_channels=self.config.out_channels,
+            patch_size=self.config.spatial_compression_ratio,
+            patch_size_t=self.config.temporal_compression_ratio,
+        )
+        mode = os.environ.get("MINIMAX_H3_VAE_UNPATCHIFY", "permute")
+        if mode not in ("gather", "permute"):
+            raise ValueError(f"MINIMAX_H3_VAE_UNPATCHIFY must be 'gather' or 'permute', got {mode!r}")
+        if mode == "gather" and decoded.dtype == ttnn.float32 and width == 16:
+            return unpatchify_tiled(decoded, **dims)
+        # Row-major from here to the DMA: the rank-8 intermediate has trailing dims of 16, which a tiled
+        # reshape would pad to 32x32, and the stitch's slices land off tile boundaries.
+        return unpatchify_device(ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT), **dims)
+
     def _decode_clips_gather_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
         """Temporal chunks decoded and stitched entirely on device, packed into full waves.
 
@@ -993,16 +1020,7 @@ class MiniMaxH3Vae:
             # of 16, which a tiled reshape pads to 32x32 -- a 4x blowup for a view -- and the stitch's
             # slices and concats land off tile boundaries on this grid's overlaps. One conversion here
             # keeps every step after it on a fast path, `mesh_partition` included.
-            decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
-            pixels = unpatchify_device(
-                decoded,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                out_channels=self.config.out_channels,
-                patch_size=self.config.spatial_compression_ratio,
-                patch_size_t=self.config.temporal_compression_ratio,
-            )
+            pixels = self._unpatchify(decoded, num_frames, height, width)
             gathered = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
             ttnn.deallocate(pixels)
             gathered = ttnn.all_gather(gathered, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
@@ -1191,16 +1209,7 @@ class MiniMaxH3Vae:
             # Same cast and layout choices as the gather form, for the same reasons (see there).
             if self._blend_dtype == ttnn.float32:
                 decoded = ttnn.typecast(decoded, ttnn.float32)
-            decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
-            pixels = unpatchify_device(
-                decoded,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                out_channels=self.config.out_channels,
-                patch_size=self.config.spatial_compression_ratio,
-                patch_size_t=self.config.temporal_compression_ratio,
-            )
+            pixels = self._unpatchify(decoded, num_frames, height, width)
             # Stage 1: the column. A one-axis gather keeps mesh order, so gathered index r is tile
             # row r of this device's column.
             column = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
@@ -1358,16 +1367,7 @@ class MiniMaxH3Vae:
 
             mark = time.perf_counter()
             decoded = decoder(tokens)
-            decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
-            pixels = unpatchify_device(
-                decoded,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                out_channels=self.config.out_channels,
-                patch_size=self.config.spatial_compression_ratio,
-                patch_size_t=self.config.temporal_compression_ratio,
-            )
+            pixels = self._unpatchify(decoded, num_frames, height, width)
             blended = self._blender.blend_wave(
                 pixels,
                 grid_rows=grid_rows,
