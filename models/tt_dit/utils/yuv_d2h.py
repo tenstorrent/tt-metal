@@ -64,22 +64,23 @@ def _warn_once_about_the_fallback() -> None:
 # The YUV planes leave rgb_to_yuv as (1, h, w, T) uint8: 28-byte pages, each padded to the 64 B DRAM alignment and read one
 # NoC transaction at a time. rgb_to_yuv's wide_rows emits the same bytes as (1, h, w*T) rows, 4.7 KB pages, and the D2H is
 # 2.7x faster (4x8 bench 2026-09-19: 6.2 -> 2.3 ms per wave, 5.4 -> 2.0 ms of it device-side); the host half views the
-# shards back. Off until the 15 s A/B.
+# shards back. Default on (15 s A/B: bit-identical, VAE 2.4 -> 2.3 s); MINIMAX_H3_YUV_WIDE=0 keeps the 28 B pages.
 _YUV_WIDE_ENV = "MINIMAX_H3_YUV_WIDE"
 
 
 def _wide_pages_enabled() -> bool:
-    return os.environ.get(_YUV_WIDE_ENV, "0").strip().lower() in ("1", "true", "yes", "on")
+    return os.environ.get(_YUV_WIDE_ENV, "1").strip().lower() in ("1", "true", "yes", "on")
 
 
-# A deferred readback ends in a full device sync that idles the device until the next wave's first program lands. With
-# MINIMAX_H3_YUV_SYNC=event the three reads are followed by a recorded event that the deferred host half waits on instead,
-# so the host enqueues the next wave while this one drains (one command queue keeps the reads ahead of the next wave).
+# A deferred readback used to end in a full device sync that idled the device until the next wave's first program landed.
+# By default the three reads are followed by a recorded event that the deferred host half waits on instead, so the host
+# enqueues the next wave while this one drains (one command queue keeps the reads ahead of the next wave); 15 s A/B
+# 2026-09-19: bit-identical, VAE 2.36 -> 2.29 s. MINIMAX_H3_YUV_SYNC=device restores the sync.
 _YUV_SYNC_ENV = "MINIMAX_H3_YUV_SYNC"
 
 
 def _event_sync_enabled() -> bool:
-    return os.environ.get(_YUV_SYNC_ENV, "device").strip().lower() == "event"
+    return os.environ.get(_YUV_SYNC_ENV, "event").strip().lower() == "event"
 
 
 def _as_hwt(shard: torch.Tensor, T: int) -> torch.Tensor:
