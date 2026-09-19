@@ -590,12 +590,11 @@ TEST_F(GumbelSampleOpTest, TestSamplingGreedyMatchesArgmaxReference) {
     // shapes with no structure at all -- every column is a live candidate in every row -- so any
     // scan-bound, page or broadcast slip surfaces as a mismatch somewhere in the sweep.
     //
-    // The logits are FLOAT32 *snapped to the bf16 grid* (8 mantissa bits). Raw fp32 randoms are NOT
-    // reproducible through the device: the compute kernel's tile copy rides through SrcA, which
+    // RAW FLOAT32 randoms, deliberately: this is the regression test for the factory's
+    // UnpackToDestFp32 mode. Without it the compute kernel's tile copy rides through SrcA, which
     // holds 19-bit TF32, so fp32 columns closer than ~2^-11 relative tie on device but not on the
-    // host argmax. Grid values survive every on-chip format (bf16 c= TF32 c= fp32) bit-exactly, and
-    // the resulting (frequent) exact ties resolve the same way on both sides: lowest column index.
-    // The last case runs the reference against a per-row [B, 1, 1, V] mask too.
+    // host argmax -- exactly the mismatches this test produced before the mode was set. The last
+    // case runs the reference against a per-row [B, 1, 1, V] mask too.
     struct Case {
         uint32_t batch, tokens, vocab;
         bool per_row_mask;
@@ -611,11 +610,8 @@ TEST_F(GumbelSampleOpTest, TestSamplingGreedyMatchesArgmaxReference) {
     for (const auto& c : cases) {
         const std::string what =
             "[" + std::to_string(c.batch) + ", 1, " + std::to_string(c.tokens) + ", " + std::to_string(c.vocab) + "]";
-        xt::xarray<float> logits = ttml::test_utils::make_uniform_xarray<float>(
+        const xt::xarray<float> logits = ttml::test_utils::make_uniform_xarray<float>(
             xt::xarray<float>::shape_type{c.batch, 1U, c.tokens, c.vocab}, -2.0F, 2.0F, seed++);
-        for (auto& v : logits) {
-            v = std::round(v * 256.0F) / 256.0F;  // snap to the bf16 grid (see the comment above)
-        }
         // Ban a deterministic scattering of columns (every third, phase-shifted per mask row):
         // dense enough that the masked argmax genuinely differs from the unmasked one.
         const uint32_t mask_batch = c.per_row_mask ? c.batch : 1U;

@@ -490,16 +490,39 @@ tt::tt_metal::Program build_program(
     shared_vars.writer_kernel_id =
         create_writer_kernel(program, layout.all_cores, writer_ct_args, {}, kWriterKernelPath);
 
-    const std::vector<uint32_t> compute_ct_args_g1{
-        layout.tiles_per_core_group_1, layout.block_size, has_mask ? 1U : 0U, do_gumbel_noise ? 1U : 0U};
-    shared_vars.compute_kernel_group_1_id = create_compute_kernel(
-        program, layout.core_group_1, compute_ct_args_g1, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+    // FLOAT32 logits (and the mask, which validation pins to the same dtype) unpack STRAIGHT INTO
+    // DST rather than through the 19-bit SrcA registers, which would round them to TF32 (10
+    // mantissa bits) and decide greedy argmax near-ties differently from ttnn::argmax. This is
+    // host-side only: with the mode set, the generated unpack formats make the kernel's copy_tile
+    // take the unpack-to-dest path (should_unpack_to_dest in cunpack_common.h gates on exactly
+    // this). BFLOAT16 fits losslessly in TF32, so it stays on the default SrcA path. The mode
+    // follows the logits dtype, which is already in the program hash, so cached programs stay
+    // consistent. This is why the compute kernels are built with a bespoke ComputeConfig rather
+    // than through create_compute_kernel, which does not expose unpack_to_dest_mode.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (logits.dtype() == tt::tt_metal::DataType::FLOAT32) {
+        unpack_to_dest_mode[static_cast<size_t>(kLogitsCbIndex)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<size_t>(kMaskCbIndex)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    auto create_gumbel_compute_kernel = [&](const tt::tt_metal::CoreRangeSet& cores, uint32_t tiles_per_core) {
+        return tt::tt_metal::CreateKernel(
+            program,
+            kComputeKernelPath,
+            cores,
+            tt::tt_metal::ComputeConfig{
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+                .fp32_dest_acc_en = true,
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .math_approx_mode = false,
+                .compile_args = {tiles_per_core, layout.block_size, has_mask ? 1U : 0U, do_gumbel_noise ? 1U : 0U}});
+    };
+    shared_vars.compute_kernel_group_1_id =
+        create_gumbel_compute_kernel(layout.core_group_1, layout.tiles_per_core_group_1);
 
     if (!layout.core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_ct_args_g2{
-            layout.tiles_per_core_group_2, layout.block_size, has_mask ? 1U : 0U, do_gumbel_noise ? 1U : 0U};
-        shared_vars.compute_kernel_group_2_id = create_compute_kernel(
-            program, layout.core_group_2, compute_ct_args_g2, {}, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
+        shared_vars.compute_kernel_group_2_id =
+            create_gumbel_compute_kernel(layout.core_group_2, layout.tiles_per_core_group_2);
     }
 
     // -------------------------------------------------------------------------
