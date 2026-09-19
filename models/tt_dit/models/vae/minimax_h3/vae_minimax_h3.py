@@ -1131,13 +1131,8 @@ class MiniMaxH3Vae:
         decoder = self.decoder
         profile = self._profile
 
-        # The wave's host work -- tiling, the grid-aligned batch, the upload -- runs while the previous
-        # wave is still on the device (MINIMAX_H3_VAE_PREFETCH: "upload" stages both, "host" stages the
-        # torch work and uploads after the readback, "0" is the serial order). The readback's device sync
-        # is where the host used to wait with the next wave's tokens still unprepared.
-        prefetch = os.environ.get("MINIMAX_H3_VAE_PREFETCH", "upload")
-        if prefetch not in ("0", "host", "upload"):
-            raise ValueError(f"MINIMAX_H3_VAE_PREFETCH must be '0', 'host' or 'upload', got {prefetch!r}")
+        # The wave's host work (tiling, the grid-aligned batch, the upload) runs while the previous wave is still on the
+        # device, so the readback's wait never finds the next wave's tokens unprepared.
         # Wave plan. Plain: `chunks_per_wave` chunks per wave, idle mesh columns carry a filler tile. Dense (one idle column):
         # in wave w of a run of grid_cols waves the idle column decodes tile column w of an extra chunk; its column stitch
         # rides the normal stages, every device keeps that column's row strip out of the axis-1 gather, and after the run
@@ -1218,7 +1213,7 @@ class MiniMaxH3Vae:
 
         def stage(wave):
             n_units, shape, batch = prepare_host(wave)
-            return n_units, shape, batch, (upload(batch) if prefetch == "upload" else None)
+            return n_units, shape, batch, upload(batch)
 
         canvases = []
         pending: list = []
@@ -1274,8 +1269,6 @@ class MiniMaxH3Vae:
         staged = stage(waves[0])
         for wave_index, wave in enumerate(waves):
             n_units, (num_frames, height, width), batch, tokens = staged
-            if tokens is None:
-                tokens = upload(batch)
             staged = None
 
             mark = time.perf_counter()
@@ -1322,7 +1315,7 @@ class MiniMaxH3Vae:
             profile["units"] += n_units
 
             # Stage the next wave now, before this wave's readback blocks on the device.
-            if prefetch != "0" and wave_index + 1 < len(waves):
+            if wave_index + 1 < len(waves):
                 staged = stage(waves[wave_index + 1])
 
             for k in range(len(wave["mains"])):
@@ -1347,8 +1340,6 @@ class MiniMaxH3Vae:
                 if edges_e is not None:
                     ttnn.deallocate(edges_e)
                 readback(canvas_rows, str(pixels.dtype))
-            if staged is None and wave_index + 1 < len(waves):
-                staged = stage(waves[wave_index + 1])
         if pending:
             mark = time.perf_counter()
             canvases.extend(future.result() for future in pending)
