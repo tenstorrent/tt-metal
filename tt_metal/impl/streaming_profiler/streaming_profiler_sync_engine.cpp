@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 #include <tt_stl/assert.hpp>
 
@@ -52,7 +53,8 @@ constexpr uint32_t kHostSeries = std::numeric_limits<uint32_t>::max();
 template <typename Key>
 struct Log {
     using Node = ClockNode<Key>;
-    IndexedRing<Node> nodes{ClockMap::kSeriesNodes};
+    explicit Log(uint32_t series_nodes) : nodes(series_nodes) {}
+    IndexedRing<Node> nodes;
     Key last_at = key_min<Key>();  // the writer's own copy
     alignas(64) std::atomic<Key> cover{key_min<Key>()};
     alignas(64) std::atomic<uint32_t> gen{0};
@@ -193,12 +195,18 @@ ThreadView& view_of(const void* owner) noexcept {
 }  // namespace
 
 struct ClockMap::Impl {
+    template <size_t... I>
+    explicit Impl(uint32_t series_nodes, std::index_sequence<I...>) :
+        chips{{((void)I, Log<int64_t>(series_nodes))...}}, host(series_nodes) {}
     std::array<Log<int64_t>, kMaxChips> chips;
     Log<double> host;
     alignas(64) std::atomic<uint64_t> cover_generation{0};
 };
 
-ClockMap::ClockMap() : impl_(std::make_unique<Impl>()) {}
+ClockMap::ClockMap(uint32_t series_nodes) :
+    impl_(std::make_unique<Impl>(series_nodes, std::make_index_sequence<kMaxChips>{})) {}
+
+uint32_t ClockMap::series_nodes() const noexcept { return static_cast<uint32_t>(impl_->host.nodes.capacity()); }
 ClockMap::~ClockMap() = default;
 
 void ClockMap::append(uint32_t chip_id, SyncNode node) {
@@ -247,6 +255,19 @@ int64_t ClockMap::cover_ticks(uint32_t chip_id) const noexcept {
         return std::numeric_limits<int64_t>::max();
     }
     return impl_->chips[chip_id].cover.load(std::memory_order_acquire);
+}
+
+int64_t ClockMap::oldest_at(uint32_t chip_id) const noexcept {
+    if (chip_id >= kMaxChips) {
+        return std::numeric_limits<int64_t>::min();
+    }
+    const Log<int64_t>& log = impl_->chips[chip_id];
+    ClockNode<int64_t> n{};
+    const uint64_t f = log.nodes.first();
+    if (log.nodes.count() == f || !log.nodes.read(f, n)) {
+        return std::numeric_limits<int64_t>::min();
+    }
+    return n.at;
 }
 
 uint64_t ClockMap::cover_generation() const noexcept { return impl_->cover_generation.load(std::memory_order_acquire); }
@@ -1236,6 +1257,7 @@ struct SyncEngine::LinkErrors {
     size_t off_path = 0;
     size_t past_model = 0;  // rounds after an end's clock model stopped, in a transition the capture cut short
     size_t unbracketed = 0;  // rounds an end recorded with a plain (wall, refclk) pair: read_bracketed gave up
+    size_t before_series = 0;  // rounds before a chip's oldest kept node: the series wrapped, nothing places them
 };
 
 // The rounds inside the path band, placed through the final map. Next to the placement error: the sender's round
@@ -1250,6 +1272,7 @@ SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
         return it == local_.end() ? std::optional<double>{0.0} : it->second.modelled_until();
     };
     const std::optional<double> until_a = until(L.dev_a), until_b = until(L.dev_b);
+    const int64_t oldest_a = map_.oldest_at(L.chip_a), oldest_b = map_.oldest_at(L.chip_b);
     for (const Round& r : rounds) {
         if (std::abs(LinkSolver::path_ns(r) - e.path_med) > LinkSolver::kPathDevNs) {
             e.off_path++;
@@ -1258,6 +1281,10 @@ SyncEngine::LinkErrors SyncEngine::link_errors(size_t li, bool anchored) const {
         if ((until_a && LinkSolver::mid_a_refclk(r) > *until_a) ||
             (until_b && LinkSolver::mid_b_refclk(r) > *until_b)) {
             e.past_model++;
+            continue;
+        }
+        if (static_cast<int64_t>(r.t0.wall) < oldest_a || static_cast<int64_t>(r.t1.wall) < oldest_b) {
+            e.before_series++;
             continue;
         }
         int64_t H = 0;
@@ -1324,7 +1351,7 @@ void SyncEngine::log_link_stats(const CaptureContext::Link& L, const LinkErrors&
         "[streaming profiler] d2d sync link chip {} -> chip {}: one way inside the stamps {:.1f} ns (p10 {:.1f}, p90 "
         "{:.1f}); receiver's stamped turnaround {:.1f} ns (p10 {:.1f}, p90 {:.1f}); sender's round trip {:.1f} ns "
         "(p10 {:.1f}, p90 {:.1f}); {} rounds, {} off the path band dropped, {} past a chip's clock model, {} read "
-        "unbracketed",
+        "unbracketed, {} before a chip's oldest kept node",
         L.chip_a,
         L.chip_b,
         pct(e.path, 0.5),
@@ -1339,7 +1366,8 @@ void SyncEngine::log_link_stats(const CaptureContext::Link& L, const LinkErrors&
         rounds,
         e.off_path,
         e.past_model,
-        e.unbracketed);
+        e.unbracketed,
+        e.before_series);
     long double se = 0, ss = 0, srr = 0;
     for (size_t i = 0; i < e.pts.size(); i++) {
         se += e.pts[i].value;
@@ -1531,6 +1559,9 @@ void SyncEngine::publish_error_plots() {
         size_t ri = 0;
         double other_a = 0.0, other_b = 0.0;  // each chip's newest residual, in force until its next point
         for (const At& x : at) {
+            if (x.tsc < em.pts.front().tsc) {
+                continue;  // before the first placed round: no cross-chip term measured there
+            }
             while (ri + 1 < em.pts.size() && em.pts[ri + 1].tsc <= x.tsc) {
                 ri++;
             }

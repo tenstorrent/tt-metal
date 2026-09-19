@@ -41,15 +41,17 @@ public:
 
     /**
      * @brief Constructs a log retaining at most @p capacity items.
-     * @param capacity Rounded down to whole chunks, at least one chunk. Chunks are allocated as items reach them.
+     * @param capacity Rounded down to whole chunks, at least one chunk. The chunk table is allocated at the first
+     *        push and chunks as items reach them, so an unused ring costs nothing but this object.
      */
-    explicit IndexedRing(uint64_t capacity) :
-        chunks_(std::max<uint64_t>(1, capacity / kChunkItems)),
-        table_(std::make_unique<std::atomic<Chunk*>[]>(chunks_)) {}
+    explicit IndexedRing(uint64_t capacity) : chunks_(std::max<uint64_t>(1, capacity / kChunkItems)) {}
 
     ~IndexedRing() {
-        for (uint64_t k = 0; k < chunks_; k++) {
-            delete table_[k].load(std::memory_order_relaxed);
+        if (std::atomic<Chunk*>* t = table_.load(std::memory_order_relaxed); t != nullptr) {
+            for (uint64_t k = 0; k < chunks_; k++) {
+                delete t[k].load(std::memory_order_relaxed);
+            }
+            delete[] t;
         }
     }
     IndexedRing(const IndexedRing&) = delete;
@@ -71,7 +73,12 @@ public:
     void push(const T& item) noexcept {
         const uint64_t n = count_.load(std::memory_order_relaxed);
         const uint64_t f = first_.load(std::memory_order_relaxed);
-        Chunk* c = table_[slot_of(n)].load(std::memory_order_relaxed);
+        std::atomic<Chunk*>* table = table_.load(std::memory_order_relaxed);
+        if (table == nullptr) {
+            table = new std::atomic<Chunk*>[chunks_]();
+            table_.store(table, std::memory_order_release);
+        }
+        Chunk* c = table[slot_of(n)].load(std::memory_order_relaxed);
         if (n - f == capacity()) {
             // n is at a chunk boundary (first and the capacity are whole chunks): this chunk holds the oldest
             // items. Readers that copied one of them across the bump see the changed sequence and fail.
@@ -80,7 +87,7 @@ public:
             std::atomic_thread_fence(std::memory_order_release);
         } else if (c == nullptr) {
             c = new Chunk;
-            table_[slot_of(n)].store(c, std::memory_order_release);
+            table[slot_of(n)].store(c, std::memory_order_release);
         }
         c->slots[n % kChunkItems].store(item);
         count_.store(n + 1, std::memory_order_release);
@@ -97,9 +104,11 @@ public:
         count_.store(aligned, std::memory_order_release);
         // The next pushes overwrite retired items at once, with no chunk boundary to bump at: fail every read in
         // flight instead.
-        for (uint64_t k = 0; k < chunks_; k++) {
-            if (Chunk* c = table_[k].load(std::memory_order_relaxed); c != nullptr) {
-                c->seq.fetch_add(1, std::memory_order_release);
+        if (std::atomic<Chunk*>* table = table_.load(std::memory_order_relaxed); table != nullptr) {
+            for (uint64_t k = 0; k < chunks_; k++) {
+                if (Chunk* c = table[k].load(std::memory_order_relaxed); c != nullptr) {
+                    c->seq.fetch_add(1, std::memory_order_release);
+                }
             }
         }
         std::atomic_thread_fence(std::memory_order_release);
@@ -111,7 +120,11 @@ public:
      *         while it was being copied.
      */
     [[nodiscard]] bool read(uint64_t i, T& out) const noexcept {
-        const Chunk* c = table_[slot_of(i)].load(std::memory_order_acquire);
+        const std::atomic<Chunk*>* table = table_.load(std::memory_order_acquire);
+        if (table == nullptr) {
+            return false;
+        }
+        const Chunk* c = table[slot_of(i)].load(std::memory_order_acquire);
         if (c == nullptr) {
             return false;
         }
@@ -158,7 +171,7 @@ private:
     uint64_t slot_of(uint64_t i) const noexcept { return (i / kChunkItems) % chunks_; }
 
     const uint64_t chunks_;
-    const std::unique_ptr<std::atomic<Chunk*>[]> table_;
+    std::atomic<std::atomic<Chunk*>*> table_{nullptr};
     alignas(64) std::atomic<uint64_t> first_{0};
     alignas(64) std::atomic<uint64_t> count_{0};
 };

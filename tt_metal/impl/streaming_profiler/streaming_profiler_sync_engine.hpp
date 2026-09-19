@@ -378,11 +378,12 @@ using HostNode = ClockNode<double>;
 class ClockMap {
 public:
     static constexpr uint32_t kMaxChips = 256;
-    // Nodes a series keeps (32 MB at most); the oldest go as newer ones arrive. Nodes come per local clock step and
-    // per host burst, so this spans hours of a capture and any consumer's lag behind the sync.
-    static constexpr uint32_t kSeriesNodes = 1u << 20;
+    // Nodes a series keeps before the oldest go: 2 GB at most per chip, allocated as nodes arrive (32 B each). Under
+    // heavy DVFS a chip takes ~300 nodes a second, so a series holds two and a half days of it; the sync report
+    // counts any round that fell off the front.
+    static constexpr uint32_t kSeriesNodes = 1u << 26;
 
-    ClockMap();
+    explicit ClockMap(uint32_t series_nodes = kSeriesNodes);
     ~ClockMap();
     ClockMap(const ClockMap&) = delete;
     ClockMap& operator=(const ClockMap&) = delete;
@@ -408,6 +409,11 @@ public:
     size_t host_published() const noexcept;
     // The wall tick the chip's series covers: INT64_MIN before its first node, INT64_MAX once finished.
     int64_t cover_ticks(uint32_t chip_id) const noexcept;
+    // The wall tick of the chip's oldest kept node, INT64_MIN while it has none: an earlier instant converts on that
+    // node's tangent, which is not a placement.
+    int64_t oldest_at(uint32_t chip_id) const noexcept;
+    // Nodes each series keeps, whole chunks of the ring.
+    uint32_t series_nodes() const noexcept;
     // Moves whenever any chip's cover does, so a consumer holding batches re-reads covers only then.
     uint64_t cover_generation() const noexcept;
 
@@ -486,7 +492,7 @@ private:
 // order; a capture is on_attach, the samples, on_capture_end. The unit test drives it the same way.
 class SyncEngine {
 public:
-    SyncEngine() : series_(map_) {}
+    explicit SyncEngine(uint32_t series_nodes = ClockMap::kSeriesNodes) : map_(series_nodes), series_(map_) {}
     void on_attach(const CaptureContext& ctx);
     void on_clock(const ClockSample& s);
     void on_capture_end(const CaptureContext& ctx);

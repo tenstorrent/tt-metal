@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <vector>
 
+#include "tt_metal/common/indexed_ring.hpp"
 #include "impl/streaming_profiler/streaming_profiler_sync_engine.hpp"
 #include "impl/streaming_profiler/streaming_profiler_sync_devices.hpp"
 
@@ -117,7 +118,7 @@ int main() {
     ctx.links.push_back(CaptureContext::Link{
         .dev_a = 1, .dev_b = 2, .chip_a = 1, .chip_b = 2, .core_a = 1, .core_b = 0, .eth_a = e1, .eth_b = e0});
     ctx.root_dev = 0;
-    SyncEngine sync;
+    SyncEngine sync(4 * tt::tt_metal::IndexedRing<SyncNode>::kChunkItems);  // small enough to wrap below
     // The host series as the probe would write it: exact nodes at two bursts, so the checks cross a node and run
     // out along a tangent.
     for (double tau : {0.0, 0.6}) {
@@ -246,7 +247,7 @@ int main() {
         constexpr uint32_t chip = 3;
         constexpr int64_t step = 1000;
         const double a = 7.5e12, b = 0.037;  // root = a + b * wall, an exact line so every placement has one answer
-        const uint32_t n = ClockMap::kSeriesNodes + 1;
+        const uint32_t n = sync.map().series_nodes() + 1;
         for (uint32_t i = 0; i < n; i++) {
             const int64_t at = static_cast<int64_t>(i) * step;
             sync.map().append(chip, SyncNode{.at = at, .value = a + b * static_cast<double>(at), .tangent = b});
