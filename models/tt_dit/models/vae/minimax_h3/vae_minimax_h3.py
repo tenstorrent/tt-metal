@@ -912,12 +912,8 @@ class MiniMaxH3Vae:
         return self._decode_clips_gather_stitched(chunk_latents, output_type)
 
     def _unpatchify(self, decoded: ttnn.Tensor, num_frames: int, height: int, width: int) -> ttnn.Tensor:
-        """Tokens (TILE, blend dtype) to `(1, C, T*pt, H*p, W*p)` ROW_MAJOR pixels.
-
-        MINIMAX_H3_VAE_UNPATCHIFY: "gather" (default) runs one page-remap program straight off the fp32 tiles
-        (unpatchify_minimax_h3.py; no untilize, slice or rank-8 permute); "permute" is the
-        to_layout + unpatchify_device chain. Both are bit-identical.
-        """
+        """Tokens (TILE, fp32) to `(1, C, T*pt, H*p, W*p)` ROW_MAJOR pixels: one page-remap program off the tiles
+        (unpatchify_minimax_h3.py), or the bit-identical to_layout + permute chain for shapes it does not serve."""
         from .stitch_device_minimax_h3 import unpatchify_device
         from .unpatchify_minimax_h3 import unpatchify_tiled
 
@@ -929,15 +925,12 @@ class MiniMaxH3Vae:
             patch_size=self.config.spatial_compression_ratio,
             patch_size_t=self.config.temporal_compression_ratio,
         )
-        mode = os.environ.get("MINIMAX_H3_VAE_UNPATCHIFY", "gather")
-        if mode not in ("gather", "permute"):
-            raise ValueError(f"MINIMAX_H3_VAE_UNPATCHIFY must be 'gather' or 'permute', got {mode!r}")
-        if mode == "gather" and decoded.dtype == ttnn.float32 and width == 16:
+        if decoded.dtype == ttnn.float32 and width == 16:
             return unpatchify_tiled(decoded, **dims)
-        if mode == "gather" and not getattr(self, "_warned_unpatchify_fallback", False):
+        if not getattr(self, "_warned_unpatchify_fallback", False):
             self._warned_unpatchify_fallback = True
             logger.warning(
-                f"MINIMAX_H3_VAE_UNPATCHIFY=gather needs fp32 tokens 16 patches wide (got {decoded.dtype}, width {width}); "
+                f"the unpatchify program needs fp32 tokens 16 patches wide (got {decoded.dtype}, width {width}); "
                 "using the permute chain"
             )
         # Row-major from here to the DMA: the rank-8 intermediate has trailing dims of 16, which a tiled
