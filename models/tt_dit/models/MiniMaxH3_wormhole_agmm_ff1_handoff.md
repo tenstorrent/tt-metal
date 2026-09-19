@@ -1,7 +1,9 @@
-# MiniMax-H3 on Wormhole Galaxy: taking the ff1 AGMM to roofline — handoff (2026-09-18)
+# MiniMax-H3 on Wormhole Galaxy: taking the ff1 AGMM to roofline — handoff (2026-09-18, updated 2026-09-19)
 
 Branch `jameslee/exp_ring_sdpa_wh`. Written for whoever picks up the AGMM work next; everything below was
-measured on this 4x8 Wormhole Galaxy (UF-EV-B12-GWH02) on 2026-09-18. The investigation write-up that this
+measured on this 4x8 Wormhole Galaxy (UF-EV-B12-GWH02) on 2026-09-18/19. **Status 2026-09-19:** lever §4.1 A
+(bf16-grade silu) is landed in both kernels, ff1 is 15.85 → 15.29 ms on the mesh; the "mesh hang" it was
+blamed for was a semaphore-reuse race in the test tooling (exp 8/9), now fixed. Next levers: §4.2 and §4.1 C. The investigation write-up that this
 hands off from is the section *ff1 AGMM: where the other 49% goes* in `MiniMaxH3_wormhole_perf.md`; this
 file adds the SwiGLU findings made after it, the exact recipes for each lever, and the tooling.
 
@@ -62,7 +64,7 @@ Inside the SwiGLU epilogue (single-device A/B on the identical `swiglu_block`, H
 | SwiGLU without `mul_binary_tile` | 16.35 | -0.10 |
 | no SFPU at all (2 copies + pack) | 14.23 | |
 | two pairs per DST acquire, inits hoisted (see §4.1) | 16.45 | -0.10 (not worth its diff) |
-| **`silu_tile<false>(...)` — bf16-grade silu under fp32 DST** | **15.52** | **-0.93 ms**, PCC 0.999928 vs 0.999930 |
+| **`silu_tile<false>(...)` — bf16-grade silu under fp32 DST** | **15.52** | **-0.93 ms**, PCC 0.999928 vs 0.999930 (single device); **-0.56 ms on the mesh AGMM**, exp 9 |
 
 `silu_tile` costs ~2,570 cycles per tile because under fp32 dest `_sfpu_sigmoid_<true>` uses the fp32-accurate
 exp (Juffa) plus a two-iteration Newton reciprocal (`ckernel_sfpu_sigmoid.h`, `ckernel_sfpu_recip.h`); the
@@ -89,7 +91,8 @@ bf16 anyway, so bf16-grade silu loses nothing measurable.
 | 5 | per-iteration zones | operand wait 1 us/iter, `matmul_blocks` 27.3 us/iter vs 17.9 math |
 | 6 | per-block zones | K loop 12.9 ms, SwiGLU 2.8 ms, waits 0 |
 | 7 | SwiGLU attribution and variants, single device | table in §2: silu 2.16 ms; batching 0.1 ms; `silu_tile<false>` -0.93 ms with PCC intact |
-| 8 | `silu_tile<false>` in the AGMM kernel **on the mesh** | **hangs** (3 of 3 attempts through the sweep harness; the untouched kernel passes right before; the same one-line change passes on a single device in `minimal_matmul`, with and without bias). Not root-caused — see §4.1 |
+| 8 | `silu_tile<false>` in the AGMM kernel on the mesh, through the sweep harness | hung 3 of 3 times. **Root-caused 2026-09-19: not the kernel.** The harness reused one semaphore pair and one gathered-in0 buffer for every call, and its warm-up enqueues calls back to back (`sync=False`): a device that finishes call i early starts call i+1 and signals ring semaphores a neighbour is still consuming in call i. Reproduced with the **unmodified** kernel: 5 back-to-back calls with one shared set hang after the first completes. The model never sees this: `CCLManager.get_ag_ping_pong_semaphore/buffer` alternates two sets. Harness fixed to ping-pong (§6) |
+| 9 | `silu_tile<false>` on the mesh with ping-pong semaphores (`agmm_ff1_mesh_bench.py`, 10 back-to-back calls) and through the fixed harness | **runs.** Host 16.58 → 16.08 ms per call; device kernel (harness, Tracy) **15,852 → 15,289 us (-563 us, -3.6%)**; PCC 0.9999838 → 0.9999834, rel-RMSE 0.00806 → 0.00828 (bar 0.9995 / 0.02); `test_linear_swiglu` 4/4 at 0.99998. **Landed** in both `compute.cpp` |
 
 Numerics baseline (perf doc, ff1 real ring op at M=13664): pcc 0.9999843, rel-RMSE 0.00837; bar pcc > 0.9995,
 rel-RMSE < 0.02. Single-device SwiGLU vs fp32 torch: fp32 dest 0.99993 / 0.0087, fp32 dest off 0.99985 / 0.0169.
@@ -106,28 +109,16 @@ rel-RMSE < 0.02. Single-device SwiGLU vs fp32 torch: fp32 dest 0.99993 / 0.0087,
 +            silu_tile<false>(GATE_DST);  // bf16-grade exp + 1 NR step: the output is packed to bf16 anyway
 ```
 
-Measured -0.93 ms on the single-device kernel with PCC unchanged (`test_linear_swiglu` 0.99998 all four
-variants). **Open problem:** in the AGMM kernel on the mesh this hangs every time (exp 8), while the untouched
-kernel runs. The sweep harness runs the op with a bias tensor (`FUSE_BIAS` path) under the Tracy `-p`
-profiler; the single-device runs that passed were bias-less (`agmm_ff1_single_device_bench.py`) and with bias
-(`test_linear_swiglu`, 4x4 grid). To root-cause, in this order:
+**Landed 2026-09-19** (exp 9): -0.93 ms single device, **-0.56 ms on the mesh AGMM** (15,852 → 15,289 us), PCC
+unchanged to the fourth decimal. The mesh gain is smaller than the single-device one; the remaining epilogue
+(~2.3 ms) is the target of change C.
 
-1. Run the AGMM with the change **without** the sweep harness: `bias_tensor=None` like the model, no Tracy.
-   A direct reproducer (`agmm_ff1_mesh_pcc.py`, mirrors the sweep's AGMM runner with the model's arguments)
-   is drafted in the session scratch but stalled before its first timing print on the *unmodified* kernel and
-   was not committed; start from `_build_op_runner`'s AGMM branch in `sweep_mm_block_sizes.py:1145-1233`
-   and keep the PCC phase to 4 devices (host-side PCC over 32 devices x 8 shards takes >10 minutes).
-2. If it still hangs, the SFPU unary path with `is_fp32_dest_acc_en=false` under an fp32 DST is the suspect:
-   `SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_silu, ...)` in
-   `tt_metal/hw/inc/api/compute/compute_kernel_api.h:160-174` passes the flag into
-   `_llk_math_eltwise_unary_sfpu_params_`, which may set DST addressing/format for a 16-bit tile. The safe
-   alternative is a kernel-local body that keeps the fp32 params path but swaps the sigmoid:
-   `for d: x = dst_reg[0]; dst_reg[0] = x * _sfpu_sigmoid_<false>(x); dst_reg++;` invoked through
-   `MATH((_llk_math_eltwise_unary_sfpu_params_<APPROX>(body, idst, (int)VectorMode::RC)))` after
-   `silu_tile_init()` (the `<false>` sigmoid needs no extra constants: `_sfpu_exp_21f_bf16_` is constant-free
-   and `recip_init` is shared).
-3. `TT_METAL_WATCHER=30 TT_METAL_WATCHER_APPEND=1` on the hanging run for per-RISC waypoints; the hang doc
-   `MiniMaxH3_wormhole_hang.md` lists the triage scripts.
+Why the earlier "mesh hang" was not this change: on Wormhole `SFPU_UNARY_CALL` **ignores** its `DST_ACCUM`
+argument (`llk_math_eltwise_unary_sfpu_macros.h:43-46` only forwards the functor, DST index and vector mode to
+`_llk_math_eltwise_unary_sfpu_params_`), so `silu_tile<false>` changes nothing but the sigmoid's exp
+(`_sfpu_exp_21f_bf16_`, inline constants, no programmable-register dependency) and its reciprocal iteration
+count; DST addressing is untouched. The hang was the harness's shared semaphore set (exp 8). The DST-addressing
+triage list in the first draft of this file is therefore moot and has been removed.
 
 **Change B — cheaper sigmoid.** `calculate_sigmoid_appx` (`ckernel_sfpu_sigmoid_appx.h`) is a 3-segment LUT
 (~5 SFPU instructions per vector vs ~30). Accuracy is the question: slope 0.2266 near zero against the true
@@ -202,8 +193,8 @@ K_block (exp 1); the ring gather (hidden, exp 3/5); fabric bandwidth (1.1 ms bou
 
 | step | K loop | epilogue | total | util |
 |---|---|---|---|---|
-| today | 12.9 | 2.8 | 15.7 | 51% |
-| §4.1 A (bf16-grade silu) | 12.9 | ~1.9 | ~14.8 | 54% |
+| 2026-09-18 | 12.9 | 2.8 | 15.7 | 51% |
+| **§4.1 A landed (2026-09-19)** | 12.9 | ~2.3 | **15.3** (device 15,289 us) | 53% |
 | §4.1 C (epilogue hidden behind the next K loop) | 12.9 | ~0 | ~12.9 | 62% |
 | §4.2 + §4.3 (delivery and compute side both lowered) | ~9-10 | ~0 | **~9-10** | 80-90% |
 | roofline | 8.0 | 0 | 8.0 | 100% |
@@ -214,7 +205,20 @@ without SwiGLU; §4.2 and §4.3 carry over unchanged.
 
 ## 6. Tooling and recipes
 
-**Mesh timing of one blocking (the validated runner).** Appends rows to `sweep_results_mm.csv` (gitignored,
+**Mesh reproducer, 15 s per run (use this first).** `models/tt_dit/tests/models/minimax_h3/tools/agmm_ff1_mesh_bench.py`
+runs the ff1 AGMM on one TP ring (the harness's 4x1 cluster submesh) exactly as the model does: fused SwiGLU,
+`bias=None`, HiFi2, fp32 dest, (8,7,10) 2x2, `math_approx_mode=True`, **two semaphore pairs and two gathered-in0
+buffers alternated per call** like `CCLManager`. Prints host ms per call over N back-to-back calls and PCC /
+rel-RMSE against fp32 torch on the first 2048 rows of every device. `--blocks`, `--fp32-dest 0`, `--no-swiglu`,
+`--sync-each`, `--no-pingpong` (reproduces the exp 8 hang). Wrap in `timeout 600`; a hang never prints "ms per call".
+
+Two things that cost hours before they were found: (1) `ttnn.from_torch` of an **fp32** torch tensor of
+13664x5376 to bf16 tiles takes ~160 s on the host (0.1 s from a bf16 torch tensor) — the first draft of this
+bench sat at 100% CPU for 15 minutes before its first op call and looked like a hang; convert to bf16 in torch
+first. (2) A ring op hung by the semaphore race (exp 8) also wedges the ETH heartbeat, so the *next* open fails
+with "Timed out waiting for ETH heartbeat" until `tt-smi -r all` + 75 s; the two failures look alike from the outside.
+
+**Mesh timing of one blocking (the validated runner; now ping-pongs semaphores and hands ttnn bf16 host tensors).** Appends rows to `sweep_results_mm.csv` (gitignored,
 holds the 1419-row 15 s sweep; back it up first, fp32-off rows are indistinguishable from fp32-on rows):
 
 ```bash
@@ -223,8 +227,9 @@ MM_SWEEP_EXPLICIT_COMBOS='[[8,7,10,2,2]]' MM_SWEEP_PROFILER_DUMP_EVERY=100000 [M
   -k "13664_5376_7168_8x8_agmm_ff1_swiglu and wh_4x8_ring" -s --timeout 7200
 ```
 
-About one minute for a handful of combos. Warm-up enqueues with `sync=False`, so a "1/N" progress line does
-not mean a combo completed — a hang shows up as the run never finishing. Wrap in `timeout 400` when testing
+About 20 s per combo including setup. Warm-up enqueues with `sync=False`, so a "1/N" progress line does
+not mean a combo completed — a hang shows up as the run never finishing (with the ping-pong fix this no longer
+happens for the AGMM; the non-AGMM branches were already safe, they have no ring semaphores). Wrap in `timeout 400` when testing
 kernel changes. Note the harness passes a **bias** for `ff1_swiglu` (the model does not) and runs
 `math_approx_mode=False` (the model runs True; silu ignores it).
 
