@@ -352,4 +352,6 @@ set(HW_JIT_API_HEADERS
     toolchain/erisc-b0-app-sections.ld
     toolchain/erisc-b0-memory.ld
     toolchain/erisc-b0-kernel.ld
+    ckernels/common/llk_sfpu/ckernel_sfpu_erf_bf16.h
+    ckernels/common/llk_sfpu/ckernel_sfpu_tt_poly_cascade_signed_abs.h
 )

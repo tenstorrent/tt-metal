@@ -70,4 +70,21 @@ ALWI void erfc_tile(uint32_t idst) {
 
 #endif
 
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+template <bool fast_and_approx = true>
+ALWI void erf_tt_poly_bf16_tile(uint32_t idst) {
+#if defined(TT_POLY_LLK_DISABLE) || !(defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
+    erf_tile<fast_and_approx>(idst);
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_erf_tt_poly_bf16, (8 /* ITERATIONS */), idst, VectorMode::RC));
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+template <bool fast_and_approx = true>
+ALWI void erf_tt_poly_bf16_tile_init() {
+    erf_tile_init<fast_and_approx>();
+}
+
 }  // namespace ckernel
