@@ -75,11 +75,12 @@ constexpr uint32_t kBatchFrames = 64;
 namespace {
 
 // A consumer's decoded records live in three arenas (zones, events, timestamped data). A batch keeps its ranges until
-// it is delivered and batches are released in decode order, so each arena is a ring whose free space runs from the
+// it is delivered and batches are released in decode order, so an arena is a ring whose free space runs from the
 // write position to the oldest live range; the stretch a wrap leaves dead at the end is skipped once the tail
-// reaches it. Pages are touched only as far as batches ever reached. Sized for the records a waiting consumer holds
-// during the sync's cover latency (a few ms) at the highest ingest rates (records are ~3x their frame bytes), and
-// well past one batch's worst case (64 full frames: 4.1 MB of records per kind, 4.8 MB of data).
+// reaches it. A batch the ring cannot take opens a larger ring behind it, freed once its last range is released, so
+// a consumer holds every record the sync has yet to cover. Pages are touched only as far as batches ever reached;
+// the first rings take one batch's worst case (64 full frames: 4.1 MB of records per kind, 4.8 MB of data) many
+// times over.
 constexpr size_t kZonesArenaBytes = size_t{128} << 20;
 constexpr size_t kEventsArenaBytes = size_t{64} << 20;
 constexpr size_t kDataArenaBytes = size_t{64} << 20;
@@ -87,7 +88,7 @@ constexpr size_t kDataArenaBytes = size_t{64} << 20;
 // starved sync consumer), and records should not wait on it forever.
 constexpr int64_t kMaxParkNs = 1'000'000'000;
 
-struct Arena {
+struct Ring {
     std::unique_ptr<uint8_t[]> buf;
     size_t cap = 0;
     size_t head = 0;  // next write
@@ -95,7 +96,8 @@ struct Arena {
     size_t wrap = 0;  // end of the live stretch before the jump to 0, while wrapped
     size_t live = 0;  // ranges committed and not yet released
     bool wrapped = false;
-    explicit Arena(size_t bytes) : buf(std::make_unique_for_overwrite<uint8_t[]>(bytes)), cap(bytes) {}
+    explicit Ring(size_t bytes) : buf(std::make_unique_for_overwrite<uint8_t[]>(bytes)), cap(bytes) {}
+    bool holds(const uint8_t* p) const { return p >= buf.get() && p < buf.get() + cap; }
     // `n` contiguous bytes at the write position, or nullptr when the live ranges leave no such room.
     uint8_t* reserve(size_t n) {
         if (live == 0) {
@@ -123,14 +125,39 @@ struct Arena {
     }
     // Frees the oldest live range.
     void release(uint8_t* p, size_t used) {
-        if (used == 0) {
-            return;
-        }
         tail = static_cast<size_t>(p - buf.get()) + used;
         live--;
         if (wrapped && tail == wrap) {
             tail = 0;
             wrapped = false;
+        }
+    }
+};
+
+struct Arena {
+    std::vector<Ring> rings;  // oldest first; the last takes new batches
+    explicit Arena(size_t bytes) { rings.emplace_back(bytes); }
+    uint8_t* reserve(size_t n) {
+        if (uint8_t* p = rings.back().reserve(n)) {
+            return p;
+        }
+        rings.emplace_back(std::max(rings.back().cap * 2, n));
+        return rings.back().reserve(n);
+    }
+    void commit(uint8_t* p, size_t used) { rings.back().commit(p, used); }
+    // Frees the oldest live range, and the ring it drained unless that is the last one.
+    void release(uint8_t* p, size_t used) {
+        if (used == 0) {
+            return;
+        }
+        for (auto r = rings.begin(); r != rings.end(); ++r) {
+            if (r->holds(p)) {
+                r->release(p, used);
+                if (r->live == 0 && r + 1 != rings.end()) {
+                    rings.erase(r);
+                }
+                return;
+            }
         }
     }
 };
@@ -151,8 +178,7 @@ struct Service::Consumer {
     std::atomic<bool> stop{false};
     ControlQueue control;
     std::atomic<uint64_t> dropped{0};
-    std::atomic<uint64_t> unplaced{0};       // batches delivered before the sync covered them
-    std::atomic<uint64_t> unplaced_full{0};  // of those, delivered to make arena room
+    std::atomic<uint64_t> unplaced{0};        // batches delivered before the sync covered them
     std::atomic<int64_t> unplaced_age_ns{0};  // the furthest such a batch was behind its cover
 };
 
@@ -272,18 +298,14 @@ void Service::warn_missed(const Consumer& c) {
         log_warning(tt::LogMetal, "[streaming profiler] consumer \"{}\" missed {} bytes of frames", c.name, dropped);
     }
     if (const uint64_t unplaced = c.unplaced.load(std::memory_order_relaxed); unplaced != 0) {
-        const uint64_t full = c.unplaced_full.load(std::memory_order_relaxed);
         log_warning(
             tt::LogMetal,
-            "[streaming profiler] consumer \"{}\" received {} batches before the d2d sync covered their records ({} "
-            "past the {} s park limit, {} to make arena room), the furthest {:.1f} ms behind its cover: the sync "
-            "engine "
-            "ran behind them (a fault); those records were placed on its last tangent",
+            "[streaming profiler] consumer \"{}\" received {} batches the d2d sync had not covered after {} s, the "
+            "furthest {:.1f} ms behind its cover: the sync engine ran behind them (a fault); those records were "
+            "placed on its last tangent",
             c.name,
             unplaced,
-            unplaced - full,
             kMaxParkNs / 1e9,
-            full,
             c.unplaced_age_ns.load(std::memory_order_relaxed) / 1e6);
     }
 }
@@ -732,37 +754,13 @@ private:
         }
     }
 
-    // Room for a batch of `words` frame words in every arena; the oldest waiting batch goes out when the arenas are
-    // full, counted as unplaced if the sync has not covered it yet.
+    // Room for a batch of `words` frame words in every arena.
     void reserve(size_t words, uint32_t frames, uint8_t*& z, uint8_t*& e, uint8_t*& d) {
         const size_t rec_bytes = (words / 2 + profiler::kSpscSinkSlackRecs) * profiler::kSpscRecBytes;
         const size_t data_bytes = rec_bytes + words * 4 + size_t{32} * frames;
-        for (;;) {
-            z = zones_arena_.reserve(rec_bytes);
-            e = events_arena_.reserve(rec_bytes);
-            d = data_arena_.reserve(data_bytes);
-            if (z != nullptr && e != nullptr && d != nullptr) {
-                return;
-            }
-            TT_FATAL(
-                !parked_.empty(),
-                "streaming profiler: a batch of {} frame words does not fit a consumer's arenas",
-                words);
-            for (Parked& pk : parked_) {
-                if (!pk.delivered) {
-                    AttachedStream& s = *pk.a->streams[pk.stream];
-                    if (pk.n.newest_ticks > map_.cover_ticks(s.chip)) {
-                        c_.unplaced.fetch_add(1, std::memory_order_relaxed);
-                        c_.unplaced_full.fetch_add(1, std::memory_order_relaxed);
-                        note_unplaced(now_ns() - pk.parked_at_ns);
-                    }
-                    deliver(pk);
-                    s.pending.pop_front();
-                    break;
-                }
-            }
-            release_delivered();
-        }
+        z = zones_arena_.reserve(rec_bytes);
+        e = events_arena_.reserve(rec_bytes);
+        d = data_arena_.reserve(data_bytes);
     }
 
     // Delivers each stream's batches in decode order while the sync covers them, then frees behind the delivered
