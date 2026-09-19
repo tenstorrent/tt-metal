@@ -155,7 +155,8 @@ _DEFAULT_AUDIO_PACK = "5:2,6:4"
 # Split mode of the packed bands' anti-alias resamplers ("same" = the convs' mode). "off" is the measured 65 dB /
 # -72 ms point (layers/audio_pack.py).
 _AUDIO_RESAMPLER_SPLIT_ENV = "MINIMAX_H3_AUDIO_RESAMPLER_SPLIT"
-# Conv split mode of the audio decoder when the caller passes none ("full" = main's accurate default).
+# Conv split mode of the audio decoder when the caller passes none ("kernel" = the in-kernel fp32 operand split,
+# same operands and fidelity as "full", 0.2 s faster on the 15 s clip).
 _AUDIO_SPLIT_ENV = "MINIMAX_H3_AUDIO_SPLIT"
 # Replay a captured device graph for the audio vocoder instead of dispatching it op by op. The vocoder is the one
 # stage that is host-bound, so this is its dominant lever; it needs a trace_region_size on the mesh.
@@ -500,7 +501,7 @@ class MiniMaxH3Pipeline:
         # for a lower-fidelity decode (~42 dB). Keys the device-weight cache via `weights_variant`.
         # audio_t_factor=4 timings: 2.2 s (full) / 1.6 s (off) on 4x8; default is 8 (~1.4 s full).
         if audio_split_mode is None:
-            audio_split_mode = os.environ.get(_AUDIO_SPLIT_ENV, "full").strip() or "full"
+            audio_split_mode = os.environ.get(_AUDIO_SPLIT_ENV, "kernel").strip() or "kernel"
         if audio_split_mode not in ("off", "weight", "act", "full", "stack", "kernel"):
             raise ValueError(
                 f"audio_split_mode must be 'off', 'weight', 'act', 'full', 'stack' or 'kernel', got {audio_split_mode!r}"
