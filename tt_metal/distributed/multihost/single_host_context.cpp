@@ -75,6 +75,8 @@ void SingleHostContext::broadcast(ttsl::Span<std::byte> buf [[maybe_unused]], Ra
 
 void SingleHostContext::all_reduce(
     ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op [[maybe_unused]], DType dtype) const {
+    // MPI defines a reduction over a one-rank communicator as that rank's input for every operator, so op is
+    // not consulted.
     TT_FATAL(
         recv_buf.size() == send_buf.size(),
         "all_reduce: recv buffer {} bytes, expected {}",
