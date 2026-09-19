@@ -1330,6 +1330,10 @@ struct LightweightMaskContext {
     uint32_t joint_l_partial_tile_idx = 0;        // Index of joint_l partial tile in the mask CB
     uint32_t straddle_num_padded_tiles = 0;       // Trailing -inf tiles on straddle chunk (0 = inactive)
     uint32_t straddle_mask_chunk_id = 0;          // K chunk index where straddle mask applies
+    uint32_t mid_mask_chunk = 0xFFFFFFFFu;        // Joint SDPA: K chunk where the spatial segment ends mid chunk
+    uint32_t mid_padded_tiles = 0;                // Fully padded K tiles at the end of that chunk
+    uint32_t mid_partial_col = 0;                 // Column where padding starts in its partial tile (0 = none)
+    uint32_t mid_partial_tile_idx = 0;            // Index of that partial tile in the mask CB
 
     /**
      * Resolve which mask type applies for a given K chunk and return pre-resolved params.

@@ -2208,6 +2208,9 @@ void sdpa_standard_v2(
                 if ((k_chunk == k_num_chunks - 1) && lw_mask.global_n_partial_col > 0) {
                     target_active_Sk = Sk_chunk_t - lw_mask.global_n_padded_tiles;
                     apply_partial_mask = true;
+                } else if (k_chunk == lw_mask.mid_mask_chunk) {
+                    target_active_Sk = Sk_chunk_t - lw_mask.mid_padded_tiles;
+                    apply_partial_mask = lw_mask.mid_partial_col > 0;
                 }
             }
             if constexpr (has_sliding_window) {
@@ -2245,7 +2248,9 @@ void sdpa_standard_v2(
                 apply_causal_mask,
                 k_chunk * Sk_chunk_t,
                 apply_partial_mask,
-                apply_partial_mask ? lw_mask.global_n_partial_tile_idx : 0u,
+                apply_partial_mask ? (k_chunk == lw_mask.mid_mask_chunk ? lw_mask.mid_partial_tile_idx
+                                                                        : lw_mask.global_n_partial_tile_idx)
+                                   : 0u,
                 apply_sliding_mask);
 
             // Post-iteration cleanup
