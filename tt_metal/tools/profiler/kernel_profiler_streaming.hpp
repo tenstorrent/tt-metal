@@ -318,28 +318,13 @@ __attribute__((noinline)) void mark_zone_long(
     publish_tail();
 }
 
-// One 3-word packet per zone with the start the scope object carried. Room is reserved before the end clock
-// is read so a stall elongates the zone it happened inside; otherwise the packet would carry a pre-stall end
-// yet sit after the stall zone. Worst case is a 1-word sticky plus the 3-word packet.
-PROFILER_INLINE_ATTR void mark_zone_close(uint32_t timer_id, uint32_t start_hi, uint32_t start_lo) {
-    ring_ensure_room(SPSC_ATOMIC_ZONE_WORDS + 1);  // worst case (ATOMIC + sticky); an S zone simply uses less
-    uint32_t hi, lo;
-    read_wall_clock(hi, lo);
+// The closes that are not a ZONE_S: a ZONE_ATOMIC (cursor delta or duration past 16 bits, or a new high half) or
+// the >3.2 s ZONE_L. The caller reserved the room and read the end clock.
+__attribute__((noinline)) void mark_zone_close_rare(
+    uint32_t timer_id, uint32_t start_hi, uint32_t start_lo, uint32_t hi, uint32_t lo) {
     const uint32_t lo_d = lo - start_lo;
     const uint32_t hi_d = hi - start_hi - (lo < start_lo);
-    // One OR-tree into one branch: cursor delta and duration both fit 16 bits and neither subtract borrowed; an
-    // invalid cursor (hi = ~0) fails via c_hi_d. Fall-through because it is the dominant case on a dense lane.
-    const uint32_t c_lo_d = lo - g_cursor_lo;
-    if (__builtin_expect((((c_lo_d | lo_d) >> 16) | (hi ^ g_cursor_hi) | hi_d) == 0, 1)) {
-        ring_write_word(ppfmt::zone_s_w0(timer_id));
-        ring_write_word((c_lo_d << 16) | lo_d);
-        g_cursor_lo = lo;
-        g_cursor_hi = hi;
-        publish_tail_batched(2);
-        return;
-    }
-    if (__builtin_expect(hi_d != 0, 0)) {
-        // The long fallback leaves the cursor alone, as the decoder's pair path does.
+    if (hi_d != 0) {
         mark_zone_long(timer_id, start_hi, start_lo, hi, lo);
         return;
     }
@@ -350,6 +335,54 @@ PROFILER_INLINE_ATTR void mark_zone_close(uint32_t timer_id, uint32_t start_hi, 
     g_cursor_lo = lo;  // ZONE_ATOMIC re-anchors the cursor (decoder: cursor = sticky_hi<<32 | end_lo)
     g_cursor_hi = hi;
     publish_tail_batched(SPSC_ATOMIC_ZONE_WORDS + 1);
+}
+
+// One packet per zone with the start the scope object carried; room (worst case a 1-word sticky plus the 3-word
+// ZONE_ATOMIC) is reserved before the end clock is read so a stall elongates the zone it happened inside.
+inline __attribute__((always_inline)) void zone_close_write(uint32_t timer_id, uint32_t start_hi, uint32_t start_lo) {
+    uint32_t hi, lo;
+    read_wall_clock(hi, lo);
+    const uint32_t lo_d = lo - start_lo;
+    const uint32_t hi_d = hi - start_hi - (lo < start_lo);
+    // One OR-tree into one branch: cursor delta and duration both fit 16 bits and neither subtract borrowed; an
+    // invalid cursor (hi = ~0) fails via the high halves. Fall-through because it is the dominant case on a dense lane.
+    const uint32_t c_lo_d = lo - g_cursor_lo;
+    if (__builtin_expect((((c_lo_d | lo_d) >> 16) | (hi ^ g_cursor_hi) | hi_d) == 0, 1)) {
+        ring_write_word(ppfmt::zone_s_w0(timer_id));
+        ring_write_word((c_lo_d << 16) | lo_d);
+        g_cursor_lo = lo;
+        g_cursor_hi = hi;
+        publish_tail_batched(2);
+        return;
+    }
+    mark_zone_close_rare(timer_id, start_hi, start_lo, hi, lo);
+}
+
+// The close whose room check failed against the cached head: refreshes the head, waits for the relay if the ring
+// really is full (or overwrites once disarmed), then writes. The only frame a close ever opens.
+__attribute__((noinline)) void mark_zone_close_stalled(uint32_t timer_id, uint32_t start_hi, uint32_t start_lo) {
+    constexpr uint32_t nwords = SPSC_ATOMIC_ZONE_WORDS + 1;
+    // Invalidate before the refresh: the relay's head write-back arrives over the NoC, which the core's L1 read
+    // cache does not observe.
+    invalidate_l1_cache();
+    g_head_cache = profiler_control_buffer[HEAD_INDEX];
+    if ((wIndex - g_head_cache) > (RING_USABLE - nwords)) {
+        ring_ensure_room_slow(nwords);
+    }
+    zone_close_write(timer_id, start_hi, start_lo);
+}
+
+// Inlined at every zone site (unless PROFILER_INLINE_ATTR out-lines it) and kept to the ZONE_S fast path; everything
+// rarer is one out-of-line copy per RISC. A fused Blaze kernel has ~80 sites per RISC, so the inlined part sets the
+// instrumented program's size, and a call in the common path is what the Kimi K2 sparse compute kernels cannot take
+// (their result moves with instruction timing; see 5d911653545).
+PROFILER_INLINE_ATTR void mark_zone_close(uint32_t timer_id, uint32_t start_hi, uint32_t start_lo) {
+    constexpr uint32_t nwords = SPSC_ATOMIC_ZONE_WORDS + 1;
+    if (__builtin_expect((wIndex - g_head_cache) > (RING_USABLE - nwords), 0)) {
+        mark_zone_close_stalled(timer_id, start_hi, start_lo);
+        return;
+    }
+    zone_close_write(timer_id, start_hi, start_lo);
 }
 
 // DeviceZoneSetCounter hook: the runtime host-id goes in band as a STICKY_PROG the host forward-fills onto
