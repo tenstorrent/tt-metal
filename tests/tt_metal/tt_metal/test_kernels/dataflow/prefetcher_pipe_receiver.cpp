@@ -4,27 +4,26 @@
 
 // PrefetcherPipe receiver kernel: wait for entries and pop.
 //
-// Compile-time parameters (via kernel compile_args):
-//   [0] prefetcher_pipe_id
-//   [1] entry_size
-//   [2] num_entries        - total dense entries in this epoch (must be divisible by
-//                           get_num_threads() when multi-DM lane credits are armed)
-//   [3] receiver_idx       - unused (reserved for test harness symmetry)
+// Bindings:
+//   pipe::in               — KernelSpec::PrefetcherPipeBinding accessor (program slot id baked in)
+// Args (named CTAs):
+//   args::num_entries      - total dense entries in this epoch (must be divisible by
+//                            get_num_threads() when multi-DM lane credits are armed)
 //
-// Multi-DM: host AttachPrefetcherPipe(..., num_pipe_consumer_threads=P) must match
-// num_threads_per_cluster. Each hart owns lane tid and wait_front/pop_front one
-// owned stride per loop iteration (num_entries / P iterations).
+// Multi-DM: the receiver KernelSpec's num_threads is the pipe's credit lane count P. Each hart
+// owns lane tid and wait_front/pop_front one owned stride per loop iteration
+// (num_entries / P iterations).
 
 #include "api/dataflow/prefetcher_pipe.h"
 #include "api/dataflow/noc.h"
 #include "api/kernel_thread_globals.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint8_t prefetcher_pipe_id = get_compile_time_arg_val(0);
-    constexpr uint32_t num_entries = get_compile_time_arg_val(2);
+    constexpr uint32_t num_entries = get_arg(args::num_entries);
 
     Noc noc;
-    experimental::PrefetcherPipe gdfb(prefetcher_pipe_id);
+    experimental::PrefetcherPipe gdfb(pipe::in);
 
     const uint32_t num_threads = get_num_threads();
     const uint32_t tid = get_my_thread_id();

@@ -243,6 +243,18 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             scratch_entries.push_back({name, size_bytes, addr_crta_word});
         });
 
+    // PrefetcherPipe bindings: sorted by name for a deterministic header (Kernel::compute_hash
+    // hashes them in binding order; both orders carry the same set, so the cache key is stable).
+    struct PipeEntry {
+        string name;
+        uint8_t prefetcher_pipe_id;
+    };
+    vector<PipeEntry> pipe_entries;
+    settings.process_prefetcher_pipe_binding_handles([&pipe_entries](const string& name, uint8_t prefetcher_pipe_id) {
+        pipe_entries.push_back({name, prefetcher_pipe_id});
+    });
+    sort(pipe_entries.begin(), pipe_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
+
     // Tensor binding sequences: user order (matches Kernel::compute_hash); no sort.
     struct TensorBindingSequenceEntry {
         string name;
@@ -281,6 +293,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
 
     if (!dfb_entries.empty()) {
         content << "#include \"api/dataflow/dataflow_buffer.h\"\n";
+    }
+    if (!pipe_entries.empty()) {
+        // Defines PrefetcherPipeBindingToken. Header-only and dependency-free (the token is just
+        // the slot id); the kernel includes api/dataflow/prefetcher_pipe.h itself to use it.
+        content << "#include \"api/dataflow/dfb_binding_token.h\"\n";
     }
 
     if (!sem_entries.empty()) {
@@ -337,6 +354,16 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     }
     emit_programmatic_binding_token_getter(content, dfb_entries, "DFBBindingToken");
     content << "}  // namespace dfb\n";
+
+    // Emit PrefetcherPipe bindings: one token per accessor, carrying the program slot id.
+    if (!pipe_entries.empty()) {
+        content << "namespace pipe {\n";
+        for (const auto& entry : pipe_entries) {
+            content << "constexpr PrefetcherPipeBindingToken " << entry.name << "{"
+                    << static_cast<uint32_t>(entry.prefetcher_pipe_id) << "};\n";
+        }
+        content << "}  // namespace pipe\n";
+    }
 
     // Emit Semaphore bindings
     tt::tt_metal::emit_semaphore_binding_tokens(content, sem_entries);

@@ -13,6 +13,8 @@
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/face_geometry.hpp>
@@ -128,6 +130,31 @@ struct DataflowBufferSpec {
     //
     // (TODO: this should become std::variant<TensorParamName, BufferParameterName>.)
     std::optional<TensorParamName> borrowed_from = std::nullopt;
+
+    // Build DFB as a PrefetcherPipe RELAY.
+    //
+    // A relay DFB aliases the data ring of one or more PrefetcherPipeParameters (declared at
+    // ProgramSpec scope) as its backing storage, so a receiver-side data-movement kernel can
+    // hand pipe entries to a compute kernel without copying: the DM kernel is the DFB's
+    // PRODUCER (it pushes each entry it receives from the pipe), the compute kernel is its
+    // CONSUMER. Empty = ordinary local DFB.
+    //
+    // Requirements (validated at MakeProgramFromSpec):
+    //  - mutually exclusive with borrowed_from
+    //  - entry_size == pipe entry_size and entry_size * num_entries == pipe ring_size, for every
+    //    named pipe (all named pipes share ring_size and entry_size)
+    //  - the DFB's node set (union of its bound kernels' nodes) equals the union of the named
+    //    pipes' receiver nodes, and those receiver sets are pairwise disjoint
+    //  - every PRODUCER kernel binds exactly this pipe set under one accessor
+    //    (KernelSpec::prefetcher_pipe_bindings); it is the pipes' receiver kernel, and its
+    //    num_threads is the pipes' receiver-side credit lane count
+    //
+    // Naming more than one pipe makes a single DFB serve several 1:N pipes whose receiver sets
+    // tile the DFB's nodes (one relay for a whole grid fed by several senders), mirroring the
+    // producer kernel's multi-pipe accessor. The pipes then supplied via ProgramRunArgs must
+    // share ring and config addresses (come from one space); that is checked at
+    // SetProgramRunArgs, when the objects exist.
+    Group<PrefetcherPipeParamName> prefetcher_pipe_relays;
 
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)

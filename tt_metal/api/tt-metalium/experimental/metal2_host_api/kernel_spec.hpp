@@ -183,6 +183,28 @@ struct KernelSpec {
     };
     Group<TensorBinding> tensor_bindings;
 
+    // PrefetcherPipe bindings
+    // Declares that this data-movement kernel participates in one or more PrefetcherPipes
+    // (declared at the ProgramSpec level as PrefetcherPipeParameters). The kernel constructs the
+    // device object from the binding token:
+    //   experimental::PrefetcherPipe pipe(pipe::<accessor_name>)
+    //
+    // One accessor is one pipe SLOT on every node the kernel runs on. Several pipes may share an
+    // accessor when they tile the kernel's nodes: on each node exactly one of them is present, and
+    // the host resolves which one per node, so one compiled kernel serves them all. The group's
+    // pipes must agree on ring_size / entry_size (one binary, one geometry).
+    //
+    // The kernel's role (sender or receiver) is derived from its WorkUnitSpec node coverage
+    // against the group's geometry; see prefetcher_pipe_parameter.hpp. Compute kernels cannot
+    // bind a pipe; they consume through a relay DFB (DataflowBufferSpec::prefetcher_pipe_relays).
+    struct PrefetcherPipeBinding {
+        // PrefetcherPipeParameters (within the ProgramSpec) reachable through this accessor.
+        // Non-empty. Typically one; several when they tile the kernel's nodes (see above).
+        Group<PrefetcherPipeParamName> pipe_parameter_names;
+        std::string accessor_name;  // pipe accessor name (used in the kernel source code)
+    };
+    Group<PrefetcherPipeBinding> prefetcher_pipe_bindings;
+
     // Additional program parameter binding types (coming soon):
     //  - GlobalSemaphore bindings
     //  - GlobalDataflowBuffer bindings
@@ -241,6 +263,7 @@ using DFBBinding = KernelSpec::DFBBinding;
 using TensorBinding = KernelSpec::TensorBinding;
 using SemaphoreBinding = KernelSpec::SemaphoreBinding;
 using ScratchpadBinding = KernelSpec::ScratchpadBinding;
+using PrefetcherPipeBinding = KernelSpec::PrefetcherPipeBinding;
 
 //------------------------------------------------
 // Convenience factories for DFBBinding
