@@ -1,49 +1,83 @@
-# Gemma4 prefill migration tests
+# Gemma4 prefill GPU-trace and migration tests
 
-These tests implement the two gates in the [shared migration guide](../common/prefill/docs/PREFILL_MIGRATION_TESTING.md). Both use the production Gemma4-31B-it configuration: one Blackhole 8×4 mesh, 60 layers, batch 1, 8192-token chunks, and six slots with 256K capacity.
+The tests use Gemma4-31B-it on one Blackhole 8×4 mesh: 60 layers, batch 1, 8192-token prefill chunks, and six allocated KV slots with 256K capacity. Each test sends one request to slot 0 and compares it once against the GPU trace.
 
-| Gate | Driver | Checks |
-| --- | --- | --- |
-| 1: `mock` | Shared `prefill_producer` | Six distinct prompts; source KV read through the exported table and device map, compared with independent HF goldens |
-| 2: `loopback` | Shared `migration_driver` | Three distinct source prompts; source golden PCC, real migration `0→5, 1→3, 2→4`, destination byte equality and golden PCC |
+| Context | Tokens | Prefill chunks |
+| --- | ---: | ---: |
+| `8k` | 8192 | 1 |
+| `16k` | 16384 | 2 |
+| `128k` | 131072 | 16 |
+| `256k` | 262144 | 32 |
 
-All 60 layers and all applicable heads are checked. The 36 table configurations describe four global packed heads, sixteen sliding K heads, and sixteen sliding V heads. Unused layer/config combinations are excluded from the driver's verification plan. Missing chunks, missing local devices, malformed goldens, and nonfinite KV fail verification.
+## GPU reference
 
-The tests launch the runner and driver in separate processes. The runner publishes the table and map; numerical validation runs in the driver. Neither test adds validation to the serving loop. Logs and the exported table/map are retained in pytest's temporary directory.
+Use the environment setup in [Prefill service](PREFILL_SERVICE.md). The adapter defaults to this staged HF/SDPA GPU capture:
 
-## Setup and golden traces
-
-Use the environment setup in [Prefill service](PREFILL_SERVICE.md). Generate six independent reference traces from real text. The exporter runs the HF model on CPU, captures post-RoPE K and normalized V before sliding-window eviction, and writes the shared producer's `metadata.json` and `kv_cache/layer_N.safetensors` format. It does not use TT hardware.
-
-The full 31B checkpoint and reference KV require substantial host RAM and disk space. Run this preparation separately from hardware testing; it is not part of test collection.
-
-```bash
-export GEMMA4_GOLDEN_ROOT=/mnt/models/huggingface/gemma4_migration_goldens
-mkdir -p /tmp/gemma4_prefill_text
-for book in 135 2600 1184 996 1023 1399; do
-    curl -fL "https://www.gutenberg.org/cache/epub/$book/pg$book.txt" \
-        -o "/tmp/gemma4_prefill_text/pg$book.txt"
-    python -m models.demos.gemma4_d_p.scripts.generate_golden_kv_cache \
-        --text "/tmp/gemma4_prefill_text/pg$book.txt" \
-        --tokens 16384 --out "$GEMMA4_GOLDEN_ROOT/$book"
-done
-export GEMMA4_MIGRATION_TRACES="$GEMMA4_GOLDEN_ROOT/135,$GEMMA4_GOLDEN_ROOT/2600,$GEMMA4_GOLDEN_ROOT/1184,$GEMMA4_GOLDEN_ROOT/996,$GEMMA4_GOLDEN_ROOT/1023,$GEMMA4_GOLDEN_ROOT/1399"
+```text
+/mnt/models/huggingface/gpu_traces/gemma4_d_p/hf-gemma4-31b-36db66e9-262144tok
 ```
 
-Output directories must be new. The default 16384-token traces exercise two prefill chunks across every CP row. This verifies the populated prefix, not every byte of the 256K capacity. Use `--tokens 262144` to check full-context migration. Trace lengths must be at least 8192, at most 262144, and divisible by 32 so the byte verifier covers the complete populated range. Distinct prompts are required to detect crossed slots.
+Set `PREFILL_TRACE_DIR` to override it. The capture contains one Gutenberg *Les Misérables* prompt, its exact token IDs in `metadata.json`, and all 60 layers of KV. The producer replays the requested token prefix without retokenizing or repeating it.
 
-## Gate 1: mock migration
+The `chunked_group_a_v1` reference stores `kv_cache/layer_N/rows_START_END.safetensors`, with key `kv_post_transform_layer_N`. Each row contains K followed by V, flattened in head order. Sliding rows have width 8192 (16 heads × 256 channels × K/V); global rows have width 4096 (4 heads × 512 channels × K/V). K is captured after normalization and RoPE; V after normalization, before sliding-window eviction.
 
-No migration endpoint or tt-llm-engine is required. The test enables `PREFILL_MOCK_MIGRATION=1`, exports the table and device map, and runs shared producer golden PCC with threshold 0.93.
+The validator reconstructs Gemma4's packed global KV and sliding K channel order. The hardware test slices the selected slot and populated prefix on the owning mesh, converts the temporary copy to BF16 row-major on-device, reads it through the TTNN command queue, joins the host shards with PyTorch, and restores chunk-major CP token order. The live BFP8 cache is unchanged. It also checks the first and last populated 32-token block on each CP rank against the exported migration table for every head and layer. These address checks are samples; the GPU comparison covers the full requested prefix. It compares all applicable heads in all 60 layers and reports separate minima for global rotary K, global V, sliding K, and sliding V. Each PCC flattens one head over the entire requested context. Prefill runs chunk-first; validation starts after all chunks finish and runs layer-first. Missing rows, invalid addresses, malformed tensors, and nonfinite values fail.
+
+## PCC definition and threshold
+
+Each score is Pearson correlation between a TT cache head and its GPU counterpart, flattened over the entire requested token prefix and the compared channels. Global rotary K and V are scored separately. There are 1680 scores per context.
+
+- `layer_minima`: the lowest head score for each cache type in the current layer. It can increase between layers.
+- `running_min_pcc`: the lowest score seen across all layers checked so far. It cannot increase.
+- Final minimum: the lowest of all 1680 scores. Each of the four reported cache minima also spans every applicable layer and head.
+
+For example, layer minima of `0.98, 0.94, 0.96` produce running minima of `0.98, 0.94, 0.94`. PCC is correlation, not the percentage of matching values.
+
+The regression threshold is **0.91**, calibrated on this capture and the current model precision. The 8K, 16K, and 128K hardware tests passed; all 1680 scores per context matched the original full UMD readback exactly:
+
+| Context | Minimum PCC | Global rotary K | Global V | Sliding K | Sliding V |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 8K | 0.920747 | 0.951169 | 0.948299 | 0.945258 | 0.920747 |
+| 16K | 0.929830 | 0.954082 | 0.952419 | 0.950691 | 0.929830 |
+| 128K | 0.934371 | 0.950708 | 0.954783 | 0.948936 | 0.934371 |
+| 256K | Not calibrated | — | — | — | — |
+
+The lowest measured score is sliding V, layer 39, head 11 at 8K. The threshold leaves about 0.0107 absolute PCC below that value; the initial 0.93 candidate rejected the 8K and 16K baselines. This is a regression floor for one captured prompt, not a general model-quality guarantee. The 256K case remains available but its calibration run was canceled. Longer prefixes produce different correlation statistics, so their minima need not decrease.
+
+## Gate 1: GPU-trace comparison
+
+The test starts the service with `PREFILL_MOCK_MIGRATION=1`, which exports the address table and device map without requiring a migration endpoint. The shared producer sends tokens followed by a shutdown sentinel. The runner synchronizes each chunk on the device before processing the next message. The test intercepts the end of the service request loop to read and compare KV before the mesh closes. The service keeps KV resident throughout validation. TT KV is read directly into host memory; only address metadata, logs, and PCC reports are written to disk.
 
 ```bash
-pytest 'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[mock]' \
-    -sv --basetemp=/tmp/gemma4-migration-mock
+# All four contexts:
+pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py \
+    -k mock -sv --basetemp=/tmp/gemma4-gpu-test
+
+# One context:
+pytest 'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[mock-128k]' -sv
 ```
+
+The test uses `GPU_PCC_THRESHOLD` in `tests/test_prefill_migration.py`. Each case starts a fresh runner process and closes its mesh after validation. It retains `producer.log`, the table, the device map, and `gemma4_slot0.json` with every layer/head PCC and comparison timings. Runner output is saved in `runner.log`. The test sets `PREFILL_PRODUCER_CHECK_PCC=0` because the owning process performs the GPU comparison; the runner synchronizes device completion before leaving its request loop.
+
+To use an already-running service, set matching service/table/map paths and invoke the shared producer. This external-process path reads the entire prefix through the migration table using slower UMD MMIO reads:
+
+```bash
+export PREFILL_MODEL=gemma4_d_p
+export PREFILL_SP=8 PREFILL_TP=4 PREFILL_NUM_LAYERS=60
+export PREFILL_MAX_SEQ_LEN=262144 PREFILL_CHUNK_SIZE=8192
+export PREFILL_NUM_USERS=1 PREFILL_PRODUCER_MAX_REQUESTS=1
+export PREFILL_PRODUCER_CHECK_PCC=1
+export PREFILL_PRODUCER_CHUNKS=16  # 128K; use 1, 2, 16, or 32
+export PREFILL_PCC_SUMMARY_DIR=/tmp/gemma4-gpu-pcc
+export PREFILL_STANDALONE_CHUNKED_PCC=0.91
+python -m models.demos.common.prefill.runners.prefill_producer
+```
+
+The producer defaults to keeping the service alive. Set `PREFILL_SEND_SHUTDOWN=1` to stop it after comparison. Do not set `PREFILL_PRODUCER_SLOT_TRACES` or `PREFILL_PCC_GOLDEN_LEN` for these prefix comparisons: the former selects the entire prompt length, and the latter caps verification.
 
 ## Gate 2: loopback migration
 
-Build/provision the tt-llm-engine migration endpoint and workers against this tt-metal checkout as described in the shared guide. Start the endpoint on the same host before running pytest:
+Provision the tt-llm-engine migration endpoint and workers against this checkout as described in the [shared migration guide](../common/prefill/docs/PREFILL_MIGRATION_TESTING.md), then start the endpoint:
 
 ```bash
 # In the tt-llm-engine checkout:
@@ -52,18 +86,20 @@ cd disaggregation/migration
     --prefill_hosts "$(hostname)" --prefill_endpoint_id 1
 ```
 
-In the tt-metal terminal, set the client directory to the one containing `_migration_client*.so`:
+In the tt-metal terminal:
 
 ```bash
 export PREFILL_MIGRATION_CLIENT_DIR=/path/to/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python
 export GEMMA4_TEST_LOOPBACK=1
-pytest 'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[loopback]' \
-    -sv --basetemp=/tmp/gemma4-migration-loopback
+pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py \
+    -k loopback -sv --basetemp=/tmp/gemma4-migration-loopback
 ```
 
-The endpoint's default queues are `/mig_ep1_cmd`, `/mig_ep1_table`, and `/mig_ep1_resp`. The corresponding `PREFILL_MIGRATION_*_QUEUE` variables can override them. The test enables real migration, requires the worker-ready handshake, and invokes the shared driver with `--verify-migration both`. Source slots 0–2 and destination slots 3–5 are disjoint. The driver shuts the runner down only after verification. The test does not start or stop the external endpoint.
+The shared migration driver migrates `0→5` and checks destination bytes against source bytes using `--verify-migration dst-bytes`. The owning test then compares source slot 0 against the GPU trace once through TTNN. It requires the worker-ready handshake. The test does not start or stop the external endpoint. Default queues are `/mig_ep1_cmd`, `/mig_ep1_table`, and `/mig_ep1_resp`; `PREFILL_MIGRATION_*_QUEUE` can override them.
 
-Gate 1 skips unless `GEMMA4_MIGRATION_TRACES` is set. Gate 2 additionally requires `GEMMA4_TEST_LOOPBACK=1`. These gates are single-host loopback tests; they do not validate a decode endpoint's layout.
+This covers one prompt and one source slot at four context lengths. It does not validate distinct prompts across all six slots or a decode endpoint's layout. Loopback cases skip unless `GEMMA4_TEST_LOOPBACK=1`; both gates skip when the GPU trace is absent.
+
+For measured data volumes, readback throughput, and comparison costs, see [PCC performance](PCC_PERFORMANCE.md).
 
 ## Host-only checks
 
@@ -71,4 +107,4 @@ Gate 1 skips unless `GEMMA4_MIGRATION_TRACES` is set. Gate 2 additionally requir
 pytest models/demos/gemma4_d_p/tests/unit/test_prefill_migration.py -q
 ```
 
-These checks use host table objects and mocked DRAM reads. They cover cache-stage descriptors, protobuf round trips, all 36 config mappings, detection of corrupted destination bytes, packed global/sliding golden decoding, and reference capture before sliding-window eviction. They do not prove real transport or hardware accuracy.
+These cover cache-stage descriptors, protobuf round trips, all 36 configurations, corrupt destination detection, GPU shard decoding and coverage, batched BFP8 readback order, CP chunk-order restoration, and nonfinite PCC rejection.
