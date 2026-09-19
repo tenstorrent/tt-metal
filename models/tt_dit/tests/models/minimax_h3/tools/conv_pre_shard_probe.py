@@ -2,10 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""C-09 phase 2 bisect on the 4x8 mesh: conv_pre's shape (2048 -> 1024, k7) run T-sharded (factor 8 over axis 1, zero halo of
-3 rows from the neighbours, no internal padding) against the replicated form (full T, internal "same" padding), same
-weights. Per-row arithmetic is identical, so the sharded output must equal the replicated one bit for bit; where it does not,
-the per-shard / per-row report says whether the halo exchange or the partition is at fault.
+"""Why conv_pre stays replicated on the 4x8 mesh: its shape (2048 -> 1024, k7; 8 KB fp32 sticks) run T-sharded (factor 8 over
+axis 1, zero halo of 3 rows from the neighbours) against the replicated form, same weights, beside smaller shapes that are
+exact. Per-row arithmetic is identical, so any difference is the halo exchange: `test_neighbor_pad_exact` isolates it,
+neighbor_pad_async returns wrong halo rows once a stick exceeds 4 KB (exact at 4 KB), against a host reference.
     pytest models/tt_dit/tests/models/minimax_h3/tools/conv_pre_shard_probe.py -s
 """
 
@@ -102,7 +102,7 @@ def test_conv_sharded_matches_replicated(mesh_device):
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
 def test_neighbor_pad_exact(mesh_device):
     """The T-halo exchange against a host reference at 1024 and 2048 fp32 channels (4 KB and 8 KB sticks), three rows of
-    zeros each side: the chunked path in `_t_neighbor_pad` and the raw CCL op side by side."""
+    zeros each side: the model's `_t_neighbor_pad` and the raw CCL op side by side."""
     torch.manual_seed(0)
     mesh_rows, mesh_cols = tuple(mesh_device.shape)
     pc = ParallelFactor(factor=mesh_cols, mesh_axis=1)
@@ -115,7 +115,7 @@ def test_neighbor_pad_exact(mesh_device):
         x_sh = ttnn.from_torch(x, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32, mesh_mapper=shard_map)
         padded_full = torch.nn.functional.pad(x, (0, 0, pad, pad))  # zeros at the global ends
         expect = [padded_full[:, s * rows : s * rows + rows + 2 * pad] for s in range(mesh_cols)]
-        forms = {"_t_neighbor_pad (chunked when > 4 KB)": lambda: _t_neighbor_pad(x_sh, pad_left=pad, pad_right=pad, parallel_config=pc, ccl_manager=ccl, padding_mode="zeros")}
+        forms = {"_t_neighbor_pad": lambda: _t_neighbor_pad(x_sh, pad_left=pad, pad_right=pad, parallel_config=pc, ccl_manager=ccl, padding_mode="zeros")}
         sem = ccl.get_np_ping_pong_semaphore(pc.mesh_axis)
         forms["raw neighbor_pad"] = lambda: ccl.neighbor_pad_persistent_buffer(
             x_sh, dims=[1], pad_left=[pad], pad_right=[pad], padding_mode="zeros", axes=[pc.mesh_axis], neighbor_sems=[sem], num_links=[max(1, min(2, ccl.num_links))]
@@ -135,5 +135,5 @@ def test_neighbor_pad_exact(mesh_device):
                 if d > 0:
                     bad.append((int(coord[0]), col, f"{d:.1e}"))
             logger.info(f"NEIGHBORPAD C={c} ({c * 4} B sticks) {name}: max |diff| vs host {worst:.3e}; bad (row, col, diff) {bad[:8]}")
-            # not deallocated: the raw form (and the unchunked path) hand back the manager's persistent buffer
+            # not deallocated: both forms hand back the manager's persistent buffer
         ttnn.deallocate(x_sh)

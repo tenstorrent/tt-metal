@@ -106,18 +106,6 @@ def ups_local_env() -> bool:
     return os.environ.get("MINIMAX_H3_AUDIO_UPS_LOCAL", "1") == "1"
 
 
-def conv_pre_local_env() -> bool:
-    """Run the vocoder's conv_pre T-sharded (halo from the neighbours) instead of replicated on the full sequence. Needs the
-    chunked halo exchange below for its 8 KB sticks."""
-    import os
-
-    return os.environ.get("MINIMAX_H3_AUDIO_CONV_PRE_LOCAL", "1") == "1"
-
-
-# neighbor_pad returns wrong halo rows when a stick exceeds this (2048 fp32 channels = 8 KB: some shards read uninitialised
-# memory, the others are off by ~1; 4 KB sticks are exact at every halo width probed). Wider sticks are exchanged in chunks.
-_NEIGHBOR_PAD_MAX_STICK_BYTES = 4096
-
 
 def weights_variant(
     split_mode: str,
@@ -379,10 +367,9 @@ def _t_neighbor_pad(
     parallel_config: "ParallelFactor | AudioTParallelConfig",
     ccl_manager: CCLManager,
     padding_mode: str = "zeros",
-    persistent: bool = True,
 ) -> ttnn.Tensor:
-    """Halo exchange on the T axis (dim 1 in BTC), single- or two-axis sharded. The result is the CCL manager's
-    persistent buffer unless ``persistent`` is False (or the sticks were chunked): never deallocate it."""
+    """Halo exchange on the T axis (dim 1 in BTC), single- or two-axis sharded; returns the CCL manager's persistent
+    buffer, never deallocate it."""
     if pad_left == 0 and pad_right == 0:
         return x_BTC
     if parallel_config is None or parallel_config.factor <= 1:
@@ -399,41 +386,13 @@ def _t_neighbor_pad(
             x_BTC = ttnn.concat([x_BTC, zr], dim=1)
         return x_BTC
 
-    C = x_BTC.shape[2]
-    elem_bytes = 4 if x_BTC.get_dtype() == ttnn.float32 else 2
-    max_c = _NEIGHBOR_PAD_MAX_STICK_BYTES // elem_bytes
-    if C > max_c:
-        # Chunk the channels; each chunk's halo lands in a fresh buffer (the persistent one would alias across chunks)
-        # and is concatenated as soon as it is produced.
-        out = None
-        for c0 in range(0, C, max_c):
-            part = ttnn.slice(x_BTC, [0, 0, c0], [x_BTC.shape[0], x_BTC.shape[1], min(c0 + max_c, C)])
-            padded = _t_neighbor_pad(
-                part,
-                pad_left=pad_left,
-                pad_right=pad_right,
-                parallel_config=parallel_config,
-                ccl_manager=ccl_manager,
-                padding_mode=padding_mode,
-                persistent=False,
-            )
-            ttnn.deallocate(part)
-            if out is None:
-                out = padded
-            else:
-                joined = ttnn.concat([out, padded], dim=2)
-                ttnn.deallocate(out)
-                ttnn.deallocate(padded)
-                out = joined
-        return out
-
     outer_dims = x_BTC.shape[0]
     num_links = max(1, min(outer_dims, ccl_manager.num_links))
 
     if isinstance(parallel_config, AudioTParallelConfig):
         # Two-axis halo: one call per mesh axis (distinct pad dims required).
         sem0 = ccl_manager.get_np_ping_pong_semaphore(parallel_config.axis0.mesh_axis)
-        x_BTC = ccl_manager.neighbor_pad(
+        x_BTC = ccl_manager.neighbor_pad_persistent_buffer(
             x_BTC,
             dims=[1],
             pad_left=[pad_left],
@@ -442,10 +401,9 @@ def _t_neighbor_pad(
             axes=[parallel_config.axis0.mesh_axis],
             neighbor_sems=[sem0],
             num_links=[num_links],
-            use_persistent_buffer=persistent,
         )
         sem1 = ccl_manager.get_np_ping_pong_semaphore(parallel_config.axis1.mesh_axis)
-        return ccl_manager.neighbor_pad(
+        return ccl_manager.neighbor_pad_persistent_buffer(
             x_BTC,
             dims=[1],
             pad_left=[pad_left],
@@ -454,11 +412,10 @@ def _t_neighbor_pad(
             axes=[parallel_config.axis1.mesh_axis],
             neighbor_sems=[sem1],
             num_links=[num_links],
-            use_persistent_buffer=persistent,
         )
 
     sem = ccl_manager.get_np_ping_pong_semaphore(parallel_config.mesh_axis)
-    return ccl_manager.neighbor_pad(
+    return ccl_manager.neighbor_pad_persistent_buffer(
         x_BTC,
         dims=[1],
         pad_left=[pad_left],
@@ -467,7 +424,6 @@ def _t_neighbor_pad(
         axes=[parallel_config.mesh_axis],
         neighbor_sems=[sem],
         num_links=[num_links],
-        use_persistent_buffer=persistent,
     )
 
 
