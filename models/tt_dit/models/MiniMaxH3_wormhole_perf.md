@@ -475,6 +475,7 @@ consistent with `is_causal=False`. Observed: `(6,24)` 1,602,880 B; `(8,20)` 1,63
 | 10 | `dit_fsdp: True` in `_PRESETS_WH` | not started | **TODO** — decision, not a measurement; costs 5.7% of the block, buys the headroom a 12 GB part needs |
 | 13 | TP/SP axes and factors at 15 s / 16:9 (`test_parallel_sweep_minimax_h3.py`) | **done** | Only three configurations exist on this mesh and the shipped TP4/SP8 is the fastest: TP8/SP4 is **+4.1%** ms/fwd (untuned blockings), TP1/SP32 **hangs deterministically** in its first forward. See the section below |
 | 14 | ff1 AGMM utilization (51% of HiFi2 peak) | **measured** | Roofline + six on-device experiments. The 15.7 ms splits into 8.0 ms of FPU work, **2.8 ms of serialized SwiGLU epilogue** and 4.9 ms of K-loop overhead where the compute-thread structure (4-tile DST, fp32 L1-acc pack every 7 MACs) and the operand delivery (~10 GB/s per core through the store-and-forward relay) are balanced co-limiters. fp32 dest off measures -4% alone, -8% with 8-tile subblocks, at 2x the numerical error; K_block >= 14 gives nothing. See *ff1 AGMM: where the other 49% goes* |
+| 15 | ff1 AGMM SwiGLU epilogue: bf16-grade `silu_tile<false>` (2026-09-19) | **landed** | Device kernel 15,852 → **15,289 us (-3.6%)** on the mesh, PCC 0.99998 unchanged to the 4th decimal; the mesh "hang" it was first blamed for was a semaphore-reuse race in `sweep_mm_block_sizes.py` (one semaphore pair for back-to-back calls; the model ping-pongs two), fixed. Details and next levers in `MiniMaxH3_wormhole_agmm_ff1_handoff.md` |
 
 ## Exp ring joint SDPA on Wormhole — brought up and measured (2026-09-18)
 
@@ -747,7 +748,8 @@ relay binds.
    decision), the grid (the mux row is the 8x8 vs 8x9 cost and is fixed by the op).
 
 Continued in **`MiniMaxH3_wormhole_agmm_ff1_handoff.md`**: the SwiGLU attribution (silu is 2.16 of the 2.2 ms), the
-bf16-grade silu result and its mesh hang, per-lever change recipes and tooling.
+bf16-grade silu **landed 2026-09-19** (15,852 → 15,289 us on the mesh; the hang first blamed on it was a
+semaphore-reuse race in the sweep harness, now fixed), per-lever change recipes and the 15 s mesh reproducer.
 
 Housekeeping from this pass: `sweep_mm_block_sizes.py` gained `MM_SWEEP_FP32_DEST_ACC=0`; its L1 pre-filter
 still over-estimates the AGMM footprint (fixing it would admit the K>=14 combos, which measured slower

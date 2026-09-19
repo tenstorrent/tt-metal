@@ -90,7 +90,7 @@ void swiglu_block(uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_
             copy_tile(in_cb, up_tile_id, UP_DST);
 #endif
             silu_tile_init();
-            silu_tile(GATE_DST);
+            silu_tile<false>(GATE_DST);  // bf16-grade exp + 1 NR step: the output is packed to bf16 anyway
             mul_binary_tile_init();
             mul_binary_tile(GATE_DST, UP_DST, GATE_DST);
             tile_regs_commit();
