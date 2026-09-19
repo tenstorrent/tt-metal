@@ -17,8 +17,33 @@ from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_kv_
 from models.demos.gemma4_d_p.tt.runners.adapter import Gemma4ServiceConfig
 from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import CONFIG_NAMES
 
+PREPARED_GPU_TRACE_LAYOUT = "gemma4_kv_heads_v1"
+
+
+def load_prepared_gpu_cache_heads(path, layer, real_len):
+    configs = range(4) if layer % 6 == 5 else range(4, 36)
+    width = 640 if layer % 6 == 5 else 256
+    with safe_open(str(path), framework="pt") as tensors:
+        if (tensors.metadata() or {}).get("layout") != PREPARED_GPU_TRACE_LAYOUT:
+            raise ValueError(f"Layer {layer}: invalid prepared GPU layout in {path}")
+        if set(tensors.keys()) != {CONFIG_NAMES[config] for config in configs}:
+            raise ValueError(f"Layer {layer}: invalid prepared GPU head names in {path}")
+        result = {}
+        for config in configs:
+            rows = tensors.get_slice(CONFIG_NAMES[config])
+            shape = rows.get_shape()
+            if len(shape) != 2 or shape[1] != width or not 0 < real_len <= shape[0]:
+                raise ValueError(f"Layer {layer}: invalid prepared GPU KV shape {shape} for {real_len} tokens")
+            if rows.get_dtype() != "BF16":
+                raise ValueError(f"Layer {layer}: prepared GPU KV must be BF16")
+            result[config] = rows[:real_len].float()
+    return result
+
 
 def load_gpu_cache_heads(trace_dir, layer, real_len):
+    prepared = Path(trace_dir) / "kv_cache" / f"layer_{layer}.safetensors"
+    if prepared.is_file():
+        return load_prepared_gpu_cache_heads(prepared, layer, real_len)
     heads, width = (4, 512) if layer % 6 == 5 else (16, 256)
     directory = Path(trace_dir) / "kv_cache" / f"layer_{layer}"
     shards = sorted(directory.glob("rows_*.safetensors"), key=lambda path: int(path.stem.split("_")[1]))
@@ -58,17 +83,43 @@ def golden_cache_heads(key, value, layer, real_len):
 
 
 def cache_pcc(expected, actual):
-    if expected.shape != actual.shape or not torch.isfinite(expected).all() or not torch.isfinite(actual).all():
-        raise ValueError("KV comparison requires matching shapes and finite values")
-    expected, actual = expected.float().flatten(), actual.float().flatten()
-    if torch.equal(expected, actual):
+    """Compute whole-head PCC with a bounded FP64 workspace."""
+    if expected.shape != actual.shape or expected.numel() == 0:
+        raise ValueError("KV comparison requires matching nonempty shapes")
+    expected = expected.reshape(expected.shape[0], -1)
+    actual = actual.reshape(actual.shape[0], -1)
+    rows_per_block = max(1, 1024 * 1024 // expected.shape[1])
+    buffer = torch.empty((2, min(rows_per_block, expected.shape[0]), expected.shape[1]), dtype=torch.float64)
+    count = 0
+    mean = torch.zeros(2, dtype=torch.float64)
+    covariance = torch.zeros(2, 2, dtype=torch.float64)
+    identical = True
+    for start in range(0, expected.shape[0], rows_per_block):
+        end = min(start + rows_per_block, expected.shape[0])
+        values = buffer[:, : end - start]
+        values[0].copy_(expected[start:end])
+        values[1].copy_(actual[start:end])
+        values = values.reshape(2, -1)
+        if not torch.isfinite(values).all():
+            raise ValueError("KV comparison requires finite values")
+        identical = identical and torch.equal(values[0], values[1])
+        block_count = values.shape[1]
+        block_mean = values.mean(dim=1, keepdim=True)
+        values.sub_(block_mean)
+        delta = block_mean.flatten() - mean
+        total_count = count + block_count
+        covariance += values @ values.T + torch.outer(delta, delta) * (count * block_count / total_count)
+        mean += delta * (block_count / total_count)
+        count = total_count
+    if identical:
         return 1.0
-    if expected.std() == 0 or actual.std() == 0:
+    scale = covariance[0, 0].sqrt() * covariance[1, 1].sqrt()
+    if scale == 0:
         return 0.0
-    pcc = float(torch.corrcoef(torch.stack((expected, actual)))[0, 1])
-    if not torch.isfinite(torch.tensor(pcc)):
+    pcc = covariance[0, 1] / scale
+    if not torch.isfinite(pcc):
         raise ValueError("KV correlation is not finite")
-    return pcc
+    return float(pcc.clamp(-1, 1))
 
 
 def read_cache_head(table, device_map, layer, slot_id, config_id, real_len, width):
@@ -138,14 +189,14 @@ def read_cache_tensor(tensor, slot_id, real_len):
     finally:
         ttnn.deallocate(row_major)
     shards = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(host)]
-    gathered = torch.cat([torch.cat(shards[row * tp : (row + 1) * tp], dim=1) for row in range(cp)], dim=2)[0]
-    heads, _, width = gathered.shape
-    return (
-        gathered.reshape(heads, cp, real_len // Gemma4ServiceConfig.CHUNK_SIZE, local_chunk, width)
-        .permute(0, 2, 1, 3, 4)
-        .reshape(heads, real_len, width)
-        .float()
-    )
+    local_heads, width = shards[0].shape[1], shards[0].shape[3]
+    chunks = real_len // Gemma4ServiceConfig.CHUNK_SIZE
+    gathered = torch.empty((local_heads * tp, chunks, cp, local_chunk, width), dtype=shards[0].dtype)
+    for row in range(cp):
+        for column in range(tp):
+            shard = shards[row * tp + column].reshape(local_heads, chunks, local_chunk, width)
+            gathered[column * local_heads : (column + 1) * local_heads, :, row].copy_(shard)
+    return gathered.reshape(local_heads * tp, real_len, width)
 
 
 def check_table_samples(table, device_map, layer, slot_id, config_id, actual):
@@ -164,7 +215,7 @@ def check_table_samples(table, device_map, layer, slot_id, config_id, actual):
             unique_id = _resolve_unique_id(nodes, device_map)
             raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, location.noc_addr, location.size_bytes)
             decoded = _decode_bfp8_chunk(bytes(raw), actual.shape[1])
-            torch.testing.assert_close(decoded, actual[position : position + 32], rtol=0, atol=0)
+            torch.testing.assert_close(decoded, actual[position : position + 32].float(), rtol=0, atol=0)
 
 
 def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
@@ -172,7 +223,9 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
     timings = dict(reference_seconds=0.0, readback_seconds=0.0, comparison_seconds=0.0)
     minima = {"global_k_rotary": 1.0, "global_v": 1.0, "sliding_k": 1.0, "sliding_v": 1.0}
     measurements = []
+    layer_timings = []
     for layer in range(Gemma4ServiceConfig.NUM_LAYERS):
+        previous_timings = timings.copy()
         start = time.perf_counter()
         expected_heads = load_gpu_cache_heads(trace_dir, layer, real_len)
         timings["reference_seconds"] += time.perf_counter() - start
@@ -195,9 +248,14 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
             measurements.append(dict(layer=layer, config=CONFIG_NAMES[config_id], pcc=scores))
             timings["comparison_seconds"] += time.perf_counter() - start
             start = time.perf_counter()
+        layer_seconds = {name: timings[name] - previous_timings[name] for name in previous_timings}
+        layer_timings.append(dict(layer=layer, **layer_seconds))
         logger.info(
             f"[Gemma4 KV PCC] slot={slot_id} layer={layer} layer_minima={layer_minima} "
-            f"running_min_pcc={min(minima.values()):.8f}"
+            f"running_min_pcc={min(minima.values()):.8f} "
+            f"reference={layer_seconds['reference_seconds']:.2f}s "
+            f"readback={layer_seconds['readback_seconds']:.2f}s "
+            f"pcc={layer_seconds['comparison_seconds']:.2f}s"
         )
     timings["total_seconds"] = time.perf_counter() - started
     if summary_dir := os.getenv("PREFILL_PCC_SUMMARY_DIR"):
@@ -209,6 +267,7 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
             tokens=real_len,
             minima=minima,
             timings=timings,
+            layer_timings=layer_timings,
             measurements=measurements,
         )
         (directory / f"gemma4_slot{slot_id}.json").write_text(json.dumps(result, indent=2) + "\n")
