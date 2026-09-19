@@ -146,14 +146,12 @@ class MiniMaxH3ViTAttention(Module):
         # "heads": SDPA writes (B, H, S, D) and nlp_concat_heads reorders it; "op": SDPA writes the concat layout
         # itself (output_concat_heads), one program less per layer. Bit-identical.
         self.sdpa_concat = os.environ.get("MINIMAX_H3_SDPA_CONCAT", "op")
-        self.rope_view = os.environ.get("MINIMAX_H3_ROPE_VIEW", "batch")
         # "op": ttnn.rms_norm on q and k, then RoPE; "fused": the RMS runs as a prologue inside rotary_embedding_llama
-        # (rms_norm_eps), 72 LayerNorm launches per wave gone. Gated on RMSE vs float64 (tools/rope_rms_probe.py).
+        # (rms_norm_eps), 72 LayerNorm launches per wave gone. Gated on RMSE vs float64 (test_rope_rms_fused_minimax_h3.py,
+        # tools/decoder_ref_probe.py).
         self.qk_rms = os.environ.get("MINIMAX_H3_QK_RMS", "fused")
         if self.qk_rms not in ("op", "fused"):
             raise ValueError(f"MINIMAX_H3_QK_RMS must be 'op' or 'fused', got {self.qk_rms!r}")
-        if self.rope_view not in ("heads", "batch"):
-            raise ValueError(f"MINIMAX_H3_ROPE_VIEW must be 'heads' or 'batch', got {self.rope_view!r}")
         if self.sdpa_concat not in ("heads", "op"):
             raise ValueError(f"MINIMAX_H3_SDPA_CONCAT must be 'heads' or 'op', got {self.sdpa_concat!r}")
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -237,22 +235,12 @@ class MiniMaxH3ViTAttention(Module):
             key = self._rms(key)
         rope_kwargs = {"rms_norm_eps": self.eps} if fused_rms else {}
 
-        # MINIMAX_H3_ROPE_VIEW=batch presents q/k as (heads, 1, S, D): the RoPE factory parallelises batch x seq tiles,
-        # so the view spreads the 32 heads over more cores (single-op probe 0.140 -> 0.125 ms, bit-identical).
-        if self.rope_view == "batch":
-            as_batch = ttnn.Shape([batch * self.num_heads, 1, seq_len, self.head_dim])
-            as_heads = ttnn.Shape([batch, self.num_heads, seq_len, self.head_dim])
-            query = ttnn.reshape(query, as_batch, as_batch)
-            key = ttnn.reshape(key, as_batch, as_batch)
         query = ttnn.experimental.rotary_embedding_llama(
             query, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config, **rope_kwargs
         )
         key = ttnn.experimental.rotary_embedding_llama(
             key, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config, **rope_kwargs
         )
-        if self.rope_view == "batch":
-            query = ttnn.reshape(query, as_heads, as_heads)
-            key = ttnn.reshape(key, as_heads, as_heads)
 
         # No mask: q/k/v are presented with the logical length of the valid tokens (same buffers,
         # padded shape unchanged), and SDPA blanks the tile-pad keys itself. The dense mask cost a
