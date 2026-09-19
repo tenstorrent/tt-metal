@@ -648,6 +648,13 @@ def _parse_steps(text: str, default: int) -> int:
     return steps
 
 
+def _parse_seed(text: str, default: int) -> int:
+    text = text.strip()
+    if not text:
+        return int(default)
+    return int(text)
+
+
 def _repl_dir() -> Path:
     """Same directory the launch script uses: `$TT_METAL_HOME/.h3_repl` (NFS), not the pytest cwd."""
     return Path(os.environ.get("TT_METAL_HOME") or os.getcwd()) / ".h3_repl"
@@ -797,9 +804,9 @@ def _read_optional_image_path(label: str) -> str | None:
 
 
 def _read_user_spec(
-    default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int
-) -> tuple[str, tuple[int, int], float, int, str | None, str | None] | None:
-    """Host stdin: prompt (required; `q` quits; blank lines ignored), aspect, duration, steps and optional fl2va keyframes."""
+    default_aspect_ratio: tuple[int, int], default_duration_s: float, default_num_steps: int, default_seed: int = 0
+) -> tuple[str, tuple[int, int], float, int, int, str | None, str | None] | None:
+    """Host stdin: prompt (required; `q` quits; blank lines ignored), aspect, duration, steps, seed and optional fl2va keyframes."""
     while True:
         try:
             prompt = _prompt_line("User prompt (q to quit): ").strip()
@@ -836,24 +843,33 @@ def _read_user_spec(
             return None
         except ValueError:
             print("expected a positive integer", file=sys.stderr)
+    while True:
+        try:
+            raw = _prompt_line(f"Seed [{default_seed}]: ")
+            seed = _parse_seed(raw, default_seed)
+            break
+        except EOFError:
+            return None
+        except ValueError:
+            print("expected an integer", file=sys.stderr)
     try:
         first_image = _read_optional_image_path("First image path (blank for none): ")
         last_image = _read_optional_image_path("Last image path (blank for none): ")
     except EOFError:
         return None
-    return prompt, aspect, duration_s, num_steps, first_image, last_image
+    return prompt, aspect, duration_s, num_steps, seed, first_image, last_image
 
 
 def _broadcast_user_spec(
-    spec: tuple[str, tuple[int, int], float, int, str | None, str | None] | None,
-) -> tuple[str, tuple[int, int], float, int, str | None, str | None] | None:
+    spec: tuple[str, tuple[int, int], float, int, int, str | None, str | None] | None,
+) -> tuple[str, tuple[int, int], float, int, int, str | None, str | None] | None:
     """Host `spec` (or None to quit) to every rank via the journal and one allgather."""
     if not ttnn.using_distributed_env():
         return spec
     seq = 0
     if is_host() and spec is not None:
         seq = _next_repl_seq()
-        prompt, aspect, duration_s, num_steps, first_image, last_image = spec
+        prompt, aspect, duration_s, num_steps, seed, first_image, last_image = spec
         _append_journal(
             seq,
             json.dumps(
@@ -862,6 +878,7 @@ def _broadcast_user_spec(
                     "aspect": [int(aspect[0]), int(aspect[1])],
                     "duration_s": float(duration_s),
                     "num_steps": int(num_steps),
+                    "seed": int(seed),
                     "first_image": first_image,
                     "last_image": last_image,
                 }
@@ -877,6 +894,7 @@ def _broadcast_user_spec(
             (int(payload["aspect"][0]), int(payload["aspect"][1])),
             float(payload["duration_s"]),
             int(payload["num_steps"]),
+            int(payload["seed"]),
             payload["first_image"],
             payload["last_image"],
         )
@@ -1028,7 +1046,7 @@ def run_user_generations(
     label: str = "t2va",
     artifact_name: str = "h3_t2va_artifacts",
 ) -> None:
-    """Prompt/aspect/duration REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set.
+    """Prompt/aspect/duration/seed REPL after a warm measured run. No-op unless ENABLE_USER_INPUT is set.
 
     Each entry is a fresh `BenchmarkProfiler` fed by `on_event` (no `run` wrap). Artifacts use the
     perf-test stem plus a 0-based index. Admission errors log and the loop continues.
@@ -1040,11 +1058,13 @@ def run_user_generations(
     artifacts = artifact_dir(artifact_name)
     index = 0
     while True:
-        spec = _read_user_spec(default_aspect_ratio, default_duration_s, num_inference_steps) if is_host() else None
+        spec = (
+            _read_user_spec(default_aspect_ratio, default_duration_s, num_inference_steps, seed) if is_host() else None
+        )
         spec = _broadcast_user_spec(spec)
         if spec is None:
             return
-        prompt, aspect_ratio, duration_s, num_steps, first_image, last_image = spec
+        prompt, aspect_ratio, duration_s, num_steps, seed, first_image, last_image = spec
         image = Image.open(first_image).convert("RGB") if first_image else None
         last = Image.open(last_image).convert("RGB") if last_image else None
         profiler = BenchmarkProfiler()
