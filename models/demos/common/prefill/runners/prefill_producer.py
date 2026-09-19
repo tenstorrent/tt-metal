@@ -19,7 +19,11 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
-from models.demos.common.prefill.runners.migration import is_per_host_storage, migration_table_path
+from models.demos.common.prefill.runners.migration import (
+    is_per_host_storage,
+    migration_table_path,
+    rank_scoped_device_map_path,
+)
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 
 
@@ -151,7 +155,7 @@ def _read_kv_chunk_table(timeout_s: int):
     return table
 
 
-def _read_device_map(timeout_s: int, rank: int | None = None) -> dict:
+def _read_device_map(timeout_s: int, rank: int | None = None, num_ranks: int = 1) -> dict:
     import glob as _glob
     import json
 
@@ -175,8 +179,11 @@ def _read_device_map(timeout_s: int, rank: int | None = None) -> dict:
     # believe it can resolve another galaxy's chips -- such a layer then clears the visibility guard
     # and dies inside the read with "no visible chip with ASIC unique_id".
     def _own():
-        # This rank's own map: the only chips this process can actually reach.
-        own = f"{stem}_r{rank}{ext}"
+        # This rank's own map: the only chips this process can actually reach. Resolve the name
+        # with the same helper the runner writes it with -- at num_ranks <= 1 that is the
+        # unsuffixed base path, and hardcoding the _r<rank> form here made the single-rank SC1
+        # leg wait out its timeout for a file nothing ever writes.
+        own = rank_scoped_device_map_path(path, rank, num_ranks)
         return [own] if os.path.exists(own) else []
 
     def _any():
@@ -909,8 +916,12 @@ def _write_pcc_verdict(
         json.dump(verdict, f)
 
 
-def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_traces: dict, rank: int = 0) -> bool:
-    device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")), rank=rank)
+def _verify_resident_slots(
+    kv_table, stats: RunStats, threshold: float, slot_traces: dict, rank: int = 0, num_ranks: int = 1
+) -> bool:
+    device_map = _read_device_map(
+        int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")), rank=rank, num_ranks=num_ranks
+    )
     if not device_map:
         logger.error("[producer] no device map available; skipping KV read/PCC.")
         _write_pcc_verdict(rank, ok=False, min_pcc=0.0, checked=0, threshold=threshold, per_cache={})
@@ -1104,7 +1115,9 @@ def _run_validator(rank: int, world_size: int) -> None:
     else:
         try:
             slot_traces, _slot_lengths, _pools = _resolve_slot_prompts(cfg)
-            ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces, rank=rank)
+            ok = _verify_resident_slots(
+                kv_table, stats, cfg.pcc_threshold, slot_traces, rank=rank, num_ranks=world_size
+            )
         except Exception as e:
             logger.error(f"[producer] validator KV read/PCC failed: {type(e).__name__}: {e}")
             ok = False
@@ -1216,7 +1229,9 @@ def main() -> None:
     verify_ok = True
     if cfg.verify and kv_table is not None:
         try:
-            verify_ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold, slot_traces, rank=mr_rank)
+            verify_ok = _verify_resident_slots(
+                kv_table, stats, cfg.pcc_threshold, slot_traces, rank=mr_rank, num_ranks=world_size
+            )
         except Exception as e:
             logger.error(f"[producer] KV read/PCC failed: {type(e).__name__}: {e}")
             verify_ok = False
