@@ -97,6 +97,15 @@ def polyphase_env() -> bool:
     return os.environ.get("MINIMAX_H3_AUDIO_POLYPHASE", "0") == "1"
 
 
+def ups_local_env() -> bool:
+    """With the polyphase form, run each transposed conv on the local T shard with a one-row zero halo from the neighbours
+    instead of gathering T, running replicated and re-partitioning (same per-row arithmetic: bit-identical; 3.5-6x per conv).
+    """
+    import os
+
+    return os.environ.get("MINIMAX_H3_AUDIO_UPS_LOCAL", "1") == "1"
+
+
 def weights_variant(
     split_mode: str,
     max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
@@ -1449,6 +1458,10 @@ class ConvTranspose1dViaConv3d(Module):
         # rounding including the sequence ends because k - s is even. K' = 3 for H3's (9, 5) and (4, 2): a third
         # and three quarters of the zero-stuffed form's multiplies, and no stuff/pad/slice ops.
         self.polyphase = polyphase_env() if polyphase is None else polyphase
+        sharded = parallel_config is not None and parallel_config.factor > 1
+        # Polyphase on the local T shard: the inner conv is itself T-sharded (one-row zero halo, no internal padding), so
+        # forward skips the T gather and the re-partition. The zero-stuffed form keeps the gathered path.
+        self.local_shard = self.polyphase and sharded and ups_local_env()
         if self.polyphase:
             from .audio_pack import packed_weight
 
@@ -1468,7 +1481,8 @@ class ConvTranspose1dViaConv3d(Module):
             self.poly_kernel = int(probe.shape[-1])
             assert self.poly_kernel % 2 == 1, f"polyphase kernel must be odd for 'same' padding, got {self.poly_kernel}"
 
-        # Inner conv stays UNSHARDED; forward gathers T, runs unsharded, then re-partitions.
+        # Inner conv: T-sharded under the local polyphase form; otherwise UNSHARDED (forward gathers T, runs unsharded, then
+        # re-partitions).
         self.conv = _AlignedOutConv1d(
             in_channels=in_channels,
             out_channels=(stride * out_channels) if self.polyphase else out_channels,
@@ -1478,8 +1492,8 @@ class ConvTranspose1dViaConv3d(Module):
             bias=bias,
             mesh_device=mesh_device,
             dtype=dtype,
-            parallel_config=None,
-            ccl_manager=None,
+            parallel_config=parallel_config if self.local_shard else None,
+            ccl_manager=ccl_manager if self.local_shard else None,
             split_mode=split_mode,
         )
         if not self.polyphase:
@@ -1528,7 +1542,7 @@ class ConvTranspose1dViaConv3d(Module):
             # Drop the gathered pad channels so the aligned-32 inner conv sees its real C_in.
             x_BTC = ttnn.slice(x_BTC, [0, 0, 0], [x_BTC.shape[0], x_BTC.shape[1], self.in_channels])
 
-        if sharded:
+        if sharded and not self.local_shard:
             x_BTC = ttnn.to_layout(x_BTC, ttnn.TILE_LAYOUT)
             x_BTC = _all_gather_t(self.ccl_manager, x_BTC, self.parallel_config)
             x_BTC = ttnn.to_layout(x_BTC, ttnn.ROW_MAJOR_LAYOUT)
@@ -1544,7 +1558,7 @@ class ConvTranspose1dViaConv3d(Module):
             x_padded = _zero_pad_t(x_zs, self.external_pad_each, self.external_pad_each, self.mesh_device)
             y = self.conv(x_padded)
 
-        if sharded:
+        if sharded and not self.local_shard:
             y = _partition_t(y, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
 
         if ch_axis is not None:
