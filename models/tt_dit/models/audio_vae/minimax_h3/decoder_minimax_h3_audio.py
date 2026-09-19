@@ -73,6 +73,7 @@ class MiniMaxH3AudioDecoder(Module):
         max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
         pack_bands: dict[int, int] | None = None,
         resampler_split_mode: str | None = None,
+        act_mode: str = "chain",
         profile: bool = False,
     ) -> None:
         super().__init__()
@@ -94,6 +95,7 @@ class MiniMaxH3AudioDecoder(Module):
         self.max_c_in_block = max_c_in_block
         self.pack_bands = dict(pack_bands or {})
         self.resampler_split_mode = resampler_split_mode
+        self.act_mode = act_mode
         # `profile` synchronizes between the stage's phases to separate them, which also serializes
         # them: the total it reports is inflated and only the shares are readable.
         self.profile = bool(profile)
@@ -137,6 +139,7 @@ class MiniMaxH3AudioDecoder(Module):
             split_mode=split_mode,
             pack_bands=pack_bands,
             resampler_split_mode=resampler_split_mode,
+            act_mode=act_mode,
         )
 
     def _project_latents_device(self, latents_BCT: torch.Tensor) -> torch.Tensor:

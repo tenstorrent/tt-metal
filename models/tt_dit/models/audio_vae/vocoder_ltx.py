@@ -30,6 +30,7 @@ from ...layers.audio_ops import (
     channel_factor,
     partition_channel,
 )
+from ...layers.audio_aa_snake import FusedActivation1d
 from ...layers.audio_pack import PackedActivation1d, PackedConv1d
 from ...layers.audio_resample import Activation1d
 from ...layers.module import Module, ModuleList
@@ -104,6 +105,7 @@ class AMPBlock1(Module):
         split_mode: str = "off",
         pack: int | None = None,
         resampler_split_mode: str | None = None,
+        act_mode: str = "chain",
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -142,6 +144,9 @@ class AMPBlock1(Module):
 
         # alpha_logscale=True: checkpoint stores log α / log β, collapsed at load time.
         def act():
+            if act_mode == "fused":
+                assert activation == "snakebeta", "the fused activation implements SnakeBeta only"
+                return FusedActivation1d(channels=channels, **common)
             if pack is not None:
                 assert activation == "snakebeta", "packed blocks implement SnakeBeta only"
                 return PackedActivation1d(
@@ -226,6 +231,7 @@ class Vocoder(Module):
         split_mode: str = "off",
         pack_bands: dict[int, int] | None = None,
         resampler_split_mode: str | None = None,
+        act_mode: str = "chain",
     ) -> None:
         super().__init__()
         # band index -> time steps packed per row for that band's AMP blocks (layers/audio_pack.py); the
@@ -233,6 +239,9 @@ class Vocoder(Module):
         self.pack_bands = dict(pack_bands or {})
         # split mode of the packed bands' anti-alias resamplers (None = same as the convs)
         self.resampler_split_mode = resampler_split_mode
+        # "chain": UpSample1d -> SnakeBeta -> DownSample1d as separate ops; "fused": one kernel per activation
+        # (layers/audio_aa_snake.py), bit-identical to the chain.
+        self.act_mode = act_mode
 
         if resblock_kernel_sizes is None:
             resblock_kernel_sizes = [3, 7, 11]
@@ -323,25 +332,35 @@ class Vocoder(Module):
                         split_mode=split_mode,
                         pack=self.pack_bands.get(i),
                         resampler_split_mode=resampler_split_mode,
+                        act_mode=act_mode,
                     )
                 )
 
         final_channels = upsample_initial_channel // (2**self.num_upsamples)
 
-        self.act_post = Activation1d(
-            channels=final_channels,
-            activation=SnakeBeta(
-                final_channels,
-                alpha_logscale=True,
+        if act_mode == "fused":
+            self.act_post = FusedActivation1d(
+                channels=final_channels,
                 mesh_device=mesh_device,
                 dtype=dtype,
                 parallel_config=parallel_config,
-            ),
-            mesh_device=mesh_device,
-            dtype=dtype,
-            parallel_config=parallel_config,
-            ccl_manager=ccl_manager,
-        )
+                ccl_manager=ccl_manager,
+            )
+        else:
+            self.act_post = Activation1d(
+                channels=final_channels,
+                activation=SnakeBeta(
+                    final_channels,
+                    alpha_logscale=True,
+                    mesh_device=mesh_device,
+                    dtype=dtype,
+                    parallel_config=parallel_config,
+                ),
+                mesh_device=mesh_device,
+                dtype=dtype,
+                parallel_config=parallel_config,
+                ccl_manager=ccl_manager,
+            )
 
         self.conv_post = _AlignedOutConv1d(
             in_channels=final_channels,
