@@ -37,7 +37,7 @@ struct operation_attributes_t {
     // dimension. Lets top-k run over the real prefix of an over-allocated row (whose tail may be stale)
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
     // validated on cache hit) so a serving loop growing valid_length reuses one program.
-    std::optional<uint32_t> valid_length{};
+    std::optional<uint32_t> valid_length;
     // Constant added to valid_length_tensor[0] on-device. Included in the program hash.
     uint32_t valid_length_offset{0};
 };

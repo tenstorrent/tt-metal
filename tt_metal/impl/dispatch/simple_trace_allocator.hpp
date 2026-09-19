@@ -31,7 +31,7 @@ public:
 
     explicit SimpleTraceAllocator(const std::vector<RingbufferConfig>& ringbuffer_configs) {
         region_allocators_.reserve(ringbuffer_configs.size());
-        for (auto& config : ringbuffer_configs) {
+        for (const auto& config : ringbuffer_configs) {
             region_allocators_.emplace_back(config.size, extra_data_);
             ringbuffer_starts_.push_back(config.start);
         }
@@ -63,11 +63,11 @@ private:
     static std::optional<uint32_t> merge_syncs(std::optional<uint32_t> sync_1, std::optional<uint32_t> sync_2) {
         if (sync_1.has_value() && sync_2.has_value()) {
             return std::max(sync_1.value(), sync_2.value());
-        } else if (sync_1.has_value()) {
-            return sync_1;
-        } else {
-            return sync_2;
         }
+        if (sync_1.has_value()) {
+            return sync_1;
+        }
+        return sync_2;
     }
 
     class RegionAllocator {

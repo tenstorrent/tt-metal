@@ -148,12 +148,15 @@ public:
     //  - Tensor bindings
     // prefetcher_pipe_id is 0xFF unless the binding is a PrefetcherPipe relay, in which case
     // it identifies the persistent slot the relay-token constructor aligns from on TRISC.
+    // Callbacks are copied to isolate mutable target state, matching the overrides.
     virtual void process_dataflow_buffer_binding_handles(
         std::function<
+            // NOLINTNEXTLINE(performance-unnecessary-value-param)
             void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t prefetcher_pipe_id)>)
         const {}
     virtual void process_semaphore_binding_handles(
         std::function<
+            // NOLINTNEXTLINE(performance-unnecessary-value-param)
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
         const {}
 
@@ -172,6 +175,7 @@ public:
                                                     const std::string& accessor_name,
                                                     uint32_t cta_offset,
                                                     uint32_t addr_crta_offset,
+                                                    // NOLINTNEXTLINE(performance-unnecessary-value-param)
                                                     uint32_t num_runtime_field_crta_words)>) const {}
 
     // Scratchpad binding callback emits the codegen-relevant fields:
@@ -180,11 +184,13 @@ public:
     //  - addr_crta_word: word index, within the kernel's CRTA buffer, of the word holding the
     //    scratchpad's (framework-allocated) L1 base address
     virtual void process_scratchpad_binding_handles(
+        // NOLINTNEXTLINE(performance-unnecessary-value-param)
         std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)>) const {}
 
     // Tensor binding sequence callback: sequence_name + ordered member TensorBinding accessor names.
     // Emitted as constexpr std::tuple tokens in the `tensor::` namespace (user order; no sort).
     virtual void process_tensor_binding_sequences(
+        // NOLINTNEXTLINE(performance-unnecessary-value-param)
         std::function<void(const std::string& sequence_name, const std::vector<std::string>& members)>) const {}
 
     // Named RTA/CRTA schema (Metal 2.0 APIs).
@@ -215,8 +221,10 @@ public:
     // Removal is tracked by issue #50953
     // Called to process named runtime arg namespaces for generated header (blaze_rt_args:: namespace).
     // Default no-op so Kernel subclasses that don't use named args compile unchanged.
+    // NOLINTNEXTLINE(performance-unnecessary-value-param)
     virtual void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)>) const {}
     // Called to process named compile-time arg namespaces for generated header (blaze_ct_args:: namespace).
+    // NOLINTNEXTLINE(performance-unnecessary-value-param)
     virtual void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)>) const {}
     ////////////////////////////////////////////////////////////
     // Called to process additional include paths (e.g., kernel source directory for relative includes)

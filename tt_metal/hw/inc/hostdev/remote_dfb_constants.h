@@ -55,6 +55,6 @@ inline constexpr uint32_t prefetcher_pipe_slot_credit_lanes(uint32_t relay_word)
 // Leading word of a dense remote-DFB region: num_slots, then dense slots.
 inline constexpr uint32_t REMOTE_DFB_REGION_HEADER_WORDS = 1;
 
-inline constexpr uint32_t remote_dfb_config_region_words(uint32_t num_slots) {
+constexpr uint32_t remote_dfb_config_region_words(uint32_t num_slots) {
     return REMOTE_DFB_REGION_HEADER_WORDS + num_slots * UINT32_WORDS_PER_REMOTE_DFB_CONFIG;
 }

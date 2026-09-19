@@ -254,6 +254,9 @@ jobs:
       - name: Configure git safe.directory
         run: git config --global --add safe.directory /work
 
+      - name: Verify clang-tidy header filters
+        run: python3 .github/scripts/test_clang_tidy_header_filters.py clang-tidy-20
+
       - name: 📦 Restore CPM source cache
         id: cpm-cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
