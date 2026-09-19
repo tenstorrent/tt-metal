@@ -47,17 +47,14 @@ case "${MODEL}" in
   kimi_k3)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi_k3.json"
-    MAX_SEQ_LEN=56320
-    # Bisected, not computed: the arithmetic bound overshoots ~20% once weights and transients are
-    # counted, and the OOM edge wanders between ranks. 1 is the measured 93-layer configuration.
-    NUM_USERS_DEFAULT=1
     # 93 layers do not fit one galaxy -- MLA's static CBs become unplaceable past ~36 layers on a
     # rank (#54876) and a 48-layer single rank OOMs at 2 users. 24 fits, ends on an MLA layer, and
     # is the deepest depth the golden's decoder-output stream covers, so sc1 is a real accuracy gate
-    # rather than a smaller copy of sc4.
+    # rather than a smaller copy of sc4. The context is the same on both: K3's whole window is the
+    # golden's 11 chunks, so there is nothing to shrink.
     SC1_NUM_LAYERS=24
-    SC1_MAX_SEQ_LEN=${MAX_SEQ_LEN}
-    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized; export PREFILL_LAYER_ACK_D2H=1;"
+    SC1_MAX_SEQ_LEN=56320
+    RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized;"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
         export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/k3_vllm_code_debug_1M;"
     ;;
