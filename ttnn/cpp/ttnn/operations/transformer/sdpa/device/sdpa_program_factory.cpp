@@ -18,6 +18,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <cmath>
 
 using namespace tt::constants;
@@ -470,6 +471,28 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     }
     const uint32_t max_global_q_chunks_per_core =
         global_q_base_chunks_per_core + (global_q_cores_doing_extra > 0 ? global_q_extra_chunks_per_core : 0);
+
+    // Blackhole serves DRAM slowest on the low rows, so a causal remainder that is the minority of the grid goes to
+    // the last cores; a majority stays where it is, concentrating it on the bottom rows measured slower.
+    const bool remainder_on_last_cores =
+        is_causal && device->arch() == tt::ARCH::BLACKHOLE && 2 * global_q_cores_doing_extra <= num_cores;
+    const uint32_t global_q_first_extra_core = remainder_on_last_cores ? (num_cores - global_q_cores_doing_extra) : 0u;
+    auto global_q_range_for_core = [&](uint32_t i) -> std::pair<uint32_t, uint32_t> {
+        const uint32_t extras_before =
+            std::min(i > global_q_first_extra_core ? i - global_q_first_extra_core : 0u, global_q_cores_doing_extra);
+        uint32_t start = i * global_q_base_chunks_per_core + extras_before * global_q_extra_chunks_per_core;
+        uint32_t count = global_q_base_chunks_per_core;
+        if (i >= global_q_first_extra_core && i < global_q_first_extra_core + global_q_cores_doing_extra) {
+            count += global_q_extra_chunks_per_core;
+        }
+        if (start >= total_q_chunks) {
+            start = total_q_chunks;
+            count = 0;
+        } else if (start + count > total_q_chunks) {
+            count = total_q_chunks - start;
+        }
+        return {start, count};
+    };
 
     const uint32_t q_buffer_factor = (max_global_q_chunks_per_core > 1) ? 2 : 1;
 
@@ -979,16 +1002,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             // Walk the core's [g_start, g_start + g_count) linear range and split into
             // contiguous (nb, nq, q_chunk_range) segments. Non-causal here (chain section is
             // !is_causal), so the zigzag remap is off and the decompose is identity.
-            uint32_t g_start = i * global_q_base_chunks_per_core +
-                               std::min(i, global_q_cores_doing_extra) * global_q_extra_chunks_per_core;
-            uint32_t g_count = global_q_base_chunks_per_core +
-                               ((i < global_q_cores_doing_extra) ? global_q_extra_chunks_per_core : 0u);
-            if (g_start >= total_q_chunks) {
-                g_start = total_q_chunks;
-                g_count = 0;
-            } else if (g_start + g_count > total_q_chunks) {
-                g_count = total_q_chunks - g_start;
-            }
+            const auto [g_start, g_count] = global_q_range_for_core(i);
             work.global_q_start = g_start;
             work.global_q_count = g_count;
 
@@ -1451,16 +1465,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
         // Global Q scheduling per-core range: contiguous slice of the flat (B, NQH, q_num_chunks) space.
-        uint32_t global_q_start = i * global_q_base_chunks_per_core +
-                                  std::min(i, global_q_cores_doing_extra) * global_q_extra_chunks_per_core;
-        uint32_t global_q_count =
-            global_q_base_chunks_per_core + ((i < global_q_cores_doing_extra) ? global_q_extra_chunks_per_core : 0u);
-        if (global_q_start >= total_q_chunks) {
-            global_q_start = total_q_chunks;
-            global_q_count = 0;
-        } else if (global_q_start + global_q_count > total_q_chunks) {
-            global_q_count = total_q_chunks - global_q_start;
-        }
+        const auto [global_q_start, global_q_count] = global_q_range_for_core(i);
 
         log_debug(
             tt::LogOp,
