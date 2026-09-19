@@ -34,15 +34,14 @@
 // _llk_math_sdpa_custom_mm_ does exactly one accumulating MVMUL walk:
 //   - _llk_math_sdpa_custom_mm_mask_dest_ first ZEROes the ct_dim result tiles in DEST
 //     (mask_chunk=false path: TT_ZEROACC per tile). mask_chunk=true would instead unpack a
-//     mask tile into SrcB and MOVB2D-broadcast it; that path needs an SFPU-produced mask CB
-//     and is NOT exercised here (see the .py). With mask_chunk=false the DEST simply starts
+//     mask tile into SrcB and MOVB2D-broadcast it. SDPA_MASK_REENTRY tests this with a
+//     host-provided mask, followed by an unmasked pass. With mask_chunk=false DEST starts
 //     at zero, so the result is the plain accumulated product below.
 //   - It then runs the kt-deep MVMUL MOP (kt_dim/2 iterations, each covering 2 k-tiles),
 //     accumulating in0[:, k] * in1[k, :] over all k into the ct_dim output tiles.
 //   - The FPU->SFPU semaphore posts (signal_granularity cadence) are pure signalling to a
-//     downstream SFPU consumer; they do NOT change the numeric result. With no SFPU thread
-//     in this test the posts just increment an unread semaphore. We test the default
-//     signal_granularity = 1 (post per c-tile).
+//     downstream SFPU consumer; they do NOT change the numeric result. PACK drains
+//     these notifications after waiting for the completed matmul.
 //
 // So the golden is the standard LoFi tiled matmul A@B, computed on the host with
 // MatmulGolden (LoFi), and only the M defined output rows per tile are validated -- the
@@ -75,6 +74,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #ifndef MM_TRANSPOSE
 #define MM_TRANSPOSE false
 #endif
+
+#ifndef SDPA_MASK_REENTRY
+#define SDPA_MASK_REENTRY false
+#endif
+constexpr std::uint32_t SDPA_PASSES = SDPA_MASK_REENTRY ? 2 : 1;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -109,17 +113,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB), mask address 0 (no mask).
     // The whole kt walk is issued by a single call (internal MOP covers kt_dim/2 iterations).
-    _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED>(
-        L1_ADDRESS(params.buffer_A[0]), // base_address_a : in1 (SrcA, rhs)
-        L1_ADDRESS(params.buffer_B[0]), // base_address_b : in0 (SrcB, lhs)
-        0,                              // base_address_mask (unused, mask_chunk=false)
-        0,                              // tile_index_a
-        0,                              // tile_index_b
-        params.TILE_SIZE_UNPACK_A,      // tile_size_a (in1 [32,32])
-        params.TILE_SIZE_UNPACK_B,      // tile_size_b (in0 [M,32])
-        KT_DIM,
-        CT_DIM,
-        false /* mask_chunk */);
+    for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
+    {
+        _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, SDPA_MASK_REENTRY>(
+            L1_ADDRESS(params.buffer_A[0]),
+            L1_ADDRESS(params.buffer_B[0]),
+            SDPA_MASK_REENTRY ? L1_ADDRESS(params.buffer_A[KT_DIM * CT_DIM]) : 0,
+            0,
+            0,
+            params.TILE_SIZE_UNPACK_A,
+            params.TILE_SIZE_UNPACK_B,
+            KT_DIM,
+            CT_DIM,
+            SDPA_MASK_REENTRY && pass == 0,
+            params.in0_face_r_dim);
+    }
 }
 
 #endif
@@ -151,12 +159,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // init: operandB_face_r_dim = in0 row count (M), ct_dim programs the MVMUL template.
     _llk_math_sdpa_custom_mm_init_<MM_TRANSPOSE>(params.in0_face_r_dim, CT_DIM);
 
-    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-
-    // The sdpa math LLK zeroes DEST, then accumulates the whole kt walk into ct_dim tiles.
-    _llk_math_sdpa_custom_mm_<SIGNAL_GRANULARITY>(params.in0_face_r_dim, 0 /* dst_index */, KT_DIM, CT_DIM, false /* mask_chunk */);
-
-    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
+    {
+        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+        _llk_math_sdpa_custom_mm_<SIGNAL_GRANULARITY>(params.in0_face_r_dim, 0, KT_DIM, CT_DIM, SDPA_MASK_REENTRY && pass == 0);
+        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif
@@ -190,14 +198,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2);
 
-    _llk_packer_wait_for_math_done_();
-
-    for (std::uint32_t i = 0; i < CT_DIM; i++)
+    for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
     {
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+        _llk_packer_wait_for_math_done_();
+        // Consume the FPU->SFPU notifications so subsequent passes cannot
+        // overflow the 4-bit semaphore. PACK is the consumer in fused SDPA.
+        for (std::uint32_t signal = 0; signal < CT_DIM / SIGNAL_GRANULARITY; ++signal)
+        {
+            t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU);
+        }
+        for (std::uint32_t i = 0; i < CT_DIM; ++i)
+        {
+            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[pass * CT_DIM + i]));
+        }
+        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
-
-    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 
     // sdpa_custom_mm_block_uninit(): restore the default tile Z/W strides.
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * FACE_R_DIM * 2);

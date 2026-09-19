@@ -11,15 +11,20 @@
 
 #ifdef TRISC_MATH
 #include "llk_math_binary_api.h"
+#ifdef ARCH_BLACKHOLE
+#include "experimental/llk_math_eltwise_mul_scalar_block_api.h"
+#endif
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_api.h"
+#ifdef ARCH_BLACKHOLE
+#include "experimental/llk_unpack_AB_scalar_block_api.h"
+#endif
 #endif
 
 namespace ckernel {
 
-// Blackhole-only: the HiFi dest-reuse init workaround below calls the Blackhole
-// LLK primitive directly, and all current consumers are Blackhole kernels.
+// Blackhole-only: the scalar-block math/unpack LLKs live only in the Blackhole trees.
 #if defined(ARCH_BLACKHOLE)
 
 // ============================================================================
@@ -50,6 +55,26 @@ ALWI void deepseek_mul_tiles_bcast_scalar(
     UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
 }
 
+// Reuse one scalar SrcB across a block of full 32x32 tiles. The caller owns
+// destination acquisition and must keep the block within that allocation.
+ALWI void mul_tiles_bcast_scalar_block_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    state_configure(icb0, icb1, call_line);
+    MATH((llk_math_eltwise_mul_scalar_block_init()));
+    UNPACK((llk_unpack_AB_scalar_block_init(icb0, icb1)));
+}
+
+ALWI void mul_tiles_bcast_scalar_block(
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t block_size) {
+    MATH((llk_math_eltwise_mul_scalar_block(idst, block_size)));
+    UNPACK((llk_unpack_AB_scalar_block(icb0, icb1, itile0, itile1, block_size)));
+}
+
+// Source-compatible spelling for callers already using the short initializer.
+ALWI void deepseek_mul_tiles_bcast_scalar_init_short(
+    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    deepseek_mul_bcast_scalar_init(icb0, icb1, call_line);
+}
+
 // ============================================================================
 // Binary dest reuse multiply
 // ============================================================================
@@ -61,31 +86,11 @@ template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestT
 ALWI void deepseek_binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
-    // HiFi-only workaround (tt-blaze #1760). The shorthand
-    // llk_math_eltwise_binary_init<...>(icb0, icb0) mis-specializes the tile
-    // shape and corrupts silu(gate)*up on the HiFi path (fixed M2 MoE HiFi4
-    // 0.70->0.9996). At HiFi, use the general init instead; LoFi keeps the
-    // original shorthand so its codegen is byte-identical.
-    //
-    // The fidelity gate MUST stay INSIDE MATH(): MATH_FIDELITY is only defined for
-    // the math thread (trisc1); referencing it on the unpack/pack threads
-    // (trisc0/trisc2) fails to compile. The immediately-invoked lambda keeps every
-    // MATH_FIDELITY use within the MATH()-elided math-thread build.
-    MATH(([&]() {
-        if constexpr (MATH_FIDELITY != MathFidelity::LoFi) {
-            _llk_math_eltwise_binary_init_<
-                EltwiseBinaryType::ELWMUL,
-                BroadcastType::NONE,
-                MATH_FIDELITY,
-                binary_reuse_dest>(ckernel::DEFAULT_TENSOR_SHAPE, 0 /*acc_to_dest*/);
-        } else {
-            llk_math_eltwise_binary_init<
-                EltwiseBinaryType::ELWMUL,
-                BroadcastType::NONE,
-                MATH_FIDELITY,
-                binary_reuse_dest>(icb0, icb0, false /*acc_to_dest*/);
-        }
-    }()));
+    // Init and execute must use the same face height: the HiFi partial-face
+    // path advances DEST separately after each face (tt-metal#50658).
+    MATH(
+        (llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
+            icb0, icb0, false /*acc_to_dest*/)));
 }
 
 /**
