@@ -1914,7 +1914,7 @@ void py_module(nb::module_& mod) {
 
     detail::bind_bitwise_binary_ops_operation<"bitwise_right_shift">(
         mod,
-        R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
+        R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. Int32 uses an arithmetic shift; uint32 uses a logical shift. For uint32, shift counts >= 32 saturate to 31 for both scalar and tensor counts, matching scalar `right_shift_tile`. For int32, counts outside [0, 31] produce 0.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         static_cast<detail::BitwiseScalarFn>(&bitwise_right_shift),
         static_cast<detail::BitwiseTensorFn>(&bitwise_right_shift),
@@ -1932,7 +1932,7 @@ void py_module(nb::module_& mod) {
 
     detail::bind_binary_operation<"logical_right_shift">(
         mod,
-        R"doc(Perform logical_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31). Logical right shift fills vacated bits with zeros. Equivalent to integer division by 2^shift_amt.)doc",
+        R"doc(Perform logical_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. Vacated bits are filled with zeros. Shift counts outside [0, 31] produce 0. Equivalent to integer division by 2^shift_amt for in-range counts.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|logical_right_shift|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         static_cast<detail::BinaryOpTensorScalarFn>(&logical_right_shift),
         static_cast<detail::BinaryOpTensorTensorFn>(&logical_right_shift),

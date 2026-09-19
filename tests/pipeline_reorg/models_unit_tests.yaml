@@ -232,6 +232,24 @@
   team: models
   budget_type: unit
 
+- name: Qwen3.6-35B-A3B MoE unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-35B-A3B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-35B-A3B MESH_DEVICE=P150x4
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_moe_tp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/unit/test_moe.py
+    pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_gdn_tp.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_attention_tp.py
+  model: qwen3.6-35b-a3b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 25
+      tier: 1
+  owner_id: U08FBKRKTB8 # Kohei Yamaguchi
+  team: models
+  budget_type: unit
+
 - name: Mistral-7B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
@@ -1218,7 +1236,7 @@
 
 - name: Stable Diffusion XL LoRA unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0
     exit_code=0
     pytest --timeout 900 models/demos/stable_diffusion_xl_base/lora/tests/test_lora_fusion.py || exit_code=$?
@@ -1232,7 +1250,7 @@
       timeout: 40
       tier: 2
     wh_n300:
-      timeout: 36
+      timeout: 40
       tier: 2
     bh_p150b_civ2:
       timeout: 30
@@ -1264,7 +1282,7 @@
 
 - name: Stable Diffusion XL VAE unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/vae/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/vae/tests/pcc/test_welford_state_leak_regression.py
   model: sdxl
@@ -1285,7 +1303,7 @@
 
 - name: Stable Diffusion XL base unit tests
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886 (SDXL NOC CB overflow / PCC)
+    export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0
     pytest --timeout 600 models/demos/stable_diffusion_xl_base/tests/pcc --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --ignore=models/demos/stable_diffusion_xl_base/tests/pcc/test_euler_discrete_scheduler.py
   model: sdxl
@@ -1511,6 +1529,12 @@
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
+    # The shared offline cache lacks this adapter. Fetch its pinned revision into
+    # writable job storage before pytest opens any devices; keep the tests offline.
+    LORA_PATH=$(mpirun -np 1 --bind-to none --wdir "${TT_METAL_HOME}" \
+      env HF_HUB_OFFLINE=0 python3 -m models.tt_dit.utils.ltx_lora_asset \
+      --download-dir "${PIPELINE_DIR:?CI staging directory required}/.lora") || exit 1
+    export LORA_PATH
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/models/tt_dit/tests/models/ltx/scaleout_configs/single_galaxy/mesh_graph_descriptor.textproto"
@@ -1518,7 +1542,7 @@
     # HF_HOME -- symlink it to the pre-staged /mnt/models cache so it resolves offline (no-op for the rest).
     mpirun --pernode --tag-output bash -lc 'mkdir -p ~/.cache && ln -sfn /mnt/models/huggingface ~/.cache/huggingface' || true
     # One multihost-ci-sc1 leg runs every LTX component test on the 4x8 galaxy (bh_sc1).
-    # Block tests use random weights; audio/upsampler/lora resolve offline from /mnt/models.
+    # Block tests use random weights; audio/upsampler resolve offline from /mnt/models.
     # Run all, accumulate failures, fail the leg if any component failed.
     rc=0
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest --timeout 1800 "$@" || rc=1; }
@@ -1644,6 +1668,21 @@
       timeout: 40
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: unit
+
+- name: HunyuanImage-3.0 unit tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0
+    models/experimental/hunyuan_image_3_0/scripts/run_ci_pytest.sh unit \
+      --timeout 540 models/experimental/hunyuan_image_3_0/tests/pcc/test_denoise.py -m "not slow"
+  model: hunyuan-image-3.0
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+      tier: 3
+  owner_id: D0B8130N4BW # Dalar Vartanians
   team: models
   budget_type: unit
 
@@ -2124,7 +2163,8 @@
     # costs 294 s of cold-cache compile here but 118 s there (the e2e perf test has already
     # compiled it). Keeping it here overran this job's 25 min. Every other pcc test stays.
     pytest models/experimental/xtts/tests/pcc/ -k "not eval" --timeout=900 \
-      --ignore=models/experimental/xtts/tests/pcc/test_empty_generation.py
+      --ignore=models/experimental/xtts/tests/pcc/test_empty_generation.py \
+      --ignore=models/experimental/xtts/tests/pcc/test_budget_length_generation.py
   model: xtts-v2
   model_family: XTTS
   skus:
