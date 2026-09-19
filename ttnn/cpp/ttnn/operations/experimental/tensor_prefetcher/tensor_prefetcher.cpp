@@ -14,8 +14,20 @@ bool is_tensor_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_
     return tt::tt_metal::experimental::IsTensorPrefetcherSupported(*mesh_device);
 }
 
-void start_tensor_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {
-    tt::tt_metal::experimental::StartTensorPrefetcher(*mesh_device, {});
+void start_tensor_prefetcher(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    uint32_t free_sender_mpfe_weight,
+    uint32_t noc1_sender_mpfe_weight,
+    uint32_t ordinary_mpfe_weight,
+    bool dynamic_mpfe_weighting) {
+    tt::tt_metal::experimental::StartTensorPrefetcher(
+        *mesh_device,
+        {
+            .free_sender_mpfe_weight = free_sender_mpfe_weight,
+            .noc1_sender_mpfe_weight = noc1_sender_mpfe_weight,
+            .ordinary_mpfe_weight = ordinary_mpfe_weight,
+            .dynamic_mpfe_weighting = dynamic_mpfe_weighting,
+        });
 }
 
 void queue_tensor_prefetcher_request(

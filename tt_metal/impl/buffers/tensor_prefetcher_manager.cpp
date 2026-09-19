@@ -12,7 +12,10 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -31,6 +34,7 @@
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -44,10 +48,58 @@ namespace tt::tt_metal::distributed {
 namespace {
 
 constexpr uint32_t kRemoteCBId = 31;
+constexpr uint32_t kNumGddrSubchannelsPerBank = 3;
+constexpr uint32_t kFirstMpfePort = 1;
+constexpr uint32_t kMpfePortSum = 1 + 2 + 3;
+constexpr uint32_t kMaxMpfeWeight = 7;
+constexpr std::string_view kBenchmarkMpfeEnvPrefix = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_";
+constexpr std::string_view kBenchmarkTimerName = "TENSOR_PREFETCHER_MPFE_ACTIVE_LIFETIME";
 
 constexpr const char* kKernelPath = "tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp";
 
 inline uint32_t align_up(uint32_t a, uint32_t align) { return (a + align - 1) & ~(align - 1); }
+
+uint32_t get_mpfe_port(const metal_SocDescriptor& soc_desc, const CoreCoord& sender_logical_core) {
+    const CoreCoord sender_physical = soc_desc.get_physical_dram_core_from_logical(sender_logical_core);
+    const tt::umd::CoreCoord sender_subchannel = soc_desc.translate_coord_to(
+        tt::umd::CoreCoord(sender_physical.x, sender_physical.y, tt::CoreType::DRAM, tt::CoordSystem::TRANSLATED),
+        tt::CoordSystem::LOGICAL);
+    // MPFE P0 is tied off. Hardware GDDR subchannels 0..2 enter through P1..P3.
+    return kFirstMpfePort + sender_subchannel.y;
+}
+
+const char* benchmark_mpfe_env(std::string_view suffix, std::string& name) {
+    name = std::string(kBenchmarkMpfeEnvPrefix) + std::string(suffix);
+    return std::getenv(name.c_str());
+}
+
+uint32_t benchmark_mpfe_weight(std::string_view suffix, uint32_t fallback) {
+    std::string name;
+    const char* value = benchmark_mpfe_env(suffix, name);
+    if (value == nullptr) {
+        return fallback;
+    }
+    TT_FATAL(
+        value[0] >= '0' && value[0] <= '7' && value[1] == '\0',
+        "{} must be one digit in [0, 7], got '{}'",
+        name,
+        value);
+    return static_cast<uint32_t>(value[0] - '0');
+}
+
+bool benchmark_mpfe_bool(std::string_view suffix, bool fallback) {
+    std::string name;
+    const char* value = benchmark_mpfe_env(suffix, name);
+    if (value == nullptr) {
+        return fallback;
+    }
+    TT_FATAL(
+        (value[0] == '0' || value[0] == '1') && value[1] == '\0',
+        "{} must be 0 or 1, got '{}'",
+        name,
+        value);
+    return value[0] == '1';
+}
 
 // Largest `page` (multiple of tile_size, <= max_page_size) such that num_tiles*tile_size
 // is divisible by page. Returns (page_size, num_pages). Identical to the existing
@@ -494,7 +546,8 @@ void TensorPrefetcherManager::allocate_sockets() {
     }
 }
 
-void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base, uint32_t stage_ring_size) {
+void TensorPrefetcherManager::build_and_launch_programs(
+    uint32_t stage_ring_base, uint32_t stage_ring_size, const MpfePolicy& mpfe_policy) {
     // Sockets must already be allocated so each kernel can be given its
     // socket_config_addr as a runtime arg.
     TT_FATAL(sockets_.size() == devices_.size() * num_senders_, "sockets must be allocated before programs");
@@ -506,9 +559,23 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
     programs_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
         auto program = std::make_unique<Program>();
+        const auto& soc_desc =
+            MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster().get_soc_desc(devices_[d]->id());
+        TT_FATAL(
+            soc_desc.get_grid_size(tt::CoreType::DRAM).y == kNumGddrSubchannelsPerBank,
+            "Tensor prefetcher expected {} GDDR subchannels per bank, found {}",
+            kNumGddrSubchannelsPerBank,
+            soc_desc.get_grid_size(tt::CoreType::DRAM).y);
 
         for (uint32_t s = 0; s < num_senders_; ++s) {
             const CoreCoord sender_logical = sender_logical_cores_[s];
+            const uint32_t bank_id = static_cast<uint32_t>(sender_logical.x);
+            const uint32_t bank_sender_base = 2 * bank_id;
+            const uint32_t free_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base]);
+            const uint32_t noc1_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base + 1]);
+            const bool controls_ordinary_mpfe = s == bank_sender_base;
+            const uint32_t own_mpfe_port = controls_ordinary_mpfe ? free_sender_port : noc1_sender_port;
+            const uint32_t ordinary_mpfe_port = kMpfePortSum - free_sender_port - noc1_sender_port;
 
             std::vector<uint32_t> compile_args = {
                 stage_ring_base,
@@ -517,13 +584,17 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
                 socket_page_size,
                 cq_signal_l1_addr_,
                 cq_signal_slot_stride_,
+                static_cast<uint32_t>(controls_ordinary_mpfe),
+                controls_ordinary_mpfe ? mpfe_policy.idle.free_sender : mpfe_policy.idle.noc1_sender,
+                controls_ordinary_mpfe ? mpfe_policy.active.free_sender : mpfe_policy.active.noc1_sender,
+                mpfe_policy.active.ordinary,
             };
 
             KernelHandle kernel_id = CreateKernel(
                 *program, kKernelPath, sender_logical, DramConfig{.noc = NOC::NOC_0, .compile_args = compile_args});
 
             const uint32_t socket_addr = sockets_[d * num_senders_ + s]->get_config_buffer_address();
-            std::vector<uint32_t> rt_args = {/*bank_id=*/static_cast<uint32_t>(sender_logical.x), socket_addr};
+            std::vector<uint32_t> rt_args = {bank_id, socket_addr, own_mpfe_port, ordinary_mpfe_port};
             SetRuntimeArgs(*program, kernel_id, sender_logical, rt_args);
         }
 
@@ -531,9 +602,53 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
     }
 }
 
-void TensorPrefetcherManager::start() {
+void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& config) {
     auto lock = lock_api_function_();
     TT_FATAL(!active_, "A Tensor prefetcher is already active on this mesh device. Call StopTensorPrefetcher first.");
+    const experimental::TensorPrefetcherConfig effective_config{
+        .free_sender_mpfe_weight =
+            benchmark_mpfe_weight("FREE_SENDER_WEIGHT", config.free_sender_mpfe_weight),
+        .noc1_sender_mpfe_weight = benchmark_mpfe_weight("NOC1_SENDER_WEIGHT", config.noc1_sender_mpfe_weight),
+        .ordinary_mpfe_weight = benchmark_mpfe_weight("ORDINARY_WEIGHT", config.ordinary_mpfe_weight),
+        .dynamic_mpfe_weighting =
+            benchmark_mpfe_bool("DYNAMIC_MPFE_WEIGHTING", config.dynamic_mpfe_weighting),
+    };
+    TT_FATAL(
+        effective_config.free_sender_mpfe_weight <= kMaxMpfeWeight &&
+            effective_config.noc1_sender_mpfe_weight <= kMaxMpfeWeight &&
+            effective_config.ordinary_mpfe_weight <= kMaxMpfeWeight,
+        "Tensor prefetcher MPFE weights must be in [0, {}], got {}/{}/{}",
+        kMaxMpfeWeight,
+        effective_config.free_sender_mpfe_weight,
+        effective_config.noc1_sender_mpfe_weight,
+        effective_config.ordinary_mpfe_weight);
+
+    const MpfeWeights active_mpfe_weights{
+        .free_sender = effective_config.free_sender_mpfe_weight,
+        .noc1_sender = effective_config.noc1_sender_mpfe_weight,
+        .ordinary = effective_config.ordinary_mpfe_weight,
+    };
+    const MpfePolicy mpfe_policy{
+        .idle =
+            effective_config.dynamic_mpfe_weighting
+                ? MpfeWeights{
+                      .free_sender = effective_config.ordinary_mpfe_weight,
+                      .noc1_sender = effective_config.ordinary_mpfe_weight,
+                      .ordinary = effective_config.ordinary_mpfe_weight}
+                : active_mpfe_weights,
+        .active = active_mpfe_weights,
+        .dynamic = effective_config.dynamic_mpfe_weighting,
+    };
+    log_info(
+        tt::LogMetal,
+        "TENSOR_PREFETCHER_MPFE_POLICY idle={}/{}/{} active={}/{}/{} dynamic={}",
+        mpfe_policy.idle.free_sender,
+        mpfe_policy.idle.noc1_sender,
+        mpfe_policy.idle.ordinary,
+        mpfe_policy.active.free_sender,
+        mpfe_policy.active.noc1_sender,
+        mpfe_policy.active.ordinary,
+        mpfe_policy.dynamic ? 1 : 0);
 
     const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
     TT_FATAL(
@@ -612,7 +727,7 @@ void TensorPrefetcherManager::start() {
     stage_third_ = stage_ring_size_ / 3;
 
     allocate_sockets();
-    build_and_launch_programs(stage_ring_base_, stage_ring_size_);
+    build_and_launch_programs(stage_ring_base_, stage_ring_size_, mpfe_policy);
 
     // Launch programs (non-blocking — kernels park on the socket immediately).
     for (uint32_t d = 0; d < devices_.size(); ++d) {
@@ -625,6 +740,7 @@ void TensorPrefetcherManager::start() {
     stop_requested_.store(false);
     host_worker_ = std::thread(&TensorPrefetcherManager::worker_loop, this);
     active_ = true;
+    active_lifetime_timer_.emplace(std::string(kBenchmarkTimerName));
 }
 
 MeshCoordinateRangeSet TensorPrefetcherManager::full_mesh_subset() const {
@@ -1260,6 +1376,7 @@ void TensorPrefetcherManager::stop() {
     for (uint32_t d = 0; d < devices_.size(); ++d) {
         ::tt::tt_metal::detail::WaitProgramDone(devices_[d], *programs_[d], /*read_device_profiler_results=*/false);
     }
+    active_lifetime_timer_.reset();
 
     sockets_.clear();
     programs_.clear();
@@ -1292,7 +1409,7 @@ bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device) {
     return metal.hal().has_programmable_core_type(HalProgrammableCoreType::DRAM);
 }
 
-void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig&) {
+void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config) {
     TT_FATAL(
         IsTensorPrefetcherSupported(mesh_device),
         "Tensor prefetcher is not supported on this mesh device. Either programmable DRAM cores are "
@@ -1301,7 +1418,7 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
         "TT_METAL_STREAMING_PROFILER to use the prefetcher, or call IsTensorPrefetcherSupported() first to "
         "skip the prefetcher path.");
     auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
-    manager.start();
+    manager.start(config);
 }
 
 void QueueTensorPrefetcherRequest(
