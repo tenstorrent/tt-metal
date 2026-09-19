@@ -2682,7 +2682,7 @@ def test_kimi_prefill_transformer_chunked(
             (8, 4),
             fabric2d_device_params(
                 fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE,
-                l1_small_size=4096,
+                l1_small_size=KimiK3Config.L1_SMALL_SIZE,
                 trace_region_size=256 * 1024 * 1024,
             ),
             2,
