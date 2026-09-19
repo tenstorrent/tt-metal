@@ -19,7 +19,6 @@ is a performance-pass job -- these exist only so the correctness gates can run.
 
 from __future__ import annotations
 
-import os
 
 from ....layers.audio_ops import DEFAULT_MAX_C_IN_BLOCK
 from ....utils.conv3d import _FP32_BLOCKINGS, aligned_channels
@@ -92,9 +91,8 @@ def h3_audio_channel_widths(
     return pairs
 
 
-# Swept 2026-09-19 on one chip with the operand split on (tests/models/minimax_h3/tools/audio_conv_block_probe.py) at the
-# per-device AMP shapes: T_out / C_out blocks only, so the per-output reduction order and the output are unchanged (the probe
-# asserts torch.equal); 2-3x per conv over the LTX-tuned rows. MINIMAX_H3_AUDIO_BLOCK_TABLE=stub keeps the old rows for A/Bs.
+# Swept on one chip with the operand split on, at the per-device AMP shapes: T_out / C_out blocks only, so the per-output
+# reduction order and the output are unchanged (torch.equal); 2-3x per conv over the LTX-tuned rows.
 _SWEPT_BLOCKINGS = {  # (C_in, C_out, k) -> (C_out_block, T_out_block); C_in_block stays the stub's
     (32, 32, 7): (32, 32),  # k7 d1 T15000: 0.652 -> 0.304 ms (2.14x)
     (64, 64, 7): (32, 32),  # k7 d1 T7500: 0.898 -> 0.292 ms (3.07x)
@@ -135,9 +133,8 @@ def register_h3_audio_blockings(*, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
                 # rather than deferring to an entry tuned for a different model.
                 _FP32_BLOCKINGS[key] = (existing[0], existing[1], T_OUT_BLOCK, existing[3], existing[4])
                 added += 1
-    if os.environ.get("MINIMAX_H3_AUDIO_BLOCK_TABLE", "swept").strip().lower() != "stub":
-        for (in_channels, out_channels, kernel), (c_out_block, t_out_block) in _SWEPT_BLOCKINGS.items():
-            key = (aligned_channels(in_channels), max(32, out_channels), (kernel, 1, 1))
-            existing = _FP32_BLOCKINGS[key]
-            _FP32_BLOCKINGS[key] = (existing[0], c_out_block, t_out_block, existing[3], existing[4])
+    for (in_channels, out_channels, kernel), (c_out_block, t_out_block) in _SWEPT_BLOCKINGS.items():
+        key = (aligned_channels(in_channels), max(32, out_channels), (kernel, 1, 1))
+        existing = _FP32_BLOCKINGS[key]
+        _FP32_BLOCKINGS[key] = (existing[0], c_out_block, t_out_block, existing[3], existing[4])
     return added
