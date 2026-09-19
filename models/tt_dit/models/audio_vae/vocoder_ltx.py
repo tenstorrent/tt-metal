@@ -247,6 +247,7 @@ class Vocoder(Module):
         split_mode: str = "off",
         pack_bands: dict[int, int] | None = None,
         act_mode: str = "chain",
+        polyphase_ups: bool = False,
     ) -> None:
         super().__init__()
         # band index -> time steps packed per row for that band's AMP blocks (layers/audio_pack.py); the
@@ -255,6 +256,8 @@ class Vocoder(Module):
         # "chain": UpSample1d -> SnakeBeta -> DownSample1d as separate ops; "fused": one kernel per activation
         # (layers/audio_aa_snake.py), bit-identical to the chain.
         self.act_mode = act_mode
+        # Transposed convs as polyphase convs over the unstuffed rows (a third of the multiplies, no stuff/pad/slice ops).
+        self.polyphase_ups = polyphase_ups
         # Set by MiniMaxH3AudioDecoder when the batch is sharded over a mesh axis: (axis, batch) for the readback.
         self.batch_shard_axis = None
         self.batch_shard = None
@@ -320,6 +323,7 @@ class Vocoder(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
+                    polyphase=polyphase_ups,
                 )
                 for i in range(self.num_upsamples)
             ]
