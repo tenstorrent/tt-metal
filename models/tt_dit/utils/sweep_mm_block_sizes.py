@@ -1149,21 +1149,24 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
         sp_size = cfg["mesh_shape"][sp_axis]
         full_M = M * sp_size
 
+        # Hand from_torch a bf16 host tensor when the device dtype is bf16: converting an fp32 tensor of these
+        # sizes to bf16 tiles inside from_torch takes ~160 s per tensor on the host (0.1 s from bf16).
+        host_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
         tt_input = ttnn.from_torch(
-            torch.randn((full_M, K), dtype=torch.float32),
+            torch.randn((full_M, K), dtype=torch.float32).to(host_dtype),
             dtype=dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=[sp_axis, tp_axis]),
         )
         tt_weight = ttnn.from_torch(
-            torch.randn((K, N), dtype=torch.float32),
+            torch.randn((K, N), dtype=torch.float32).to(host_dtype),
             dtype=dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
         )
         tt_bias = ttnn.from_torch(
-            torch.randn((1, N), dtype=torch.float32),
+            torch.randn((1, N), dtype=torch.float32).to(host_dtype),
             dtype=dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
@@ -1174,17 +1177,23 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
         ccl_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
         )
-        ccl_semaphore_handles = [
-            ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
-            ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+        # Two semaphore pairs and two gathered-in0 buffers, alternated per call like the model's
+        # CCLManager.get_ag_ping_pong_semaphore / get_ag_ping_pong_buffer. With a single shared set, calls
+        # enqueued back to back (the sync=False warm-up) race on the ring semaphores and hang the mesh.
+        ccl_semaphore_sets = [
+            [
+                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+            ]
+            for _ in range(2)
         ]
-        persistent_output_buffer = ttnn.from_torch(
-            torch.empty((M, K), dtype=torch.float32),
-            layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            device=mesh_device,
-        )
+        persistent_output_buffers = [
+            ttnn.allocate_tensor_on_device(
+                ttnn.Shape([M, K]), dtype, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
+            )
+            for _ in range(2)
+        ]
+        agmm_call_idx = [0]
 
         addcmul_tensor1 = None
         addcmul_tensor2 = None
@@ -1207,6 +1216,8 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
             )
 
         def run_op(m_blk, k_blk, n_blk, sb_h, sb_w, sync=True):
+            pp = agmm_call_idx[0] % 2
+            agmm_call_idx[0] += 1
             ttnn.experimental.all_gather_minimal_matmul_async(
                 tt_input,
                 tt_weight,
@@ -1214,8 +1225,8 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 fused_activation=fused_activation,
                 compute_kernel_config=compute_config,
                 config=_matmul_config(m_blk, k_blk, n_blk, sb_h, sb_w),
-                persistent_output_buffer=persistent_output_buffer,
-                multi_device_global_semaphore=ccl_semaphore_handles,
+                persistent_output_buffer=persistent_output_buffers[pp],
+                multi_device_global_semaphore=ccl_semaphore_sets[pp],
                 num_links=cfg["num_links"],
                 topology=cfg["topology"],
                 cluster_axis=cfg["cluster_axis"],
