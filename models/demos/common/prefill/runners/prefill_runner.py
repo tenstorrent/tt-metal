@@ -86,8 +86,8 @@ DFLASH_ENABLED = (
 
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
-# Env-overridable: on Kimi-K3 AttnRes wants L1_SMALL large and MLA's chunked attention wants it
-# small, and the band satisfying both is narrow (#54834). Re-bisecting it must not need a rebuild.
+# Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
+# that used to make this a narrow band; what is left is MLA's chunked-attention ceiling.
 _L1_SMALL_SIZE = int(os.environ.get("PREFILL_L1_SMALL_SIZE", ADAPTER.l1_small_size))
 USE_TRACE = os.environ.get("PREFILL_USE_TRACE", "0") == "1"
 _TRACE_REGION_SIZE = int(os.environ.get("PREFILL_TRACE_REGION_SIZE", 256 * 1024 * 1024)) if USE_TRACE else 0

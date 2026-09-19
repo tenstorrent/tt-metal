@@ -105,7 +105,7 @@ PLACEMENTS = [
         # 24576 MLA's chunked attention then fails to place its CBs ("statically allocated circular
         # buffers ... clash with L1 buffers") once there is a second chunk to attend over. 4096
         # clears AttnRes with margin while leaving MLA its working space.
-        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": 4096},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-8x4",
     )
