@@ -292,17 +292,18 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     //   user_grid:        Full grid from program_config (or device default). Contains SDPA workers + fabric MUX.
     //   sdpa_grid:        user_grid[:,:-1] — all columns except the last. SDPA workers (some are MUX writers).
     //   fabric_mux_col:   user_grid.x - 1 — last column reserved for fabric MUX kernel.
-    //   sdpa_writer_range:  sdpa_grid columns 0..(sdpa_grid.x-3) — non-MUX SDPA writer cores.
-    //   mux_writer_range:   sdpa_grid columns (sdpa_grid.x-2)..(sdpa_grid.x-1) — MUX fabric writer cores (2 links).
+    //   sdpa_writer_range:  sdpa_grid columns 0..(sdpa_grid.x-num_links-1) — non-MUX SDPA writer cores.
+    //   mux_writer_range:   sdpa_grid columns (sdpa_grid.x-num_links)..(sdpa_grid.x-1) — MUX fabric writer cores,
+    //                       one column per link.
     const auto device_grid = mesh_device->compute_with_storage_grid_size();
     CoreCoord user_grid =
         args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size : device_grid;
     const bool mux_on_bottom_row = exp_sdpa_mux_on_bottom_row();
-    // Bottom-row experiment: SDPA keeps every column but gives up the two bottom rows (row y-1
-    // hosts the MUX kernels, row y-2 idles so the SDPA row count stays even for the direction
-    // split). Default: SDPA keeps every row but gives up the last column to the MUX kernels.
-    CoreCoord sdpa_grid =
-        mux_on_bottom_row ? CoreCoord{user_grid.x, user_grid.y - 2} : CoreCoord{user_grid.x - 1, user_grid.y};
+    // Bottom-row experiment: SDPA keeps every column but gives up the bottom row (row y-1 hosts the
+    // MUX kernels) plus one idle row when the remainder is odd, so the SDPA row count stays even
+    // for the direction split (8x9 Wormhole -> 8x8; 13x10 Blackhole -> 13x8). Default: SDPA keeps
+    // every row but gives up the last column to the MUX kernels.
+    const CoreCoord sdpa_grid = exp_sdpa_grid_for_user_grid(user_grid);
 
     TT_FATAL(
         user_grid.x <= device_grid.x && user_grid.y <= device_grid.y,
@@ -312,11 +313,14 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         device_grid.x,
         device_grid.y);
     TT_FATAL(
-        sdpa_grid.x >= 3,
-        "SDPA grid must have at least 3 columns (1+ pure SDPA + 2 MUX writers). "
+        sdpa_grid.x >= args.num_links + 1,
+        "SDPA grid must have at least num_links + 1 = {} columns (1+ pure SDPA + one MUX writer column per link). "
         "user_grid has {} cols, sdpa_grid has {} cols.",
+        args.num_links + 1,
         user_grid.x,
         sdpa_grid.x);
+    // First fabric-MUX client column: the last num_links SDPA columns are the MUX writers, link = col - this.
+    const uint32_t mux_client_col0 = sdpa_grid.x - args.num_links;
     TT_FATAL(
         sdpa_grid.y % 2 == 0,
         "SDPA grid rows ({}) must be even so the backward/forward MUX client halves match.",
@@ -364,27 +368,38 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // Every segment must fill its row exactly: fewer chunks than columns would idle the trailing
     // columns, and the last two SDPA columns are the fabric MUX clients that perform the K/V
     // all-gather — an idle MUX column means that link never forwards its shard.
+    // Sequential-pass experiment (TT_EXP_SDPA_Q_GROUPS): a segment spans q_groups row-widths of Q
+    // chunks, walked as q_groups serial passes. See exp_sdpa_q_groups() in the header.
+    const bool seq_passes = exp_sdpa_sequential_passes();
+    const uint32_t q_groups = seq_passes ? exp_sdpa_q_groups() : 1u;
+    const uint32_t chunks_per_segment = sdpa_grid.x * q_groups;
     TT_FATAL(
-        num_q_chunks % sdpa_grid.x == 0,
+        num_q_chunks % chunks_per_segment == 0,
         "Exp ring joint SDPA requires a head's Q chunks to fill a whole number of rows. Got "
-        "num_q_chunks={} with {} columns. Adjust q_chunk_size so ceil(local_padded_N / "
+        "num_q_chunks={} with {} columns x {} Q groups. Adjust q_chunk_size so ceil(local_padded_N / "
         "q_chunk_size) is a multiple of {}.",
         num_q_chunks,
         sdpa_grid.x,
-        sdpa_grid.x);
-    const uint32_t segs_per_head = num_q_chunks / sdpa_grid.x;
+        q_groups,
+        chunks_per_segment);
+    const uint32_t segs_per_head = num_q_chunks / chunks_per_segment;
     const uint32_t total_segments = B * NH * segs_per_head;
     const uint32_t num_passes = tt::div_up(total_segments, rows);
 
     // L1-bound: the CB budget must hold num_passes resident Q chunks + state-FIFO entries. The
     // caller's program config is responsible for picking (q_chunk, k_chunk, segs) that fit; an
     // oversized combination fails CB allocation at program build.
-    constexpr uint32_t kMaxPasses = 3;
+    // 4 admits the Wormhole H3 shard at q=256 (14 heads x segs 2 over 8 rows); the CB budget check
+    // below is what actually bounds the pass count.
+    constexpr uint32_t kMaxPasses = 4;
+    // Sequential passes hold one Q chunk and one flash state regardless of the pass count, so the
+    // cap does not apply there (the CB budget check below is what bounds the shape).
+    const uint32_t max_passes = seq_passes ? 64u : kMaxPasses;
     TT_FATAL(
-        num_passes <= kMaxPasses,
+        num_passes <= max_passes,
         "Exp ring joint SDPA supports at most {} head-segments per core row. "
         "Got B*NH={} x segs_per_head={} with {} rows (P={}).",
-        kMaxPasses,
+        max_passes,
         B * NH,
         segs_per_head,
         rows,
@@ -401,12 +416,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // reserves the new entry up front), which would deadlock at full depth — so give that case one
     // spare entry. The last active ring iteration is the only one that can be partial, and it
     // normalizes into cb_out instead of pushing to the FIFO, so it never needs the spare.
-    const uint32_t state_fifo_entries = num_passes + (num_local_k_chunks <= 1 ? 1 : 0);
+    // Sequential passes keep one flash state live (scratch path), so the FIFO shrinks to one entry.
+    const uint32_t state_fifo_entries = (seq_passes ? 1u : num_passes) + (num_local_k_chunks <= 1 ? 1 : 0);
     log_debug(tt::LogOp, "state_fifo_entries: {}", state_fifo_entries);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     // Q holds one chunk per pass; all of them stay resident for the whole op (read once).
-    uint32_t q_tiles = num_passes * Sq_chunk_t * DHt;
+    uint32_t q_tiles = (seq_passes ? 1u : num_passes) * Sq_chunk_t * DHt;  // sequential: one live chunk
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -685,6 +701,17 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    // EXPERIMENT (TT_EXP_SDPA_PROFILE_INNER): per-phase device zones inside sdpa_inner_loop_step
+    // (QK matmul, reduce max, softmax exp, PV matmul, row norm, correction). Only the first few
+    // hundred steps per core fit the L1 profiler buffer, which is enough for a steady-state split.
+    if (std::getenv("TT_EXP_SDPA_PROFILE_INNER") != nullptr) {
+        defines["SDPA_PROFILE_INNER"] = "1";
+    }
+    if (seq_passes) {
+        defines["EXP_SEQ_PASSES"] = "1";
+        defines["EXP_Q_GROUPS"] = std::to_string(q_groups);
+        defines["EXP_GROUP_STRIDE"] = std::to_string(sdpa_grid.x);
+    }
 
     // NOTE: KernelDescriptor construction is deferred until after chain construction
     // so that the mcast_enabled compile-time arg can be determined first.
@@ -1003,7 +1030,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     for (const auto& cb : desc.cbs) {
         total_cb_bytes += cb.total_size;
     }
-    const bool stream_q = (num_passes > 1) && (total_cb_bytes > usable_l1);
+    // Sequential passes already hold a single Q chunk (read once per pass), so never stream Q there.
+    const bool stream_q = !seq_passes && (num_passes > 1) && (total_cb_bytes > usable_l1);
     if (stream_q) {
         total_cb_bytes -= desc.cbs[0].total_size;
         desc.cbs[0].total_size = Sq_chunk_t * DHt * q_tile_size;  // c_0 is the first CB pushed
@@ -1021,6 +1049,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "stream_q: {}", stream_q);
     reader_compile_time_args[sem_args_offset + 4] = stream_q ? 1 : 0;
     compute_compile_time_args[20] = stream_q ? 1 : 0;
+    if (seq_passes) {
+        compute_compile_time_args[21] = 0;  // one live pass: scratch accumulators, no L1 state FIFO
+    }
 
     auto* const q_buf = input_tensor_q.buffer();
     auto* const k_buf = input_tensor_k.buffer();
@@ -1098,13 +1129,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
      *     row always run the same number of passes (required for K/V CB pointer lockstep under
      *     mcast).
      */
-    const uint32_t q_stride = rows * sdpa_grid.x;
+    const uint32_t q_stride = rows * chunks_per_segment;  // == rows * sdpa_grid.x when q_groups == 1
     for (uint32_t i = 0; i < num_sdpa_cores; ++i) {
         const CoreCoord core = {i % sdpa_grid.x, i / sdpa_grid.x};
         auto& work = core_work.at(i);
         work.logical_core = core;
         work.physical_core = device->worker_core_from_logical_core(core);
-        work.q_base = core.y * sdpa_grid.x + core.x;
+        work.q_base = core.y * chunks_per_segment + core.x;
         work.q_stride = q_stride;
         work.q_count = 0;
         for (uint32_t p = 0; p < num_passes; ++p) {
@@ -1117,7 +1148,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             work.head_work.push_back(CoreHeadWork{
                 .batch = head_id / NH,
                 .head = head_id % NH,
-                .q_chunk_start = (seg_id % segs_per_head) * sdpa_grid.x + core.x,
+                .q_chunk_start = (seg_id % segs_per_head) * chunks_per_segment + core.x,
                 .q_chunk_count = 1,
             });
         }
@@ -1469,14 +1500,43 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t fabric_mux_col = user_grid.x - 1;  // Last column of user_grid (default placement)
     const uint32_t fabric_mux_row = user_grid.y - 1;  // Last row of user_grid (bottom-row placement)
     const bool mux_top_cluster = exp_sdpa_mux_top_cluster();
-    const std::vector<CoreCoord> mux_backward_logical_cores =
-        mux_on_bottom_row ? std::vector<CoreCoord>{{0, fabric_mux_row}, {sdpa_grid.x - 1, fabric_mux_row}}
-        : mux_top_cluster ? std::vector<CoreCoord>{{fabric_mux_col, 0}, {fabric_mux_col, 1}}
-                          : std::vector<CoreCoord>{{fabric_mux_col, 0}, {fabric_mux_col, sdpa_grid.y - 1}};
-    const std::vector<CoreCoord> mux_forward_logical_cores =
-        mux_on_bottom_row ? std::vector<CoreCoord>{{mid - 1, fabric_mux_row}, {mid, fabric_mux_row}}
-        : mux_top_cluster ? std::vector<CoreCoord>{{fabric_mux_col, 2}, {fabric_mux_col, 3}}
-                          : std::vector<CoreCoord>{{fabric_mux_col, mid - 1}, {fabric_mux_col, mid}};
+    // One MUX kernel per (direction, link). With 2 links keep the measured placements above; with more
+    // links fill the reserved column from the top: backward at rows [0, num_links), forward at
+    // [num_links, 2*num_links). (Placement measured neutral on Blackhole; it is not a lever.)
+    std::vector<CoreCoord> mux_backward_logical_cores;
+    std::vector<CoreCoord> mux_forward_logical_cores;
+    if (args.num_links == 2) {
+        mux_backward_logical_cores =
+            mux_on_bottom_row ? std::vector<CoreCoord>{{0, fabric_mux_row}, {sdpa_grid.x - 1, fabric_mux_row}}
+            : mux_top_cluster ? std::vector<CoreCoord>{{fabric_mux_col, 0}, {fabric_mux_col, 1}}
+                              : std::vector<CoreCoord>{{fabric_mux_col, 0}, {fabric_mux_col, sdpa_grid.y - 1}};
+        mux_forward_logical_cores =
+            mux_on_bottom_row ? std::vector<CoreCoord>{{mid - 1, fabric_mux_row}, {mid, fabric_mux_row}}
+            : mux_top_cluster ? std::vector<CoreCoord>{{fabric_mux_col, 2}, {fabric_mux_col, 3}}
+                              : std::vector<CoreCoord>{{fabric_mux_col, mid - 1}, {fabric_mux_col, mid}};
+    } else if (mux_on_bottom_row) {
+        // Fill the reserved bottom row from the left: backward at columns [0, num_links), forward
+        // at [num_links, 2*num_links). On the 8-wide Wormhole grid 4 links fill the row exactly.
+        TT_FATAL(
+            user_grid.x >= 2 * args.num_links,
+            "Reserved MUX row has {} columns but {} links need 2 MUX kernels per link.",
+            user_grid.x,
+            args.num_links);
+        for (uint32_t link = 0; link < args.num_links; ++link) {
+            mux_backward_logical_cores.push_back({link, fabric_mux_row});
+            mux_forward_logical_cores.push_back({args.num_links + link, fabric_mux_row});
+        }
+    } else {
+        TT_FATAL(
+            user_grid.y >= 2 * args.num_links,
+            "Reserved MUX column has {} rows but {} links need 2 MUX kernels per link.",
+            user_grid.y,
+            args.num_links);
+        for (uint32_t link = 0; link < args.num_links; ++link) {
+            mux_backward_logical_cores.push_back({fabric_mux_col, link});
+            mux_forward_logical_cores.push_back({fabric_mux_col, args.num_links + link});
+        }
+    }
 
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -1511,9 +1571,9 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
 
-    // Non-fabric writer: columns 0..(sdpa_grid.x-3)
-    // sdpa_grid.x-2 and sdpa_grid.x-1 are fabric MUX client columns
-    CoreRange sdpa_writer_range({0, 0}, {sdpa_grid.x - 3, sdpa_grid.y - 1});
+    // Non-fabric writer: columns 0..(mux_client_col0 - 1)
+    // sdpa_grid.x-num_links .. sdpa_grid.x-1 are fabric MUX client columns
+    CoreRange sdpa_writer_range({0, 0}, {mux_client_col0 - 1, sdpa_grid.y - 1});
     KernelDescriptor writer_kernel{};
     writer_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp";
@@ -1523,8 +1583,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     writer_kernel.defines = kernel_defines;
     writer_kernel.config = WriterConfigDescriptor{};
 
-    // Fabric writer: columns sdpa_grid.x-2 and sdpa_grid.x-1 (backward and forward MUX clients)
-    CoreRange mux_writer_range({sdpa_grid.x - 2, 0}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
+    // Fabric writer: the last num_links SDPA columns (each split into backward / forward MUX client halves)
+    CoreRange mux_writer_range({mux_client_col0, 0}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
     auto writer_fabric_compile_time_args = writer_compile_time_args;
     fabric_mux_connection_ct_args(num_mux_clients_per_group, mux_kernel_config, writer_fabric_compile_time_args);
 
@@ -1562,31 +1622,34 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        // Forwarded so dst_size (get_dest_reg_count above) and the kernel's DST sync mode agree:
+        // full sync doubles the tile capacity the subblock search may use.
+        .dst_full_sync_en = dst_full_sync_en,
         .math_approx_mode = math_approx_mode,
     };
 
     // Build backward and forward termination master core sets (1 per link per direction)
-    // Backward masters: row 0 of both MUX client columns (top half = backward direction).
-    // Forward masters:  row num_workers_per_link of both MUX client columns (bottom half = forward).
-    // Link is determined by column: col sdpa_grid.x-2 = link 0, col sdpa_grid.x-1 = link 1.
+    // Backward masters: row 0 of every MUX client column (top half = backward direction).
+    // Forward masters:  row num_workers_per_link of every MUX client column (bottom half = forward).
+    // Link is determined by column: col mux_client_col0 + link.
     std::vector<CoreCoord> ag_backward_master_cores, ag_forward_master_cores;
     std::set<CoreRange> ag_backward_master_ranges, ag_forward_master_ranges;
-    for (uint32_t col_offset = 0; col_offset < 2; ++col_offset) {
-        CoreCoord bwd_master = {sdpa_grid.x - 2 + col_offset, 0};
-        CoreCoord fwd_master = {sdpa_grid.x - 2 + col_offset, num_workers_per_link};
+    for (uint32_t col_offset = 0; col_offset < args.num_links; ++col_offset) {
+        CoreCoord bwd_master = {mux_client_col0 + col_offset, 0};
+        CoreCoord fwd_master = {mux_client_col0 + col_offset, num_workers_per_link};
         ag_backward_master_cores.push_back(bwd_master);
         ag_forward_master_cores.push_back(fwd_master);
         ag_backward_master_ranges.insert(CoreRange(bwd_master));
         ag_forward_master_ranges.insert(CoreRange(fwd_master));
     }
 
-    // Pass the full direction-half range across both MUX client columns so that
+    // Pass the full direction-half range across all MUX client columns so that
     // any AG sync semaphores would be allocated on ALL workers in each direction group.
     // This ensures every core (both term-masters and non-masters) has the same number of
     // semaphores allocated before fabric_mux_connection_rt_args runs, keeping
     // termination_sync IDs consistent.
-    CoreRange all_backward_clients({sdpa_grid.x - 2, 0}, {sdpa_grid.x - 1, num_workers_per_link - 1});
-    CoreRange all_forward_clients({sdpa_grid.x - 2, num_workers_per_link}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
+    CoreRange all_backward_clients({mux_client_col0, 0}, {sdpa_grid.x - 1, num_workers_per_link - 1});
+    CoreRange all_forward_clients({mux_client_col0, num_workers_per_link}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
     // K/V tensor shape info for all-gather RT args
     const auto& ag_input_shape = input_tensor_k.padded_shape();
     const auto& ag_output_shape = gathered_input_tensor_k.padded_shape();
@@ -1664,12 +1727,12 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         // Split-head dedup follower rows forward nothing, so their clients do not connect and
         // their readers do not feed c_14/c_15 at all.
         const bool row_forwards = row_dedup_role.at(core.y) != 2;
-        const bool is_mux_writer = (core.x >= sdpa_grid.x - 2);
+        const bool is_mux_writer = (core.x >= mux_client_col0);
         bool is_mux_writer_valid = false;
         if (is_mux_writer && row_forwards) {
             const uint32_t half_within_col = core.y / num_workers_per_link;
             const bool is_backward = (half_within_col == 0);
-            const uint32_t link = (core.x == sdpa_grid.x - 1) ? 1 : 0;
+            const uint32_t link = core.x - mux_client_col0;
             const bool link_in_range = (link < args.num_links) && (link < mux_backward_logical_cores.size()) &&
                                        (link < mux_forward_logical_cores.size());
             if (link_in_range) {
@@ -1719,10 +1782,10 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
         if (is_mux_writer) {
             // Direction is determined by row half: top half = backward, bottom half = forward.
-            // Link is determined by column: col sdpa_grid.x-2 = link 0, col sdpa_grid.x-1 = link 1.
+            // Link is determined by column: link = col - mux_client_col0.
             const uint32_t half_within_col = core.y / num_workers_per_link;
             const bool is_backward = (half_within_col == 0);
-            const uint32_t link = (core.x == sdpa_grid.x - 1) ? 1 : 0;
+            const uint32_t link = core.x - mux_client_col0;
             // Compact channel id among the direction half's FORWARDING rows (followers do not
             // connect and hold no channel). Term master = channel 0 of the group; with dedup off
             // this is the original worker_idx layout (row 0 of each half).
@@ -1938,8 +2001,7 @@ void ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     auto* mesh_device = tensor_args.input_q.device();
     const CoreCoord user_grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                                 : mesh_device->compute_with_storage_grid_size();
-    const CoreCoord sdpa_grid = exp_sdpa_mux_on_bottom_row() ? CoreCoord{user_grid.x, user_grid.y - 2}
-                                                             : CoreCoord{user_grid.x - 1, user_grid.y};
+    const CoreCoord sdpa_grid = exp_sdpa_grid_for_user_grid(user_grid);
     const uint32_t num_sdpa_cores = sdpa_grid.x * sdpa_grid.y;
     const uint32_t expected_reader_args = dyn::reader_arg_count(args.num_links);
 
@@ -1963,10 +2025,10 @@ void ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
                 reader_args[dyn::kReaderSemaphoreArgBase + lnk] = static_cast<uint32_t>(args.semaphore[lnk].address());
             }
 
-            // out_ready_sem_addr lives only on the two MUX-writer columns. num_links is TT_FATAL-fixed
-            // to 2, so link_in_range always holds in the factory and the slot is always present.
-            if (core.x >= sdpa_grid.x - 2) {
-                const uint32_t link = (core.x == sdpa_grid.x - 1) ? 1u : 0u;
+            // out_ready_sem_addr lives only on the num_links MUX-writer columns. The factory sizes the
+            // MUX core lists to num_links, so link_in_range always holds and the slot is always present.
+            if (core.x >= sdpa_grid.x - args.num_links) {
+                const uint32_t link = core.x - (sdpa_grid.x - args.num_links);
                 auto& writer_args = writer_fabric_grid[core.x][core.y];
                 TT_FATAL(
                     writer_args.size() == dyn::kWriterFabricArgCount,

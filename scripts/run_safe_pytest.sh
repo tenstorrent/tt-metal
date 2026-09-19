@@ -248,8 +248,11 @@ fi
 # --profile: wrap pytest in the Tracy profiler. `python -m tracy -r` runs pytest
 #   as a child and post-processes results into ops_perf_results*.csv on pass or
 #   fail. Its exit-code masking is handled at the result check below.
+# SAFE_PYTEST_TRACY_OPTS: extra options for `python -m tracy` (e.g.
+#   "--profiler-capture-perf-counters=fpu,pack,unpack" for hardware counters). Space-separated.
 if [[ "$PROFILE_MODE" == true ]]; then
-    PYTEST_CMD=(python -m tracy -r -m pytest "${TEST_PATH}")
+    # shellcheck disable=SC2206
+    PYTEST_CMD=(python -m tracy -r ${SAFE_PYTEST_TRACY_OPTS:-} -m pytest "${TEST_PATH}")
 else
     PYTEST_CMD=(pytest "${TEST_PATH}")
 fi

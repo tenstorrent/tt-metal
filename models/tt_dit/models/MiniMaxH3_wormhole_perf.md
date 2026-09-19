@@ -469,11 +469,293 @@ consistent with `is_causal=False`. Observed: `(6,24)` 1,602,880 B; `(8,20)` 1,63
 | 5 | Re-profile the block with landed configs | blocked | **TODO** — needs the pinned `diffusers` fork; not installed here |
 | 6 | Pipeline re-run: warm total, denoise, ms/fwd, CLIP | **done** | Same-host A/B: **-69.9 ms/fwd, -0.58%**, exactly the isolated-sweep prediction. CLIP **35.88** (min 34.69, bar 33.0) on the later run |
 | 11 | Numerics of the landed blockings (the sweep never checked) | **done** | ff2 (8,7,10) pcc 1.0000000 vs torch, identical to (8,8,8) to one bf16 ulp; ff1 (8,7,10) pcc 0.9999843 on the real SwiGLU ring, = (8,3,14) to 6 dp. Both PASS |
-| 7 | `use_exp_ring_sdpa` on Wormhole | not started | **TODO** — gated on `is_blackhole() and sp_factor == 32`, but `exp_ring_joint_sdpa_program_factory.cpp` has no arch gate and the sp check is described in-tree as "a proxy for the 4x32 shape". On WH the other conditions already hold (`tp_factor == 4`, `exp_ring_num_passes = ceil(14/9) = 2 <= 3`). A different kernel on the op that is 70% of the block, so the largest single lever available — but it needs PCC and CLIP validation, not a timing check |
+| 7 | `use_exp_ring_sdpa` on Wormhole | **done** | Brought up (header-pool and reader fixes, even-row grid, 2 or 4 links, sequential passes for shards that do not fit L1); PCC 0.99975. 15 s shard (padded to 14336 rows): exp **206.7 ms** vs normal 192.9 ms (+7%) on 56 vs 63 cores; ~5% less core time per unit of work. See *Exp ring joint SDPA on Wormhole* |
 | 8 | FSDP layout conversions | not started | **TODO** — tilize/untilize go 0.13 -> 3.13 ms under FSDP, a 23x blowup and a quarter of the whole FSDP cost spent on format round-trips rather than communication. Cheapest apparent win in the breakdown |
-| 9 | Ring SDPA kernel utilization | not started | **TODO** — 48.8% FPU / 35.6% math at the shipped chunk size, shown to be inherent to the kernel at this shape rather than a chunk-size miss. Work is in the kernel |
+| 9 | Ring SDPA kernel utilization | not started | **TODO** — 48% at the shipped chunk size, inherent to the kernel at this shape rather than a chunk-size miss. Note `PM FPU UTIL (%)` is the perf-model ideal divided by measured time (`tools/tracy/process_ops_logs.py`), not a hardware counter; the exp kernel shares the same inner loop, so the work remains in `compute_streaming.hpp` |
 | 10 | `dit_fsdp: True` in `_PRESETS_WH` | not started | **TODO** — decision, not a measurement; costs 5.7% of the block, buys the headroom a 12 GB part needs |
 | 13 | TP/SP axes and factors at 15 s / 16:9 (`test_parallel_sweep_minimax_h3.py`) | **done** | Only three configurations exist on this mesh and the shipped TP4/SP8 is the fastest: TP8/SP4 is **+4.1%** ms/fwd (untuned blockings), TP1/SP32 **hangs deterministically** in its first forward. See the section below |
+| 14 | ff1 AGMM utilization (51% of HiFi2 peak) | **measured** | Roofline + six on-device experiments. The 15.7 ms splits into 8.0 ms of FPU work, **2.8 ms of serialized SwiGLU epilogue** and 4.9 ms of K-loop overhead where the compute-thread structure (4-tile DST, fp32 L1-acc pack every 7 MACs) and the operand delivery (~10 GB/s per core through the store-and-forward relay) are balanced co-limiters. fp32 dest off measures -4% alone, -8% with 8-tile subblocks, at 2x the numerical error; K_block >= 14 gives nothing. See *ff1 AGMM: where the other 49% goes* |
+| 15 | ff1 AGMM SwiGLU epilogue: bf16-grade `silu_tile<false>` (2026-09-19) | **landed** | Device kernel 15,852 → **15,289 us (-3.6%)** on the mesh, PCC 0.99998 unchanged to the 4th decimal; the mesh "hang" it was first blamed for was a semaphore-reuse race in `sweep_mm_block_sizes.py` (one semaphore pair for back-to-back calls; the model ping-pongs two), fixed. Details and next levers in `MiniMaxH3_wormhole_agmm_ff1_handoff.md` |
+| 16 | ff1 AGMM K-loop attribution with per-thread device zones (2026-09-19) | **measured** | The 5 ms above the FPU time is **pipeline issue efficiency**, not delivery: on a 2x2 fp32 subblock the MATH thread issues at 47 cycles per tile-MAC (nominal 32), UNPACK is busy 42 per tile and PACK 309 per fp32 L1-acc tile, with 21-26 cycles of DST waits — all three ~95% busy. A relay-protocol prefetch changed nothing (16.08 → 16.06 ms); 4x1 subblocks cost +2.2 ms; doubling K_block -1.3%. Remaining levers are precision decisions (fp32 dest off + 2x4: -8% measured; LUT sigmoid) or tt-llk work on `matmul_block`. Handoff §2-§5 rewritten accordingly |
+
+## Exp ring joint SDPA on Wormhole — brought up and measured (2026-09-18)
+
+`exp_ring_joint_scaled_dot_product_attention` is the fused ring-attention kernel that measured 21% faster
+than `RingJointSDPADeviceOperation` on Blackhole at the H3 shard `[1, 14, 3424, 128]`, ring 8 (`42986a68fe0`).
+This section records what it took to run it on this galaxy and what it measures against the normal op. All
+numbers are max over the 32 devices, `DEVICE KERNEL DURATION`, from Tracy CSVs under
+`generated/profiler/reports/2026_09_18_01_4*`–`02_0*`.
+
+### What blocked it, and the fixes
+
+| blocker | where | fix |
+|---|---|---|
+| model gate `is_blackhole() and sp == 32` | `attention_minimax_h3.py` | `MINIMAX_H3_EXP_RING_SDPA=1/0` forces it on/off; unset keeps the Blackhole rule |
+| SDPA rows must be even (backward/forward MUX-client halves) | `exp_ring_joint_sdpa_program_factory.cpp` "SDPA grid rows must be even" | program grid `(8, 8)`: **7x8 = 56 SDPA cores** (the normal op has 63); `num_workers_per_link = 4` |
+| `num_links == 2` `TT_FATAL`; one MUX-client column per link | `exp_ring_joint_sdpa_device_operation.cpp` | the model passes 2 for this op (`MINIMAX_H3_EXP_RING_NUM_LINKS`); the factory now also lays out 4 client columns / 8 MUX kernels for `num_links=4` |
+| **fabric packet-header pool**: the AG writer allocates 8 scatter + 2 unicast + 1 atomic-inc headers per RISC; Wormhole's pool is `NUM_PACKET_HEADERS / 2 = 8` per RISC (Blackhole 12), and `PacketHeaderPool::allocate_header` spins forever on exhaustion | `exp_ring_joint_writer.cpp`; `tt_metal/hw/inc/internal/tt-1xx/wormhole/dev_mem_map.h:149` | rotation sized from the budget: 4 scatter headers on Wormhole, 8 on Blackhole. This was the first hang: every fabric writer on all 32 chips parked in `allocate_header` |
+| reader's per-link semaphore array was `[2]` | `exp_ring_joint_reader.cpp` | `[4]` with an assert; with 4 links the overflow corrupted the reader's stack and every reader exited without work (second hang) |
+| 8 KB fabric payload illegal on WH (cap 7616 B) | `fabric_context.cpp` | the H3 WH mesh already runs 4 KB; the op derives packet size from the fabric |
+| `kMaxPasses = 3` | factory + device op | raised to 4 (the CB budget check is what bounds passes) |
+
+### L1 decides the shape, not the gates
+
+The op keeps every pass's Q chunk and flash state resident for the whole op, so per-core L1 scales with
+`rows_per_device x heads_per_device / SDPA cores`. Using the model's own `_exp_sdpa_l1_bytes`: **no
+(cols, segs, q, k) fits 5 s, 10 s or 15 s on the 7x8 grid** (minimum 2.45 MB at 15 s against a 1.31 MB
+budget, even with Q streamed and the pass cap lifted). The only H3 shard that fits is the SP=32-equivalent
+`3424 rows/device` — the `sp_sim4` shard — at q512/k128 (2 passes, streamed Q) or q256/k256 (4 passes,
+streamed Q). Everything below is measured there; **the real 15 s pipeline shard cannot run the exp op as
+designed**. Making it fit means sequential passes (pass-outer, ring-inner) with passes ≥ 1 reading the
+gathered K/V from DRAM instead of the fabric — kernel work across reader, writer, compute and factory.
+
+### Single op, `[1, 14, 3424, 128]`, ring 8, HiFi2 bf16, PCC 0.99975 on every exp point
+
+| op | config | cores | per call |
+|---|---|---|---|
+| normal `RingJointSDPA` (sweep best of 7, `create_perf_table[minimax_h3_15s_768p_sim32]`) | q256 / k512 | 63 | **15.74 ms** |
+| normal | q160 / k256 | 63 | 16.11 ms |
+| exp, 2 links | q256 / k256, 4 passes | 56 | 16.65 ms |
+| exp, 2 links | q512 / k128, 2 passes | 56 | 20.26 ms |
+| exp, 4 links | q512 / k128, 2 passes | 56 | 20.33 ms (no change vs 2 links: the K/V gather is not on the critical path) |
+
+### In the block (`test_minimax_h3_transformer_block_perf[wormhole_b0-sp_sim4-15s_768p-…_is_fsdp1]`)
+
+| SDPA variant | SDPA row | block device-only |
+|---|---|---|
+| normal ring op (model fallback q256 / k512) | **14.76 ms** | **44.39 ms** |
+| exp, q256 / k256, 4 passes (`MINIMAX_H3_EXP_RING_MAX_PASSES=4`) | 16.09 ms | 45.12 ms |
+| exp, q512 / k128, 2 passes | 19.88 ms | 49.13 ms |
+
+The normal op is **~9% faster on the SDPA row** at the one shard the exp op can hold, and the exp op runs
+on 56 cores where the normal op has 63. The Blackhole 21% did not transfer: there the exp op fits Q and
+state resident on 110 cores at q160/k512, here L1 forces streamed Q and k=128–256 chunks whose per-chunk
+overhead costs more than the removed DRAM save/restore saves. Both ops share the same inner loop
+(`sdpa_inner_loop_step`), so the Wormhole utilization gap (48% vs Blackhole's ~70% on the same kernel) is
+untouched by either.
+
+Reproduce: unit test `test_exp_ring_joint_attention.py::…[wormhole_b0-4x8_wh_h3_sim32{,_p4,_nl4}-ring]`
+(PCC + timing under `--profile`), normal-op table `test_ring_joint_sdpa.py::…create_perf_table[minimax_h3_15s_768p_sim32]`,
+block A/B with `MINIMAX_H3_EXP_RING_SDPA={1,0}` and `MINIMAX_H3_EXP_RING_MAX_PASSES={3,4}`.
+
+### Sequential passes: the exp op on the 15 s shard (2026-09-18, branch `jameslee/exp_ring_sdpa_wh`)
+
+The L1 wall above comes from the lockstep schedule: every pass's Q chunk and flash state stay resident
+because all passes advance together per ring iteration. `TT_EXP_SDPA_Q_GROUPS=G` (factory + all three
+kernels, one setting per process) switches the op to **pass-outer / ring-inner**: one pass runs all
+ring iterations before the next starts, so one Q chunk and one flash state are live per core (the
+normal op's `q_per_core == 1` scratch path, no L1 state FIFO), and a head-segment's Q chunks are split
+into G groups of one chunk per column walked as extra passes. Only group 0 of a segment forwards K/V
+over the fabric; later groups re-read the gathered K/V the first group landed in DRAM. Per-core L1 is
+then the single-pass footprint (q256/k512: 599 tiles = 1.23 MB) at any shard size.
+
+Constraint: `num_q_chunks % (columns x G) == 0`. 13664 rows give 54 chunks of q=256, which no
+7-column layout divides, so the shard is padded to **14336 rows/device** (56 chunks = 7 x 4 x 2
+segments, +4.9% work). The normal op was measured at the same 14336 rows for the comparison.
+
+| op | layout | links | per call |
+|---|---|---|---|
+| normal `RingJointSDPA` (`create_perf_table[minimax_h3_15s_768p_pad14336]`) | q256 / k512, 63 cores | 4 | **192.9 ms** |
+| exp, sequential, G=4 | segs=2 (pair dedup on), 4 segment-passes on rows 0-3 and 3 on rows 4-7, 56 cores | 2 | 238.0 ms |
+| exp, sequential, G=4 | same | 4 | 238.2 ms |
+| exp, sequential, G=2 | segs=4 (7 balanced passes per row, no dedup: every row forwards) | 2 | 212.6 ms |
+| exp, sequential, G=2 | same | 4 | **206.7 ms** |
+
+Numerics: sequential mode PCC 0.99975 at the 3424-row shard (`4x8_wh_h3_sim32_seq`, G=2), identical to the
+lockstep schedule; the 14336-row runs are timing-only (the torch reference at 114688 tokens does not fit
+host memory) and validated end-to-end only through that smaller PCC.
+
+Reading: the exp op **now runs the 15 s shard on Wormhole**, best at 206.7 ms against the normal op's
+192.9 ms (+7%). Per core it is ahead: 206.7 ms x 56 cores = 11.6 core-s against 192.9 x 63 = 12.2 for the
+normal op, i.e. ~5% less core time for the same work. The remaining gap is exactly the 7 cores the
+even-row MUX-client constraint costs on a 9-row grid; a 9-row layout (asymmetric backward/forward
+client halves) would make the exp op the faster kernel at 15 s. Row balance matters more than fabric
+duplication: segs=4 forwards every head 4x yet beats segs=2 with pair dedup by 11%, and only at segs=4
+do 4 links help (212.6 -> 206.7 ms). Reproduce with
+`TT_EXP_SDPA_Q_GROUPS={2,4} … test_exp_ring_joint_attention.py::…[wormhole_b0-4x8_wh_h3_15s_seq{,_nl4}-ring]`
+under `--profile`; the normal-op row is `create_perf_table[minimax_h3_15s_768p_pad14336]`.
+
+### Bottom-row MUX placement: 64 SDPA cores instead of 56 (2026-09-18, branch `jameslee/exp_ring_sdpa_wh`)
+
+The 7 lost cores above come from the reserved MUX *column*: the SDPA grid is 7 wide, and the 9-row
+height must round down to 8 for the equal backward/forward MUX-client halves. The op already had a
+Blackhole placement experiment, `TT_EXP_SDPA_MUX_BOTTOM_ROW`, that puts the MUX kernels on the bottom
+*row* instead and gave up two rows to keep the count even. On the 8x9 Wormhole grid one row is enough:
+SDPA keeps all 8 columns and rows 0-7 (8x8 = **64 cores**), the 8 MUX kernels of 4 links fill row 8
+exactly. The change is host-side only: the grid helper (`exp_sdpa_grid_for_user_grid`) drops one row
+plus an idle row only when the remainder is odd, and the bottom-row MUX list is generalized from two
+hard-coded pairs to `num_links` columns per direction (the 9-row asymmetric-halves layout the previous
+section proposed would give 63 cores for far more surgery, so it is not needed).
+
+With 8 columns the 56 chunks of q=256 divide as 8 x 7, so a segment is 7 chunks wide and the sequential
+mode runs G=1: 98 segments on 8 rows -> 13 passes on rows 0-1, 12 on rows 2-7 (ideal 12.25). Every pass
+forwards its head's K/V (no groups), so a row forwards 13 shards per op against 7 in the segs=4/G=2 layout.
+
+| op | layout | links | per call |
+|---|---|---|---|
+| normal `RingJointSDPA` | q256 / k512, 63 cores | 4 | **192.9 ms** |
+| exp, sequential, G=2 (previous best) | segs=4, 7x8 = 56 cores, reserved-column MUX | 4 | 206.7 ms |
+| exp, sequential, G=1 | q256 / k512, segs=7, **8x8 = 64 cores**, bottom-row MUX | 2 | 199.6 ms |
+| exp, sequential, G=1 | same | 4 | **196.2 ms** |
+| exp, sequential, G=1 | q448 / k256, segs=4 (7 passes of 14 tile-rows), 64 cores | 4 | 200.9 ms |
+| exp, sequential, G=1 | q192 / k512 at 13824 rows/device (72 chunks = 8 x 9; 16 passes of 6 tile-rows) | 4 | 220.2 ms |
+| exp, sequential, G=1 | q128 / k512, segs=14 (25 passes of 4 tile-rows), 64 cores | 4 | 336.2 ms |
+| exp, sequential, G=1 | q448 / k512 | 4 | does not build: CBs need 1.71 MB of 1.34 MB |
+
+Numerics: PCC 0.99975 at the 3424-row shard on the bottom-row layout with 2 links (`4x8_wh_h3_sim32_seq`,
+7x8, unchanged from the reserved-column number) and 0.99972 on the 64-core grid with 4 links at a
+4096-row shard (`4x8_wh_h3_4096_bot_nl4`, 16 chunks = 8 x 2). The 15 s rows are timing-only as before.
+
+Reading: 64 cores take the exp op from 206.7 to **196.2 ms**, 1.7% behind the normal op (192.9). The
+per-core work model predicted 206.7 x 13/14 = 192 ms; the missing 4 ms is fabric traffic (13 forwards
+per row instead of 7), visible as 2 links -> 4 links = 199.6 -> 196.2 and as a 3 ms spread across
+devices that the 56-core layout did not have (206.80 / 206.84). The chunk sweep says the op's time
+follows the number of inner-loop steps (passes x K chunks), not Q tile-rows: q=192 does 8% fewer
+tile-rows per core but 19% more steps and is 12% slower; q=128 nearly doubles the steps and is 71%
+slower; q=448 cuts the steps but only fits with k=256, and the halved K chunk costs more than the
+larger Q chunk saves. q256 / k512 stays the shape. What is left between 196.2 and a win: the
+13-vs-12.25 pass imbalance (6%, inherent to 98 segments on 8 rows at q=256) and the duplicate
+forwarding (~2%, the 2-vs-4-link gap). With segs=7 a pass holds 8 segments of 2-3 distinct heads, so
+generalizing the pair dedup to "one forwarder per (pass, head)" would cut each row's forwards from 13
+to about 4 and take the traffic off the critical path even on 2 links. Reproduce with
+`TT_EXP_SDPA_MUX_BOTTOM_ROW=1 TT_EXP_SDPA_Q_GROUPS=1 … [wormhole_b0-4x8_wh_h3_15s_seq{,_nl4}-ring]`
+under `--profile`; the q128 / q192 / q448 rows are the `4x8_wh_h3_15s_q{128,192,448}_nl4` cases.
+
+### Inner loop: where a 66 µs step goes, and three experiments (2026-09-18, branch `jameslee/exp_ring_sdpa_wh`)
+
+Both ring ops run `sdpa_inner_loop_step` (`compute_streaming.hpp`) once per (Q chunk, K chunk):
+at q256 / k512 that is 2912 steps per core per call at 15 s, 66 µs each (192 ms). The kernel
+already carries per-phase device zones behind a `profiling_enabled` template flag; the new env knob
+`TT_EXP_SDPA_PROFILE_INNER=1` (exp op) compiles them in. The L1 profiler buffer holds ~125 zones per
+RISC per launch, so the log covers the first step and a half of each core, which is what the table
+uses (`tools/sdpa_phase_zones.py` on the report's `profile_log_device.csv`). Step 0 on the math
+thread includes a 15 µs wait for the first K chunk; the steady-state step is ~66 µs.
+
+Per step, one core (device 0, core (1,1)), pack-4 build:
+
+| thread | matmul zones (QK + PV) | softmax zones | outside all leaf zones |
+|---|---|---|---|
+| unpack (TRISC_0) | 16.6 + 21.1 µs | SUB 8.7, reduce 3.1 | 17.7 µs |
+| math (TRISC_1) | 34.3 (19 steady) + 21.2 µs | SUB 10.1, init 1.9, reduce 0.8 | 10.9 µs |
+| pack (TRISC_2) | 22.2 + 2.2 µs | EXP 14.4, PACK SUB_EXP 14.0, reduce 1.7 | 24.9 µs |
+
+Reading. The pure FPU work is 1024 tile-matmuls per step (QK 8x16x4, PV 8x4x16) at 32 cycles each
+for HiFi2 = 33 µs, i.e. **50% of the step**, which is the 48% "FPU util" the roofline reported.
+Inside their zones the matmul blocks run at ~80% of that rate. The other half of the step is the
+softmax and the thread handshakes: on the pack thread the exp (SFPU, `exp_packthread_tile`) and the
+in-place pack plus the row-sum accumulate pack (every probability tile is packed twice, the second
+time with packer L1-accumulate into the row-sum tile) cost 28 µs per step; on the math thread the
+broadcast subtract of the row max is 10 µs (128 tiles at ~80 cycles) and 11 µs sit between zones in
+`tile_regs_acquire`/`wait` handshakes and CB waits. Nothing waits on DRAM or the fabric after the
+first chunk: memory and fabric are off the critical path, the core is bound by its own non-matmul
+work. That is also what the chunk sweep said (time follows steps, not FLOPs).
+
+Experiments, exp op on 64 cores at 15 s (196.2 ms base), max over 32 devices:
+
+| change | per call | verdict |
+|---|---|---|
+| A. `MIN_BLOCKED_PACK_TILES` 8 -> 4 on Wormhole (one pack per 4-wide subblock row instead of 4) | **193.7 ms** | kept; normal op 192.9 -> **191.6 ms** on the same change (`create_perf_table[minimax_h3_15s_768p_pad14336]`) |
+| B. full-sync 16-tile DST (`dst_full_sync_en`, now forwarded by the exp factory; test knob `TT_EXP_SDPA_TEST_DST_FULL_SYNC=1`) | 262.8 ms | rejected: the half-sync ping-pong that overlaps math and pack is worth far more than larger subblocks |
+| C. approximate SFPU exp (`TT_EXP_SDPA_TEST_EXP_APPROX=1`, on top of A) | 192.7 ms | 0.5%; PCC 0.99972 unchanged at 4096 rows; the model keeps exact exp |
+| D. `--profiler-capture-perf-counters=fpu,pack,unpack` (via `SAFE_PYTEST_TRACY_OPTS`) | no data | Tracy's multi-pass counter capture deadlocks on this box: the inner `python -m tracy` waits on a UMD chip lock its parent holds (21 min, killed) |
+
+What is left in the inner loop, by size: the double pack of the probabilities (14 µs on the pack
+thread; computing the row sum with the FPU reduce instead of the packer accumulate would trade
+pack time for math time, and math has ~11 µs of handshake slack), the SFPU exp (14 µs; approx mode
+proved it is not SFPU-op bound, so the cost is the pack-thread scheduling around it), and the
+broadcast subtract (10 µs on math; a fused "exp(x - m)" on the SFPU would remove it, the current
+custom LLK ignores its fidelity parameter so LoFi does not help). Each is a kernel change of a day
+or more and applies to both ring ops.
+
+## ff1 AGMM: where the other 49% goes (2026-09-18, branch `jameslee/exp_ring_sdpa_wh`)
+
+The fused all-gather + matmul for ff1 (`all_gather_minimal_matmul_async`, per device M=13664, K=5376 gathered
+over the TP=4 ring, N=7168 packed gate|up, fused SwiGLU, bf16, HiFi2, fp32 dest, 8x8 worker grid, blocking
+(8, 7, 10) subblock 2x2) runs at 15.7 ms against an 8.03 ms compute roofline on the 64-core AGMM grid
+(64 x 2048 FLOP/cycle x 1.0 GHz = 131.1 TFLOP/s), i.e. 51%. Its DRAM bound is 0.78 ms and its fabric bound
+1.10 ms (4 links x 12.5 GB/s, bidirectional ring), so on paper the op is compute-bound by 7x. The roofline
+script that produces these numbers and the Blackhole cross-reference is
+`models/tt_dit/tests/models/minimax_h3/tools/agmm_roofline.py`.
+
+Method: mine the 320-combo ff1 block sweep already on disk, read the op's kernels, then six on-device
+experiments (all on this Galaxy, baseline re-measured in every run: 15,632-15,743 us). The block sweep and
+the AGMM runs use `sweep_mm_block_sizes.py`; the single-device runs use a host-timed script (8 iterations
+after warm-up, dispatch included, so absolute numbers are ~1-2% pessimistic).
+
+### What the kernel does (source read, `.../all_gather_minimal_matmul_async/device/`)
+
+- No multicast. in0 (the gathered activation, a DRAM buffer) and in1 (weights, DRAM) each travel down a
+  serial store-and-forward chain of 8 cores with a request/response semaphore round-trip per hop per
+  K-block (`dm_in0_sender.cpp:446-476`, `dm_in1_sender_out.cpp:511-541`). Only the chain head reads DRAM,
+  tile by tile with one barrier per block.
+- Loop order m -> n -> k, so in0 is re-read from DRAM once per N block (3x) and in1 once per M block (7x):
+  ~1.0 GB of DRAM reads per device per op, all issued by the 16 chain-head cores, and ~127 MB of relay
+  writes received and re-sent by every core.
+- Compute: DST holds 4 tiles under fp32 dest (`get_dest_reg_count`), so the subblock is 2x2 and every
+  K_block (7 tiles) the partial sums are packed as fp32 into an L1 intermediate CB with L1 accumulate:
+  36,288 accumulating fp32 packs per core against 254,016 tile-MACs. `packer_l1_acc` is not plumbed
+  (always on). The intermediate CB is 320 KB, the out CB is single-buffered.
+- SwiGLU is a separate epilogue pass per output block (`swiglu_block`, `compute.cpp:28-70`): copy gate and
+  up tiles from the intermediate into DST, `silu`, `mul`, pack, with the two SFPU inits re-armed per tile
+  pair. It runs on the same math/pack threads after the K loop, so nothing overlaps it.
+
+### Experiments
+
+| # | question | result |
+|---|---|---|
+| 1 | Is the fp32 pack every 7 MACs the limiter? Raise K_block (the sweep never measured K>=14 because its L1 estimator over-counts this op's CBs: double-buffered full-width out and a bias CB that ff1 does not allocate) | No. (8,14,8) 16,227 us, (8,14,6) 16,281, (6,14,10) 16,898, (8,21,4) 18,131 vs 15,725 baseline; (8,14,10) and (8,21,6) fail at warm-up |
+| 2 | fp32 dest off (`MM_SWEEP_FP32_DEST_ACC=0`, new knob), which allows 8-tile subblocks and a bf16 intermediate | Same blocking (8,7,10) 2x2: **15,162 us (-3.6%)**. Best (8,7,16) sb 2x4: **14,475 us (-8.0%)**; (12,7,8) sb 4x2 14,677; (8,7,14) 2x2 14,756 |
+| 3 | Single device, same per-device shape: how much is the gather fusion, the SwiGLU epilogue, the base kernel? | `minimal_matmul` + SwiGLU (8,7,10) fp32: 16.56 ms, i.e. the mesh AGMM is not slower than the plain op -- the ring gather is fully hidden. Plain (no SwiGLU): 14.52 ms -> **SwiGLU costs ~2.0 ms** at every blocking tried. fp32 off (12,7,8) 4x2 plain: 12.67 ms (63%). Mainline `ttnn.matmul` auto-config 8x8 is no better: 23.4 ms fp32 on, 15.2 ms off |
+| 4 | Math-bound or data-movement-bound? Same kernel at LoFi / HiFi2 / HiFi4 (ideal 4.0 / 8.0 / 16.1 ms) | Plain (8,7,10) fp32: **13.17 / 14.48 / 20.72 ms**. Halving the math saves 1.3 ms, doubling it costs 6.2 ms: at HiFi2 the kernel sits on a ~12-13 ms non-math floor. With (12,7,8) fp32 off (fewer in1 re-reads) the LoFi floor drops to 10.73 ms |
+| 5 | Tracy zones in the K loop (first 60 of 504 iterations per core fit the profiler buffer) | Unpack thread waits **61 us for operands in 1,590 us** of matmul; the math thread spends **27.3 us per K-block iteration against 17.9 us of pure math** (66%). At HiFi2 the operands arrive just in time; the loss is inside `matmul_blocks` |
+| 6 | Tracy zones per output block (all 21 blocks per core) | Per core: kernel 15,750 us = **K loop 12,934 + SwiGLU 2,809 (17.8%)** + output waits 0 + 10 us outside zones. Identical on every core and device |
+
+Experiments 4 and 5 together say the K loop has two limiters of nearly equal size at HiFi2: the
+compute-thread structure (DST handshake and the fp32 accumulating pack per subblock, ~27 us per iteration) and
+the operand delivery through the relay chain (~24 us per iteration, ~250 KB per core per iteration, i.e.
+~10 GB/s delivered per core). That is why the levers that touch one side only move a few percent: a bigger
+K_block halves the packs but doubles the bytes per iteration, and fp32-off speeds up the packs until the
+relay binds.
+
+### Decomposition of the 15.7 ms
+
+| component | ms | share | evidence |
+|---|---|---|---|
+| FPU work at HiFi2 peak | 8.03 | 51% | roofline |
+| K-loop overhead (DST/pack structure, co-limited by operand delivery) | 4.9 | 31% | exp 4, 5, 6 |
+| SwiGLU epilogue, serialized after each block's K loop | 2.8 | 18% | exp 6 (2.0 ms of it is SwiGLU-specific, exp 3) |
+| operand waits, output waits, fabric, dispatch | <0.1 | <1% | exp 5, 6 |
+
+### Levers, ranked
+
+1. **The SwiGLU epilogue (2.8 ms, no numerical change).** `swiglu_block` re-arms `silu_tile_init` and
+   `mul_binary_tile_init` inside the per-tile loop and stages every gate/up pair through the fp32
+   intermediate. Hoisting the inits (all silu tiles of a block, then all multiplies), or a single fused
+   SFPU pass, or applying the epilogue while the last K block's result is still in DST, would bring it
+   towards the ~0.8 ms a plain copy epilogue costs. Kernel work in `compute.cpp`, no config change.
+2. **Operand delivery (the ~24 us per K-block floor).** *Retired 2026-09-19 (row 16): the loop does not wait on
+   delivery; the ~24 us is the compute pipeline's own issue pace.* Any of: multicast instead of the 8-deep
+   store-and-forward relay; keep an in1 block resident across M blocks so the weight is read once per N block
+   (the fabric-bound factory already has this `c_7` scratch CB, `minimal_matmul_fabric_bound_program_factory.cpp:347-357`,
+   but that path has no Wormhole grid entry in `fabric_agmm_configs`); spread the head-core DRAM reads over
+   the chain; double-buffer the out CB. The (12,7,8) result (-13% on the plain kernel) shows how much cutting
+   in1 re-reads alone is worth.
+3. **Compute-thread structure.** fp32 dest off: measured -3.6% at the same blocking and -8% with an 8-tile
+   subblock. It does **not** change the roofline (fidelity fixes the FPU rate; fp32 dest only halves DST
+   and makes the packs fp32), but it is a precision decision: on the single-device shape, relative RMSE
+   against fp32 torch doubles (plain 0.0050 -> 0.0109, SwiGLU 0.0087 -> 0.0169; PCC 0.99993 -> 0.99985; the
+   ff1 bar is rmse < 0.02). Not landed. Only worth taking together with lever 2, since the relay then binds.
+4. **Not levers here:** K_block (exp 1), the ring gather (hidden, exp 3 and 5), fabric bandwidth
+   (1.1 ms bound, 7% util), aggregate DRAM bandwidth (0.78 ms bound), LoFi (halves the roofline, a quality
+   decision), the grid (the mux row is the 8x8 vs 8x9 cost and is fixed by the op).
+
+Continued in **`MiniMaxH3_wormhole_agmm_ff1_handoff.md`**: the SwiGLU attribution (silu is 2.16 of the 2.2 ms), the
+bf16-grade silu **landed 2026-09-19** (15,852 → 15,289 us on the mesh; the hang first blamed on it was a
+semaphore-reuse race in the sweep harness, now fixed), per-lever change recipes and the 15 s mesh reproducer.
+
+Housekeeping from this pass: `sweep_mm_block_sizes.py` gained `MM_SWEEP_FP32_DEST_ACC=0`; its L1 pre-filter
+still over-estimates the AGMM footprint (fixing it would admit the K>=14 combos, which measured slower
+anyway). The kernel zones used in experiments 5 and 6 were temporary and are not in the tree.
 
 ## TP/SP parallel-configuration sweep — 15 s / 16:9
 
