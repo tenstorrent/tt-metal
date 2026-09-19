@@ -16,7 +16,11 @@ from models.experimental.chronos_forecast.tt.model_preprocessing import (
     instance_norm,
     instance_norm_inverse,
     normalize_chronos2_inputs,
+    patch,
+    patch_chronos2_inputs,
     prepare_chronos2_inputs,
+    prepare_patched_context,
+    prepare_patched_future,
     target_encode,
 )
 
@@ -410,3 +414,111 @@ def test_prepare_inputs_apply_instance_norm_flag():
     torch.testing.assert_close(normed.loc_scale[1], loc_scale[1])
     fut, _ = instance_norm(raw.future_covariates, loc_scale)
     torch.testing.assert_close(normed.future_covariates, fut, equal_nan=True)
+
+
+def test_patch_matches_vendored_reference():
+    from models.experimental.chronos_forecast.reference.chronos_bolt_ops import Patch as RefPatch
+
+    torch.manual_seed(0)
+    x = torch.randn(2, 20)
+    ref = RefPatch(patch_size=16, patch_stride=16)
+    torch.testing.assert_close(patch(x, patch_size=16, patch_stride=16), ref(x), equal_nan=True, atol=0, rtol=0)
+
+
+def test_patch_oracle_vs_amazon_submodule():
+    from models.experimental.chronos_forecast.common.chronos_src import ensure_chronos_on_path
+
+    ensure_chronos_on_path()
+    from chronos.chronos_bolt import Patch as UpPatch
+
+    torch.manual_seed(0)
+    x = torch.randn(2, 20)
+    up = UpPatch(patch_size=16, patch_stride=16)
+    torch.testing.assert_close(patch(x, 16, 16), up(x), equal_nan=True, atol=0, rtol=0)
+
+
+def test_prepare_patched_context_matches_reference_model():
+    from models.experimental.chronos_forecast.common.chronos_src import CHRONOS_SUBMODULE_ROOT
+    from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
+
+    dummy = CHRONOS_SUBMODULE_ROOT / "test" / "dummy-chronos2-model"
+    model = RefModel.from_pretrained(dummy).eval()
+    torch.manual_seed(0)
+    context = torch.randn(2, 32)
+    ref_patched, ref_mask, ref_ls = model._prepare_patched_context(context)
+    patched, mask, loc_scale = prepare_patched_context(
+        context,
+        patch_size=model.chronos_config.input_patch_size,
+        patch_stride=model.chronos_config.input_patch_stride,
+        context_length=model.chronos_config.context_length,
+        time_encoding_scale=model.chronos_config.time_encoding_scale,
+        use_arcsinh=model.chronos_config.use_arcsinh,
+    )
+    torch.testing.assert_close(patched, ref_patched, equal_nan=True, atol=0, rtol=0)
+    assert torch.equal(mask, ref_mask)
+    torch.testing.assert_close(loc_scale[0], ref_ls[0], atol=0, rtol=0)
+    torch.testing.assert_close(loc_scale[1], ref_ls[1], atol=0, rtol=0)
+
+
+def test_prepare_patched_future_matches_reference_model():
+    from models.experimental.chronos_forecast.common.chronos_src import CHRONOS_SUBMODULE_ROOT
+    from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
+
+    dummy = CHRONOS_SUBMODULE_ROOT / "test" / "dummy-chronos2-model"
+    model = RefModel.from_pretrained(dummy).eval()
+    torch.manual_seed(0)
+    context = torch.randn(2, 32)
+    _, _, loc_scale = model._prepare_patched_context(context)
+    future = torch.randn(2, 16)
+    future[0, 3] = float("nan")
+    ref_patched, ref_mask = model._prepare_patched_future(
+        future_covariates=future,
+        future_covariates_mask=None,
+        loc_scale=loc_scale,
+        num_output_patches=1,
+        batch_size=2,
+    )
+    patched, mask = prepare_patched_future(
+        future,
+        loc_scale,
+        num_output_patches=1,
+        output_patch_size=model.chronos_config.output_patch_size,
+        batch_size=2,
+        time_encoding_scale=int(model.chronos_config.time_encoding_scale),
+        use_arcsinh=model.chronos_config.use_arcsinh,
+    )
+    torch.testing.assert_close(patched, ref_patched, equal_nan=True, atol=0, rtol=0)
+    torch.testing.assert_close(mask, ref_mask, equal_nan=True, atol=0, rtol=0)
+
+
+def test_patch_chronos2_inputs_matches_reference_encode_prep():
+    from models.experimental.chronos_forecast.common.chronos_src import CHRONOS_SUBMODULE_ROOT
+    from models.experimental.chronos_forecast.reference.chronos2.model import Chronos2Model as RefModel
+
+    dummy = CHRONOS_SUBMODULE_ROOT / "test" / "dummy-chronos2-model"
+    model = RefModel.from_pretrained(dummy).eval()
+    torch.manual_seed(0)
+    context = torch.randn(1, 32)
+    packed = prepare_chronos2_inputs(context[0], prediction_length=16)
+    patched = patch_chronos2_inputs(
+        packed,
+        patch_size=model.chronos_config.input_patch_size,
+        patch_stride=model.chronos_config.input_patch_stride,
+        output_patch_size=model.chronos_config.output_patch_size,
+        num_output_patches=1,
+        context_length=model.chronos_config.context_length,
+        time_encoding_scale=model.chronos_config.time_encoding_scale,
+        use_arcsinh=model.chronos_config.use_arcsinh,
+    )
+    ref_ctx, ref_mask, ref_ls = model._prepare_patched_context(packed.context)
+    ref_fut, _ = model._prepare_patched_future(
+        packed.future_covariates,
+        None,
+        ref_ls,
+        num_output_patches=1,
+        batch_size=1,
+    )
+    torch.testing.assert_close(patched.patched_context, ref_ctx, equal_nan=True, atol=0, rtol=0)
+    assert torch.equal(patched.attention_mask, ref_mask)
+    torch.testing.assert_close(patched.patched_future, ref_fut, equal_nan=True, atol=0, rtol=0)
+

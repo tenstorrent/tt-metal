@@ -6,18 +6,19 @@
 Step 0: build history V and future W, flatten variates onto the model batch axis.
 Categorical covariates are encoded next (ordinal, or per-item target encoding when
 there is a single target). InstanceNorm then standardizes each row along time
-(optional arcsinh). This file does not import Amazon Chronos, and it does not run
-Patch / ResidualBlock.
+(optional arcsinh). Patch windows time, then concatenates time encoding and mask.
+This file does not import Amazon Chronos, and it does not run ResidualBlock.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Sequence, cast
 
 import numpy as np
 import pandas as pd
 import torch
+from einops import rearrange, repeat
 
 ArrayLike = torch.Tensor | np.ndarray | Sequence
 
@@ -38,6 +39,24 @@ class Chronos2PackedInputs:
     group_ids: torch.Tensor
     target_idx_ranges: list[tuple[int, int]]
     loc_scale: tuple[torch.Tensor, torch.Tensor] | None = None
+
+
+@dataclass(frozen=True)
+class Chronos2PatchedInputs:
+    """Patched tensors after InstanceNorm + Patch + time encoding.
+
+    Shapes:
+        patched_context: (B, num_context_patches, 3 * patch_size)
+        attention_mask: (B, num_context_patches)
+        patched_future: (B, num_output_patches, 3 * output_patch_size)
+    """
+
+    patched_context: torch.Tensor
+    attention_mask: torch.Tensor
+    patched_future: torch.Tensor
+    loc_scale: tuple[torch.Tensor, torch.Tensor]
+    group_ids: torch.Tensor
+    target_idx_ranges: list[tuple[int, int]]
 
 
 def preprocess_model_parameters(state_dict, device):
@@ -224,6 +243,227 @@ def normalize_chronos2_inputs(
         group_ids=packed.group_ids,
         target_idx_ranges=packed.target_idx_ranges,
         loc_scale=loc_scale,
+    )
+
+
+def patch(
+    x: torch.Tensor,
+    patch_size: int,
+    patch_stride: int | None = None,
+) -> torch.Tensor:
+    """Window the last dim (Amazon Chronos ``Patch.forward``)."""
+    if patch_stride is None:
+        patch_stride = patch_size
+    length = x.shape[-1]
+
+    if length % patch_size != 0:
+        padding_size = (
+            *x.shape[:-1],
+            patch_size - (length % patch_size),
+        )
+        padding = torch.full(size=padding_size, fill_value=torch.nan, dtype=x.dtype, device=x.device)
+        x = torch.concat((padding, x), dim=-1)
+
+    x = x.unfold(dimension=-1, size=patch_size, step=patch_stride)
+    return x
+
+
+def prepare_patched_context(
+    context: torch.Tensor,
+    context_mask: torch.Tensor | None = None,
+    *,
+    patch_size: int,
+    patch_stride: int | None = None,
+    context_length: int | None = None,
+    time_encoding_scale: int | None = None,
+    apply_instance_norm: bool = True,
+    use_arcsinh: bool = False,
+    instance_norm_eps: float = 1e-5,
+    loc_scale: tuple[torch.Tensor, torch.Tensor] | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+    """InstanceNorm (optional) + Patch + time encoding. Amazon ``_prepare_patched_context``."""
+    if patch_stride is None:
+        patch_stride = patch_size
+    context_mask = (
+        context_mask.to(context.dtype)
+        if context_mask is not None
+        else torch.isnan(context).logical_not().to(context.dtype)
+    )
+
+    batch_size, seq_len = context.shape
+    if context_length is not None and seq_len > context_length:
+        context = context[..., -context_length:]
+        context_mask = context_mask[..., -context_length:]
+
+    if apply_instance_norm:
+        context, loc_scale = instance_norm(
+            context, loc_scale, eps=instance_norm_eps, use_arcsinh=use_arcsinh
+        )
+    elif loc_scale is None:
+        raise ValueError("loc_scale is required when apply_instance_norm is False")
+
+    context = context.to(dtype=torch.float32)
+    context_mask = context_mask.to(dtype=torch.float32)
+
+    patched_context = patch(context, patch_size=patch_size, patch_stride=patch_stride)
+    patched_mask = torch.nan_to_num(patch(context_mask, patch_size=patch_size, patch_stride=patch_stride), nan=0.0)
+    patched_context = torch.where(patched_mask > 0.0, patched_context, 0.0)
+
+    attention_mask = patched_mask.sum(dim=-1) > 0
+    num_context_patches = attention_mask.shape[-1]
+
+    final_context_length = num_context_patches * patch_size
+    scale = time_encoding_scale if time_encoding_scale is not None else context_length
+    if scale is None:
+        scale = final_context_length
+    context_time_enc = torch.arange(
+        start=-final_context_length, end=0, device=context.device, dtype=torch.float32
+    )
+    context_time_enc = (
+        repeat(
+            context_time_enc,
+            "(n p) -> b n p",
+            b=batch_size,
+            n=num_context_patches,
+            p=patch_size,
+        )
+        .div(cast(int, scale))
+        .to(dtype=torch.float32)
+    )
+
+    patched_context = torch.cat([context_time_enc, patched_context, patched_mask], dim=-1)
+    return patched_context, attention_mask, loc_scale
+
+
+def prepare_patched_future(
+    future_covariates: torch.Tensor | None,
+    loc_scale: tuple[torch.Tensor, torch.Tensor],
+    *,
+    num_output_patches: int,
+    output_patch_size: int,
+    batch_size: int,
+    time_encoding_scale: int,
+    future_covariates_mask: torch.Tensor | None = None,
+    use_arcsinh: bool = False,
+    instance_norm_eps: float = 1e-5,
+    apply_instance_norm: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Amazon ``_prepare_patched_future`` (zero-pad, rearrange, time encoding)."""
+    if future_covariates is not None:
+        if apply_instance_norm:
+            future_covariates, _ = instance_norm(
+                future_covariates, loc_scale, eps=instance_norm_eps, use_arcsinh=use_arcsinh
+            )
+        future_covariates = future_covariates.to(dtype=torch.float32)
+
+        if future_covariates_mask is None:
+            future_covariates_mask = torch.isnan(future_covariates).logical_not().to(future_covariates.dtype)
+
+        future_covariates = torch.where(future_covariates_mask > 0.0, future_covariates, 0.0)
+
+        if torch.isnan(future_covariates).any():
+            raise ValueError(
+                "future_covariates contains NaN values at indices not masked by future_covariates_mask. "
+                "Input the correct future_covariates_mask or omit it to automatically infer the mask based on NaN values."
+            )
+
+        if num_output_patches * output_patch_size > future_covariates.shape[-1]:
+            padding_shape = (
+                *future_covariates.shape[:-1],
+                num_output_patches * output_patch_size - future_covariates.shape[-1],
+            )
+            future_covariates = torch.cat(
+                [future_covariates, torch.zeros(padding_shape).to(future_covariates)], dim=-1
+            )
+            future_covariates_mask = torch.cat(
+                [future_covariates_mask, torch.zeros(padding_shape).to(future_covariates_mask)], dim=-1
+            )
+
+        patched_future_covariates = rearrange(
+            future_covariates, "b (n p) -> b n p", n=num_output_patches, p=output_patch_size
+        )
+        patched_future_covariates_mask = rearrange(
+            future_covariates_mask, "b (n p) -> b n p", n=num_output_patches, p=output_patch_size
+        )
+    else:
+        patched_future_covariates = torch.zeros(
+            batch_size, num_output_patches, output_patch_size, dtype=torch.float32
+        )
+        patched_future_covariates_mask = torch.zeros(
+            batch_size, num_output_patches, output_patch_size, dtype=torch.float32
+        )
+
+    final_future_length = num_output_patches * output_patch_size
+    future_time_enc = torch.arange(start=0, end=final_future_length, dtype=torch.float32)
+    future_time_enc = (
+        repeat(
+            future_time_enc,
+            "(n p) -> b n p",
+            b=batch_size,
+            n=num_output_patches,
+            p=output_patch_size,
+        )
+        .div(cast(int, time_encoding_scale))
+        .to(dtype=torch.float32)
+    )
+
+    patched_future = torch.cat([future_time_enc, patched_future_covariates, patched_future_covariates_mask], dim=-1)
+    return patched_future, patched_future_covariates_mask
+
+
+def patch_chronos2_inputs(
+    packed: Chronos2PackedInputs,
+    *,
+    patch_size: int = 16,
+    patch_stride: int | None = None,
+    output_patch_size: int | None = None,
+    num_output_patches: int | None = None,
+    context_length: int = 8192,
+    time_encoding_scale: int | None = None,
+    use_arcsinh: bool = False,
+    instance_norm_eps: float = 1e-5,
+) -> Chronos2PatchedInputs:
+    """Patch packed V/W the way ``Chronos2Model.encode`` prepares embeddings."""
+    if patch_stride is None:
+        patch_stride = patch_size
+    if output_patch_size is None:
+        output_patch_size = patch_size
+    if time_encoding_scale is None:
+        time_encoding_scale = context_length
+    horizon = packed.future_covariates.shape[-1]
+    if num_output_patches is None:
+        num_output_patches = max(1, (horizon + output_patch_size - 1) // output_patch_size)
+
+    already_normed = packed.loc_scale is not None
+    patched_context, attention_mask, loc_scale = prepare_patched_context(
+        packed.context,
+        patch_size=patch_size,
+        patch_stride=patch_stride,
+        context_length=context_length,
+        time_encoding_scale=time_encoding_scale,
+        apply_instance_norm=not already_normed,
+        use_arcsinh=use_arcsinh,
+        instance_norm_eps=instance_norm_eps,
+        loc_scale=packed.loc_scale,
+    )
+    patched_future, _ = prepare_patched_future(
+        packed.future_covariates,
+        loc_scale,
+        num_output_patches=num_output_patches,
+        output_patch_size=output_patch_size,
+        batch_size=packed.context.shape[0],
+        time_encoding_scale=time_encoding_scale,
+        use_arcsinh=use_arcsinh,
+        instance_norm_eps=instance_norm_eps,
+        apply_instance_norm=not already_normed,
+    )
+    return Chronos2PatchedInputs(
+        patched_context=patched_context,
+        attention_mask=attention_mask,
+        patched_future=patched_future,
+        loc_scale=loc_scale,
+        group_ids=packed.group_ids,
+        target_idx_ranges=packed.target_idx_ranges,
     )
 
 
