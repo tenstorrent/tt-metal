@@ -28,7 +28,6 @@ from ...layers.audio_ops import (
     _partition_t,
     _set_tpad_tail,
     channel_factor,
-    conv_pre_local_env,
     partition_channel,
 )
 from ...layers.audio_aa_snake import FusedActivation1d
@@ -296,12 +295,9 @@ class Vocoder(Module):
         # the pipeline warms the decode eagerly at warmup, which the vocoder frees back to a
         # deterministic state, so capture and replay share one free-list.
 
-        # conv_pre (2048 -> 1024, k=7) is the one conv whose T-sharded form was wrong: its 8 KB sticks break the halo
-        # exchange (neighbor_pad returns uninitialized rows), so it ran replicated on the full sequence. With the halo
-        # exchanged in 4 KB channel chunks (audio_ops._t_neighbor_pad) it runs T-sharded like every other conv
-        # (MINIMAX_H3_AUDIO_CONV_PRE_LOCAL=0 keeps the replicated form). Channel-TP always shards it: conv_pre's own
-        # `gather_channel_to_full` rebuilds C_in and removing parallel_config would hand it a C-shard.
-        self._conv_pre_unsharded = channel_factor(parallel_config) == 1 and not conv_pre_local_env()
+        # conv_pre runs replicated under T-sharding: its 8 KB fp32 sticks break the neighbor_pad halo exchange
+        # (tools/conv_pre_shard_probe.py). Channel-TP still shards it: `gather_channel_to_full` rebuilds C_in from the C-shard.
+        self._conv_pre_unsharded = channel_factor(parallel_config) == 1
         self.conv_pre = _AlignedOutConv1d(
             in_channels=in_channels,
             out_channels=upsample_initial_channel,
