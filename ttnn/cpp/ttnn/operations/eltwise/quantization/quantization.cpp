@@ -180,8 +180,8 @@ std::variant<ttnn::Tensor, T> reshape_per_channel_arg(
     return reshape_per_channel_vector_args(*tensor_p, input_shape, axis.value(), out_dtype);
 }
 
-// Widen quantized input to f32 for the composite paths. Use dequantize as the widening step
-// for int8 until typecast(int8 -> int32) is enabled (#50401).
+// Widen quantized input to f32 for the composite paths. int8 still routes through dequantize, but this
+// detour can use typecast now that it supports int8.
 ttnn::Tensor widen_quantized_input_to_f32(const ttnn::Tensor& input) {
     if (input.dtype() != ttnn::DataType::INT8) {
         return ttnn::typecast(input, ttnn::DataType::FLOAT32);
@@ -189,11 +189,9 @@ ttnn::Tensor widen_quantized_input_to_f32(const ttnn::Tensor& input) {
     return ttnn::dequantize(input, 1.0f, 0, /*axis=*/std::nullopt, ttnn::DataType::FLOAT32, std::nullopt, std::nullopt);
 }
 
-// Narrow composite's fp result to the output dtype. typecast truncates toward zero and wraps
-// modulo 256, so the narrow quantized dtypes go through quantize instead, which saturates and
-// rounds to nearest even: int8 until typecast(int32 -> int8) is enabled (#50401), and uint8
-// because the composite path would otherwise miss the lower clamp the fused path applies, and
-// would keep truncating where the fused path rounds (#51304).
+// Narrow composite's fp result to the output dtype. typecast truncates toward zero and wraps modulo 256
+// (callers here pass unbounded floats), so int8 and uint8 go through quantize instead, which saturates and
+// rounds to nearest even.
 ttnn::Tensor narrow_composite_result(
     const ttnn::Tensor& shifted,
     ttnn::DataType c_dtype,

@@ -172,6 +172,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_matmul_<MATH_FIDELITY>(0);
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
+    _llk_math_matmul_uninit_();
 }
 
 #endif

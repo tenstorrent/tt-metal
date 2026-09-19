@@ -244,6 +244,31 @@ struct FiberSchedulerImpl {
         return false;
     }
     bool any_waiting_on_host() const { return any_fresh_socket_poll_waiter() || any_parked_is_socket_wait(); }
+    // Called under mu_. A release puts internal producers back on another worker's
+    // ready queue; global spin churn does not prove that worker has serviced them.
+    // Only fresh wait tags justify treating runnable fibers as blocked dependencies.
+    bool any_runnable_internal_work() const {
+        for (const auto& up : all_) {
+            const Fiber* f = up.get();
+            if (f->state == FiberState::QuiescenceDeferred) {
+                return true;
+            }
+            if (f->state != FiberState::Ready && f->state != FiberState::Running) {
+                continue;
+            }
+            const uint64_t resumes = f->own_resumes.load(std::memory_order_relaxed);
+            const bool socket_wait =
+                f->socket_poll_waiting.load(std::memory_order_relaxed) &&
+                poll_tag_is_fresh(resumes, f->poll_wait_stamp.load(std::memory_order_relaxed), poll_wait_staleness_);
+            const bool cb_wait =
+                f->cb_poll_waiting.load(std::memory_order_relaxed) &&
+                poll_tag_is_fresh(resumes, f->cb_poll_stamp.load(std::memory_order_relaxed), poll_wait_staleness_);
+            if (!socket_wait && !cb_wait) {
+                return true;
+            }
+        }
+        return false;
+    }
     // The peer-fed twin of any_fresh_socket_poll_waiter: a d2d socket poll whose publisher is another
     // RANK. Such a fiber is Ready and spinning, never parked, so quiescence is never reached and the
     // tier-2 watchdog would report a livelock for a run that is merely waiting on another process.
@@ -450,8 +475,13 @@ void FiberSchedulerImpl::inner_loop(unsigned w) {
                 // quiescence-deferred fibers are runnable internal work and must get at least one
                 // release first. Otherwise a next-page H2D poll can suspend the run while the
                 // current page's deferred producer is still waiting to publish to a d2d consumer.
+                // Runnable internal work defers HostWait for the same reason a deferred producer
+                // does, so it joins that term rather than vetoing the gate: a fiber that can never
+                // progress on its own (a raw-L1 yield-spinner) would otherwise keep the run from
+                // ever asking the host for bytes, and the wall backstop would abort a run that had
+                // a resumable HostWait available. The barren-release bound still applies.
                 const bool internal_work_needs_repoll =
-                    !quiescence_deferred_.empty() || any_parked_non_socket();
+                    !quiescence_deferred_.empty() || any_parked_non_socket() || any_runnable_internal_work();
                 if (persistent_ && any_waiting_on_host() &&
                     (!internal_work_needs_repoll || barren_releases_ >= barren_release_limit)) {
                     host_wait_ = true;
@@ -839,6 +869,8 @@ void FiberScheduler::abandon_host_wait(const std::string& why) {
     teardown_and_throw();
 }
 
+static std::string emule_park_op_name(const Fiber* f);
+
 std::string FiberSchedulerImpl::dump_parked() {
     std::ostringstream os;
     os << "  " << parked_.size() << " distinct wait-key(s); parked fibers:\n";
@@ -915,6 +947,56 @@ std::string FiberSchedulerImpl::dump_parked() {
     if (!quiescence_deferred_.empty()) {
         os << "  " << quiescence_deferred_.size() << " fiber(s) deferred to quiescence\n";
     }
+    // Fibers NOT parked. A quiescent (tier-1) deadlock has none; a watchdog stop catches them
+    // mid-flight: Running = inside a loop that never yields (the wall-backstop culprit), Ready =
+    // woken by a release, or yield-spinning on a raw L1 word (invisible to parked_ by design).
+    {
+        unsigned running = 0, ready = 0;
+        for (const auto& up : all_) {
+            running += up->state == FiberState::Running;
+            ready += up->state == FiberState::Ready;
+        }
+        if (running != 0 || ready != 0) {
+            constexpr unsigned kMaxListed = 64;
+            unsigned listed = 0;
+            os << "  " << running << " fiber(s) Running + " << ready << " Ready (not parked):\n";
+            // Running first: with one non-yielding kernel and hundreds of released waiters, the
+            // culprit must not fall off the cap.
+            for (int pass = 0; pass < 2 && listed < kMaxListed; ++pass) {
+                const FiberState want = pass == 0 ? FiberState::Running : FiberState::Ready;
+                for (const auto& up : all_) {
+                    const Fiber* f = up.get();
+                    if (f->state != want) {
+                        continue;
+                    }
+                    if (listed++ >= kMaxListed) {
+                        break;
+                    }
+                    os << "    [" << (want == FiberState::Running ? "RUNNING" : "ready  ") << "] core(log "
+                       << f->id.logical_x << "," << f->id.logical_y << " phys " << int(f->id.phys_x) << ","
+                       << int(f->id.phys_y) << ") risc/proc " << int(f->id.proc_id);
+                    if (f->id.kernel_src) {
+                        os << " kernel " << f->id.kernel_src;
+                    }
+                    os << " resumes=" << f->own_resumes.load(std::memory_order_relaxed);
+                    if (f->cb_poll_waiting.load(std::memory_order_relaxed)) {
+                        os << " (probing CB " << f->cb_poll_id.load(std::memory_order_relaxed) << ")";
+                    }
+                    // A Ready fiber's context is saved (it yielded), so its stack walks like a parked one's.
+                    if (park_stacks && want == FiberState::Ready) {
+                        std::string op = emule_park_op_name(f);
+                        if (!op.empty()) {
+                            os << " [op] " << op;
+                        }
+                    }
+                    os << "\n";
+                }
+            }
+            if (running + ready > kMaxListed) {
+                os << "    ... " << (running + ready - kMaxListed) << " more not listed\n";
+            }
+        }
+    }
     if (socket_poll_waiters_ != 0) {
         // Split: a stale tag means the fiber left the loop, so reporting it sends triage after nothing.
         unsigned fresh = 0, stale = 0, peer = 0;
@@ -990,6 +1072,25 @@ void FiberSchedulerImpl::watchdog() {
     const auto host_backstop = std::chrono::seconds(env_size("TT_EMULE_HOST_WAIT_WATCHDOG_SEC", 900));
     uint64_t last_progress = progress_.load();
     uint64_t last_resump = resumptions_.load();
+    std::unordered_map<const Fiber*, uint64_t> sampled_resumes;
+    // Global churn is not a fair execution budget for a fiber still computing
+    // in its first quantum. Sample each live fiber's own scheduling turns.
+    const auto sample_scheduling_turns = [&] {
+        bool fair_window = true;
+        std::lock_guard<std::mutex> lk(mu_);
+        for (const auto& up : all_) {
+            const Fiber* f = up.get();
+            const uint64_t resumes = f->own_resumes.load(std::memory_order_relaxed);
+            const uint64_t previous = sampled_resumes[f];
+            if ((f->state == FiberState::Running && resumes - previous <= 1) ||
+                (f->state == FiberState::Ready && resumes == previous)) {
+                fair_window = false;
+            }
+            sampled_resumes[f] = resumes;
+        }
+        return fair_window;
+    };
+    sample_scheduling_turns();
     auto last_advance = std::chrono::steady_clock::now();
     bool was_parked = host_wait_parked_.load(std::memory_order_acquire);
     while (run_active_.load(std::memory_order_acquire)) {
@@ -1010,6 +1111,7 @@ void FiberSchedulerImpl::watchdog() {
         }
         uint64_t p = progress_.load();
         uint64_t r = resumptions_.load();
+        const bool fair_window = sample_scheduling_turns();
         if (p != last_progress) {
             last_progress = p;
             last_resump = r;
@@ -1020,23 +1122,76 @@ void FiberSchedulerImpl::watchdog() {
         // A rank resuming a peer-fed spin-poll racks up resumptions with no local progress, which is
         // indistinguishable from a livelock by counting alone. It is not one while a peer can still
         // act — ranks reach a wave at different times. Read-only probe: the watchdog runs off-thread.
-        bool livelock = !parked && (r - last_resump) > window && !peer_liveness_probe();
+        // A finite non-yielding compute quantum can coexist with arbitrarily
+        // many consumer resumes. Its wall-clock backstop still applies, but
+        // other workers must not spend its fast scheduling budget for it.
+        bool livelock = !parked && fair_window && (r - last_resump) > window && !peer_liveness_probe();
         bool wall = (std::chrono::steady_clock::now() - last_advance) > (parked ? host_backstop : backstop);
         if (livelock || wall) {
-            std::fprintf(
-                stderr,
-                "[EMULE] fiber engine: no global progress (%s) — suspected %s.\n%s",
+            char head[512];
+            std::snprintf(
+                head,
+                sizeof head,
+                "EMULE fiber engine: no global progress (%s) — suspected %s.",
                 livelock ? "resumption window"
                 : parked ? "host-wait backstop, TT_EMULE_HOST_WAIT_WATCHDOG_SEC"
-                         : "wall-clock backstop",
+                         : "wall-clock backstop, TT_EMULE_FIBER_WATCHDOG_SEC",
                 livelock ? "livelock / wake-cycle"
                 : parked ? "the host never pumped this parked run again"
-                         : "lost wakeup / hang",
-                [this] {
+                         : "lost wakeup / hang / non-yielding kernel loop");
+            std::fprintf(stderr, "[EMULE] %s\n", head);
+            std::fflush(stderr);
+            if (!parked) {
+                // Cooperative stop first. Ask every worker to leave inner_loop at its next scheduling
+                // boundary and let launch_and_wait -> teardown_and_throw report the stall as a
+                // FiberEngineStall carrying dump_parked(). Two reasons this beats dumping here:
+                //  1. The dump is taken single-threaded, under mu_, once the workers are quiescent —
+                //     an unlocked dump of parked_ while workers still park/wake tears and segfaults
+                //     (observed on the GLM dense-decoder stall), and a dump racing 63 contended
+                //     lock() callers is a long wait at best.
+                //  2. An exception reaches the test framework. A bare abort()'s stderr does not:
+                //     pytest captures fd 2 into a temp file that dies with the process, which is why
+                //     no CI log has ever shown this message for the stalls it fired on.
+                {
                     std::lock_guard<std::mutex> g(mu_);
-                    return dump_parked();
-                }()
-                    .c_str());
+                    stall_reason_ = head;
+                    deadlock_ = true;
+                    abort_flag_ = true;
+                    cv_.notify_all();
+                }
+                const auto grace = std::chrono::seconds(env_size("TT_EMULE_FIBER_WATCHDOG_GRACE_SEC", 30));
+                const auto t0 = std::chrono::steady_clock::now();
+                for (;;) {
+                    {
+                        std::lock_guard<std::mutex> g(mu_);
+                        if (workers_done_ == W_) {
+                            return;  // run ended: teardown_and_throw throws FiberEngineStall + dump
+                        }
+                    }
+                    if (!run_active_.load(std::memory_order_acquire)) {
+                        return;
+                    }
+                    if (std::chrono::steady_clock::now() - t0 > grace) {
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                std::fprintf(
+                    stderr,
+                    "[EMULE] fiber engine: not every worker reached a scheduling boundary within %llus "
+                    "(TT_EMULE_FIBER_WATCHDOG_GRACE_SEC) — a fiber is in a loop that never yields. "
+                    "The Running fiber(s) below are the culprits.\n",
+                    (unsigned long long)grace.count());
+            }
+            // Hard path: parked between pumps (no workers to stop), or a fiber that never returns to
+            // its worker. Every other worker is now idle on a condition variable (mu_ released) and a
+            // fiber runs with mu_ unlocked, so a blocking lock is safe here — a worker holds mu_ only
+            // for the bridge's short critical sections.
+            {
+                std::lock_guard<std::mutex> g(mu_);
+                std::fprintf(stderr, "%s", dump_parked().c_str());
+            }
+            std::fflush(stderr);
             std::abort();
         }
         last_resump = r;
@@ -1147,6 +1302,14 @@ void FiberScheduler::launch_and_wait(bool initial) {
             }
         } else {
             W = p_->W_;   // pump: reuse homing; ready_ already refilled by pump()'s re-poll
+        }
+        // A host delivery may have satisfied a poll since the previous HostWait.
+        // Each runnable fiber must re-observe its dependency in this quantum before
+        // another worker can use its poll tag to suspend the run again.
+        for (const auto& up : p_->all_) {
+            if (up->state == FiberState::Ready) {
+                p_->retire_poll_tags(up.get());
+            }
         }
         // Reset run counters (a fresh run and each pump re-poll both start from zero, matching the
         // per-run watermarks above).
