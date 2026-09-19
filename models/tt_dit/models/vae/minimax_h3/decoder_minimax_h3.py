@@ -149,7 +149,7 @@ class MiniMaxH3ViTAttention(Module):
         self.rope_view = os.environ.get("MINIMAX_H3_ROPE_VIEW", "batch")
         # "op": ttnn.rms_norm on q and k, then RoPE; "fused": the RMS runs as a prologue inside rotary_embedding_llama
         # (rms_norm_eps), 72 LayerNorm launches per wave gone. Gated on RMSE vs float64 (tools/rope_rms_probe.py).
-        self.qk_rms = os.environ.get("MINIMAX_H3_QK_RMS", "op")
+        self.qk_rms = os.environ.get("MINIMAX_H3_QK_RMS", "fused")
         if self.qk_rms not in ("op", "fused"):
             raise ValueError(f"MINIMAX_H3_QK_RMS must be 'op' or 'fused', got {self.qk_rms!r}")
         if self.rope_view not in ("heads", "batch"):
