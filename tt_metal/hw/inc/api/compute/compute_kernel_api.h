@@ -1177,4 +1177,22 @@ ALWI void clear_compute_special_value_flags() { MATH((llk_math_clear_compute_spe
 
 #endif
 
+/** Internal BF16 typed-compiler route; public callers retain the stock entry point. */
+ALWI void abs_tt_poly_bf16_tile(uint32_t idst) {
+#if defined(TT_POLY_LLK_DISABLE) || !(defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
+    abs_tile(idst);
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs_tt_poly_bf16, (8 /* ITERATIONS */), idst, VectorMode::RC));
+#endif
+}
+
+/** Initialize the internal BF16 typed-compiler route. */
+ALWI void abs_tt_poly_bf16_tile_init() {
+    abs_tile_init();
+#if !defined(TT_POLY_LLK_DISABLE) && (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
+    MATH(sfpu::init_abs_tt_poly_bf16());
+#endif
+}
+
 }  // namespace ckernel
