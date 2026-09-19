@@ -145,6 +145,9 @@ class MiniMaxH3ViTAttention(Module):
         # "heads": SDPA writes (B, H, S, D) and nlp_concat_heads reorders it; "op": SDPA writes the concat layout
         # itself (output_concat_heads), one program less per layer. Bit-identical.
         self.sdpa_concat = os.environ.get("MINIMAX_H3_SDPA_CONCAT", "heads")
+        self.rope_view = os.environ.get("MINIMAX_H3_ROPE_VIEW", "heads")
+        if self.rope_view not in ("heads", "batch"):
+            raise ValueError(f"MINIMAX_H3_ROPE_VIEW must be 'heads' or 'batch', got {self.rope_view!r}")
         if self.sdpa_concat not in ("heads", "op"):
             raise ValueError(f"MINIMAX_H3_SDPA_CONCAT must be 'heads' or 'op', got {self.sdpa_concat!r}")
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -225,12 +228,22 @@ class MiniMaxH3ViTAttention(Module):
         query = self._rms(query)
         key = self._rms(key)
 
+        # MINIMAX_H3_ROPE_VIEW=batch presents q/k as (heads, 1, S, D): the RoPE factory parallelises batch x seq tiles,
+        # so the view spreads the 32 heads over more cores (single-op probe 0.140 -> 0.125 ms, bit-identical).
+        if self.rope_view == "batch":
+            as_batch = ttnn.Shape([batch * self.num_heads, 1, seq_len, self.head_dim])
+            as_heads = ttnn.Shape([batch, self.num_heads, seq_len, self.head_dim])
+            query = ttnn.reshape(query, as_batch, as_batch)
+            key = ttnn.reshape(key, as_batch, as_batch)
         query = ttnn.experimental.rotary_embedding_llama(
             query, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config
         )
         key = ttnn.experimental.rotary_embedding_llama(
             key, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config
         )
+        if self.rope_view == "batch":
+            query = ttnn.reshape(query, as_heads, as_heads)
+            key = ttnn.reshape(key, as_heads, as_heads)
 
         # No mask: q/k/v are presented with the logical length of the valid tokens (same buffers,
         # padded shape unchanged), and SDPA blanks the tile-pad keys itself. The dense mask cost a
