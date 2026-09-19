@@ -229,6 +229,8 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
+    // Same selection as the single chip factory: only fp32 DEST accumulation keeps the legacy compute kernel.
+    const bool use_streaming_compute = !fp32_dest_acc_en;
     const uint32_t qk_in0_block_w = DHt;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
@@ -240,11 +242,20 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size);
+    auto [out_out_subblock_h, out_out_subblock_w] =
+        detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
+    if (use_streaming_compute) {
+        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, vDHt);
+        TT_FATAL(
+            Sq_chunk_t % out_out_subblock_h == 0,
+            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
+            Sq_chunk_t,
+            out_out_subblock_h);
+    }
 
     // Determine granularity for statistics computation
     // Each granularity must evenly divide its tile count to avoid dropping tiles
@@ -287,12 +298,12 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         static_cast<uint32_t>(is_chunked),  //(uint32_t)is_chunked,
         block_size_t,
         page_table_stick_size,
-        0,                  // use_attention_sink
-        0,                  // use_mla
-        0,                  // mla_kv_overlap
-        qk_out_subblock_h,  // qk_subblock_h
-        0,                  // sliding_window_size (ring uses no sliding window)
-        0                   // use_streaming_compute (ring uses legacy compute)
+        0,                                            // use_attention_sink
+        0,                                            // use_mla
+        0,                                            // mla_kv_overlap
+        qk_out_subblock_h,                            // qk_subblock_h
+        0,                                            // sliding_window_size (ring uses no sliding window)
+        static_cast<uint32_t>(use_streaming_compute)  // arg 28
     };
     // Semaphore placeholders (not used in ring, but kernel expects them at indices 29-32)
     reader_compile_time_args.push_back(0);                                            // sender_semaphore_id
@@ -335,16 +346,16 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         packed_identity_scalar,
         scale_packed,
         num_cores,
-        true,   //(std::uint32_t)is_causal,
-        false,  //(std::uint32_t)use_provided_mask,
-        false,  //(std::uint32_t)use_padded_mask,
-        true,   //(uint32_t)is_chunked,
-        0,      //(uint32_t)sliding_window_size,
-        1,      // arg 20: lightweight causal mask
-        0,      // arg 21: use_streaming_compute — always false for ring distributed (causal)
-        0,      // arg 22: out_subblock_h — unused when streaming is off
-        0,      // arg 23: k_partial_col — non-streaming, no partial mask emitted
-        static_cast<uint32_t>(use_zigzag_balancing),  // arg 24
+        true,                                          //(std::uint32_t)is_causal,
+        false,                                         //(std::uint32_t)use_provided_mask,
+        false,                                         //(std::uint32_t)use_padded_mask,
+        true,                                          //(uint32_t)is_chunked,
+        0,                                             //(uint32_t)sliding_window_size,
+        1,                                             // arg 20: lightweight causal mask
+        static_cast<uint32_t>(use_streaming_compute),  // arg 21: row grouped cb_out drain
+        out_out_subblock_h,                            // arg 22: drain group height
+        0,                                             // arg 23: k_partial_col — non-streaming, no partial mask emitted
+        static_cast<uint32_t>(use_zigzag_balancing),   // arg 24
         0,  // arg 25: use_windowed_mask — ring never uses windowed (block-diagonal) attention
         0,  // arg 26: sender_semaphore_id, ring has no chains
         0,  // arg 27: receiver_semaphore_id
@@ -388,11 +399,11 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         scale_packed,
-        0,          //(uint32_t)sliding_window_size,
-        0,          //(std::uint32_t)use_attention_sink,
-        0,          //(std::uint32_t)use_streaming_compute - always false for ring distributed (causal)
-        valid_Skt,  // arg 31: unpadded K tiles for streaming padded_k_tiles
-        0u,         // arg 32: k_partial_col - unused on ring's non-streaming path
+        0,                                                  //(uint32_t)sliding_window_size,
+        0,                                                  //(std::uint32_t)use_attention_sink,
+        static_cast<std::uint32_t>(use_streaming_compute),  // arg 30
+        valid_Skt,                                          // arg 31: unpadded K tiles for streaming padded_k_tiles
+        0u,                                           // arg 32: k_partial_col - unused on ring's non-streaming path
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
         0,                                            // arg 34: use_windowed_narrowing — ring is never windowed
     };
@@ -473,6 +484,9 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         cb_ids.page_table = allocate_cb(page_table_stick_size, 1, page_table_df);
     }
 
+    if (use_streaming_compute) {
+        cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
+    }
     cb_ids.qk_im = allocate_tile_cb(qk_tiles, im_tile_size, im_df);
     cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
