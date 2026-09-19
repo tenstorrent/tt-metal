@@ -92,13 +92,15 @@ env:
   # its LoudBox perf legs call run_device_perf, which shells out to `python3 -m tracy`.
   # Without a profiler build the gate dispatches them and they fail on "Tracy tools
   # not found" -- a gate artefact, not a test failure. blackhole-e2e-tests.yaml itself
-  # builds with `tracy: true` for the same reason.
+  # builds with `tracy: true` for the same reason. models_device_perf_tests.yaml is the
+  # same case: every entry runs test_device_perf.py / run_device_profiler, i.e. tracy.
   TRACY_BUILD_YAMLS: >-
     galaxy_profiler_tests.yaml
     single_card_profiler_tests.yaml
     t3k_profiler_tests.yaml
     runtime_perf_profiler_tests.yaml
     blackhole_e2e_tests.yaml
+    models_device_perf_tests.yaml
 
 jobs:
   scope:
@@ -268,6 +270,10 @@ jobs:
         GTEST_TOTAL_SHARDS: ${{ matrix.leg.gtest_shard_total || 1 }}
         GTEST_SHARD_INDEX: ${{ matrix.leg.gtest_shard_index || 0 }}
         HF_HUB_OFFLINE: ${{ (matrix.leg['weights-cache-mode'] == 'local-disk' || matrix.leg['weights-cache-mode'] == 'lfc') && '0' || '1' }}
+        # The three models impls (e2e, unit, device perf) pair HF_HUB_OFFLINE with this
+        # cache path; without it an offline leg whose cmd does not export HF_HOME looks
+        # in ~/.cache and fails with "couldn't find them in the cached files".
+        HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
         # The tracy paths the three profiler impls set. Empty on every other leg,
         # which the consuming scripts treat as unset (they test with -z).
         PROFILER_SCRIPTS_ROOT: ${{ matrix.leg.gate_profile == 'profiler' && '/work/tools/tracy' || '' }}
