@@ -590,6 +590,7 @@
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -621,6 +622,7 @@
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -651,6 +653,7 @@
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -690,6 +693,7 @@
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 # ===== GLM-5.2-744B ====================================================================================
@@ -1557,13 +1561,15 @@
       # 34648535999, 65.9 min on run 34659612357 (rank 0 alone spent 54.2 min loading its 24 layers).
       # After that comes the producer connect, 11 chunks of 5120, the KV read-back and a ~7 min mesh
       # unwind. 45 min cut this off mid-bringup and 70 min cut it off six minutes after bringup.
-      # Sized off the slower measurement. shield/demo bh_sc4 is a SUM over the team's legs on that
-      # SKU, not a per-leg cap, so this raises it to 150: 20 (Kimi-K2.7) + 30 (GLM-5.2) + 100.
-      timeout: 100
+      # 100 was still too tight: run 34831600450 was killed at 106 min with the leg live. Doubled,
+      # matching the 2x pass #56135 applied to the rest of this pipeline. shield/demo bh_sc4 is a
+      # SUM over the team's legs on that SKU, not a per-leg cap: 40 (Kimi-K2.7) + 60 (GLM-5.2) + 200.
+      timeout: 200
       tier: 1
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
   team: shield
+  budget_type: demo
   sp_config: sc4
 
 
@@ -1578,15 +1584,20 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
+    # Below the job timeout on purpose: at the script default of 3600 the wait outlives the leg,
+    # so a bringup that never finishes is reported as a job kill with no diagnostic.
+    export TABLE_WAIT_SECS=2400
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3 sc1
   test_type: k3_prefill_runner_24l
   test_tags: [kimi_k3, runner, kv_cache]
   test_group: disagg_prefill
   skus:
     bh_sc1:
-      timeout: 30
+      # 30 killed the leg at 38 min on run 34831600450, mid-bringup.
+      timeout: 60
   owner_id: U0ACLAM77PS  # Kosta Grujcic
   team: shield
+  budget_type: demo
   sp_config: sc1
 
 - name: "Ring joint SDPA perf + ring MLA chunked 55k@5k perf, accuracy, determinism"
