@@ -164,18 +164,6 @@ def _audio_trace_enabled() -> bool:
     return os.environ.get(_AUDIO_TRACE_ENV, "1").strip().lower() in ("1", "true", "yes", "on")
 
 
-# "1": one stereo channel per mesh row (the axis the T-shard does not use); every vocoder op then runs one batch item
-# per device instead of the replicated pair. Bit-identical per channel; measured 0.5 -> 0.4 s eager, default on.
-_AUDIO_BSHARD_ENV = "MINIMAX_H3_AUDIO_BSHARD"
-
-
-def _audio_batch_shard() -> bool:
-    raw = os.environ.get(_AUDIO_BSHARD_ENV, "1").strip().lower()
-    if raw not in ("", "0", "1", "false", "true", "no", "yes"):
-        raise ValueError(f"{_AUDIO_BSHARD_ENV}={raw!r} must be 0 or 1")
-    return raw in ("1", "true", "yes")
-
-
 def _requested_audio_t_factor(audio_t_factor: int | None, default: int = _DEFAULT_AUDIO_T_FACTOR) -> tuple[int, bool]:
     """Explicit kwarg wins; else MINIMAX_H3_AUDIO_T_FACTOR; else `default`. Returns (factor, from_env)."""
     if audio_t_factor is not None:
@@ -1505,13 +1493,14 @@ class MiniMaxH3Pipeline:
                 else None
             )
             audio_ccl = self.audio_ccl_manager if audio_parallel_config is not None else None
+            # One stereo channel per row of the mesh axis the T-shard does not use, when that axis has two devices.
             batch_shard_axis = None
-            if _audio_batch_shard() and audio_parallel_config is not None:
+            if audio_parallel_config is not None:
                 other = 1 - self._audio_t_axis
                 if tuple(self.mesh_device.shape)[other] >= 2:
                     batch_shard_axis = other
                 else:
-                    logger.warning(f"{_AUDIO_BSHARD_ENV}=1 ignored: mesh axis {other} has one device")
+                    logger.warning(f"audio batch shard skipped: mesh axis {other} has one device")
             decoder = MiniMaxH3AudioDecoder(
                 latent_channels=config["latent_channels"],
                 latent_dim=config["latent_dim"],
