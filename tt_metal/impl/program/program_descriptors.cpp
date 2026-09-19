@@ -189,7 +189,7 @@ static inline ttsl::hash::hash_t hash_cb_format_descriptor(const CBFormatDescrip
 }
 
 static inline ttsl::hash::hash_t hash_cb_descriptor(const CBDescriptor& cb) {
-    ttsl::hash::hash_t hash = ttsl::hash::hash_objects_with_default_seed(cb.total_size, cb.uniform_address_group);
+    ttsl::hash::hash_t hash = cb.core_ranges.size();
     for (const auto& core_range : cb.core_ranges.ranges()) {
         ttsl::hash::hash_combine(hash, core_range);
     }
@@ -203,6 +203,9 @@ static inline ttsl::hash::hash_t hash_cb_descriptor(const CBDescriptor& cb) {
     }
     ttsl::hash::hash_combine(hash, cb.buffer != nullptr);
     ttsl::hash::hash_combine(hash, cb.global_circular_buffer != nullptr);
+    if (cb.uniform_address_group != 0) {
+        ttsl::hash::hash_combine(hash, cb.uniform_address_group);
+    }
     return hash;
 }
 

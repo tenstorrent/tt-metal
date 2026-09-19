@@ -65,7 +65,6 @@
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
-#include "program_options.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
@@ -394,12 +393,7 @@ DeviceAddr detail::ProgramImpl::reserve_program_local_l1(const IDevice* device, 
         sealed_cores.emplace(core, arena.seal(CoreRangeSet(CoreRange(core))));
     }
     if (uses_per_core_l1_layout() && !program_end_by_core_.empty()) {
-        // The uniform-layout arena begins at the global kernel-config frontier. Once
-        // this program has a finalized per-core binary layout, that frontier
-        // is unnecessarily conservative on a core with no persistent arena
-        // allocations. Start immediately after the real program image there.
-        // If a persistent allocation is present, its high-water mark remains
-        // the lower bound, preserving the arena's non-overlap contract.
+        // Use each image end unless a persistent allocation raises the bound.
         DeviceAddr base = 0;
         for (const CoreCoord& core : corerange_to_cores(cores)) {
             auto it = program_end_by_core_.find(core);
@@ -480,7 +474,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
     const bool uses_per_core_l1_layout = descriptor.program_l1_layout == ProgramL1Layout::PER_CORE;
     TT_FATAL(
-        !uses_per_core_l1_layout || detail::per_core_program_size_enabled(),
+        !uses_per_core_l1_layout || std::getenv("TT_METAL_PER_CORE_PROGRAM_SIZE") != nullptr,
         "ProgramL1Layout::PER_CORE requires TT_METAL_PER_CORE_PROGRAM_SIZE to be enabled");
     internal_->set_per_core_l1_layout(uses_per_core_l1_layout);
     validate_uniform_address_groups(descriptor.cbs);
@@ -2110,12 +2104,8 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
             for (const auto& member : members) {
                 for (CircularBufferAllocator& allocator : this->cb_allocators_) {
                     if (member->core_ranges().intersects(allocator.core_range)) {
-                        // Allocators are keyed by the rectangular ranges used by
-                        // every CB in the program.  Such a range may intersect
-                        // multiple disjoint members of this address group.  It
-                        // represents one allocation cursor, so reserve it once
-                        // using the largest capacity required by any member it
-                        // intersects.
+                        // One range allocator may intersect several disjoint
+                        // group members; reserve their maximum capacity once.
                         size_by_allocator[&allocator] =
                             std::max<uint64_t>(size_by_allocator[&allocator], member->size());
                     }
@@ -3174,12 +3164,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 }
 
 void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_dispatch) {
-    // The compile and allocation steps below are individually guarded and would early-return:
-    // nothing has changed since this program was compiled and laid out for this device. Skip them
-    // outright, since this is called on every enqueue and the guards alone cost microseconds per
-    // program. The validation steps still have to run: they read live device state - L1 allocations
-    // made since the last enqueue, and service-core claims - so a buffer that has come to overlap
-    // this program's regions is only caught by re-checking them here.
+    // Reuse cached layout, but revalidate against allocations and service-core
+    // claims that may have changed since the preceding enqueue.
     if (not this->compile_and_allocate_needed_ and this->compile_and_allocate_device_ == device) {
         this->validate_program_image_region(device);
         this->validate_circular_buffer_core_ranges(device);
@@ -3504,10 +3490,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 
         size_t max_size = get_ringbuffer_size(device, programmable_core_type);
 
-        // The global ringbuffer frontier is only a conservative partition. In
-        // per-core mode the true boundary is program_end(core) followed by that
-        // core's program-local buffers; reallocation and allocator reservation
-        // below validate those regions against the real L1 allocations.
+        // Per-core layout validates actual image and program-local bounds.
         if (!use_per_core_tensix_layout) {
             TT_FATAL(
                 state.offset <= max_size,
@@ -3521,19 +3504,16 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             TT_FATAL(
                 std::ranges::all_of(
                     programs, [](const ProgramImpl* program) { return program->uses_per_core_l1_layout(); }),
-                "All programs finalized together must use the same per-core program reservation setting");
+                "All programs finalized together must use the same per-core L1 layout");
             TT_FATAL(
                 !metal_ctx.rtoptions().get_fast_dispatch(),
-                "Per-core program reservation is supported only with slow dispatch");
+                "Per-core program layout is supported only with slow dispatch");
             const DeviceAddr program_base =
                 hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
             for (auto& [core, program_end] : program_end_by_core) {
                 program_end += program_base;
             }
-            // Slow dispatch finalizes kernel offsets before configuring local
-            // CBs, DFBs, and scratch. Retain the exact per-core lower bound so
-            // their first (and only) allocation is stable for the lifetime of
-            // the program.
+            // Retain each image end as the program-local allocation lower bound.
             for (ProgramImpl* program : programs) {
                 program->program_end_by_core_ = program_end_by_core;
                 program->validate_program_image_region(device);

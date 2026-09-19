@@ -233,10 +233,8 @@ struct ProgramDescriptor {
     KernelDescriptors kernels;
     SemaphoreDescriptors semaphores;
     CBDescriptors cbs;
-    // PER_CORE computes the program-image frontier independently on each
-    // worker. The resulting static layout is revalidated before every launch
-    // and never reserves allocator space. It is honored only when
-    // TT_METAL_PER_CORE_PROGRAM_SIZE is enabled.
+    // PER_CORE stores each worker's image frontier without reserving L1.
+    // Launches revalidate it; TT_METAL_PER_CORE_PROGRAM_SIZE enables support.
     ProgramL1Layout program_l1_layout = ProgramL1Layout::UNIFORM;
     std::optional<std::uint64_t> custom_program_hash;
 

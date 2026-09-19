@@ -526,8 +526,7 @@ private:
     bool per_core_l1_layout_{false};
     bool has_uniform_address_groups_{false};
     // Absolute end of the kernel-config/program image on each active Tensix.
-    // In per-core reservation mode this is also the lower bound for local CB,
-    // DFB, and scratch allocations on the corresponding cores.
+    // Per-core layout also uses it as the local CB/DFB/scratch lower bound.
     std::unordered_map<CoreCoord, uint32_t> program_end_by_core_;
     bool program_run_args_initialized_{false};
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on
@@ -555,7 +554,7 @@ private:
         // last L1 region
         uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
 
-        // Mark one local allocation. append_only preserves the legacy CB
+        // Mark one local allocation. append_only preserves sequential CB
         // cursor behavior; grouped/per-core placement supports interval holes.
         void mark_address(uint64_t address, uint64_t size, uint64_t base_address, bool append_only = false);
 

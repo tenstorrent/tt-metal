@@ -73,16 +73,19 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
     };
 
     auto hash_cb_format_descriptor = [&](const CBFormatDescriptor& format_descriptor) -> size_t {
-        return ttsl::hash::hash_objects_with_default_seed(
+        auto hash = ttsl::hash::hash_objects_with_default_seed(
             format_descriptor.buffer_index,
             format_descriptor.data_format,
             format_descriptor.page_size,
-            format_descriptor.tile,
-            format_descriptor.face_geometry);
+            format_descriptor.tile);
+        if (format_descriptor.face_geometry.has_value()) {
+            ttsl::hash::hash_combine(hash, format_descriptor.face_geometry);
+        }
+        return hash;
     };
 
     auto hash_circular_buffer = [&](const CBDescriptor& cb) -> size_t {
-        size_t hash = ttsl::hash::hash_objects_with_default_seed(cb.total_size, cb.uniform_address_group);
+        size_t hash = cb.total_size;
         for (const auto& core_range : cb.core_ranges.ranges()) {
             ttsl::hash::hash_combine(hash, core_range);
         }
@@ -96,6 +99,9 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
         }
         ttsl::hash::hash_combine(hash, cb.buffer != nullptr);
         ttsl::hash::hash_combine(hash, cb.global_circular_buffer != nullptr);
+        if (cb.uniform_address_group != 0) {
+            ttsl::hash::hash_combine(hash, cb.uniform_address_group);
+        }
         return hash;
     };
 

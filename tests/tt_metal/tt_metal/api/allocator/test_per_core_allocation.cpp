@@ -77,23 +77,19 @@ protected:
 // (FreeListOpt internally uses DRAM alignment which may be larger than L1 alignment)
 static constexpr DeviceAddr PAGE_SIZE = 1024;
 
-Program make_per_core_blank_program(CoreCoord core, bool with_static_cb = false) {
+Program make_per_core_program(CoreCoord core, bool oversized_image = false) {
     ProgramDescriptor descriptor{
         .kernels = {{
-            .kernel_source = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+            .kernel_source = oversized_image
+                                 ? "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp"
+                                 : "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
             .core_ranges = CoreRangeSet(CoreRange(core)),
+            .defines =
+                oversized_image ? KernelDescriptor::Defines{{"KERNEL_BYTES", "102400"}} : KernelDescriptor::Defines{},
             .config = DataMovementConfigDescriptor{},
         }},
         .program_l1_layout = ProgramL1Layout::PER_CORE,
     };
-    if (with_static_cb) {
-        descriptor.cbs.push_back(CBDescriptor{
-            .total_size = PAGE_SIZE,
-            .core_ranges = CoreRangeSet(CoreRange(core)),
-            .format_descriptors =
-                {{.buffer_index = 0, .data_format = tt::DataFormat::Float16_b, .page_size = PAGE_SIZE}},
-        });
-    }
     return Program(descriptor);
 }
 
@@ -113,12 +109,12 @@ TEST_F(PerCoreAllocationTest, CachedPerCoreProgramsDoNotChangeAllocatorState) {
     const auto mesh_lockstep_before = mesh_allocator->get_l1_allocated_ranges(AllocatorID{0});
     const auto mesh_per_core_before = mesh_allocator->get_l1_allocated_ranges(AllocatorID{mesh_bank_id + 1});
 
-    auto first = make_per_core_blank_program(core);
+    auto first = make_per_core_program(core);
     first.impl().compile_and_allocate(mesh_device, /*force_slow_dispatch=*/false);
     first.impl().finalize_offsets(mesh_device);
     EXPECT_NO_THROW(first.impl().validate_program_image_region(mesh_device));
 
-    auto second = make_per_core_blank_program(core);
+    auto second = make_per_core_program(core);
     second.impl().compile_and_allocate(mesh_device, /*force_slow_dispatch=*/false);
     second.impl().finalize_offsets(mesh_device);
     EXPECT_NO_THROW(second.impl().validate_program_image_region(mesh_device));
@@ -154,7 +150,7 @@ TEST_F(PerCoreAllocationTest, CachedPerCoreProgramsDoNotChangeAllocatorState) {
 TEST_F(PerCoreAllocationTest, CachedPerCoreLayoutRevalidatesPostCacheAllocations) {
     auto* mesh_device = this->devices_[0].get();
     const CoreCoord core(0, 0);
-    auto program = make_per_core_blank_program(core, /*with_static_cb=*/true);
+    auto program = make_per_core_program(core, /*oversized_image=*/true);
     program.impl().compile_and_allocate(mesh_device, /*force_slow_dispatch=*/false);
     program.impl().finalize_offsets(mesh_device);
 
@@ -180,7 +176,7 @@ TEST_F(PerCoreAllocationTest, CachedPerCoreLayoutRevalidatesPostCacheAllocations
 TEST_F(PerCoreAllocationTest, SlowDispatchRevalidatesPostCompileAllocations) {
     auto* device = this->devices_[0]->get_devices()[0];
     const CoreCoord core(0, 0);
-    auto program = make_per_core_blank_program(core, /*with_static_cb=*/true);
+    auto program = make_per_core_program(core, /*oversized_image=*/true);
     program.impl().compile_and_allocate(device, /*force_slow_dispatch=*/true);
     program.impl().finalize_offsets(device);
 
@@ -198,13 +194,13 @@ TEST_F(PerCoreAllocationTest, AllocatorOverrideRevalidatesCurrentState) {
     auto* device = this->devices_[0]->get_devices()[0];
     auto* allocator = device->allocator_impl().get();
     const CoreCoord core(0, 0);
-    auto program = make_per_core_blank_program(core, /*with_static_cb=*/true);
+    auto program = make_per_core_program(core, /*oversized_image=*/true);
     program.impl().compile_and_allocate(device, /*force_slow_dispatch=*/true);
     program.impl().finalize_offsets(device);
-    const DeviceAddr static_cb_address = program.impl().circular_buffers().front()->address();
+    const DeviceAddr allocator_base = allocator->get_base_allocator_addr(HalMemType::L1);
     const AllocatorState baseline = allocator->extract_state();
 
-    allocator->mirror_lockstep_allocation(static_cb_address, PAGE_SIZE);
+    allocator->mirror_lockstep_allocation(allocator_base, PAGE_SIZE);
     EXPECT_THROW(program.impl().compile_and_allocate(device, /*force_slow_dispatch=*/true), std::exception);
 
     allocator->override_state(baseline);
