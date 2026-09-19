@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -1133,15 +1132,9 @@ class MiniMaxH3Vae:
 
         # The wave's host work (tiling, the grid-aligned batch, the upload) runs while the previous wave is still on the
         # device, so the readback's wait never finds the next wave's tokens unprepared.
-        # Wave plan. Plain: `chunks_per_wave` chunks per wave, idle mesh columns carry a filler tile. Dense (one idle column):
-        # in wave w of a run of grid_cols waves the idle column decodes tile column w of an extra chunk; its column stitch
-        # rides the normal stages, every device keeps that column's row strip out of the axis-1 gather, and after the run
-        # the extra chunk's row stage runs on the kept strips. Same tiles and blend operands, so the bits do not change
-        # (15 s A/B 2026-09-19: VAE 2.6 -> 2.4 s, bit-identical; default).
-        pack = os.environ.get("MINIMAX_H3_VAE_PACK", "dense")
-        if pack not in ("plain", "dense"):
-            raise ValueError(f"MINIMAX_H3_VAE_PACK must be 'plain' or 'dense', got {pack!r}")
-        dense = pack == "dense" and chunks_per_wave == 1 and mesh_cols == grid_cols + 1
+        # Wave plan. Dense (one idle mesh column): in wave w of a run of grid_cols waves the idle column decodes tile column w
+        # of an extra chunk and every device keeps that row strip; after the run the extra chunk's row stage runs on them.
+        dense = chunks_per_wave == 1 and mesh_cols == grid_cols + 1
         waves: list[dict] = []
         if dense:
             run = grid_cols + 1
