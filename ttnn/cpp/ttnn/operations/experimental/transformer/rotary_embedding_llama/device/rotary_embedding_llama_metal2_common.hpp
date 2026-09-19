@@ -48,6 +48,11 @@ inline const ScratchpadSpecName ZERO_SCRATCH{"zero"};  // c_27
 // binds a self-looped zero DFB (its Gen2 uplift is tracked separately). Not used by the three
 // rotary_embedding_llama factories.
 inline const DFBSpecName ZERO_DFB{"zero"};  // c_27
+// Fused q/k RMS prologue (rms_norm_eps): x^2 tiles, the per-row rsqrt scale, the normalised x, the 1/W reduce scaler.
+inline const DFBSpecName XX_DFB{"xx"};
+inline const DFBSpecName EX2PE_DFB{"ex2pe"};
+inline const DFBSpecName XN_DFB{"xn"};
+inline const DFBSpecName SCALER_DFB{"scaler"};
 
 // Tensor parameters
 inline const TensorParamName INPUT_PARAM{"input"};

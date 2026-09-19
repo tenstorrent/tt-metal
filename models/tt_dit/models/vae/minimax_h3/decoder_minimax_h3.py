@@ -146,6 +146,11 @@ class MiniMaxH3ViTAttention(Module):
         # itself (output_concat_heads), one program less per layer. Bit-identical.
         self.sdpa_concat = os.environ.get("MINIMAX_H3_SDPA_CONCAT", "heads")
         self.rope_view = os.environ.get("MINIMAX_H3_ROPE_VIEW", "heads")
+        # "op": ttnn.rms_norm on q and k, then RoPE; "fused": the RMS runs as a prologue inside rotary_embedding_llama
+        # (rms_norm_eps), 72 LayerNorm launches per wave gone. Gated on RMSE vs float64 (tools/rope_rms_probe.py).
+        self.qk_rms = os.environ.get("MINIMAX_H3_QK_RMS", "op")
+        if self.qk_rms not in ("op", "fused"):
+            raise ValueError(f"MINIMAX_H3_QK_RMS must be 'op' or 'fused', got {self.qk_rms!r}")
         if self.rope_view not in ("heads", "batch"):
             raise ValueError(f"MINIMAX_H3_ROPE_VIEW must be 'heads' or 'batch', got {self.rope_view!r}")
         if self.sdpa_concat not in ("heads", "op"):
@@ -225,8 +230,11 @@ class MiniMaxH3ViTAttention(Module):
             transpose_k_heads=False,
         )
 
-        query = self._rms(query)
-        key = self._rms(key)
+        fused_rms = self.qk_rms == "fused"
+        if not fused_rms:
+            query = self._rms(query)
+            key = self._rms(key)
+        rope_kwargs = {"rms_norm_eps": self.eps} if fused_rms else {}
 
         # MINIMAX_H3_ROPE_VIEW=batch presents q/k as (heads, 1, S, D): the RoPE factory parallelises batch x seq tiles,
         # so the view spreads the 32 heads over more cores (single-op probe 0.140 -> 0.125 ms, bit-identical).
@@ -236,10 +244,10 @@ class MiniMaxH3ViTAttention(Module):
             query = ttnn.reshape(query, as_batch, as_batch)
             key = ttnn.reshape(key, as_batch, as_batch)
         query = ttnn.experimental.rotary_embedding_llama(
-            query, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+            query, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config, **rope_kwargs
         )
         key = ttnn.experimental.rotary_embedding_llama(
-            key, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+            key, rope_cos, rope_sin, self.rope_trans_mat, compute_kernel_config=self.rope_compute_kernel_config, **rope_kwargs
         )
         if self.rope_view == "batch":
             query = ttnn.reshape(query, as_heads, as_heads)

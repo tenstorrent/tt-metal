@@ -8,6 +8,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "api/compute/reduce.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
@@ -68,6 +71,21 @@ void kernel_main() {
             ckl::DataFormatReconfig::Disabled,
             RELOAD_IMPL == 0 ? ckl::TileAddressing::Offset : ckl::TileAddressing::Direct);
     };
+#ifdef FUSE_RMS
+    // x <- x * rsqrt(mean_W(x^2) + eps) per row before the rotation; the rope math then reads xn instead of the input.
+    constexpr auto xx_dfb = dfb::xx;
+    constexpr auto ex2pe_dfb = dfb::ex2pe;
+    constexpr auto xn_dfb = dfb::xn;
+    constexpr auto scaler_dfb = dfb::scaler;
+    constexpr uint32_t rms_eps_bits = get_arg(args::rms_eps_bits);
+    constexpr auto x_dfb = xn_dfb;
+    DataflowBuffer xx_dfb_obj(xx_dfb);
+    DataflowBuffer ex2pe_dfb_obj(ex2pe_dfb);
+    DataflowBuffer xn_dfb_obj(xn_dfb);
+    DataflowBuffer scaler_dfb_obj(scaler_dfb);
+#else
+    constexpr auto x_dfb = in_dfb;
+#endif
 
     DataflowBuffer in_dfb_obj(in_dfb);
     DataflowBuffer cos_dfb_obj(cos_dfb);
@@ -90,6 +108,9 @@ void kernel_main() {
 
     // Get the trans_mat
     trans_mat_dfb_obj.wait_front(onetile);
+#ifdef FUSE_RMS
+    scaler_dfb_obj.wait_front(onetile);
+#endif
 
     uint32_t in0_index = 0;
     uint32_t in1_index = 0;
@@ -117,19 +138,71 @@ void kernel_main() {
                 cos_interm_dfb_obj.reserve_back(Wt);
                 out_dfb_obj.reserve_back(Wt);
 
-                // // rotated = x @ trans_mat
-                // Matmul uses SrcOrder::Reverse: trans_mat is SrcA and input is SrcB.
-                reconfig_data_format(cos_interm_dfb, trans_mat_dfb, sin_interm_dfb, in_dfb);
-                pack_reconfig_data_format(out_dfb, rotated_in_interm_dfb);
-                matmul_init(in_dfb, trans_mat_dfb);
+#ifdef FUSE_RMS
+                // (1) xx = x * x (fp32 tiles)
+                reconfig_data_format(in_dfb, in_dfb);
+                pack_reconfig_data_format(xx_dfb);
+                xx_dfb_obj.reserve_back(Wt);
+                mul_init(in_dfb, in_dfb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
-                    matmul_tiles(in_dfb, trans_mat_dfb, j, in1_index, j);
+                    mul_tiles(in_dfb, in_dfb, j, j, j);
+                    pack_tile(j, xx_dfb, j);
+                }
+                REL();
+                xx_dfb_obj.push_back(Wt);
+                xx_dfb_obj.wait_front(Wt);
+                // (2) mean over W (reduce with the 1/W scaler; REDUCE_ROW SUM wants scaler as SrcA), + eps, rsqrt
+                reconfig_data_format(scaler_dfb, xx_dfb);
+                pack_reconfig_data_format(ex2pe_dfb);
+                ex2pe_dfb_obj.reserve_back(onetile);
+                reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(xx_dfb, scaler_dfb, ex2pe_dfb);
+                ACQ();
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(xx_dfb, scaler_dfb, j, 0, 0);
+                }
+                reduce_uninit();
+                binop_with_scalar_tile_init();
+                add_unary_tile(0, rms_eps_bits);
+                rsqrt_tile_init();
+                rsqrt_tile(0);
+                pack_tile(0, ex2pe_dfb, 0);
+                REL();
+                xx_dfb_obj.pop_front(Wt);
+                ex2pe_dfb_obj.push_back(onetile);
+                ex2pe_dfb_obj.wait_front(onetile);
+                // (3) xn = x * scale (the scale sits in column 0 of every row: broadcast over columns)
+                reconfig_data_format(in_dfb, ex2pe_dfb);
+                pack_reconfig_data_format(xn_dfb);
+                xn_dfb_obj.reserve_back(Wt);
+                mul_bcast_cols_init(in_dfb, ex2pe_dfb);
+                ACQ();
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    mul_tiles_bcast_cols(in_dfb, ex2pe_dfb, j, 0, j);
+                    pack_tile(j, xn_dfb, j);
+                }
+                REL();
+                xn_dfb_obj.push_back(Wt);
+                xn_dfb_obj.wait_front(Wt);
+                ex2pe_dfb_obj.pop_front(onetile);
+                in_dfb_obj.pop_front(Wt);  // the rope math below reads xn
+                // Leave the unpacker in the state the rope math's first reconfig assumes (trans_mat SrcA, x SrcB).
+                reconfig_data_format(trans_mat_dfb, x_dfb);
+#endif
+
+                // // rotated = x @ trans_mat
+                // Matmul uses SrcOrder::Reverse: trans_mat is SrcA and input is SrcB.
+                reconfig_data_format(cos_interm_dfb, trans_mat_dfb, sin_interm_dfb, x_dfb);
+                pack_reconfig_data_format(out_dfb, rotated_in_interm_dfb);
+                matmul_init(x_dfb, trans_mat_dfb);
+                ACQ();
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    matmul_tiles(x_dfb, trans_mat_dfb, j, in1_index, j);
                     pack_tile(j, rotated_in_interm_dfb, j);
                 }
                 REL();
                 rotated_in_interm_dfb_obj.push_back(Wt);
-                reconfig_data_format(trans_mat_dfb, rotated_in_interm_dfb, in_dfb, sin_dfb);
+                reconfig_data_format(trans_mat_dfb, rotated_in_interm_dfb, x_dfb, sin_dfb);
                 pack_reconfig_data_format(rotated_in_interm_dfb, sin_interm_dfb);
                 mul_init(rotated_in_interm_dfb, sin_dfb);
                 // sin_interim = rotated * sin
@@ -141,7 +214,7 @@ void kernel_main() {
                         sin_cos_input(sin_dfb)>{0u, sin_cos_row_cnt * Wt},
                     ckl::PackTile<bulk_output(sin_interm_dfb)>{});
 
-                reconfig_data_format(rotated_in_interm_dfb, in_dfb, sin_dfb, cos_dfb);
+                reconfig_data_format(rotated_in_interm_dfb, x_dfb, sin_dfb, cos_dfb);
                 pack_reconfig_data_format(sin_interm_dfb, cos_interm_dfb);
                 // cos_interim = x * cos
                 ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
@@ -149,7 +222,7 @@ void kernel_main() {
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
                         ckl::input(
-                            in_dfb,
+                            x_dfb,
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::AtEnd,
                             ckl::InputTileMapping::Block,
@@ -181,4 +254,7 @@ void kernel_main() {
 
     // Done with the transformation matrix, so remove from CB
     trans_mat_dfb_obj.pop_front(onetile);
+#ifdef FUSE_RMS
+    scaler_dfb_obj.pop_front(onetile);
+#endif
 }
