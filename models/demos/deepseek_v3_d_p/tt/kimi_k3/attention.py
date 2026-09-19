@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Optional, Protocol
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 
 
 @dataclass(frozen=True)
@@ -64,7 +65,7 @@ class K3Attention(Protocol):
         ...
 
 
-class TtK3MlaAttention:
+class TtK3MlaAttention(LightweightModule):
     """`ttMLA` under the protocol.
 
     A thin adapter and deliberately nothing more: K3's MLA differences — NoPE, the output gate, 96
@@ -116,7 +117,7 @@ class TtK3MlaAttention:
         )
 
 
-class TtK3KdaAttention:
+class TtK3KdaAttention(LightweightModule):
     """`ttKDA` under the protocol, with its carry.
 
     The carry lives in a `KdaStateCache` keyed by global layer index, not on the layer: `ttKDA` is
