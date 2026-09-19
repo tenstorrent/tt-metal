@@ -1,7 +1,6 @@
 {
   "env": {
     "PREFILL_MODEL": "kimi_k3",
-    "PREFILL_FABRIC_MODE": "2d",
     "PREFILL_NUM_LAYERS": "93",
     "PREFILL_MAX_SEQ_LEN": "56320",
     "PREFILL_NUM_USERS": "1",
