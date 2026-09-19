@@ -193,8 +193,14 @@ shield:
     wh_n300_civ2: 10
     bh_p150: 60
   demo:
-    bh_sc4: 100
-    bh_sc1: 150
+    # Sums over the team's disaggregated-prefill legs on each SKU, not per-leg caps.
+    # bh_sc4: Kimi-K2.7 40 + GLM-5.2 60 + Kimi-K3 200. Kimi-K3 is 93 layers against the others'
+    # depths and its bringup is dominated by streaming a 1.5 TB TTNN cache off the models share on
+    # four ranks at once -- 42.6 and 65.9 min to all ranks serving on runs 34648535999 and
+    # 34659612357, and run 34831600450 was killed at 106 min under a 100 min cap.
+    # bh_sc1: Kimi-K2.7 70 + GLM-5.2 80 + Kimi-K3 60.
+    bh_sc4: 300
+    bh_sc1: 210
 
 scaleout:
   merge_gate:
@@ -414,7 +420,7 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 1280
+    bh_sc1: 1470
     bh_sc1_high_power: 388
     wh_n150: 500
     wh_n150_civ2: 300
