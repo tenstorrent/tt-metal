@@ -79,8 +79,16 @@ tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bo
     return use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
 }
 
-// Streaming compute (v2) handles every SDPA variant, with fp32 DEST accumulation when the flag is on.
-bool can_use_streaming_compute(bool /*fp32_dest_acc_en*/) { return true; }
+// With fp32 DEST the streaming kernel still keeps its running row sum in bf16 (the fused rescale packs the sum
+// with the output accumulator), and that rounding compounds per K chunk. Measured on Blackhole at k128 against
+// the fp32 torch reference: rmse 0.0066 at 512 chunks (bfp8, S65536) and 0.0114 at 1024 chunks, past the
+// 0.0094 gate of the 128k llama test, so longer rows keep the legacy kernel.
+constexpr uint32_t kFp32StreamingMaxKChunks = 512;
+
+// Streaming compute (v2) handles every SDPA variant; with fp32 DEST accumulation up to the chunk count above.
+bool can_use_streaming_compute(bool fp32_dest_acc_en, uint32_t k_num_chunks) {
+    return !fp32_dest_acc_en || k_num_chunks <= kFp32StreamingMaxKChunks;
+}
 
 uint32_t lightweight_mask_tile_count(bool is_causal, bool has_sliding_window, bool has_k_partial_mask) {
     uint32_t tiles = 1;  // neginf
@@ -697,7 +705,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
-    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en, k_num_chunks);
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
