@@ -91,6 +91,13 @@ def test_pipeline_inference(
     prompt_image,
     request,
 ):
+    # A 4-chip mesh cannot hold both experts resident at 720p: the warmup step in
+    # WanPipelineI2V.__init__ OOMs inside the transformer (the VAE encode is chunked and fits).
+    # Stream the weights there, the same mitigation the 2x4 parametrization uses; 480p keeps
+    # resident weights, which is faster.
+    if tuple(mesh_shape) == (2, 2) and height >= 720:
+        dynamic_load = True
+
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
