@@ -34,10 +34,7 @@ degrades spectral metrics through its 108-conv chain, and H3's is longer still.
 
 from __future__ import annotations
 
-import time
-
 import torch
-from loguru import logger
 
 import ttnn
 
@@ -74,7 +71,6 @@ class MiniMaxH3AudioDecoder(Module):
         pack_bands: dict[int, int] | None = None,
         act_mode: str = "chain",
         batch_shard_axis: int | None = None,
-        profile: bool = False,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
@@ -104,10 +100,6 @@ class MiniMaxH3AudioDecoder(Module):
                 raise ValueError("batch_shard_axis needs a T-sharded decoder and must differ from the T-shard axis")
             if mesh_shape[batch_shard_axis] < 2:
                 raise ValueError(f"mesh axis {batch_shard_axis} has length {mesh_shape[batch_shard_axis]}; nothing to shard")
-        # `profile` synchronizes between the stage's phases to separate them, which also serializes
-        # them: the total it reports is inflated and only the shares are readable.
-        self.profile = bool(profile)
-        self.last_profile: dict[str, float] = {}
         self._pad_masks: dict = {}
 
         # H3's audio channel schedule differs from LTX's at both ends, so every conv misses
@@ -182,49 +174,28 @@ class MiniMaxH3AudioDecoder(Module):
         """
         _, channels, _ = latents_BCT.shape
         assert channels == self.latent_channels, f"expected {self.latent_channels} latent channels, got {channels}"
-        profile: dict[str, float] = {}
-        mark = time.perf_counter()
         # dec_in_proj is a k=1 conv, so it runs on the vocoder's own T padding and hands its output to the
         # vocoder on device: no readback + re-upload of the (B, T, 2048) projection between the two.
         x = latents_BCT.transpose(1, 2).float().contiguous()  # (B, T, C)
         t_pad = self.decoder.t_pad_for(x.shape[1])
         if t_pad:
             x = torch.nn.functional.pad(x, (0, 0, 0, t_pad))
-        if self.profile:
-            profile["host_prep"] = time.perf_counter() - mark
-            mark = time.perf_counter()
         if self.batch_shard_axis is None:
             x_dev = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
         else:
             x_dev = self._upload_batch_sharded(x)
             self.decoder.batch_shard = (self.batch_shard_axis, x.shape[0])
-        if self.profile:
-            ttnn.synchronize_device(self.mesh_device)
-            profile["upload"] = time.perf_counter() - mark
-            mark = time.perf_counter()
         projected_dev = self.dec_in_proj(x_dev)
         if t_pad:
             # k=1 with a bias: the zero pad rows project to the bias, but the vocoder expects zero pad rows
             # (conv_pre reads them). One multiply by a cached (1, T + t_pad, 1) validity mask restores that.
             projected_dev = ttnn.multiply(projected_dev, self._pad_row_mask(x.shape[1], t_pad))
-        if self.profile:
-            ttnn.synchronize_device(self.mesh_device)
-            profile["projection"] = time.perf_counter() - mark
-        waveform = self.decoder.forward_device_BTC(
+        return self.decoder.forward_device_BTC(
             projected_dev,
             t_pad=t_pad,
             traced=traced,
             trace_key=tuple(latents_BCT.shape),
-            timings=profile if self.profile else None,
         )
-        if self.profile:
-            self.last_profile = profile
-            total = sum(profile.values())
-            shares = "  ".join(
-                f"{name} {value * 1e3:.0f} ms ({100 * value / total:.0f} %)" for name, value in profile.items()
-            )
-            logger.info(f"    audio decode phases (serialized, {total:.2f} s accounted): {shares}")
-        return waveform
 
     def _upload_batch_sharded(self, x_BTC: torch.Tensor) -> ttnn.Tensor:
         """Row r of the mesh along ``batch_shard_axis`` gets batch item ``r % B`` (rows past B hold replicas)."""

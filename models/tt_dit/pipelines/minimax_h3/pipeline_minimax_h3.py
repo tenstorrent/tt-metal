@@ -151,9 +151,6 @@ _DEFAULT_AUDIO_T_FACTOR = 8
 # Time-packed late vocoder bands (band -> steps per row): the two narrowest bands on 32-wide rows, measured
 # 0.53 -> 0.45 s traced at unchanged PSNR (layers/audio_pack.py).
 _AUDIO_PACK_BANDS = {5: 2, 6: 4}
-# Separate the audio stage's phases (host prep, upload, projection, vocoder, readback). Costs a synchronize
-# between each, so the total it reports is inflated and only the shares mean anything.
-_AUDIO_PHASES_ENV = "MINIMAX_H3_AUDIO_PHASES"
 
 
 def _requested_audio_t_factor(audio_t_factor: int | None, default: int = _DEFAULT_AUDIO_T_FACTOR) -> tuple[int, bool]:
@@ -1509,7 +1506,6 @@ class MiniMaxH3Pipeline:
                 pack_bands=_AUDIO_PACK_BANDS,
                 act_mode="fused",  # one kernel per anti-aliased SnakeBeta activation (layers/audio_aa_snake.py)
                 batch_shard_axis=batch_shard_axis,
-                profile=os.environ.get(_AUDIO_PHASES_ENV, "0").strip() not in ("", "0", "false", "no"),
             )
             logger.info(
                 f"Audio trace: {'on' if self.audio_trace else 'off'}; conv split: {decoder.split_mode}; "
