@@ -153,7 +153,7 @@ Available counter groups:
 
 Blackhole-only groups: ``l1_2``, ``l1_3``, ``l1_4``, ``l1_5`` (extended L1 client ports); on Blackhole ``all`` includes them.
 
-**Multi-pass capture**: the L1 banks share a hardware mux, so at most one L1 bank counts per run; the other groups all fit next to it. ``python -m tracy`` schedules the passes automatically: a request that fits one pass runs once as before, and a larger request (such as ``all``) stops with the printed pass plan unless ``--perf-counter-multipass`` is given, in which case the workload is replayed once per pass and the per-pass results are merged.
+**Multi-pass capture**: the L1 banks share a hardware mux, so at most one L1 bank counts per run; the other groups all fit next to it. Every counter is a 24 byte record per core per op and the device profiler buffer holds 48 bytes per supported op per RISC between host reads, so a pass with many groups covers fewer ops per run (about 19 for the five group mask, 25 for a pass with ``instrn``); pass ``--op-support-count`` to raise it for long runs, the planner prints the estimate. ``python -m tracy`` schedules the passes automatically: a request that fits one pass runs once as before, and a larger request (such as ``all``) stops with the printed pass plan unless ``--perf-counter-multipass`` is given, in which case the workload is replayed once per pass and the per-pass results are merged.
 
 ..  code-block:: sh
 
