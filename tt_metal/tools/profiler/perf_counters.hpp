@@ -54,8 +54,11 @@ union PerfCounter {
 };
 static_assert(sizeof(PerfCounter) == sizeof(std::uint64_t) * 2, "PerfCounter must be 128-bit");
 
-// The RISC that orchestrates the kernel owns the counters. tt-1xx: TRISC1 arms and stops, BRISC reads
-// once the TRISCs are done. Quasar: DM0 arms all four NEOs before GO and stops and reads them after DONE.
+// The RISC that orchestrates the kernel owns the counters. tt-1xx: TRISC1 arms, BRISC stops and reads once
+// every TRISC is done (TRISC1 only knows when its own kernel ends, and the math thread exits early on unpack
+// or pack only kernels such as fast tilize, untilize, transpose and typecast, which left those ops with a few
+// hundred cycle window and all zero counts). Quasar: DM0 arms all four NEOs before GO and stops and reads
+// them after DONE.
 #if defined(ARCH_QUASAR)
 #if defined(COMPILE_FOR_DM)
 #define PERF_COUNTER_WRAP_RISC 1
@@ -73,8 +76,10 @@ static_assert(sizeof(PerfCounter) == sizeof(std::uint64_t) * 2, "PerfCounter mus
 #if defined(PROFILE_PERF_COUNTERS) && (defined(PERF_COUNTER_WRAP_RISC) || defined(PERF_COUNTER_READ_RISC))
 
 #include <array>
+#include <type_traits>
 #include <utility>
 
+#include "core_config.h"
 #include "kernel_profiler.hpp"
 
 // Quasar's DM firmware has a 2 KB RW data region and its linker script folds .rodata into it; the constant
@@ -259,11 +264,6 @@ void stop_perf_counter() {
 #endif
 }
 
-struct PerfCounterWrapper {
-    PerfCounterWrapper() { kernel_profiler::start_perf_counter(); }
-    ~PerfCounterWrapper() { kernel_profiler::stop_perf_counter(); }
-};
-
 #endif  // PERF_COUNTER_WRAP_RISC
 
 #if defined(PERF_COUNTER_READ_RISC)
@@ -343,8 +343,10 @@ inline void emit_record(const PerfCounter& counter) {
 #if defined(ARCH_QUASAR)
     spill_record(counter);
 #else
+    // A TS_DATA_16B record is three marker slots (marker, data, trailer); asking for two let a record be
+    // dropped when exactly two slots were left.
     kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-        kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2);
+        kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
     kernel_profiler::timeStampedData<
         PERF_COUNTER_PROFILER_ID,
         kernel_profiler::DoingDispatch::DISPATCH,
@@ -365,21 +367,33 @@ inline void read_l1_client_event_counter(std::uint32_t neo) {
 // size limit, and the poll never fails on hardware.
 __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group PERF_COUNTER_NEO_PARAM) {
     const auto& regs = regs_for(counter_group PERF_COUNTER_NEO_ARG(neo));
+#if !defined(ARCH_QUASAR)
+    // Freeze the group now that all three TRISCs are done, so the window spans the whole compute kernel
+    // (Quasar DM0 stops every NEO explicitly before reading). The next start zeroes the counts, so no clear
+    // is needed after the read.
+    llk::perf::stop(regs);
+#endif
     llk::perf::read_table<0>(
         regs, table_for_group[counter_group], [&](PerfCounterType type, std::uint32_t ref_cnt, std::uint32_t value) {
             PerfCounter counter(value, ref_cnt, type, neo);
             emit_record(counter);
         });
-    // Toggle start bit to clear the counters for this group
-    llk::perf::start(regs);
 }
 
 // One L1 group per pass at most; its mux position is routed here so passes without L1 carry no mux code.
-// trisc_enables is the launch message's processor enable mask; Quasar skips NEOs that ran nothing.
-void read_perf_counters([[maybe_unused]] std::uint32_t trisc_enables) {
+// trisc_enables is the launch message's processor enable mask. Only a launch with a compute kernel starts
+// the counters, so a data movement only op is skipped instead of reporting the values the previous op left
+// latched; Quasar skips NEOs that ran nothing.
+void read_perf_counters(std::uint32_t trisc_enables) {
     if (kernel_profiler::get_profiler_zone_invalid()) {
         return;
     }
+#if !defined(ARCH_QUASAR)
+    if (!(trisc_enables &
+          (1u << static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0)))) {
+        return;
+    }
+#endif
     for (std::uint32_t n = 0; n < NUM_NEOS; n++) {
 #if defined(ARCH_QUASAR)
         if (!neo_enabled(trisc_enables, n)) {
@@ -439,7 +453,7 @@ void read_perf_counters([[maybe_unused]] std::uint32_t trisc_enables) {
 #if defined(PERF_COUNTER_WRAP_RISC)
 #define StartPerfCounters() kernel_profiler::start_perf_counter();
 #define StopPerfCounters() kernel_profiler::stop_perf_counter();
-#define RecordPerfCounters() kernel_profiler::PerfCounterWrapper _perf_counter_wrapper_;
+#define RecordPerfCounters() kernel_profiler::start_perf_counter();
 #else
 #define StartPerfCounters()
 #define StopPerfCounters()
