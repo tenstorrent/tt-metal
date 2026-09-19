@@ -287,6 +287,30 @@ bool check_if_riscs_on_specified_core_done(
         cluster.read_core(
             core_status.data(), core_status.size(), {static_cast<size_t>(chip_id), core}, go_msg_addr & ~0x3);
         uint8_t run = core_status.view().signal();
+        // Re-read before believing a non-conforming sample.
+        //
+        // Under TT_METAL_SIMULATOR the wall-clock timeout above is deliberately disabled, so a
+        // long kernel is polled in a tight unbounded loop -- a 50-minute conv issues an enormous
+        // number of these 4-byte reads. The RTL-simulation transport answers them from a bare
+        // FIFO with no request/response correlation (tt-umd rtl_sim_communicator.cpp:
+        // wait_for_command_response() just pops the queue head), so one sample can carry another
+        // request's bytes. That shows up here as a `signal` value which is in NO RUN_MSG enum at
+        // all -- 0x3e and 0x3b have been observed, where every legal value is 0x00/0x40/0x80/
+        // 0xc0/0xe0/0xf0. A single unvalidated byte should not kill the run; a genuinely stuck
+        // core still reports the same wrong value every time.
+        if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
+            constexpr int k_go_msg_rereads = 4;
+            for (int attempt = 0; attempt < k_go_msg_rereads && run != run_state &&
+                                  run != tt_metal::dev_msgs::RUN_MSG_DONE;
+                 ++attempt) {
+                cluster.read_core(
+                    core_status.data(),
+                    core_status.size(),
+                    {static_cast<size_t>(chip_id), core},
+                    go_msg_addr & ~0x3);
+                run = core_status.view().signal();
+            }
+        }
         if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
             fprintf(
                 stderr,
