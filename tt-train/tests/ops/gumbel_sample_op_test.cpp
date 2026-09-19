@@ -10,7 +10,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -207,6 +209,75 @@ namespace {
 // added to the scaled logits is bounded to roughly [-3.1, +16.6]. The tests below size their logit
 // gaps against this span so that "the scaled logits must win" is a guarantee, not a coin flip.
 constexpr float kGumbelNoiseSpan = 20.0F;
+
+// Logits with one WINNER column planted per (batch, token) row above a uniform floor, plus the
+// row-major expected argmax. Winners walk the vocabulary with a per-row stride, so a row, page or
+// batch-entry mix-up lands on a DIFFERENT id instead of coincidentally matching. `offset` shifts
+// the walk and `winner_modulo` (0 = the full vocab) restricts which columns can win -- the
+// buffer-placement test uses both to keep winners off its decoy column.
+struct WinnerLogits {
+    xt::xarray<float> logits;
+    std::vector<uint32_t> expected;  // argmax per (batch, token) row, row-major
+};
+
+WinnerLogits make_winner_logits(
+    uint32_t batch,
+    uint32_t tokens,
+    uint32_t vocab,
+    uint32_t stride,
+    uint32_t offset = 0U,
+    uint32_t winner_modulo = 0U,
+    float winner_value = -0.5F,
+    float floor_value = -1.0F) {
+    const uint32_t modulo = (winner_modulo == 0U) ? vocab : winner_modulo;
+    WinnerLogits out;
+    out.logits = xt::xarray<float>::from_shape({batch, 1U, tokens, vocab});
+    out.logits.fill(floor_value);
+    out.expected.resize(static_cast<size_t>(batch) * tokens);
+    for (uint32_t b = 0; b < batch; ++b) {
+        for (uint32_t t = 0; t < tokens; ++t) {
+            const uint32_t winner = ((b * tokens + t) * stride + offset) % modulo;
+            out.logits(b, 0, t, winner) = winner_value;
+            out.expected[b * tokens + t] = winner;
+        }
+    }
+    return out;
+}
+
+// Exact CPU reference for GREEDY (temperature 0) sampling: argmax over (logits - mask) at each
+// selected row, strict greater so ties keep the lowest column -- the same tie-break the writer's
+// scan and merge use. Exact on FLOAT32 device inputs: greedy applies no scaling and no noise, an
+// absent (or zero) mask column leaves the logit bit-identical, and a banned column's fp32 subtract
+// rounds the same way on host and device -- so the two argmaxes see the same values.
+std::vector<uint32_t> greedy_reference(
+    const xt::xarray<float>& logits,
+    const std::optional<xt::xarray<float>>& mask,
+    const std::optional<std::vector<uint32_t>>& positions) {
+    const auto batch = static_cast<uint32_t>(logits.shape(0));
+    const auto tokens = static_cast<uint32_t>(logits.shape(2));
+    const auto vocab = static_cast<uint32_t>(logits.shape(3));
+    std::vector<uint32_t> expected;
+    expected.reserve(positions.has_value() ? batch : static_cast<size_t>(batch) * tokens);
+    for (uint32_t b = 0; b < batch; ++b) {
+        // A [B, 1, 1, V] mask carries one row per entry; a [1, 1, 1, V] mask is shared by all.
+        const uint32_t mask_row = (mask.has_value() && mask->shape(0) > 1U) ? b : 0U;
+        const uint32_t first_token = positions.has_value() ? (*positions)[b] : 0U;
+        const uint32_t last_token = positions.has_value() ? first_token + 1U : tokens;
+        for (uint32_t t = first_token; t < last_token; ++t) {
+            uint32_t best = 0U;
+            float best_score = -std::numeric_limits<float>::infinity();
+            for (uint32_t v = 0; v < vocab; ++v) {
+                const float score = logits(b, 0, t, v) - (mask.has_value() ? (*mask)(mask_row, 0, 0, v) : 0.0F);
+                if (score > best_score) {
+                    best_score = score;
+                    best = v;
+                }
+            }
+            expected.push_back(best);
+        }
+    }
+    return expected;
+}
 
 }  // namespace
 
@@ -421,20 +492,8 @@ TEST_F(GumbelSampleOpTest, TestSamplingRaggedShapes) {
     constexpr uint32_t kTokens = 37U;  // 37 = 32 + 5 -> Ht = 2, last tile row has 5 valid rows
     constexpr uint32_t kVocab = 77U;   // 77 = 2*32 + 13 -> Wt = 3, last tile has 13 valid columns
 
-    xt::xarray<float>::shape_type shape = {kBatch, 1, kTokens, kVocab};
-    xt::xarray<float> a = xt::zeros<float>(shape);
-    a.fill(-1.0F);
-
     // A distinct winner per (batch, token) so a row/page mix-up cannot pass by coincidence.
-    std::vector<uint32_t> expected(kBatch * kTokens);
-    for (uint32_t b = 0; b < kBatch; ++b) {
-        for (uint32_t t = 0; t < kTokens; ++t) {
-            const uint32_t winner = ((b * kTokens + t) * 7U) % kVocab;
-            a(b, 0, t, winner) = -0.5F;
-            expected[b * kTokens + t] = winner;
-        }
-    }
-
+    const auto [a, expected] = make_winner_logits(kBatch, kTokens, kVocab, /* stride */ 7U);
     auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
 
     // Greedy is exact, so assert the full result vector: one id per token, in [batch, token] order.
@@ -468,15 +527,10 @@ TEST_F(GumbelSampleOpTest, TestSamplingHonoursBufferPlacement) {
 
     auto* device = &ttml::autograd::ctx().get_device();
 
-    xt::xarray<float>::shape_type shape = {1, 1, kRows, kVocab};
-    xt::xarray<float> a = xt::zeros<float>(shape);
-    a.fill(-1.0F);
-    std::vector<uint32_t> expected(kRows);
-    for (uint32_t r = 0; r < kRows; ++r) {
-        const uint32_t winner = (r * 7U + 3U) % (kVocab - 1U);  // never the decoy
-        a(0, 0, r, winner) = 1.0F;
-        expected[r] = winner;
-    }
+    // Winners walk (r * 7 + 3) % (kVocab - 1): never the decoy column, and at 1.0F they sit far
+    // enough above the floor that greedy is exact.
+    const auto [a, expected] = make_winner_logits(
+        1U, kRows, kVocab, /* stride */ 7U, /* offset */ 3U, /* winner_modulo */ kVocab - 1U, /* winner_value */ 1.0F);
 
     // ---- logits placement ----
     auto dram_logits = ttml::core::from_xtensor(a, device);
@@ -530,6 +584,68 @@ ttnn::Tensor make_positions(const std::vector<uint32_t>& positions) {
 
 }  // namespace
 
+TEST_F(GumbelSampleOpTest, TestSamplingGreedyMatchesArgmaxReference) {
+    // Greedy is exact, so RANDOM logits can be checked against greedy_reference (a host argmax over
+    // the masked rows at the selected positions). Unlike the planted-winner tests this sweeps
+    // shapes with no structure at all -- every column is a live candidate in every row -- so any
+    // scan-bound, page or broadcast slip surfaces as a mismatch somewhere in the sweep.
+    //
+    // The logits are FLOAT32 *snapped to the bf16 grid* (8 mantissa bits). Raw fp32 randoms are NOT
+    // reproducible through the device: the compute kernel's tile copy rides through SrcA, which
+    // holds 19-bit TF32, so fp32 columns closer than ~2^-11 relative tie on device but not on the
+    // host argmax. Grid values survive every on-chip format (bf16 c= TF32 c= fp32) bit-exactly, and
+    // the resulting (frequent) exact ties resolve the same way on both sides: lowest column index.
+    // The last case runs the reference against a per-row [B, 1, 1, V] mask too.
+    struct Case {
+        uint32_t batch, tokens, vocab;
+        bool per_row_mask;
+    };
+    const std::vector<Case> cases = {
+        {1U, 32U, 64U, false},  // tile-aligned baseline
+        {2U, 37U, 77U, false},  // ragged tokens and vocab
+        {3U, 70U, 130U, true},  // multi-tile-row entries, ragged vocab, per-row mask
+    };
+
+    auto* device = &ttml::autograd::ctx().get_device();
+    uint32_t seed = 1000U;
+    for (const auto& c : cases) {
+        const std::string what =
+            "[" + std::to_string(c.batch) + ", 1, " + std::to_string(c.tokens) + ", " + std::to_string(c.vocab) + "]";
+        xt::xarray<float> logits = ttml::test_utils::make_uniform_xarray<float>(
+            xt::xarray<float>::shape_type{c.batch, 1U, c.tokens, c.vocab}, -2.0F, 2.0F, seed++);
+        for (auto& v : logits) {
+            v = std::round(v * 256.0F) / 256.0F;  // snap to the bf16 grid (see the comment above)
+        }
+        // Ban a deterministic scattering of columns (every third, phase-shifted per mask row):
+        // dense enough that the masked argmax genuinely differs from the unmasked one.
+        const uint32_t mask_batch = c.per_row_mask ? c.batch : 1U;
+        xt::xarray<float> mask = xt::zeros<float>(xt::xarray<float>::shape_type{mask_batch, 1U, 1U, c.vocab});
+        for (uint32_t mb = 0; mb < mask_batch; ++mb) {
+            for (uint32_t v = mb % 3U; v < c.vocab; v += 3U) {
+                mask(mb, 0, 0, v) = 1e4F;
+            }
+        }
+        std::vector<uint32_t> positions(c.batch);
+        for (uint32_t b = 0; b < c.batch; ++b) {
+            positions[b] = (b * 31U + 5U) % c.tokens;
+        }
+
+        auto tensor_logits = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(logits, device);
+        auto tensor_mask = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(mask, device);
+
+        auto no_mask = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_logits, 0.0F, 7));
+        EXPECT_EQ(no_mask, greedy_reference(logits, std::nullopt, std::nullopt)) << what << ": no mask";
+
+        auto masked = ttml::core::to_vector<uint32_t>(
+            ttml::metal::gumbel_sample(tensor_logits, 0.0F, 7, /* seed_axes */ {}, tensor_mask));
+        EXPECT_EQ(masked, greedy_reference(logits, mask, std::nullopt)) << what << ": mask";
+
+        auto positioned = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(
+            tensor_logits, 0.0F, 7, /* seed_axes */ {}, tensor_mask, make_positions(positions)));
+        EXPECT_EQ(positioned, greedy_reference(logits, mask, positions)) << what << ": mask + positions";
+    }
+}
+
 TEST_F(GumbelSampleOpTest, TestSamplingAtPerRowPositions) {
     // Prefill wants ONE token per sequence, taken at that sequence's own prompt end -- a different
     // row for every batch entry. Passing those positions makes the op read only the tiles holding
@@ -546,21 +662,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingAtPerRowPositions) {
 
     const std::vector<uint32_t> positions = {0U, 45U, 69U};  // tile rows 0, 1, 2; rows 0, 13, 5
 
-    xt::xarray<float>::shape_type shape = {kBatch, 1, kTokens, kVocab};
-    xt::xarray<float> a = xt::zeros<float>(shape);
-    a.fill(-1.0F);
-
-    // Distinct winner per (batch, token), so reading the wrong row or the wrong batch entry lands on
-    // a different id rather than coincidentally matching.
-    std::vector<uint32_t> expected_all(kBatch * kTokens);
-    for (uint32_t b = 0; b < kBatch; ++b) {
-        for (uint32_t t = 0; t < kTokens; ++t) {
-            const uint32_t winner = ((b * kTokens + t) * 11U) % kVocab;
-            a(b, 0, t, winner) = -0.5F;
-            expected_all[b * kTokens + t] = winner;
-        }
-    }
-
+    const auto [a, expected_all] = make_winner_logits(kBatch, kTokens, kVocab, /* stride */ 11U);
     auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
 
     // Sample everything first. Besides producing the reference, this seeds the program cache with
@@ -623,19 +725,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingAtPerRowPositionsAcrossTokenCounts) {
     constexpr uint32_t kVocab = 77U;
 
     auto run = [](uint32_t tokens, const std::vector<uint32_t>& positions) {
-        xt::xarray<float>::shape_type shape = {kBatch, 1U, tokens, kVocab};
-        xt::xarray<float> a = xt::zeros<float>(shape);
-        a.fill(-1.0F);
-
-        std::vector<uint32_t> expected_all(kBatch * tokens);
-        for (uint32_t b = 0; b < kBatch; ++b) {
-            for (uint32_t t = 0; t < tokens; ++t) {
-                const uint32_t winner = ((b * tokens + t) * 11U) % kVocab;
-                a(b, 0, t, winner) = -0.5F;
-                expected_all[b * tokens + t] = winner;
-            }
-        }
-
+        const auto [a, expected_all] = make_winner_logits(kBatch, tokens, kVocab, /* stride */ 11U);
         auto tensor = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
         auto got = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(
             tensor, 0.0F, 7, /* seed_axes */ {}, /* mask */ std::nullopt, make_positions(positions)));
@@ -700,17 +790,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingRepatchesPositionsBufferOnCacheHit) {
     constexpr uint32_t kTokens = 96U;
     constexpr uint32_t kVocab = 40U;
 
-    xt::xarray<float>::shape_type shape = {kBatch, 1U, kTokens, kVocab};
-    xt::xarray<float> a = xt::zeros<float>(shape);
-    a.fill(-1.0F);
-    std::vector<uint32_t> winner_at(kBatch * kTokens);
-    for (uint32_t b = 0; b < kBatch; ++b) {
-        for (uint32_t t = 0; t < kTokens; ++t) {
-            const uint32_t winner = ((b * kTokens + t) * 3U) % kVocab;
-            a(b, 0, t, winner) = -0.5F;
-            winner_at[b * kTokens + t] = winner;
-        }
-    }
+    const auto [a, winner_at] = make_winner_logits(kBatch, kTokens, kVocab, /* stride */ 3U);
     auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
 
     auto sample_at = [&](const std::vector<uint32_t>& positions) {
@@ -761,17 +841,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingClampsOutOfRangePosition) {
     constexpr uint32_t kTokens = 70U;  // Ht = 3, mid-tile: the padding band is [70, 96)
     constexpr uint32_t kVocab = 40U;
 
-    xt::xarray<float>::shape_type shape = {kBatch, 1U, kTokens, kVocab};
-    xt::xarray<float> a = xt::zeros<float>(shape);
-    a.fill(-1.0F);
-    std::vector<uint32_t> winner_at(kBatch * kTokens);
-    for (uint32_t b = 0; b < kBatch; ++b) {
-        for (uint32_t t = 0; t < kTokens; ++t) {
-            const uint32_t winner = ((b * kTokens + t) * 5U) % kVocab;
-            a(b, 0, t, winner) = -0.5F;
-            winner_at[b * kTokens + t] = winner;
-        }
-    }
+    const auto [a, winner_at] = make_winner_logits(kBatch, kTokens, kVocab, /* stride */ 5U);
     auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
 
     // Entry 0: in-range control (the last real token itself -- the clamp must not disturb it).
@@ -813,17 +883,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingWithoutPositionsUnchangedByAccessorChain)
     constexpr uint32_t kTokens = 37U;
     constexpr uint32_t kVocab = 77U;
 
-    xt::xarray<float>::shape_type shape = {kBatch, 1U, kTokens, kVocab};
-    xt::xarray<float> a = xt::zeros<float>(shape);
-    a.fill(-1.0F);
-    std::vector<uint32_t> expected(kBatch * kTokens);
-    for (uint32_t b = 0; b < kBatch; ++b) {
-        for (uint32_t t = 0; t < kTokens; ++t) {
-            const uint32_t winner = ((b * kTokens + t) * 7U) % kVocab;
-            a(b, 0, t, winner) = -0.5F;
-            expected[b * kTokens + t] = winner;
-        }
-    }
+    const auto [a, expected] = make_winner_logits(kBatch, kTokens, kVocab, /* stride */ 7U);
     auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
 
     auto no_mask = ttml::core::to_vector<uint32_t>(ttml::metal::gumbel_sample(tensor_a, 0.0F, 7));
@@ -984,6 +1044,21 @@ TEST_F(GumbelSampleOpTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
         col_to_slot[kActiveCols[c]] = static_cast<int>(c);
     }
 
+    // Five sigma on Binomial(total, p): flakes at ~1e-6 per column, while a broken Gumbel chain
+    // moves these counts by tens of sigma. Shared by the every-row and the positions+mask paths --
+    // both draw the same number of samples, so the bounds are identical.
+    auto expect_counts_match_weights =
+        [&](const std::array<uint32_t, kActive>& counts, uint32_t total, const char* what) {
+            for (uint32_t c = 0; c < kActive; ++c) {
+                const double p = static_cast<double>(kWeights[c]) / kWeightTotal;
+                const double expected_count = p * total;
+                const double tolerance = 5.0 * std::sqrt(total * p * (1.0 - p));
+                EXPECT_NEAR(static_cast<double>(counts[c]), expected_count, tolerance)
+                    << what << ": column " << kActiveCols[c] << " (weight " << kWeights[c] << ") selected " << counts[c]
+                    << " / " << total;
+            }
+        };
+
     // Pool several seeds so the result does not hinge on the internal structure of one RNG stream.
     const std::vector<uint32_t> seeds = {1U, 2U, 3U, 4U};
     std::array<uint32_t, kActive> counts{};
@@ -1001,16 +1076,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
         }
     }
 
-    // Five sigma on Binomial(total_samples, p): flakes at ~1e-6 per column, while a broken Gumbel
-    // chain moves these counts by tens of sigma.
-    for (uint32_t c = 0; c < kActive; ++c) {
-        const double p = static_cast<double>(kWeights[c]) / kWeightTotal;
-        const double expected_count = p * total_samples;
-        const double tolerance = 5.0 * std::sqrt(total_samples * p * (1.0 - p));
-        EXPECT_NEAR(static_cast<double>(counts[c]), expected_count, tolerance)
-            << "column " << kActiveCols[c] << " (weight " << kWeights[c] << ") selected " << counts[c] << " / "
-            << total_samples;
-    }
+    expect_counts_match_weights(counts, total_samples, "every-row path");
 
     // A nonzero seed is contractually reproducible, and distinct seeds must actually decorrelate --
     // both are properties the fused in-place chain could silently break.
@@ -1080,14 +1146,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
         }
     }
 
-    for (uint32_t c = 0; c < kActive; ++c) {
-        const double p = static_cast<double>(kWeights[c]) / kWeightTotal;
-        const double expected_count = p * pos_total;
-        const double tolerance = 5.0 * std::sqrt(pos_total * p * (1.0 - p));
-        EXPECT_NEAR(static_cast<double>(pos_counts[c]), expected_count, tolerance)
-            << "positions+mask: column " << kActiveCols[c] << " (weight " << kWeights[c] << ") selected "
-            << pos_counts[c] << " / " << pos_total;
-    }
+    expect_counts_match_weights(pos_counts, pos_total, "positions+mask");
 }
 
 TEST_F(GumbelSampleOpTest, TestSamplingWideRowManyOwners) {
@@ -1245,17 +1304,7 @@ TEST_F(GumbelSampleOpTest, TestSamplingPreallocatedOutput) {
     constexpr uint32_t kTokens = 37U;  // mid-tile, so the ragged write-out is the path exercised
     constexpr uint32_t kVocab = 77U;
 
-    xt::xarray<float>::shape_type shape = {kBatch, 1U, kTokens, kVocab};
-    xt::xarray<float> a = xt::zeros<float>(shape);
-    a.fill(-1.0F);
-    std::vector<uint32_t> expected(kBatch * kTokens);
-    for (uint32_t b = 0; b < kBatch; ++b) {
-        for (uint32_t t = 0; t < kTokens; ++t) {
-            const uint32_t winner = ((b * kTokens + t) * 7U) % kVocab;
-            a(b, 0, t, winner) = -0.5F;
-            expected[b * kTokens + t] = winner;
-        }
-    }
+    const auto [a, expected] = make_winner_logits(kBatch, kTokens, kVocab, /* stride */ 7U);
 
     auto* device = &ttml::autograd::ctx().get_device();
     auto tensor_a = ttml::core::from_xtensor(a, device);
