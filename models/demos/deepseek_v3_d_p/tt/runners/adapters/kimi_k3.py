@@ -60,16 +60,12 @@ class KimiK3Adapter(MLAPrefillAdapter):
     ref_cache_env = "TT_KIMI_K3_PREFILL_HOST_REF_CACHE"
     mla_ref_cache_env = "KIMI_K3_MLA_REF_CACHE"
     ttnn_cache_env = "TT_KIMI_K3_PREFILL_TTNN_CACHE"
-    # 1152 (the AttnRes suite's own value) fails `inter_block`'s statistics collective once the
-    # sealed set has two blocks, which first happens at depth 24; 24576 (this package's usual value)
-    # then starves MLA chunked attention of circular buffers as soon as there is a second chunk to
-    # attend over. 4096 clears both. See tenstorrent/tt-metal#54834.
     # Kimi-K3 is NoPE: the KV cache's second half carries no rotation, so scoring it against the
     # golden must NOT re-base to the device's Meta interleave. With the RoPE default the nope half
     # still reads ~0.999 while the pe half collapses to ~0.02 -- a broken comparison that looks
     # exactly like a broken model.
     kv_pe_interleave = False
-    l1_small_size = 4096
+    l1_small_size = KimiK3Config.L1_SMALL_SIZE
     # `weight_cache_path` appends `{name}_{arch}_{N}dev/{sp}x{tp}`, so this is the root only. The
     # cache generator writes `<root>/kimi_k3_bh_32dev/<checkpoint-id>/mesh8x4.tpaxis1`, keyed by
     # checkpoint so a different one cannot silently load another's tensors; `8x4` is a symlink onto
