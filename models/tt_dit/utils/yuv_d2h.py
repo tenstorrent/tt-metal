@@ -61,17 +61,6 @@ def _warn_once_about_the_fallback() -> None:
     )
 
 
-# A deferred readback used to end in a full device sync that idled the device until the next wave's first program landed.
-# By default the three reads are followed by a recorded event that the deferred host half waits on instead, so the host
-# enqueues the next wave while this one drains (one command queue keeps the reads ahead of the next wave); 15 s A/B
-# 2026-09-19: bit-identical, VAE 2.36 -> 2.29 s. MINIMAX_H3_YUV_SYNC=device restores the sync.
-_YUV_SYNC_ENV = "MINIMAX_H3_YUV_SYNC"
-
-
-def _event_sync_enabled() -> bool:
-    return os.environ.get(_YUV_SYNC_ENV, "event").strip().lower() == "event"
-
-
 def _as_hwt(shard: torch.Tensor, T: int) -> torch.Tensor:
     """A wide (1, h, w*T) host shard back to the kernel-native (1, h, w, T) view; a 4-D shard passes through."""
     if shard.dim() == 4:
@@ -168,12 +157,13 @@ def _yuv_planar_d2h(
     out_H = H if out_H is None else out_H
     out_W = W if out_W is None else out_W
 
-    # Async D2H all 3 outputs, single sync — overlaps three D2H reads.
+    # Three async reads; a deferred caller waits on a recorded event in the host half (so the next wave is enqueued while
+    # this one drains), an inline caller synchronizes here.
     host_Y = tt_Y.cpu(blocking=False)
     host_Cb = tt_Cb.cpu(blocking=False)
     host_Cr = tt_Cr.cpu(blocking=False)
     read_event = None
-    if defer and _event_sync_enabled():
+    if defer:
         read_event = ttnn.record_event(mesh_device, 0)
     else:
         ttnn.synchronize_device(mesh_device)
