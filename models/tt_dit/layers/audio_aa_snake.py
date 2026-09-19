@@ -290,6 +290,10 @@ class FusedActivation1d(Module):
             rows, width, pack = rows // k2, width * k2, pack * k2
         t_sticks = rows * pack
         assert x.buffer_aligned_page_size() == width * 4, "the kernel reads whole unpadded DRAM pages"
+        # The accessor args baked into the kernels assume DRAM-interleaved pages, and the program hash packs
+        # (t_sticks, batch, pack) into fixed bit fields.
+        assert x.memory_config().buffer_type == ttnn.BufferType.DRAM and not x.is_sharded(), "x must be DRAM interleaved"
+        assert t_sticks < (1 << 20) and batch < 16 and pack < 16, f"shape ({batch}, {t_sticks}, pack {pack}) exceeds the key's fields"
 
         if self._sharded:
             pad_rows = -(-5 // pack)

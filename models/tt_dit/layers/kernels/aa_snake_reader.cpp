@@ -58,8 +58,10 @@ void kernel_main() {
     experimental::CB ab_cb(cb_ab);
     experimental::CB fl_cb(cb_fl);
 
-    // Edge flags for this device: [is_first, is_last] along the time axis; the writer's z clamp reads them.
+    // Edge flags for this device: [is_first, is_last] along the time axis; the writer's z clamp reads them, and the
+    // sequence ends below clamp per stick (the halo's replicated row repeats k sticks when rows are packed).
     fl_cb.reserve_back(1);
+    const uint32_t fl_l1 = fl_cb.get_write_ptr();
     noc.async_read(fl_acc, fl_cb, 64, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
     // Alpha and beta blocks (the per-channel vectors repeated R times), one tile each.
     ab_cb.reserve_back(2);
@@ -74,10 +76,13 @@ void kernel_main() {
     const uint32_t nblocks = n_tiles + NB_EXTRA;
     const int32_t x_lo = q_lo - 3;
     const int32_t x_hi = q_lo + static_cast<int32_t>(nblocks * R) + 3;
-    // The halo'd tensor holds unpadded sticks [-HALO, T_LOCAL + HALO); its pad rows on a sequence end already
-    // replicate the edge stick, so anything outside is a clamp to the nearest available stick.
-    const int32_t r_lo = x_lo < -HALO ? -HALO : x_lo;
-    const int32_t r_hi = x_hi > T_LOCAL + HALO ? T_LOCAL + HALO : x_hi;
+    // The halo'd tensor holds unpadded sticks [-HALO, T_LOCAL + HALO). On a sequence end the halo is ignored and the
+    // edge stick is replicated per stick below, like the unpacked reference; elsewhere the neighbour's sticks are real.
+    volatile tt_l1_ptr uint32_t* fl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fl_l1);
+    const int32_t avail_lo = fl[0] != 0 ? 0 : -HALO;
+    const int32_t avail_hi = fl[1] != 0 ? T_LOCAL : T_LOCAL + HALO;
+    const int32_t r_lo = x_lo < avail_lo ? avail_lo : x_lo;
+    const int32_t r_hi = x_hi > avail_hi ? avail_hi : x_hi;
 
     // Staging: stick r lives at stage + (r - x_lo) * STICK; one page of slack on each side because the
     // page reads land whole (DRAM reads need 64 B alignment on both ends, which whole pages at page-aligned
