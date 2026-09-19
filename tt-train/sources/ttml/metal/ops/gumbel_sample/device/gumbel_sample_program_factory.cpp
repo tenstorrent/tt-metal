@@ -76,7 +76,8 @@ static_assert(kWriterLogicalTokensIdx == kWriterPositionsBufferIdx + kWriterMerg
 
 // Per-entry token positions live in a small device TENSOR, not in runtime args. Each core stages
 // into L1, once at kernel start, only the entry WINDOW its contiguous tile run touches (see
-// PositionWindow in dataflow_utils.hpp; the CB sizing note below derives the window bound).
+// PositionWindow in the op's kernels/dataflow/position_window.hpp; the CB sizing note below
+// derives the window bound).
 constexpr auto kReaderPositionsCbIndex = tt::CBIndex::c_5;
 constexpr auto kWriterPositionsCbIndex = tt::CBIndex::c_6;
 
@@ -391,7 +392,8 @@ tt::tt_metal::Program build_program(
     // hw/inc/internal/debug/sanitize.h.
     //
     // Each core stages only the entry WINDOW its contiguous tile run touches (see PositionWindow
-    // in dataflow_utils.hpp): a run of n tiles spans at most (n - 1) / Wt + 2 entries. Sized by
+    // in the op's kernels/dataflow/position_window.hpp): a run of n tiles spans at most
+    // (n - 1) / Wt + 2 entries. Sized by
     // the LARGER core group so one CB config serves both; cores with smaller windows leave the
     // tail unused. Sizing by num_entries instead would make the positions footprint -- L1 bytes
     // AND per-core staging page reads, in BOTH kernels -- scale with the global batch rather than

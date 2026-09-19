@@ -20,6 +20,8 @@ ttnn::Tensor gumbel_sample(
     // streams), so a mismatched mask is normalized once here, at the op boundary, rather than by
     // every caller. Host tensors are passed through untouched: the device op's validation owns
     // that rejection, and probing dtypes here would just preempt its clearer error.
+    // TODO: the follow-up PR in the stack #56181 makes the callsite mask match the logits dtype, so we won't need this
+    // bridge anymore then.
     std::optional<ttnn::Tensor> mask = logits_mask;
     if (mask.has_value() && logits.storage_type() == ttnn::StorageType::DEVICE && mask->dtype() != logits.dtype()) {
         mask = ttnn::typecast(*mask, logits.dtype());

@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "position_window.hpp"  // PositionWindow / stage_position_window, shared with the writer
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
@@ -61,7 +62,7 @@ void kernel_main() {
     // this kernel dereferences is start_tile / Wt ..= (start_tile + num_tiles - 1) / Wt by
     // construction of source_page below. It cannot be deferred: the very first logits page address
     // depends on it. The staging, the slot addressing and the position clamp are single-sourced in
-    // PositionWindow (dataflow_utils.hpp); the writer stages the identical window and consumes the
+    // PositionWindow (position_window.hpp); the writer stages the identical window and consumes the
     // complementary bit field of the same clamped value.
     PositionWindow positions{};
     if constexpr (do_positions) {

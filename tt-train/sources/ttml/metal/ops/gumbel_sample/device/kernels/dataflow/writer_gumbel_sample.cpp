@@ -25,6 +25,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/numeric/float32.h"
+#include "position_window.hpp"  // PositionWindow / stage_position_window, shared with the reader
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 namespace {
@@ -94,7 +95,7 @@ void kernel_main() {
     // Stage the entry WINDOW this core's tile run touches, exactly as the reader does -- the rows
     // this kernel scans (pass 1) and the one row it may merge (pass 2's owned_row, the run's LAST
     // entry) all lie inside [start_tile / Wt, (start_tile + num_tiles - 1) / Wt]. Staging, slot
-    // addressing and the position clamp are single-sourced in PositionWindow (dataflow_utils.hpp).
+    // addressing and the position clamp are single-sourced in PositionWindow (position_window.hpp).
     //
     // The read is free here -- the next thing this kernel does is block on cb_wait_front(scores),
     // which cannot clear until the reader has already fetched logits from DRAM. BRISC issues reads
