@@ -151,9 +151,6 @@ _DEFAULT_AUDIO_T_FACTOR = 8
 # Time-packed late vocoder bands (band -> steps per row): the two narrowest bands on 32-wide rows, measured
 # 0.53 -> 0.45 s traced at unchanged PSNR (layers/audio_pack.py).
 _AUDIO_PACK_BANDS = {5: 2, 6: 4}
-# Split mode of the packed bands' anti-alias resamplers ("same" = the convs' mode). "off" is the measured 65 dB /
-# -72 ms point (layers/audio_pack.py).
-_AUDIO_RESAMPLER_SPLIT_ENV = "MINIMAX_H3_AUDIO_RESAMPLER_SPLIT"
 # Replay a captured device graph for the audio vocoder instead of dispatching it op by op. The vocoder is the one
 # stage that is host-bound, so this is its dominant lever; it needs a trace_region_size on the mesh.
 _AUDIO_TRACE_ENV = "MINIMAX_H3_AUDIO_TRACE"
@@ -165,13 +162,6 @@ _AUDIO_PHASES_ENV = "MINIMAX_H3_AUDIO_PHASES"
 def _audio_trace_enabled() -> bool:
     """Explicit kwarg wins; else MINIMAX_H3_AUDIO_TRACE; else on (the vocoder replays a captured graph: 0.5 -> 0.3 s)."""
     return os.environ.get(_AUDIO_TRACE_ENV, "1").strip().lower() in ("1", "true", "yes", "on")
-def _audio_resampler_split_mode() -> str | None:
-    raw = os.environ.get(_AUDIO_RESAMPLER_SPLIT_ENV, "same").strip()
-    if raw in ("", "same"):
-        return None
-    if raw not in ("off", "weight", "act", "full"):
-        raise ValueError(f"{_AUDIO_RESAMPLER_SPLIT_ENV}={raw!r} must be same, off, weight, act or full")
-    return raw
 
 
 # "1": one stereo channel per mesh row (the axis the T-shard does not use); every vocoder op then runs one batch item
@@ -1535,14 +1525,13 @@ class MiniMaxH3Pipeline:
                 ccl_manager=audio_ccl,
                 split_mode=self.audio_split_mode,
                 pack_bands=_AUDIO_PACK_BANDS,
-                resampler_split_mode=_audio_resampler_split_mode(),
                 act_mode="fused",  # one kernel per anti-aliased SnakeBeta activation (layers/audio_aa_snake.py)
                 batch_shard_axis=batch_shard_axis,
                 profile=os.environ.get(_AUDIO_PHASES_ENV, "0").strip() not in ("", "0", "false", "no"),
             )
             logger.info(
                 f"Audio trace: {'on' if self.audio_trace else 'off'}; conv split: {decoder.split_mode}; "
-                f"packing: {decoder.pack_bands or 'off'}; resampler split {decoder.resampler_split_mode or 'same'}; "
+                f"packing: {decoder.pack_bands or 'off'}; "
                 f"activations: {decoder.act_mode}; batch shard axis {decoder.batch_shard_axis}"
             )
 
@@ -1568,7 +1557,6 @@ class MiniMaxH3Pipeline:
                     decoder.split_mode,
                     decoder.max_c_in_block,
                     decoder.pack_bands,
-                    decoder.resampler_split_mode,
                     act_mode=decoder.act_mode,
                 ),
                 parallel_config=self.vae_parallel_config,

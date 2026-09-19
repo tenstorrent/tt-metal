@@ -89,7 +89,6 @@ def weights_variant(
     split_mode: str,
     max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
     pack_bands: dict[int, int] | None = None,
-    resampler_split_mode: str | None = None,
     act_mode: str = "chain",
 ) -> str:
     """Cache-key suffix for the precision levers that change the prepared parameter set.
@@ -115,9 +114,6 @@ def weights_variant(
     if pack_bands:
         # Time-packed bands hold dense packed weights of other shapes (layers/audio_pack.py).
         suffix += "_pack" + "-".join(f"{b}x{k}" for b, k in sorted(pack_bands.items()))
-        rs_variant = "full" if resampler_split_mode == "kernel" else resampler_split_mode
-        if rs_variant is not None and rs_variant != variant:
-            suffix += f"_rs-{rs_variant}"
     if polyphase_env():
         # The transposed convs' prepared weights are the polyphase packed form, a different tensor set.
         suffix += "_pp"

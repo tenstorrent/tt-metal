@@ -122,7 +122,6 @@ class AMPBlock1(Module):
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
         pack: int | None = None,
-        resampler_split_mode: str | None = None,
         act_mode: str = "chain",
     ) -> None:
         super().__init__()
@@ -171,7 +170,6 @@ class AMPBlock1(Module):
                     channels=channels,
                     pack=pack,
                     split_mode=split_mode,
-                    resampler_split_mode=resampler_split_mode,
                     **common,
                 )
             return Activation1d(
@@ -248,15 +246,12 @@ class Vocoder(Module):
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
         pack_bands: dict[int, int] | None = None,
-        resampler_split_mode: str | None = None,
         act_mode: str = "chain",
     ) -> None:
         super().__init__()
         # band index -> time steps packed per row for that band's AMP blocks (layers/audio_pack.py); the
         # narrow late bands (8-16 channels) run ~2x faster per op on 32-wide packed rows.
         self.pack_bands = dict(pack_bands or {})
-        # split mode of the packed bands' anti-alias resamplers (None = same as the convs)
-        self.resampler_split_mode = resampler_split_mode
         # "chain": UpSample1d -> SnakeBeta -> DownSample1d as separate ops; "fused": one kernel per activation
         # (layers/audio_aa_snake.py), bit-identical to the chain.
         self.act_mode = act_mode
@@ -347,7 +342,6 @@ class Vocoder(Module):
                         ccl_manager=ccl_manager,
                         split_mode=split_mode,
                         pack=self.pack_bands.get(i),
-                        resampler_split_mode=resampler_split_mode,
                         act_mode=act_mode,
                     )
                 )

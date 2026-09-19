@@ -59,11 +59,6 @@ RECIPES = {
     "full_pack4": {"pack": {4: 1, 5: 2, 6: 4}},
     "full_pack34": {"pack": {3: 1, 4: 1, 5: 2, 6: 4}},
     "off_pack34": {"all": "off", "pack": {3: 1, 4: 1, 5: 2, 6: 4}},
-    # packed resamplers (fixed kaiser taps) with a cheaper split than the convs
-    "full_pack_rsact": {"pack": {5: 2, 6: 4}, "resamplers": "act"},
-    "full_pack_rsoff": {"pack": {5: 2, 6: 4}, "resamplers": "off"},
-    # the same point built through the constructor path the pipeline uses
-    "rsoff_built": {"pack": {5: 2, 6: 4}, "build_kwargs": {"resampler_split_mode": "off"}},
     # the fused anti-alias SnakeBeta kernel (layers/audio_aa_snake.py) in place of every resampler/snake chain
     "fused_pack": {"pack": {5: 2, 6: 4}, "build_kwargs": {"act_mode": "fused"}},
     "kernel_fused_pack": {"all": "kernel", "pack": {5: 2, 6: 4}, "build_kwargs": {"act_mode": "fused"}},
@@ -74,7 +69,6 @@ RECIPES = {
         "build_kwargs": {"act_mode": "fused", "batch_shard_axis": 0},
     },
 }
-RESAMPLERS_KEY = "resamplers"
 BUILD_KWARGS_KEY = "build_kwargs"  # extra constructor kwargs
 PACK_KEY = "pack"
 
@@ -94,27 +88,13 @@ def _conv_modules_by_band(decoder):
     yield "post", voc.conv_post
 
 
-def _packed_resamplers(decoder):
-    for block in decoder.decoder.resblocks:
-        for act in list(block.acts1) + list(block.acts2):
-            for name in ("up", "down"):
-                if hasattr(act, name):
-                    yield getattr(act, name)
-
-
 def apply_recipe(decoder, recipe: dict) -> dict:
     """Set ``split_mode`` per conv after construction (forward reads it per call; the unused residual is harmless)."""
     counts = {}
-    if RESAMPLERS_KEY in recipe:
-        n = 0
-        for conv in _packed_resamplers(decoder):
-            conv.split_mode = recipe[RESAMPLERS_KEY]
-            n += 1
-        counts[f"resamplers_{recipe[RESAMPLERS_KEY]}"] = n
     if PACK_KEY in recipe:
         counts["pack"] = dict(recipe[PACK_KEY])
-    if RESAMPLERS_KEY in recipe or BUILD_KWARGS_KEY in recipe:
-        recipe = {k: v for k, v in recipe.items() if k not in (PACK_KEY, RESAMPLERS_KEY, BUILD_KWARGS_KEY)}
+    if BUILD_KWARGS_KEY in recipe:
+        recipe = {k: v for k, v in recipe.items() if k not in (PACK_KEY, BUILD_KWARGS_KEY)}
     for band, conv in _conv_modules_by_band(decoder):
         mode = None
         if "all" in recipe:
