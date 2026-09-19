@@ -4,9 +4,23 @@
 
 """Shared helpers for the WAN 2.2 pipeline tests."""
 
+import hashlib
+import re
+
 import numpy as np
 import torch
 from loguru import logger
+
+
+def prompt_tag(prompt: str, seed: int) -> str:
+    """Filesystem-safe tag so runs with different prompts or seeds do not overwrite each other.
+
+    A readable (truncated) slug plus a short digest of the full prompt, so two prompts sharing
+    their first 40 characters still get distinct filenames.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", prompt.lower()).strip("-")[:40].strip("-")
+    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:6]
+    return f"_{slug}-{digest}_seed{seed}" if slug else f"_{digest}_seed{seed}"
 
 
 def check_output_sanity(frames, *, num_frames, height, width):

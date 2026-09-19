@@ -23,7 +23,7 @@ from ....utils.test import (
     ring_params_req_exact_devices,
     skip_if_unsupported_num_links,
 )
-from .common import check_first_frame_matches_seed, check_output_sanity
+from .common import check_first_frame_matches_seed, check_output_sanity, prompt_tag
 
 
 def create_fractal_image(width: int, height: int) -> Image.Image:
@@ -133,7 +133,7 @@ def test_pipeline_inference(
 
     prompt = "The cat in the hat runs up the hill to the house."
 
-    def run(*, prompt, number, seed):
+    def run(*, prompt, seed):
         logger.info(f"Running inference with prompt: '{prompt}'")
         logger.info(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
@@ -163,7 +163,7 @@ def test_pipeline_inference(
         if int(ttnn.distributed_context_get_rank()) == 0:
             check_output_sanity(frames, num_frames=num_frames, height=height, width=width)
             check_first_frame_matches_seed(frames, seed_image=test_image, width=width, height=height)
-        output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
+        output_filename = f"wan_i2v_{width}x{height}{prompt_tag(prompt, seed)}.mp4"
         try:
             from models.tt_dit.utils.video import export_to_video
 
@@ -171,6 +171,7 @@ def test_pipeline_inference(
             logger.info(f"Saved video to: {output_filename}")
         except ImportError:
             logger.info("Could not export video - imageio_ffmpeg not available")
+        return output_filename
 
     # VBench gate for I2V uses ONLY subject_consistency + background_consistency. They measure
     # intra-video feature consistency (does the content stay coherent frame-to-frame), which still
@@ -191,19 +192,17 @@ def test_pipeline_inference(
         },
     }
 
-    def check_output_with_vbench(prompt, number):
+    def check_output_with_vbench(prompt, output_filename):
         if int(ttnn.distributed_context_get_rank()) == 0:
             # The gate itself refuses to no-op without vbench (models/tt_dit/utils/vbench.py), so
             # skip here instead: the video is already written, and an interactive generation run
             # should not be reported as a failure just because the optional scorer is absent.
             pytest.importorskip("vbench", reason="VBench quality gate needs the `vbench` package")
-            output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
             thresholds = vbench_thresholds_by_height[height]
             assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
 
     if no_prompt:
-        run(prompt=prompt, number=0, seed=42)
-        check_output_with_vbench(prompt, 0)
+        check_output_with_vbench(prompt, run(prompt=prompt, seed=42))
     else:
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
@@ -211,5 +210,4 @@ def test_pipeline_inference(
                 prompt = new_prompt
             if prompt[0] == "q":
                 break
-            run(prompt=prompt, number=i, seed=i)
-            check_output_with_vbench(prompt, i)
+            check_output_with_vbench(prompt, run(prompt=prompt, seed=i))

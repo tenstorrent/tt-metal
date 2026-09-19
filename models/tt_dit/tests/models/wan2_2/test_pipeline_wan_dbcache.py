@@ -20,9 +20,7 @@ see ``_parse_custom_config``). The ``*_traced`` parametrizations run the traced 
 
 from __future__ import annotations
 
-import hashlib
 import os
-import re
 import time
 
 import numpy as np
@@ -38,7 +36,7 @@ from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineCon
 from models.tt_dit.utils.dbcache import DBCacheConfig
 
 from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
-from .common import check_output_sanity
+from .common import check_output_sanity, prompt_tag
 
 
 class _Timer:
@@ -116,17 +114,6 @@ def _parse_custom_config(name: str) -> WanDBCacheConfig:
         high_noise=cfg.high_noise.replace(**per_expert, **high),
         low_noise=cfg.low_noise.replace(**per_expert, **low),
     )
-
-
-def _prompt_tag(prompt: str, seed: int) -> str:
-    """Filesystem-safe tag so runs with different prompts or seeds do not overwrite each other.
-
-    A readable (truncated) slug plus a short digest of the full prompt, so two prompts sharing
-    their first 40 characters still get distinct filenames.
-    """
-    slug = re.sub(r"[^a-z0-9]+", "-", prompt.lower()).strip("-")[:40].strip("-")
-    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:6]
-    return f"_{slug}-{digest}_seed{seed}" if slug else f"_{digest}_seed{seed}"
 
 
 def _save_frame_strip(frames: np.ndarray, path: str, *, count: int = 5, scale: int = 2) -> None:
@@ -320,7 +307,7 @@ def test_wan_dbcache_ab(
             shift_tag = f"_fs{flow_shift:g}" if flow_shift is not None else ""
             stem = (
                 f"wan_dbcache_{safe}_{width}x{height}_s{num_inference_steps}"
-                f"{shift_tag}{_prompt_tag(prompt, seed)}{'_traced' if traced else ''}"
+                f"{shift_tag}{prompt_tag(prompt, seed)}{'_traced' if traced else ''}"
             )
             _save_frame_strip(frames, f"{stem}_strip.png")
             try:
