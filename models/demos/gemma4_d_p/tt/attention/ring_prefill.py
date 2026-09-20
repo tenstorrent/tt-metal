@@ -132,6 +132,7 @@ def write_chunk_to_global_ring_cache(
     num_layers=1,
     slot_idx=0,
     prefill_metadata=None,
+    actual_end=None,
 ):
     """Append one packed global-attention chunk to its CP-local history."""
 
@@ -151,6 +152,7 @@ def write_chunk_to_global_ring_cache(
             layer_idx=layer_idx,
             num_layers=num_layers,
             kv_actual_global=kv_actual_global_t,
+            valid_global=prefill_metadata.actual_end,
             cluster_axis=mesh_config.cp_axis,
         )
     else:
@@ -161,6 +163,7 @@ def write_chunk_to_global_ring_cache(
             layer_idx=layer_idx,
             num_layers=num_layers,
             kv_actual_global=kv_actual_global,
+            valid_global=actual_end,
             cluster_axis=mesh_config.cp_axis,
         )
 
@@ -248,6 +251,7 @@ def write_chunk_to_sliding_ring_cache(
     num_layers=1,
     slot_idx=0,
     prefill_metadata=None,
+    actual_end=None,
 ):
     """Append one sliding-attention chunk (K and V) to its CP-local history."""
 
@@ -268,6 +272,7 @@ def write_chunk_to_sliding_ring_cache(
                 layer_idx=layer_idx,
                 num_layers=num_layers,
                 kv_actual_global=kv_actual_global_t,
+                valid_global=prefill_metadata.actual_end,
                 cluster_axis=mesh_config.cp_axis,
             )
         else:
@@ -278,6 +283,7 @@ def write_chunk_to_sliding_ring_cache(
                 layer_idx=layer_idx,
                 num_layers=num_layers,
                 kv_actual_global=kv_actual_global,
+                valid_global=actual_end,
                 cluster_axis=mesh_config.cp_axis,
             )
 
@@ -306,7 +312,8 @@ def sliding_ring_prefill_attention(
     slot_idx=0,
 ):
     """Attend sliding layers using separate K and V ring caches."""
-    return _ring_prefill_attention(
+    return prefill_metadata.sliding.attention(
+        attention_fn=_ring_prefill_attention,
         tt_q=tt_q,
         cache_k=cache_k,
         cache_v=cache_v,

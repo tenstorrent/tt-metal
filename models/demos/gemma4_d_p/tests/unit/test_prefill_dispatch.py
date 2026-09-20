@@ -18,6 +18,7 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     hidden = SimpleNamespace(shape=(1, 1, 1024, 64))
     model = object.__new__(Gemma4Model)
     model.mesh_device = object()
+    model.prefill_chunk_size = 8192
     model.hf_config = SimpleNamespace(layer_types=("sliding_attention", "full_attention"))
     model.tt_kv_cache = [None, None]
     model._rope_prefill_positions = None
