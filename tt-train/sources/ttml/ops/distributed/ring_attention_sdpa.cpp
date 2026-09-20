@@ -25,6 +25,7 @@
 #include "metal/ops/ring_sdpa_bw/ring_sdpa_bw.hpp"
 #include "metal/ops/ring_sdpa_fw/ring_sdpa_fw.hpp"
 #include "metal/ops/ring_ttnn_sdpa_fw/ring_ttnn_sdpa_fw.hpp"
+#include "metal/ops/ring_cyclic_sdpa_fw/ring_cyclic_sdpa_fw.hpp"
 #include "metal/ops/ring_softmax_merge/ring_softmax_merge.hpp"
 #include "metal/ops/cyclic_sdpa_bw/device/cyclic_sdpa_bw_program_factory.hpp"
 #include "ops/binary_ops.hpp"
@@ -252,6 +253,10 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
             ttml::metal::ring_ttnn_sdpa_fw(
                 q, k, v, ring_size, cp_axis, step, mask, Direction::Backward, /* zigzag */ true, who,
                 forward_chunk_size, step_out, step_inter);
+        } else if (forward_kind == RingForwardKind::Cyclic) {
+            ttml::metal::ring_cyclic_sdpa_fw(
+                q, k, v, ring_size, cp_axis, step, mask, Direction::Backward, /* zigzag */ true, who,
+                rows_per_block_tiles, step_out, step_inter);
         } else {
             ttml::metal::ring_zigzag_sdpa_fw(
                 q, k, v, ring_size, cp_axis, step, who, mask, Direction::Backward, step_out, step_inter);
@@ -600,6 +605,21 @@ autograd::TensorPtr ring_attention_sdpa(
                 /* zigzag */ false,
                 ttml::metal::ops::ZigzagVisitor::Any,
                 forward_chunk_size,
+                output_tensor,
+                intermediate_tensor);
+        } else if (forward_kind == RingForwardKind::Cyclic) {
+            ttml::metal::ring_cyclic_sdpa_fw(
+                query_tensor,
+                k_current,
+                v_current,
+                ring_size,
+                cp_axis_value,
+                step,
+                mask_type,
+                ttml::metal::ops::ring_cyclic_sdpa_fw::RingDirection::Backward,
+                /* zigzag */ false,
+                ttml::metal::ops::ZigzagVisitor::Any,
+                rows_per_block_tiles,
                 output_tensor,
                 intermediate_tensor);
         } else {

@@ -245,7 +245,7 @@ struct DeviceConfig {
     std::string cp_shift_transport = "fifo";       // fifo | direct
     std::string cp_layout = "contiguous";          // contiguous | zigzag
     uint32_t cp_rows_per_block_tiles = 0;          // 0 = the planner picks; else 1, 2 or 4
-    std::string cp_forward = "two_pass";           // two_pass | ttnn
+    std::string cp_forward = "two_pass";           // two_pass | ttnn | cyclic
     uint32_t cp_forward_chunk = 256;               // ttnn's query/key chunk, rows
 };
 
@@ -286,8 +286,10 @@ ttml::ops::distributed::RingAttentionOptions ring_attention_options_from(const D
         opts.forward_kind = RingForwardKind::TwoPass;
     } else if (config.cp_forward == "ttnn") {
         opts.forward_kind = RingForwardKind::Ttnn;
+    } else if (config.cp_forward == "cyclic") {
+        opts.forward_kind = RingForwardKind::Cyclic;
     } else {
-        throw std::runtime_error("cp_forward must be two_pass or ttnn; got " + config.cp_forward);
+        throw std::runtime_error("cp_forward must be two_pass, ttnn or cyclic; got " + config.cp_forward);
     }
     if (config.cp_forward_chunk == 0 || config.cp_forward_chunk % 32 != 0) {
         throw std::runtime_error("cp_forward_chunk must be a positive multiple of 32");

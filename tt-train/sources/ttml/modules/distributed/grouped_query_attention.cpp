@@ -118,7 +118,8 @@ ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
         // height from the planner unless the config pins it.
         const auto& opts = ops::distributed::ring_attention_options();
         uint32_t rows_per_block_tiles = 1U;
-        if (opts.backward_kind != ops::distributed::RingBackwardKind::TwoPass) {
+        if (opts.backward_kind != ops::distributed::RingBackwardKind::TwoPass ||
+            opts.forward_kind == ops::distributed::RingForwardKind::Cyclic) {
             rows_per_block_tiles = opts.rows_per_block_tiles != 0U
                                        ? opts.rows_per_block_tiles
                                        : ops::distributed::plan_rows_per_block_tiles(
