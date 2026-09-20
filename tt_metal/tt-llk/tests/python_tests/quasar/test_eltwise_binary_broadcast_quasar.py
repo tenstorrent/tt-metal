@@ -14,56 +14,68 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    BlocksCalculationAlgorithm,
     BroadcastType,
     DestSync,
     ImpliedMathFormat,
+    MathFidelity,
     MathOperation,
     PerfRunType,
     format_dict,
 )
 from helpers.param_config import (
-    generate_reduced_input_dimensions,
-    get_num_blocks_and_num_tiles_in_block,
+    generate_perf_input_dimensions,
+    generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
-    quasar_mx_smoke,
     runtime,
+    select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
+    ACC_TO_DEST,
     BROADCAST_TYPE,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    INPUT_TILE_CNT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
-    NUM_BLOCKS,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
+    OUTPUT_TILE_CNT,
     TEST_FACE_DIMS,
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
+from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
+from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
-
-TILE_ELEMS = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
-FACE_ELEMS = 16 * 16
-
-BINARY_BROADCAST_FORMATS = (
-    input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-        ],
-    )
-    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
-    + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+from quasar.test_eltwise_binary_quasar import (
+    get_num_tiles_per_accumulation,
+    valid_acc_to_dest,
 )
+
+BINARY_BROADCAST_DATA_FORMATS = [
+    DataFormat.Float16_b,
+    DataFormat.Float16,
+    DataFormat.MxFp4,
+    DataFormat.MxInt8,
+    DataFormat.MxInt4,
+    DataFormat.MxInt2,
+]
+BINARY_BROADCAST_FORMATS = input_output_formats(
+    BINARY_BROADCAST_DATA_FORMATS,
+)
+BINARY_BROADCAST_PERF_FORMATS = input_output_formats(
+    BINARY_BROADCAST_DATA_FORMATS,
+    same=True,
+)
+BINARY_BROADCAST_FORMATS += [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
 
 BROADCAST_TYPES = [
     BroadcastType.Column,
@@ -76,6 +88,42 @@ def binary_broadcast_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
+def binary_broadcast_tile_dimensions(formats, broadcast_type, *, is_perf=False):
+    tile_sizes = (
+        select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
+        if is_perf
+        else SUPPORTED_TILE_SIZES
+    )
+    return [
+        list(tile_dims)
+        for tile_dims in tile_sizes
+        if not (
+            broadcast_type in (BroadcastType.Row, BroadcastType.Column)
+            and tuple(tile_dims) == (32, 16)
+        )
+        and not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, tile_dims
+        )
+    ]
+
+
+def binary_broadcast_input_dimensions(
+    dest_acc, dest_sync, tile_dimensions, *, is_perf=False
+):
+    tile_shape = construct_tile_shape(tile_dimensions)
+    if is_perf:
+        return generate_perf_input_dimensions(dest_acc, dest_sync, tile_shape)
+    return generate_unary_input_dimensions(dest_acc, dest_sync, tile_shape)
+
+
+def binary_broadcast_acc_to_dest_modes(
+    input_dimensions, tile_dimensions, *, is_perf=False
+):
+    if is_perf and tuple(tile_dimensions) == (1, 32) and input_dimensions[0] == 1:
+        return [False]
+    return valid_acc_to_dest(input_dimensions, tile_dimensions)
+
+
 def binary_broadcast_implied_math_formats(format, *, is_perf=False):
     if is_perf:
         return [ImpliedMathFormat.Yes]
@@ -84,23 +132,38 @@ def binary_broadcast_implied_math_formats(format, *, is_perf=False):
     return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
 
 
+def binary_broadcast_math_fidelities(format, math_op):
+    if format.input_format == DataFormat.Int8:
+        return [MathFidelity.LoFi]
+    return get_valid_math_fidelities(format, math_op)
+
+
 @pytest.mark.quasar
 @parametrize(
     formats=BINARY_BROADCAST_FORMATS,
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    mathop=[
+    math_op=[
         MathOperation.Elwadd,
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
     broadcast_type=BROADCAST_TYPES,
-    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
+    math_fidelity=lambda formats, math_op: binary_broadcast_math_fidelities(
+        formats, math_op
+    ),
     implied_math_format=lambda formats: binary_broadcast_implied_math_formats(formats),
-    dest_sync_mode=lambda: binary_broadcast_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: binary_broadcast_dest_sync_modes(is_perf=False),
+    unpack_to_dest=[False],
+    tile_dimensions=lambda formats, broadcast_type: binary_broadcast_tile_dimensions(
+        formats, broadcast_type, is_perf=False
+    ),
     input_dimensions=runtime(
-        lambda dest_acc, dest_sync_mode: generate_reduced_input_dimensions(
-            dest_acc, dest_sync_mode
+        lambda dest_acc, dest_sync, tile_dimensions: binary_broadcast_input_dimensions(
+            dest_acc, dest_sync, tile_dimensions, is_perf=False
         )
+    ),
+    acc_to_dest=lambda input_dimensions, tile_dimensions: binary_broadcast_acc_to_dest_modes(
+        input_dimensions, tile_dimensions, is_perf=False
     ),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
@@ -108,12 +171,15 @@ def binary_broadcast_implied_math_formats(format, *, is_perf=False):
 def test_eltwise_binary_broadcast_quasar(
     formats,
     dest_acc,
-    mathop,
+    math_op,
     broadcast_type,
     math_fidelity,
     implied_math_format,
-    dest_sync_mode,
+    dest_sync,
+    unpack_to_dest,
+    tile_dimensions,
     input_dimensions,
+    acc_to_dest,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -121,14 +187,9 @@ def test_eltwise_binary_broadcast_quasar(
     is_perf=False,
     perf_report=None,
 ):
-
-    num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
-        dest_acc,
-        formats,
-        input_dimensions,
-        blocks_algorithm=BlocksCalculationAlgorithm.Standard,
-    )
+    tile_shape = construct_tile_shape(tile_dimensions)
+    num_faces = tile_shape.total_num_faces()
+    num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
 
     if formats.input_format == DataFormat.Int8:
         stimuli_spec = StimuliSpec.uniform(low=-127.0, high=127.0)
@@ -141,16 +202,19 @@ def test_eltwise_binary_broadcast_quasar(
         input_dimensions_B=input_dimensions,
         spec_A=stimuli_spec,
         spec_B=stimuli_spec,
+        output_format=formats.output_format,
+        tile_dimensions=tile_dimensions,
     )
+    tile_cnt_res = tile_cnt_A // num_tiles_per_accumulation
 
     generate_broadcast_golden = get_golden_generator(BroadcastGolden)
     bcast_src_B_tensor = generate_broadcast_golden(
         broadcast_type,
         src_B,
         formats.output_format,
-        num_faces=4,
+        num_faces=num_faces,
         tile_cnt=tile_cnt_A,
-        face_r_dim=16,
+        face_r_dim=tile_shape.face_r_dim,
         input_format=formats.input_format,
     )
 
@@ -162,13 +226,17 @@ def test_eltwise_binary_broadcast_quasar(
         else formats.input_format
     )
     golden_tensor = generate_golden(
-        mathop,
+        math_op,
         src_A,
         bcast_src_B_tensor,
         formats.output_format,
         math_fidelity,
         input_format=input_format,
         input_format_B=input_format_B,
+        acc_to_dest=acc_to_dest,
+        tile_shape=tile_shape,
+        num_tiles_per_accumulation=num_tiles_per_accumulation,
+        dest_acc=dest_acc,
     )
 
     if is_perf and perf_report is None:
@@ -179,18 +247,26 @@ def test_eltwise_binary_broadcast_quasar(
         "formats": formats,
         "templates": [
             MATH_FIDELITY(math_fidelity),
-            MATH_OP(mathop=mathop),
+            MATH_OP(mathop=math_op),
             IMPLIED_MATH_FORMAT(implied_math_format),
             BROADCAST_TYPE(broadcast_type),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
+            ACC_TO_DEST(acc_to_dest),
         ],
         "runtimes": [
-            generate_input_dim(input_dimensions, input_dimensions),
+            generate_input_dim(
+                input_dimensions,
+                input_dimensions,
+                tile_dimensions=tile_dimensions,
+            ),
             TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(tiles_in_block),
-            NUM_FACES(4),
-            TEST_FACE_DIMS(),
+            INPUT_TILE_CNT(tile_cnt_A),
+            OUTPUT_TILE_CNT(tile_cnt_res),
+            NUM_TILES_IN_BLOCK(num_tiles_per_accumulation),
+            NUM_FACES(num_faces),
+            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
+            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+            TEST_FACE_DIMS(tile_shape.face_r_dim),
             LOOP_FACTOR(loop_factor),
         ],
         "variant_stimuli": StimuliConfig(
@@ -201,10 +277,13 @@ def test_eltwise_binary_broadcast_quasar(
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_A,
-            tile_count_res=tile_cnt_A,
-            num_faces=4,
+            tile_count_res=tile_cnt_res,
+            num_faces=num_faces,
+            face_r_dim=tile_shape.face_r_dim,
+            tile_dimensions=tile_dimensions,
+            use_dense_tile_dimensions=True,
         ),
-        "unpack_to_dest": False,
+        "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
         "disable_format_inference": formats.input_format.is_mx_format(),
     }
