@@ -70,8 +70,6 @@ private:
     std::filesystem::path directory_;
 };
 
-}  // namespace
-
 TEST_F(RunTimeOptionsFirmwareSource, CPU_BlazeVariantImpliesThePrecompiledFirmwareBypass) {
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", "blaze");
     ScopedEnv header("TT_METAL_FW_HEADER_BRISC", test_header_path());
@@ -168,3 +166,5 @@ TEST_F(RunTimeOptionsFirmwareSource, CPU_BlazeDefineOnlyAppliesToBriscFirmware) 
         }
     }
 }
+
+}  // namespace
