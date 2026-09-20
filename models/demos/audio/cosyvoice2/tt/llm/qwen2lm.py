@@ -158,6 +158,7 @@ class TtQwen2LM:
         dtype=ttnn.bfloat16,
         seed: int = 0,
         cosyvoice_state_dict: dict | None = None,
+        use_decode_trace: bool = False,
     ):
         self.args = args
         self.mesh_device = mesh_device
@@ -262,6 +263,13 @@ class TtQwen2LM:
         )
 
         self._prefill_rot_mats = None  # lazily built, see _rot_mats_prefill_table
+
+        # Traced decode (opt-in, see `_decode_step_traced`). Needs the device opened with a
+        # nonzero `trace_region_size`; without one, capture fails loudly rather than silently
+        # falling back, so a mis-configured caller finds out immediately.
+        self.use_decode_trace = use_decode_trace
+        self._trace_id = None
+        self._trace_tokens = self._trace_pos = self._trace_rot_idxs = self._trace_logits = None
 
     # ------------------------------------------------------------------
     # Host-side embedding helpers -- each round-trips through the SAME
@@ -427,6 +435,96 @@ class TtQwen2LM:
         return ttnn.to_torch(logits_tt).float().reshape(-1)[: self.head_out_features]
 
     # ------------------------------------------------------------------
+    # Traced decode. The untraced `decode_step` spends ~39 of its ~42 ms/token launching the
+    # 24 layers from Python (measured: device wait after launch ~0.07 ms, i.e. the device is
+    # idle waiting for the host); the four host<->device round trips around it are ~1.4 ms
+    # combined. Capturing the whole per-token graph once -- token embedding, 24 layers, final
+    # norm, logits head -- and replaying it removes that dispatch cost. Per step the host only
+    # writes three tiny device tensors (token id, position, rope index), replays, and reads the
+    # 6564 logits back for the (host) RAS sampler.
+    #
+    # TRACE SCOPE: a trace is captured at the first decode step of a `generate()` call and released
+    # when that call ends -- it never outlives the LLM stage. A trace bakes in the device addresses
+    # of every intermediate it used; anything allocated AFTER capture that lands on those addresses
+    # is overwritten on the next replay. The flow decoder and vocoder allocate persistent tensors
+    # lazily (prepared conv weights and verified-config caches, keyed per input geometry, i.e. new
+    # for every new utterance length), so a trace kept alive across them hung the device on its
+    # first replay (observed). Within one `generate()` nothing else allocates, so capturing at its
+    # start and releasing at its end is safe by construction, at the cost of one warm-up step and
+    # one capture per utterance.
+    # ------------------------------------------------------------------
+    def _decode_graph(self) -> "ttnn.Tensor":
+        """The traced region: persistent device inputs -> device logits. No host traffic, no
+        allocation of persistent state -- only intermediates, safe inside a capture."""
+        decode_mem = self.args.get_residual_mem_config(Mode.DECODE, None)
+        x = self.speech_embedding(self._trace_tokens)  # [1, 1, 32, dim]; row 0 is the real token
+        x = ttnn.unsqueeze_to_4D(x)
+        x = ttnn.to_memory_config(x, decode_mem)
+        rot_mats = self.rope_setup.get_rot_mats(self._trace_rot_idxs)
+        for layer in self.layers:
+            x = layer(x, self._trace_pos, rot_mats_global=rot_mats, mode=Mode.DECODE)
+        x = self.norm(x, mode=Mode.DECODE, norm_config=self.args.get_norm_config("lm_head", Mode.DECODE, None))
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        return self.llm_decoder(x)
+
+    def _logits_to_host(self, logits_tt: "ttnn.Tensor") -> torch.Tensor:
+        return ttnn.to_torch(logits_tt).float().reshape(-1, logits_tt.shape[-1])[0, : self.head_out_features]
+
+    def _decode_step_traced(self, token: int, pos: int) -> torch.Tensor:
+        """One decode step for `token` at absolute position `pos`; returns torch logits
+        `[head_out_features]`. The first call compiles + captures (and returns that step's real
+        result); later calls replay."""
+        tokens_host = ttnn.from_torch(
+            torch.tensor([token] + [0] * 31, dtype=torch.int32).reshape(1, 1, 1, 32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        pos_host = ttnn.from_torch(torch.tensor([pos]), dtype=ttnn.int32)
+        rope_host = self.rope_setup.get_rot_idxs(torch.tensor([pos]), on_host=True)
+
+        if self._trace_id is None:
+            # Persistent device inputs, allocated once, outside any capture window.
+            self._trace_tokens = ttnn.from_torch(
+                torch.zeros(1, 1, 1, 32, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh_device,
+            )
+            self._trace_pos = ttnn.from_torch(torch.tensor([0]), device=self.mesh_device, dtype=ttnn.int32)
+            self._trace_rot_idxs = self.rope_setup.get_rot_idxs(torch.tensor([0]), on_host=False)
+
+        ttnn.copy_host_to_device_tensor(tokens_host, self._trace_tokens)
+        ttnn.copy_host_to_device_tensor(pos_host, self._trace_pos)
+        ttnn.copy_host_to_device_tensor(rope_host, self._trace_rot_idxs)
+
+        if self._trace_id is None:
+            # Warm-up: compiles every kernel and produces this step's real logits (and writes this
+            # position's KV entry) before anything is recorded.
+            warm = self._decode_graph()
+            result = self._logits_to_host(warm)
+            ttnn.deallocate(warm)
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            self._trace_logits = self._decode_graph()
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            self._trace_id = trace_id
+            return result
+
+        ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=False)
+        return self._logits_to_host(self._trace_logits)
+
+    def release_decode_trace(self) -> None:
+        """Free the captured trace and the persistent device tensors it owns. `generate()` calls
+        this itself when it ends (see the module note on trace scope); safe to call any time."""
+        if self._trace_id is not None:
+            ttnn.release_trace(self.mesh_device, self._trace_id)
+            self._trace_id = None
+        for name in ("_trace_logits", "_trace_tokens", "_trace_pos", "_trace_rot_idxs"):
+            t = getattr(self, name)
+            if t is not None:
+                ttnn.deallocate(t)
+                setattr(self, name, None)
+
+    # ------------------------------------------------------------------
     # RAS sampling: on-device nucleus primary path, host fallback for the
     # repeat-window resample. See tt/llm/sampling.py's module docstring for
     # why the two paths split this way.
@@ -473,6 +571,7 @@ class TtQwen2LM:
         stop_token_ids: list[int] | None = None,
         sampler: str = "ras",
         seed: int | None = None,
+        use_trace: bool | None = None,
         **sampling_kwargs,
     ) -> list[int]:
         """Text token ids -> semantic speech token ids, autoregressively.
@@ -501,37 +600,46 @@ class TtQwen2LM:
         """
         from .sampling import greedy, ras_sampling
 
+        if use_trace is None:
+            use_trace = self.use_decode_trace
         if seed is not None:
             torch.manual_seed(seed)
         if stop_token_ids is None:
             stop_token_ids = self.stop_token_ids
 
-        sequence = self.assemble_prefill_sequence(text_ids, prompt_speech_ids)
-        hidden, pos = self.prefill(sequence)
-        logits = self.logits_for_hidden(hidden)
-
-        out: list[int] = []
-        for i in range(max_tokens):
-            sampling_logits = logits
-            if i < min_tokens:
-                sampling_logits = logits.clone()
-                sampling_logits[self.eos_token] = -float("inf")
-            if sampler == "greedy":
-                token = greedy(sampling_logits)
-            elif sampler == "ras":
-                token = ras_sampling(sampling_logits.clone(), out, **sampling_kwargs)
-            elif sampler == "ras_device":
-                token = self.ras_sample_device(sampling_logits, out, **sampling_kwargs)
-            else:
-                raise ValueError(f"unknown sampler {sampler!r}")
-            if token in stop_token_ids:
-                break
-            out.append(token)
-            token_emb = self.embed_speech_tokens_host(torch.tensor([[token]]))
-            hidden = self.decode_step(token_emb, pos)
+        try:
+            sequence = self.assemble_prefill_sequence(text_ids, prompt_speech_ids)
+            hidden, pos = self.prefill(sequence)
             logits = self.logits_for_hidden(hidden)
-            pos += 1
-        return out
+
+            out: list[int] = []
+            for i in range(max_tokens):
+                sampling_logits = logits
+                if i < min_tokens:
+                    sampling_logits = logits.clone()
+                    sampling_logits[self.eos_token] = -float("inf")
+                if sampler == "greedy":
+                    token = greedy(sampling_logits)
+                elif sampler == "ras":
+                    token = ras_sampling(sampling_logits.clone(), out, **sampling_kwargs)
+                elif sampler == "ras_device":
+                    token = self.ras_sample_device(sampling_logits, out, **sampling_kwargs)
+                else:
+                    raise ValueError(f"unknown sampler {sampler!r}")
+                if token in stop_token_ids:
+                    break
+                out.append(token)
+                if use_trace:
+                    logits = self._decode_step_traced(token, pos)
+                else:
+                    token_emb = self.embed_speech_tokens_host(torch.tensor([[token]]))
+                    hidden = self.decode_step(token_emb, pos)
+                    logits = self.logits_for_hidden(hidden)
+                pos += 1
+            return out
+        finally:
+            if use_trace:
+                self.release_decode_trace()
 
 
 class TtDeviceNucleusSampler:

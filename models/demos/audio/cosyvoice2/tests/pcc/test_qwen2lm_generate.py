@@ -438,3 +438,38 @@ def test_device_generate_breaks_immediately_even_before_min_tokens(device, monke
     out = tt_model.generate(text_ids, max_tokens=20, min_tokens=10, sampler="greedy")
 
     assert out == [], (which_stop, stop_id, out)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536, "trace_region_size": 50_000_000}], indirect=True)
+def test_device_generate_traced_matches_untraced(device):
+    """Traced decode (`use_trace=True`: token embedding + 24 layers + norm + logits head captured
+    once and replayed) must produce EXACTLY the tokens the untraced path does.
+
+    The untraced loop spends ~92% of its ~42 ms/token launching the 24 layers from Python (the
+    device is idle waiting on the host); tracing removes that (measured 41 -> 9.8 ms/token, and
+    bit-identical logits / 232-of-232 identical RAS tokens on the real 9.3 s utterance). This pins
+    the equivalence at test scale, and -- because the SAME captured trace is then reused for a
+    prompt of a different length, so decode positions start somewhere else -- that the trace really
+    is position-independent (position / rope index / token are per-step device writes, not baked in).
+
+    Each `generate()` captures its own trace and releases it when it returns (a trace must not
+    outlive the LLM stage: later stages' lazily allocated persistent tensors can land on the
+    addresses it baked in -- see qwen2lm.py's TRACE SCOPE note), so this also checks the release.
+    """
+    from models.demos.audio.cosyvoice2.tt.llm.qwen2lm import TtQwen2LM
+
+    args, state_dict = _build_args_and_state_dict(device)
+    tt_model = TtQwen2LM(args, device, state_dict)
+
+    torch.manual_seed(5)
+    short = torch.randint(0, args.vocab_size, (1, 4))
+    longer = torch.randint(0, args.vocab_size, (1, 11))
+    try:
+        for text_ids in (short, longer, short):
+            untraced = tt_model.generate(text_ids, max_tokens=12, sampler="greedy", use_trace=False)
+            traced = tt_model.generate(text_ids, max_tokens=12, sampler="greedy", use_trace=True)
+            assert traced == untraced, (text_ids.shape, untraced, traced)
+            assert len(untraced) > 1, "need several decode steps for the comparison to mean anything"
+            assert tt_model._trace_id is None, "generate() left its trace alive"
+    finally:
+        tt_model.release_decode_trace()
