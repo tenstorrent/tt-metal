@@ -31,7 +31,7 @@ public:
     ~MpiTransport() override;
 
     bool can_send(uint32_t pages) const override;
-    bool send(uint32_t first_page, uint32_t pages) override;
+    bool send(uint64_t first_page, uint32_t pages) override;
     uint64_t pages_released() const override { return released_; }
     uint64_t peer_consumed_pages() const override { return peer_consumed_; }
 

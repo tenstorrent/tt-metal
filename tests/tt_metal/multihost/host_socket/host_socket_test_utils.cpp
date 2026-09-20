@@ -118,7 +118,7 @@ std::vector<uint32_t> payload_for_core(uint32_t core_index, uint64_t size_bytes)
 }
 
 void run_transfer(const Params& params, bool verify, double* gbps_out, std::vector<uint64_t>* ack_latency_ns_out) {
-    const auto context = multihost::DistributedContext::get_current_world();
+    const auto& context = multihost::DistributedContext::get_current_world();
     const auto rank = context->rank();
     const bool is_sender = rank == kSenderRank;
 

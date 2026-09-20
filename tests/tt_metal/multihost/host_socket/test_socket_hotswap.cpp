@@ -120,7 +120,7 @@ TEST(SocketHotSwapTest, D2DMeshSocket) {
 // The swap: identical body and kernels, a HostMeshSocket instead, and
 // SOCKET_MODE flipped to the host transport. Two ranks, one endpoint each.
 TEST(SocketHotSwapTest, HostMeshSocketDropIn) {
-    const auto context = multihost::DistributedContext::get_current_world();
+    const auto& context = multihost::DistributedContext::get_current_world();
     ASSERT_EQ(*context->size(), 2) << "needs exactly 2 ranks";
 
     Params params = params_from_env();

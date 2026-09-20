@@ -14,16 +14,11 @@
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/tt_pause.hpp>
 
 namespace tt::tt_metal::distributed::host_transport {
 
 namespace {
-
-// Bounds the bookkeeping deque; peer ring credit is the real limit.
-constexpr size_t kMaxOutstandingBatches = 64;
-
-// Two payload runs plus the arrival signal.
-constexpr uint32_t kSlotsPerBatch = 3;
 
 constexpr uint32_t kSpinsBeforeSleep = 1000;
 constexpr uint32_t kSleepCapUs = 50;
@@ -34,7 +29,7 @@ struct Backoff {
 
     void idle() {
         if (++empty < kSpinsBeforeSleep) {
-            __builtin_ia32_pause();
+            ttsl::pause();
         } else {
             std::this_thread::sleep_for(std::chrono::microseconds(sleep_us));
             sleep_us = std::min(sleep_us + sleep_us / 4 + 1, kSleepCapUs);
@@ -122,7 +117,7 @@ bool RelaySender::poll() {
     if (n == 0 || !transport_.can_send(n)) {
         return progress;
     }
-    if (!transport_.send(static_cast<uint32_t>(forwarded), n)) {
+    if (!transport_.send(forwarded, n)) {
         return progress;
     }
 
@@ -247,11 +242,16 @@ bool RelayLoop::poll_once() {
         try {
             progress |= endpoint->poll();
         } catch (const std::exception& e) {
-            endpoint->error_ = e.what();
+            endpoint->set_error(e.what());
             log_error(tt::LogDistributed, "host_transport relay endpoint stopped: {}", e.what());
         }
     }
     return progress;
+}
+
+std::string RelayLoop::describe(const RelayEndpoint& endpoint) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return endpoint.describe();
 }
 
 std::string RelayLoop::first_error() const {

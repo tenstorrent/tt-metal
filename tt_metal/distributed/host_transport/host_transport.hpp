@@ -40,9 +40,11 @@ public:
 
     // Room for a batch of `pages` right now.
     virtual bool can_send(uint32_t pages) const = 0;
-    // Hand `pages` pages from ring page `first_page` to the peer, which places
-    // them at the same index. False if nothing was sent.
-    virtual bool send(uint32_t first_page, uint32_t pages) = 0;
+    // Hand `pages` pages from absolute ring page `first_page` to the peer, which
+    // places them at the same index. False if nothing was sent. `first_page` stays
+    // 64-bit: it is compared against an absolute counter and only narrowed after
+    // the modulo, so truncating here would break once a stream passes 2^32 pages.
+    virtual bool send(uint64_t first_page, uint32_t pages) = 0;
     // Source bytes the transport has finished reading, so the relay can release
     // them back to the device. Absolute.
     virtual uint64_t pages_released() const = 0;

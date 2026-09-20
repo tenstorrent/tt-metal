@@ -14,7 +14,7 @@ namespace tt::tt_metal::distributed::host_socket_test {
 namespace {
 
 void require_two_ranks() {
-    const auto context = multihost::DistributedContext::get_current_world();
+    const auto& context = multihost::DistributedContext::get_current_world();
     ASSERT_NE(context, nullptr) << "DistributedContext is not initialized";
     ASSERT_EQ(*context->size(), 2) << "HostMeshSocket tests need exactly 2 ranks";
 }
@@ -68,7 +68,7 @@ TEST(HostSocketTest, Throughput) {
     double gbps = 0.0;
     run_transfer(params, /*verify=*/false, &gbps);
 
-    const auto context = multihost::DistributedContext::get_current_world();
+    const auto& context = multihost::DistributedContext::get_current_world();
     if (context->rank() == kSenderRank) {
         GTEST_LOG_(INFO) << "HostMeshSocket throughput: " << gbps << " GB/s at " << params.page_size
                          << " B pages across " << params.num_cores << " core(s)";
@@ -90,7 +90,7 @@ TEST(HostSocketTest, Soak) {
     }
     double gbps = 0.0;
     run_transfer(params, /*verify=*/true, &gbps);
-    const auto context = multihost::DistributedContext::get_current_world();
+    const auto& context = multihost::DistributedContext::get_current_world();
     if (context->rank() == kSenderRank) {
         GTEST_LOG_(INFO) << "soak sustained " << gbps << " GB/s over " << params.min_seconds << " s";
     }

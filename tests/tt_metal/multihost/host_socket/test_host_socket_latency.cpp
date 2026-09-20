@@ -22,7 +22,7 @@ namespace tt::tt_metal::distributed::host_socket_test {
 namespace {
 
 TEST(HostSocketLatencyTest, RoundTrip) {
-    const auto context = multihost::DistributedContext::get_current_world();
+    const auto& context = multihost::DistributedContext::get_current_world();
     ASSERT_EQ(*context->size(), 2) << "needs exactly 2 ranks";
 
     Params params = params_from_env();
@@ -130,7 +130,7 @@ TEST(HostSocketLatencyTest, RoundTrip) {
 }
 
 TEST(HostSocketLatencyTest, StreamingAckLatency) {
-    const auto context = multihost::DistributedContext::get_current_world();
+    const auto& context = multihost::DistributedContext::get_current_world();
     ASSERT_EQ(*context->size(), 2) << "needs exactly 2 ranks";
 
     // One long iteration: across several, the relay also samples over a kernel

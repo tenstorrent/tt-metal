@@ -11,6 +11,10 @@
 
 #include "tt_metal/distributed/host_transport/host_transport.hpp"
 #include "tt_metal/distributed/host_transport/socket_relay.hpp"
+#include <vector>
+#include <span>
+#include <mutex>
+#include <map>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 
 #include <fmt/format.h>
@@ -35,12 +39,35 @@ namespace {
 constexpr uint32_t kEndpointExchangeTagBase = 0x7248;
 
 // Reserves a contiguous run, since each connection takes kTagsPerConnection of
-// them. Both ends allocate in the same construction order, so both get the same
-// base without exchanging it.
-multihost::Tag reserve_exchange_tags(size_t connections) {
-    static std::atomic<uint32_t> next{0};
+// them. Keyed by context and ordered rank pair, as rank-scoped MeshSockets are:
+// a process-wide counter would drift between two ranks that took part in
+// different sockets before connecting to each other, and they would then pick
+// different tags and block in the handshake. Both ends of a given pair allocate
+// in the same construction order, so both derive the same base without
+// exchanging it.
+multihost::Tag reserve_exchange_tags(
+    const multihost::DistributedContext& context,
+    multihost::Rank sender,
+    multihost::Rank receiver,
+    size_t connections) {
+    static std::mutex mutex;
+    static std::map<std::pair<multihost::DistributedContextId, uint64_t>, uint32_t> next;
+    const uint64_t pair_key = (static_cast<uint64_t>(*sender) << 32) | static_cast<uint32_t>(*receiver);
     const uint32_t width = static_cast<uint32_t>(connections) * host_transport::kTagsPerConnection;
-    return multihost::Tag{static_cast<int>(kEndpointExchangeTagBase + next.fetch_add(width))};
+
+    std::lock_guard<std::mutex> lock(mutex);
+    uint32_t& cursor = next[{context.id(), pair_key}];
+    const uint32_t base = cursor;
+    cursor += width;
+    return multihost::Tag{static_cast<int>(kEndpointExchangeTagBase + base)};
+}
+
+// The two endpoints, and only them. create_sub_context uses MPI_Comm_create_group,
+// so ranks outside the group neither call it nor are waited on.
+std::shared_ptr<multihost::DistributedContext> endpoint_context(
+    const std::shared_ptr<multihost::DistributedContext>& context, const SocketConfig& config) {
+    std::vector<int> ranks{*config.sender_rank, *config.receiver_rank};
+    return context->create_sub_context(ranks);
 }
 
 }  // namespace
@@ -65,7 +92,23 @@ struct HostMeshSocket::Impl {
     RingGeometry geometry;
     std::vector<Connection> connections;
     std::vector<MeshCoreCoord> active_cores;
+    // The two endpoint ranks only; barriers must not touch non-participants.
+    std::shared_ptr<multihost::DistributedContext> endpoints;
     bool participates = false;
+
+    // Unregisters every relay this socket owns. Idempotent, so the destructor
+    // and move assignment can both call it.
+    void detach() {
+        if (!transport.own_relay_thread) {
+            return;
+        }
+        for (auto& connection : connections) {
+            if (connection.relay) {
+                RelayLoop::instance().remove(connection.relay);
+                connection.relay.reset();
+            }
+        }
+    }
 
     bool poll() {
         bool progress = false;
@@ -135,6 +178,24 @@ HostMeshSocket::HostMeshSocket(
     impl_->participates = true;
     impl_->active_cores = local_cores(config, impl_->endpoint);
 
+    // Both endpoints agree before either enters the transport handshake: the
+    // handshake is a blocking send/recv pair, so one rank throwing while the
+    // other waits would hang instead of failing both.
+    impl_->endpoints = endpoint_context(context, config);
+    {
+        uint8_t mine = host_transport::host_transport_available() ? 1 : 0;
+        std::vector<uint8_t> all(static_cast<size_t>(*impl_->endpoints->size()), 0);
+        impl_->endpoints->all_gather(
+            std::span<std::byte>(reinterpret_cast<std::byte*>(&mine), 1),
+            std::span<std::byte>(reinterpret_cast<std::byte*>(all.data()), all.size()));
+        const bool both = std::all_of(all.begin(), all.end(), [](uint8_t v) { return v != 0; });
+        TT_FATAL(
+            both,
+            "HostMeshSocket needs a usable host transport on both endpoints; rank {} has {}",
+            *rank,
+            mine ? "one" : "none");
+    }
+
     // One page per core, so every core finds its metadata at the same L1 address
     // and a multi-core kernel needs only one.
     impl_->config_buffer = create_socket_config_buffer(device, config, impl_->endpoint);
@@ -147,7 +208,8 @@ HostMeshSocket::HostMeshSocket(
     }
 
     const bool is_sender = impl_->endpoint == SocketEndpoint::SENDER;
-    const auto exchange_tag = reserve_exchange_tags(config.socket_connection_config.size());
+    const auto exchange_tag = reserve_exchange_tags(
+        *context, config.sender_rank, config.receiver_rank, config.socket_connection_config.size());
 
     impl_->connections.resize(config.socket_connection_config.size());
     for (size_t i = 0; i < config.socket_connection_config.size(); i++) {
@@ -197,7 +259,9 @@ HostMeshSocket::HostMeshSocket(
         }
     }
 
-    context->barrier();
+    // Endpoints only; barriering on the full context would wait on ranks that
+    // returned above and never call it.
+    impl_->endpoints->barrier();
 
     if (transport.own_relay_thread) {
         for (auto& connection : impl_->connections) {
@@ -207,20 +271,25 @@ HostMeshSocket::HostMeshSocket(
 }
 
 HostMeshSocket::~HostMeshSocket() {
-    if (impl_ == nullptr) {
-        return;
-    }
-    if (impl_->transport.own_relay_thread) {
-        for (auto& connection : impl_->connections) {
-            if (connection.relay) {
-                RelayLoop::instance().remove(connection.relay);
-            }
-        }
+    if (impl_ != nullptr) {
+        impl_->detach();
     }
 }
 
 HostMeshSocket::HostMeshSocket(HostMeshSocket&&) noexcept = default;
-HostMeshSocket& HostMeshSocket::operator=(HostMeshSocket&&) noexcept = default;
+
+HostMeshSocket& HostMeshSocket::operator=(HostMeshSocket&& other) noexcept {
+    if (this != &other) {
+        // The relay loop holds shared_ptrs to our endpoints, which reference this
+        // socket and its transport. Replacing impl_ without unregistering first
+        // would leave the relay thread polling freed objects.
+        if (impl_ != nullptr) {
+            impl_->detach();
+        }
+        impl_ = std::move(other.impl_);
+    }
+    return *this;
+}
 
 DeviceAddr HostMeshSocket::get_config_buffer_address() const { return impl_->config_buffer_address; }
 
@@ -319,7 +388,11 @@ void HostMeshSocket::barrier(std::optional<uint32_t> timeout_ms) {
         if (std::chrono::steady_clock::now() >= deadline) {
             std::string state;
             for (size_t i = 0; i < impl_->connections.size(); i++) {
-                state += fmt::format("\n  want {} drained: {}", targets[i], impl_->connections[i].relay->describe());
+                const auto& relay = impl_->connections[i].relay;
+                // Formatting live relay state must be serialized against the relay
+                // thread; when we drive polling ourselves there is no other reader.
+                const std::string detail = drive_here ? relay->describe() : RelayLoop::instance().describe(*relay);
+                state += fmt::format("\n  want {} drained: {}", targets[i], detail);
             }
             TT_THROW(
                 "HostMeshSocket::barrier timed out as {}:{}",

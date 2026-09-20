@@ -70,7 +70,7 @@ void MpiTransport::top_up_receives() {
 
 bool MpiTransport::can_send(uint32_t pages) const { return pending_send_.size() + pages <= kMaxOutstanding; }
 
-bool MpiTransport::send(uint32_t first_page, uint32_t pages) {
+bool MpiTransport::send(uint64_t first_page, uint32_t pages) {
     TT_ASSERT(is_sender_, "send() on a receiving transport");
     // Both sides derive the destination page from their own counter, so a caller
     // that skips or repeats a page would silently misplace every later one.

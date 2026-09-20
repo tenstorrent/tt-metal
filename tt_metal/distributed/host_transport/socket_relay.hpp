@@ -37,12 +37,27 @@ public:
     virtual std::string describe() const = 0;
 
     // poll() runs on the relay thread, where an escaping exception would kill the
-    // process instead of failing the caller.
-    const std::string& error() const { return error_; }
-    bool failed() const { return !error_.empty(); }
+    // process instead of failing the caller. The flag is atomic so the hot barrier
+    // loop can test it without locking; the message is copied under a lock, since
+    // the relay thread writes it.
+    bool failed() const { return failed_.load(std::memory_order_acquire); }
+    std::string error() const {
+        std::lock_guard<std::mutex> lock(error_mutex_);
+        return error_;
+    }
 
 protected:
+    void set_error(std::string message) {
+        {
+            std::lock_guard<std::mutex> lock(error_mutex_);
+            error_ = std::move(message);
+        }
+        failed_.store(true, std::memory_order_release);
+    }
+
+    mutable std::mutex error_mutex_;
     std::string error_;
+    std::atomic<bool> failed_{false};
     friend class RelayLoop;
 };
 
@@ -137,6 +152,12 @@ public:
     bool poll_once();
 
     std::string first_error() const;
+
+    // Serialized against poll_once(), which holds the same lock for a whole sweep.
+    // describe() reads counters the relay thread mutates without synchronization
+    // of their own, so formatting them from another thread needs this. Only the
+    // timeout path uses it, so the contention does not matter.
+    std::string describe(const RelayEndpoint& endpoint) const;
 
     // Wrong NUMA node roughly halves the ring's dependent-load rate.
     void set_numa_node(int node);
