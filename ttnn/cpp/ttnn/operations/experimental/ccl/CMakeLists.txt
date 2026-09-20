@@ -28,8 +28,6 @@ file(
     neighbor_pad_halo/device/kernels/*.cpp
     reduce_scatter_minimal_async/device/kernels/*.cpp
     reduce_scatter_minimal_direct/device/kernels/*.cpp
-    ring_attention_all_gather_async/device/kernels/*.cpp
-    ring_attention_all_gather_async/device/kernels/*.hpp
     dit_fused_distributed_rmsnorm/device/kernels/*.cpp
     dit_fused_distributed_rmsnorm/device/kernels/*.hpp
     send_recv_async/send_async/device/kernels/*.cpp
