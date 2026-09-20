@@ -409,11 +409,35 @@ class TPGatedDeltaNet:
             )
         self._zero_conv0 = z((1, self.B, self.qkv_dim_tp))
         self._zero_conv_carry = z((1, self.K - 1, self.qkv_dim_tp))
-        self._zero_rec = z((self.B, self.Nv, self.Dk, self.Dv))
+        # Read-only zero source for reset_state_inplace's ttnn.copy into rec_state. SHARED by every GDN layer of
+        # the model (keyed on shape): per layer it is B x Nv x Dk x Dv bf16 = 1.5 MiB/slot, i.e. 72 MiB/slot over
+        # 48 layers at TP=1 (2.3 GiB at B=32, the difference between fitting and not fitting on one die).
+        self._zero_rec = self._shared_zero_rec((self.B, self.Nv, self.Dk, self.Dv))
         # Chunk-outer batched-prefill conv left-context (allocated lazily by forward_prefill_batched).
         if getattr(self, "_batched_conv_carry", None) is not None:
             ttnn.deallocate(self._batched_conv_carry)
         self._batched_conv_carry = None
+
+    def _shared_zero_rec(self, shape):
+        """One bf16 zero tensor of `shape` per model (cached on args, which lives as long as the model): every GDN
+        layer's reset_state_inplace copies from it, none writes it. Keyed on shape because the B=1 prefill scratch
+        (model._alloc_gdn_scratch_b1) and the [Bmax,...] decode buffers coexist."""
+        cache = getattr(self.args, "_gdn_shared_zero_bufs", None)
+        if cache is None:
+            cache = {}
+            self.args._gdn_shared_zero_bufs = cache
+        key = tuple(int(d) for d in shape)
+        t = cache.get(key)
+        if t is None:
+            t = ttnn.from_torch(
+                torch.zeros(*shape, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+            cache[key] = t
+        return t
 
     def reset_state_inplace(self):
         """Zero conv + recurrent state in place (preserves trace buffer addresses).

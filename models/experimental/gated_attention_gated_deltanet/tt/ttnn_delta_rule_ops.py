@@ -8,6 +8,7 @@ FLA layout: q,k [B,T,H,K]; v [B,T,H,V]; beta,g [B,T,H]; state [B,H,K,V].
 """
 
 import math
+import os
 
 import torch
 import ttnn
@@ -248,12 +249,18 @@ def fused_decay_and_write_ttnn(
     beta_t,
     device=None,
     apply_decay=True,
+    state_mc=None,
 ):
-    """State update: h = decay*h + beta*(k⊗delta). apply_decay=False if caller already decayed h."""
+    """State update: h = decay*h + beta*(k⊗delta). apply_decay=False if caller already decayed h.
+
+    state_mc: placement of the state-sized [B,H,K,V] tensors (outer product, updated h). Default L1 (the
+    validated decode path); the caller passes DRAM when the state is too large for L1 (see
+    _decode_state_memory_config)."""
     B = h.shape[0]
     H = h.shape[1]
     K = h.shape[2]
     V = h.shape[3]
+    _SMC = state_mc if state_mc is not None else ttnn.L1_MEMORY_CONFIG
 
     # decay_t: [B,H] -> [B,H,1,1] (already exp(g) in BF16)
     decay = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -279,7 +286,7 @@ def fused_decay_and_write_ttnn(
     outer = ttnn.matmul(
         k_col,
         d_row,
-        memory_config=_L1,
+        memory_config=_SMC,
         compute_kernel_config=matmul_compute_cfg,
         program_config=None,
     )
@@ -288,15 +295,27 @@ def fused_decay_and_write_ttnn(
     outer = ttnn.multiply(
         outer,
         beta_expanded,
-        memory_config=_L1,
+        memory_config=_SMC,
     )
 
     # apply_decay=False: h already decayed (decay->read->write order).
     if apply_decay:
-        h = ttnn.multiply(h, decay, memory_config=_L1)
-    h = ttnn.add(h, outer, memory_config=_L1)
+        h = ttnn.multiply(h, decay, memory_config=_SMC)
+    h = ttnn.add(h, outer, memory_config=_SMC)
 
     return h
+
+
+# Largest [B,H,K,V] recurrent state the decode step keeps L1-resident. 64 MiB interleaved over the 110 worker
+# cores is ~600 KB/core; the 96 MiB state of the 27B at TP=1 with B=32 (32 x 48 x 128 x 128 fp32) needs 917 KB/core
+# and fails to allocate ("Out of Memory: Not enough space to allocate 100663296 B L1 buffer"). Above the budget the
+# state-sized tensors (h, the k(x)delta outer product) live in DRAM; everything below is byte-identical to before.
+_DECODE_STATE_L1_MAX_BYTES = int(os.environ.get("QWEN35_GDN_DECODE_STATE_L1_MAX_BYTES", str(64 * 1024 * 1024)))
+
+
+def _decode_state_memory_config(B, H, K, V, dtype):
+    nbytes = B * H * K * V * (4 if dtype == ttnn.float32 else 2)
+    return ttnn.L1_MEMORY_CONFIG if nbytes <= _DECODE_STATE_L1_MAX_BYTES else ttnn.DRAM_MEMORY_CONFIG
 
 
 def recurrent_delta_rule_step_ttnn(
@@ -431,8 +450,9 @@ def recurrent_gated_delta_rule_decode_ttnn(
     elif high_precision and h.dtype != ttnn.float32:
         h = ttnn.typecast(h, ttnn.float32)
 
-    # Decode opt: keep [B,H,K,V] state in L1 (~0.8MB fp32 at B=1).
-    h = ttnn.to_memory_config(h, ttnn.L1_MEMORY_CONFIG)
+    # Decode opt: keep [B,H,K,V] state in L1 (~0.8MB fp32 at B=1); DRAM once it exceeds the L1 budget.
+    _SMC = _decode_state_memory_config(B, H, K, V, h.dtype)
+    h = ttnn.to_memory_config(h, _SMC)
 
     read_query_compute_cfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -453,7 +473,7 @@ def recurrent_gated_delta_rule_decode_ttnn(
     # than a standalone ttnn.exp + multiply.
     _L1 = ttnn.L1_MEMORY_CONFIG
     g_bhkv = ttnn.reshape(g_t, [B, H, 1, 1], memory_config=_L1)
-    h = ttnn.multiply(h, g_bhkv, input_tensor_b_activations=[ttnn.UnaryOpType.EXP], memory_config=_L1)
+    h = ttnn.multiply(h, g_bhkv, input_tensor_b_activations=[ttnn.UnaryOpType.EXP], memory_config=_SMC)
 
     # v_read = k @ h (decayed state)
     v_read = ttnn.matmul(
@@ -467,7 +487,7 @@ def recurrent_gated_delta_rule_decode_ttnn(
     # decay_t is unused downstream (apply_decay=False -> h already decayed above); pass g_bhkv to
     # satisfy the signature without recomputing a decay tensor.
     h = fused_decay_and_write_ttnn(
-        h=h, k_t=k_t, delta=delta, decay_t=g_bhkv, beta_t=beta_t, device=device, apply_decay=False
+        h=h, k_t=k_t, delta=delta, decay_t=g_bhkv, beta_t=beta_t, device=device, apply_decay=False, state_mc=_SMC
     )
 
     # o = q @ h
