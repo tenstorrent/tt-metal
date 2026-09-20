@@ -76,9 +76,13 @@ enum class RingBackwardKind {
 // chunk-blocked flash-attention kernel with its lse output, 5-9x faster at
 // the ring's launch shapes, Float32 accumulation; its lse is within 2-3e-2
 // of the truth where sdpa_fw is within 1e-2.
+// Cyclic is the forward on the cyclic schedule (cyclic_sdpa_fw): the row
+// packet relayed core to core, Float32 statistics and accumulator, its lse
+// within 1e-3; it takes the same block height as the cyclic backwards.
 enum class RingForwardKind {
     TwoPass,
     Ttnn,
+    Cyclic,
 };
 
 // shift_transport is how every ring shift in the forward and the backward

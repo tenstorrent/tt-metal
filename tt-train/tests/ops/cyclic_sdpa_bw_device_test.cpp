@@ -3000,6 +3000,31 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_CompareForwardsWithTtnn) {
                 std::printf("    tt-train relative RMS vs Float32 reference: %.2e\n", relative_rms(ours_xt, O));
             }
 
+            // The forward on the cyclic schedule, at every block height whose
+            // schedule fits the grid (C = N / (2 Bt 32) cores per slice).
+            for (const uint32_t Bt : {1u, 2u, 4u}) {
+                ttnn::Tensor cyc_O;
+                double cyc_s = 0.0;
+                try {
+                    cyc_s = time_it([&]() {
+                        auto [o, l] = ttml::metal::cyclic_sdpa_fw(q, k, v, Bt, mask);
+                        cyc_O = o;
+                        distributed::Finish(device->mesh_command_queue());
+                    });
+                } catch (const std::exception& e) {
+                    std::printf("  cyclic_sdpa_fw Bt %u: does not fit (%.80s)\n", Bt, e.what());
+                    continue;
+                }
+                const std::string name = "cyclic_sdpa_fw (relay, Bt " + std::to_string(Bt) + ")";
+                report(name.c_str(), cyc_s);
+                const auto cyc_xt = ttml::core::to_xtensor(cyc_O);
+                std::printf("    vs tt-train: max |dO| %.3e (scale %.3e), speed-up %.2fx\n",
+                            xt::amax(xt::abs(cyc_xt - ours_xt))(), xt::amax(xt::abs(ours_xt))(), ours_s / cyc_s);
+                if (ref_O.has_value()) {
+                    std::printf("    cyclic relative RMS vs Float32 reference: %.2e\n", relative_rms(cyc_xt, *ref_O));
+                }
+            }
+
             // Two settings of ttnn's kernel: its defaults, and the precise
             // ones -- exact exponential, HiFi4 matmuls, Float32 accumulation
             // -- since the defaults trade accuracy for speed.

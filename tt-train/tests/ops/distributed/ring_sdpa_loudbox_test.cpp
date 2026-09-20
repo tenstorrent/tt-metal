@@ -941,6 +941,37 @@ TEST_F(LoudboxRingSDPATest, TtnnForwardZigzagCyclicBackwardGroupedHeads) {
         1, 8, seq_for(256), 64, /*test_backward=*/true, RingShiftTransport::Direct, RingLayout::Zigzag,
         Kind::CyclicInPlace, /*Bt*/ 2U, /*kv heads*/ 2, Fwd::Ttnn, /*input_scale*/ 0.5F);
 }
+// The cyclic forward: Float32 statistics, so it is graded like sdpa_fw (the
+// default branch), at the default sharp input regime.
+TEST_F(LoudboxRingSDPATest, CyclicForwardContiguousTwoPassBackward) {
+    using Kind = ttml::ops::distributed::RingBackwardKind;
+    using Fwd = ttml::ops::distributed::RingForwardKind;
+    run_ring_attention(
+        1, 4, seq_for(512), 64, /*test_backward*/ true, RingShiftTransport::Direct, RingLayout::Contiguous,
+        Kind::TwoPass, /*Bt*/ 1U, /*kv heads*/ 0, Fwd::Cyclic);
+}
+TEST_F(LoudboxRingSDPATest, CyclicForwardZigzagCyclicBackward) {
+    using Kind = ttml::ops::distributed::RingBackwardKind;
+    using Fwd = ttml::ops::distributed::RingForwardKind;
+    run_ring_attention(
+        1, 4, seq_for(1024), 64, /*test_backward*/ true, RingShiftTransport::Direct, RingLayout::Zigzag,
+        Kind::CyclicInPlace, /*Bt*/ 2U, /*kv heads*/ 0, Fwd::Cyclic);
+}
+TEST_F(LoudboxRingSDPATest, CyclicForwardZigzagCyclicBackwardGroupedHeads) {
+    using Kind = ttml::ops::distributed::RingBackwardKind;
+    using Fwd = ttml::ops::distributed::RingForwardKind;
+    run_ring_attention(
+        1, 4, seq_for(1024), 64, /*test_backward*/ true, RingShiftTransport::Direct, RingLayout::Zigzag,
+        Kind::CyclicInPlace, /*Bt*/ 2U, /*kv heads*/ 2, Fwd::Cyclic);
+}
+TEST_F(LoudboxRingSDPATest, CyclicForwardZigzagWiderHead) {
+    using Kind = ttml::ops::distributed::RingBackwardKind;
+    using Fwd = ttml::ops::distributed::RingForwardKind;
+    run_ring_attention(
+        1, 4, seq_for(1024), 128, /*test_backward*/ true, RingShiftTransport::Direct, RingLayout::Zigzag,
+        Kind::CyclicInPlace, /*Bt*/ 2U, /*kv heads*/ 2, Fwd::Cyclic);
+}
+
 TEST_F(LoudboxRingSDPATest, TtnnForwardZigzagWiderHead) {
     using Kind = ttml::ops::distributed::RingBackwardKind;
     using Fwd = ttml::ops::distributed::RingForwardKind;
@@ -1666,6 +1697,8 @@ TEST_F(LoudboxRingSDPATest, DISABLED_ProfileOneBackward) {
     Fwd forward = Fwd::TwoPass;
     if (const char* env = std::getenv("TTML_LOUDBOX_PROFILE_FORWARD"); env != nullptr && std::string(env) == "ttnn") {
         forward = Fwd::Ttnn;
+    } else if (env != nullptr && std::string(env) == "cyclic") {
+        forward = Fwd::Cyclic;
     }
     size_t heads = 4;
     if (const char* env = std::getenv("TTML_LOUDBOX_PROFILE_HEADS"); env != nullptr && *env != '\0') {
