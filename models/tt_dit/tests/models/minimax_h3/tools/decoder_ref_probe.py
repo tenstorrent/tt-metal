@@ -2,10 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The VAE decoder on its real weights against the pinned diffusers decoder run in float64 on the CPU (post_quant_conv applied
-by the reference, folded into proj_in on ours). Loads the pinned module from MINIMAX_H3_REF_SRC when diffusers lacks it.
-    MINIMAX_H3_MODEL_PATH=... MINIMAX_H3_REF_SRC=.../autoencoder_kl_minimax_h3.py pytest .../decoder_ref_probe.py -s
-"""
+"""The VAE decoder on real weights against the pinned diffusers decoder run in float64 on the CPU (its post_quant_conv
+is folded into our proj_in). Needs MINIMAX_H3_MODEL_PATH, and MINIMAX_H3_REF_SRC when diffusers lacks the module."""
 
 import glob
 import importlib.util
@@ -121,5 +119,5 @@ def test_decoder_against_reference(mesh_device):
     )
     pcc, text = _metrics(pixels, expected)
     logger.info(f"DECREF decoder vs float64 reference: {text}; decoder {ms:.1f} ms")
-    # Measured 2026-09-19: pcc 0.999404 / rel-RMSE 3.019e-2 (the separate rms_norm path it replaced: 0.999368 / 3.105e-2).
+    # The fused q/k RMS path measures pcc 0.999404 / rel-RMSE 3.019e-2; the rms_norm pair it replaced 0.999368 / 3.105e-2.
     assert pcc > 0.999, f"decoder drifted from the reference: pcc {pcc:.6f}"
