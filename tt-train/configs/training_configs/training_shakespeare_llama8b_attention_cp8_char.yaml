@@ -10,15 +10,15 @@
 # (two_pass | cyclic | cyclic_in_place) or the TTML_CP_BACKWARD environment
 # variable, so the same config runs the baseline and the cyclic backward.
 training_config:
-  project_name: "tt_train_nano_llama_cp"
+  project_name: "tt_train_llama8b_attention_cp"
   seed: 5489
   model_save_interval: 1000000
   batch_size: 1
-  max_steps: 40
+  max_steps: 20
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   data_path: "data/shakespeare.txt"
-  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/nanollama3_cp_char.yaml"
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama8b_attention_cp_char.yaml"
   optimizer:
     type: AdamW
     lr: 0.0003
