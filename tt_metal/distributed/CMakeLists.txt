@@ -46,6 +46,10 @@ elseif(ENABLE_DISTRIBUTED)
     find_package(MPI QUIET COMPONENTS C)
     if(MPI_FOUND)
         message(STATUS "ULFM MPI not found, using system MPI")
+        # OpenMPI < 5 (and MPICH) pull their deprecated C++ bindings into <mpi.h> for C++
+        # translation units, which then need libmpi_cxx at link time. Only the C API is used
+        # here, so opt out instead of linking the C++ bindings library.
+        target_compile_definitions(MPI::MPI_C INTERFACE OMPI_SKIP_MPICXX=1 MPICH_SKIP_MPICXX=1)
         add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
         set(USE_MPI TRUE)
         list(APPEND DISTRIBUTED_SRC multihost/mpi_distributed_context.cpp)
