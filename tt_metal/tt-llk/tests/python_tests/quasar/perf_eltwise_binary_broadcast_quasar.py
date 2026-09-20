@@ -10,16 +10,16 @@ from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
 )
-from helpers.param_config import generate_perf_input_dimensions, parametrize
-from helpers.tile_shape import construct_tile_shape
+from helpers.param_config import parametrize
 from quasar.test_eltwise_binary_broadcast_quasar import (
-    BINARY_BROADCAST_FORMATS,
-    BINARY_BROADCAST_TILE_DIMENSIONS,
+    BINARY_BROADCAST_PERF_FORMATS,
     BROADCAST_TYPES,
     binary_broadcast_acc_to_dest_modes,
     binary_broadcast_dest_sync_modes,
     binary_broadcast_implied_math_formats,
+    binary_broadcast_input_dimensions,
     binary_broadcast_math_fidelities,
+    binary_broadcast_tile_dimensions,
 )
 from quasar.test_eltwise_binary_broadcast_quasar import (
     test_eltwise_binary_broadcast_quasar as run_eltwise_binary_broadcast,
@@ -29,7 +29,7 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    formats=BINARY_BROADCAST_FORMATS,
+    formats=BINARY_BROADCAST_PERF_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
     math_op=get_perf_math_operations,
     broadcast_type=BROADCAST_TYPES,
@@ -41,14 +41,15 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
     ),
     dest_sync=lambda: binary_broadcast_dest_sync_modes(is_perf=True),
     unpack_to_dest=[False],
-    tile_dimensions=BINARY_BROADCAST_TILE_DIMENSIONS,
-    input_dimensions=lambda dest_acc, dest_sync, tile_dimensions: generate_perf_input_dimensions(
-        dest_acc,
-        dest_sync,
-        construct_tile_shape(tile_dimensions),
-        use_largest_fallback=True,
+    tile_dimensions=lambda formats, broadcast_type: binary_broadcast_tile_dimensions(
+        formats, broadcast_type, is_perf=True
     ),
-    acc_to_dest=binary_broadcast_acc_to_dest_modes,
+    input_dimensions=lambda dest_acc, dest_sync, tile_dimensions: binary_broadcast_input_dimensions(
+        dest_acc, dest_sync, tile_dimensions, is_perf=True
+    ),
+    acc_to_dest=lambda input_dimensions, tile_dimensions: binary_broadcast_acc_to_dest_modes(
+        input_dimensions, tile_dimensions, is_perf=True
+    ),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],

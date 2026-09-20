@@ -822,8 +822,9 @@ PERF_TEST_SCHEMAS = {
 
 PERF_TEST_SCHEMAS_QSR = {
     "perf_eltwise_binary_broadcast_quasar": {
-        "version": 4,
+        "version": 5,
         "columns": [
+            "acc_to_dest",
             "block_ct_dim",
             "block_rt_dim",
             "broadcast_type",
@@ -841,6 +842,8 @@ PERF_TEST_SCHEMAS_QSR = {
             "full_ct_dim",
             "full_rt_dim",
             "implied_math_format",
+            "input_num_tiles_in_block",
+            "input_tile_cnt",
             "loop_factor",
             "marker",
             "math_fidelity",
@@ -848,6 +851,13 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces",
             "num_faces_A",
             "num_faces_B",
+            "num_faces_c_dim_A",
+            "num_faces_c_dim_B",
+            "num_faces_r_dim_A",
+            "num_faces_r_dim_B",
+            "num_tiles_in_block",
+            "output_num_tiles_in_block",
+            "output_tile_cnt",
             "tile_cnt",
             "unpack_to_dest",
         ],
