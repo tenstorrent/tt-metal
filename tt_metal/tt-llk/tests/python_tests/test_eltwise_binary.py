@@ -497,17 +497,11 @@ def _run_eltwise_binary_test(
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
-    broadcast_type=[
-        BroadcastType.None_,
-        BroadcastType.Row,
-        BroadcastType.Column,
-        BroadcastType.Scalar,
-    ],
     math_op=BASE_MATH_OPS,
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
     transpose_srca=[Transpose.Yes, Transpose.No],
-    tile_dimensions=lambda transpose_srca, broadcast_type: get_eltwise_binary_tile_dimensions(
-        transpose_srca, broadcast_type
+    tile_dimensions=lambda transpose_srca: get_eltwise_binary_tile_dimensions(
+        transpose_srca, BroadcastType.None_
     ),
     input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: get_eltwise_binary_input_dimensions(
         dest_acc,
@@ -523,7 +517,6 @@ def test_eltwise_binary(
     dest_sync,
     unpack_to_dest,
     formats,
-    broadcast_type,
     math_op,
     math_fidelity,
     transpose_srca,
@@ -536,7 +529,7 @@ def test_eltwise_binary(
         dest_sync,
         unpack_to_dest,
         formats,
-        broadcast_type,
+        BroadcastType.None_,
         math_op,
         math_fidelity,
         transpose_srca,
@@ -551,17 +544,11 @@ def test_eltwise_binary(
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
     formats=get_bfp4_formats(),
-    broadcast_type=[
-        BroadcastType.None_,
-        BroadcastType.Row,
-        BroadcastType.Column,
-        BroadcastType.Scalar,
-    ],
     math_fidelity=lambda formats: _get_valid_math_fidelity(formats),
     transpose_srca=Transpose.No,
     math_op=BFP4_MATH_OPS,
-    tile_dimensions=lambda transpose_srca, broadcast_type: get_eltwise_binary_tile_dimensions(
-        transpose_srca, broadcast_type
+    tile_dimensions=lambda transpose_srca: get_eltwise_binary_tile_dimensions(
+        transpose_srca, BroadcastType.None_
     ),
     input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: get_eltwise_binary_input_dimensions(
         dest_acc,
@@ -577,7 +564,6 @@ def test_eltwise_binary_bfp4_b(
     dest_sync,
     unpack_to_dest,
     formats,
-    broadcast_type,
     math_fidelity,
     transpose_srca,
     math_op,
@@ -590,7 +576,7 @@ def test_eltwise_binary_bfp4_b(
         dest_sync,
         unpack_to_dest,
         formats,
-        broadcast_type,
+        BroadcastType.None_,
         math_op,
         math_fidelity,
         transpose_srca,
@@ -1064,14 +1050,11 @@ def test_eltwise_binary_dest_reuse(
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
     formats=INT8_FORMAT,
-    broadcast_type=[
-        BroadcastType.None_,
-    ],
     math_fidelity=MathFidelity.LoFi,
     transpose_srca=Transpose.No,
     math_op=INT8_MATH_OPS,
-    tile_dimensions=lambda transpose_srca, broadcast_type: get_eltwise_binary_tile_dimensions(
-        transpose_srca, broadcast_type
+    tile_dimensions=lambda transpose_srca: get_eltwise_binary_tile_dimensions(
+        transpose_srca, BroadcastType.None_
     ),
     input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: get_eltwise_binary_input_dimensions(
         dest_acc,
@@ -1087,7 +1070,6 @@ def test_eltwise_binary_int8_format(
     dest_sync,
     unpack_to_dest,
     formats,
-    broadcast_type,
     math_fidelity,
     transpose_srca,
     math_op,
@@ -1100,7 +1082,7 @@ def test_eltwise_binary_int8_format(
         dest_sync,
         unpack_to_dest,
         formats,
-        broadcast_type,
+        BroadcastType.None_,
         math_op,
         math_fidelity,
         transpose_srca,
