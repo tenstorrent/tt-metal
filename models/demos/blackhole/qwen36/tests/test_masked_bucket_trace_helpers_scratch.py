@@ -43,9 +43,9 @@ def test_host_masks_all_ones_at_full_bucket():
 
 
 def test_host_masks_rejects_out_of_range():
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError):  # allow-pytest.raises: host-only guard
         host_masks(0, 128)
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError):  # allow-pytest.raises: host-only guard
         host_masks(129, 128)
 
 
@@ -180,12 +180,14 @@ def test_fill_pt_row_default_never_reads_the_row_past_the_real_blocks():
 def test_fill_pt_row_default_is_deterministic_in_the_stale_own_block_row():
     """The exact vLLM row from the server dump: the fill names block 2 ONCE and pads with the scratch block."""
     for T in (1, 2, 63, 64):
-        assert torch.equal(fill_pt_row(STALE_OWN_BLOCK_ROW, 0, T, 128, 63, BLOCK), torch.tensor([[2, 63]], dtype=torch.int32))
+        assert torch.equal(
+            fill_pt_row(STALE_OWN_BLOCK_ROW, 0, T, 128, 63, BLOCK), torch.tensor([[2, 63]], dtype=torch.int32)
+        )
 
 
 def test_fill_pt_row_trust_tail_rejects_the_stale_own_block_row():
     """Rollback form on the stale vLLM row: the alias guard refuses to name block 2 twice instead of racing."""
-    with pytest.raises(AssertionError, match="pad rows into real block"):
+    with pytest.raises(AssertionError, match="pad rows into real block"):  # allow-pytest.raises: host-only guard
         fill_pt_row(STALE_OWN_BLOCK_ROW, 0, 64, 128, 63, BLOCK, trust_tail=True)
 
 
@@ -194,25 +196,41 @@ def test_fill_pt_row_trust_tail_rejects_a_stale_tail_aliasing_another_requests_b
     receive pad rows; with the guard the rollback form fails loudly."""
     pt = torch.zeros(1, 64, dtype=torch.int32)
     pt[0, :4] = torch.tensor([7, 9, 9, 7], dtype=torch.int32)  # real [7, 9], stale tail [9, 7]
-    with pytest.raises(AssertionError, match="pad rows into real block"):
+    with pytest.raises(AssertionError, match="pad rows into real block"):  # allow-pytest.raises: host-only guard
         fill_pt_row(pt, 0, 65, 256, 63, BLOCK, trust_tail=True)
     # default: the same row is fine
     assert torch.equal(fill_pt_row(pt, 0, 65, 256, 63, BLOCK), torch.tensor([[7, 9, 63, 63]], dtype=torch.int32))
 
 
+PAD_IN_REAL = "pad block 63 is one of the request's real blocks"
+
+
 def test_fill_pt_row_rejects_the_pad_block_among_the_real_blocks():
     pt = torch.zeros(1, 64, dtype=torch.int32)
     pt[0, :2] = torch.tensor([7, 63], dtype=torch.int32)
-    with pytest.raises(AssertionError, match="pad block 63 is one of the request's real blocks"):
+    with pytest.raises(AssertionError, match=PAD_IN_REAL):  # allow-pytest.raises: host-only guard
         fill_pt_row(pt, 0, 65, 256, 63, BLOCK)
-    with pytest.raises(AssertionError, match="pad block 63 is one of the request's real blocks"):
+    with pytest.raises(AssertionError, match=PAD_IN_REAL):  # allow-pytest.raises: host-only guard
         fill_pt_row(pt, 0, 65, 256, 63, BLOCK, trust_tail=True)
+
+
+def test_fill_pt_row_allows_the_pad_block_among_the_real_blocks_when_there_are_no_pad_entries():
+    """nreal == width: no pad row is written, so the pad block's identity is irrelevant (the batched text_demo maps
+    the whole pool incl. the last block -- the default pad block -- to its last user and must keep working)."""
+    pt = torch.zeros(1, 64, dtype=torch.int32)
+    pt[0, :2] = torch.tensor([7, 63], dtype=torch.int32)
+    for T in (65, 128):
+        assert torch.equal(fill_pt_row(pt, 0, T, 128, 63, BLOCK), torch.tensor([[7, 63]], dtype=torch.int32))
+    pt[0, :8] = torch.arange(56, 64, dtype=torch.int32)
+    assert fill_pt_row(pt, 0, 512, 512, 63, BLOCK).tolist()[0] == list(range(56, 64))
+    with pytest.raises(AssertionError, match=PAD_IN_REAL):  # allow-pytest.raises: host-only guard
+        fill_pt_row(pt, 0, 511, 1024, 63, BLOCK)  # 8 real + 8 pad entries in the 1024 bucket -> guard fires
 
 
 def test_fill_pt_row_rejects_a_real_block_named_twice():
     pt = torch.zeros(1, 64, dtype=torch.int32)
     pt[0, :2] = torch.tensor([5, 5], dtype=torch.int32)
-    with pytest.raises(AssertionError, match="names a real block twice"):
+    with pytest.raises(AssertionError, match="names a real block twice"):  # allow-pytest.raises: host-only guard
         fill_pt_row(pt, 0, 65, 256, 63, BLOCK)
 
 
@@ -226,13 +244,13 @@ def test_fill_pt_row_pad_block_may_repeat():
 
 def test_fill_pt_row_rejects_block_zero_as_scratch():
     pt = torch.arange(64, dtype=torch.int32).reshape(1, 64)
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError):  # allow-pytest.raises: host-only guard
         fill_pt_row(pt, 0, 33, 128, 0, BLOCK)
 
 
 def test_fill_pt_row_rejects_an_unmapped_real_block():
     pt = torch.arange(1, 3, dtype=torch.int32).reshape(1, 2)  # 2 blocks
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError):  # allow-pytest.raises: host-only guard
         fill_pt_row(pt, 0, 200, 256, 63, BLOCK)  # needs 4 real blocks
 
 
@@ -253,5 +271,5 @@ def test_parse_bucket_trace_gate_list():
 
 
 def test_parse_bucket_trace_gate_rejects_unknown_bucket():
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError):  # allow-pytest.raises: host-only guard
         parse_bucket_trace_gate("192", BUCKETS)

@@ -194,12 +194,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         model = self.model[0]
         # Traced masked-bucket prefill (QWEN36_PREFILL_BUCKET_TRACE) needs one scratch KV block that the scheduler never
         # hands out: allocate num_blocks+1 physically and keep page tables over 0..num_blocks-1 (the model then takes the
-        # extra last block as its pad block). QWEN36_PREFILL_BUCKET_EXTRA_BLOCK=0 disables (then the caller must reserve).
+        # extra last block as its pad block). There is deliberately NO opt-out: every padded prefill writes its pad rows
+        # into the pad block, so a pad block inside the scheduler's pool is a live request's K/V (silent cross-request
+        # corruption) -- the former QWEN36_PREFILL_BUCKET_EXTRA_BLOCK=0 knob did exactly that and was removed.
         shape = list(kv_cache_shape)
-        if (
-            getattr(model, "_mb_trace_buckets", None)
-            and os.environ.get("QWEN36_PREFILL_BUCKET_EXTRA_BLOCK", "1") == "1"
-        ):
+        traced = bool(getattr(model, "_mb_trace_buckets", None))
+        if traced:
             shape[0] = int(shape[0]) + 1
             logger.info(
                 f"[prefill] allocating {shape[0]} KV blocks ({kv_cache_shape[0]} scheduler + 1 pad block for bucket traces)"
@@ -207,7 +207,15 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # QWEN_SDPA_BF8: bf8 paged KV (model.allocate_kv_caches also promotes this internally; wired explicitly here so
         # the caller's intent is visible and a future refactor that drops the model-side override stays correct).
         kv_dtype = ttnn.bfloat8_b if os.environ.get("QWEN_SDPA_BF8", "0") == "1" else ttnn.bfloat16
-        return model.allocate_kv_caches(shape, kv_dtype, batch_size=batch_size)
+        kv = model.allocate_kv_caches(shape, kv_dtype, batch_size=batch_size)
+        if traced and int(model._pad_kv_block) != int(kv_cache_shape[0]):
+            # QWEN36_PREFILL_BUCKET_PAD_BLOCK pointed inside the scheduler's pool (0..num_blocks-1): refuse to serve.
+            raise RuntimeError(
+                f"traced masked-bucket prefill needs its pad block OUTSIDE the scheduler's pool: pad block "
+                f"{model._pad_kv_block} but the scheduler owns blocks 0..{int(kv_cache_shape[0]) - 1} (unset "
+                f"QWEN36_PREFILL_BUCKET_PAD_BLOCK, or set QWEN36_PREFILL_BUCKET_TRACE=0)"
+            )
+        return kv
 
     @staticmethod
     def _has_visual(kwargs, pixel_key):

@@ -62,7 +62,9 @@ def host_logit_sel(actual_len, bucket):
     return sel
 
 
-def fill_pt_row(page_table, chunk_start, actual_len, bucket, pad_block, block_size=DEFAULT_BLOCK_SIZE, trust_tail=False):
+def fill_pt_row(
+    page_table, chunk_start, actual_len, bucket, pad_block, block_size=DEFAULT_BLOCK_SIZE, trust_tail=False
+):
     """FIXED-WIDTH KV-fill page table [1, bucket//block_size] int32 for the traced bucket body.
 
     The eager path sizes this table to the REAL blocks only (``page_table[:, blk0:blkN]`` with
@@ -87,16 +89,20 @@ def fill_pt_row(page_table, chunk_start, actual_len, bucket, pad_block, block_si
     non-zero entry" then named block 2 twice in ONE paged_fill_cache, so the bucket's PAD rows raced
     the real rows for the same block (multi-core write race): 63/64-token prompts gave nondeterministic,
     wrong logits, and a stale id owned by ANOTHER live request silently corrupted that request's K/V.
-    The same row reaches every device count (the plugin hands the model vLLM's block-table row as is,
-    and TP>1 replicates it to all devices), so the safe rule is the default everywhere.
+    The same row reaches every device count: the serving plugin (vllm-tt-plugin, ``vllm_tt_plugin/
+    input_batch.py`` ``block_tables_for_rows``: ``bt.get_cpu_tensor()[rows, :width].clone()``, called from
+    ``model_runner.py`` for every prefill) hands the model vLLM's block-table row unchanged, stale tail
+    included, and TP>1 replicates that row to all devices; so the safe rule is the default everywhere.
 
     trust_tail=True (QWEN36_PREFILL_TRUST_PT_TAIL=1, rollback only) restores the old row-building rule;
     the alias guard below still rejects a row that would name a real block twice, so the rollback can
     fail loudly but can no longer corrupt K/V.
 
-    Guards (AssertionError): the request's real blocks are distinct, ``pad_block`` is not one of them,
-    and no pad entry aliases a real block -- i.e. no physical block other than ``pad_block`` appears
-    twice in the row handed to paged_fill_cache.
+    Guards (AssertionError): the request's real blocks are distinct, and no pad entry aliases a real
+    block -- i.e. no physical block other than ``pad_block`` appears twice in the row handed to
+    paged_fill_cache. ``pad_block`` must not be one of the real blocks when the row has pad entries
+    (nreal < width); a row whose real blocks fill the bucket writes no pad rows, so the pad block is
+    irrelevant there and a demo whose arange page table maps the pad block to its last user stays valid.
     """
     assert bucket % block_size == 0, f"bucket {bucket} must be a multiple of block_size {block_size}"
     assert chunk_start % block_size == 0, f"chunk_start {chunk_start} must be block-aligned"
@@ -128,7 +134,8 @@ def fill_pt_row(page_table, chunk_start, actual_len, bucket, pad_block, block_si
         f"page-table row names a real block twice for chunk_start={chunk_start}, actual_len={actual_len}: "
         f"real blocks {real}"
     )
-    assert pad_block not in real, (
+    # Only meaningful when pad rows are actually written (nreal < width): a fully real row never touches pad_block.
+    assert nreal == width or pad_block not in real, (
         f"pad block {pad_block} is one of the request's real blocks {real} (chunk_start={chunk_start}, "
         f"actual_len={actual_len}); the KV cache must carry one spare block the scheduler never hands out"
     )

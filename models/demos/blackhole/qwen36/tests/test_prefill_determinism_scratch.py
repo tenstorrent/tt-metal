@@ -17,7 +17,9 @@ recurrent/conv state and the request's K/V blocks are compared bit-for-bit acros
 Env knobs:
   P1B_B        max_batch_size: 8 -> prefill_paged_slots (decode-node shape, max_num_seqs=8); 1 -> prefill_traced_chunked
                on the B=1 buffers (prefill-node shape, max_num_seqs=1). Default 8.
-  P1B_LENS     comma list of prompt lengths (default 1,2,31,32,33,62,63,64,65,66,127,128,129)
+  P1B_LENS     comma list of prompt lengths (default 1,2,31,32,33,62,63,64,65,66,127,128,129,257,513,1025,2305:
+               the block-edge lengths, plus lengths whose fill has MANY pad entries -- 3/7/15 cores writing the
+               scratch block in ONE paged_fill_cache -- incl. one in the chunk_start=2048 tail bucket)
   P1B_REPEATS  repeats per length (default 8)
   P1B_CHURN    1 -> between repeats run a different prefill (random 300 tokens into slot 1) + 3 decode steps (memory churn,
                like the decode steps / exports vLLM runs between requests)
@@ -44,7 +46,6 @@ import threading
 import time
 
 import numpy as np
-
 import pytest
 import torch
 from loguru import logger
@@ -129,7 +130,10 @@ def _decode_step(model, vocab, width, active):
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 1), id="1x1")], indirect=True)
 def test_prefill_determinism(mesh_device, reset_seeds, ensure_gc):
     B = int(os.environ.get("P1B_B", "8"))
-    lens = [int(x) for x in os.environ.get("P1B_LENS", "1,2,31,32,33,62,63,64,65,66,127,128,129").split(",")]
+    lens = [
+        int(x)
+        for x in os.environ.get("P1B_LENS", "1,2,31,32,33,62,63,64,65,66,127,128,129,257,513,1025,2305").split(",")
+    ]
     reps = int(os.environ.get("P1B_REPEATS", "8"))
     out_path = os.environ.get("P1B_OUT", os.path.join(os.getcwd(), f"p1b_determinism_B{B}.json"))
     num_blocks = 8 * BPU
@@ -138,7 +142,9 @@ def test_prefill_determinism(mesh_device, reset_seeds, ensure_gc):
     assert model.use_tp
     args = model.args
     vocab = args.vocab_size
-    model.allocate_kv_caches((num_blocks + 1, args.n_local_kv_heads, BLOCK, args.head_dim), ttnn.bfloat8_b, batch_size=B)
+    model.allocate_kv_caches(
+        (num_blocks + 1, args.n_local_kv_heads, BLOCK, args.head_dim), ttnn.bfloat8_b, batch_size=B
+    )
     logger.info(f"[p1b] model loaded in {time.perf_counter()-t0:.0f}s; B={B} bucket_trace={model._mb_trace_buckets}")
 
     batched = B > 1
@@ -162,7 +168,9 @@ def test_prefill_determinism(mesh_device, reset_seeds, ensure_gc):
     if batched:
         model.warmup_gdn_slot_write()
     ttnn.synchronize_device(mesh_device)
-    logger.info(f"[p1b] prefill warmup {time.perf_counter()-t0:.0f}s; programs={mesh_device.num_program_cache_entries()}")
+    logger.info(
+        f"[p1b] prefill warmup {time.perf_counter()-t0:.0f}s; programs={mesh_device.num_program_cache_entries()}"
+    )
     n_pc = mesh_device.num_program_cache_entries()
 
     churn = os.environ.get("P1B_CHURN", "0") == "1"
@@ -174,17 +182,21 @@ def test_prefill_determinism(mesh_device, reset_seeds, ensure_gc):
     if do_export:
         from models.demos.blackhole.qwen36.tests.test_kv_transfer_hook import make_sinks
         from models.demos.blackhole.qwen36.tt.kv_transfer import Qwen36KVTransfer
+
         hook = Qwen36KVTransfer(model)
         hook.warmup_kv_transfer(role="kv_producer", mode="dumpfile", chunk_tokens=2048, slots=range(B))
     stop = threading.Event()
+
     def _heap():
         import random
+
         keep = []
         while not stop.is_set():
             keep.append(torch.zeros(random.choice([1, 2, 4, 8, 16, 33, 128, 131, 512]), dtype=torch.int32))
             keep.append(np.zeros(random.choice([2, 4, 8, 64, 1024]), dtype=np.int64))
             if len(keep) > 64:
                 keep = keep[32:]
+
     th = threading.Thread(target=_heap, daemon=True) if heap else None
     if th:
         th.start()
@@ -194,6 +206,7 @@ def test_prefill_determinism(mesh_device, reset_seeds, ensure_gc):
     churn_prompt = torch.randint(0, vocab, (1, 300), dtype=torch.long)
     slot = 0
     results = {}
+
     def _pt_row(blocks, nblk):
         row = torch.zeros(1, max(pt_width, BPU), dtype=torch.int32)
         if stale:
@@ -206,6 +219,7 @@ def test_prefill_determinism(mesh_device, reset_seeds, ensure_gc):
         else:
             row[0, :BPU] = torch.tensor(blocks, dtype=torch.int32)
         return row
+
     for T in lens:
         ids = _prompt(T)
         assert len(ids) == T
@@ -217,11 +231,15 @@ def test_prefill_determinism(mesh_device, reset_seeds, ensure_gc):
             blocks = _region(1 + (r % 7)) if vary else (_region(1) if stale else _region(0))
             if churn:
                 if batched:
-                    model.prefill_paged_slots([churn_prompt], torch.tensor([_region(7)], dtype=torch.int32), [1], valid_lens=[300])
+                    model.prefill_paged_slots(
+                        [churn_prompt], torch.tensor([_region(7)], dtype=torch.int32), [1], valid_lens=[300]
+                    )
                     for step in range(3):
                         _decode_step(model, vocab, 2, {1: (7, 300 + step, _region(7))})
                 else:
-                    lgt = model.prefill_traced_chunked(churn_prompt, torch.tensor([_region(7)], dtype=torch.int32), actual_len=300)
+                    lgt = model.prefill_traced_chunked(
+                        churn_prompt, torch.tensor([_region(7)], dtype=torch.int32), actual_len=300
+                    )
                     ttnn.deallocate(lgt)
             if batched:
                 pt = _pt_row(blocks, nblk)
@@ -280,10 +298,22 @@ def test_prefill_determinism(mesh_device, reset_seeds, ensure_gc):
             f"[p1b] T={T:5d} distinct={len(distinct)}/{reps} maxdiff={maxdiff:.4g} argmax={argmax} "
             f"gdn_bad={sorted(bad_layers)[:6]} kv_bad={kv_bad} new_programs={rec['new_programs']}"
         )
-        json.dump({"B": B, "bucket_trace": os.environ.get("QWEN36_PREFILL_BUCKET_TRACE"), "churn": churn, "zeropad": zeropad,
-                   "export": do_export, "heapchurn": heap, "pt_width": pt_width, "stale": stale,
-                   "vary_blocks": vary, "results": results},
-                  open(out_path, "w"), indent=1)
+        json.dump(
+            {
+                "B": B,
+                "bucket_trace": os.environ.get("QWEN36_PREFILL_BUCKET_TRACE"),
+                "churn": churn,
+                "zeropad": zeropad,
+                "export": do_export,
+                "heapchurn": heap,
+                "pt_width": pt_width,
+                "stale": stale,
+                "vary_blocks": vary,
+                "results": results,
+            },
+            open(out_path, "w"),
+            indent=1,
+        )
     stop.set()
     nondet = [T for T, r in results.items() if r["distinct_logits"] > 1]
     logger.info(f"[p1b] NONDETERMINISTIC lengths: {nondet}")
