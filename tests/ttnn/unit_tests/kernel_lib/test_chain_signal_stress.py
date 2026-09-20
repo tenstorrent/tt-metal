@@ -5,23 +5,23 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.unit_tests.kernel_lib.test_mcast_family import _cores
+from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import core_set
 
 
 def _stress(device, noc, counter, events, guards, includes_sender, reverse_channel=False):
     coords = [(0, 0), (2, 0), (4, 0)]
-    cores = _cores(coords)
+    cores = core_set(coords)
     signal = ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag
     noc_id = ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0
     family = ttnn.McastFamily(
         device,
         ttnn.McastConfig(noc=noc_id, data_ready=signal, irregular_receiver_set_mode=ttnn.TransferMode.ChainUnicast),
     )
-    family.add_group(_cores(coords if includes_sender else coords[1:]), [ttnn.CoreCoord(*coords[0])])
+    family.add_group(core_set(coords if includes_sender else coords[1:]), [ttnn.CoreCoord(*coords[0])])
     reverse = None
     if reverse_channel:
         reverse = ttnn.McastFamily(device, ttnn.McastConfig(noc=noc_id, data_ready=signal))
-        reverse.add_group(_cores([coords[0]]), [ttnn.CoreCoord(*coords[2])])
+        reverse.add_group(core_set([coords[0]]), [ttnn.CoreCoord(*coords[2])])
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape([3, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
