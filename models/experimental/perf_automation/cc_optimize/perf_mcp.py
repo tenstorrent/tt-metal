@@ -4429,7 +4429,10 @@ def _emit_fullpipe(result: dict) -> dict:
     if result.get("target_ms") is not None:
         parts.append("target_ms=%s gap_ms=%s" % (result.get("target_ms"), result.get("gap_to_target_ms")))
     if result.get("error"):
-        parts.append("error=%s" % str(result.get("error"))[:140])
+        # Was :140 -- truncated a real crash mid-word ("ImportError while loading con"), so the one
+        # place this gate's failures get logged carried no usable diagnosis. 600 matches the other
+        # crash-message truncations in this file (measure_candidate, _autorecord_wedge).
+        parts.append("error=%s" % str(result.get("error"))[:600])
     line = " ".join(parts)
     sys.stderr.write(line + "\n")
     sys.stderr.flush()
@@ -5000,7 +5003,17 @@ def check_full_pipeline_latency() -> dict:
     end_to_end_ms, via=trace_replay|eager_wall, best/delta/target) to stderr and appends it to
     $TMPDIR/perf_mcp_fullpipe_gate.log so the gated end-to-end time is visible every iteration.
     Returns {status, full_pipeline_ms, method, metric, best_ms?, delta_pct?, target_ms?,
-    gap_to_target_ms?, reached_target?}."""
+    gap_to_target_ms?, reached_target?}. An unexpected exception anywhere in the measurement is caught
+    and returned as status 'crash' with the real error text -- never left to escape as a bare
+    "Error executing tool" with no information for the caller to act on (measure_candidate already
+    guards this same way; this gate previously did not)."""
+    try:
+        return _check_full_pipeline_latency_body()
+    except Exception as exc:  # noqa: BLE001 -- surface it, do not let the MCP layer swallow the reason
+        return _emit_fullpipe({"status": "crash", "error": "gate crashed: %s" % str(exc)[-600:], "cq": 1})
+
+
+def _check_full_pipeline_latency_body() -> dict:
     # The tool is trace+1cq end to end: one track, one baseline, no 2-CQ bookend.
     cq = 1
     ms, method, err, path = _measure_full_pipeline_guarded()

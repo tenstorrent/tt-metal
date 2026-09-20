@@ -68,6 +68,53 @@ def test_slower_is_diverged_not_banked(tmp_path, monkeypatch):
     assert json.loads((tmp_path / "base_1cq.json").read_text())["full_pipeline_ms"] == 90.0
 
 
+def test_an_exception_anywhere_in_the_measurement_returns_a_crash_verdict_not_a_bare_error(tmp_path, monkeypatch):
+    # Before this guard, any exception raised past _measure_full_pipeline_guarded (e.g. a parsing
+    # bug tripped by a new decode_step's output) escaped the tool entirely and the caller only ever
+    # saw "Error executing tool check_full_pipeline_latency" -- no reason, nothing to act on. The
+    # top-level try/except must turn that into the same structured status='crash' + error text every
+    # other failure path here already returns.
+    monkeypatch.setattr(perf_mcp, "_FULLPIPE_BASELINE_1CQ_PATH", tmp_path / "base_1cq.json")
+
+    def _boom():
+        raise RuntimeError("KeyError: 'TRACE_PER_TOKEN_MS' not found while parsing decode_step output")
+
+    monkeypatch.setattr(perf_mcp, "_measure_full_pipeline_guarded", _boom)
+    r = _cfpl()
+    assert r["status"] == "crash"
+    assert "KeyError" in r["error"] and "TRACE_PER_TOKEN_MS" in r["error"]
+
+
+def test_the_crash_verdict_is_also_written_to_the_gate_log(tmp_path, monkeypatch):
+    monkeypatch.setattr(perf_mcp, "_FULLPIPE_BASELINE_1CQ_PATH", tmp_path / "base_1cq.json")
+    monkeypatch.setattr(perf_mcp, "state_dir", lambda: tmp_path)
+
+    def _boom():
+        raise RuntimeError("device wedged mid-parse")
+
+    monkeypatch.setattr(perf_mcp, "_measure_full_pipeline_guarded", _boom)
+    _cfpl()
+    logged = (tmp_path / "perf_mcp_fullpipe_gate.log").read_text()
+    assert "status=crash" in logged and "device wedged mid-parse" in logged
+
+
+def test_a_long_crash_message_is_not_truncated_mid_word_in_the_log(tmp_path, monkeypatch):
+    # Was :140 -- a real crash ("ImportError while loading conftest...") was cut to "ImportError
+    # while loading con" in the one place this gate's failures are logged, which is useless for
+    # diagnosis. 600 must be enough to keep a full ImportError line intact.
+    monkeypatch.setattr(perf_mcp, "_FULLPIPE_BASELINE_1CQ_PATH", tmp_path / "base_1cq.json")
+    monkeypatch.setattr(perf_mcp, "state_dir", lambda: tmp_path)
+    long_msg = "ImportError while loading conftest '/some/long/path/conftest.py'." + ("x" * 200)
+
+    def _boom():
+        raise RuntimeError(long_msg)
+
+    monkeypatch.setattr(perf_mcp, "_measure_full_pipeline_guarded", _boom)
+    _cfpl()
+    logged = (tmp_path / "perf_mcp_fullpipe_gate.log").read_text()
+    assert "ImportError while loading conftest '/some/long/path/conftest.py'." in logged
+
+
 def test_eager_to_trace_upgrade_rebaselines(tmp_path, monkeypatch):
     # A fidelity UPGRADE (eager -> trace+1cq) re-baselines rather than cross-comparing incomparable modes.
     p = tmp_path / "base_1cq.json"
