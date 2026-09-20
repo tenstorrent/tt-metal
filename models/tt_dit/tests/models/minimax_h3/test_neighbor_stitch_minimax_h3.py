@@ -2,21 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The gather-free neighbour stitch against the gather stitch, at production geometry, on 4x8.
-
-`test_stitch_device_minimax_h3.py` gates `DeviceTileStitcher` against the host reference; nothing
-gated `NeighborTileBlender`, which is the path `MINIMAX_H3_VAE_STITCH=neighbor` selects. Rather than
-reimplement the reference a second time, this pins the neighbour path to the gather path through the
-whole decode: same latents, same decoder weights, same geometry, only the exchange differs. The
-gather path's own gate then carries the comparison back to the reference.
-
-It needs 32 chips because the halo exchange is between mesh neighbours, and the real decoder because
-the two paths place tiles on devices differently -- a stub returning one tensor for every device
-would hide exactly the placement this is meant to check. Weights come from the TT_DIT cache, so no
-`diffusers` reference implementation is required.
-
-    pytest models/tt_dit/tests/models/minimax_h3/test_neighbor_stitch_minimax_h3.py -q
-"""
+"""The neighbour stitch pinned to the gather stitch through a whole 4x8 decode: same latents, weights and geometry,
+only the exchange differs. Real weights: a per-device stub would hide the tile placement this checks."""
 
 import pytest
 import torch
