@@ -171,11 +171,15 @@ def test_shared_producer_checks_packed_global_and_sliding_kv(caches_and_mesh, mo
     assert read_slot_kv_and_check_pcc(table, {}, 0, 32, tmp_path)["global_v"] == 0.0
 
 
-@pytest.mark.parametrize("nonfinite", [float("nan"), float("inf")])
-def test_pcc_rejects_nonfinite_values(expect_error, nonfinite):
+@pytest.mark.parametrize("nonfinite", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("operand", ["expected", "actual", "both"])
+def test_pcc_rejects_nonfinite_values(expect_error, nonfinite, operand):
     expected = torch.ones(4097, 256)
     actual = expected.clone()
-    actual[-1, -1] = nonfinite
+    if operand in ("expected", "both"):
+        expected[-1, -1] = nonfinite
+    if operand in ("actual", "both"):
+        actual[-1, -1] = nonfinite
     with expect_error(ValueError, "finite"):
         cache_pcc(expected, actual)
 

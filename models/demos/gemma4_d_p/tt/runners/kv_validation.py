@@ -100,17 +100,23 @@ def cache_pcc(expected, actual):
         values[0].copy_(expected[start:end])
         values[1].copy_(actual[start:end])
         values = values.reshape(2, -1)
-        if not torch.isfinite(values).all():
-            raise ValueError("KV comparison requires finite values")
         identical = identical and torch.equal(values[0], values[1])
         block_count = values.shape[1]
         block_mean = values.mean(dim=1, keepdim=True)
         values.sub_(block_mean)
         delta = block_mean.flatten() - mean
         total_count = count + block_count
-        covariance += values @ values.T + torch.outer(delta, delta) * (count * block_count / total_count)
+        expected_square_sum = torch.dot(values[0], values[0])
+        cross_product_sum = torch.dot(values[0], values[1])
+        actual_square_sum = torch.dot(values[1], values[1])
+        block_covariance = torch.stack(
+            (expected_square_sum, cross_product_sum, cross_product_sum, actual_square_sum)
+        ).reshape(2, 2)
+        covariance += block_covariance + torch.outer(delta, delta) * (count * block_count / total_count)
         mean += delta * (block_count / total_count)
         count = total_count
+    if not torch.isfinite(covariance).all():
+        raise ValueError("KV comparison requires finite values")
     if identical:
         return 1.0
     scale = covariance[0, 0].sqrt() * covariance[1, 1].sqrt()
