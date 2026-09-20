@@ -24,10 +24,22 @@ def _addr(t):
         return "?"
 
 
-# QWEN36_GDN_HIST_DEVICE_PACK (default 1): build a slot's packed conv-history tiles ON DEVICE from its K tap rows
-# (pack_hist_device) instead of the host repack (_per_device_rows to_torch reads -> _pack_head_tiles -> from_torch), which
-# cost ~340 ms per served request over the GDN layers. 0 = host repack (fallback, bitwise identical result).
-_HIST_DEVICE_PACK = os.environ.get("QWEN36_GDN_HIST_DEVICE_PACK", "1") == "1"
+# QWEN36_GDN_HIST_DEVICE_PACK: build a slot's packed conv-history tiles ON DEVICE from its K tap rows (pack_hist_device)
+# instead of the host repack (_per_device_rows to_torch reads -> _pack_head_tiles -> from_torch, ~340 ms per served
+# request over the GDN layers). Unset = "auto": on for the 4-device mesh it was validated on (bitwise exact, GSM8K,
+# 32-user soak); OFF on other meshes -- the pack is bitwise exact at 8 devices too, but two 30-minute TP=8 serving runs
+# (2026-09-20) hung on the first decode after a 31-prompt chunked prefill with it on and ran clean with it off, and the
+# cause is not understood yet. 1 forces it on everywhere, 0 forces the host repack (bitwise identical result).
+_HIST_DEVICE_PACK_ENV = os.environ.get("QWEN36_GDN_HIST_DEVICE_PACK", "auto")
+_HIST_DEVICE_PACK_VALIDATED_DEVICES = (4,)
+
+
+def hist_device_pack_enabled(mesh) -> bool:
+    if _HIST_DEVICE_PACK_ENV in ("1", "0"):
+        return _HIST_DEVICE_PACK_ENV == "1"
+    return int(mesh.get_num_devices()) in _HIST_DEVICE_PACK_VALIDATED_DEVICES
+
+
 # Shared per-mesh constants of the device pack, keyed by (id(mesh), Nv, Nk, Dk, Dv, C): every GDN layer of a model has the
 # same geometry, so one ~4 MB set serves all of them. Built ONLY by hist_pack_consts(..., build=True) from
 # TPGatedDeltaNet.__init__, i.e. before ANY trace (chunk-prefill or decode) is captured: a buffer allocated after a
@@ -484,7 +496,7 @@ class TPGatedDeltaNet:
         # construction, before ANY trace is captured. Allocating them later (e.g. from the prefill warm-up hook, which
         # runs after the chunk-prefill trace capture) places them in that trace's freed-intermediate address range and
         # every prefill replay then clobbers them (observed: deterministic garbage decodes, 2026-09-20).
-        if _HIST_DEVICE_PACK and self._decode_fused_conv:
+        if hist_device_pack_enabled(self.mesh) and self._decode_fused_conv:
             self._hist_pack_consts(build=True)
 
     def reset_state(self):
@@ -1677,10 +1689,10 @@ class TPGatedDeltaNet:
             self._hist_packed_valid = False
             self._ensure_conv_hist_packed()
             return
-        if _HIST_DEVICE_PACK and self._hist_pack_consts() is not None:
+        if hist_device_pack_enabled(self.mesh) and self._hist_pack_consts() is not None:
             self._sync_conv_hist_packed_device(slot, taps)
             return
-        if _HIST_DEVICE_PACK and not getattr(self, "_hist_pack_warned", False):
+        if hist_device_pack_enabled(self.mesh) and not getattr(self, "_hist_pack_warned", False):
             self._hist_pack_warned = True
             logger.warning(
                 "[hist] device pack constants were not built at warm-up (warmup_hist_device_pack); using the host repack"
@@ -1699,7 +1711,9 @@ class TPGatedDeltaNet:
     def hist_device_pack_ready(self):
         """True when a per-slot repack goes through the device chain (knob on, fused-conv decode, constants built at
         warm-up): callers may then pass the slot's tap tensors straight to _sync_conv_hist_packed(slot, taps=...)."""
-        return bool(_HIST_DEVICE_PACK and self._decode_fused_conv and self._hist_pack_consts() is not None)
+        return bool(
+            hist_device_pack_enabled(self.mesh) and self._decode_fused_conv and self._hist_pack_consts() is not None
+        )
 
     def _hist_pack_consts(self, build=False):
         return hist_pack_consts(self.mesh, self.Nv, self.Nk, self.Dk, self.Dv, self.qkv_dim_tp, build=build)
@@ -1743,7 +1757,7 @@ class TPGatedDeltaNet:
         before any trace; nothing is allocated here beyond per-call temporaries). The rows repacked (every slot) are
         rebuilt from their own conv_states rows, i.e. unchanged. No-op unless the fused-conv decode path and
         QWEN36_GDN_HIST_DEVICE_PACK are on, the constants exist and the packed buffer exists."""
-        if not (_HIST_DEVICE_PACK and self._decode_fused_conv) or self.conv_hist_packed is None:
+        if not (hist_device_pack_enabled(self.mesh) and self._decode_fused_conv) or self.conv_hist_packed is None:
             return False
         if self._hist_pack_consts() is None:
             logger.warning("[hist] device pack constants missing at warm-up (not built in __init__); host repack stays")
