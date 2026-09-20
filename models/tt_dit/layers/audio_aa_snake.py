@@ -2,23 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""One fused anti-aliased SnakeBeta activation: ``UpSample1d(2x) -> SnakeBeta -> DownSample1d(2x)`` as a single
-``generic_op`` program (kernels in ``layers/kernels/aa_snake_*.cpp``) instead of the ~21-program chain of
-``Activation1d``.
-
-The rewrite is exact. With ``s = 2 t`` (the upsampler's scaled taps) and ``base[r] = x[clamp(r - 3)]``, the
-upsampled signal's even and odd phases are unit-stride 6-tap filters, ``E[q] = sum_j s[2j] base[q + j]`` and
-``O[q] = sum_j s[2j + 1] base[q + 1 + j]``; SnakeBeta applies per channel; the stride-2 12-tap downsampler is
-``out[n] = sum_k t[k] z[clamp(2n + k - 5)]`` with ``z[2q] = E[q]``, ``z[2q + 1] = O[q]``. Each tap is an fp32
-SFPU multiply then add in tap order, the arithmetic of the depthwise conv1d kernel today's chain runs, so the
-result is bit-identical to ``Activation1d`` at ``t_pad = 0``.
-
-Layout: fp32 row-major sticks; a 4 KB block of ``R = 1024 / C`` consecutive sticks is one fp32 "tile" to the
-unpacker, which makes the elementwise math layout-blind and removes every tilize/untilize. Time-packed inputs
-``(B, T / k, k C)`` need no special handling beyond their DRAM page size: the pack factor is read off the tensor
-width. Under T-sharding the ``_t_neighbor_pad`` replicate halo (5 sticks per side, rounded up to packed rows)
-supplies the neighbours; the sequence-end clamps run in-kernel on the first/last device.
-"""
+"""One fused anti-aliased SnakeBeta activation, ``UpSample1d(2x) -> SnakeBeta -> DownSample1d(2x)``, as a single
+``generic_op`` program (``layers/kernels/aa_snake_*.cpp``), bit-identical to the ``Activation1d`` chain it replaces."""
 
 from __future__ import annotations
 
@@ -46,11 +31,9 @@ def _f32_bits(value: float) -> int:
 
 
 class FusedActivation1d(Module):
-    """Drop-in for ``Activation1d(channels, SnakeBeta(alpha_logscale=True))``: same state keys (``act.alpha``,
-    ``act.beta``, optional ``upsample.filter`` / ``downsample.lowpass.filter``), same ``(B, T, C)`` or packed
-    ``(B, T / k, k C)`` fp32 ROW_MAJOR input and output. ``stage`` is a bring-up knob: 0 copies the input through
-    the whole gather machinery, 1 runs the resampler taps without the activation, 2 is the real thing.
-    """
+    """Drop-in for ``Activation1d(channels, SnakeBeta(alpha_logscale=True))``: same state keys, same ``(B, T, C)`` or
+    packed ``(B, T / k, k C)`` fp32 ROW_MAJOR input and output. ``stage`` is a bring-up knob: 0 copies the input through
+    the gather machinery, 1 runs the resampler taps without the activation, 2 is the real thing."""
 
     def __init__(
         self,
