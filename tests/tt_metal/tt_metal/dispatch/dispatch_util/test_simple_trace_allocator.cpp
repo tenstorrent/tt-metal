@@ -10,10 +10,9 @@
 
 namespace tt::tt_metal {
 
+// NOLINTBEGIN(cppcoreguidelines-virtual-class-destructor)
 class SimpleTraceAllocatorFixture : public ::testing::Test {
 public:
-    ~SimpleTraceAllocatorFixture() override = default;
-
     using ExtraData = SimpleTraceAllocator::ExtraData;
     using RegionAllocator = SimpleTraceAllocator::RegionAllocator;
 
@@ -24,6 +23,7 @@ public:
 
 protected:
     SimpleTraceAllocatorFixture() = default;
+    ~SimpleTraceAllocatorFixture() override = default;
 
     static bool intersects(uint32_t begin_1, uint32_t size_1, uint32_t begin_2, uint32_t size_2) {
         return SimpleTraceAllocator::intersects(begin_1, size_1, begin_2, size_2);
@@ -47,6 +47,7 @@ protected:
 
     std::vector<ExtraData> extra_data_;
 };
+// NOLINTEND(cppcoreguidelines-virtual-class-destructor)
 
 using ExtraData = SimpleTraceAllocatorFixture::ExtraData;
 
