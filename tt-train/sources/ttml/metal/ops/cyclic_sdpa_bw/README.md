@@ -294,16 +294,21 @@ Through `nano_gpt` with context parallelism on the ring of eight
 heads of 64, four blocks, 45056 characters a step; the backward chosen by
 `device_config.cp_backward` or `TTML_CP_BACKWARD`), median step time:
 
-| backward | layout | step (ms) | vs the original (two-pass, contiguous) |
-|---|---|---|---|
-| two-pass | contiguous | 1875 | -- |
-| two-pass | zigzag | 1243 | -34% |
-| cyclic in-place | zigzag | 667 | -64% |
+| forward | backward | layout | step (ms) | vs the original (two-pass, contiguous) |
+|---|---|---|---|---|
+| two-pass (`sdpa_fw`) | two-pass | contiguous | 1875 | -- |
+| two-pass | two-pass | zigzag | 1243 | -34% |
+| two-pass | cyclic in-place | zigzag | 667 | -64% |
+| ttnn with lse (`cp_forward: ttnn`) | cyclic in-place | zigzag | 507 | -73% |
+| ttnn with lse, fused merge | cyclic in-place | zigzag | **412** | **-78%** |
 
 The same at Llama 8B's attention shape (32 / 8 heads of 128, two blocks):
-2567 -> 1633 -> 923 ms, -64% as well. Within a layout the two backwards
-give the same loss to the printed precision. The remaining step is mostly
-the two-pass forward.
+2567 -> 1633 -> 923 -> 633 -> 556 ms, -78% as well. Within a layout the
+two backwards give the same loss to the printed precision, and the ttnn
+forward's loss curve matched the two-pass forward's to bf16 noise. The
+forward is ttnn's chunk-blocked flash-attention kernel with a log-sum-exp
+output added (`ring_ttnn_sdpa_fw`), and the per-step online-softmax merge
+is one fused op (`ring_softmax_merge`); both on `bklockiewicz/ring-forward`.
 
 ### Utilisation against the repository's two-pass backward
 
