@@ -249,26 +249,52 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
     logger.info(f"PASSED: per-user GDN state (B={B}) worst PCC = {worst:.5f}")
 
 
+def _mixed_parity_remap(B):
+    """A slot permutation with identity rows, same-parity moves AND cross-parity moves (B=8:
+    [2, 1, 7, 0, 4, 6, 3, 5] -> rows 1/4 identity, 0<-2 / 7<-5 same parity, 2<-7 / 3<-0 / 5<-6 / 6<-3 cross).
+    The reverse permutation would make EVERY move cross-parity (i and B-1-i differ in parity for even B), which
+    would leave the plain-gather branch of remap_slots uncovered."""
+    if B == 8:
+        return [2, 1, 7, 0, 4, 6, 3, 5]
+    return [B - 1 - i for i in range(B)]
+
+
+def _retag_packed_parity(tile):
+    """[.., 4, 32, 32] packed conv-history tile(s) re-tagged for the other slot parity: tile rows 2c <-> 2c+1."""
+    lead = tile.shape[:-2]
+    return tile.reshape(*lead, 16, 2, 32).flip(-2).reshape(*lead, 32, 32)
+
+
 @torch.no_grad()
 @parametrize_mesh_tp()
 @parametrize_batch(batches=(8,))
-def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, request):
-    """Per-slot GDN state edits for vLLM continuous batching: write_slot + remap_slots.
+@pytest.mark.parametrize("fused_conv", [False, True], ids=["composite", "fusedconv"])
+def test_gdn_tp_write_slot_and_remap(mesh_device, B, fused_conv, monkeypatch, reset_seeds, ensure_gc, request):
+    """Per-slot GDN state edits for vLLM continuous batching: write_slot + remap_slots, in both decode modes
+    (composite conv, and QWEN36_GDN_DECODE_FUSED=2 = fused-conv gdn_decode_step with the packed, parity-tagged
+    conv history -- the PD decode node's M2 mode).
 
     write_slot writes ONE user's B=1 prefill state into a single decode row without disturbing the
-    others — the incremental analogue of assemble_batched_state (which builds the whole batch at
+    others -- the incremental analogue of assemble_batched_state (which builds the whole batch at
     once). remap_slots reindexes the rows on a vLLM batch condense. Validates:
       (a) writing B users one slot at a time (in reverse order, so each write must preserve the
           rows written before it) then ONE batched decode matches B independent B=1 runs, row by row;
-      (b) remap_slots(reverse) makes decode row i carry user (B-1-i)'s state, and the permuted state
-          is exactly the pre-remap rows reindexed (no cross-row contamination).
+      (b) remap_slots(mixed permutation: identity / same-parity / cross-parity moves) makes decode row i
+          carry user remap[i]'s state exactly (rec_state rows reindexed, no cross-row contamination);
+          fused-conv: the packed history row i is the OLD row remap[i] re-tagged to parity i & 1 when the
+          parity changed (bit-exact), and the plain gather (old code path) differs for every cross-parity move;
+      (c) the decode step AFTER the remap: row i's output matches user remap[i]'s next B=1 decode step
+          (this is where a wrong-parity packed row decodes with an empty conv shift register);
+      (d) fused-conv negative control: re-tagging one cross-parity row to the WRONG parity (what the plain
+          gather left behind) and decoding again breaks that row while every other row still matches.
     """
+    monkeypatch.setenv("QWEN36_GDN_DECODE_FUSED", "2" if fused_conv else "0")
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
     args1 = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
-    logger.info(f"devices={nd} gdn layer={li} B={B}")
+    logger.info(f"devices={nd} gdn layer={li} B={B} fused_conv={fused_conv}")
 
     sd = load_gdn_layer(args.CKPT_DIR, li)
     from models.tt_transformers.tt.ccl import TT_CCL
@@ -277,22 +303,31 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
     tw = load_gdn_weights_tp(mesh_device, sd, args)
     comp = tp_composer(mesh_device)
     T = 128
+    STEPS = 3  # decode steps per user: (a) after write_slot, (c) after the remap, (d) negative control
 
     xp = [torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16) for _ in range(B)]
-    xd = [torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16) for _ in range(B)]
+    xd = [[torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16) for _ in range(B)] for _ in range(STEPS)]
 
-    # ---- reference: B independent B=1 prefill(capture_state) + decode ----
-    ref_rows = []
+    def rows_of(out):  # [1, 1, B, dim] mesh output -> list of per-row float vectors
+        t = ttnn.to_torch(out, mesh_composer=comp)
+        return [t[0, 0, i].float() for i in range(t.shape[2])]
+
+    # ---- reference: B independent B=1 prefill(capture_state) + STEPS decode steps ----
+    ref = [[None] * B for _ in range(STEPS)]  # ref[step][user]
     for u in range(B):
         g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         g.reset_state()
         g.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, capture_state=True)
-        out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
-        ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+        for st in range(STEPS):
+            ref[st][u] = rows_of(g.forward_decode(replicate_to_device(mesh_device, xd[st][u])))[0]
 
     # ---- batched via write_slot: each user prefilled B=1, its state written into ITS slot ----
     gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
     gb.reset_state()
+    if fused_conv:
+        # the fused-conv path must really be taken (else this variant is vacuous)
+        assert gb._decode_fused_conv and gb._fuse_ab and getattr(args, "proj_1d_decode", False)
+        assert gb.conv_hist_packed is not None and gb._hist_packed_valid
     for u in reversed(range(B)):  # reverse order: every write must preserve the already-written rows
         gu = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         gu.reset_state()
@@ -300,30 +335,84 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
         gb.write_slot(u, gu.rec_state, list(gu.conv_states))  # consumes gu's rec/conv buffers
         gu.rec_state, gu.conv_states = None, None
 
-    x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim], row u = user u's decode token
-    out_b = gb.forward_decode(replicate_to_device(mesh_device, x_dec))
-    out_t = ttnn.to_torch(out_b, mesh_composer=comp)  # [1, 1, B, dim]
     thr = get_pcc_threshold(request)
-    pccs = [compute_pcc(ref_rows[u], out_t[0, 0, u].float()) for u in range(B)]
+
+    # (a) one batched decode, row u = user u
+    out_rows = rows_of(gb.forward_decode(replicate_to_device(mesh_device, torch.cat(xd[0], dim=2))))
+    pccs = [compute_pcc(ref[0][u], out_rows[u]) for u in range(B)]
     bad = [(u, p) for u, p in enumerate(pccs) if p < thr]
     assert not bad, f"write_slot users below PCC {thr}: {bad} (min={min(pccs):.5f})"
-    logger.info(f"write_slot (B={B}) worst PCC = {min(pccs):.5f}")
+    logger.info(f"(a) write_slot (B={B}) worst PCC = {min(pccs):.5f}")
 
-    # ---- remap_slots(reverse): row i must become the exact pre-remap row (B-1-i) ----
-    remap = [B - 1 - i for i in range(B)]
-    pre = ttnn.to_torch(gb.rec_state, mesh_composer=comp).float()  # [nd*B?, ...] mesh dim 0 = devices
+    # ---- (b) remap_slots(mixed): row i must become the exact pre-remap row remap[i] ----
+    remap = _mixed_parity_remap(B)
+    cross = [i for i in range(B) if remap[i] != i and (remap[i] & 1) != (i & 1)]
+    same = [i for i in range(B) if remap[i] != i and (remap[i] & 1) == (i & 1)]
+    logger.info(
+        f"remap={remap}: identity={[i for i in range(B) if remap[i] == i]} same-parity={same} cross-parity={cross}"
+    )
+    assert cross and same, "remap must exercise both the plain-gather and the parity re-tag branches"
+    comp0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)  # per-device blocks stacked on dim 0
+    pre = ttnn.to_torch(gb.rec_state, mesh_composer=comp0).float()  # [nd*B, Nv, Dk, Dv]
+    pre_hist = ttnn.to_torch(gb.conv_hist_packed, mesh_composer=comp0).float() if fused_conv else None
     gb.remap_slots(remap)
-    post = ttnn.to_torch(gb.rec_state, mesh_composer=comp).float()
-    # rec_state per device is [B, Nv, Dk, Dv]; mesh-concat stacks devices on dim 0 -> [nd*B, ...].
-    # Compare row i to pre row remap[i] within each device block.
+    post = ttnn.to_torch(gb.rec_state, mesh_composer=comp0).float()
     ndev = pre.shape[0] // B
     max_diff = 0.0
     for d in range(ndev):
         for i in range(B):
             max_diff = max(max_diff, (post[d * B + i] - pre[d * B + remap[i]]).abs().max().item())
     assert max_diff < 1e-3, f"remap_slots rec mismatch: max_diff={max_diff}"
-    logger.info(f"remap_slots (B={B}) exact-permutation max_diff = {max_diff:.2e}")
-    logger.info(f"PASSED: write_slot + remap_slots (B={B})")
+    logger.info(f"(b) remap_slots (B={B}) rec exact-permutation max_diff = {max_diff:.2e}")
+    if fused_conv:
+        post_hist = ttnn.to_torch(gb.conv_hist_packed, mesh_composer=comp0).float()  # [nd*B, Nv, 4, 32, 32]
+        for d in range(ndev):
+            for i in range(B):
+                src = pre_hist[d * B + remap[i]]
+                plain = src  # what a plain gather (old remap_slots) leaves at row i
+                want = _retag_packed_parity(src) if (remap[i] & 1) != (i & 1) else src
+                got = post_hist[d * B + i]
+                assert torch.equal(got, want), f"packed history row {i} (dev {d}) != old row {remap[i]} re-tagged"
+                # the packed row must carry its chunks on ITS parity rows and nothing on the other parity
+                assert got[..., 1 - (i & 1) :: 2, :].abs().max().item() == 0.0, f"row {i}: data on the wrong parity"
+                assert got[..., (i & 1) :: 2, :].abs().max().item() > 0.0, f"row {i}: empty history"
+                if i in cross:  # negative control at the tile level: the plain gather would be a different tensor
+                    assert not torch.equal(
+                        got, plain
+                    ), f"cross-parity row {i}: plain gather == re-tagged (test is vacuous)"
+                    assert plain[..., 1 - (i & 1) :: 2, :].abs().max().item() > 0.0
+        logger.info(
+            f"(b) packed conv history: {len(cross)} cross-parity rows re-tagged bit-exactly, plain gather differs"
+        )
+
+    # ---- (c) decode after the remap: row i continues user remap[i] ----
+    x2 = torch.cat([xd[1][remap[i]] for i in range(B)], dim=2)
+    out_rows = rows_of(gb.forward_decode(replicate_to_device(mesh_device, x2)))
+    pccs = [compute_pcc(ref[1][remap[i]], out_rows[i]) for i in range(B)]
+    bad = [(i, p) for i, p in enumerate(pccs) if p < thr]
+    assert not bad, f"post-remap decode rows below PCC {thr}: {bad} (min={min(pccs):.5f}); cross-parity rows={cross}"
+    logger.info(
+        f"(c) post-remap decode (B={B}) worst PCC = {min(pccs):.5f} "
+        f"(cross-parity rows {[f'{i}:{pccs[i]:.5f}' for i in cross]})"
+    )
+
+    # ---- (d) negative control (fused-conv): a wrong-parity packed row == the old plain gather -> that row breaks ----
+    if fused_conv:
+        v = cross[0]
+        # the correctly tagged tile re-tagged once more == the wrong-parity tile the old plain gather left behind
+        wrong = gb._swap_packed_parity(gb._slice_along(gb.conv_hist_packed, 0, v, v + 1))
+        gb._write_index(gb.conv_hist_packed, wrong, v, dim=0)
+        x3 = torch.cat([xd[2][remap[i]] for i in range(B)], dim=2)
+        out_rows = rows_of(gb.forward_decode(replicate_to_device(mesh_device, x3)))
+        pccs = [compute_pcc(ref[2][remap[i]], out_rows[i]) for i in range(B)]
+        others = [(i, p) for i, p in enumerate(pccs) if i != v and p < thr]
+        assert not others, f"negative control: untouched rows below PCC {thr}: {others}"
+        logger.info(
+            f"(d) negative control: wrong-parity row {v} PCC = {pccs[v]:.5f}, other rows min = "
+            f"{min(p for i, p in enumerate(pccs) if i != v):.5f}"
+        )
+        assert pccs[v] < thr, f"negative control: wrong-parity row {v} still matches (PCC {pccs[v]:.5f} >= {thr})"
+    logger.info(f"PASSED: write_slot + remap_slots (B={B}, {'fused-conv' if fused_conv else 'composite'})")
 
 
 @torch.no_grad()

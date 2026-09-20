@@ -1215,12 +1215,63 @@ class TPGatedDeltaNet:
         if all(idx[i] == i for i in range(self.B)):
             return
         self._gather_indices(self.rec_state, idx, dim=0)
-        if self.conv_hist_packed is not None and self._hist_packed_valid:
-            self._gather_indices(self.conv_hist_packed, idx, dim=0)
-        else:
-            self._sync_conv_hist_packed()
+        # conv_states first: the packed-history fallback below (no valid packed buffer) rebuilds FROM conv_states, so
+        # they must already be in the post-remap order when it runs.
         for m in range(self.K):
             self._gather_indices(self.conv_states[m], idx, dim=1)
+        if self.conv_hist_packed is not None and self._hist_packed_valid:
+            self._remap_conv_hist_packed(idx)
+        else:
+            self._sync_conv_hist_packed()
+
+    def _remap_conv_hist_packed(self, idx):
+        """Reindex the fused-conv packed history: slot i takes old packed slot idx[i].
+
+        The packed tile is PARITY-TAGGED by slot: channel chunk c of slot b lives in tile row 2c + (b & 1)
+        (_pack_rows_vec / _ensure_conv_hist_packed), and the fused kernel decoding row i selects rows 2c + (i & 1)
+        (build_user_selectors / pack_head_tile_user). A plain gather therefore corrupts every row that moves between
+        an even and an odd slot: its history stays on the source parity rows, the kernel reads the (zero) other-parity
+        rows, and the user silently decodes with an empty conv shift register. vLLM batch condense after a write_slot
+        (the common PD case, and ~50% of every condense) is exactly such a move. Re-packing from conv_states is NOT an
+        option on the fused path (the op advances conv_hist_packed in place, conv_states go stale after the first step),
+        so a cross-parity row is re-tagged from the packed tile itself: rows 2c <-> 2c+1 swapped (a pure permutation,
+        bit-exact; one host round trip of that slot's [1, Nv, 4, 32, 32] bf16 tile per device). Same-parity moves and
+        identity rows are the plain device slice, so with no parity change this is byte-identical to the old
+        _gather_indices path (same slices -> one concat -> one in-place copy; `new` is fully materialized before the
+        copy, so gathering from the buffer into itself is safe)."""
+        buf = self.conv_hist_packed
+        rows = []
+        for i, src in enumerate(idx):
+            r = self._slice_along(buf, 0, src, src + 1)
+            if (src & 1) != (i & 1):
+                r = self._swap_packed_parity(r)
+            rows.append(r)
+        new = ttnn.concat(rows, dim=0)
+        ttnn.copy(new, buf)
+        ttnn.deallocate(new)
+        for r in rows:
+            ttnn.deallocate(r)
+
+    def _swap_packed_parity(self, packed_row):
+        """[1, Nv, 4, 32, 32] packed-history row (per device) with tile rows 2c and 2c+1 swapped, i.e. the same
+        history re-tagged for a slot of the other parity. Consumes `packed_row`. Host round trip (eager only)."""
+        per_dev = torch.stack(
+            [
+                ttnn.to_torch(d).reshape(self.Nv, 4, 32, 32).to(torch.bfloat16)
+                for d in ttnn.get_device_tensors(packed_row)
+            ]
+        )  # [n_dev, Nv, 4, 32, 32]
+        per_dev = per_dev.reshape(-1, self.Nv, 4, 16, 2, 32).flip(-2).reshape(-1, self.Nv, 4, 32, 32).contiguous()
+        out = ttnn.from_torch(
+            per_dev,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+        )  # sharded on dim 0 -> [1, Nv, 4, 32, 32] per device, like _packed_slot_tensor
+        ttnn.deallocate(packed_row)
+        return out
 
     def _gather_indices(self, buf, idx, dim):
         """Rebuild `buf` so slice i along `dim` becomes old slice idx[i], then copy back in place.
@@ -1553,9 +1604,13 @@ class TPGatedDeltaNet:
             rows = torch.stack(
                 [ttnn.to_torch(devs[j][d]).reshape(-1, devs[j][d].shape[-1])[: self.B] for j in range(4)], dim=1
             )  # [Bmax, 4, C]: every slot's 4 conv rows of this device, one host round trip per tap
-            packed = torch.where(par, self._pack_rows_vec(rows, 1), self._pack_rows_vec(rows, 0))  # [Bmax, 4, Nv, 32, 32]
+            packed = torch.where(
+                par, self._pack_rows_vec(rows, 1), self._pack_rows_vec(rows, 0)
+            )  # [Bmax, 4, Nv, 32, 32]
             slots.append(packed.permute(0, 2, 1, 3, 4))  # [Bmax, Nv, 4, 32, 32]
-        per_dev = torch.stack(slots, dim=0).reshape(-1, self.Nv, 4, 32, 32).contiguous()  # [n_dev * Bmax, Nv, 4, 32, 32]
+        per_dev = (
+            torch.stack(slots, dim=0).reshape(-1, self.Nv, 4, 32, 32).contiguous()
+        )  # [n_dev * Bmax, Nv, 4, 32, 32]
         packed = ttnn.from_torch(
             per_dev,
             dtype=ttnn.bfloat16,
