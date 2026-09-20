@@ -100,6 +100,52 @@ ttnn::Tensor scaled_dot_product_attention(
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).
+std::tuple<ttnn::Tensor, ttnn::Tensor> scaled_dot_product_attention_with_lse(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    bool is_causal,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor,
+    const std::optional<ttnn::Tensor>& optional_lse_tensor) {
+    // Float32 accumulation by default: the lse needs the standard compute path.
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor_q.device()->arch(),
+        compute_kernel_config,
+        tt::tt_metal::MathFidelity::HiFi2,
+        /* math_approx_mode */ true,
+        /* fp32_dest_acc_en */ true,
+        /* packer_l1_acc */ false);
+    auto outputs = ttnn::prim::sdpa_with_lse(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        std::nullopt,  // attn_mask
+        std::nullopt,  // page_table
+        std::nullopt,  // attention_sink
+        is_causal,
+        scale,
+        std::nullopt,  // sliding_window_size
+        std::nullopt,  // chunk_start_idx
+        std::nullopt,  // chunk_start_idx_tensor
+        false,         // use_mla
+        std::nullopt,  // head_dim_v
+        memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        std::move(program_config),
+        kernel_config_val,
+        std::nullopt,  // cu_window_seqlens
+        0,             // windowed_q_token_offset
+        std::nullopt,  // windowed_q_token_offset_tensor
+        std::nullopt,  // paged_cache_geometry
+        /* return_lse */ true,
+        optional_output_tensor,
+        optional_lse_tensor);
+    return {outputs.at(0), outputs.at(1)};
+}
+
 ttnn::Tensor chunked_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,

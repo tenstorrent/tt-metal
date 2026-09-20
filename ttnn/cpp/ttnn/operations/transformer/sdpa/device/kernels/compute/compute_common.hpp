@@ -13,6 +13,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/softplus.h"
@@ -809,6 +810,45 @@ void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     }
 }
 
+// The per-row log-sum-exp of a finished query chunk: lse = ln(sum) + scale * max, one tile per
+// query row tile with the values in column 0, where the row reductions left the sum and the max.
+// Computed in the DST registers (Float32 with fp32_dest_acc_en) and packed straight into the
+// Float32 output CB, so the value is never rounded through the bf16 statistics CBs; the max is
+// the rounded one the exponentials used, which is what makes exp(scale s - lse) consistent with
+// the normalised output. Leaves both inputs in place for the normalisation that follows.
+template <uint32_t scale_fp32>
+void compute_lse_block(uint32_t sum_cb, uint32_t max_cb, uint32_t lse_cb, uint32_t num_tiles) {
+    CircularBuffer cb_sum(sum_cb);
+    CircularBuffer cb_max(max_cb);
+    CircularBuffer cb_lse(lse_cb);
+    cb_sum.wait_front(num_tiles);
+    cb_max.wait_front(num_tiles);
+    cb_lse.reserve_back(num_tiles);
+    pack_reconfig_data_format(lse_cb);
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        tile_regs_acquire();
+        reconfig_data_format_srca(sum_cb);
+        copy_init(sum_cb);
+        copy_tile(sum_cb, i, 0 /*dst*/);
+        log_tile_init();
+        log_tile(0);
+        reconfig_data_format_srca(max_cb);
+        copy_init(max_cb);
+        copy_tile(max_cb, i, 1 /*dst*/);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(1, scale_fp32);
+        add_binary_tile_init();
+        add_binary_tile(0, 1, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, lse_cb);
+        tile_regs_release();
+        cb_lse.push_back(1);
+    }
+    reconfig_data_format_srca(sum_cb);
+    pack_reconfig_data_format(sum_cb);
+}
+
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     CircularBuffer cb_in(in_cb);
     CircularBuffer cb_out(out_cb);
@@ -1541,7 +1581,8 @@ template <
     uint32_t chunked_q_local_padded_Nt = 0,
     uint32_t chunked_chunk_size_t = 0,
     bool use_windowed_narrowing = false,
-    uint32_t cb_windowed_k_range = 0>
+    uint32_t cb_windowed_k_range = 0,
+    bool return_lse = false>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2056,6 +2097,9 @@ void sdpa_inner_loop(
                 copy_block(alias_prev_max, cb_lse_out, Sq_chunk_t);
             }
         } else {
+            if constexpr (return_lse) {
+                compute_lse_block<scale_fp32>(alias_prev_sum, alias_prev_max, cb_lse_out, Sq_chunk_t);
+            }
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
@@ -2115,7 +2159,9 @@ template <
     uint32_t sliding_window_size,
     bool lightweight_mask_enabled = false,
     bool use_windowed_narrowing = false,
-    uint32_t cb_windowed_k_range = 0>
+    uint32_t cb_windowed_k_range = 0,
+    bool return_lse = false,
+    uint32_t cb_lse_out = 0>
 void sdpa_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2179,7 +2225,8 @@ void sdpa_standard(
         0,      // chunked_q_local_padded_Nt (not used)
         0,      // chunked_chunk_size_t (not used)
         use_windowed_narrowing,
-        cb_windowed_k_range>(
+        cb_windowed_k_range,
+        return_lse>(
         Skt,
         qk_in0_block_w,
         qk_subblock_w,
@@ -2230,9 +2277,9 @@ void sdpa_standard(
         cb_sum_A,
         cb_sum_B,
         cb_exp_max_diff,
-        0,  // cb_lse_in (not used)
-        0,  // cb_lse_out (not used)
-        0,  // cb_prev_out (not used)
+        0,           // cb_lse_in (not used)
+        cb_lse_out,  // the lse output with return_lse; unused otherwise
+        0,           // cb_prev_out (not used)
         cb_out,
         lw_mask,
         is_causal,

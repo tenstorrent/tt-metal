@@ -32,6 +32,12 @@ struct SDPAParams {
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
+    // Also return the per-row log-sum-exp, lse = scale * max + ln(sum), as a second output: a
+    // (B, NQH, S, 32) FLOAT32 tile tensor with the value in column 0 of each row's tile -- what a
+    // backward pass or a ring-attention combine needs. Requires fp32_dest_acc_en (the standard compute
+    // path keeps the row sums in Float32; the streaming path's bf16 statistics would put a few percent
+    // on every row).
+    bool return_lse = false;
 };
 
 struct SDPAInputs {
@@ -50,6 +56,10 @@ struct SDPAInputs {
     // read by the writer at runtime. Present only when the caller wants a per-device offset under one
     // shared program; otherwise the scalar windowed_q_token_offset is used.
     std::optional<Tensor> windowed_q_token_offset_tensor;
+    // Preallocated outputs: the attention output, and (with return_lse) the lse tensor. Either may be
+    // absent, in which case the op allocates.
+    std::optional<Tensor> optional_output_tensor;
+    std::optional<Tensor> optional_lse_tensor;
 };
 
 }  // namespace ttnn::prim

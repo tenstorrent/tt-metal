@@ -93,6 +93,10 @@ void kernel_main() {
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 16);
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 17);
     constexpr uint32_t cb_windowed_k_range = get_compile_time_arg_val(cb_arg_offset + 18);
+    // return_lse: where the per-row log-sum-exp goes (inactive, all ones, otherwise). Standard path
+    // only; the host refuses return_lse with the streaming compute.
+    constexpr uint32_t cb_lse_out = get_compile_time_arg_val(cb_arg_offset + 19);
+    constexpr bool return_lse = cb_lse_out != 0xFFFFFFFFu;
     uint32_t chunked_q_chunk_offset = 0;
     CircularBuffer cb_chunk_start_idx_obj(cb_chunk_start_idx);
     CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
@@ -238,7 +242,9 @@ void kernel_main() {
                 sliding_window_size,
                 use_lightweight_causal_mask,
                 use_windowed_narrowing,
-                cb_windowed_k_range>(
+                cb_windowed_k_range,
+                return_lse,
+                cb_lse_out>(
                 Skt,
                 qk_in0_block_w,
                 qk_subblock_w,

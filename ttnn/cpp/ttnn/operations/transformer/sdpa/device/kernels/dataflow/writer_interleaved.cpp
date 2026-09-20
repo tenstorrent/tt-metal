@@ -50,6 +50,8 @@ void kernel_main() {
     constexpr auto cu_window_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     // Per-device Q offset accessor, chained after cu_window so the offset chain stays intact.
     constexpr auto q_offset_args = TensorAccessorArgs<cu_window_args.next_compile_time_args_offset()>();
+    // The lse output's accessor, chained after the Q offset (nullptr placeholder without return_lse).
+    constexpr auto lse_args = TensorAccessorArgs<q_offset_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -86,7 +88,7 @@ void kernel_main() {
     constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
 
-    constexpr uint32_t cb_arg_offset = q_offset_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_arg_offset = lse_args.next_compile_time_args_offset();
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -97,12 +99,19 @@ void kernel_main() {
     // Dedicated 1-tile CB for the per-device Q-offset tensor; allocated only when that tensor is passed
     // (q_in otherwise, same fallback rule as cb_cu_window_in), and only touched behind the runtime guard.
     constexpr uint32_t cb_windowed_q_offset = get_compile_time_arg_val(cb_arg_offset + 6);
+    // return_lse: the compute kernel pushes one Float32 lse tile per query row tile of a chunk into
+    // this CB; inactive (all ones) otherwise, and then nothing below reads runtime arg 14.
+    constexpr uint32_t cb_lse = get_compile_time_arg_val(cb_arg_offset + 7);
+    constexpr bool return_lse = cb_lse != 0xFFFFFFFFu;
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
     const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, vDHt);
+    const uint32_t lse_addr = return_lse ? get_arg_val<uint32_t>(14) : 0u;
+    const auto lse_writer = TensorAccessor(lse_args, lse_addr);
+    const auto lse_tile_shape = TensorTileShape(B, NQH, valid_Sqt, 1);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
@@ -257,6 +266,22 @@ void kernel_main() {
                     vDHt,
                     out_tile_id,
                     tile_bytes,
+                    barrier_threshold);
+            }
+            if constexpr (return_lse) {
+                // One lse tile per query row tile of the chunk; the compute kernel pushes Sq_chunk_t
+                // of them, the rows past out_row_tile_count are padding and are popped unwritten.
+                constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse);
+                const uint32_t lse_tile_id = lse_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+                write_block(
+                    noc,
+                    lse_writer,
+                    cb_lse,
+                    Sq_chunk_t,
+                    out_row_tile_count,
+                    1,
+                    lse_tile_id,
+                    lse_tile_bytes,
                     barrier_threshold);
             }
         }

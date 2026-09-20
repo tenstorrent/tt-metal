@@ -2747,6 +2747,117 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_CompareAcrossHeadDimensions) {
     }
 }
 
+// ttnn's chunk-blocked forward with the log-sum-exp output added to it, against
+// tt-train's sdpa_fw, whose intermediates carry the same statistic (column 0
+// of a (B, H, S, 32) Float32 tile: lse = scale * max + ln sum). Both are also
+// graded against a Float32 host reference. Grouped heads, causal and dense.
+namespace {
+void check_ttnn_sdpa_with_lse(uint32_t heads, uint32_t kv_heads, uint32_t N, uint32_t d, bool causal, uint32_t chunk) {
+    using namespace tt::tt_metal;
+    auto* device = &ttml::autograd::ctx().get_device();
+    xt::xarray<float> Q = xt::zeros<float>({1u, heads, N, d});
+    xt::xarray<float> K = xt::zeros<float>({1u, kv_heads, N, d});
+    xt::xarray<float> V = xt::zeros<float>({1u, kv_heads, N, d});
+    for (uint32_t h = 0; h < heads; ++h) {
+        xt::view(Q, 0, h, xt::all(), xt::all()) = random_bf16_matrix(N, d, 6000u + h);
+    }
+    for (uint32_t g = 0; g < kv_heads; ++g) {
+        xt::view(K, 0, g, xt::all(), xt::all()) = random_bf16_matrix(N, d, 7000u + g);
+        xt::view(V, 0, g, xt::all(), xt::all()) = random_bf16_matrix(N, d, 8000u + g);
+    }
+    const auto q = ttml::core::from_xtensor(Q, device);
+    const auto k = ttml::core::from_xtensor(K, device);
+    const auto v = ttml::core::from_xtensor(V, device);
+    const auto mask = causal ? ttml::metal::AttentionMaskType::Causal : ttml::metal::AttentionMaskType::None;
+
+    const auto fw = ttml::metal::sdpa_fw(q, k, v, mask, std::nullopt, 0.0F, /*return_intermediates=*/true);
+    const auto ours_O = ttml::core::to_xtensor(fw[0].value());
+    const auto ours_lse = ttml::core::to_xtensor(fw[1].value());
+
+    ttnn::operations::transformer::SDPAProgramConfig cfg{
+        .compute_with_storage_grid_size = device->compute_with_storage_grid_size(),
+        .sub_core_grids = std::nullopt,
+        .q_chunk_size = chunk,
+        .k_chunk_size = chunk,
+        .exp_approx_mode = std::nullopt};
+    const auto [theirs, theirs_lse_t] = ttnn::transformer::scaled_dot_product_attention_with_lse(
+        q, k, v, causal, std::nullopt, std::nullopt, cfg);
+    ASSERT_EQ(theirs_lse_t.logical_shape(), ttnn::Shape({1u, heads, N, 32u}));
+    ASSERT_EQ(theirs_lse_t.dtype(), ttnn::DataType::FLOAT32);
+    const auto theirs_O = ttml::core::to_xtensor(theirs);
+    const auto theirs_lse = ttml::core::to_xtensor(theirs_lse_t);
+
+    // The same call again into preallocated outputs, which must give the same tensors.
+    auto pre_O = ttnn::empty_like(theirs);
+    auto pre_lse = ttnn::empty_like(theirs_lse_t);
+    const auto [again, again_lse] = ttnn::transformer::scaled_dot_product_attention_with_lse(
+        q, k, v, causal, std::nullopt, std::nullopt, cfg, std::nullopt, pre_O, pre_lse);
+    EXPECT_EQ(again.buffer()->address(), pre_O.buffer()->address()) << "the preallocated output was not used";
+    EXPECT_EQ(again_lse.buffer()->address(), pre_lse.buffer()->address()) << "the preallocated lse was not used";
+    {
+        const auto again_O = ttml::core::to_xtensor(again);
+        const auto again_l = ttml::core::to_xtensor(again_lse);
+        const float dO = xt::amax(xt::abs(again_O - theirs_O))();
+        // Column 0 only: the other 31 columns of an lse tile are whatever the row reduce left there.
+        const float dl = xt::amax(xt::abs(
+            xt::view(again_l, xt::all(), xt::all(), xt::all(), 0) -
+            xt::view(theirs_lse, xt::all(), xt::all(), xt::all(), 0)))();
+        std::printf("  preallocated call vs fresh call: max |dO| %.3e (scale %.3e), max |dlse| %.3e\n", dO,
+                    xt::amax(xt::abs(theirs_O))(), dl);
+        EXPECT_EQ(dO, 0.0F) << "preallocated output differs from the fresh call";
+        EXPECT_EQ(dl, 0.0F) << "preallocated lse differs from the fresh call";
+    }
+
+    const uint32_t hpg = heads / kv_heads;
+    const std::string at = " (heads " + std::to_string(heads) + "/" + std::to_string(kv_heads) + ", N " +
+                           std::to_string(N) + ", d " + std::to_string(d) + (causal ? ", causal" : ", dense") + ")";
+    for (uint32_t h = 0; h < heads; ++h) {
+        const auto r = reference_from_inputs(
+            xt::xarray<float>(xt::view(Q, 0, h, xt::all(), xt::all())),
+            xt::xarray<float>(xt::view(K, 0, h / hpg, xt::all(), xt::all())),
+            xt::xarray<float>(xt::view(V, 0, h / hpg, xt::all(), xt::all())),
+            xt::xarray<float>(xt::view(Q, 0, h, xt::all(), xt::all())),
+            causal);
+        // lse per row, column 0 of the tiles.
+        xt::xarray<float> ref_lse = xt::view(r.lse_tile, 0, 0, xt::all(), 0);
+        xt::xarray<float> ours_l = xt::view(ours_lse, 0, h, xt::all(), 0);
+        xt::xarray<float> theirs_l = xt::view(theirs_lse, 0, h, xt::all(), 0);
+        const float ours_lse_err = xt::amax(xt::abs(ours_l - ref_lse))();
+        const float theirs_lse_err = xt::amax(xt::abs(theirs_l - ref_lse))();
+        const float between = xt::amax(xt::abs(theirs_l - ours_l))();
+        const float rms_ours = relative_rms(slice_of(ours_O, 0, h), r.O);
+        const float rms_theirs = relative_rms(slice_of(theirs_O, 0, h), r.O);
+        if (h == 0) {
+            std::printf(
+                "  head 0%s: lse max |err| vs reference: sdpa_fw %.2e, ttnn %.2e, between them %.2e; O relative RMS: "
+                "sdpa_fw %.2e, ttnn %.2e\n",
+                at.c_str(), ours_lse_err, theirs_lse_err, between, rms_ours, rms_theirs);
+        }
+        // The lse enters the backward as exp(scale s - lse): 1e-2 absolute is a 1% per-row
+        // factor. sdpa_fw is inside 1e-2; ttnn's kernel measures up to 2.6e-2, because its running
+        // max and rescale factors exp(scale (m_prev - m_cur)) are bf16 and the roundings compound
+        // over the K chunks (Float32 statistics CBs broke its kernel, so that stays as it is for
+        // now). Graded at 5e-2 here; the ring tests grade the gradients this feeds.
+        EXPECT_LT(theirs_lse_err, 5e-2F) << "ttnn lse head " << h << at;
+        EXPECT_LT(ours_lse_err, 2e-2F) << "sdpa_fw lse head " << h << at;
+        EXPECT_LT(rms_theirs, 0.06F) << "ttnn output head " << h << at;
+    }
+}
+}  // namespace
+
+TEST(TtnnSdpaLseTest, CausalMatchesSdpaFw) {
+    check_ttnn_sdpa_with_lse(4, 4, 1024, 64, /* causal */ true, /* chunk */ 128);
+}
+TEST(TtnnSdpaLseTest, DenseMatchesSdpaFw) {
+    check_ttnn_sdpa_with_lse(4, 4, 1024, 64, /* causal */ false, /* chunk */ 128);
+}
+TEST(TtnnSdpaLseTest, GroupedHeadsCausal) {
+    check_ttnn_sdpa_with_lse(4, 2, 2048, 64, /* causal */ true, /* chunk */ 256);
+}
+TEST(TtnnSdpaLseTest, GroupedHeadsDenseWiderHead) {
+    check_ttnn_sdpa_with_lse(4, 2, 1024, 128, /* causal */ false, /* chunk */ 128);
+}
+
 // The two forwards on one chip: tt-train's sdpa_fw (one query tile row per
 // core pass, K and V re-read per row; the ring's step forward today) against
 // ttnn's chunk-blocked flash-attention forward at several chunk sizes. The
@@ -2827,6 +2938,40 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_CompareForwardsWithTtnn) {
             // Two settings of ttnn's kernel: its defaults, and the precise
             // ones -- exact exponential, HiFi4 matmuls, Float32 accumulation
             // -- since the defaults trade accuracy for speed.
+            for (const uint32_t chunk : {128u, 256u, 512u}) {
+                if (sh.N % chunk != 0u) {
+                    continue;
+                }
+                // The variant the ring would call: Float32 accumulation and the lse output.
+                ttnn::operations::transformer::SDPAProgramConfig cfg{
+                    .compute_with_storage_grid_size = grid,
+                    .sub_core_grids = std::nullopt,
+                    .q_chunk_size = chunk,
+                    .k_chunk_size = chunk,
+                    .exp_approx_mode = std::nullopt};
+                ttnn::Tensor with_lse_O;
+                double with_lse_s = 0.0;
+                try {
+                    with_lse_s = time_it([&]() {
+                        auto [o, l] = ttnn::transformer::scaled_dot_product_attention_with_lse(
+                            q, k, v, causal, std::nullopt, std::nullopt, cfg);
+                        with_lse_O = o;
+                        distributed::Finish(device->mesh_command_queue());
+                    });
+                } catch (const std::exception& e) {
+                    std::printf("  ttnn sdpa with lse, chunk %u: does not fit (%.80s)\n", chunk, e.what());
+                    continue;
+                }
+                const std::string name = "ttnn sdpa with lse, fp32 acc, chunk " + std::to_string(chunk);
+                report(name.c_str(), with_lse_s);
+                if (ref_O.has_value()) {
+                    std::printf(
+                        "    ttnn with lse relative RMS vs Float32 reference: %.2e (%.2fx faster than sdpa_fw)\n",
+                        relative_rms(ttml::core::to_xtensor(with_lse_O), *ref_O), ours_s / with_lse_s);
+                } else {
+                    std::printf("    (%.2fx faster than sdpa_fw)\n", ours_s / with_lse_s);
+                }
+            }
             for (const bool precise : {false, true}) {
             for (const uint32_t chunk : {128u, 256u, 512u}) {
                 if (sh.N % chunk != 0u) {

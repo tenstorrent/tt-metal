@@ -39,6 +39,23 @@ ttnn::Tensor scaled_dot_product_attention(
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
 
 /// Legacy: chunk start index as scalar.
+// Plain or causal attention with the per-row log-sum-exp as a second output: lse = scale * max +
+// ln(sum), a (B, NQH, S, 32) FLOAT32 tile tensor with the value in column 0 of each row's tile --
+// what a backward pass or a ring-attention combine needs. Runs the standard compute path with
+// Float32 accumulation (the default compute kernel config here), and takes preallocated output
+// and lse tensors so a caller can accumulate in place.
+std::tuple<ttnn::Tensor, ttnn::Tensor> scaled_dot_product_attention_with_lse(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    bool is_causal = true,
+    std::optional<float> scale = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& optional_lse_tensor = std::nullopt);
+
 ttnn::Tensor chunked_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
