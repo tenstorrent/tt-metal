@@ -33,7 +33,11 @@ void bind_mse_loss_function(nb::module_& mod) {
 
 
             Keyword Args:
-                reduction (bool, optional): Loss Reduction Mode. Defaults to `None`.
+                reduction (ttnn.LossReductionMode, optional): Loss reduction mode. One of
+                    `ttnn.LossReductionMode.NONE` (no reduction, output has the shape of the
+                    inputs), `ttnn.LossReductionMode.MEAN` or `ttnn.LossReductionMode.SUM`
+                    (reduced over every dimension, output is a scalar).
+                    Defaults to `ttnn.LossReductionMode.NONE`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
@@ -63,7 +67,11 @@ void bind_mae_loss_function(nb::module_& mod) {
 
 
             Keyword Args:
-                reduction (bool, optional): Loss Reduction Mode. Defaults to `None`.
+                reduction (ttnn.LossReductionMode, optional): Loss reduction mode. One of
+                    `ttnn.LossReductionMode.NONE` (no reduction, output has the shape of the
+                    inputs), `ttnn.LossReductionMode.MEAN` or `ttnn.LossReductionMode.SUM`
+                    (reduced over every dimension, output is a scalar).
+                    Defaults to `ttnn.LossReductionMode.NONE`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
 
