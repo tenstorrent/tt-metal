@@ -21,13 +21,14 @@
 #   transport  host-only page streaming between the two ranks;
 #              needs no Tenstorrent device
 #   smoke      transport, then the four correctness tests
+#   multirank  3 ranks, 2 endpoints: non-participants must not be waited on
 #   hotswap    the same body and kernels over a D2D MeshSocket and over this one
 #   perf       throughput at 14 KiB pages
 #   latency    idle device-to-device round trip, then ack latency under load
 #   sweep      page-size sweep at fixed volume, then core-count scaling, then
 #              ring-depth scaling (locates the bandwidth-delay product)
 #   soak       long-running verified soak (see HOST_SOCKET_SOAK_SECONDS)
-#   all        transport, smoke, hotswap, perf, latency
+#   all        transport, smoke, multirank, hotswap, perf, latency
 #
 # Environment knobs (all optional):
 #   TT_METAL_HOME              repo root; also resolved from SLURM_SUBMIT_DIR
@@ -97,15 +98,37 @@ mapfile -t NODES < <(scontrol show hostnames "${SLURM_JOB_NODELIST}")
 
 # Two nodes is the real configuration. One node still exercises the whole
 # datapath (both ranks, different chips) and is far easier to schedule.
-if (( ${#NODES[@]} >= 2 )); then
-    N0="${NODES[0]}"; N1="${NODES[1]}"
-    HOSTSPEC="$N0:1,$N1:1"
-    LOOPBACK=0
-else
-    N0="${NODES[0]}"; N1="$N0"
-    HOSTSPEC="$N0:2"
-    LOOPBACK=1
-fi
+# Ranks beyond the two endpoints are non-participants: they open no device, so
+# they are packed onto the first node. The socket still spans two hosts because
+# the test picks rank 0 and rank size-1 as its endpoints, and those land on
+# different nodes under the layouts below.
+#
+# A mode that wants a different rank count calls set_layout again; NRANKS and
+# HOSTSPEC must stay in step, so nothing sets them by hand.
+set_layout() {
+    NRANKS="${1:-2}"
+    (( NRANKS >= 2 )) || { echo "error: need at least 2 ranks" >&2; exit 2; }
+    local extra=$(( NRANKS - 2 ))
+    if (( ${#NODES[@]} >= 2 )); then
+        N0="${NODES[0]}"; N1="${NODES[1]}"
+        # rank 0 on N0 with any spare ranks beside it, the last rank on N1.
+        HOSTSPEC="$N0:$(( 1 + extra )),$N1:1"
+        LOOPBACK=0
+    else
+        N0="${NODES[0]}"; N1="$N0"
+        HOSTSPEC="$N0:$NRANKS"
+        LOOPBACK=1
+    fi
+
+    # Unbound: the relay is a polling thread and sharing one core costs
+    # throughput. SLURM hands out one slot per node, so any layout denser than
+    # one rank per node needs --oversubscribe or mpirun refuses to map.
+    MAP_ARGS="--bind-to none"
+    if (( NRANKS > ${#NODES[@]} )); then
+        MAP_ARGS="$MAP_ARGS --oversubscribe"
+    fi
+}
+set_layout "${HOST_SOCKET_RANKS:-2}"
 
 MPIRUN=/opt/openmpi-v5.0.7-ulfm/bin/mpirun
 [[ -x "$MPIRUN" ]] || MPIRUN=$(command -v mpirun) || { echo "error: no mpirun" >&2; exit 2; }
@@ -146,11 +169,6 @@ RUN_TIMEOUT="${HOST_SOCKET_TIMEOUT:-600}"
 # Many chip pairs to get past contended devices, so keep each attempt short.
 case "$MODE" in smoke) RUN_TIMEOUT="${HOST_SOCKET_TIMEOUT:-120}" ;; esac
 
-# Unbound: the relay is a polling thread and sharing one core costs throughput.
-# Loopback puts both ranks on a node with one SLURM slot, hence --oversubscribe.
-MAP_ARGS="--bind-to none"
-(( LOOPBACK )) && MAP_ARGS="$MAP_ARGS --oversubscribe"
-
 # World size > 1 makes the control plane require a per-rank mesh binding. The
 # descriptor wires nothing between the two meshes: this runs over the host network.
 export TT_MESH_GRAPH_DESC_PATH="${HOST_SOCKET_MGD:-$HERE/config/two_bh_single_chip_mgd.textproto}"
@@ -182,7 +200,7 @@ run_gtest() {  # label, gtest_filter, then VAR=VAL overrides
         # follow up with a kill.
         local log="${TMPDIR:-/tmp}/host_socket_${SLURM_JOB_ID:-local}_$$.log"
         timeout --kill-after=30s "$RUN_TIMEOUT" \
-        env "$@" "$MPIRUN" -n 2 --host "$HOSTSPEC" \
+        env "$@" "$MPIRUN" -n "$NRANKS" --host "$HOSTSPEC" \
             --allow-run-as-root --tag-output $MAP_ARGS \
             -x TT_METAL_HOME -x TT_METAL_RUNTIME_ROOT -x TT_MESH_GRAPH_DESC_PATH \
             -x TT_HOST_SOCKET_DEVICE_ID -x TT_VISIBLE_DEVICES_PER_RANK \
@@ -243,6 +261,19 @@ case "$MODE" in
         run_gtest "streaming ack latency" 'HostSocketLatencyTest.StreamingAckLatency' \
             TT_HOST_SOCKET_IDLE_RTT_US="${idle_rtt:-0}" || rc=$?
         ;;
+    multirank)
+        # Three ranks, two endpoints. Exercises the path where a socket is built
+        # inside a world larger than itself: the non-participant never calls the
+        # socket's barriers, so anything collective over the full context hangs.
+        set_layout 3
+        export TT_MESH_GRAPH_DESC_PATH="$HERE/config/three_bh_single_chip_mgd.textproto"
+        # Every rank opens a device, and ranks 0 and 1 share a node, so each entry
+        # names a chip per rank: "rank0:rank1:rank2". Rank 2 is on the other node
+        # and may reuse rank 0's chip id.
+        CHIP_CANDIDATES="${HOST_SOCKET_VISIBLE_DEVICES:-5:13:5,21:29:21,0:1:0,2:3:2,6:7:6}"
+        echo "== multirank: $NRANKS ranks over $HOSTSPEC"
+        run_gtest "multi-rank world" 'HostSocketMultiRankTest.*' || rc=$?
+        ;;
     hotswap)
         # Same body and same kernels over a D2D MeshSocket and over a
         # HostMeshSocket; only the socket type and SOCKET_MODE differ.
@@ -288,12 +319,13 @@ case "$MODE" in
         # throughput. 'sweep' is deliberately separate; it is long.
         "$0" transport || rc=$?
         "$0" smoke || rc=$?
+        "$0" multirank || rc=$?
         "$0" hotswap || rc=$?
         "$0" perf || rc=$?
         "$0" latency || rc=$?
         ;;
     *)
-        echo "unknown mode: $MODE (want transport|smoke|hotswap|perf|latency|sweep|soak|all)" >&2
+        echo "unknown mode: $MODE (want transport|smoke|multirank|hotswap|perf|latency|sweep|soak|all)" >&2
         exit 2
         ;;
 esac

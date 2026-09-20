@@ -1,0 +1,24 @@
+# Three independent single-chip Blackhole meshes, one per rank. As with the
+# two-rank descriptor there are deliberately no connections between them: this
+# socket runs over the host network, not ethernet.
+#
+# The third mesh exists so a world larger than the socket's two endpoints has a
+# valid binding for every rank. That rank opens no device.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 1 ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 1 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
