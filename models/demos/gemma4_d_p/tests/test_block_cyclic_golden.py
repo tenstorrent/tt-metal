@@ -6,6 +6,7 @@
 import json
 import os
 import random
+import time
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,7 @@ from models.demos.gemma4_d_p.tt.prefill_metadata import chunk_positions
 
 
 def prefill_chunk(model, token_ids, actual_start, actual_end, pad_token_id=0):
-    """Pack a fixed-size request in CP order and prefill its real token interval."""
+    """Pack and prefill a request; return synchronized forward latency in milliseconds."""
     mesh_config = model.mesh_config
     positions = chunk_positions(actual_start, model.prefill_chunk_size, mesh_config.cp_degree).flatten()
     valid = positions < actual_end
@@ -36,11 +37,15 @@ def prefill_chunk(model, token_ids, actual_start, actual_end, pad_token_id=0):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=mesh_config.shard_mapper(mesh_dims=(1, None)),
     )
+    ttnn.synchronize_device(mesh_config.device)
+    start = time.perf_counter()
     hidden_states = model.transform_and_embed_prefill_inputs_device(device_tokens)
     output = model(hidden_states, actual_start=actual_start, actual_end=actual_end)
+    ttnn.synchronize_device(mesh_config.device)
+    elapsed_ms = (time.perf_counter() - start) * 1000
     output.deallocate(True)
     device_tokens.deallocate(True)
-    ttnn.synchronize_device(mesh_config.device)
+    return elapsed_ms
 
 
 @pytest.mark.timeout(900)
@@ -70,8 +75,8 @@ def test_block_cyclic_prefill_256k():
             # Rewind up to 2K tokens, then extend the populated prefix.
             actual_start = max(0, actual_end - rng.randint(0, 2048)) // 32 * 32
             actual_end = min(context_len, actual_start + rng.randint(chunk_size // 2, chunk_size))
-            logger.info("Prefill [{}, {})", actual_start, actual_end)
-            prefill_chunk(model, token_ids, actual_start, actual_end, tokenizer.pad_token_id)
+            elapsed_ms = prefill_chunk(model, token_ids, actual_start, actual_end, tokenizer.pad_token_id)
+            logger.info("Prefill [{}, {}): synchronized forward {:.3f} ms", actual_start, actual_end, elapsed_ms)
 
         # Restore absolute token order in the final-layer KV cache.
         row_order = _cp_chunk_major_row_order(context_len, mesh_config.cp_degree, chunk_size).argsort()
