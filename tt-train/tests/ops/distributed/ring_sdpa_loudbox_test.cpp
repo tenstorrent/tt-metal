@@ -1362,8 +1362,8 @@ TEST_F(LoudboxRingSDPATest, DISABLED_CompareGroupedHeads) {
               << " chips, grouped-query heads, zigzag, direct shifts, median of five (ms)\n";
     using Kind = ttml::ops::distributed::RingBackwardKind;
     std::vector<std::array<size_t, 5>> table = {
-        // query heads, key heads, rows per chip, head dim, Bt for the cyclic kind
-        {6, 3, 4096, 64, 2},
+        // query heads, key heads, rows per chip, head dim, Bt for the cyclic
+        // kind on the contiguous layout (zigzag sweeps every height)
         {6, 3, 4096, 64, 4},
         {32, 4, 2048, 64, 2},
         {32, 4, 4096, 64, 4},
@@ -1392,16 +1392,49 @@ TEST_F(LoudboxRingSDPATest, DISABLED_CompareGroupedHeads) {
         if (rows < min_rows || rows % (4U * Bt * 32U) != 0U) {
             continue;
         }
-        const auto run = [&](Kind kind) {
-            return time_ring_backward(
-                       1, heads, seq_len, d, kind, Bt, RingShiftTransport::Direct, 5U, RingLayout::Zigzag, kv_heads) *
+        const auto run = [&](Kind kind, RingLayout layout, uint32_t bt) {
+            return time_ring_backward(1, heads, seq_len, d, kind, bt, RingShiftTransport::Direct, 5U, layout, kv_heads) *
                    1e3;
         };
-        const double tp = run(Kind::TwoPass);
-        const double cy = run(Kind::CyclicInPlace);
-        std::cout << "  heads=" << heads << " kv_heads=" << kv_heads << " rows/chip=" << rows << " d=" << d
-                  << " Bt=" << Bt << ": two-pass zigzag " << tp << " | cyclic in-place zigzag " << cy << " ("
-                  << (cy / tp - 1.0) * 100.0 << "%)\n";
+        // The two-pass backward on both layouts, since which is faster
+        // depends on the chunk size; the cyclic one on zigzag at every block
+        // height that divides the chunk (the planner's choice is the best of
+        // them), and on the contiguous layout at the table's height. Cores
+        // busy on the cyclic side: C = chunk / (2 Bt 32) per group, and the
+        // group count is capped to the key heads (batch 1 here).
+        const double tp_c = run(Kind::TwoPass, RingLayout::Contiguous, 1U);
+        const double tp_z = run(Kind::TwoPass, RingLayout::Zigzag, 1U);
+        const double tp_best = std::min(tp_c, tp_z);
+        std::ostringstream line;
+        line << "  heads=" << heads << " kv_heads=" << kv_heads << " rows/chip=" << rows << " d=" << d
+             << ": two-pass contiguous " << tp_c << " zigzag " << tp_z;
+        double cy_best = std::numeric_limits<double>::infinity();
+        uint32_t cy_best_bt = 0;
+        for (const uint32_t bt : {1U, 2U, 4U}) {
+            if ((rows / 2) % (2U * bt * 32U) != 0U) {
+                continue;
+            }
+            const double cy = run(Kind::CyclicInPlace, RingLayout::Zigzag, bt);
+            // As the planner counts them: groups = min(key heads, how many
+            // rectangles of C fit), lowered to a divisor of the key heads.
+            const size_t C = (rows / 2) / (2U * bt * 32U);
+            size_t groups = std::min<size_t>(kv_heads, 110 / C);
+            while (kv_heads % groups != 0) {
+                --groups;
+            }
+            const size_t cores = groups * C;
+            line << " | cyclic zigzag Bt=" << bt << " " << cy << " (" << (cy / tp_best - 1.0) * 100.0 << "%, ~"
+                 << cores << " cores)";
+            if (cy < cy_best) {
+                cy_best = cy;
+                cy_best_bt = bt;
+            }
+        }
+        const double cy_c = run(Kind::CyclicInPlace, RingLayout::Contiguous, Bt);
+        line << " | cyclic contiguous Bt=" << Bt << " " << cy_c << " (" << (cy_c / tp_best - 1.0) * 100.0
+             << "%) | best cyclic zigzag Bt=" << cy_best_bt << " " << cy_best << " vs best two-pass " << tp_best
+             << ": " << (cy_best / tp_best - 1.0) * 100.0 << "%";
+        std::cout << line.str() << "\n";
     }
 }
 
