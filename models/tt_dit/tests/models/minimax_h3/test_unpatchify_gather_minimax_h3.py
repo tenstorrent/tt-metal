@@ -42,8 +42,12 @@ def test_unpatchify_tiled_matches_permute(mesh_device):
     for tag in ("a", "b"):
         x = torch.randn(1, SEQ, 3072).bfloat16()
         # The decoder emits bf16 tiles; the pipeline casts to fp32 while still TILE.
-        x_dev = ttnn.typecast(ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device), ttnn.float32)
-        t_chain, ref = _best(lambda: unpatchify_device(ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT), **dims), mesh_device)
+        x_dev = ttnn.typecast(
+            ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device), ttnn.float32
+        )
+        t_chain, ref = _best(
+            lambda: unpatchify_device(ttnn.to_layout(x_dev, ttnn.ROW_MAJOR_LAYOUT), **dims), mesh_device
+        )
         t_gather, got = _best(lambda: unpatchify_tiled(x_dev, **dims), mesh_device)
         ref_t = ttnn.to_torch(ref).float()
         got_t = ttnn.to_torch(got).float()

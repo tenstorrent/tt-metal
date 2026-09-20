@@ -15,7 +15,9 @@ _TILE = 4096
 _programs: dict = {}
 
 
-def _build(mesh_device, *, s_pad: int, d: int, num_frames: int, height: int, out_channels: int, pt: int, p: int, x, out):
+def _build(
+    mesh_device, *, s_pad: int, d: int, num_frames: int, height: int, out_channels: int, pt: int, p: int, x, out
+):
     grid = mesh_device.compute_with_storage_grid_size()
     cores = [(cx, cy) for cy in range(grid.y) for cx in range(grid.x)]
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
@@ -44,7 +46,8 @@ def _build(mesh_device, *, s_pad: int, d: int, num_frames: int, height: int, out
         cbs=[cb],
         # Deterministic across processes (ints only, no str hashing); every compile-time and work-split input is in it,
         # since generic_op trusts the hash on a program-cache hit.
-        hash=(0xC13 << 52) | (hash((s_pad, d, num_frames, height, out_channels, pt, p, tuple(ct), len(cores))) & ((1 << 52) - 1)),
+        hash=(0xC13 << 52)
+        | (hash((s_pad, d, num_frames, height, out_channels, pt, p, tuple(ct), len(cores))) & ((1 << 52) - 1)),
     )
 
 

@@ -54,7 +54,6 @@ def _reshape_rows(x: ttnn.Tensor, shape) -> ttnn.Tensor:
     return y
 
 
-
 def _batch_sharded_to_torch(x_dev: ttnn.Tensor, axis: int, batch: int) -> torch.Tensor:
     """Batch item b lives on the devices whose coordinate along ``axis`` is b (T already gathered on each): read one
     local device per item and stack them."""
@@ -71,6 +70,7 @@ def _batch_sharded_to_torch(x_dev: ttnn.Tensor, axis: int, batch: int) -> torch.
         else:
             raise RuntimeError(f"no local device holds batch item {b} along mesh axis {axis}")
     return torch.cat(parts, dim=0)
+
 
 class DilatedConv1d(_AlignedOutConv1d):
     """Symmetric ("same") zeros-pad ``Conv1dViaConv3d`` with ``dilation``. For the AMP

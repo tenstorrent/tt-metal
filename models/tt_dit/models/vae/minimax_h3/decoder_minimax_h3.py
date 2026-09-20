@@ -383,7 +383,6 @@ class MiniMaxH3ViTDecoder3d(Module):
         self.rope_sin = Parameter(total_shape=[1, 1, self.seq_len, head_dim], device=mesh_device, dtype=dtype)
         self._rope_host = (cos.reshape(1, 1, self.seq_len, head_dim), sin.reshape(1, 1, self.seq_len, head_dim))
 
-
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Build the fused suffix constant and the RoPE constants.
 

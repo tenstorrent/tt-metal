@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """SDPA writing the concat-heads layout itself (`output_concat_heads=True`) against SDPA + `nlp_concat_heads`, at the
-H3 VAE decoder's shape (32 heads, 1824 padded / 1797 logical tokens, head dim 64), one chip: bit-identical, both timed."""
+H3 VAE decoder's shape (32 heads, 1824 padded / 1797 logical tokens, head dim 64), one chip: bit-identical, both timed.
+"""
 
 import time
 
@@ -42,7 +43,9 @@ def test_sdpa_concat_heads_matches(mesh_device, valid_len):
         logical = ttnn.Shape([1, HEADS, valid_len, HEAD_DIM])
         q, k, v = (ttnn.reshape(t, logical, padded) for t in (q, k, v))
     grid = mesh_device.compute_with_storage_grid_size()
-    cfg = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=grid, q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False)
+    cfg = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid, q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False
+    )
     kcfg = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=False
     )
@@ -58,7 +61,14 @@ def test_sdpa_concat_heads_matches(mesh_device, valid_len):
 
     def fused():
         out = ttnn.transformer.scaled_dot_product_attention(
-            q, k, v, attn_mask=None, is_causal=False, program_config=cfg, compute_kernel_config=kcfg, output_concat_heads=True
+            q,
+            k,
+            v,
+            attn_mask=None,
+            is_causal=False,
+            program_config=cfg,
+            compute_kernel_config=kcfg,
+            output_concat_heads=True,
         )
         full = ttnn.Shape([1, 1, SEQ, dim])
         if out.shape[-2] != SEQ:

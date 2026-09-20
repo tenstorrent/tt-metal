@@ -62,7 +62,11 @@ def test_rope_rms_fused(mesh_device, view):
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True
     )
     rope_cfg = ttnn.init_device_compute_kernel_config(
-        mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
     )
 
     def today():
@@ -77,7 +81,13 @@ def test_rope_rms_fused(mesh_device, view):
     out_t, t_today = _timed(mesh_device, today)
     out_f, t_fused = _timed(mesh_device, fused)
     x_bf16 = ttnn.to_torch(ttnn.from_torch(x, dtype=ttnn.bfloat16)).float()  # what the device saw
-    ref = _reference(x_bf16.reshape(1, HEADS, SEQ, HEAD_DIM), ttnn.to_torch(cos_dev).float(), ttnn.to_torch(sin_dev).float(), ttnn.to_torch(trans).float().reshape(-1, 32)[:32], EPS)
+    ref = _reference(
+        x_bf16.reshape(1, HEADS, SEQ, HEAD_DIM),
+        ttnn.to_torch(cos_dev).float(),
+        ttnn.to_torch(sin_dev).float(),
+        ttnn.to_torch(trans).float().reshape(-1, 32)[:32],
+        EPS,
+    )
     got_t = ttnn.to_torch(out_t).float().reshape(1, HEADS, SEQ, HEAD_DIM).double()
     got_f = ttnn.to_torch(out_f).float().reshape(1, HEADS, SEQ, HEAD_DIM).double()
     scale = ref.std()

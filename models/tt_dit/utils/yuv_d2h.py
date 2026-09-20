@@ -186,7 +186,9 @@ def _yuv_planar_d2h(
                         continue
                     buf = distributed_buf.get_shard(c)
                     if buf is not None:
-                        coords_and_shards.append((c, _as_hwt(_host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim], T)))
+                        coords_and_shards.append(
+                            (c, _as_hwt(_host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim], T))
+                        )
                 return coords_and_shards
 
             Y_coords_shards = _extract_local(host_Y)
@@ -226,7 +228,6 @@ def _yuv_planar_d2h(
             Y_shards = _extract(host_Y)  # each (1, h_per_y, w_per_y, T)
             Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
             Cr_shards = _extract(host_Cr)
-
 
         # --- C++/AVX2 fast path --------------------------------------------- Drop-in replacement for the torch_threaded
         # `planar_concat_cpp` copies non-contiguous shards one by one, slower than the torch scatter: hence the guard.
@@ -500,7 +501,6 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h]   Y : {list(tt_Y.shape)}")
         print(f"  [yuv-d2h]   Cb: {list(tt_Cb.shape)}")
         print(f"  [yuv-d2h]   Cr: {list(tt_Cr.shape)}")
-
 
     # 3+4
     new_H = logical_h if logical_h is not None else H
