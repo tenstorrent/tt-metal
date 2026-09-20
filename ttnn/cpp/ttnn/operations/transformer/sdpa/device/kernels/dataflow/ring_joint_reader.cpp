@@ -412,6 +412,11 @@ void kernel_main() {
 
     uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
     uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    ring_joint::SlidingQMapping qmap{
+        get_arg_val<uint32_t>(argidx++),
+        get_arg_val<uint32_t>(argidx++),
+        get_arg_val<uint32_t>(argidx++),
+        get_arg_val<uint32_t>(argidx++)};
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
         argidx);
@@ -521,7 +526,6 @@ void kernel_main() {
             logical_lt = ring_joint::tiles_for(logical_l_live);
             joint_l_partial_col_live = ring_joint::tile_partial_col(logical_l_live);
         }
-        [[maybe_unused]] ring_joint::KvPadQMapping qmap{};
         if constexpr (kv_pad_from_metadata) {
             uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
                 meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1);
@@ -533,8 +537,8 @@ void kernel_main() {
             const uint32_t tensor_rank =
                 ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
-            qmap = ring_joint::build_kv_pad_q_mapping_device(
-                kv_actual_tile_count, logical_nt, ring_size, q_local_padded_Nt, tensor_rank);
+            qmap = ring_joint::build_sliding_q_mapping(
+                kv_actual_tile_count, logical_nt, q_local_padded_Nt, ring_size, tensor_rank);
             // Joint trio stays defaulted: KV-pad rotation is validated incompatible with a sharded joint.
             const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>({
                 .transport_rank = fused_op_receiver.seq.ring_index,
@@ -936,7 +940,8 @@ void kernel_main() {
                     kv_local_padded_Nt,
                     Sk_chunk_t,
                     logical_nt,
-                    circular_kv_slab_count);
+                    circular_kv_slab_count,
+                    kv_pad_rotation_enabled ? &qmap : nullptr);
                 ASSERT(sliding_q_plan.is_valid);
                 ASSERT(sliding_q_plan.total_k_chunk_count > 0);
             }
@@ -958,7 +963,7 @@ void kernel_main() {
                  */
                 const bool kv_chunk_is_joint = !has_sliding_window && has_joint_k && k_chunk >= num_local_k_chunks;
                 const bool kv_chunk_is_beyond_logical_n =
-                    !kv_chunk_is_joint &&
+                    !has_sliding_window && !kv_chunk_is_joint &&
                     !kv_chunk_starts_before_logical_end<
                         kv_pad_rotation_enabled,
                         chunked_enabled,

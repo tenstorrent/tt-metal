@@ -9,6 +9,40 @@
 
 namespace ttnn::operations::transformer::sdpa::ring_joint {
 
+// Absolute positions of the two contiguous segments packed into one device's Q slab.
+struct SlidingQMapping {
+    uint32_t q_pre_wrap_start_tile = 0;
+    uint32_t q_pre_wrap_tile_count = 0;
+    uint32_t q_post_wrap_start_tile = 0;
+    uint32_t q_valid_tile_count = 0;
+};
+
+constexpr SlidingQMapping build_sliding_q_mapping(
+    uint32_t start, uint32_t end, uint32_t local, uint32_t ring_size, uint32_t device) {
+    SlidingQMapping mapping;
+    const uint32_t group = start / (local * ring_size);
+    for (uint32_t part = 0; part < 2; ++part) {
+        const uint32_t slab_start = (group + part) * local * ring_size + device * local;
+        const uint32_t begin = start > slab_start ? start : slab_start;
+        const uint32_t finish = end < slab_start + local ? end : slab_start + local;
+        const uint32_t count = finish > begin ? finish - begin : 0;
+        if (part == 0) {
+            mapping.q_pre_wrap_start_tile = count ? begin : 0;
+            mapping.q_pre_wrap_tile_count = count;
+        } else {
+            mapping.q_post_wrap_start_tile = count ? begin : 0;
+        }
+        mapping.q_valid_tile_count += count;
+    }
+    return mapping;
+}
+
+struct SlidingHaloSources {
+    uint32_t first_start_tile = 0;
+    uint32_t second_start_tile = 0;
+    uint32_t count = 1;
+};
+
 struct SlidingKVSourceRange {
     uint32_t source_ring_id = 0;
     uint32_t first_k_chunk = 0;
@@ -28,12 +62,8 @@ struct SlidingKChunkRef {
     uint32_t compact_k_chunk = 0;
 };
 
-// Circular sliding KV cache (circular_kv_slab_count = n_slabs): each device keeps only
-// n_slabs Q-sized slabs and chunk group g lives in local slab (g % n_slabs). 0 or 1 means the
-// cache is unbounded (identity). This is the ONLY place local slab placement is derived; keep
-// every consumer (host plan, reader, compute) on this helper so the three never desync. The
-// trace-metadata halo helper (compute_halo_tail_start_Ht, ring_attention_all_gather_metadata.hpp)
-// still derives the slab unwrapped, which is why circular caches are rejected on that path.
+// Circular caches wrap local slabs; global token positions remain absolute.
+// Zero or one slab denotes an unbounded cache.
 constexpr uint32_t circular_kv_local_slab(uint32_t source_group, uint32_t circular_kv_slab_count) {
     return circular_kv_slab_count > 1 ? source_group % circular_kv_slab_count : source_group;
 }
@@ -48,35 +78,31 @@ constexpr uint32_t chunked_sliding_halo_tile_rows(
     return ((left_window_tokens + k_chunk_tokens - 1) / k_chunk_tokens) * k_chunk_tile_rows;
 }
 
-constexpr uint32_t chunked_sliding_halo_source_start_tile(
-    uint32_t source_device,
-    uint32_t q_local_tile_rows,
-    uint32_t ring_size,
-    uint32_t logical_k_tile_rows,
-    uint32_t halo_tile_rows,
-    uint32_t circular_kv_slab_count = 0) {
-    const uint32_t q_group_tile_rows = q_local_tile_rows * ring_size;
-    if (q_group_tile_rows == 0 || logical_k_tile_rows < q_group_tile_rows || halo_tile_rows > q_local_tile_rows) {
-        return 0;
+// The receiver's Q mapping determines which predecessor slabs must be sent.
+constexpr SlidingHaloSources sliding_halo_sources(
+    const SlidingQMapping& mapping, uint32_t local, uint32_t ring_size, uint32_t halo, uint32_t circular_slabs = 0) {
+    SlidingHaloSources sources;
+    const auto origin = [=](uint32_t query_start) {
+        const uint32_t query_slab = query_start / local;
+        return query_slab == 0
+                   ? 0
+                   : circular_kv_local_slab((query_slab - 1) / ring_size, circular_slabs) * local + local - halo;
+    };
+    if (mapping.q_valid_tile_count == 0) {
+        return sources;
     }
-    const uint32_t current_group = logical_k_tile_rows / q_group_tile_rows - 1;
-    // The wrap source for device 0 is the prior group. It does not exist in group
-    // 0, but device 0's clipped work plan never reads the fixed-size payload sent
-    // on this edge. Clamp the origin to an in-bounds tile range and preserve the
-    // exchange length so the halo protocol remains synchronized.
-    if (current_group == 0 && source_device + 1 == ring_size) {
-        return 0;
+    sources.first_start_tile =
+        origin(mapping.q_pre_wrap_tile_count ? mapping.q_pre_wrap_start_tile : mapping.q_post_wrap_start_tile);
+    if (mapping.q_pre_wrap_tile_count && mapping.q_valid_tile_count > mapping.q_pre_wrap_tile_count) {
+        sources.second_start_tile = origin(mapping.q_post_wrap_start_tile);
+        sources.count = 2;
     }
-    const uint32_t source_group = source_device + 1 == ring_size ? current_group - 1 : current_group;
-    return circular_kv_local_slab(source_group, circular_kv_slab_count) * q_local_tile_rows + q_local_tile_rows -
-           halo_tile_rows;
+    return sources;
 }
 
-// Device-compatible work plan for one Q chunk. The supported 128-token window
-// touches at most the Q-owned region and its predecessor, so two fixed ranges
-// cover the chunked layout without a dynamic container.
+// A Q compute block can straddle its packed slab's wrap: two source ranges per segment.
 struct SlidingQWorkPlan {
-    static constexpr uint32_t max_source_ranges = 2;
+    static constexpr uint32_t max_source_ranges = 4;
 
     std::array<SlidingKVSourceRange, max_source_ranges> source_ranges{};
     uint32_t source_range_count = 0;
@@ -130,104 +156,89 @@ constexpr SlidingQWorkPlan build_sliding_q_work_plan(
     uint32_t k_local_tile_rows,
     uint32_t k_chunk_tile_rows,
     uint32_t logical_k_tile_rows,
-    uint32_t circular_kv_slab_count = 0) {
+    uint32_t circular_kv_slab_count = 0,
+    const SlidingQMapping* rotated_q = nullptr) {
     SlidingQWorkPlan plan;
     if (q_chunk_tile_rows == 0 || q_local_tile_rows == 0 || ring_size == 0 || sliding_window_tokens == 0 ||
-        tile_height == 0 || k_chunk_tile_rows == 0 || q_local_tile_rows % k_chunk_tile_rows != 0) {
+        tile_height == 0 || k_chunk_tile_rows == 0 || q_local_tile_rows % k_chunk_tile_rows != 0 ||
+        q_local_start_tile + q_chunk_tile_rows > q_local_tile_rows) {
         return plan;
     }
-
-    const uint32_t q_group_tile_rows = ring_size * q_local_tile_rows;
-    // A complete first group is valid: device 0 clips at token 0 and every other
-    // device can consume its predecessor within the same group.
-    if (logical_k_tile_rows < q_group_tile_rows || q_local_start_tile + q_chunk_tile_rows > q_local_tile_rows) {
+    const uint32_t group_rows = ring_size * q_local_tile_rows;
+    if (!rotated_q && logical_k_tile_rows < group_rows) {
         return plan;
     }
-
-    const uint32_t halo_tile_rows =
-        chunked_sliding_halo_tile_rows(sliding_window_tokens, tile_height, k_chunk_tile_rows);
-    if (halo_tile_rows > q_local_tile_rows) {
+    const uint32_t halo = chunked_sliding_halo_tile_rows(sliding_window_tokens, tile_height, k_chunk_tile_rows);
+    if (halo > q_local_tile_rows) {
         return plan;
     }
-
-    const uint32_t current_q_group_start = logical_k_tile_rows - q_group_tile_rows;
-    const uint32_t global_q_start_tile =
-        current_q_group_start + q_device_index * q_local_tile_rows + q_local_start_tile;
-    const uint32_t left_window_tokens = sliding_window_tokens > 0 ? sliding_window_tokens - 1 : 0;
-    const uint32_t left_window_tile_rows = tile_height == 0 ? 0 : (left_window_tokens + tile_height - 1) / tile_height;
-    const uint32_t window_start_tile =
-        global_q_start_tile > left_window_tile_rows ? global_q_start_tile - left_window_tile_rows : 0;
-    const uint32_t window_end_tile = global_q_start_tile + q_chunk_tile_rows;
-
-    const uint32_t clipped_window_start =
-        window_start_tile < logical_k_tile_rows ? window_start_tile : logical_k_tile_rows;
-    const uint32_t clipped_window_end = window_end_tile < logical_k_tile_rows ? window_end_tile : logical_k_tile_rows;
-    if (clipped_window_start >= clipped_window_end) {
-        return plan;
-    }
-
-    const uint32_t first_slab = clipped_window_start / q_local_tile_rows;
-    const uint32_t last_slab = (clipped_window_end - 1) / q_local_tile_rows;
-    for (uint32_t slab = first_slab; slab <= last_slab; ++slab) {
-        const uint32_t source_ring_id = slab % ring_size;
-        const uint32_t source_group = slab / ring_size;
-        const uint32_t slab_global_start = slab * q_local_tile_rows;
-        const uint32_t range_global_start =
-            clipped_window_start > slab_global_start ? clipped_window_start : slab_global_start;
-        const uint32_t slab_global_end = slab_global_start + q_local_tile_rows;
-        const uint32_t range_global_end = clipped_window_end < slab_global_end ? clipped_window_end : slab_global_end;
-        const uint32_t source_local_base =
-            circular_kv_local_slab(source_group, circular_kv_slab_count) * q_local_tile_rows;
-        const uint32_t range_local_start = source_local_base + range_global_start - slab_global_start;
-        const uint32_t range_local_end = source_local_base + range_global_end - slab_global_start;
-        if (range_local_start >= k_local_tile_rows) {
+    const SlidingQMapping mapping = rotated_q
+                                        ? *rotated_q
+                                        : SlidingQMapping{
+                                              logical_k_tile_rows - group_rows + q_device_index * q_local_tile_rows,
+                                              q_local_tile_rows,
+                                              0,
+                                              q_local_tile_rows};
+    const uint32_t first_query_slab =
+        (mapping.q_pre_wrap_tile_count ? mapping.q_pre_wrap_start_tile : mapping.q_post_wrap_start_tile) /
+        q_local_tile_rows;
+    const uint32_t left_tiles = (sliding_window_tokens - 1 + tile_height - 1) / tile_height;
+    for (uint32_t part = 0; part < 2; ++part) {
+        const uint32_t segment_begin = part == 0 ? 0 : mapping.q_pre_wrap_tile_count;
+        const uint32_t segment_end = part == 0 ? mapping.q_pre_wrap_tile_count : mapping.q_valid_tile_count;
+        const uint32_t begin = q_local_start_tile > segment_begin ? q_local_start_tile : segment_begin;
+        const uint32_t chunk_end = q_local_start_tile + q_chunk_tile_rows;
+        const uint32_t end = chunk_end < segment_end ? chunk_end : segment_end;
+        if (begin >= end) {
             continue;
         }
-        const uint32_t clipped_range_local_end =
-            range_local_end < k_local_tile_rows ? range_local_end : k_local_tile_rows;
-        if (range_local_start >= clipped_range_local_end) {
-            continue;
-        }
-
-        const uint32_t first_k_chunk = range_local_start / k_chunk_tile_rows;
-        const uint32_t last_k_chunk = (clipped_range_local_end + k_chunk_tile_rows - 1) / k_chunk_tile_rows;
-        uint32_t first_compact_k_chunk = 0;
-        if (source_ring_id != q_device_index) {
-            const uint32_t halo_source_start = chunked_sliding_halo_source_start_tile(
-                source_ring_id,
-                q_local_tile_rows,
-                ring_size,
-                logical_k_tile_rows,
-                halo_tile_rows,
-                circular_kv_slab_count);
-            // A remote range must begin inside the fixed-size halo. This is
-            // guaranteed by the one-hop halo bound and first-group clipping;
-            // make it explicit so unsigned subtraction cannot produce an
-            // out-of-range compact-buffer index if that contract changes.
-            // (Bounded mode wraps halo_source_start and first_k_chunk through the SAME
-            // source-group slab base, so the comparison stays exact across the wrap.)
-            if (halo_source_start > first_k_chunk * k_chunk_tile_rows) {
+        const uint32_t segment_origin = part == 0 ? mapping.q_pre_wrap_start_tile : mapping.q_post_wrap_start_tile;
+        const uint32_t q_begin = segment_origin + begin - segment_begin;
+        const uint32_t q_end = segment_origin + end - segment_begin;
+        const uint32_t window_begin = q_begin > left_tiles ? q_begin - left_tiles : 0;
+        const uint32_t window_end = q_end < logical_k_tile_rows ? q_end : logical_k_tile_rows;
+        for (uint32_t slab = window_begin / q_local_tile_rows; slab * q_local_tile_rows < window_end; ++slab) {
+            const uint32_t source = slab % ring_size;
+            const uint32_t slab_begin = slab * q_local_tile_rows;
+            const uint32_t range_begin = window_begin > slab_begin ? window_begin : slab_begin;
+            const uint32_t range_end =
+                window_end < slab_begin + q_local_tile_rows ? window_end : slab_begin + q_local_tile_rows;
+            const uint32_t local_base =
+                circular_kv_local_slab(slab / ring_size, circular_kv_slab_count) * q_local_tile_rows;
+            const uint32_t local_begin = local_base + range_begin - slab_begin;
+            const uint32_t local_end = local_base + range_end - slab_begin;
+            const uint32_t clipped_end = local_end < k_local_tile_rows ? local_end : k_local_tile_rows;
+            if (local_begin >= clipped_end) {
+                continue;
+            }
+            const uint32_t first_k = local_begin / k_chunk_tile_rows;
+            const uint32_t last_k = (clipped_end + k_chunk_tile_rows - 1) / k_chunk_tile_rows;
+            uint32_t compact_k = 0;
+            if (source != q_device_index) {
+                const uint32_t halo_origin = local_base + q_local_tile_rows - halo;
+                if (first_k * k_chunk_tile_rows < halo_origin) {
+                    return SlidingQWorkPlan{};
+                }
+                const uint32_t halo_slot = slab + 1 == first_query_slab ? 0 : 1;
+                compact_k = (halo_slot * halo + first_k * k_chunk_tile_rows - halo_origin) / k_chunk_tile_rows;
+            }
+            if (plan.source_range_count == SlidingQWorkPlan::max_source_ranges) {
                 return SlidingQWorkPlan{};
             }
-            first_compact_k_chunk = (first_k_chunk * k_chunk_tile_rows - halo_source_start) / k_chunk_tile_rows;
+            plan.source_ranges[plan.source_range_count++] = SlidingKVSourceRange{
+                source,
+                first_k,
+                last_k,
+                compact_k,
+                slab_begin / k_chunk_tile_rows + first_k - local_base / k_chunk_tile_rows};
+            plan.total_k_chunk_count += last_k - first_k;
         }
-        if (plan.source_range_count == SlidingQWorkPlan::max_source_ranges) {
-            return SlidingQWorkPlan{};
-        }
-        // Absolute global chunk of first_k_chunk: undo the (possibly wrapped) slab base. q_local %
-        // k_chunk == 0 (checked above), so both bases are whole k-chunk multiples.
-        const uint32_t slab_global_k_chunk_base = slab_global_start / k_chunk_tile_rows;
-        const uint32_t source_local_k_chunk_base = source_local_base / k_chunk_tile_rows;
-        const uint32_t first_global_k_chunk = slab_global_k_chunk_base + first_k_chunk - source_local_k_chunk_base;
-        auto& range = plan.source_ranges[plan.source_range_count++];
-        range = SlidingKVSourceRange{
-            .source_ring_id = source_ring_id,
-            .first_k_chunk = first_k_chunk,
-            .last_k_chunk = last_k_chunk,
-            .first_compact_k_chunk = first_compact_k_chunk,
-            .first_global_k_chunk = first_global_k_chunk,
-        };
-        plan.total_k_chunk_count += range.k_chunk_count();
+    }
+    if (rotated_q && plan.total_k_chunk_count == 0) {
+        // Padded Q blocks still consume one fully masked K block to preserve the output cadence.
+        plan.source_ranges[0] =
+            SlidingKVSourceRange{q_device_index, 0, 1, 0, q_device_index * q_local_tile_rows / k_chunk_tile_rows};
+        plan.source_range_count = plan.total_k_chunk_count = 1;
     }
     plan.is_valid = plan.total_k_chunk_count != 0;
     return plan;

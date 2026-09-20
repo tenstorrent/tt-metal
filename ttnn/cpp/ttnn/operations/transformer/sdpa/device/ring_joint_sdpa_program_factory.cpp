@@ -755,13 +755,14 @@ void apply_ring_joint_scalar_runtime_args(
             tt::constants::TILE_HEIGHT,
             runtime_ring_size,
             runtime_plan.logical_nt,
-            derived_kv_slab_count(args, tensor_args));
+            derived_kv_slab_count(args, tensor_args),
+            args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
+                                           : std::nullopt);
         TT_FATAL(runtime_chunked_sliding_layout.uses_neighbor_halo(), "Sliding attention requires a neighbor halo");
         // logical_n/kv_actual_isl are runtime-patched and excluded from the program hash. For
         // compact chunked sliding they also choose which cache-group tail the one-hop gather reads.
         // Relocate every per-link reader/writer slice from the descriptor's previous group to the current group.
-        const uint32_t runtime_tail_start_Ht =
-            runtime_chunked_sliding_layout.send_tail_start_tile(ring_write_plan.transport_rank);
+        const auto sources = runtime_chunked_sliding_layout.send_sources(ring_write_plan.transport_rank);
         auto& reader_grid_args = GetRuntimeArgs(program, kNeighborHaloReaderKernelIndex);
         auto& writer_grid_args = GetRuntimeArgs(program, kNeighborHaloWriterKernelIndex);
         TT_FATAL(reader_grid_args.size() == writer_grid_args.size(), "Directional gather runtime grids disagree");
@@ -786,29 +787,22 @@ void apply_ring_joint_scalar_runtime_args(
                     TT_FATAL(
                         writer_args.size() > writer_origin_idx, "Directional gather writer descriptor is incomplete");
                     const uint32_t input_Wt = ag_inputs[in]->padded_shape()[3] / tt::constants::TILE_WIDTH;
-                    const uint32_t runtime_origin_page = runtime_tail_start_Ht * input_Wt;
-                    const uint32_t previous_origin_page = writer_args[writer_origin_idx];
-                    if (previous_origin_page != runtime_origin_page) {
-                        const int64_t page_delta = static_cast<int64_t>(runtime_origin_page) - previous_origin_page;
-                        const auto relocate_pages = [&](auto& runtime_args, uint32_t start_idx, uint32_t end_idx) {
-                            const int64_t relocated_start = static_cast<int64_t>(runtime_args[start_idx]) + page_delta;
-                            const int64_t relocated_end = static_cast<int64_t>(runtime_args[end_idx]) + page_delta;
-                            TT_FATAL(
-                                relocated_start >= 0 && relocated_end >= relocated_start,
-                                "Invalid cached neighbor-halo relocation");
-                            runtime_args[start_idx] = static_cast<uint32_t>(relocated_start);
-                            runtime_args[end_idx] = static_cast<uint32_t>(relocated_end);
-                        };
-                        relocate_pages(
-                            reader_args,
-                            reader_base + ag_rt::kNeighborReaderInputTileStartFieldOffset,
-                            reader_base + ag_rt::kNeighborReaderInputTileEndFieldOffset);
-                        relocate_pages(
-                            writer_args,
-                            writer_base + ag_rt::kNeighborWriterInputTileStartFieldOffset,
-                            writer_base + ag_rt::kNeighborWriterInputTileEndFieldOffset);
-                    }
-                    writer_args[writer_origin_idx] = runtime_origin_page;
+                    const uint32_t halo_pages = runtime_chunked_sliding_layout.halo_tile_rows * input_Wt;
+                    const uint32_t link = reader_args[ag_rt::kNeighborReaderRuntimeArgHeaderCount - 1];
+                    const uint32_t num_links = args.all_gather_operation_attributes.num_links;
+                    const uint32_t pages = sources.count * halo_pages;
+                    const uint32_t start = link * (pages / num_links) + std::min(link, pages % num_links);
+                    const uint32_t end = (link + 1) * (pages / num_links) + std::min(link + 1, pages % num_links);
+                    reader_args[reader_base + ag_rt::kNeighborReaderInputTileStartFieldOffset] = start;
+                    reader_args[reader_base + ag_rt::kNeighborReaderInputTileEndFieldOffset] = end;
+                    reader_args[reader_base + ag_rt::kNeighborReaderFirstOriginFieldOffset] =
+                        sources.first_start_tile * input_Wt;
+                    reader_args[reader_base + ag_rt::kNeighborReaderSecondOriginFieldOffset] =
+                        sources.second_start_tile * input_Wt;
+                    reader_args[reader_base + ag_rt::kNeighborReaderHaloPagesFieldOffset] = halo_pages;
+                    writer_args[writer_base + ag_rt::kNeighborWriterInputTileStartFieldOffset] = start;
+                    writer_args[writer_base + ag_rt::kNeighborWriterInputTileEndFieldOffset] = end;
+                    writer_args[writer_origin_idx] = 0;
                 }
             }
         }
@@ -842,7 +836,13 @@ void apply_ring_joint_scalar_runtime_args(
             layout.compute_q_valid_tile_count == layout.compute_logical_nt + 4 &&
             layout.compute_active_ring_iter_mask == layout.compute_logical_nt + 5,
         "RingJoint scalar runtime argument blocks must be contiguous");
-    const std::array reader_values = {runtime_plan.logical_nt, ring_work_masks.active_ring_iter_mask};
+    const std::array reader_values = {
+        runtime_plan.logical_nt,
+        ring_work_masks.active_ring_iter_mask,
+        runtime_plan.kv_pad_q_mapping.q_pre_wrap_start_tile,
+        runtime_plan.kv_pad_q_mapping.q_pre_wrap_tile_count,
+        runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
+        runtime_plan.kv_pad_q_mapping.q_valid_tile_count};
     const std::array writer_values = {
         runtime_plan.logical_nt, ring_work_masks.active_ring_iter_mask, ring_work_masks.single_valid_kv_chunk_mask};
     const std::array compute_values = {
@@ -1119,7 +1119,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             tt::constants::TILE_HEIGHT,
             ring_size,
             logical_nt,
-            circular_kv_slab_count);
+            circular_kv_slab_count,
+            args.kv_actual_isl.has_value() ? std::optional<uint32_t>(*args.kv_actual_isl / tt::constants::TILE_HEIGHT)
+                                           : std::nullopt);
         TT_FATAL(
             kernel_chunked && chunked_sliding_halo_layout.uses_neighbor_halo(),
             "Sliding K/V requires neighbor-halo geometry; gathered rows={}, global rows={}",
@@ -2859,6 +2861,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         reader_args.push_checked(runtime_arg_layout.reader_logical_nt, logical_nt, "reader.logical_nt");
         reader_args.push_checked(
             runtime_arg_layout.reader_active_ring_iter_mask, active_ring_iter_mask, "reader.active_ring_iter_mask");
+        reader_args.push_back(kv_pad_q_mapping.q_pre_wrap_start_tile);
+        reader_args.push_back(kv_pad_q_mapping.q_pre_wrap_tile_count);
+        reader_args.push_back(kv_pad_q_mapping.q_post_wrap_start_tile);
+        reader_args.push_back(kv_pad_q_mapping.q_valid_tile_count);
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         std::vector<uint32_t> reader_signaler_args;
@@ -2971,14 +2977,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TT_FATAL(
             halo_transport_coord.has_value() && halo_destination_coord.has_value(),
             "Sliding attention requires a next-device route");
-        // send_to_next_start_Ht is linear in the chunk index, so on the scalar path the host relocates
-        // the halo page ranges every dispatch (apply_ring_joint_scalar_runtime_args). A captured trace
-        // never replays that, so on the metadata path hand the halo kernels the same kv_actual_isl the
-        // rest of the op reads and let them derive the start themselves; the value above then serves as
-        // the baked origin they shift away from.
+        // Metadata kernels derive source tails on-device for each trace replay.
+        const auto halo_sources = chunked_sliding_halo_layout.send_sources(transport_rank);
         const RingAttentionNeighborHaloConfig neighbor_halo{
-            .send_to_next_start_Ht = chunked_sliding_halo_layout.send_tail_start_tile(transport_rank),
-            .send_to_next_count_Ht = chunked_sliding_halo_layout.halo_tile_rows,
+            .send_to_next_start_Ht = halo_sources.first_start_tile,
+            .send_to_next_count_Ht = halo_sources.count * chunked_sliding_halo_layout.halo_tile_rows,
+            .send_second_start_Ht = halo_sources.second_start_tile,
             .send_backward = linear_wrap_halo,
             .unicast_hops = linear_wrap_halo ? ring_size - 1 : 1,
             .slot_id = tensor_args.has_metadata() ? &tensor_args.slot_id.value() : nullptr,
