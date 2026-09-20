@@ -1641,6 +1641,8 @@ TEST_F(LoudboxRingSDPATest, DISABLED_CompareStepTimes) {
         const auto cy = time_ring_step(1, heads, kv_heads, seq_len, d, Kind::CyclicInPlace, Bt, RingLayout::Zigzag, 5U);
         const auto cy_ttnn = time_ring_step(
             1, heads, kv_heads, seq_len, d, Kind::CyclicInPlace, Bt, RingLayout::Zigzag, 5U, Fwd::Ttnn);
+        const auto cy_cyc = time_ring_step(
+            1, heads, kv_heads, seq_len, d, Kind::CyclicInPlace, Bt, RingLayout::Zigzag, 5U, Fwd::Cyclic);
         // Useful FLOPs of the causal backward over the whole sequence: five
         // matmuls of 2 S^2 d, halved by the triangle, per head. The forward
         // is two such matmuls.
@@ -1662,7 +1664,12 @@ TEST_F(LoudboxRingSDPATest, DISABLED_CompareStepTimes) {
                   << "    cyclic + ttnn forward: forward " << cy_ttnn.forward_ms << " backward " << cy_ttnn.backward_ms
                   << " step " << cy_ttnn.forward_ms + cy_ttnn.backward_ms << " | step "
                   << pct(tp.forward_ms + tp.backward_ms, cy_ttnn.forward_ms + cy_ttnn.backward_ms)
-                  << "% vs two-pass, forward " << pct(tp.forward_ms, cy_ttnn.forward_ms) << "%\n";
+                  << "% vs two-pass, forward " << pct(tp.forward_ms, cy_ttnn.forward_ms) << "%\n"
+                  << "    cyclic + cyclic forward: forward " << cy_cyc.forward_ms << " backward " << cy_cyc.backward_ms
+                  << " step " << cy_cyc.forward_ms + cy_cyc.backward_ms << " | step "
+                  << pct(tp.forward_ms + tp.backward_ms, cy_cyc.forward_ms + cy_cyc.backward_ms)
+                  << "% vs two-pass, forward " << pct(tp.forward_ms, cy_cyc.forward_ms) << "% vs two-pass, "
+                  << pct(cy_ttnn.forward_ms, cy_cyc.forward_ms) << "% vs ttnn\n";
     }
 }
 
