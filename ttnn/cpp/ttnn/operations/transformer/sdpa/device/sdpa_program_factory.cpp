@@ -73,16 +73,8 @@ tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bo
     return use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
 }
 
-// With fp32 DEST the streaming kernel still keeps its running row sum in bf16 (the fused rescale packs the sum
-// with the output accumulator), and that rounding compounds per K chunk. Measured on Blackhole at k128 against
-// the fp32 torch reference: rmse 0.0066 at 512 chunks (bfp8, S65536) and 0.0114 at 1024 chunks, past the
-// 0.0094 gate of the 128k llama test, so longer rows keep the legacy kernel.
-constexpr uint32_t kFp32StreamingMaxKChunks = 512;
-
-// Streaming compute (v2) handles every SDPA variant; with fp32 DEST accumulation up to the chunk count above.
-bool can_use_streaming_compute(bool fp32_dest_acc_en, uint32_t k_num_chunks) {
-    return !fp32_dest_acc_en || k_num_chunks <= kFp32StreamingMaxKChunks;
-}
+// Streaming compute (v2) handles every SDPA variant, with fp32 DEST accumulation when the flag is on.
+bool can_use_streaming_compute(bool /*fp32_dest_acc_en*/) { return true; }
 
 uint32_t lightweight_mask_tile_count(bool is_causal, bool has_sliding_window, bool has_k_partial_mask) {
     uint32_t tiles = 1;  // neginf
@@ -487,7 +479,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
-    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en, k_num_chunks);
+    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
@@ -787,15 +779,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat im_df =
         tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
-    // With the flag on the QK scores stay fp32 between the matmul and the softmax on both kernels; the
-    // streaming kernel keeps its row sums in im_df because the fused rescale packs sum and out together.
+    // With the flag on the QK scores and the row sums stay fp32 on both kernels; the streaming kernel switches
+    // its pack and unpack formats around the sums at run time (see sdpa_fp32_sums in compute_streaming.hpp).
     tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
-    tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en && !use_streaming_compute);
-    // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
-    // both must share the same data format for the unpack config to be correct.
-    TT_ASSERT(
-        !use_streaming_compute || sum_df == im_df,
-        "SDPA fused SALAD correction requires out and sum CBs to share data format");
+    tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
