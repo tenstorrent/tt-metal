@@ -12,6 +12,12 @@ preserve them without adding unrelated files to commits.
 - Helper-library branch merge base: `32e9f88020ced0683a744170dd3e43c0e849d1d9`.
   Operation-specific pre-migration hashes must still be established for the report.
 - No worktrees, `tt_metal` edits, rebases, pushes, or resets.
+- Apply the consolidated `helper_design/mcast_pipe/migration/guardrails.md`:
+  shared wire definitions, opaque operation boundaries, exact geometry, owned
+  semaphores, setup outside loops, and measured performance claims. The newer
+  requested plans supersede its historical public-preparation wording. Its
+  all-nightly/shrink/2% gates explicitly concern the referenced operation migration
+  queue; no new operation migrations are requested here.
 - Host changes require `./build_metal.sh`; tests use the primary Python environment
   and `scripts/run_safe_pytest.sh`, sequentially, with one parametrization first.
 - The compact-runtime plan explicitly requests an implementation Claude review;
@@ -87,6 +93,14 @@ preserve them without adding unrelated files to commits.
 - Focused suite initially failed collection because the existing chain stress
   test imported deleted `_cores` from the family test. Updated it to the shared
   `core_set` utility; rerun pending.
+- The first combined run also exposed native-child lock contention after Python
+  compiler checks: closing the device fixture retains process-wide UMD ownership.
+  Stopped the waiting native child before it opened a device. Compiler contracts
+  now execute in isolated Python children; the existing native launcher never
+  opens a Python device. Run the launcher before device-owning test modules.
+- Current sequential rerun has passed all 44 native host contracts, all seven
+  intentional negative compiler checks, and both native SpecDeviceSmoke/Matrix
+  tests. Remaining Python and transfer/stress cases are still running.
 - Completed focused run: 332 pytest cases passed in 214.45 s, including the
   44 native host tests and native device matrices (`/tmp/mcast-feedback-contracts.log`).
 - Consumer regressions: Conv3D weight-sharing (3 cases) and wrapped GroupNorm
