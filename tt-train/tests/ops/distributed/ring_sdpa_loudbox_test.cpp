@@ -1233,7 +1233,8 @@ double time_ring_backward(
     RingShiftTransport transport = RingShiftTransport::Fifo,
     uint32_t samples_to_take = 5U,
     RingLayout layout = RingLayout::Contiguous,
-    size_t num_kv_heads_or_zero = 0) {
+    size_t num_kv_heads_or_zero = 0,
+    ttml::ops::distributed::RingForwardKind forward = ttml::ops::distributed::RingForwardKind::TwoPass) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     const uint32_t cp_axis = autograd::ctx().get_parallelism_context().get_cp_axis().value();
@@ -1256,7 +1257,7 @@ double time_ring_backward(
             to_device(ttml::test_utils::make_uniform_xarray<float>(kv_shape, 0.0F, 2.0F, rng())), true);
         auto out = ops::distributed::ring_attention_sdpa(
             query, key, value, std::nullopt, ttml::metal::AttentionMaskType::Causal, kind, rows_per_block_tiles,
-            transport, layout);
+            transport, layout, forward);
         out->set_grad(to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())));
         tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
 
@@ -1657,14 +1658,29 @@ TEST_F(LoudboxRingSDPATest, DISABLED_ProfileOneBackward) {
     if (const char* env = std::getenv("TTML_LOUDBOX_PROFILE_LAYOUT"); env != nullptr && std::string(env) == "zigzag") {
         layout = RingLayout::Zigzag;
     }
+    // TTML_LOUDBOX_PROFILE_FORWARD=ttnn profiles with the ttnn step forward; the heads from
+    // TTML_LOUDBOX_PROFILE_HEADS (default 4); TTML_LOUDBOX_PROFILE_DIRECT_ONLY=1 skips the FIFO rows.
+    using Fwd = ttml::ops::distributed::RingForwardKind;
+    Fwd forward = Fwd::TwoPass;
+    if (const char* env = std::getenv("TTML_LOUDBOX_PROFILE_FORWARD"); env != nullptr && std::string(env) == "ttnn") {
+        forward = Fwd::Ttnn;
+    }
+    size_t heads = 4;
+    if (const char* env = std::getenv("TTML_LOUDBOX_PROFILE_HEADS"); env != nullptr && *env != '\0') {
+        heads = std::strtoul(env, nullptr, 10);
+    }
+    const bool direct_only = std::getenv("TTML_LOUDBOX_PROFILE_DIRECT_ONLY") != nullptr;
     for (const auto transport : {RingShiftTransport::Fifo, RingShiftTransport::Direct}) {
+        if (direct_only && transport == RingShiftTransport::Fifo) {
+            continue;
+        }
         for (const auto kind : {Kind::TwoPass, Kind::Cyclic, Kind::CyclicInPlace}) {
             std::cout << "== " << (layout == RingLayout::Zigzag ? "zigzag, " : "") << rows_per_chip << " rows/chip, Bt=" << Bt << ", "
                       << (kind == Kind::TwoPass ? "two-pass" : kind == Kind::Cyclic ? "cyclic" : "cyclic in-place")
                       << ", " << (transport == RingShiftTransport::Fifo ? "fifo" : "direct")
                       << " shifts (second profile is the timed one)\n";
             const double seconds = time_ring_backward(
-                1, 4, rows_per_chip * cp_size, 64, kind, Bt, transport, /* samples */ 1U, layout);
+                1, heads, rows_per_chip * cp_size, 64, kind, Bt, transport, /* samples */ 1U, layout, 0, forward);
             std::cout << "   unprofiled-style total (with profile syncs): " << seconds * 1e3 << " ms\n";
         }
     }

@@ -40,10 +40,18 @@ tt::tt_metal::ProgramDescriptor sdpa_descriptor(
     auto& output = std::get<0>(tensor_return_value);
     auto& intermediates = std::get<1>(tensor_return_value);
     auto* device = tensor_args.query.device();
-    const uint32_t rows = static_cast<uint32_t>(tensor_args.query.padded_shape()[2]);
-    const uint32_t chunk = std::max(32U, std::min(attrs.chunk_size, rows) / 32U * 32U);
+    const auto grid = device->compute_with_storage_grid_size();
+    const uint32_t cores = grid.x * grid.y;
+    const auto [batch, heads, rows, dim] = tensor_args.query.padded_shape().to_array_4D();
+    // ttnn parallelises over query chunks: batch x heads x rows / chunk work units. A launch with
+    // few heads and a short chunk would leave most cores idle at the caller's chunk, so halve it
+    // (to no less than 64 rows) until there are at least two units per core.
+    uint32_t chunk = std::max(32U, std::min(attrs.chunk_size, rows) / 32U * 32U);
+    while (chunk > 64U && batch * heads * ((rows + chunk - 1U) / chunk) < 2U * cores) {
+        chunk = std::max(64U, chunk / 2U / 32U * 32U);
+    }
     ttnn::operations::transformer::SDPAProgramConfig program_config{
-        .compute_with_storage_grid_size = device->compute_with_storage_grid_size(),
+        .compute_with_storage_grid_size = grid,
         .sub_core_grids = std::nullopt,
         .q_chunk_size = chunk,
         .k_chunk_size = chunk,
