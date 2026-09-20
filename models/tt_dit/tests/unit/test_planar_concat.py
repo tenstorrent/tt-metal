@@ -141,11 +141,8 @@ def test_fast_device_to_host_yuv_rejects_invalid_crop(logical_h, logical_w, expe
 
 @pytest.mark.skipif(not HAS_CPP_PLANAR_CONCAT, reason="planar concat extension not built (models/tt_dit/utils/cpp)")
 def test_planar_concat_default_results_do_not_alias():
-    """Back-to-back calls must own their results.
-
-    The H3 decode appends every chunk of a clip to one list, so a shared output buffer would
-    leave all of them showing the frame decoded last.
-    """
+    """Back-to-back calls must own their results: the H3 decode appends every chunk of a clip to one list, so a
+    shared output buffer would leave all of them showing the frame decoded last."""
     rng = np.random.default_rng(0xA11A5)
     TP, SP, h_per, w_per, T = 2, 2, 32, 32, 16
     u = _make_shards(rng, TP * SP, h_per // 2, w_per // 2, T, "CHWT")
