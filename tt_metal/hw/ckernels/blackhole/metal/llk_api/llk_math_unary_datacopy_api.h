@@ -32,7 +32,8 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
-    PackMode pack_mode = PackMode::Default>
+    PackMode pack_mode = PackMode::Default,
+    bool acc_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_init_impl(std::uint32_t num_faces, std::uint32_t dst_format) {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Tilize,
@@ -44,8 +45,13 @@ inline void llk_math_eltwise_unary_datacopy_init_impl(std::uint32_t num_faces, s
         StateVal<OperationFpuEltwiseUnaryDatacopy::NumFaces>(num_faces),
         StateVal<Operand<Exu::Fpu>::Format>(dst_format)));
 
-    _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
-        num_faces, dst_format);
+    _llk_math_eltwise_unary_datacopy_init_<
+        type,
+        is_fp32_dest_acc_en,
+        src_b_bcast_type,
+        is_int_fpu_en,
+        pack_mode,
+        acc_to_dest>(num_faces, dst_format);
 }
 
 template <
@@ -96,11 +102,17 @@ template <
     bool is_fp32_dest_acc_en,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool is_int_fpu_en = false,
-    PackMode pack_mode = PackMode::Default>
+    PackMode pack_mode = PackMode::Default,
+    bool acc_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
-    llk_math_eltwise_unary_datacopy_init_impl<type, is_fp32_dest_acc_en, src_b_bcast_type, is_int_fpu_en, pack_mode>(
-        get_operand_num_faces(operand_id), get_operand_dst_format(operand_id));
+    llk_math_eltwise_unary_datacopy_init_impl<
+        type,
+        is_fp32_dest_acc_en,
+        src_b_bcast_type,
+        is_int_fpu_en,
+        pack_mode,
+        acc_to_dest>(get_operand_num_faces(operand_id), get_operand_dst_format(operand_id));
 }
 
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
