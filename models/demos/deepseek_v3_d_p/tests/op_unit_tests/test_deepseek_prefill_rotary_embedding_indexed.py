@@ -517,8 +517,10 @@ def test_rotary_embedding_indexed_metadata_matches_scalar(mesh_device, refresh_b
 @pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (8, 4)], ids=["2x2", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 2 * 1024 * 1024}], indirect=True)
 @pytest.mark.parametrize("rotary_offset", [0, 32])
-@pytest.mark.parametrize("subshard", [False, True], ids=["keys", "queries"])
-def test_rotary_embedding_indexed_partial(mesh_device, rotary_offset, subshard, expect_error):
+@pytest.mark.parametrize(
+    "subshard, reuse_cos_sin", [(False, False), (True, False), (True, True)], ids=["keys", "queries", "queries-reuse"]
+)
+def test_rotary_embedding_indexed_partial(mesh_device, rotary_offset, subshard, reuse_cos_sin, expect_error):
     """Partial RoPE matches slice/rotate/concat and copies other channels exactly on replay."""
     sp, tp = mesh_device.shape
     # Keep each TP query shard tile-aligned on both meshes.
@@ -537,7 +539,17 @@ def test_rotary_embedding_indexed_partial(mesh_device, rotary_offset, subshard, 
     sin = upload(block_cyclic_reorder(angles.sin().reshape(1, 1, capacity, rotary_dim), chunk_local, sp, seq_dim=2))
     trans = upload(get_rot_transformation_mat(), ttnn.ReplicateTensorToMesh(mesh_device))
     torch.manual_seed(56)
-    x = upload(torch.randn(1, 4 if subshard else 1, chunk_global, width, dtype=torch.bfloat16))
+    num_heads = 4 if subshard else 1
+    if reuse_cos_sin:
+        grid = mesh_device.compute_with_storage_grid_size()
+        seq_tiles = chunk_local // tp // 32
+        num_cores = grid.x * grid.y
+        if num_cores < seq_tiles:
+            pytest.skip("Cos/sin reuse coverage requires one core per sequence tile row")
+        # Two heads per core and one row per head force RELOAD_IMPL=0 with shared cos/sin.
+        # On an 80-core grid this matches GLM's 32 heads and five local sequence tile rows.
+        num_heads = 2 * (num_cores // seq_tiles)
+    x = upload(torch.randn(1, num_heads, chunk_global, width, dtype=torch.bfloat16))
     if subshard:
         full = x
         x = ttnn.mesh_partition(x, dim=2, cluster_axis=1)
@@ -688,3 +700,61 @@ def test_indexer_deepseek_rope_fallback(mesh_device, subshard):
             ttnn.deallocate(out)
             if use_metadata:
                 ttnn.deallocate(actual_start)
+
+
+@pytest.mark.parametrize("use_metadata", [False, True], ids=["scalar", "metadata"])
+def test_rotary_embedding_indexed_padded_default(device, use_metadata, expect_error):
+    """Omission and None preserve padded full-width RoPE, including both Python overloads."""
+    device.enable_program_cache()
+    torch.manual_seed(0)
+
+    def upload(x):
+        return ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    source = torch.randn(1, 2, 32, 80, dtype=torch.bfloat16)
+    cos = torch.randn(1, 1, 32, 80, dtype=torch.bfloat16)
+    sin = torch.randn_like(cos)
+    x, c, s = upload(source), upload(cos), upload(sin)
+    trans = upload(get_rot_transformation_mat())
+    start = 0
+    if use_metadata:
+        start = ttnn.from_torch(
+            torch.zeros(1, 1, 1, 1, dtype=torch.int64),
+            device=device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+    rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+    # Compare to the same physical data with padding made explicit in the logical shape.
+    padded = [upload(torch.nn.functional.pad(t, (0, 16))) for t in (source, cos, sin)]
+    expected_out = rope(*padded, trans, start, 0, rotary_dim=96)
+    expected = ttnn.to_torch(expected_out)[..., :80]
+    ttnn.deallocate(expected_out)
+    for options in ({}, {"rotary_dim": None}):
+        out = rope(x, c, s, trans, start, 0, **options)
+        actual = ttnn.to_torch(out)
+        assert actual.shape == source.shape
+        assert torch.equal(actual, expected)
+        ttnn.deallocate(out)
+    with expect_error(RuntimeError, "rotary region must fit"):
+        rope(x, c, s, trans, start, 0, rotary_dim=96)
+
+
+@pytest.mark.parametrize("cos_width, sin_width", [(33, 64), (64, 33), (33, 33)])
+def test_rotary_embedding_indexed_logical_frequency_width(device, cos_width, sin_width, expect_error):
+    """Explicit dimensions reject padded frequency columns even after warming the legacy program."""
+    device.enable_program_cache()
+    torch.manual_seed(0)
+
+    def upload(x):
+        return ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    x = upload(torch.randn(1, 2, 32, 64))
+    cos = upload(torch.ones(1, 1, 32, cos_width))
+    sin = upload(torch.zeros(1, 1, 32, sin_width))
+    trans = upload(get_rot_transformation_mat())
+    rope = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+    warmed = rope(x, cos, sin, trans, 0, 0)
+    ttnn.deallocate(warmed)
+    with expect_error(RuntimeError, "rotary_dim must match logical cos and sin head dims"):
+        rope(x, cos, sin, trans, 0, 0, rotary_dim=64)

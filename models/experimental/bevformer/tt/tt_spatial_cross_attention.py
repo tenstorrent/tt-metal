@@ -198,6 +198,7 @@ class TTSpatialCrossAttention:
         num_cams (int): Number of cameras.
         batch_first (bool): Whether the first dimension of input is batch_size.
         deformable_attention (dict): Config for MSDeformableAttention.
+        spatial_shapes: Multi-scale feature shapes [num_levels, 2]
         **kwargs: Additional arguments.
     """
 
@@ -209,6 +210,8 @@ class TTSpatialCrossAttention:
         num_cams: int = 6,
         batch_first: bool = True,
         deformable_attention: Optional[dict] = None,
+        *,
+        spatial_shapes,
         **kwargs,
     ):
         self.device = device
@@ -228,10 +231,9 @@ class TTSpatialCrossAttention:
             batch_first=batch_first,
         )
 
-        # Its own namespace, not the SCA's: both own an ``output_proj`` and both
-        # apply it, so sharing one namespace makes the inner attention project
-        # with the SCA's matrix and the SCA apply that matrix a second time.
-        self.deformable_attention = TTMSDeformableAttention(deform_config, device, params.deformable_attention)
+        self.deformable_attention = TTMSDeformableAttention(
+            deform_config, device, params.deformable_attention, spatial_shapes=spatial_shapes
+        )
 
     def forward(
         self,
@@ -243,8 +245,6 @@ class TTSpatialCrossAttention:
         residual=None,
         query_pos=None,
         key_padding_mask=None,
-        spatial_shapes=None,
-        level_start_index=None,
         rebatch_plan=None,
         **kwargs,
     ):
@@ -252,16 +252,14 @@ class TTSpatialCrossAttention:
         Forward pass of TTNN Spatial Cross Attention.
 
         Args:
-            query: BEV queries [B, num_queries, embed_dims].
-            reference_points_cam: Camera projected reference points [num_cams, B, num_queries, D, 2].
+            query: Bfloat16 BEV queries [B, num_queries, embed_dims].
+            reference_points_cam: Bfloat16 camera projected reference points [num_cams, B, num_queries, D, 2].
             bev_mask: Valid mask for camera projections [num_cams, B, num_queries, D].
             key: Multi-camera features [num_cams, H*W, B, embed_dims].
             value: Same as key.
             residual: Residual connection input.
             query_pos: Query positional encoding.
             key_padding_mask: Key padding mask.
-            spatial_shapes: Spatial shapes of multi-scale features.
-            level_start_index: Start index of each level.
             rebatch_plan: Prebuilt :class:`SCARebatchPlan`. Shared by every encoder layer; built here if absent.
             **kwargs: Additional arguments.
 
@@ -336,18 +334,6 @@ class TTSpatialCrossAttention:
 
         _, L, _, _ = key.shape
 
-        # Validate spatial shapes consistency to prevent incorrect sampling locations
-        if spatial_shapes is not None:
-            if isinstance(spatial_shapes, ttnn.Tensor):
-                spatial_shapes_torch = ttnn.to_torch(spatial_shapes)
-            else:
-                spatial_shapes_torch = spatial_shapes
-            expected_L = spatial_shapes_torch.prod(dim=1).sum().item()
-            assert expected_L == L, (
-                f"Spatial shapes mismatch: spatial_shapes total ({expected_L}) != key spatial dimension ({L}). "
-                f"spatial_shapes: {spatial_shapes_torch.tolist()}, key.shape: {key.shape}"
-            )
-
         # [num_cams, L, bs, embed_dims] -> [bs * num_cams, L, embed_dims]
         key_reshaped = ttnn.permute(key, (2, 0, 1, 3))  # [bs, num_cams, L, embed_dims]
         key_reshaped = ttnn.reshape(key_reshaped, (bs * self.num_cams, L, self.embed_dims))
@@ -361,8 +347,6 @@ class TTSpatialCrossAttention:
             key=key_reshaped,
             value=value_reshaped,
             reference_points=reference_points_batched,
-            spatial_shapes=spatial_shapes,
-            level_start_index=level_start_index,
             **kwargs,
         )
 

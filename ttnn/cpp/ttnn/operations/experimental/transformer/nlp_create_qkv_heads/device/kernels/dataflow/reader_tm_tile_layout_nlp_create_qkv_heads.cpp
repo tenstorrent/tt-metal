@@ -50,7 +50,7 @@ void kernel_main() {
     const uint32_t tile_bytes_k = get_tile_size(cb_id_k);
 
     if constexpr (head_parallel) {
-        constexpr uint32_t heads = head_parallel ? q_num_tiles / head_tiles : 1;
+        constexpr uint32_t heads = q_num_tiles / head_tiles;
         constexpr uint32_t transfer_tiles = head_tiles % 4 == 0 ? 4 : (head_tiles % 2 == 0 ? 2 : 1);
         for (uint32_t block = in0_tensor_tile_id; block < in0_tensor_tile_id + num_blocks; ++block) {
             const uint32_t batch_head = block / seq_tiles;

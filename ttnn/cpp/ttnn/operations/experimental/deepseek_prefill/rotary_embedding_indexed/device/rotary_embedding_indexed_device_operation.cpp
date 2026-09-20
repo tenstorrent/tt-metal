@@ -231,11 +231,18 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(cos_shape == sin_shape, "cos and sin must have the same shape");
     TT_FATAL(args.rotary_dim > 0 && args.rotary_dim % TILE_WIDTH == 0, "rotary_dim must be positive and tile-aligned");
     TT_FATAL(args.rotary_offset % TILE_WIDTH == 0, "rotary_offset must be tile-aligned");
+    // Omitted dimensions preserve the legacy full padded-width operation. Explicit regions
+    // must stay inside the supplied logical data, including both frequency tensors.
+    const auto input_width = args.rotary_dim_explicit ? input.logical_shape()[-1] : input_shape[-1];
     TT_FATAL(
-        args.rotary_dim <= input.logical_shape()[-1] &&
-            args.rotary_offset <= input.logical_shape()[-1] - args.rotary_dim,
+        args.rotary_dim <= input_width && args.rotary_offset <= input_width - args.rotary_dim,
         "rotary region must fit within input head dim");
     TT_FATAL(args.rotary_dim == cos_shape[-1], "rotary_dim and cos head dim must match");
+    if (args.rotary_dim_explicit) {
+        TT_FATAL(
+            args.rotary_dim == cos.logical_shape()[-1] && args.rotary_dim == sin.logical_shape()[-1],
+            "rotary_dim must match logical cos and sin head dims");
+    }
 
     const uint32_t input_seq = input_shape[-2];
     TT_FATAL(input_seq % TILE_HEIGHT == 0, "input seq dim ({}) must be tile-aligned", input_seq);
@@ -288,6 +295,7 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
         args.cluster_axis,
         args.seq_subshard_axis,
         args.rotary_dim,
+        args.rotary_dim_explicit,
         args.rotary_offset,
         args.compute_kernel_config,
         args.output_mem_config,
@@ -518,6 +526,9 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         .hw_config = create_reader_datamovement_config(mesh_device->arch())};
 
     // ------------------------------------------------------------------ indexed writer + reused llama compute
+    TT_FATAL(
+        rotary_seq_len_t == seq_len_t,
+        "Indexed RoPE writer requires compute to produce rotary tiles for every input row");
     KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
@@ -797,7 +808,8 @@ ttnn::Tensor rotary_embedding_indexed(
         .cluster_axis = cluster_axis,
         .seq_subshard_axis = seq_subshard_axis,
         .kv_actual_global = kv_actual_global,
-        .rotary_dim = rotary_dim.value_or(input.logical_shape()[-1]),
+        .rotary_dim = rotary_dim.value_or(input.padded_shape()[-1]),
+        .rotary_dim_explicit = rotary_dim.has_value(),
         .rotary_offset = rotary_offset,
         .output_mem_config = out_mem_config,
         .compute_kernel_config = kernel_config_val,
