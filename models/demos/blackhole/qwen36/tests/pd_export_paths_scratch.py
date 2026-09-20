@@ -75,6 +75,37 @@ def main():
             + "  ".join(f"{m}: {'OK ' if ok else 'BAD'} {1e3 * dt:7.1f} ms" for m, (ok, dt) in res.items())
         )
     os.environ.pop("QWEN36_PD_EXPORT", None)
+    # import round trip with bucket padding: 3 real blocks -> bucket 4, padding rows land in the pad block only
+    model.num_devices = 4
+    model._pad_kv_block = NB - 1
+    before = [
+        (
+            ttnn.to_torch(l.attention.paged_k, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=1)).to(torch.bfloat16),
+            ttnn.to_torch(l.attention.paged_v, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=1)).to(torch.bfloat16),
+        )
+        for l in layers
+    ]
+    src, dst = [10, 11, 12], [200, 57, 3]
+    kv = pd_transfer.export_kv_blocks(model, src)
+    pd_transfer.import_warmup(model, max_bucket=8)
+    t0 = time.perf_counter()
+    pd_transfer.import_kv_blocks(model, dst, kv)
+    dt = time.perf_counter() - t0
+    ok_imp = True
+    for li, l in enumerate(layers):
+        for cache, (bk, bv), ref_pair in ((l.attention.paged_k, kv[li], before[li]),):
+            pass
+        for j, cache in enumerate((l.attention.paged_k, l.attention.paged_v)):
+            after = ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=1)).to(torch.bfloat16)
+            ref = before[li][j].clone()
+            ref[dst] = kv[li][j]  # destination blocks take the exported rows
+            mask = torch.ones(NB, dtype=torch.bool)
+            mask[NB - 1] = False  # pad block may hold anything
+            ok_imp &= torch.equal(after[mask], ref[mask])
+    logger.info(
+        f"import 3 blocks -> bucket 4 into {dst}: {'OK' if ok_imp else 'BAD'} ({1e3 * dt:.1f} ms); only dst blocks (+pad) changed"
+    )
+    bad += not ok_imp
     ttnn.close_mesh_device(mesh)
     logger.info("ALL OK" if bad == 0 else f"{bad} MISMATCHES")
 

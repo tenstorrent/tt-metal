@@ -219,7 +219,7 @@ def export_kv_blocks(model, block_ids):
     return out
 
 
-_EXPORT_BUCKETS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+_EXPORT_BUCKETS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
 
 
 def export_bucket(n_blocks: int) -> int:
@@ -229,7 +229,7 @@ def export_bucket(n_blocks: int) -> int:
     return n_blocks  # beyond the pre-warmed buckets: exact count (compiles on first use)
 
 
-def export_warmup(model, max_bucket: int = 256):
+def export_warmup(model, max_bucket: int = 2048):
     """Compile the export programs for every bucket up to max_bucket (~2 s per bucket and path)."""
     t0 = time.perf_counter()
     num_blocks = int(_attention_layers(model)[0].paged_k.shape[0])
@@ -243,12 +243,27 @@ def export_warmup(model, max_bucket: int = 256):
     logger.info(f"[pd] export warm-up: buckets <= {max_bucket} in {time.perf_counter() - t0:.1f} s")
 
 
+def _pad_block(model, cache):
+    pad = getattr(model, "_pad_kv_block", None)
+    return int(pad) if pad is not None else int(cache.shape[0]) - 1
+
+
 def import_kv_blocks(model, block_ids, kv):
-    """Write `kv` (the `export_kv_blocks` layout) into this instance's paged caches at `block_ids`."""
+    """Write `kv` (the `export_kv_blocks` layout) into this instance's paged caches at `block_ids`.
+
+    Program shapes (tilize, typecast, paged_fill_cache) depend on the block count, so the import is padded to
+    the export's power-of-two bucket: the payload rows are followed by zero rows that land in the model's pad
+    KV block (whose contents never reach a live request), and `import_warmup` compiles every bucket at start.
+    Without it every new prompt-length bucket compiled ~1-2 s inside the first request's TTFT."""
     t0 = time.perf_counter()
     n_dev = model.num_devices
-    n_blocks = len(block_ids)
-    pt = torch.tensor([list(int(b) for b in block_ids)], dtype=torch.int32)  # [1, n_blocks]
+    n_real = len(block_ids)
+    layers = _attention_layers(model)
+    assert len(kv) == len(layers), f"{len(kv)} KV layer pairs for {len(layers)} attention layers"
+    cache0 = layers[0].paged_k
+    n = export_bucket(n_real) if os.environ.get("QWEN36_PD_IMPORT_BUCKETS", "1") == "1" else n_real
+    ids = [int(b) for b in block_ids] + [_pad_block(model, cache0)] * (n - n_real)
+    pt = torch.tensor([ids], dtype=torch.int32)  # [1, n]
     page_table_tt = ttnn.from_torch(
         pt,
         dtype=ttnn.int32,
@@ -257,22 +272,39 @@ def import_kv_blocks(model, block_ids, kv):
         mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
     )
     mapper = ttnn.ShardTensorToMesh(model.mesh_device, dim=0)
-    layers = _attention_layers(model)
-    assert len(kv) == len(layers), f"{len(kv)} KV layer pairs for {len(layers)} attention layers"
     for att, (k_host, v_host) in zip(layers, kv):
         for host, cache in ((k_host, att.paged_k), (v_host, att.paged_v)):
             nb, ndn, blk, hd = host.shape
-            assert nb == n_blocks, f"{nb} blocks in payload vs {n_blocks} block ids"
+            assert nb == n_real, f"{nb} blocks in payload vs {n_real} block ids"
+            if n != nb:
+                host = torch.cat([host, host.new_zeros((n - nb, ndn, blk, hd))], dim=0)
             nkv = ndn // n_dev
-            # [n_blocks, n_dev*nkv, blk, hd] -> [n_dev, nkv, n_blocks*blk, hd] (one [1, nkv, T, hd] fill per device)
-            x = host.view(nb, n_dev, nkv, blk, hd).permute(1, 2, 0, 3, 4).reshape(n_dev, nkv, nb * blk, hd)
+            # [n, n_dev*nkv, blk, hd] -> [n_dev, nkv, n*blk, hd] (one [1, nkv, T, hd] fill per device)
+            x = host.view(n, n_dev, nkv, blk, hd).permute(1, 2, 0, 3, 4).reshape(n_dev, nkv, n * blk, hd)
             xt = _upload(model, x.contiguous(), cache.dtype, mapper)
             ttnn.experimental.paged_fill_cache(cache, xt, page_table_tt, batch_idx=0)
             ttnn.deallocate(xt)
     ttnn.deallocate(page_table_tt)
     logger.debug(
-        f"[pd] imported {n_blocks} KV blocks x {len(layers)} layers in {1e3 * (time.perf_counter() - t0):.1f} ms"
+        f"[pd] imported {n_real} KV blocks (bucket {n}) x {len(layers)} layers in {1e3 * (time.perf_counter() - t0):.1f} ms"
     )
+
+
+def import_warmup(model, max_bucket: int = 2048):
+    """Compile the KV import programs for every bucket up to max_bucket: zero payloads written into the pad
+    block only."""
+    t0 = time.perf_counter()
+    layers = _attention_layers(model)
+    cache0 = layers[0].paged_k
+    _, nkv, blk, hd = cache0.shape
+    n_dev = model.num_devices
+    pad = _pad_block(model, cache0)
+    for b in _EXPORT_BUCKETS:
+        if b > max_bucket:
+            break
+        z = torch.zeros((b, n_dev * nkv, blk, hd), dtype=torch.bfloat16)
+        import_kv_blocks(model, [pad] * b, [(z, z) for _ in layers])
+    logger.info(f"[pd] import warm-up: buckets <= {max_bucket} in {time.perf_counter() - t0:.1f} s")
 
 
 def import_gdn_slot(model, slot, rec_snap, conv_snap, mode=None):
