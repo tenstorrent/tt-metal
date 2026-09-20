@@ -1,11 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""CPU reference clips for the audio-decoder squeeze experiments: encoder latents of a seeded noise clip and their
-reference decode, cached as ``ref_<T>lat_b<B>.pt``. No ttnn import, so it can be precomputed on a host without a
-build:
-
-    MINIMAX_H3_MODEL_PATH=... SQZ_REF_DIR=... python -m models.tt_dit.tests.models.minimax_h3.sqz_reference 600 1
-"""
+"""CPU reference clips for the audio-decoder squeeze experiments (encoder latents of a seeded noise clip and their
+decode), cached as ``ref_<T>lat_b<B>.pt``; no ttnn import, so ``python -m <module> <frames> <batch>`` needs no build."""
 
 import json
 import os
