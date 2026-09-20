@@ -188,7 +188,13 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
         while (pos <= list.size()) {
             const size_t next = list.find(',', pos);
             const std::string item = list.substr(pos, next == std::string::npos ? std::string::npos : next - pos);
-            if (!item.empty()) {
+            if (item == "FID_S2") {
+                defines["FID_S"] = "2";  // matmul fidelity experiments
+            } else if (item == "FID_O2") {
+                defines["FID_O"] = "2";
+            } else if (item == "FID_O3") {
+                defines["FID_O"] = "3";
+            } else if (!item.empty()) {
                 defines["FW_EXPERIMENT_" + item] = "1";
             }
             if (next == std::string::npos) {
