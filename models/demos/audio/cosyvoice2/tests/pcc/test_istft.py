@@ -139,7 +139,7 @@ needs_l1_small = pytest.mark.parametrize("device_params", [{"l1_small_size": 327
 
 
 @needs_l1_small
-@pytest.mark.parametrize("n_frames", [256, 8192])
+@pytest.mark.parametrize("n_frames", [256, 8192, 55681, 65537])
 def test_device_istft_matches_real_torch_istft(device, n_frames):
     """Device output vs. torch.istft directly -- zero inferential steps.
 
@@ -157,6 +157,12 @@ def test_device_istft_matches_real_torch_istft(device, n_frames):
     either side -- was previously only run at n_frames=256, well short of what
     test_host_identity_across_lengths already covers on host (up to 8192) and what
     a real HiFT vocoder call produces for a several-second utterance.
+
+    n_frames=55681 is the real 9.3 s test utterance (222,720 samples) and 65537 is just
+    past 2**16: `TtStft`'s hoisted conv weight silently broke at exactly that input width
+    (see test_stft.py), and this op uses the same hoisted-weight-prep pattern
+    (`prepare_conv_transpose2d_weights`), so its lengths get pinned the same way. Measured
+    fine at every length through 240,000 frames; this keeps it that way.
     """
     import ttnn
     from models.demos.audio.cosyvoice2.tt.hifigan.istft import TtIStft, periodic_hann

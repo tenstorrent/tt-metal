@@ -15,11 +15,19 @@ padding all come from the weight/module handed in.
 
 from __future__ import annotations
 
+import torch
 from loguru import logger
 
 import ttnn
 
-from .conv import accurate_compute_config, extract_conv_weights, safe_compute_config
+from .conv import (
+    AGREEMENT_TOLERANCE,
+    accurate_compute_config,
+    extract_conv_weights,
+    pick_most_accurate,
+    relative_error,
+    safe_compute_config,
+)
 
 
 class TtConvTranspose1d:
@@ -54,6 +62,9 @@ class TtConvTranspose1d:
 
         self.weight = ttnn.from_torch(weight.unsqueeze(2), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
         self._prep_cache: dict = {}
+        # Host copies, used only as the tie-break reference in `_verify_and_resolve`.
+        self._host_weight = weight.detach().float().clone()
+        self._host_bias = bias.detach().float().clone() if bias is not None else None
         # prepare_conv_transpose2d_weights asserts conv_config.weights_dtype.has_value(),
         # so the config cannot be left to the op's default here.
         self.conv_config = ttnn.Conv2dConfig(weights_dtype=weights_dtype)
@@ -151,28 +162,66 @@ class TtConvTranspose1d:
         )
         return out[0] if isinstance(out, (tuple, list)) else out
 
+    def _to_host(self, t, batch_size: int, out_length: int):
+        return ttnn.to_torch(t).float().reshape(batch_size, out_length, self.out_channels).double()
+
+    def _host_reference(self, nhwc, length: int, batch_size: int):
+        """float64 torch conv_transpose1d of the same input with the same
+        (un-quantised) weights, `[B, L_out, C_out]`. Only run to arbitrate a disagreement."""
+        x_cf = ttnn.to_torch(nhwc).float().reshape(batch_size, length, self.in_channels).transpose(1, 2).double()
+        bias = self._host_bias.double() if self._host_bias is not None else None
+        ref = torch.nn.functional.conv_transpose1d(
+            x_cf,
+            self._host_weight.double(),
+            bias,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            groups=self.groups,
+        )
+        return ref.transpose(1, 2)
+
     def _verify_and_resolve(self, nhwc, weight, bias, length: int, batch_size: int, out, key):
         """First call for this geometry only -- see TtConv1d._verify_and_resolve,
         same reasoning (a single raw-weight + safe-config reference, catching
         either the compute-config axis or the weight-prep axis at once) and
-        same mechanism, adapted for conv_transpose2d."""
+        same mechanism, adapted for conv_transpose2d: agreement is a relative L2
+        distance within `AGREEMENT_TOLERANCE`, and a disagreement is arbitrated
+        by a float64 host conv_transpose1d between prepared+accurate,
+        raw+safe and raw+accurate, not by assuming the safe reference is right."""
         ref = self._conv_transpose(nhwc, self.weight, self.bias, length, batch_size, self._safe_compute_config)
-        a = float(ttnn.to_torch(out).float().abs().max())
-        b = float(ttnn.to_torch(ref).float().abs().max())
-        ok = a == a and abs(a - b) <= 0.02 * max(b, 1e-9)
-        if ok:
+        lo = self.out_length(length)
+        fast_host = self._to_host(out, batch_size, lo)
+        ref_host = self._to_host(ref, batch_size, lo)
+        if relative_error(fast_host, ref_host) <= AGREEMENT_TOLERANCE:
             ttnn.deallocate(ref)
             self._verified_config[key] = (weight, bias, self.compute_config)
             return out
+
+        raw_accurate = self._conv_transpose(nhwc, self.weight, self.bias, length, batch_size, self.compute_config)
+        candidates = {
+            "prepared weight + accurate config": (out, (weight, bias, self.compute_config)),
+            "raw weight + safe config": (ref, (self.weight, self.bias, self._safe_compute_config)),
+            "raw weight + accurate config": (raw_accurate, (self.weight, self.bias, self.compute_config)),
+        }
+        host = {
+            "prepared weight + accurate config": fast_host,
+            "raw weight + safe config": ref_host,
+            "raw weight + accurate config": self._to_host(raw_accurate, batch_size, lo),
+        }
+        best, errors = pick_most_accurate(host, self._host_reference(nhwc, length, batch_size))
         logger.warning(
-            f"prepared weight and/or accurate_compute_config disagrees with the raw-weight/"
-            f"safe-config reference at ConvTranspose1d({self.in_channels}->{self.out_channels}, "
-            f"k={self.kernel_size}, s={self.stride}) length {length}: max|out| {a:.4g} vs {b:.4g}; "
-            "using raw weights + safe compute config for this geometry"
+            f"fast conv path disagrees with the raw-weight/safe-config reference at "
+            f"ConvTranspose1d({self.in_channels}->{self.out_channels}, k={self.kernel_size}, s={self.stride}) "
+            f"length {length}; relative error vs float64 host conv: "
+            + ", ".join(f"{n} {e:.4g}" for n, e in errors.items())
+            + f" -> using {best}"
         )
-        self._verified_config[key] = (self.weight, self.bias, self._safe_compute_config)
-        ttnn.deallocate(out)
-        return ref
+        chosen_tensor, self._verified_config[key] = candidates[best]
+        for name, (t, _) in candidates.items():
+            if name != best:
+                ttnn.deallocate(t)
+        return chosen_tensor
 
     def __call__(self, x, length: int, batch_size: int = 1):
         """x: ttnn [B, L, C_in] -> (ttnn [B, L_out, C_out], L_out)."""

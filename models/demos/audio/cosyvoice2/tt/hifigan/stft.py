@@ -29,13 +29,25 @@ istft.py uses for overlap-add.
 
 Net: reflect-pad -> conv1d -> one matmul. Same op inventory as the inverse, no FFT
 anywhere.
+
+**The framing conv deliberately does NOT hoist its weight with
+`ttnn.prepare_conv_weights`.** With the hoisted weight this op silently returned
+garbage (PCC ~0.27, output ~30x too small) for every input of 65,536 samples or
+more -- a sharp 2**16 cutoff, i.e. any utterance longer than ~2.7 s at 24 kHz --
+while the identical conv given the raw weight (the op prepares it internally) was
+correct at every length tried, out to 1.9M samples. That is the
+tenstorrent/tt-metal#55545 defect class (`prepare_conv_weights` disagreeing with
+the op's own preparation on Wormhole), and this op had no output check, unlike
+`TtConv1d`/`TtConvTranspose1d`. The weight here is a 16x16 diagonal, called once
+per utterance, so re-preparing it per call costs nothing that matters; correctness
+wins over the (currently unused) trace-friendliness of a hoisted weight.
+`tests/pcc/test_stft.py` pins the lengths either side of the cutoff.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import torch
-from loguru import logger
 
 import ttnn
 
@@ -85,13 +97,13 @@ class TtStft:
             torch.from_numpy(stft_basis(n_fft)).unsqueeze(0), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
         )
 
-        # Diagonal framing kernel with the window folded in, OIHW (H=1) for
-        # prepare_conv_weights.
+        # Diagonal framing kernel with the window folded in, OIHW (H=1). Handed to
+        # `ttnn.conv1d` raw on every call -- see the module docstring for why it is
+        # not pre-prepared.
         w4 = torch.zeros(n_fft, 1, 1, n_fft, dtype=torch.float32)
         w4[torch.arange(n_fft), 0, 0, torch.arange(n_fft)] = torch.from_numpy(self.window)
         self._weight_4d = ttnn.from_torch(w4, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
         self.conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, deallocate_activation=False)
-        self._prep_cache: dict[tuple[int, int], ttnn.Tensor] = {}
 
         # Reversal operator for reflect padding. TTNN has no `flip`, and
         # `ttnn.pad` offers only Replicate and Zeros -- no reflect mode -- so the
@@ -107,41 +119,6 @@ class TtStft:
     def n_frames(self, length: int) -> int:
         padded = length + (self.n_fft if self.center else 0)
         return (padded - self.n_fft) // self.hop + 1
-
-    _warned = False
-
-    def _prepared(self, x, length: int, batch_size: int):
-        key = (length, batch_size)
-        if key in self._prep_cache:
-            return self._prep_cache[key]
-        try:
-            w = ttnn.prepare_conv_weights(
-                weight_tensor=self._weight_4d,
-                weights_format="OIHW",
-                has_bias=False,
-                input_memory_config=x.memory_config(),
-                input_layout=x.layout,
-                in_channels=1,
-                out_channels=self.n_fft,
-                batch_size=batch_size,
-                input_height=1,
-                input_width=length,
-                kernel_size=(1, self.n_fft),
-                stride=(1, self.hop),
-                padding=(0, 0),
-                dilation=(1, 1),
-                groups=1,
-                device=self.device,
-                input_dtype=self.dtype,
-                conv_config=self.conv_config,
-            )
-        except Exception as e:  # noqa: BLE001
-            if not TtStft._warned:
-                TtStft._warned = True
-                logger.warning(f"stft prepare_conv_weights unavailable, stays untraceable: {str(e)[:200]}")
-            w = None
-        self._prep_cache[key] = w
-        return w
 
     def __call__(self, x, length: int, batch_size: int = 1):
         """x: ttnn [B, L, 1] (channels-last, single channel) -> [B, 2*bins, T]."""
@@ -162,10 +139,9 @@ class TtStft:
             ttnn.deallocate(right)
             length = length + 2 * p
 
-        prepared = self._prepared(x, length, batch_size)
         frames, n_frames = ttnn.conv1d(
             input_tensor=x,
-            weight_tensor=prepared if prepared is not None else self._weight_4d,
+            weight_tensor=self._weight_4d,
             device=self.device,
             in_channels=1,
             out_channels=self.n_fft,

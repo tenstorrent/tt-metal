@@ -19,6 +19,7 @@ collapses it at construction.
 
 from __future__ import annotations
 
+import torch
 from loguru import logger
 
 import ttnn
@@ -78,6 +79,38 @@ def safe_compute_config(device):
     )
 
 
+# The fast path (prepared weight + accurate_compute_config) and the raw-weight +
+# safe_compute_config reference are both *correct* on a healthy geometry, but not
+# identical: measured at Conv1d(128->128, k=11) L=18560 against a float64 conv, the
+# accurate config is ~0.4% off and the "safe" one ~2.7% off, so the two differ by a
+# few percent with nothing wrong. The silent defects this guards against are gross
+# (PCC 0.0011, values ~1e37, a ~30x scale error) -- so the two only count as
+# disagreeing past this relative L2 distance, and only then is a float64 host
+# reference computed to decide who is right (see `pick_most_accurate`).
+AGREEMENT_TOLERANCE = 0.05
+
+
+def relative_error(got, want) -> float:
+    """||got - want|| / ||want|| in float64; NaN/inf (or an all-zero `want`) count as +inf."""
+    got, want = got.double(), want.double()
+    denom = float(want.norm())
+    err = float((got - want).norm())
+    if not (err == err) or denom == 0.0 or denom != denom:
+        return float("inf")
+    return err / denom
+
+
+def pick_most_accurate(host_candidates: dict, truth) -> tuple:
+    """Name of the candidate closest to `truth`, plus every candidate's relative error.
+
+    The resolver used to treat the raw-weight + safe-config output as ground truth
+    and switch to it on any disagreement -- which chose the *less* accurate result
+    whenever the fast path was the right one (see `AGREEMENT_TOLERANCE`).
+    """
+    errors = {name: relative_error(t, truth) for name, t in host_candidates.items()}
+    return min(errors, key=errors.get), errors
+
+
 def fold_weight_norm(weight_v, weight_g, dim: int = 0):
     """w = g * v / ||v||, with the norm taken over every axis except `dim`."""
     norm_dims = [d for d in range(weight_v.dim()) if d != dim]
@@ -133,6 +166,9 @@ class TtConv1d:
         self._weight_4d = ttnn.from_torch(weight.unsqueeze(2), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
         self.weight = ttnn.from_torch(weight, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
         self._prep_cache: dict = {}
+        # Host copies, used only as the tie-break reference in `_verify_and_resolve`.
+        self._host_weight = weight.detach().float().clone()
+        self._host_bias = bias.detach().float().clone() if bias is not None else None
         self.bias = None
         if bias is not None:
             self.bias = ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -228,6 +264,28 @@ class TtConv1d:
             return_output_dim=True,
         )
 
+    def _out_length(self, input_length: int) -> int:
+        return (input_length + 2 * self.padding - self.dilation * (self.kernel_size - 1) - 1) // self.stride + 1
+
+    def _to_host(self, t, batch_size: int, out_length: int):
+        return ttnn.to_torch(t).float().reshape(batch_size, out_length, self.out_channels).double()
+
+    def _host_reference(self, x, input_length: int, batch_size: int):
+        """float64 torch conv of the same input with the same (un-quantised) weights,
+        `[B, L_out, C_out]`. Only ever run to arbitrate a disagreement."""
+        x_cf = ttnn.to_torch(x).float().reshape(batch_size, input_length, self.in_channels).transpose(1, 2).double()
+        bias = self._host_bias.double() if self._host_bias is not None else None
+        ref = torch.nn.functional.conv1d(
+            x_cf,
+            self._host_weight.double(),
+            bias,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            groups=self.groups,
+        )
+        return ref.transpose(1, 2)
+
     def _verify_and_resolve(self, x, weight, bias, input_length: int, batch_size: int, out, key):
         """First call for this geometry only: compare the fast path's
         already-computed result (`out` -- prepared weight + accurate
@@ -256,31 +314,58 @@ class TtConv1d:
           of "our real utterance lengths are fine today" is a durable
           guarantee against a defect this sparse and silent.
 
-        Caches whichever `(weight, bias, compute_config)` triple measured
-        correct in `_verified_config[key]`, so every later call at this
-        geometry goes straight to it in one conv -- this only runs once per
-        geometry, not once per call. (`self.compute_config is None`, i.e.
-        `high_fidelity=False`, skips this entirely and is not covered by
-        this check -- not exercised by the real vocoder, which always builds
-        `high_fidelity=True`.)
+        **Agreement** means a relative L2 distance within `AGREEMENT_TOLERANCE`
+        (not `max|out|`, which a corruption can preserve): the fast path is kept,
+        at no extra cost beyond the one reference conv. **Disagreement** does NOT
+        mean the reference is right -- the raw-weight + safe-config reference is
+        itself the *less* accurate of the two on a healthy geometry (~2.7% vs
+        ~0.4% error at `Conv1d(128->128, k=11)` L=18560, where prepared and raw
+        weights were bit-identical), and switching to it on the old `max|out|`
+        within-2% check degraded accuracy on three resblock convs of the real
+        464-frame utterance. So on a disagreement a float64 host conv arbitrates
+        between three candidates -- prepared+accurate, raw+safe, raw+accurate (the
+        right answer when only the prepared weight is at fault) -- and the closest
+        to it wins.
+
+        Caches whichever `(weight, bias, compute_config)` triple won in
+        `_verified_config[key]`, so every later call at this geometry goes
+        straight to it in one conv -- this only runs once per geometry, not once
+        per call. (`self.compute_config is None`, i.e. `high_fidelity=False`,
+        skips this entirely and is not covered by this check -- not exercised by
+        the real vocoder, which always builds `high_fidelity=True`.)
         """
-        ref, _ = self._conv(x, self.weight, self.bias, input_length, batch_size, self._safe_compute_config)
-        a = float(ttnn.to_torch(out).float().abs().max())
-        b = float(ttnn.to_torch(ref).float().abs().max())
-        ok = a == a and abs(a - b) <= 0.02 * max(b, 1e-9)  # a != a catches NaN/inf
-        if ok:
+        ref, out_length = self._conv(x, self.weight, self.bias, input_length, batch_size, self._safe_compute_config)
+        fast_host = self._to_host(out, batch_size, out_length)
+        ref_host = self._to_host(ref, batch_size, out_length)
+        if relative_error(fast_host, ref_host) <= AGREEMENT_TOLERANCE:
             ttnn.deallocate(ref)
             self._verified_config[key] = (weight, bias, self.compute_config)
             return out
+
+        raw_accurate, _ = self._conv(x, self.weight, self.bias, input_length, batch_size, self.compute_config)
+        candidates = {
+            "prepared weight + accurate config": (out, (weight, bias, self.compute_config)),
+            "raw weight + safe config": (ref, (self.weight, self.bias, self._safe_compute_config)),
+            "raw weight + accurate config": (raw_accurate, (self.weight, self.bias, self.compute_config)),
+        }
+        host = {
+            "prepared weight + accurate config": fast_host,
+            "raw weight + safe config": ref_host,
+            "raw weight + accurate config": self._to_host(raw_accurate, batch_size, out_length),
+        }
+        best, errors = pick_most_accurate(host, self._host_reference(x, input_length, batch_size))
         logger.warning(
-            f"prepared weight and/or accurate_compute_config disagrees with the raw-weight/"
-            f"safe-config reference at Conv1d({self.in_channels}->{self.out_channels}, "
-            f"k={self.kernel_size}, s={self.stride}) length {input_length}: max|out| {a:.4g} vs {b:.4g}; "
-            "using raw weights + safe compute config for this geometry"
+            f"fast conv path disagrees with the raw-weight/safe-config reference at "
+            f"Conv1d({self.in_channels}->{self.out_channels}, k={self.kernel_size}, s={self.stride}) "
+            f"length {input_length}; relative error vs float64 host conv: "
+            + ", ".join(f"{n} {e:.4g}" for n, e in errors.items())
+            + f" -> using {best}"
         )
-        self._verified_config[key] = (self.weight, self.bias, self._safe_compute_config)
-        ttnn.deallocate(out)
-        return ref
+        chosen_tensor, self._verified_config[key] = candidates[best]
+        for name, (t, _) in candidates.items():
+            if name != best:
+                ttnn.deallocate(t)
+        return chosen_tensor
 
     def __call__(self, x, input_length: int, batch_size: int = 1):
         key = (input_length, batch_size)
