@@ -34,9 +34,8 @@ ASPECT_RATIO = (16, 9)
 DURATIONS_S = [5, 10, 15]
 VSA_SPARSITY = 0.9
 
-# 4x8's parameters carry no trace region -- only the quad's, for `trace_denoise` -- so the audio vocoder has
-# nowhere to capture into. Reserving costs address space rather than working DRAM, and this is the size
-# `test_audio_decode_squeeze.py` captures this same vocoder graph in.
+# 4x8's parameters carry no trace region -- only the quad's, for `trace_denoise` -- so the audio vocoder has nowhere
+# to capture into. Reserving costs address space rather than working DRAM; this size fits the vocoder graph.
 _MESH_4X8_TRACE = pytest.param(
     MESH_4X8_RING.values[0],
     {**MESH_4X8_RING.values[1], "trace_region_size": 1_200_000_000},
