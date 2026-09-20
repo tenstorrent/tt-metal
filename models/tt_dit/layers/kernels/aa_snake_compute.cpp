@@ -2,11 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fused anti-aliased SnakeBeta activation, compute. Phase A: per up block, the even/odd phase streams
-// E and O as fp32 SFPU multiply-then-add over 6 taps each (the depthwise conv kernel's order), then SnakeBeta on
-// both. Phase B: per output tile, 12 taps over the E/O tiles the writer gathered. Every operand enters DST via
-// UnpackToDestFp32 copies, so the taps are exact fp32 arithmetic. STAGE 0 copies (identity through the whole
-// gather machinery), 1 runs the taps without the activation, 2 the full activation.
+// Fused anti-aliased SnakeBeta activation, compute. Phase A: per up block, the E/O phase streams as fp32 SFPU
+// multiply-then-add over 6 taps each, then SnakeBeta. Phase B: 12 down taps per out tile. STAGE 0/1/2 = copy/taps/all.
 
 #include <cstdint>
 
