@@ -20,6 +20,11 @@
 #include "api/compute/experimental/sdpa_sub_custom.h"
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
+#ifdef TRISC_PACK
+#include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+#endif
+#include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -229,6 +234,49 @@ ALWI void sdpa_maybe_reconfig_data_format(uint32_t runtime_srca_old_cb, uint32_t
         reconfig_data_format(runtime_srca_old_cb, srca_new_cb, runtime_srcb_old_cb, srcb_new_cb);
     }
 #endif
+}
+
+// fp32 DEST keeps the output accumulator and the row sums in fp32 while the other intermediates stay bf16, so
+// the packs and unpacks that cross between them switch formats at run time. With bf16 accumulators this is
+// false and nothing extra is emitted.
+ALWI bool sdpa_fp32_accumulator(uint32_t acc_cb, uint32_t im_cb) {
+#ifdef TRISC_PACK
+    return pack_dst_format[acc_cb] != pack_dst_format[im_cb];
+#elif defined(TRISC_UNPACK) || defined(TRISC_MATH)
+    return unpack_src_format[acc_cb] != unpack_src_format[im_cb];
+#else
+    return false;
+#endif
+}
+
+// A CB flagged for unpack to DEST reports Float32 as its register format. That is what the DEST copies need, but
+// the same CB fed to the FPU through SrcA or SrcB has to take the usual fp32 to Tf32 conversion, or the source
+// register fills with 32 bit datums that the FPU reads as bf16 pairs.
+ALWI void sdpa_reconfig_srca_tf32(uint32_t cb) {
+    UNPACK((_llk_unpack_reconfig_data_format_srca_impl_<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(
+        unpack_src_format[cb], static_cast<uint32_t>(DataFormat::Tf32), get_local_cb_interface(cb).fifo_page_size)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(cb)));
+}
+
+ALWI void sdpa_reconfig_srcb_tf32(uint32_t cb) {
+    UNPACK((_llk_unpack_reconfig_data_format_srcb_impl_<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(
+        unpack_src_format[cb], static_cast<uint32_t>(DataFormat::Tf32), get_local_cb_interface(cb).fifo_page_size)));
+    MATH((llk_math_reconfig_data_format_srcb<DST_ACCUM_MODE>(cb)));
+}
+
+// DEST tile odst *= DEST tile idst, issued from the pack thread. The pack thread already owns the SFPU for the
+// softmax exp, so its rescale multiply cannot interleave with those instructions the way a math thread SFPU op
+// would.
+ALWI void sdpa_mul_tiles_packthread(uint32_t idst, uint32_t odst) {
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary_mul,
+        (false, ckernel::BinaryOp::MUL, 8, DST_ACCUM_MODE),
+        odst,
+        idst,
+        odst,
+        VectorMode::RC)));
 }
 
 // Keep this out-of-line even on BH: repeated pack-width configuration sites
@@ -587,7 +635,8 @@ void sub_exp_block_bcast_cols(
  * Operates on first-column subset of tiles.
  */
 template <bool profiling_enabled, uint32_t scale_fp32>
-void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t sbh) {
+void sub_exp_first_col_blocks(
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t sbh, bool repack = false) {
     const uint32_t tiles_per_row = sbh;
     const uint32_t global_row_base = q_subblock * tiles_per_row;
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
@@ -613,6 +662,9 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
+        if (repack) {
+            pack_reconfig_data_format(out_cb);
+        }
         configure_single_tile_pack(out_cb);
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             pack_tile<false>(i, out_cb);
@@ -640,7 +692,9 @@ void salad_correct_fused(
     uint32_t sum_out_cb,
     uint32_t ob_q_subblock,
     uint32_t sum_q_subblock,
-    uint32_t write_q_subblock) {
+    uint32_t write_q_subblock,
+    bool fp32_acc = false,
+    uint32_t ones_row_cb = INVALID_CB) {
     constexpr uint32_t tiles_per_row = sbh_t;
     constexpr uint32_t tiles_per_column = sbw_t;
     constexpr uint32_t col_batch = (dst_size / sbh_t < sbw_t) ? dst_size / sbh_t : sbw_t;
@@ -653,11 +707,70 @@ void salad_correct_fused(
     const uint32_t sum_row_base = sum_q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
 
-    mul_bcast_cols_init(out_in_cb, bcast_cb);
-
     CircularBuffer(out_in_cb).wait_front((ob_q_subblock + 1) * tiles_per_row * tiles_per_column);
     CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row);
     CircularBuffer(bcast_cb).wait_front((ob_q_subblock + 1) * tiles_per_row);
+
+    if (fp32_acc) {
+        // An fp32 operand is truncated on its way into the FPU source registers, which turns the per chunk
+        // rounding of the accumulator into a one sided drift. So the fp32 accumulator and sum never go through
+        // the FPU: alpha is broadcast across the row by a one tile matmul of the alpha column against the scaler
+        // tile (ones in row 0), the tiles are unpacked straight into DEST and scaled on the pack thread's SFPU.
+        constexpr uint32_t alpha_dst = 0;
+        constexpr uint32_t tiles_per_acquire = dst_size - 1;
+        CircularBuffer(ones_row_cb).wait_front(1);
+        auto broadcast_alpha = [&](uint32_t row) {
+            reconfig_data_format(ones_row_cb, bcast_cb);
+            matmul_block_init(bcast_cb, ones_row_cb, 0, 1, 1, 1);
+            matmul_block(bcast_cb, ones_row_cb, ob_row_base + row, 0, alpha_dst, 0, 1, 1, 1);
+        };
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            const uint32_t in_row = (ob_row_base + i) * tiles_per_column;
+            const uint32_t out_row = (write_row_base + i) * tiles_per_column;
+            for (uint32_t col_base = 0; col_base < tiles_per_column; col_base += tiles_per_acquire) {
+                const uint32_t cols = (col_base + tiles_per_acquire <= tiles_per_column) ? tiles_per_acquire
+                                                                                         : tiles_per_column - col_base;
+                tile_regs_acquire();
+                broadcast_alpha(i);
+                reconfig_data_format_srca(out_in_cb);
+                copy_init(out_in_cb);
+                for (uint32_t j = 0; j < cols; j++) {
+                    copy_tile(out_in_cb, in_row + col_base + j, 1 + j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < cols; j++) {
+                    sdpa_mul_tiles_packthread(alpha_dst, 1 + j);
+                }
+                PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+                pack_reconfig_data_format(out_out_cb);
+                PACK((llk_pack_reconfig_l1_acc(1)));
+                configure_single_tile_pack(out_out_cb);
+                for (uint32_t j = 0; j < cols; j++) {
+                    sdpa_pack_tile_ooo(1 + j, out_out_cb, out_row + col_base + j);
+                }
+                tile_regs_release();
+            }
+            tile_regs_acquire();
+            broadcast_alpha(i);
+            reconfig_data_format_srca(sum_in_cb);
+            copy_init(sum_in_cb);
+            copy_tile(sum_in_cb, sum_row_base + i, 1);
+            tile_regs_commit();
+            tile_regs_wait();
+            sdpa_mul_tiles_packthread(alpha_dst, 1);
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+            pack_reconfig_data_format(sum_out_cb);
+            PACK((llk_pack_reconfig_l1_acc(1)));
+            configure_single_tile_pack(sum_out_cb);
+            sdpa_pack_tile_ooo(1, sum_out_cb, write_row_base + i);
+            tile_regs_release();
+        }
+        // Back to the bf16 unpack formats the rest of the step assumes.
+        reconfig_data_format(bcast_cb, bcast_cb);
+        return;
+    }
+    mul_bcast_cols_init(out_in_cb, bcast_cb);
 
     constexpr uint32_t last_batch_rem = tiles_per_column % col_batch;
     for (uint32_t col_base = 0; col_base < tiles_per_column; col_base += col_batch) {
@@ -728,7 +841,8 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
     uint32_t cur_out_cb,
     uint32_t sbh,
     [[maybe_unused]] uint32_t cur_max_cb_rt = 0,
-    [[maybe_unused]] uint32_t sink_row_offset = 0) {
+    [[maybe_unused]] uint32_t sink_row_offset = 0,
+    bool fp32_acc = false) {
     // Dense SDPA supplies one scalar tile; sparse SDPA supplies a first-column vector of head
     // scalars per tile row. Fold exp((sink - max)*scale) into the col-reduced denominator (DST[0]).
     if constexpr (use_attention_sink) {
@@ -746,6 +860,11 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             // Pack format follows scratch_cb for the reciprocal intermediate. The old/new form folds away
             // when scratch and normalized output formats match, and reconfigures after rows that packed output.
             sdpa_maybe_pack_reconfig_data_format<normalized_out_cb, scratch_cb>();
+            if (fp32_acc) {
+                reconfig_data_format_srca(col_identity_cb);
+                sdpa_reconfig_srcb_tf32(cur_sum_cb);
+                pack_reconfig_data_format(scratch_cb);
+            }
 
             CircularBuffer(col_identity_cb).wait_front(N);
             CircularBuffer(cur_sum_cb).wait_front(1);
@@ -796,6 +915,10 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
             constexpr uint32_t batch = (head_dim_t_ < dst_size) ? head_dim_t_ : dst_size;
+            if (fp32_acc) {
+                sdpa_reconfig_srca_tf32(cur_out_cb);
+                reconfig_data_format_srcb(scratch_cb);
+            }
             mul_bcast_cols_init(cur_out_cb, scratch_cb);
             // Pack output to normalized_out_cb; old/new skips when it has the same format as scratch.
             sdpa_maybe_pack_reconfig_data_format<scratch_cb, normalized_out_cb>();
@@ -829,6 +952,9 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
     // format (e.g. Bfp8 output dtype), the format register stays Bfp8 and the next
     // pack to a F16b CB writes garbage that's later mis-decoded by F16b unpacks.
     sdpa_maybe_pack_reconfig_data_format<normalized_out_cb, scratch_cb>();
+    if (fp32_acc) {
+        reconfig_data_format(scratch_cb, scratch_cb);
+    }
 }
 
 // ===================== Streaming SDPA Core Functions =====================
@@ -1586,6 +1712,7 @@ static void sdpa_inner_loop_step(
         // When save_out_cb is set, V matmul + SALAD write to save_out_cb (cb_out) instead of cur.out.
         // Writer drains save_out_cb row-by-row to DRAM during SALAD. cur.out stays empty.
         const uint32_t out_cb = (save_out_cb != INVALID_CB) ? save_out_cb : cur.out;
+        const bool fp32_acc = sdpa_fp32_accumulator(cur.out, cb_recip_scratch);
 
         // V wait deferred: don't block here. The sub_exp drain loop below
         // doesn't touch V, so the reader's V DMA can overlap with the drain.
@@ -1627,6 +1754,10 @@ static void sdpa_inner_loop_step(
                     if (kt_sub == 0) {
                         CircularBuffer(cb_qkt_im).wait_front(qktv_in0_wait_tiles);
                         CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                    }
+                    if (fp32_acc) {
+                        // The format write clears the L1 accumulate bit, so it goes before the arm below.
+                        pack_reconfig_data_format(out_cb);
                     }
                     if (kt_sub > 0) {
                         PACK((llk_pack_reconfig_l1_acc(1)));
@@ -1696,6 +1827,9 @@ static void sdpa_inner_loop_step(
                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                     sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_v_in, cb_recip_scratch, cb_qkt_im>();
                     mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+                    if (fp32_acc) {
+                        pack_reconfig_data_format(out_cb);
+                    }
                     inplace_v_matmul_pack_batched<vDHt, dst_size, qktv_h>(
                         cb_qkt_im,
                         cb_v_in,
@@ -1735,7 +1869,7 @@ static void sdpa_inner_loop_step(
                 cb_normalized_out,
                 scale_fp32,
                 use_attention_sink,
-                cb_attention_sink>(cur.sum, out_cb, sbh, cur.max, sink_row_offset);
+                cb_attention_sink>(cur.sum, out_cb, sbh, cur.max, sink_row_offset, fp32_acc);
             if constexpr (use_attention_sink) {
                 sink_row_offset += sbh;
             }
@@ -1754,14 +1888,41 @@ static void sdpa_inner_loop_step(
                 if constexpr (has_qktv_remainder) {
                     if (sbh == qktv_remainder_h) {
                         salad_correct_fused<qktv_remainder_h, vDHt, dst_size>(
-                            prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+                            prev.out,
+                            prev.sum,
+                            cb_exp_max_diff,
+                            out_cb,
+                            cur.sum,
+                            0,
+                            salad_row,
+                            w_salad,
+                            fp32_acc,
+                            cb_identity_scale_in);
                     } else {
                         salad_correct_fused<qktv_h, vDHt, dst_size>(
-                            prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+                            prev.out,
+                            prev.sum,
+                            cb_exp_max_diff,
+                            out_cb,
+                            cur.sum,
+                            0,
+                            salad_row,
+                            w_salad,
+                            fp32_acc,
+                            cb_identity_scale_in);
                     }
                 } else {
                     salad_correct_fused<qktv_h, vDHt, dst_size>(
-                        prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad);
+                        prev.out,
+                        prev.sum,
+                        cb_exp_max_diff,
+                        out_cb,
+                        cur.sum,
+                        0,
+                        salad_row,
+                        w_salad,
+                        fp32_acc,
+                        cb_identity_scale_in);
                 }
             }
             CircularBuffer(cb_exp_max_diff).pop_front(sbh);
@@ -1790,7 +1951,7 @@ static void sdpa_inner_loop_step(
             if (!is_first_iter) {
                 CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
                 sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                    prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
+                    prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h, fp32_acc);
                 CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
             }
 
@@ -1807,6 +1968,9 @@ static void sdpa_inner_loop_step(
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
                 mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
+                if (fp32_acc) {
+                    pack_reconfig_data_format(out_cb);
+                }
                 // Configure once before v_subblock loop; skip inside.
                 configure_row_pack_width(out_cb, qktv_subblock_w);
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
@@ -1845,7 +2009,7 @@ static void sdpa_inner_loop_step(
 
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
                     sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
+                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h, fp32_acc);
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
 
                     salad_correct_row(salad_row, w_salad, qktv_h);
@@ -1899,7 +2063,7 @@ static void sdpa_inner_loop_step(
                     constexpr uint32_t drain_salad_row = 0;
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
                     sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
+                        prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h, fp32_acc);
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
                     salad_correct_row(drain_salad_row, 0, drain_h);
                 }
