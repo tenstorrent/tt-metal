@@ -115,7 +115,9 @@ addresses, and exact preservation of prior KV, later tiles, and the other slot.
 `tests/test_block_cyclic_golden.py` contains just a packing utility and one
 unparameterized 256K test. It tokenizes the Gutenberg input, checks the token IDs
 against the GPU trace, and runs 54 requests with seed 42: 53 starts off the 8K
-boundary, 53 rewinds larger than one tile, and 51 unaligned ends. It compares
+boundary, 53 rewinds larger than one tile, and 51 unaligned ends. All requests
+replay one trace using a fixed token buffer. Tokens and metadata are uploaded and
+synchronized before the timer; warmup and capture are logged separately. It compares
 all heads and all positions in the final decoder layer's packed KV cache against
 `/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135`, requiring PCC >=0.98.
 
@@ -127,7 +129,11 @@ HF_HUB_OFFLINE=1 \
 python_env/bin/python -m pytest models/demos/gemma4_d_p/tests/test_block_cyclic_golden.py -sv
 ```
 
-The standalone test passed in 134.53 seconds, with final-layer PCC 0.983890.
+The traced standalone test passed in 137.58 seconds, with final-layer PCC 0.983890.
+Its first two replays took 392.546 ms and 397.450 ms on this run. The canonical
+256K/8192/8x4 traced test also passed on this branch, with initial replays of
+393.1 ms and 405.1 ms. Both paths currently use the two-pass SWA adapter, including
+aligned requests; these timings include that additional device work.
 The BFP8 model's native single-SWA aligned baseline is also PCC 0.983890 against this BF16
 GPU trace, so this end-to-end test uses 0.98. A stricter exploratory check found
 per-head sliding V scores of 0.987504 (layer 24) and 0.981308 (layer 25) for both
