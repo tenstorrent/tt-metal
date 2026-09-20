@@ -1169,12 +1169,23 @@ class TPGatedDeltaNet:
         if all(idx[i] == i for i in range(self.B)):
             return
         self._gather_indices(self.rec_state, idx, dim=0)
-        if self.conv_hist_packed is not None and self._hist_packed_valid:
-            self._gather_indices(self.conv_hist_packed, idx, dim=0)
-        else:
-            self._sync_conv_hist_packed()
         for m in range(self.K):
             self._gather_indices(self.conv_states[m], idx, dim=1)
+        if self.conv_hist_packed is not None and self._hist_packed_valid:
+            self._gather_indices(self.conv_hist_packed, idx, dim=0)
+            # The packed history row is laid out for its slot's PARITY (channel chunk c at tile row
+            # 2c + (slot & 1), see _pack_head_tiles): a row that moved between slots of different parity
+            # would hand the fused decode conv a misaligned history for the next K-1 steps. Repack those
+            # rows from the (already gathered) conv_states.
+            flipped = [i for i in range(self.B) if i != idx[i] and ((i ^ idx[i]) & 1)]
+            if len(flipped) > 8:
+                self._hist_packed_valid = False
+                self._ensure_conv_hist_packed()
+            else:
+                for i in flipped:
+                    self._sync_conv_hist_packed(slot=i)
+        else:
+            self._sync_conv_hist_packed()
 
     def _gather_indices(self, buf, idx, dim):
         """Rebuild `buf` so slice i along `dim` becomes old slice idx[i], then copy back in place.

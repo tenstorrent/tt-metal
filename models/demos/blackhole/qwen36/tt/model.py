@@ -1843,6 +1843,12 @@ class Qwen36Model:
             _dev_copy = int(os.environ.get("QWEN36_PLAIN_GDN_SLOT_DEVICE_COPY", "0") or 0)
         except ValueError:
             _dev_copy = 0
+        # Prefill/decode disaggregation (pd_transfer.py): a producer instance parks each request's host GDN snapshot
+        # under its slot (pd_gdn_capture) for export, which needs the host snapshot path; pd_skip_gdn_slot_write
+        # skips the decode-slot write on an instance that never decodes.
+        _pd_capture = getattr(self, "pd_gdn_capture", None)
+        if _pd_capture is not None:
+            _dev_copy = 0
         # QWEN36_PREFILL_LOGITS_FAST=1: read the [1, vocab] logits row from ONE device instead of all replicas.
         _fast_logits = os.environ.get("QWEN36_PREFILL_LOGITS_FAST", "0") == "1"
         _t0 = _tp()
@@ -1960,10 +1966,11 @@ class Qwen36Model:
                     continue
                 # Snapshot this user's B=1 scratch state (host round trip — the next user's reset
                 # overwrites the scratch in place; see prefill_traced_bucket_batched for why not clone).
-                per_user_rec.append([ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states])
-                per_user_conv.append(
-                    [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_states]
-                )
+                rec_snap, conv_snap = self._snapshot_gdn_scratch_host(dn_states, comp)
+                per_user_rec.append(rec_snap)
+                per_user_conv.append(conv_snap)
+                if _pd_capture is not None:
+                    _pd_capture[int(empty_slots[u])] = (per_user_rec[-1], per_user_conv[-1])
                 _t4 = _tp()
                 _t["prefill"] += _t2 - _t1
                 _t["logits"] += _t3 - _t2
@@ -1988,7 +1995,7 @@ class Qwen36Model:
 
         # Write each user's snapshot into its decode slot, preserving the other live rows.
         _t6 = _tp()
-        if not _dev_copy:
+        if not _dev_copy and not getattr(self, "pd_skip_gdn_slot_write", False):
             for u in range(N):
                 self._write_gdn_slot(int(empty_slots[u]), per_user_rec[u], per_user_conv[u])
         _t["write_slot"] += _tp() - _t6
@@ -2066,6 +2073,37 @@ class Qwen36Model:
             )
             cache[key] = m
         return m
+
+    def _snapshot_gdn_scratch_host(self, dn_states, comp):
+        """Host snapshot of the B=1 GDN scratch of every GDN layer: rec_snap[li] [n_dev, Nv, Dk, Dv] (fp32),
+        conv_snap[li][m] [n_dev, 1, D].
+
+        Default (QWEN36_GDN_SNAPSHOT_DEVICE_UNTILIZE=1): concat all layers on device, untilize on device and
+        read ROW_MAJOR once per state type -- the host read is then a memcpy (host-side untilize of ~150 MB of
+        fp32 tile tensors cost ~150 ms per request). =0: the original per-tensor ttnn.to_torch of TILE tensors.
+        """
+        if os.environ.get("QWEN36_GDN_SNAPSHOT_DEVICE_UNTILIZE", "1") != "1" or not dn_states:
+            rec = [ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states]
+            conv = [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_states]
+            return rec, conv
+        L = len(dn_states)
+        n_dev = self.num_devices
+        K = dn_states[0].K
+        rec_cat = ttnn.concat([dn.rec_state for dn in dn_states], dim=0)  # per device [L, Nv, Dk, Dv]
+        rec_rm = ttnn.to_layout(rec_cat, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(rec_cat)
+        rec_all = ttnn.to_torch(rec_rm, mesh_composer=comp)  # [n_dev*L, Nv, Dk, Dv]
+        ttnn.deallocate(rec_rm)
+        rec_all = rec_all.reshape(n_dev, L, *rec_all.shape[1:])
+        taps_cat = ttnn.concat([c for dn in dn_states for c in dn.conv_states], dim=0)  # per device [L*K, 1, D]
+        taps_rm = ttnn.to_layout(taps_cat, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(taps_cat)
+        taps_all = ttnn.to_torch(taps_rm, mesh_composer=comp)  # [n_dev*L*K, 1, D]
+        ttnn.deallocate(taps_rm)
+        taps_all = taps_all.reshape(n_dev, L, K, 1, -1)
+        rec = [rec_all[:, li].contiguous() for li in range(L)]
+        conv = [[taps_all[:, li, m].contiguous() for m in range(K)] for li in range(L)]
+        return rec, conv
 
     def _write_gdn_slot(self, slot, rec_snap, conv_snap):
         """Upload one request's B=1 GDN state snapshot (host torch, per GDN layer) and write it
