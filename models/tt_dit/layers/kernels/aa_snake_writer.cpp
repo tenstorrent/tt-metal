@@ -2,10 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fused anti-aliased SnakeBeta activation, writer. Once the compute kernel has produced every E/O block for this
-// core, gathers the 12 down-tap tiles per output tile into CB_DN (k odd reads E at shift (k - 5) / 2, k even
-// reads O at shift (k - 6) / 2; the sequence-end tiles on the first/last device apply the z clamp stick by
-// stick), then streams each finished output tile to DRAM, valid sticks only on the partial last tile.
+// Fused anti-aliased SnakeBeta activation, writer. Once compute has produced every E/O block for this core, gathers
+// the 12 down-tap tiles per output tile into CB_DN (z clamp stick by stick at the sequence ends), then streams it out.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
