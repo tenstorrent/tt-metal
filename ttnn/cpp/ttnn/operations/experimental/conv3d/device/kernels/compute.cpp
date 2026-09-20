@@ -92,10 +92,8 @@ ALWI void pack_tile_with_wh_destination_wait(uint32_t tile, uint32_t out_cb, uin
     pack_tile(tile, out_cb);
 }
 
-// The operand-split form of `matmul_blocks`: three K passes accumulate into one DST subblock,
-// x_hi*W_hi + x_hi*W_lo + x_lo*W_hi, so the sum is formed in fp32 DST instead of three separate
-// convs and two fp32 SFPU adds. The dropped x_lo*W_lo term is below fp32's own resolution of the
-// products. All four CBs share the fp32 format, so one init and one reconfig serve every pass.
+// The operand-split form of `matmul_blocks`: three K passes, x_hi*W_hi + x_hi*W_lo + x_lo*W_hi, accumulate into one
+// fp32 DST subblock (x_lo*W_lo is below fp32 resolution). All four CBs share the fp32 format, so one init serves all.
 void matmul_blocks_split(
     const uint32_t in0_hi_cb,
     const uint32_t in0_lo_cb,
@@ -163,10 +161,8 @@ void matmul_blocks_split(
     }
 }
 
-// Split `num_tiles` tilized fp32 activation tiles into hi = bf16(x) (kept as masked fp32) and the exact
-// residual lo = x - hi. `in_cb` must be UnpackToDestFp32 so `copy_tile` lands the tile in DST unchanged;
-// the typecast is the same RNE routine `ttnn.typecast` uses and the subtract is exact in fp32, so the two
-// outputs are bit-identical to the host-side `_split_operand`. DST: 2 tiles.
+// Split `num_tiles` tilized fp32 tiles into hi = bf16(x) (as masked fp32) and the exact residual lo = x - hi; `in_cb`
+// must be UnpackToDestFp32 so `copy_tile` lands the tile in DST unchanged. Bit-identical to the host `_split_operand`.
 template <uint32_t num_tiles>
 void split_operand_block(uint32_t in_cb, uint32_t hi_cb, uint32_t lo_cb) {
     CircularBuffer in_cb_obj(in_cb);
