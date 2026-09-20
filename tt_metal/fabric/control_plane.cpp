@@ -9,9 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <initializer_list>
-#include <iomanip>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -19,7 +17,6 @@
 #include <numeric>
 #include <optional>
 #include <ostream>
-#include <queue>
 #include <set>
 #include <string>
 #include <tuple>
@@ -33,8 +30,6 @@
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "core_coord.hpp"
-#include "compressed_direction_table.hpp"
-#include "compressed_routing_path.hpp"
 #include "tools/scaleout/factory_system_descriptor/utils.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "fabric_host_utils.hpp"
@@ -43,7 +38,6 @@
 #include "distributed_context.hpp"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "hal_types.hpp"
-#include "tt_metal/common/env_lib.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -519,7 +513,8 @@ void ControlPlane::init_control_plane(
                                               ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
                                                std::to_string(world_size) + ".yaml");
     try {
-        tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(*this->topology_mapper_, asic_mapping_file);
+        tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(
+            *this->topology_mapper_, asic_mapping_file, rtoptions.get_mock_enabled());
     } catch (const std::exception& e) {
         log_warning(tt::LogFabric, "Failed to export ASIC to Fabric node ID mapping: {}", e.what());
     }
@@ -639,7 +634,8 @@ void ControlPlane::init_control_plane_auto_discovery() {
                                               ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
                                                std::to_string(world_size) + ".yaml");
     try {
-        tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(*this->topology_mapper_, asic_mapping_file);
+        tt::tt_fabric::serialize_asic_to_fabric_node_mapping_to_file(
+            *this->topology_mapper_, asic_mapping_file, rtoptions.get_mock_enabled());
     } catch (const std::exception& e) {
         log_warning(tt::LogFabric, "Failed to export ASIC to Fabric node ID mapping: {}", e.what());
     }

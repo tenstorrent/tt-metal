@@ -172,6 +172,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/mask.h
     inc/api/compute/matmul.h
     inc/api/compute/mul_int_sfpu.h
+    inc/api/compute/nextafter.h
     inc/api/compute/pack.h
     inc/api/compute/pack_untilize.h
     inc/api/compute/quantization.h
@@ -238,6 +239,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/mod_div_lib.h
     inc/internal/pch.h
     inc/internal/risc_attribs.h
+    inc/internal/scoped_lock_cache_ops.h
     inc/internal/template_string.h
     inc/internal/tensix_functions.h
     inc/internal/vptr_uint.h
