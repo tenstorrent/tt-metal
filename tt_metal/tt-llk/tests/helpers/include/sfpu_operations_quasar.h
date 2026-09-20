@@ -19,6 +19,7 @@
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
 #include "llk_sfpu/ckernel_sfpu_cumsum.h"
+#include "llk_sfpu/ckernel_sfpu_ema.h"
 #include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
@@ -132,6 +133,15 @@ void init_unary_sfpu_operation_quasar()
     {
         cumsum_init<APPROX>();
     }
+    else if constexpr (OPERATION == SfpuType::ema)
+    {
+        // Smoothing weights as fp32 bit patterns, matching the EMA_ALPHA_BETA test-parameter
+        // defaults the golden is built on. OUT_TILE_DELTA must match the call below - it is baked
+        // into the store immediates of the quad body this records.
+        init_ema<0 /* OUT_TILE_DELTA: in place */>(
+            static_cast<std::uint32_t>(0x3E800000),  // alpha = 0.25 (fp32)
+            static_cast<std::uint32_t>(0x3F400000)); // beta  = 0.75 (fp32)
+    }
 }
 
 /**
@@ -205,8 +215,8 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
  * @param sfpu_format SFPU math format; only the comp family reads it (see
  *        @ref call_zero_comp_operation_quasar), float-only ops ignore it.
- * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
- *        reads it. Defaults to true so each tile is independent.
+ * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum and
+ *        ema read it. Defaults to true so each tile is independent.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <
@@ -361,6 +371,13 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
         // Whole-tile op: the accumulation chain spans all 32 tile rows and crosses the face-pair
         // boundary, so it runs once per tile (RC_custom), not once per face.
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cumsum, (APPROX, ITERATIONS), dst_index, VectorMode::RC_custom, first);
+    }
+    else if constexpr (OPERATION == SfpuType::ema)
+    {
+        // Whole-tile op: the recurrence runs down all 32 tile rows, so it runs once per tile
+        // (RC_custom), not once per face. OUT_TILE_DELTA = 0 keeps the result in the tile the
+        // harness packs from.
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_ema, (0 /* OUT_TILE_DELTA: in place */), dst_index, VectorMode::RC_custom, first);
     }
     else if constexpr (OPERATION == SfpuType::floor)
     {
