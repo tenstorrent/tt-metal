@@ -1421,6 +1421,44 @@ m2::ProgramSpec spec_pair(uint32_t prefix = 0) {
 }
 const std::array spec_targets{m2::KernelSpecName{"sender"}, m2::KernelSpecName{"receiver"}};
 
+TEST_F(McastHostFixture, NoHandshakeLeavesExchangeCreditAcrossConstructionPaths) {
+    using namespace tt::tt_metal;
+    const auto participants = grid({0, 0}, {1, 0});
+    for (const auto signal :
+         {dataflow_kernel_lib::DataReadySignal::Flag, dataflow_kernel_lib::DataReadySignal::Counter}) {
+        auto family = make_family(device_, {{participants, {{0, 0}}}}, {.handshake = false, .data_ready = signal});
+        Program program;
+        ProgramDescriptor descriptor;
+        auto spec = spec_pair();
+        for (uint32_t id = 0; id < 14; ++id) {
+            program.impl().add_semaphore(participants, id, 0, tt::CoreType::WORKER);
+            descriptor.semaphores.push_back({.id = id, .core_ranges = participants, .initial_value = 0});
+            spec.semaphores.push_back(
+                {.unique_id = m2::SemaphoreSpecName{"exchange_" + std::to_string(id)}, .target_nodes = participants});
+        }
+        KernelDescriptor kernel;
+        kernel.core_ranges = participants;
+        kernel.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        const std::array targets{std::ref(kernel)};
+        family.attach(descriptor, "payload", targets);
+        ASSERT_EQ(descriptor.semaphores.size(), 15u);
+        EXPECT_EQ(descriptor.semaphores.back().id, 14u);
+        EXPECT_EQ(kernel.compile_time_args[wire::CONSUMER_READY], UNUSED_SEM_ID);
+
+        m2::ProgramRunArgs args;
+        family.attach(spec, args, "payload", spec_targets);
+        ASSERT_EQ(spec.semaphores.size(), 15u);
+        for (const auto& target : spec.kernels) {
+            EXPECT_EQ(target.semaphore_bindings.size(), 1u);
+        }
+        family.append_semaphores(program);
+        ASSERT_EQ(program.impl().semaphores().size(), 15u);
+        EXPECT_EQ(program.impl().semaphores().back().id(), 14u);
+        // The final hardware slot remains available for the operation's exchange credit.
+        EXPECT_EQ(CreateSemaphore(program, participants, 0), 15u);
+    }
+}
+
 TEST_F(McastHostFixture, SpecAttachPopulatesNamedMetadataResourcesAndRuntimePrefixes) {
     auto family = make_family(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})});
     auto spec = spec_pair(2);

@@ -56,5 +56,9 @@ preserve them without adding unrelated files to commits.
   without handshakes, 2 with handshakes, and 3 for chain forwarding. Verify all
   emission paths and add a regression for allocation pressure before deciding
   whether allocator changes are needed.
+- Feedback 1: all three emitters use `required_semaphores_()`. Added a regression
+  with 14 occupied slots, both data-ready modes, descriptor/spec/direct paths,
+  and a final operation-owned exchange credit. No allocator change is needed in
+  this baseline. Build and execution are pending the feedback validation batch.
 - Completion remains unproven until every requirement in the supplied plans has
   direct evidence. Checkboxes track work, not a reduction of the requested scope.
