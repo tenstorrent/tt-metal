@@ -895,12 +895,24 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
         model.sampling.apply_decode_state([_greedy_params], reset_batch=True)
 
     _sharded_logits_mode = _mode in ("shard", "sample")
+    # No on-device sampler (a (1,1) mesh = TP=1 mode): "shard" still applies to the single full-vocab "shard", but
+    # ttnn_decode_forward(on_device_logits=True) asserts a sampler (it pads B to the sampler width). Take the raw
+    # pre-gather logits through _ondev_argmax instead (exactly what _run_tp_generation's greedy path does).
+    _ondev_logits = _sharded_logits_mode and model.sampling is not None
+    if _mode == "shard" and model.sampling is None:
+        model._ondev_argmax = True
+
+    def _dec_fwd():
+        out = model.ttnn_decode_forward(
+            dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=_ondev_logits
+        )
+        # on_device_logits=False returns (logits, None); the sampler path returns the bare padded tensor.
+        return out if _ondev_logits else out[0]
+
     trace_id, tt_logits, tt_idx, tt_val, tt_tok = None, None, None, None, None
     if not eager:
         snap = _snapshot_gdn()
-        _warm_logits = model.ttnn_decode_forward(
-            dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=_sharded_logits_mode
-        )
+        _warm_logits = _dec_fwd()
         if _mode == "shard":
             # ttnn_decode_forward(on_device_logits=True) pads the batch dim up to the sampler's
             # width (e.g. 32), not our real B -- use the actual shape, slice to B on readback.
@@ -910,17 +922,13 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
         elif _mode == "sample":
             model.sampling.sample(_warm_logits, enable_trace=False)
         trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
-        tt_logits = model.ttnn_decode_forward(
-            dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=_sharded_logits_mode
-        )
+        tt_logits = _dec_fwd()
         if _mode == "shard":
             # Fold per-shard argmax+max into the trace: tiny [num_devices,padded_B] readback/step.
             tt_idx, tt_val = _argmax_dev_b(tt_logits, tt_logits.shape[2])
         elif _mode == "sample":
             # Fold sampling INTO the same trace as the forward pass (mirrors _run_tp_generation).
             tt_tok, _ = model.sampling.sample(tt_logits, enable_trace=False)
-        else:
-            tt_logits = tt_logits[0]
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         _restore_gdn(snap)
     _log_device_memory(model, f"after decode trace (B={B})")
@@ -936,15 +944,13 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
         _update([generated[u][-1] for u in range(B)], pos)
         t1 = time.time()
         if eager:
-            out = model.ttnn_decode_forward(
-                dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3], on_device_logits=_sharded_logits_mode
-            )
+            out = _dec_fwd()
             if _mode == "shard":
                 tt_idx, tt_val = _argmax_dev_b(out, out.shape[2])
             elif _mode == "sample":
                 tt_tok, _ = model.sampling.sample(out, enable_trace=False)
             else:
-                tt_logits = out[0]
+                tt_logits = out
         else:
             ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh)
