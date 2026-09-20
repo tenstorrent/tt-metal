@@ -2,9 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""RoPE with the q/k RMS normalisation folded in (`rotary_embedding_llama(..., rms_norm_eps=eps)`) against today's
-`ttnn.rms_norm` -> `rotary_embedding_llama` pair at the H3 VAE decoder's shape, one chip: both against a float64 reference
-(the fused form must be at least as accurate), both timed."""
+"""RoPE with the q/k RMS normalisation folded in (`rotary_embedding_llama(..., rms_norm_eps=eps)`) against the separate
+`ttnn.rms_norm` -> `rotary_embedding_llama` pair at the H3 VAE decoder's shape: at least as accurate vs float64."""
 
 import time
 
