@@ -1,8 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""CPU-only checks of the time-packed weight construction in ``layers/audio_pack.py``: the dense packed conv on
-``(T/k, k*C)`` rows must reproduce the unpacked op (exactly for zero-padded convs; away from the sequence ends for
-the replicate-padded resamplers) for the vocoder's late-band shapes."""
+"""CPU-only checks of the time-packed weights in ``layers/audio_pack.py``: the dense packed conv on ``(T/k, k*C)`` rows
+must reproduce the unpacked op (exactly for zero-padded convs; away from the ends for replicate-padded resamplers)."""
 
 import math
 
