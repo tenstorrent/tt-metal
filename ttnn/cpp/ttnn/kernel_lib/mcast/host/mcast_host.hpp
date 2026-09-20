@@ -78,7 +78,11 @@ static constexpr uint32_t ACK_EQUALS_FANOUT = 0xFFFFFFFFu;
 struct McastConfig {
     // NoC used by the kernel pipe.
     tt::tt_metal::NOC noc = tt::tt_metal::NOC::NOC_0;
-    // Wait for receiver readiness before sending.
+    // Wait for receiver readiness before sending. When disabled, the kernel writer
+    // must ensure any prior accesses to the landing region finish before the sender
+    // can write it, e.g. through synchronization in an earlier operation phase.
+    // Without such ordering, leave the region untouched until receive() completes.
+    // receive() waits for completed delivery; it does not initiate the transfer.
     bool handshake = true;
     // Select the data-ready signaling mode.
     dataflow_kernel_lib::DataReadySignal data_ready = dataflow_kernel_lib::DataReadySignal::Flag;

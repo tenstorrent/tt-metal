@@ -20,7 +20,7 @@ preserve them without adding unrelated files to commits.
 ## 1. Feedback 1022
 
 - [ ] Verify/minimize semaphore allocation for every construction path.
-- [ ] Document receiver landing-region ownership when handshakes are disabled.
+- [x] Document receiver landing-region ownership when handshakes are disabled.
 - [ ] Make preparation private and automatic; allow topology queries during collection.
 - [ ] Expose only the array/span descriptor attachment interface.
 - [ ] Replace `auto` function definitions/template parameters with explicit types,
@@ -60,5 +60,8 @@ preserve them without adding unrelated files to commits.
   with 14 occupied slots, both data-ready modes, descriptor/spec/direct paths,
   and a final operation-owned exchange credit. No allocator change is needed in
   this baseline. Build and execution are pending the feedback validation batch.
+- Feedback 2: documented early payload arrival, prohibited pre-receive writes
+  (including zero-fill), and completion-wait semantics on both host configuration
+  and the receiver pipe API. Documentation-only; checked against send/receive flow.
 - Completion remains unproven until every requirement in the supplied plans has
   direct evidence. Checkboxes track work, not a reduction of the requested scope.

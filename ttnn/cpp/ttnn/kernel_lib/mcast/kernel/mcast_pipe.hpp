@@ -116,6 +116,12 @@ private:
 //   * NUM_SENDERS            — number of stored sender coordinate pairs.
 //   * SenderCoordinates      — indexable coordinate view, stored by value (a pointer by default).
 //
+// With PRE_HANDSHAKE=false, the kernel writer must ensure any prior accesses to
+// the landing region finish before the sender can write it, e.g. through
+// synchronization in an earlier operation phase. Without such ordering, leave
+// the region untouched until receive() completes.
+// receive() waits for completed delivery; calling it does not start the transfer.
+//
 template <
     auto DATA_READY_SEM_ID,
     bool PRE_HANDSHAKE = true,
