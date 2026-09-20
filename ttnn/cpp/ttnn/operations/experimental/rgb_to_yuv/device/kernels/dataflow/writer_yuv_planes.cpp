@@ -9,10 +9,8 @@
 // each (row-group, T-tile) unit the compute kernel emits Y (2 rows) then Cb
 // (1 UV row) then Cr, so the writer drains and writes them in that order.
 //
-// Two output layouts. Plain: planes are (1, H, W, T) and every stick is its own
-// T-byte page (one small write each). Wide (`wide` = 1, needs one T tile per unit):
-// planes are (1, H, W*T); the unit's rows are staged in L1 and each row is one
-// write, so the D2H that follows reads 4.7 KB pages instead of 28 B ones.
+// Two output layouts. Plain: planes are (1, H, W, T), one T-byte page per stick. Wide (`wide` = 1, one T tile
+// per unit): planes are (1, H, W*T); a unit's rows are staged in L1 and written whole, W*T bytes per page.
 //
 // Compile-time args:
 //   [0] cb_out_rm
