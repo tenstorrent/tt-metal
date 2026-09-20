@@ -27,6 +27,7 @@ from helpers.param_config import (
     generate_quasar_sfpu_format_variants,
     input_output_formats,
     parametrize,
+    resolve_quasar_sfpu_variant,
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -243,41 +244,44 @@ def _prepare_int_stimuli(
     return src_A, tile_cnt_A, src_B
 
 
-# (binary_op, mathop, clamp_inputs) — int MUL clamps to keep the product in range.
-_INT_OPS = [
-    ("ADD", MathOperation.SfpuElwadd, None),
-    ("MUL", MathOperation.SfpuElwmulInt, 1000),
-    ("GT", MathOperation.SfpuGtInt, None),
-    ("LT", MathOperation.SfpuLtInt, None),
-    ("LE", MathOperation.SfpuLeInt, None),
-    ("GE", MathOperation.SfpuGeInt, None),
-    ("COPY_DEST", MathOperation.SfpuCopyDest, None),
-]
+# Shared with perf_eltwise_binary_sfpu_quasar.py. tile_indices stays functional-only.
+# Compare aliases: SfpuLtInt/GtInt/LeInt/GeInt are Quasar-only enum members for the
+# same kernels BH drives as SfpuElwLt/Gt/Le/Ge (see test_sfpu_domains.py).
+INT_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Int32], same=True),
+    dest_acc=[DestAccumulation.Yes],
+    mathop=[
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwmulInt,
+        MathOperation.SfpuElwGt,
+        MathOperation.SfpuElwLt,
+        MathOperation.SfpuElwLe,
+        MathOperation.SfpuElwGe,
+        MathOperation.SfpuCopyDest,
+    ],
+)
 
 
 @pytest.mark.quasar
-@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
-@pytest.mark.parametrize(
-    "binary_op, mathop, clamp_inputs", _INT_OPS, ids=[op for op, _, _ in _INT_OPS]
-)
-@pytest.mark.parametrize(
-    "data_format, dest_acc", [(DataFormat.Int32, DestAccumulation.Yes)]
+@parametrize(
+    **INT_SWEEP,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_int_quasar(
-    data_format,
+    formats,
     dest_acc,
-    binary_op,
     mathop,
-    clamp_inputs,
-    tile_indices,
+    tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
     *,
+    approx_mode=ApproximationMode.No,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
     is_perf=False,
     perf_report=None,
 ):
     """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest), Int32."""
-    formats = InputOutputFormat(input_format=data_format, output_format=data_format)
+    binary_op = mathop.cpp_enum_value
+    clamp_inputs = 1000 if mathop == MathOperation.SfpuElwmulInt else None
     _run_sfpu_binary_llk_golden(
         formats,
         dest_acc,
@@ -288,6 +292,7 @@ def test_eltwise_binary_sfpu_int_quasar(
         prepare_stimuli=lambda f, dims, s0, s1, op: _prepare_int_stimuli(
             f, dims, s0, s1, op, clamp_inputs
         ),
+        approx_mode=approx_mode,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,
@@ -374,36 +379,58 @@ def _check_div_special_cases(res_tensor):
         ), f"x/x special case at lane {lane}: expected 1.0, got {actual}"
 
 
-_FLOAT_OPS = [
-    ("ADD", MathOperation.SfpuElwadd, ApproximationMode.No),
-    ("SUB", MathOperation.SfpuElwsub, ApproximationMode.No),
-    ("MUL", MathOperation.SfpuElwmul, ApproximationMode.No),
-    ("DIV", MathOperation.SfpuElwdiv, ApproximationMode.No),
-    ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.No),
-    ("ATAN2", MathOperation.SfpuAtan2, ApproximationMode.Yes),
-    # COPY_DEST ignores APPROXIMATION_MODE (stateless copy); only one entry needed.
-    ("COPY_DEST", MathOperation.SfpuCopyDest, ApproximationMode.No),
+_FLOAT_VARIANTS = _get_valid_float_formats_dest_acc()
+_FLOAT_MATHOPS = [
+    MathOperation.SfpuElwadd,
+    MathOperation.SfpuElwsub,
+    MathOperation.SfpuElwmul,
+    MathOperation.SfpuElwdiv,
+    MathOperation.SfpuAtan2,
+    MathOperation.SfpuCopyDest,
 ]
 
 
-@pytest.mark.quasar
-@pytest.mark.parametrize(
-    "binary_op, mathop, approx_mode",
-    _FLOAT_OPS,
-    ids=[f"{op}_{approx.name}" for op, _, approx in _FLOAT_OPS],
-)
-@parametrize(
-    formats_dest_acc=_get_valid_float_formats_dest_acc(),
+def _dest_acc_for_float_formats(formats):
+    dest_accs = []
+    seen = set()
+    for variant in _FLOAT_VARIANTS:
+        same_io = (
+            variant.formats.input_format == formats.input_format
+            and variant.formats.output_format == formats.output_format
+        )
+        if same_io and variant.dest_acc not in seen:
+            seen.add(variant.dest_acc)
+            dest_accs.append(variant.dest_acc)
+    return dest_accs
+
+
+def _approx_modes_for_mathop(mathop):
+    if mathop == MathOperation.SfpuAtan2:
+        return [ApproximationMode.No, ApproximationMode.Yes]
+    return [ApproximationMode.No]
+
+
+FLOAT_SWEEP = dict(
+    formats=[variant.formats for variant in _FLOAT_VARIANTS],
+    dest_acc=_dest_acc_for_float_formats,
+    mathop=_FLOAT_MATHOPS,
+    approx_mode=_approx_modes_for_mathop,
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+)
+
+
+@pytest.mark.quasar
+@parametrize(
+    **FLOAT_SWEEP,
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_float_quasar(
-    formats_dest_acc,
-    implied_math_format,
-    tile_indices,
-    binary_op,
+    formats,
+    dest_acc,
     mathop,
     approx_mode,
+    implied_math_format,
+    tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -411,9 +438,13 @@ def test_eltwise_binary_sfpu_float_quasar(
     perf_report=None,
 ):
     """Binary SFPU float ops (add, sub, mul, div, atan2, copy_dest)."""
-    format_variant = formats_dest_acc
-    formats = format_variant.formats
-    dest_acc = format_variant.dest_acc
+    format_variant = resolve_quasar_sfpu_variant(
+        MathOperation.SfpuElwadd, formats, dest_acc
+    )
+    assert (
+        format_variant is not None
+    ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
+    binary_op = mathop.cpp_enum_value
     post_check = (
         _check_div_special_cases if mathop == MathOperation.SfpuElwdiv else None
     )
@@ -440,16 +471,19 @@ _BF16_ADD_SUB_OPS = [
     ("SUB", MathOperation.SfpuElwsub),
 ]
 
+BF16_RNE_SWEEP = dict(
+    binary_op_mathop=_BF16_ADD_SUB_OPS,
+)
+
 
 @pytest.mark.quasar
-@pytest.mark.parametrize(
-    "binary_op, mathop", _BF16_ADD_SUB_OPS, ids=[op for op, _ in _BF16_ADD_SUB_OPS]
+@parametrize(
+    **BF16_RNE_SWEEP,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
-@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
 def test_eltwise_binary_sfpu_bf16_rne_quasar(
-    tile_indices,
-    binary_op,
-    mathop,
+    binary_op_mathop,
+    tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -461,6 +495,7 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
     RNE narrowing only applies when DEST holds bf16 (fp32 dest accumulation
     disabled), so this test is scoped to Float16_b with DestAccumulation.No.
     """
+    binary_op, mathop = binary_op_mathop
     formats = InputOutputFormat(
         input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
     )
@@ -547,6 +582,19 @@ def _generate_max_min_combinations(
                         )
                     )
     return combinations
+
+
+MAX_MIN_FLOAT_SWEEP = dict(
+    formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
+        SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
+    ),
+)
+MAX_MIN_INT32_SWEEP = dict(
+    formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
+        SFPU_BINARY_MAX_MIN_INT32_FORMATS,
+        implied_math_formats=(ImpliedMathFormat.No,),
+    ),
+)
 
 
 def _run_max_min(
@@ -684,14 +732,12 @@ def _run_max_min(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
-    ),
+    **MAX_MIN_FLOAT_SWEEP,
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_float_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,
-    tile_indices,
+    tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -720,15 +766,12 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math_is_max_input_dims=_generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_INT32_FORMATS,
-        implied_math_formats=(ImpliedMathFormat.No,),
-    ),
+    **MAX_MIN_INT32_SWEEP,
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_int32_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,
-    tile_indices,
+    tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -796,6 +839,11 @@ def _int32_to_smag32(t: torch.Tensor) -> torch.Tensor:
 
 
 _QUANT_OPS = ["QUANT", "REQUANT", "DEQUANT"]
+
+QUANT_SWEEP = dict(
+    binary_op=_QUANT_OPS,
+    sign_magnitude=[False, True],
+)
 
 
 def _run_quant(
@@ -949,14 +997,13 @@ def _run_quant(
 
 @pytest.mark.quasar
 @parametrize(
-    binary_op=_QUANT_OPS,
-    sign_magnitude=[False, True],
+    **QUANT_SWEEP,
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_quant_quasar(
     binary_op,
     sign_magnitude,
-    tile_indices,
+    tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
