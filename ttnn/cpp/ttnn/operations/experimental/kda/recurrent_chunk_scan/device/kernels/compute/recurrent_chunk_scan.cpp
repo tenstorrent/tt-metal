@@ -324,6 +324,8 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
             elementwise<ElementwiseOperation::SUBTRACT, Kt * Vt, Vt>(summary_ring, state_ring, summary_head_output);
             copy<Kt * Vt, Vt>(state_ring, summary_head_state);
             pack_reconfig_data_format(dfb::state_update);
+            // Restart from zero and identity so the tail summary is independent
+            // of the head transition just saved above.
             state.wait_front(key_value_tiles);
             summary_seed.wait_front(key_value_tiles);
             copy<key_value_tiles, key_value_tiles>(state, state_ring);

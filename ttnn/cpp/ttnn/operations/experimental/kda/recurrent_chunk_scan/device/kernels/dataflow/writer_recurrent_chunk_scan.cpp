@@ -65,6 +65,8 @@ FORCE_INLINE void write_summary(
         auto& head_a = straddles ? split_head_a : full_a;
         auto& head_b = straddles ? split_head_b : full_b;
         if (straddles) {
+            // Split-head buffers hold one tile-row each. Drain the same packets
+            // compute publishes instead of waiting for a full matrix to fit.
             write_value_slice<Kt, Vt, VtFull, 1>(head_a_accessor, head_a, noc, row_base, value_block);
             write_value_slice<Kt, Vt, VtFull, 1>(head_b_accessor, head_b, noc, row_base, value_block);
         } else {

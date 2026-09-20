@@ -93,16 +93,23 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
     ttnn::bind_function<"summarize_chunk_recurrence", "ttnn.experimental.kda.">(
         mod,
         R"doc(
-        Summarize each group of prepared chunks into one affine state transition.
+        Summarize each group's chronological head and tail segments into separate
+        affine state transitions.
 
         In grouped execution, groups are flattened into the leading dimension:
 
             leading = B * H * G
 
         The operation applies the same state update as ``recurrent_chunk_scan`` without
-        producing token outputs and returns one transform per batch-head-group:
+        producing token outputs. Each defined head or tail pair describes its
+        segment's state transition:
 
             S_after = A @ S_before + B
+
+        A group crossing the chronological wrap has both head and tail summaries,
+        allowing other ranks' transitions to be applied between them. Groups wholly
+        before or after the split define only their head or tail pair, respectively.
+        Unsplit ranks define only head pairs; inactive slots are unspecified.
 
         It derives the transform through two parallel recurrence evaluations:
 
