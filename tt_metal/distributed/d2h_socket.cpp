@@ -142,6 +142,14 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
         .addr_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32)};
 }
 
+bool D2HSocket::hugepage_fallback_supported_on_host() {
+#if defined(__x86_64__) || defined(__i386__)
+    return true;
+#else
+    return false;
+#endif
+}
+
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shared_ptr<MeshDevice>& mesh_device) {
 #if !defined(__x86_64__) && !defined(__i386__)
     // Cache management for WB + non-snooped PCIe DMA is x86-specific (clflush + lfence).
