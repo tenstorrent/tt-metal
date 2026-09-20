@@ -328,7 +328,7 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
         // tensors of one chunk length.
         ttnn::Tensor q_lo, q_hi, dO_lo, dO_hi, O_lo, O_hi, lse_pad_lo, lse_pad_hi;
         ttnn::Tensor dQ_lo, dQ_hi, dK_lo, dK_hi, dV_lo, dV_hi;  // FP32 accumulators
-        ttnn::Tensor step_dQ, step_dK, step_dV, zero_step;      // bf16 per-launch outputs
+        ttnn::Tensor step_dQ, step_dK, step_dV, zero_step, zero_step_kv;  // bf16 per-launch outputs
         if (two_pass) {
             q_lo = rows_of(query_tensor, 0, n);
             q_hi = rows_of(query_tensor, n, n);
@@ -338,13 +338,20 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
             O_hi = rows_of(attn_output, n, n);
             lse_pad_lo = pad_lse_to_intermediates_layout(lse_lo);
             lse_pad_hi = pad_lse_to_intermediates_layout(lse_hi);
-            for (ttnn::Tensor* t : {&dQ_lo, &dQ_hi, &dK_lo, &dK_hi, &dV_lo, &dV_hi}) {
+            // dK and dV take the key's shape, which under grouped-query
+            // attention has fewer heads than the query's.
+            const ttnn::Tensor k_chunk = rows_of(key->get_value(), 0, n);
+            for (ttnn::Tensor* t : {&dQ_lo, &dQ_hi}) {
                 *t = device_zeros_like(q_lo, ttnn::DataType::FLOAT32);
             }
+            for (ttnn::Tensor* t : {&dK_lo, &dK_hi, &dV_lo, &dV_hi}) {
+                *t = device_zeros_like(k_chunk, ttnn::DataType::FLOAT32);
+            }
             step_dQ = device_zeros_like(q_lo, q_lo.dtype());
-            step_dK = device_zeros_like(q_lo, q_lo.dtype());
-            step_dV = device_zeros_like(q_lo, q_lo.dtype());
+            step_dK = device_zeros_like(k_chunk, k_chunk.dtype());
+            step_dV = device_zeros_like(k_chunk, k_chunk.dtype());
             zero_step = device_zeros_like(q_lo, q_lo.dtype());
+            zero_step_kv = device_zeros_like(k_chunk, k_chunk.dtype());
         } else {
             grad_Q_accum = device_zeros_like(query_tensor, ttnn::DataType::FLOAT32);
             grad_K_accum = device_zeros_like(key->get_value(), ttnn::DataType::FLOAT32);
@@ -376,8 +383,8 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
                                        ttnn::Tensor& dV_acc,
                                        uint32_t step) {
             ttnn::copy(zero_step, step_dQ);
-            ttnn::copy(zero_step, step_dK);
-            ttnn::copy(zero_step, step_dV);
+            ttnn::copy(zero_step_kv, step_dK);
+            ttnn::copy(zero_step_kv, step_dV);
             profile.mark("zero step buffers");
             auto [gq, gk, gv] = ttml::metal::ring_zigzag_sdpa_bw(
                 dO, O, q, k, v, lse_pad, ring_size, cp_axis, step, who, mask, Direction::Backward, step_dQ, step_dK,

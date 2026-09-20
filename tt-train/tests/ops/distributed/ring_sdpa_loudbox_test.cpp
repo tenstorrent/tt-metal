@@ -181,17 +181,22 @@ struct RefForward {
     float scale;
 };
 
-//: Dense causal attention forward in float32. Inputs are (B, H, S, D).
+//: Dense causal attention forward in float32. Query is (B, H, S, D); key and
+//: value are (B, G, S, D) with G dividing H (grouped-query attention: query
+//: head h uses key head h / (H / G)), G = H being plain multi-head attention.
 RefForward reference_forward(
     const xt::xarray<float>& query, const xt::xarray<float>& key, const xt::xarray<float>& value) {
     const auto shape = query.shape();
     const size_t B = shape[0], H = shape[1], S = shape[2], D = shape[3];
+    const size_t G = key.shape()[1];
+    const size_t heads_per_group = H / G;
     const float scale = 1.0F / std::sqrt(static_cast<float>(D));
 
     xt::xarray<float> weights = xt::zeros<float>({B, H, S, S});
     xt::xarray<float> output = xt::zeros<float>({B, H, S, D});
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
+            const size_t g = h / heads_per_group;
             for (size_t i = 0; i < S; ++i) {
                 // Causal: only keys 0..i contribute, so the row's softmax runs
                 // over that prefix and the rest stay zero.
@@ -199,7 +204,7 @@ RefForward reference_forward(
                 for (size_t j = 0; j <= i; ++j) {
                     float dot = 0.0F;
                     for (size_t d = 0; d < D; ++d) {
-                        dot += query(b, h, i, d) * key(b, h, j, d);
+                        dot += query(b, h, i, d) * key(b, g, j, d);
                     }
                     weights(b, h, i, j) = dot * scale;
                     max_val = std::max(max_val, weights(b, h, i, j));
@@ -215,7 +220,7 @@ RefForward reference_forward(
                 for (size_t d = 0; d < D; ++d) {
                     float acc = 0.0F;
                     for (size_t j = 0; j <= i; ++j) {
-                        acc += weights(b, h, i, j) * value(b, h, j, d);
+                        acc += weights(b, h, i, j) * value(b, g, j, d);
                     }
                     output(b, h, i, d) = acc;
                 }
@@ -231,7 +236,9 @@ struct RefGrads {
     xt::xarray<float> dV;
 };
 
-//: Dense causal attention backward in float32, from the saved weights.
+//: Dense causal attention backward in float32, from the saved weights. dK and
+//: dV take the key's shape: under grouped-query attention the query heads of
+//: one key head add into it.
 RefGrads reference_backward(
     const xt::xarray<float>& query,
     const xt::xarray<float>& key,
@@ -241,21 +248,24 @@ RefGrads reference_backward(
     const float scale) {
     const auto shape = query.shape();
     const size_t B = shape[0], H = shape[1], S = shape[2], D = shape[3];
+    const size_t G = key.shape()[1];
+    const size_t heads_per_group = H / G;
 
     xt::xarray<float> dQ = xt::zeros<float>({B, H, S, D});
-    xt::xarray<float> dK = xt::zeros<float>({B, H, S, D});
-    xt::xarray<float> dV = xt::zeros<float>({B, H, S, D});
+    xt::xarray<float> dK = xt::zeros<float>({B, G, S, D});
+    xt::xarray<float> dV = xt::zeros<float>({B, G, S, D});
 
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
+            const size_t g = h / heads_per_group;
             for (size_t i = 0; i < S; ++i) {
                 // dV_j += P_ij dO_i, and dP_ij = dO_i . V_j
                 std::vector<float> dP(i + 1, 0.0F);
                 for (size_t j = 0; j <= i; ++j) {
                     float acc = 0.0F;
                     for (size_t d = 0; d < D; ++d) {
-                        dV(b, h, j, d) += weights(b, h, i, j) * grad_output(b, h, i, d);
-                        acc += grad_output(b, h, i, d) * value(b, h, j, d);
+                        dV(b, g, j, d) += weights(b, h, i, j) * grad_output(b, h, i, d);
+                        acc += grad_output(b, h, i, d) * value(b, g, j, d);
                     }
                     dP[j] = acc;
                 }
@@ -267,8 +277,8 @@ RefGrads reference_backward(
                 for (size_t j = 0; j <= i; ++j) {
                     const float dS = weights(b, h, i, j) * (dP[j] - row) * scale;
                     for (size_t d = 0; d < D; ++d) {
-                        dQ(b, h, i, d) += dS * key(b, h, j, d);
-                        dK(b, h, j, d) += dS * query(b, h, i, d);
+                        dQ(b, h, i, d) += dS * key(b, g, j, d);
+                        dK(b, g, j, d) += dS * query(b, h, i, d);
                     }
                 }
             }
@@ -595,8 +605,13 @@ void run_ring_attention(
     const RingShiftTransport transport = RingShiftTransport::Fifo,
     const RingLayout layout = RingLayout::Contiguous,
     const ttml::ops::distributed::RingBackwardKind kind = ttml::ops::distributed::RingBackwardKind::TwoPass,
-    const uint32_t rows_per_block_tiles = 1U) {
+    const uint32_t rows_per_block_tiles = 1U,
+    // Key/value heads; fewer than num_heads is grouped-query attention. 0
+    // means num_heads.
+    const size_t num_kv_heads_or_zero = 0) {
     using namespace ttml;
+    const size_t num_kv_heads = num_kv_heads_or_zero == 0 ? num_heads : num_kv_heads_or_zero;
+    ASSERT_EQ(num_heads % num_kv_heads, 0U) << "query heads must be a multiple of key/value heads";
     const bool zigzag = layout == RingLayout::Zigzag;
     // How the host lays the sequence out for the chips, and how it reads the
     // chips' results back into sequence order.
@@ -619,12 +634,13 @@ void run_ring_attention(
     const size_t seq_per_device = seq_len / cp_size;
     ASSERT_EQ(seq_per_device % 32U, 0U) << "each device's shard must be a whole number of tiles";
 
-    seed_for_case({batch, num_heads, seq_len, head_dim, test_backward ? 1U : 0U});
+    seed_for_case({batch, num_heads + 1000 * num_kv_heads, seq_len, head_dim, test_backward ? 1U : 0U});
     auto& rng = autograd::ctx().get_generator();
     const std::array<std::size_t, 4> qkv_shape{batch, num_heads, seq_len, head_dim};
+    const std::array<std::size_t, 4> kv_shape{batch, num_kv_heads, seq_len, head_dim};
     const xt::xarray<float> query_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng());
-    const xt::xarray<float> key_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng());
-    const xt::xarray<float> value_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng());
+    const xt::xarray<float> key_xt = ttml::test_utils::make_uniform_xarray<float>(kv_shape, 0.0F, 2.0F, rng());
+    const xt::xarray<float> value_xt = ttml::test_utils::make_uniform_xarray<float>(kv_shape, 0.0F, 2.0F, rng());
 
     const auto ref = reference_forward(query_xt, key_xt, value_xt);
 
@@ -693,10 +709,10 @@ void run_ring_attention(
         batch, num_heads, seq_len, head_dim, seq_per_device));
     const auto gathered_dK = from_chips(gather_cp(
         core::to_xtensor<float>(key_tensor->get_grad(), core::IdentityComposer{}),
-        batch, num_heads, seq_len, head_dim, seq_per_device));
+        batch, num_kv_heads, seq_len, head_dim, seq_per_device));
     const auto gathered_dV = from_chips(gather_cp(
         core::to_xtensor<float>(value_tensor->get_grad(), core::IdentityComposer{}),
-        batch, num_heads, seq_len, head_dim, seq_per_device));
+        batch, num_kv_heads, seq_len, head_dim, seq_per_device));
 
     // The same grading the Galaxy suite uses, and for the same reasons:
     // uniform(0, 2) inputs make rowsum(dO o O) large against the (dP - u)
@@ -835,6 +851,30 @@ TEST_F(LoudboxRingSDPATest, ZigzagCausalBackwardCyclicWithTallBlocks) {
         Kind::CyclicInPlace, /*Bt*/ 2U);
 }
 
+// Grouped-query attention through the ring: four query heads on two key
+// heads, both backwards, on the zigzag layout the training run will use.
+TEST_F(LoudboxRingSDPATest, ZigzagCausalBackwardTwoPassGroupedHeads) {
+    run_ring_attention(
+        1, 4, seq_for(128), 64, /*test_backward=*/true, RingShiftTransport::Direct, RingLayout::Zigzag,
+        ttml::ops::distributed::RingBackwardKind::TwoPass, /*Bt*/ 1U, /*kv heads*/ 2);
+}
+
+TEST_F(LoudboxRingSDPATest, ZigzagCausalBackwardCyclicInPlaceGroupedHeads) {
+    using Kind = ttml::ops::distributed::RingBackwardKind;
+    run_ring_attention(
+        1, 4, seq_for(128), 64, /*test_backward=*/true, RingShiftTransport::Direct, RingLayout::Zigzag,
+        Kind::CyclicInPlace, /*Bt*/ 1U, /*kv heads*/ 2);
+}
+
+// Eight query heads on two key heads with tall blocks: the ratio the Llama
+// configs use, and the sequencing of four heads in turn on one core group.
+TEST_F(LoudboxRingSDPATest, ZigzagCausalBackwardCyclicGroupedHeadsFourPerKeyHead) {
+    using Kind = ttml::ops::distributed::RingBackwardKind;
+    run_ring_attention(
+        1, 8, seq_for(256), 64, /*test_backward=*/true, RingShiftTransport::Direct, RingLayout::Zigzag,
+        Kind::CyclicInPlace, /*Bt*/ 2U, /*kv heads*/ 2);
+}
+
 // ------------------------------------------- the two backward implementations
 
 namespace {
@@ -854,8 +894,11 @@ void compare_backward_implementations(
     const size_t num_heads,
     const size_t seq_len,
     const size_t head_dim,
-    const uint32_t rows_per_block_tiles) {
+    const uint32_t rows_per_block_tiles,
+    const size_t num_kv_heads_or_zero = 0) {
     using namespace ttml;
+    const size_t num_kv_heads = num_kv_heads_or_zero == 0 ? num_heads : num_kv_heads_or_zero;
+    ASSERT_EQ(num_heads % num_kv_heads, 0U) << "query heads must be a multiple of key/value heads";
 
     auto* device = &autograd::ctx().get_device();
     const auto& pctx = autograd::ctx().get_parallelism_context();
@@ -867,12 +910,13 @@ void compare_backward_implementations(
     ASSERT_EQ(seq_per_device % (2U * rows_per_block_tiles * 32U), 0U)
         << "chunk of " << seq_per_device << " rows does not divide into cyclic blocks";
 
-    seed_for_case({batch, num_heads, seq_len, head_dim, rows_per_block_tiles});
+    seed_for_case({batch, num_heads + 1000 * num_kv_heads, seq_len, head_dim, rows_per_block_tiles});
     auto& rng = autograd::ctx().get_generator();
     const std::array<std::size_t, 4> qkv_shape{batch, num_heads, seq_len, head_dim};
+    const std::array<std::size_t, 4> kv_shape{batch, num_kv_heads, seq_len, head_dim};
     const xt::xarray<float> query_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng());
-    const xt::xarray<float> key_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng());
-    const xt::xarray<float> value_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng());
+    const xt::xarray<float> key_xt = ttml::test_utils::make_uniform_xarray<float>(kv_shape, 0.0F, 2.0F, rng());
+    const xt::xarray<float> value_xt = ttml::test_utils::make_uniform_xarray<float>(kv_shape, 0.0F, 2.0F, rng());
     const xt::xarray<float> grad_output_xt =
         ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng());
 
@@ -895,12 +939,12 @@ void compare_backward_implementations(
             q, k, v, /*mask=*/std::nullopt, ttml::metal::AttentionMaskType::Causal, kind, rows_per_block_tiles);
         out->set_grad(to_device(grad_output_xt));
         out->backward();
-        const auto gather = [&](const ttnn::Tensor& t) {
+        const auto gather = [&](const ttnn::Tensor& t, size_t heads) {
             return gather_cp(
-                core::to_xtensor<float>(t, core::IdentityComposer{}),
-                batch, num_heads, seq_len, head_dim, seq_per_device);
+                core::to_xtensor<float>(t, core::IdentityComposer{}), batch, heads, seq_len, head_dim, seq_per_device);
         };
-        return Result{gather(q->get_grad()), gather(k->get_grad()), gather(v->get_grad())};
+        return Result{
+            gather(q->get_grad(), num_heads), gather(k->get_grad(), num_kv_heads), gather(v->get_grad(), num_kv_heads)};
     };
 
     const auto two_pass = run(ops::distributed::RingBackwardKind::TwoPass);
@@ -1086,6 +1130,16 @@ TEST_F(LoudboxRingSDPATest, BothBackwardsAgreeWithWiderHead) {
     compare_backward_implementations(1, 2, seq_for(64), 128, /* Bt */ 1);
 }
 
+// Grouped-query attention on the contiguous layout: both backwards sum the
+// query heads of a key head into its dK and dV, and must agree with the
+// reference and each other.
+TEST_F(LoudboxRingSDPATest, BothBackwardsAgreeWithGroupedHeads) {
+    compare_backward_implementations(1, 4, seq_for(128), 64, /* Bt */ 2, /* kv heads */ 2);
+}
+TEST_F(LoudboxRingSDPATest, BothBackwardsAgreeWithGroupedHeadsAtBatchTwo) {
+    compare_backward_implementations(2, 6, seq_for(128), 64, /* Bt */ 1, /* kv heads */ 3);
+}
+
 // ------------------------------------------------------------------ timing
 
 namespace {
@@ -1106,13 +1160,16 @@ double time_ring_backward(
     uint32_t rows_per_block_tiles = 1U,
     RingShiftTransport transport = RingShiftTransport::Fifo,
     uint32_t samples_to_take = 5U,
-    RingLayout layout = RingLayout::Contiguous) {
+    RingLayout layout = RingLayout::Contiguous,
+    size_t num_kv_heads_or_zero = 0) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     const uint32_t cp_axis = autograd::ctx().get_parallelism_context().get_cp_axis().value();
     auto& rng = autograd::ctx().get_generator();
 
+    const size_t num_kv_heads = num_kv_heads_or_zero == 0 ? num_heads : num_kv_heads_or_zero;
     const std::array<std::size_t, 4> qkv_shape{batch, num_heads, seq_len, head_dim};
+    const std::array<std::size_t, 4> kv_shape{batch, num_kv_heads, seq_len, head_dim};
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
     const auto to_device = [&](const xt::xarray<float>& x) {
         return core::from_xtensor<float, ttnn::DataType::BFLOAT16>(x, device, ttnn::Layout::TILE, mapper.get());
@@ -1122,9 +1179,9 @@ double time_ring_backward(
         auto query = autograd::create_tensor(
             to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())), true);
         auto key = autograd::create_tensor(
-            to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())), true);
+            to_device(ttml::test_utils::make_uniform_xarray<float>(kv_shape, 0.0F, 2.0F, rng())), true);
         auto value = autograd::create_tensor(
-            to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())), true);
+            to_device(ttml::test_utils::make_uniform_xarray<float>(kv_shape, 0.0F, 2.0F, rng())), true);
         auto out = ops::distributed::ring_attention_sdpa(
             query, key, value, std::nullopt, ttml::metal::AttentionMaskType::Causal, kind, rows_per_block_tiles,
             transport, layout);
@@ -1291,6 +1348,60 @@ TEST_F(LoudboxRingSDPATest, DISABLED_CompareLayouts) {
                   << "%) | cyclic in-place contiguous " << cy_c << " (" << pct(tp_c, cy_c) << "%) | cyclic in-place zigzag "
                   << cy_z << " (" << pct(tp_c, cy_z) << "% vs two-pass contiguous, " << pct(cy_c, cy_z)
                   << "% vs cyclic contiguous, " << pct(tp_z, cy_z) << "% vs two-pass zigzag)\n";
+    }
+}
+
+// The two backwards on grouped-query shapes like the Llama configs' -- 32
+// query heads on 8 or 4 key heads, 6 on 3 -- zigzag layout, direct shifts,
+// median of five. Rows per chip as in CompareLayouts; TTML_LOUDBOX_MIN_ROWS
+// skips the small cases, TTML_LOUDBOX_GQA_SHAPES="heads:kv:rows:d:Bt,..."
+// replaces the table.
+TEST_F(LoudboxRingSDPATest, DISABLED_CompareGroupedHeads) {
+    const uint32_t cp_size = ttml::autograd::ctx().get_parallelism_context().get_cp_size();
+    std::cout << "ring backward on " << cp_size
+              << " chips, grouped-query heads, zigzag, direct shifts, median of five (ms)\n";
+    using Kind = ttml::ops::distributed::RingBackwardKind;
+    std::vector<std::array<size_t, 5>> table = {
+        // query heads, key heads, rows per chip, head dim, Bt for the cyclic kind
+        {6, 3, 4096, 64, 2},
+        {6, 3, 4096, 64, 4},
+        {32, 4, 2048, 64, 2},
+        {32, 4, 4096, 64, 4},
+        {32, 8, 2048, 128, 2},
+        {32, 8, 4096, 128, 4},
+    };
+    if (const char* spec = std::getenv("TTML_LOUDBOX_GQA_SHAPES")) {
+        table.clear();
+        std::stringstream ss(spec);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            std::array<size_t, 5> cfg{};
+            std::stringstream is(item);
+            std::string field;
+            for (size_t k = 0; k < 5 && std::getline(is, field, ':'); ++k) {
+                cfg[k] = std::stoul(field);
+            }
+            table.push_back(cfg);
+        }
+    }
+    const size_t min_rows = std::getenv("TTML_LOUDBOX_MIN_ROWS") ? std::stoul(std::getenv("TTML_LOUDBOX_MIN_ROWS")) : 0;
+    for (const auto& cfg : table) {
+        const size_t heads = cfg[0], kv_heads = cfg[1], rows = cfg[2], d = cfg[3];
+        const auto Bt = static_cast<uint32_t>(cfg[4]);
+        const size_t seq_len = rows * cp_size;
+        if (rows < min_rows || rows % (4U * Bt * 32U) != 0U) {
+            continue;
+        }
+        const auto run = [&](Kind kind) {
+            return time_ring_backward(
+                       1, heads, seq_len, d, kind, Bt, RingShiftTransport::Direct, 5U, RingLayout::Zigzag, kv_heads) *
+                   1e3;
+        };
+        const double tp = run(Kind::TwoPass);
+        const double cy = run(Kind::CyclicInPlace);
+        std::cout << "  heads=" << heads << " kv_heads=" << kv_heads << " rows/chip=" << rows << " d=" << d
+                  << " Bt=" << Bt << ": two-pass zigzag " << tp << " | cyclic in-place zigzag " << cy << " ("
+                  << (cy / tp - 1.0) * 100.0 << "%)\n";
     }
 }
 
