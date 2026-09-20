@@ -74,7 +74,7 @@ The regression threshold is **0.91** for this captured prompt. The 256K validati
 | Sliding K | 0.935193 |
 | Sliding V | 0.916626 |
 
-The lowest score is sliding V, layer 39, head 9: **0.916626**, about **0.0066** above the threshold. The threshold is a regression floor for this prompt and model precision. PCC values depend on the token prefix, so minima need not decrease with context length. See [PCC performance](PCC_PERFORMANCE.md) for the test configuration and timing breakdown.
+The lowest score is sliding V, layer 39, head 9: **0.916626**, about **0.0066** above the threshold. The threshold is a regression floor for this prompt and model precision. PCC values depend on the token prefix, so minima need not decrease with context length.
 
 ## Gate 1: GPU-trace comparison
 
@@ -89,7 +89,7 @@ pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py \
 pytest 'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[mock-128k]' -sv
 ```
 
-The test defaults `OMP_NUM_THREADS` to `16` when it is unset. An exported value overrides this. Phase timings and data volumes are in [PCC performance](PCC_PERFORMANCE.md).
+The test defaults `OMP_NUM_THREADS` to `16` when it is unset. An exported value overrides this.
 
 The test uses `GPU_PCC_THRESHOLD` in `tests/test_prefill_migration.py`. Each case starts a fresh runner process and closes its mesh after validation. It retains `producer.log`, the table, the device map, and `gemma4_slot0.json` with every layer/head PCC and total and per-layer phase timings. Each completed layer logs reference-loading, readback, and PCC time. Runner output is saved in `runner.log`. The test sets `PREFILL_PRODUCER_CHECK_PCC=0` because the owning process performs the GPU comparison; the runner synchronizes device completion before leaving its request loop.
 
@@ -121,8 +121,6 @@ GEMMA4_TEST_LOOPBACK=1 pytest models/demos/gemma4_d_p/tests/test_prefill_migrati
 The shared migration driver migrates `0→5` and checks destination bytes against source bytes using `--verify-migration dst-bytes`. The owning test then compares source slot 0 against the GPU trace once through TTNN. It requires the worker-ready handshake. The test does not start or stop the external endpoint. Default queues are `/mig_ep1_cmd`, `/mig_ep1_table`, and `/mig_ep1_resp`; `PREFILL_MIGRATION_*_QUEUE` can override them.
 
 This covers one prompt and one source slot at four context lengths. It does not validate distinct prompts across all six slots or a decode endpoint's layout. Loopback cases skip unless `GEMMA4_TEST_LOOPBACK=1`; both gates skip when the GPU trace is absent.
-
-For measured data volumes, readback throughput, and comparison costs, see [PCC performance](PCC_PERFORMANCE.md).
 
 ## Host-only checks
 
