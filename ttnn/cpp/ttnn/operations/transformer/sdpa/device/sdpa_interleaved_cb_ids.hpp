@@ -37,6 +37,7 @@ struct CBIds {
     uint32_t windowed_q_offset = inactive;   // windowed mode with a per-device Q-offset tensor only
     uint32_t windowed_cu_reader = inactive;  // windowed narrowing only: the reader's own cu_window copy
     uint32_t windowed_k_range = inactive;    // windowed narrowing only: per-Q-chunk {k_lo, k_hi}, reader -> compute
+    uint32_t lse_out = inactive;             // return_lse only: the per-row log-sum-exp, compute -> writer
 
     std::vector<uint32_t> reader_compile_time_args() const {
         return {
@@ -60,7 +61,8 @@ struct CBIds {
             chunk_start_idx_writer,
             out,
             cu_window_seqlens,
-            windowed_q_offset};
+            windowed_q_offset,
+            lse_out};
     }
 
     std::vector<uint32_t> compute_compile_time_args() const {
@@ -83,7 +85,8 @@ struct CBIds {
             sum_A,
             sum_B,
             exp_max_diff,
-            windowed_k_range};
+            windowed_k_range,
+            lse_out};
     }
 };
 

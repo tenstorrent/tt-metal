@@ -256,7 +256,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     const auto& input_tensor_v = tensor_args.v.value_or(tensor_args.k);
-    const auto& output_tensor = tensor_return_value;
+    const auto& output_tensor = tensor_return_value.at(0);
+    // With return_lse the second output is the per-row log-sum-exp, one Float32 tile per query row
+    // tile; the compute kernel packs it beside the normalised output and the writer drains it.
+    const bool return_lse = operation_attributes.return_lse;
+    const std::optional<Tensor> lse_tensor =
+        return_lse ? std::optional<Tensor>(tensor_return_value.at(1)) : std::nullopt;
     const auto& attn_mask = tensor_args.attn_mask;
     const auto& page_table = tensor_args.page_table;
     const auto& attention_sink = tensor_args.attention_sink;
@@ -429,6 +434,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     auto* chunk_start_idx_buffer = flexible_chunked ? tensor_args.chunk_start_idx_tensor.value().buffer() : nullptr;
 
     auto* out0_buffer = output_tensor.buffer();
+    auto* lse_buffer = buffer_or_null(lse_tensor);
 
     bool use_attention_sink = attention_sink.has_value();
 
@@ -695,6 +701,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // passed the offset as a scalar (or is not windowed), in which case the writer never reads it.
     TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
         .append_to(writer_compile_time_args);
+    // Then the lse accessor, same chain and placeholder rule: nullptr without return_lse.
+    TensorAccessorArgs(buffer_or_null(lse_tensor)).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -866,6 +874,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     cb_ids.sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
+    if (return_lse) {
+        cb_ids.lse_out =
+            allocate_tile_cb(statistics_tiles, tt::tile_size(tt::DataFormat::Float32), tt::DataFormat::Float32);
+    }
 
     const auto reader_cb_compile_time_args = cb_ids.reader_compile_time_args();
     const auto writer_cb_compile_time_args = cb_ids.writer_compile_time_args();
@@ -1504,7 +1516,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
              cu_window_buffer,                                 // 9: windowed mask src (nullptr if unused)
              cu_window_seqlens_eles,                           // 10: window count + 1
              windowed_q_token_offset,                          // 11: global origin of this Q shard (scalar)
-             windowed_q_offset_buffer});                       // 12: same, per-device (nullptr => use 11)
+             windowed_q_offset_buffer,                         // 12: same, per-device (nullptr => use 11)
+             lse_buffer});                                     // 13: lse output (nullptr without return_lse)
 
         compute_desc.emplace_runtime_args(
             core,

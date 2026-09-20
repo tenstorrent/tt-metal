@@ -18,8 +18,9 @@ namespace ttnn::prim {
 struct SDPAOperation {
     using operation_attributes_t = SDPAParams;
     using tensor_args_t = SDPAInputs;
-    using spec_return_value_t = tt::tt_metal::TensorSpec;
-    using tensor_return_value_t = Tensor;
+    // [output] or, with return_lse, [output, lse].
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
 
     struct SDPAProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
@@ -39,6 +40,32 @@ struct SDPAOperation {
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
 };
+
+// The launch with every option: returns [output] or [output, lse].
+std::vector<Tensor> sdpa_with_lse(
+    const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const std::optional<Tensor>& input_tensor_v,
+    const std::optional<Tensor>& attn_mask,
+    const std::optional<Tensor>& page_table_tensor,
+    const std::optional<Tensor>& attention_sink,
+    bool is_causal,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    std::optional<int64_t> chunk_start_idx,
+    const std::optional<Tensor>& chunk_start_idx_tensor,
+    bool use_mla,
+    std::optional<uint32_t> head_dim_v,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const std::optional<Tensor>& cu_window_seqlens,
+    uint32_t windowed_q_token_offset,
+    const std::optional<Tensor>& windowed_q_token_offset_tensor,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    bool return_lse,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<Tensor>& optional_lse_tensor);
 
 Tensor sdpa(
     const Tensor& input_tensor_q,

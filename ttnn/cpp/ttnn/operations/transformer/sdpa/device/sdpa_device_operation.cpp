@@ -528,26 +528,92 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     for (const auto* tensor : {&q, &k, &v}) {
         validate_padding(*tensor);
     }
+
+    // The lse output and the preallocated outputs.
+    if (attrs.return_lse) {
+        TT_FATAL(
+            get_fp32_dest_acc_en(std::optional<DeviceComputeKernelConfig>(attrs.compute_kernel_config)),
+            "return_lse needs fp32_dest_acc_en in the compute kernel config: the standard compute path keeps the "
+            "row sums in Float32, the streaming path's bf16 statistics would not give a usable log-sum-exp");
+        TT_FATAL(
+            !attrs.use_mla && !attrs.chunk_start_idx.has_value() && !tensors.chunk_start_idx_tensor.has_value() &&
+                !attrs.is_windowed && !tensors.attention_sink.has_value(),
+            "return_lse is supported for plain and causal attention only (no MLA, chunked, windowed or "
+            "attention-sink variants)");
+    }
+    const auto specs = compute_output_specs(attrs, tensors);
+    if (tensors.optional_output_tensor.has_value()) {
+        const auto& t = tensors.optional_output_tensor.value();
+        TT_FATAL(t.storage_type() == StorageType::DEVICE, "The preallocated output must be on device");
+        TT_FATAL(
+            t.logical_shape() == specs.at(0).logical_shape() && t.dtype() == specs.at(0).data_type() &&
+                t.layout() == Layout::TILE,
+            "The preallocated output {} ({}) must be shape {} of dtype {} in tile layout",
+            t.logical_shape(),
+            t.dtype(),
+            specs.at(0).logical_shape(),
+            specs.at(0).data_type());
+    }
+    if (tensors.optional_lse_tensor.has_value()) {
+        TT_FATAL(attrs.return_lse, "A preallocated lse tensor was given without return_lse");
+        const auto& t = tensors.optional_lse_tensor.value();
+        TT_FATAL(t.storage_type() == StorageType::DEVICE, "The preallocated lse must be on device");
+        TT_FATAL(
+            t.logical_shape() == specs.at(1).logical_shape() && t.dtype() == DataType::FLOAT32 &&
+                t.layout() == Layout::TILE,
+            "The preallocated lse {} ({}) must be shape {} FLOAT32 in tile layout",
+            t.logical_shape(),
+            t.dtype(),
+            specs.at(1).logical_shape());
+    }
 }
 
 SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
     const SDPAParams& attrs, const SDPAInputs& tensors) {
-    auto shape = tensors.q.logical_shape();
-    if (attrs.use_mla) {
-        shape[3] = attrs.head_dim_v.value_or(shape[3]);
+    std::vector<tt::tt_metal::TensorSpec> specs;
+    if (tensors.optional_output_tensor.has_value()) {
+        specs.push_back(tensors.optional_output_tensor->tensor_spec());
+    } else {
+        auto shape = tensors.q.logical_shape();
+        if (attrs.use_mla) {
+            shape[3] = attrs.head_dim_v.value_or(shape[3]);
+        }
+        specs.emplace_back(
+            shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
     }
-    return tt::tt_metal::TensorSpec(
-        shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
+    if (attrs.return_lse) {
+        if (tensors.optional_lse_tensor.has_value()) {
+            specs.push_back(tensors.optional_lse_tensor->tensor_spec());
+        } else {
+            // One Float32 tile per query row tile, the row's lse in column 0.
+            auto lse_shape = tensors.q.logical_shape();
+            lse_shape[3] = tt::constants::TILE_WIDTH;
+            specs.emplace_back(
+                lse_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config));
+        }
+    }
+    return specs;
 }
 
 SDPAOperation::tensor_return_value_t SDPAOperation::create_output_tensors(
     const SDPAParams& attrs, const SDPAInputs& tensors) {
-    return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
+    const auto specs = compute_output_specs(attrs, tensors);
+    std::vector<Tensor> outputs;
+    outputs.push_back(
+        tensors.optional_output_tensor.has_value() ? tensors.optional_output_tensor.value()
+                                                   : create_device_tensor(specs.at(0), tensors.q.device()));
+    if (attrs.return_lse) {
+        outputs.push_back(
+            tensors.optional_lse_tensor.has_value() ? tensors.optional_lse_tensor.value()
+                                                    : create_device_tensor(specs.at(1), tensors.q.device()));
+    }
+    return outputs;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t>
 SDPAOperation::create_op_performance_model(
-    const SDPAParams& args, const SDPAInputs& tensor_args, Tensor& output_tensor) {
+    const SDPAParams& args, const SDPAInputs& tensor_args, std::vector<Tensor>& outputs) {
+    Tensor& output_tensor = outputs.at(0);
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     const bool has_v = tensor_args.v.has_value();
@@ -569,7 +635,7 @@ SDPAOperation::create_op_performance_model(
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
         log_warning(tt::LogOp, "SDPA perf model does not support tt::arch '{}'", enchantum::to_string(arch));
         return operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t>(
-            input_tensors, output_tensor, 0);
+            input_tensors, outputs, 0);
     }
 
     // Get main dimensions for Q*K and softmax(QK^T/sqrt) * V matmuls
@@ -621,12 +687,70 @@ SDPAOperation::create_op_performance_model(
     // TODO: somehow account for overhead of fused masking and softmax?
 
     return operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t>(
-        input_tensors, output_tensor, ideal_dev_clock_cycles);
+        input_tensors, outputs, ideal_dev_clock_cycles);
 }
 
 }  // namespace ttnn::prim
 
 namespace ttnn::prim {
+std::vector<Tensor> sdpa_with_lse(
+    const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const std::optional<Tensor>& input_tensor_v,
+    const std::optional<Tensor>& attn_mask,
+    const std::optional<Tensor>& page_table_tensor,
+    const std::optional<Tensor>& attention_sink,
+    bool is_causal,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    std::optional<int64_t> chunk_start_idx,
+    const std::optional<Tensor>& chunk_start_idx_tensor,
+    bool use_mla,
+    std::optional<uint32_t> head_dim_v,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    const std::optional<Tensor>& cu_window_seqlens,
+    uint32_t windowed_q_token_offset,
+    const std::optional<Tensor>& windowed_q_token_offset_tensor,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    bool return_lse,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<Tensor>& optional_lse_tensor) {
+    using OperationType = ttnn::prim::SDPAOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
+            .scale = scale,
+            .output_mem_config = output_mem_config,
+            .program_config = std::move(program_config),
+            .is_causal = is_causal,
+            .chunk_start_idx = chunk_start_idx,
+            .chunk_start_idx_tensor = chunk_start_idx_tensor,
+            .compute_kernel_config = compute_kernel_config,
+            .use_mla = use_mla,
+            .head_dim_v = head_dim_v,
+            .sliding_window_size = sliding_window_size,
+            .is_windowed = cu_window_seqlens.has_value(),
+            .windowed_q_token_offset = windowed_q_token_offset,
+            .paged_cache_geometry =
+                paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
+            .return_lse = return_lse,
+        },
+        OperationType::tensor_args_t{
+            .q = input_tensor_q,
+            .k = input_tensor_k,
+            .v = input_tensor_v,
+            .attn_mask = attn_mask,
+            .page_table = page_table_tensor,
+            .chunk_start_idx_tensor = chunk_start_idx_tensor,
+            .attention_sink = attention_sink,
+            .cu_window_seqlens = cu_window_seqlens,
+            .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
+            .optional_output_tensor = optional_output_tensor,
+            .optional_lse_tensor = optional_lse_tensor,
+        });
+}
+
 Tensor sdpa(
     const Tensor& input_tensor_q,
     const Tensor& input_tensor_k,
@@ -648,34 +772,30 @@ Tensor sdpa(
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
-    using OperationType = ttnn::prim::SDPAOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .scale = scale,
-            .output_mem_config = output_mem_config,
-            .program_config = std::move(program_config),
-            .is_causal = is_causal,
-            .chunk_start_idx = chunk_start_idx,
-            .chunk_start_idx_tensor = chunk_start_idx_tensor,
-            .compute_kernel_config = compute_kernel_config,
-            .use_mla = use_mla,
-            .head_dim_v = head_dim_v,
-            .sliding_window_size = sliding_window_size,
-            .is_windowed = cu_window_seqlens.has_value(),
-            .windowed_q_token_offset = windowed_q_token_offset,
-            .paged_cache_geometry =
-                paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
-        },
-        OperationType::tensor_args_t{
-            .q = input_tensor_q,
-            .k = input_tensor_k,
-            .v = input_tensor_v,
-            .attn_mask = attn_mask,
-            .page_table = page_table_tensor,
-            .chunk_start_idx_tensor = chunk_start_idx_tensor,
-            .attention_sink = attention_sink,
-            .cu_window_seqlens = cu_window_seqlens,
-            .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
-        });
+    return sdpa_with_lse(
+               input_tensor_q,
+               input_tensor_k,
+               input_tensor_v,
+               attn_mask,
+               page_table_tensor,
+               attention_sink,
+               is_causal,
+               scale,
+               sliding_window_size,
+               chunk_start_idx,
+               chunk_start_idx_tensor,
+               use_mla,
+               head_dim_v,
+               output_mem_config,
+               std::move(program_config),
+               compute_kernel_config,
+               cu_window_seqlens,
+               windowed_q_token_offset,
+               windowed_q_token_offset_tensor,
+               paged_cache_geometry,
+               /* return_lse */ false,
+               std::nullopt,
+               std::nullopt)
+        .at(0);
 }
 }  // namespace ttnn::prim
