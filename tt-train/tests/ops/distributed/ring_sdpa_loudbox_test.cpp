@@ -1438,6 +1438,120 @@ TEST_F(LoudboxRingSDPATest, DISABLED_CompareGroupedHeads) {
     }
 }
 
+// A training step pays the forward and the backward, and the forward is the
+// same two-pass ring for both kinds; this times both, so the end-to-end gain
+// of a step can be read next to the backward's. Also printed: the backward's
+// useful FLOP rate over the whole ring and its share of the ring's LoFi peak
+// (594 TFLOP/s per chip), with the conventions of the single-chip table --
+// five matmuls over the causal triangle, 5 S^2 d per head.
+namespace {
+struct StepTimes {
+    double forward_ms{}, backward_ms{};
+};
+StepTimes time_ring_step(
+    size_t batch, size_t num_heads, size_t num_kv_heads, size_t seq_len, size_t head_dim,
+    ttml::ops::distributed::RingBackwardKind kind, uint32_t Bt, RingLayout layout, uint32_t samples_to_take) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const uint32_t cp_axis = autograd::ctx().get_parallelism_context().get_cp_axis().value();
+    auto& rng = autograd::ctx().get_generator();
+    const std::array<std::size_t, 4> qkv_shape{batch, num_heads, seq_len, head_dim};
+    const std::array<std::size_t, 4> kv_shape{batch, num_kv_heads, seq_len, head_dim};
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
+    const auto to_device = [&](const xt::xarray<float>& x) {
+        return core::from_xtensor<float, ttnn::DataType::BFLOAT16>(x, device, ttnn::Layout::TILE, mapper.get());
+    };
+    const auto sample = [&]() {
+        auto query = autograd::create_tensor(
+            to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())), true);
+        auto key = autograd::create_tensor(
+            to_device(ttml::test_utils::make_uniform_xarray<float>(kv_shape, 0.0F, 2.0F, rng())), true);
+        auto value = autograd::create_tensor(
+            to_device(ttml::test_utils::make_uniform_xarray<float>(kv_shape, 0.0F, 2.0F, rng())), true);
+        const auto grad = to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng()));
+        tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
+        const auto t0 = std::chrono::steady_clock::now();
+        auto out = ops::distributed::ring_attention_sdpa(
+            query, key, value, std::nullopt, ttml::metal::AttentionMaskType::Causal, kind, Bt,
+            RingShiftTransport::Direct, layout);
+        tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
+        const auto t1 = std::chrono::steady_clock::now();
+        out->set_grad(grad);
+        tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
+        const auto t2 = std::chrono::steady_clock::now();
+        out->backward();
+        tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
+        const auto t3 = std::chrono::steady_clock::now();
+        return StepTimes{
+            std::chrono::duration<double, std::milli>(t1 - t0).count(),
+            std::chrono::duration<double, std::milli>(t3 - t2).count()};
+    };
+    sample();  // warm the program cache and the kernel build
+    std::vector<double> fwd, bwd;
+    for (uint32_t k = 0; k < samples_to_take; ++k) {
+        const auto t = sample();
+        fwd.push_back(t.forward_ms);
+        bwd.push_back(t.backward_ms);
+    }
+    std::sort(fwd.begin(), fwd.end());
+    std::sort(bwd.begin(), bwd.end());
+    return {fwd[fwd.size() / 2], bwd[bwd.size() / 2]};
+}
+}  // namespace
+
+// Forward and backward of a ring step for both backward kinds, zigzag,
+// direct shifts, median of five. TTML_LOUDBOX_STEP_SHAPES="heads:kv:rows:d:Bt,..."
+// replaces the table.
+TEST_F(LoudboxRingSDPATest, DISABLED_CompareStepTimes) {
+    const uint32_t cp_size = ttml::autograd::ctx().get_parallelism_context().get_cp_size();
+    std::cout << "ring forward + backward on " << cp_size << " chips, zigzag, direct shifts, median of five (ms)\n";
+    using Kind = ttml::ops::distributed::RingBackwardKind;
+    std::vector<std::array<size_t, 5>> table = {
+        {4, 4, 4096, 64, 4},
+        {20, 10, 5632, 64, 4},
+        {32, 8, 5632, 128, 4},
+    };
+    if (const char* spec = std::getenv("TTML_LOUDBOX_STEP_SHAPES")) {
+        table.clear();
+        std::stringstream ss(spec);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            std::array<size_t, 5> cfg{};
+            std::stringstream is(item);
+            std::string field;
+            for (size_t k = 0; k < 5 && std::getline(is, field, ':'); ++k) {
+                cfg[k] = std::stoul(field);
+            }
+            table.push_back(cfg);
+        }
+    }
+    for (const auto& cfg : table) {
+        const size_t heads = cfg[0], kv_heads = cfg[1], rows = cfg[2], d = cfg[3];
+        const auto Bt = static_cast<uint32_t>(cfg[4]);
+        const size_t seq_len = rows * cp_size;
+        const auto tp = time_ring_step(1, heads, kv_heads, seq_len, d, Kind::TwoPass, 1U, RingLayout::Zigzag, 5U);
+        const auto cy = time_ring_step(1, heads, kv_heads, seq_len, d, Kind::CyclicInPlace, Bt, RingLayout::Zigzag, 5U);
+        // Useful FLOPs of the causal backward over the whole sequence: five
+        // matmuls of 2 S^2 d, halved by the triangle, per head. The forward
+        // is two such matmuls.
+        const double S = static_cast<double>(seq_len);
+        const double bwd_flop = 5.0 * S * S * static_cast<double>(d) * static_cast<double>(heads);
+        const double peak = 594.0 * cp_size;  // TFLOP/s, LoFi, 110 cores per chip
+        const auto tflops = [&](double flop, double ms) { return flop / (ms * 1e-3) / 1e12; };
+        const auto pct = [](double a, double b) { return (b / a - 1.0) * 100.0; };
+        std::cout << "  heads=" << heads << " kv_heads=" << kv_heads << " rows/chip=" << rows << " d=" << d
+                  << " Bt=" << Bt << ":\n"
+                  << "    two-pass  forward " << tp.forward_ms << " backward " << tp.backward_ms << " step "
+                  << tp.forward_ms + tp.backward_ms << " | backward " << tflops(bwd_flop, tp.backward_ms)
+                  << " TFLOP/s, " << 100.0 * tflops(bwd_flop, tp.backward_ms) / peak << "% of the ring's LoFi peak\n"
+                  << "    cyclic    forward " << cy.forward_ms << " backward " << cy.backward_ms << " step "
+                  << cy.forward_ms + cy.backward_ms << " | backward " << tflops(bwd_flop, cy.backward_ms)
+                  << " TFLOP/s, " << 100.0 * tflops(bwd_flop, cy.backward_ms) / peak << "% of the ring's LoFi peak\n"
+                  << "    change: backward " << pct(tp.backward_ms, cy.backward_ms) << "%, step "
+                  << pct(tp.forward_ms + tp.backward_ms, cy.forward_ms + cy.backward_ms) << "%\n";
+    }
+}
+
 // One whole backward per implementation and transport, with the phase
 // profile in ring_attention_sdpa switched on (TTML_RING_PROFILE), so the
 // whole-backward total above can be split into kernel, accumulate, shift

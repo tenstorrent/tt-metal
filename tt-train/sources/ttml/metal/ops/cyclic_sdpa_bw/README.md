@@ -275,6 +275,11 @@ better layout, the cyclic on its better layout and block height):
 | 32 / 8, 5632, 64 | 141.9 | 31.1 | -78% | 88 |
 | 32 / 8, 5632, 128 | 237.0 | 58.4 | -75% | 88 |
 
+On eight chips (`TTML_LOUDBOX_RING8=1`) every time above is within a few
+percent of double, on both sides, so the percentages carry over; at the
+Llama 8B shape (32 / 8, 5632 rows per chip, `d = 128`) the backward takes
+468 ms two-pass against 113 ms cyclic, 89 against 368 TFLOP/s over the ring.
+
 The core count is the cap on groups from the key-head count (see
 "Grouped-query attention"): `batch x G` groups of `C` cores. The last four
 rows are shapes whose key heads and chunk tile the grid (5632 rows per
