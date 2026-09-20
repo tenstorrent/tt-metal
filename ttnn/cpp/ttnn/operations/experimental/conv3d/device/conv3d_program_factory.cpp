@@ -1121,10 +1121,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         }
     }
 
-    if (share_weights) {
-        weights_mcast_family->prepare_arguments();
-    }
-
     // Build reduction groups from logical reduction keys (c_out_idx, t_out_idx, h_out_idx, w_out_idx).
     const uint32_t num_reduction_groups = total_output_parallel;
     std::vector<std::vector<uint32_t>> reduction_groups(num_reduction_groups);

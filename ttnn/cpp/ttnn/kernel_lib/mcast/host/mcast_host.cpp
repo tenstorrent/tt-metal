@@ -119,7 +119,7 @@ McastFamily::Group::Group(
 }
 
 void McastFamily::Group::prepare_(
-    tt::tt_metal::IDevice* device, const McastConfig& cfg, dataflow_kernel_lib::TransferMode transfer_mode) {
+    tt::tt_metal::IDevice* device, const McastConfig& cfg, dataflow_kernel_lib::TransferMode transfer_mode) const {
     auto& state = prepared_.emplace(PreparedState{});
     // Map the normalized logical rectangles: non-worker NoC rows/columns are transparent to multicast.
     // Preserve holes in the logical receiver set, and count actual workers rather than NoC area.
@@ -290,7 +290,7 @@ McastFamily::McastFamily(tt::tt_metal::IDevice* device, const McastConfig& cfg) 
 
 void McastFamily::add_group(
     CoreRangeSet receivers, std::vector<CoreCoord> senders, std::optional<uint32_t> ack_count_override) {
-    TT_FATAL(!arguments_prepared_, "McastFamily::add_group: cannot add groups after prepare_arguments");
+    TT_FATAL(!arguments_prepared_, "McastFamily::add_group: cannot add groups after successful preparation");
     Group candidate(std::move(receivers), std::move(senders), ack_count_override);
     if (!groups_.empty()) {
         const auto& first = groups_.front();
@@ -307,16 +307,35 @@ void McastFamily::add_group(
         }
     }
     groups_.push_back(std::move(candidate));
+    topology_current_ = false;
 }
 
-void McastFamily::prepare_arguments() {
+void McastFamily::prepare_topology_() const {
+    if (topology_current_) {
+        return;
+    }
+    std::vector<CoreRange> participating_ranges, receiver_ranges;
+    for (const auto& group : groups_) {
+        const auto& participants = group.participating_cores().ranges();
+        participating_ranges.insert(participating_ranges.end(), participants.begin(), participants.end());
+        const auto& receivers = group.receiver_cores().ranges();
+        receiver_ranges.insert(receiver_ranges.end(), receivers.begin(), receivers.end());
+    }
+    // Cache logical topology independently of device mapping. Rebuild only after an addition.
+    auto participants = detail::merge_disjoint_ranges(std::move(participating_ranges));
+    auto receivers = detail::merge_disjoint_ranges(std::move(receiver_ranges));
+    participating_ = std::move(participants);
+    receivers_ = std::move(receivers);
+    topology_current_ = true;
+}
+
+void McastFamily::prepare_arguments_() const {
     if (arguments_prepared_) {
         return;
     }
     TT_FATAL(!groups_.empty(), "McastFamily::prepare_arguments: at least one group is required");
     // Discard any partial preparation from a previous failed attempt. Input geometry survives.
-    receivers_ = {};
-    participating_ = {};
+    prepare_topology_();
     layout_ = {};
     for (auto& group : groups_) {
         group.prepared_.reset();
@@ -334,12 +353,7 @@ void McastFamily::prepare_arguments() {
     std::optional<uint32_t> first_ack, first_remote;
     std::optional<SenderMcastMode> first_sender_mcast_mode;
     bool uniform_ack = true, uniform_remote = true, uniform_sender_mcast_mode = true;
-    std::vector<CoreRange> participating_ranges, receiver_ranges;
     for (auto& group : groups_) {
-        const auto& participants = group.participating_cores().ranges();
-        participating_ranges.insert(participating_ranges.end(), participants.begin(), participants.end());
-        const auto& receivers = group.receiver_cores().ranges();
-        receiver_ranges.insert(receiver_ranges.end(), receivers.begin(), receivers.end());
         group.prepare_(device_, cfg_, transfer_mode);
         layout_.has_remote_receivers |= group.has_remote_receivers();
         const auto& state = group.prepared_state_();
@@ -370,10 +384,6 @@ void McastFamily::prepare_arguments() {
             }
         }
     }
-    // Groups are disjoint. Coalesce their ranges once, rather than rebuilding the
-    // growing union after each row/column in a multicast family.
-    participating_ = detail::merge_disjoint_ranges(std::move(participating_ranges));
-    receivers_ = detail::merge_disjoint_ranges(std::move(receiver_ranges));
     layout_.flags |= uint32_t(transfer_mode) << wire::TRANSFER_MODE_SHIFT;
     layout_.ack_count = uniform_ack ? *first_ack : ACK_EQUALS_FANOUT;
     layout_.uniform_remote_count = uniform_remote ? *first_remote : 0u;
@@ -402,7 +412,7 @@ void McastFamily::prepare_arguments() {
 }
 
 void McastFamily::require_arguments_prepared_() const {
-    TT_FATAL(arguments_prepared_, "McastFamily: call prepare_arguments() before querying the family");
+    TT_FATAL(arguments_prepared_, "McastFamily: attach or call append_semaphores() before requesting arguments");
 }
 const McastFamily::Group* McastFamily::group_for_core_(const CoreCoord& core) const {
     for (const auto& group : groups_) {
@@ -449,11 +459,11 @@ std::vector<uint32_t> McastFamily::runtime_args_(const CoreCoord& core) const {
     return args;
 }
 const CoreRangeSet& McastFamily::participating_cores() const {
-    require_arguments_prepared_();
+    prepare_topology_();
     return participating_;
 }
 CoreRangeSet McastFamily::sender_only_cores() const {
-    require_arguments_prepared_();
+    prepare_topology_();
     return participating_.subtract(receivers_);
 }
 uint32_t McastFamily::required_semaphores_() const {
@@ -513,7 +523,7 @@ Mcast1D::Mcast1D(
             family_->add_group(std::move(line_receivers), std::vector<CoreCoord>{sender});
         }
     }
-    family_->prepare_arguments();
+    family_->prepare_arguments_();
 }
 
 std::vector<std::vector<tt::tt_metal::CoreCoord>> Mcast1D::sender_lines_from_grid_(
@@ -576,7 +586,7 @@ Mcast2D::Mcast2D(
         const auto sender = std::get<Mcast2DFixedSenderConfig>(sender_config).sender;
         family_->add_group(receivers, std::vector<CoreCoord>{sender});
     }
-    family_->prepare_arguments();
+    family_->prepare_arguments_();
 }
 
 std::vector<tt::tt_metal::CoreCoord> Mcast2D::senders_from_grid_(

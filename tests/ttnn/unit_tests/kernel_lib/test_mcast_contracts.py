@@ -33,7 +33,6 @@ def test_forwarding_receive_compile_contract(device, expect_error, with_dense_gr
     family.add_group(core_set([(0, 0), (2, 0)]), [ttnn.CoreCoord(0, 0)])
     if with_dense_group:
         family.add_group(core_set([(0, 2), (1, 2)]), [ttnn.CoreCoord(0, 2)])
-    family.prepare_arguments()
     receiver = ttnn.CoreCoord(1, 2) if with_dense_group else ttnn.CoreCoord(2, 0)
     kernel = ttnn.KernelDescriptor(
         kernel_source=f"{KERNEL_DIR}/pipe_receive_contract.cpp",

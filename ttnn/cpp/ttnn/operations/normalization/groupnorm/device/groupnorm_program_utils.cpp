@@ -178,7 +178,6 @@ kernel_lib::host::McastFamily make_group_norm_mcast_family(
         family.add_group(
             tt::tt_metal::CoreRangeSet(std::move(receivers)), std::vector<tt::tt_metal::CoreCoord>{group.front()});
     }
-    family.prepare_arguments();
     return family;
 }
 

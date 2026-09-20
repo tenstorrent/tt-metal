@@ -60,7 +60,6 @@ namespace ttnn::kernel_lib::host {
 // McastFamily mcast(device, McastConfig{.noc = noc});
 // mcast.add_group(receivers_a, std::vector<tt::tt_metal::CoreCoord>{sender_a});
 // mcast.add_group(receivers_b, std::vector<tt::tt_metal::CoreCoord>{sender_b});
-// mcast.prepare_arguments();
 // const std::array kernels{std::ref(kernel)};
 // mcast.attach(descriptor, "input_mcast", kernels);
 // descriptor.kernels.push_back(std::move(kernel));
@@ -133,8 +132,9 @@ void append_absent_mcast_compile_time_args_to(Args& destination) {
 // Groups share a sender mode, number of sender rounds, and TransferMode.
 class McastFamily {
 public:
-    // Collect groups, then prepare_arguments before querying. The borrowed device must stay open/alive
-    // through successful argument preparation. Prepared queries and repeated prepare_arguments do not use it.
+    // Collect groups, query topology to place kernels, then attach or append_semaphores.
+    // The borrowed device must stay open/alive through the first successful preparation.
+    // Later attachment and topology queries use owned snapshots, without accessing the device.
     // Copies own their data; building copies share the borrowed-device lifetime requirement.
     explicit McastFamily(tt::tt_metal::IDevice* device, const McastConfig& cfg = {});
     // One exact receiver set and a nonempty ordered sender list. One sender is fixed;
@@ -143,10 +143,7 @@ public:
         tt::tt_metal::CoreRangeSet receivers,
         std::vector<tt::tt_metal::CoreCoord> senders,
         std::optional<uint32_t> ack_count_override = std::nullopt);
-    // Idempotent after success. Failure leaves queries blocked and collection data intact.
-    void prepare_arguments();
-
-    // All queries require successful argument preparation; additions are then forbidden.
+    // Attachment and Program binding prepare arguments automatically; additions are then forbidden.
     // =============================================================================
     // Operation construction paths:
     //
@@ -197,6 +194,11 @@ public:
     tt::tt_metal::CoreRangeSet sender_only_cores() const;
 
 private:
+    friend class Mcast1D;
+    friend class Mcast2D;
+    void prepare_topology_() const;
+    // Idempotent after success. Failure preserves collected groups and their topology.
+    void prepare_arguments_() const;
     std::vector<uint32_t> runtime_args_(const tt::tt_metal::CoreCoord& core) const;
 
     struct Group {
@@ -236,7 +238,9 @@ private:
             std::variant<PreparedMulticast, PreparedChain> transport = PreparedMulticast{};
         };
         void prepare_(
-            tt::tt_metal::IDevice* device, const McastConfig& cfg, dataflow_kernel_lib::TransferMode transfer_mode);
+            tt::tt_metal::IDevice* device,
+            const McastConfig& cfg,
+            dataflow_kernel_lib::TransferMode transfer_mode) const;
         PreparedMulticast prepare_multicast_(const McastConfig& cfg, PreparedState& state) const;
         PreparedChain prepare_chain_(tt::tt_metal::IDevice* device, PreparedState& state) const;
         const PreparedState& prepared_state_() const;
@@ -246,7 +250,7 @@ private:
         std::optional<uint32_t> ack_count_override_;
         tt::tt_metal::CoreRangeSet participating_;
         std::vector<uint32_t> fanouts_;
-        std::optional<PreparedState> prepared_;
+        mutable std::optional<PreparedState> prepared_;
     };
 
     void require_arguments_prepared_() const;
@@ -258,18 +262,19 @@ private:
     uint32_t required_semaphores_() const;
     std::vector<uint32_t> compile_time_args_(const std::array<uint32_t, 3>& ids) const;
     tt::tt_metal::IDevice* device_;
-    bool arguments_prepared_ = false;
+    mutable bool arguments_prepared_ = false;
+    mutable bool topology_current_ = false;
     // Preparation is the last use of the borrowed device; attachment uses these snapshots.
-    tt::ARCH prepared_arch_{};
-    tt::tt_metal::CoreCoord prepared_device_grid_;
+    mutable tt::ARCH prepared_arch_{};
+    mutable tt::tt_metal::CoreCoord prepared_device_grid_;
     std::optional<tt::tt_metal::ProgramId> bound_program_id_;
     std::array<uint32_t, 3> program_semaphore_ids_{UNUSED_SEM_ID, UNUSED_SEM_ID, UNUSED_SEM_ID};
     const Group* group_for_core_(const tt::tt_metal::CoreCoord& core) const;
     std::vector<Group> groups_;
     McastConfig cfg_;
-    tt::tt_metal::CoreRangeSet receivers_;
-    tt::tt_metal::CoreRangeSet participating_;
-    dataflow_kernel_lib::mcast_wire::FamilyMetadata layout_;
+    mutable tt::tt_metal::CoreRangeSet receivers_;
+    mutable tt::tt_metal::CoreRangeSet participating_;
+    mutable dataflow_kernel_lib::mcast_wire::FamilyMetadata layout_;
 };
 
 // Mcast1D-specific types.

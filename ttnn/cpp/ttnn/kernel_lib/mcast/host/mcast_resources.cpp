@@ -75,7 +75,7 @@ std::array<uint32_t, 3> McastFamily::resolve_semaphore_ids_(std::span<const Sema
 }
 
 void McastFamily::append_semaphores(Program& program) {
-    require_arguments_prepared_();
+    prepare_arguments_();
     auto& impl = program.impl();
     TT_FATAL(!impl.created_from_spec(), "Multicast Program binding requires a regular Program");
     TT_FATAL(!impl.is_compiled(), "Cannot bind multicast semaphores to a compiled Program");

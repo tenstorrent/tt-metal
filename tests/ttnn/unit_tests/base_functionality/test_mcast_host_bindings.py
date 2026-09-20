@@ -48,7 +48,6 @@ def test_group_sender_lists(device, expect_error):
         family.add_group(receivers, senders=[ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0)])
     ordered = [ttnn.CoreCoord(2, 0), ttnn.CoreCoord(0, 0)]
     family.add_group(receivers, ordered)
-    family.prepare_arguments()
     _, kernel = inspect(family, device)
     assert kernel.compile_time_args[6] == 2
     mapped = [device.worker_core_from_logical_core(c) for c in ordered]
@@ -67,43 +66,37 @@ def test_family_lifecycle(device, noc, expect_error):
     cfg = ttnn.McastConfig(noc=noc, base_sem_id=4)
     family = ttnn.McastFamily(device, cfg)
     cfg.base_sem_id = 0
-    queries = [
-        lambda: inspect(family, device, noc),
-        family.participating_cores,
-        family.sender_only_cores,
-    ]
-    for query in queries:
-        with expect_error(RuntimeError, "call prepare_arguments"):
-            query()
+    assert family.participating_cores().num_cores() == 0
+    assert family.sender_only_cores().num_cores() == 0
     with expect_error(RuntimeError, "at least one group"):
-        family.prepare_arguments()
+        inspect(family, device, noc)
     family.add_group(cores([(0, 0), (2, 0), (4, 0)]), [first])
     with expect_error(RuntimeError, "footprints overlap"):
         family.add_group(cores([(0, 0)]), [first])
-    for query in queries:
-        with expect_error(RuntimeError, "call prepare_arguments"):
-            query()
+    assert family.participating_cores().num_cores() == 3
+    assert family.sender_only_cores().num_cores() == 0
     family.add_group(cores([(2, 2)]), [second])
-    family.prepare_arguments()
     # Python config is snapshotted by construction, and keyword values reach C++.
     descriptor, kernel = inspect(family, device, noc)
     assert [sem.id for sem in descriptor.semaphores] == [4, 5]
-    family.prepare_arguments()
-    with expect_error(RuntimeError, "after prepare_arguments"):
+    inspect(family, device, noc)
+    with expect_error(RuntimeError, "after successful preparation"):
         family.add_group(cores([(6, 6)]), [ttnn.CoreCoord(6, 6)])
     assert family.participating_cores().num_cores() == 4
 
 
-def test_failed_family_prepare_arguments(device, expect_error):
+def test_failed_family_attachment_preserves_collection(device, expect_error):
     family = ttnn.McastFamily(device, ttnn.McastConfig(sem_ids=[0]))
     family.add_group(
         ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))]), [ttnn.CoreCoord(0, 0)]
     )
     for _ in range(2):
         with expect_error(RuntimeError, "consumer_ready id"):
-            family.prepare_arguments()
-        with expect_error(RuntimeError, "call prepare_arguments"):
             inspect(family, device)
+        assert family.participating_cores().num_cores() == 2
+    family.add_group(core_set([(2, 0)]), [ttnn.CoreCoord(3, 0)])
+    assert family.participating_cores().num_cores() == 4
+    assert family.sender_only_cores().num_cores() == 1
 
 
 def test_family_retains_device(device):
@@ -116,7 +109,7 @@ def test_family_retains_device(device):
     family.add_group(
         ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]), [ttnn.CoreCoord(0, 0)]
     )
-    family.prepare_arguments()
+    inspect(family, device)
     assert sys.getrefcount(device) == references + 1
     del family
     gc.collect()
@@ -142,6 +135,7 @@ def test_group_is_not_public():
 @pytest.mark.parametrize("helper_type", [ttnn.McastFamily, ttnn.Mcast1D, ttnn.Mcast2D])
 def test_internal_accessors_are_not_public(helper_type):
     for name in [
+        "prepare_arguments",
         "compile_time_args",
         "runtime_args",
         "owned_semaphores",
@@ -172,7 +166,7 @@ def test_chain_requires_distinct_adopted_source(device, expect_error, ids):
         [ttnn.CoreCoord(0, 0)],
     )
     with expect_error(RuntimeError, "signal_source|distinct"):
-        family.prepare_arguments()
+        inspect(family, device)
 
 
 @pytest.mark.parametrize(
@@ -190,4 +184,4 @@ def test_chain_protocol_diagnostics(device, expect_error, options, senders, grou
     )
     family.add_group(core_set([(0, 0), (2, 0), (0, 2)]), [ttnn.CoreCoord(*c) for c in senders], group_ack)
     with expect_error(RuntimeError, error):
-        family.prepare_arguments()
+        inspect(family, device)

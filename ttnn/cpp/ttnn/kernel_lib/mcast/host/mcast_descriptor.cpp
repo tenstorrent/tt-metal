@@ -47,7 +47,7 @@ void McastFamily::attach(
     ProgramDescriptor& descriptor,
     std::string_view prefix,
     std::span<const std::reference_wrapper<KernelDescriptor>> targets) const {
-    require_arguments_prepared_();
+    prepare_arguments_();
     require_unbound_();
     TT_FATAL(!targets.empty(), "Multicast attachment requires at least one kernel");
 

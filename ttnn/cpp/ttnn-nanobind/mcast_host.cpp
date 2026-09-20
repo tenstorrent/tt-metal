@@ -4,7 +4,7 @@
 //
 // Python binding for the mcast HOST helper (ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp).
 // Thin passthrough to the C++ family and rectangular wrappers. Python families use
-// the same constructor/add_group/prepare_arguments lifecycle as C++.
+// the same constructor/add_group/attach lifecycle as C++.
 
 #include "mcast_host.hpp"
 
@@ -193,15 +193,13 @@ void py_module(nb::module_& mod) {
             nb::arg("device"),
             nb::arg("config") = kh::McastConfig{},
             nb::keep_alive<1, 2>(),
-            "Collect groups, then prepare_arguments. Keep the device open through successful argument preparation.")
+            "Collect groups, place kernels using topology queries, then attach. Keep the device open until attachment.")
         .def(
             "add_group",
             &kh::McastFamily::add_group,
             nb::arg("receivers"),
             nb::arg("senders"),
             nb::arg("ack_count_override") = nb::none())
-        .def("prepare_arguments", &kh::McastFamily::prepare_arguments)
-
         .def("participating_cores", &kh::McastFamily::participating_cores)
         .def("sender_only_cores", &kh::McastFamily::sender_only_cores);
 

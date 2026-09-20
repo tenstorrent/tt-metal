@@ -92,7 +92,6 @@ def run_family_case(
     family = ttnn.McastFamily(device, config)
     for receivers, senders in specs:
         family.add_group(core_set(receivers), [ttnn.CoreCoord(*c) for c in senders])
-    family.prepare_arguments()
     _run_channel(
         device,
         family,
@@ -289,7 +288,6 @@ def _run_channel(
         )
         for receivers, senders in specs:
             passive.add_group(core_set(receivers), [ttnn.CoreCoord(*c) for c in senders])
-        passive.prepare_arguments()
         passive.attach(descriptor, "mcast", kernels[1:])
     if expected_chain is not None:
         assert (attached_ct[5] >> 3) & 3 == int(expected_chain)
@@ -307,7 +305,6 @@ def _run_channel(
         geometry_family = ttnn.McastFamily(device, ttnn.McastConfig(noc=config.noc))
         for receivers, senders in specs:
             geometry_family.add_group(core_set(receivers), [ttnn.CoreCoord(*c) for c in senders])
-        geometry_family.prepare_arguments()
         _, geometry_kernel = attach_for_inspection(geometry_family, participants, config.noc)
         for _, senders in specs:
             x, y = senders[0]
@@ -317,7 +314,6 @@ def _run_channel(
     if with_barrier:
         barrier = ttnn.McastFamily(device, ttnn.McastConfig(noc=config.noc))
         barrier.add_group(participants, [ttnn.CoreCoord(0, 0)])
-        barrier.prepare_arguments()
         barrier.attach(descriptor, "barrier_mcast", kernels)
     else:
         for kernel in kernels:

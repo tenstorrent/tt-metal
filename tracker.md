@@ -63,5 +63,11 @@ preserve them without adding unrelated files to commits.
 - Feedback 2: documented early payload arrival, prohibited pre-receive writes
   (including zero-fill), and completion-wait semantics on both host configuration
   and the receiver pipe API. Documentation-only; checked against send/receive flow.
+- Feedback 3 implementation: private cached preparation runs from both attach
+  paths and Program binding. Logical topology is cached separately, invalidated
+  after additions, and queryable even after preparation failure. Existing const
+  attachment APIs and eager rectangular wrappers are preserved. Removed explicit
+  preparation from operation callers and Python bindings; revised native/Python
+  lifecycle and negative-input tests. Build/execution pending.
 - Completion remains unproven until every requirement in the supplied plans has
   direct evidence. Checkboxes track work, not a reduction of the requested scope.

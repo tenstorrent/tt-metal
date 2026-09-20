@@ -18,12 +18,10 @@ def _stress(device, noc, counter, events, guards, includes_sender, reverse_chann
         ttnn.McastConfig(noc=noc_id, data_ready=signal, irregular_receiver_set_mode=ttnn.TransferMode.ChainUnicast),
     )
     family.add_group(_cores(coords if includes_sender else coords[1:]), [ttnn.CoreCoord(*coords[0])])
-    family.prepare_arguments()
     reverse = None
     if reverse_channel:
         reverse = ttnn.McastFamily(device, ttnn.McastConfig(noc=noc_id, data_ready=signal))
         reverse.add_group(_cores([coords[0]]), [ttnn.CoreCoord(*coords[2])])
-        reverse.prepare_arguments()
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape([3, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
