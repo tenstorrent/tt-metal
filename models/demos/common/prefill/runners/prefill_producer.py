@@ -729,9 +729,12 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs
     from tests.ttnn.utils_for_testing import comp_pcc
 
-    # The pe half needs re-basing only if the model rotates it. Absent (every other model here) means
-    # the usual rotated convention.
-    _KVPE_INTERLEAVE = not bool(getattr(ADAPTER.model_config, "USE_NOPE", False))
+    # The pe half needs re-basing only if the model rotates it. The adapter's own declaration wins:
+    # `cache_half_pccs` names a second case (a natively interleaved indexer RoPE) where the answer
+    # is False with no USE_NOPE flag to derive it from, and the chunked test already reads the
+    # attribute, so deriving it a second way here is how the two drift. Absent both, the usual
+    # rotated convention.
+    _KVPE_INTERLEAVE = getattr(ADAPTER, "kv_pe_interleave", not bool(getattr(ADAPTER.model_config, "USE_NOPE", False)))
 
     KV_LORA = ADAPTER.model_config.KV_LORA_RANK
     HEAD_DIM = KV_LORA + ADAPTER.model_config.QK_ROPE_HEAD_DIM
@@ -754,6 +757,16 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     # fall inside the tail.
     win_start = int(os.environ.get("PREFILL_PCC_WINDOW_START", "0"))
     win_end = int(os.environ.get("PREFILL_PCC_WINDOW_END", "0"))
+    # Moving the device read without moving the golden read scores unrelated positions, and the
+    # result looks exactly like a broken model rather than a misconfiguration: every layer lands
+    # near zero. There is no safe default to infer -- a head+tail capture wants the head length,
+    # a full-length capture wants the window start itself -- so require it to be stated.
+    if (win_end or tail_window) and "PREFILL_PCC_GOLDEN_OFFSET" not in os.environ:
+        raise ValueError(
+            "a PCC window is set (PREFILL_PCC_WINDOW_END or PREFILL_PCC_TAIL_WINDOW) but "
+            "PREFILL_PCC_GOLDEN_OFFSET is not; set it to the golden row the window starts at "
+            "(0 is valid and must be passed explicitly)."
+        )
     if win_end:
         for name, v in (("PREFILL_PCC_WINDOW_START", win_start), ("PREFILL_PCC_WINDOW_END", win_end)):
             if v % tokens_per_block:
@@ -781,12 +794,15 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     unreferenced = []
     missing_golden = []
     for layer in range(NUM_LAYERS):
-        # A hybrid attention stack writes a KV slab on only some layers, so the golden references only
-        # those and the table publishes rows for only those. Skip the rest explicitly: the loader
-        # would raise on the missing file, and reading an unpublished row would score whatever sits
-        # at the default location.
+        # A hybrid attention stack writes a KV slab on only some layers, so the table publishes rows
+        # for only those. Decide from the MODEL, not from what is on disk: a shared or dense-variant
+        # trace dir can carry a golden for a slab-less layer, and `table.lookup` on its unpublished
+        # row would score whatever sits at the default address and fold that into the gate.
+        if layer not in expected_slabs:
+            unreferenced.append(layer)
+            continue
         if not kvpe_golden_present(trace_dir, layer):
-            (missing_golden if layer in expected_slabs else unreferenced).append(layer)
+            missing_golden.append(layer)
             continue
         loc0 = table.lookup(layer, 0, slot_id)
         try:
@@ -833,7 +849,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         f"[{golden_offset},{golden_offset + cmp_len}) "
         f"across {checked}/{len(expected_slabs)} "
         f"slab-owning layers -> {min_pcc:.6f}"
-        + (f"; {len(unreferenced)} layers carry no KV golden (hybrid stack): {unreferenced}" if unreferenced else "")
+        + (f"; {len(unreferenced)} layers own no KV slab (hybrid stack): {unreferenced}" if unreferenced else "")
     )
     if missing_golden:
         # These layers DO own a slab, so the golden must have covered them. Warning and scoring the
@@ -857,6 +873,16 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             )
             return mins
 
+        if first_pos + skip_rows != 0 or cmp_len != real_len:
+            # The window flags move the KVPE read only; the loop below still walks from 0 and asks
+            # the golden for [0,real_len). Half-windowing one gate is worse than refusing: both
+            # halves fold into the same `mins`, so the verdict would mix two token ranges.
+            raise RuntimeError(
+                f"a PCC window ([{first_pos + skip_rows},{first_pos + skip_rows + cmp_len}) of "
+                f"[0,{real_len})) is set on a table that also carries an index config, but the "
+                f"indexer-key half is not windowed. Score the index cache unwindowed, or extend "
+                f"the window to it."
+            )
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
         index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
         n_index_layers = table.config(1).num_layers

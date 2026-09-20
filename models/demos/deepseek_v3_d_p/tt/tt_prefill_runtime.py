@@ -434,8 +434,11 @@ class TtPrefillRuntime:
             # `zero_padded_kv_cache` to compile on the first REAL chunk -- measured at 5863 ms of an
             # 8.1 s chunk 0, against 0.3 ms once built. The traced path already warms these programs
             # for the same reason (see capture_trace). A no-op sink emits no records and needs no
-            # draining, and d2h_service stays None so the device-op ack is not fired here. Costs
-            # nothing: this is the warm pass that was already happening.
+            # draining, and d2h_service stays None so the device-op ack is not fired here.
+            # It is not free: with a sink wired, `zero_pad_and_ack`'s host-callback branch also
+            # runs its `ttnn.synchronize_device`, so this warm pass now costs one host sync per
+            # KV-writing layer on every model. That is bounded, once per process, and buys back
+            # the 5.8 s above.
             prev_sink = self._layer_completion_sink
             self._layer_completion_sink = lambda *_args, **_kwargs: None
             try:

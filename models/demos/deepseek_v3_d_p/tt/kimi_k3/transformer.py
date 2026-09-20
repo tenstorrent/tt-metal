@@ -431,7 +431,7 @@ class TtKimiK3Transformer(LightweightModule):
         metadata: Optional[tuple] = None,
         *,
         rope_tensors=None,
-        padding_side: str = "right",
+        padding_side: Optional[str] = None,
         layer_tap: Optional[Callable] = None,
     ):
         """Run this rank's layers. Returns the post-norm hidden state, or the raw one mid-pipeline.
@@ -452,6 +452,11 @@ class TtKimiK3Transformer(LightweightModule):
             raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
         if return_intermediates:
             raise NotImplementedError("Kimi-K3 does not implement return_intermediates")
+        # The constructor argument is the channel `TtPrefillTransformer` uses (it reads
+        # `self.padding_side` and takes no per-call value), so defaulting the keyword to "right"
+        # here made a `padding_side="left"` model mask the wrong end of every chunk.
+        if padding_side is None:
+            padding_side = self.padding_side
 
         if self.is_first_rank:
             hidden, inherited = ttnn.unsqueeze_to_4D(self.embed(token_ids)), None
