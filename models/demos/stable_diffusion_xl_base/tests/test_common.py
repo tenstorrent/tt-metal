@@ -203,7 +203,7 @@ def normalize_prompt_for_text_encoder(
 
 
 # encode_prompt function, adapted from sdxl pipeline to work with on device tt text encoders
-# batch size (lenght of prompts) must be equal to number of devices
+# batch size (length of prompts) must be equal to number of devices
 def batch_encode_prompt_on_device(
     pipeline,
     tt_text_encoder,
