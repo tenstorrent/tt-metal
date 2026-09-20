@@ -2,7 +2,7 @@
 
 ## Run the tests
 
-Both tests require a Blackhole 8×4 mesh, a [tt-metal source build](../../../INSTALLING.md#source) with its Python environment, the Gemma4-31B-it checkpoint, and the [GPU capture](PREFILL_MIGRATION.md#gpu-reference). The checkpoint and capture are separate from the repository; provision them before running. The commands below use the canonical model paths.
+Both tests require a Blackhole 8×4 mesh, a [tt-metal source build](../../../../INSTALLING.md#source) with its Python environment, the Gemma4-31B-it checkpoint, and the [GPU capture](PREFILL_MIGRATION.md#gpu-reference). The checkpoint and capture are separate from the repository; provision them before running. The commands below use the canonical model paths.
 
 From the tt-metal repository root, in both terminals for loopback:
 
@@ -35,7 +35,7 @@ The test starts the model runner and migration driver. Build the external migrat
 
 **Loopback environment — both terminals:**
 
-Use OpenMPI 5 with ULFM and PRRTE, provided by tt-metal's [dependency installer](../../../install_dependencies.sh). These commands use its default installation path. The tt-llm-engine checkout lives alongside tt-metal; set `TT_LLM_ENGINE_DIR` to another location if needed.
+Use OpenMPI 5 with ULFM and PRRTE, provided by tt-metal's [dependency installer](../../../../install_dependencies.sh). These commands use its default installation path. The tt-llm-engine checkout lives alongside tt-metal; set `TT_LLM_ENGINE_DIR` to another location if needed.
 
 ```bash
 export TT_LLM_ENGINE_DIR="$TT_METAL_HOME/../tt-llm-engine"
