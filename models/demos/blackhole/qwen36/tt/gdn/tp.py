@@ -1226,13 +1226,36 @@ class TPGatedDeltaNet:
 
     def _gather_indices(self, buf, idx, dim):
         """Rebuild `buf` so slice i along `dim` becomes old slice idx[i], then copy back in place.
-        `new` is fully materialized before the copy, so gathering from `buf` into itself is safe."""
-        rows = [self._slice_along(buf, dim, idx[i], idx[i] + 1) for i in range(len(idx))]
-        new = ttnn.concat(rows, dim=dim)
+        Only the span of slices that actually move is re-materialized (a vLLM condense moves the last
+        request into each hole, so usually one or two rows of 32), and consecutive source indices
+        inside it are read as one slice: ~5 device ops per tensor instead of 34 (a full 32-slice
+        gather over 48 layers x 6 tensors cost ~10k op dispatches, ~1 s, per remap). Everything is
+        materialized before the copy, so gathering from `buf` into itself is safe."""
+        n = len(idx)
+        changed = [i for i in range(n) if idx[i] != i]
+        if not changed:
+            return
+        a, b = changed[0], changed[-1] + 1
+        runs = []  # (lo, hi): old slices [lo, hi) read in one piece
+        for i in range(a, b):
+            if runs and runs[-1][1] == idx[i]:
+                runs[-1][1] += 1
+            else:
+                runs.append([idx[i], idx[i] + 1])
+        parts = [self._slice_along(buf, dim, lo, hi) for lo, hi in runs]
+        temps = list(parts)
+        if a > 0:
+            parts.insert(0, self._slice_along(buf, dim, 0, a))
+            temps.append(parts[0])
+        if b < n:
+            parts.append(self._slice_along(buf, dim, b, n))
+            temps.append(parts[-1])
+        new = ttnn.concat(parts, dim=dim) if len(parts) > 1 else parts[0]
         ttnn.copy(new, buf)
-        ttnn.deallocate(new)
-        for r in rows:
-            ttnn.deallocate(r)
+        if not any(new is t for t in temps):  # identity: `in` would call ttnn.eq element-wise
+            ttnn.deallocate(new)
+        for t in temps:
+            ttnn.deallocate(t)
 
     def forward_prefill_batched(self, x, chunk_size=128, valid_lens=None, carry=False):
         """Batched prefill: all B users in one pass (no per-user Python loop).
