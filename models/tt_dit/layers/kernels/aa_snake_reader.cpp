@@ -2,18 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fused anti-aliased SnakeBeta activation (BigVGAN UpSample1d(2x) -> snake -> DownSample1d(2x)), reader.
-//
-// Row-major fp32 sticks of C channels; a "tile" here is a 4 KB block of R = 1024 / C consecutive sticks, fed
-// to the unpacker as one fp32 32x32 tile. Unpack -> DST -> pack is a byte identity, and every operand shares the
-// layout, so the elementwise math is layout-blind. This RISC stages the sticks this core needs in L1 (whole
-// DRAM pages, then the replicate clamp of the sequence ends as local copies) and gathers the 7 tap-shifted
-// up-stage tiles per block into CB_UP for the compute kernel.
-//
-// Math (see layers/audio_aa_snake.py): base[r] = x[clamp(r - 3)]; E[q] = sum_j s[2j] base[q + j],
-// O[q] = sum_j s[2j + 1] base[q + 1 + j] (j = 0..5); out[n] = sum_k t[k] z[clamp(2n + k - 5)], z[2q] = E[q],
-// z[2q + 1] = O[q]. Up blocks cover q in [o0 - 3, o0 - 3 + nblocks * R), so tap t of block q0 is x sticks
-// [q0 + t - 3, q0 + t - 3 + R).
+// Fused anti-aliased SnakeBeta activation, reader. A "tile" is a 4 KB block of R = 1024 / C row-major fp32 sticks.
+// Stages this core's sticks in L1 (whole pages, then the sequence-end clamp) and gathers 7 tap-shifted tiles per block.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -84,9 +74,8 @@ void kernel_main() {
     const int32_t r_lo = x_lo < avail_lo ? avail_lo : x_lo;
     const int32_t r_hi = x_hi > avail_hi ? avail_hi : x_hi;
 
-    // Staging: stick r lives at stage + (r - x_lo) * STICK; one page of slack on each side because the
-    // page reads land whole (DRAM reads need 64 B alignment on both ends, which whole pages at page-aligned
-    // offsets satisfy; single sticks would not).
+    // Staging: stick r lives at stage + (r - x_lo) * STICK, with a page of slack each side because page reads land
+    // whole (DRAM reads need 64 B alignment on both ends; whole pages at page-aligned offsets satisfy it).
     x_cb.reserve_back(1);
     const uint32_t stage = x_cb.get_write_ptr() + PAGE;
     const uint32_t p_lo = static_cast<uint32_t>(r_lo + HALO) / K;
