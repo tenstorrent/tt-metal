@@ -2,12 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Why conv_pre stays replicated on the 4x8 mesh: its shape (2048 -> 1024, k7; 8 KB fp32 sticks) run T-sharded (factor 8 over
-axis 1, zero halo of 3 rows from the neighbours) against the replicated form, same weights, beside smaller shapes that are
-exact. Per-row arithmetic is identical, so any difference is the halo exchange: `test_neighbor_pad_exact` isolates it,
-neighbor_pad_async returns wrong halo rows once a stick exceeds 4 KB (exact at 4 KB), against a host reference.
-    pytest models/tt_dit/tests/models/minimax_h3/tools/conv_pre_shard_probe.py -s
-"""
+"""Why conv_pre stays replicated on the 4x8 mesh: T-sharded against replicated at its shape (2048 -> 1024, k7; 8 KB fp32
+sticks) and smaller ones, plus the halo exchange alone: neighbor_pad returns wrong halo rows for sticks over 4 KB."""
 
 import time
 
@@ -32,7 +28,7 @@ MESH = [
 ]
 # (C_in, C_out, k, T total): conv_pre at 600 latents, and the polyphase ups shapes (stride*out outputs, K' = 3)
 SHAPES = [
-    (2048, 1024, 7, 600),  # conv_pre: corrupted on shards 1, 3, 6 on 2026-09-19 (halo rows)
+    (2048, 1024, 7, 600),  # conv_pre: 8 KB sticks, wrong halo rows on several shards
     (1024, 5 * 512, 3, 600),
     (512, 5 * 256, 3, 3000),
     (128, 2 * 64, 3, 30000),
