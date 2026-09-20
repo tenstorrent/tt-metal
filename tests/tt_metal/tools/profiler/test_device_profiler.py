@@ -286,6 +286,23 @@ def test_custom_cycle_count():
     _assert_kernel_cycle_counts(devicesData, REF_CYCLE_COUNT_MIN, REF_CYCLE_COUNT_MAX)
 
 
+def test_accumulate_residual_identity():
+    if os.getenv("ARCH_NAME") == "quasar":
+        pytest.skip("L1 accumulate profiling uses a different Quasar path")
+
+    clear_profiler_runtime_artifacts()
+    test_binary = "build/test/tt_metal/tools/profiler/test_accumulate_residual"
+    env = os.environ.copy()
+    env.update(
+        {
+            "TT_METAL_DEVICE_PROFILER": "1",
+            "TT_METAL_PROFILER_ACCUMULATE": "1",
+            "TT_METAL_PROFILER_MID_RUN_DUMP": "1",
+        }
+    )
+    subprocess.run([test_binary], cwd=TT_METAL_HOME, env=env, check=True)
+
+
 @pytest.mark.skip_post_commit
 def test_full_buffer():
     OP_COUNT = 23
