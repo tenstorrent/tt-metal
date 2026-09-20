@@ -96,7 +96,13 @@ cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 use_system_sfpi="OFF"
-toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
+# Pick a default toolchain file for the host architecture.
+case "$ARCH" in
+    x86_64)  toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake";;
+    aarch64) toolchain_path="cmake/aarch64-linux-clang-20-libstdcpp-toolchain.cmake";;
+    riscv64) toolchain_path="cmake/riscv64-linux-gcc-14-toolchain.cmake";;
+    *)       toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake";;
+esac
 host_march="x86-64-v3"
 
 
@@ -336,7 +342,10 @@ else
 fi
 echo "INFO: Tracy debug-verbosity categories: $perf_debug_categories_effective"
 echo "INFO: Enable LTO: $enable_lto"
-echo "INFO: Host march: $host_march"
+echo "INFO: Host arch: $ARCH"
+if [ "$ARCH" = "x86_64" ]; then
+    echo "INFO: Host march: $host_march"
+fi
 echo "INFO: Warnings as errors: $warnings_as_errors"
 
 # Prepare cmake arguments
