@@ -2,15 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Unpatchify as one data-movement program over the TILE-layout fp32 token tensor.
-
-``unpatchify_device`` (stitch_device_minimax_h3.py) is untilize -> slice -> reshape copy -> rank-8 permute -> reshape
-copy, ~3.4 ms per decoder wave per device. On the tiled tensor the same permutation is a page remap: the 16 tokens of
-a (t, h) unit are one half of a tile row, and the 1 KB face holding their 16-feature group ``(c, f, yy)`` is exactly
-canvas row ``(c, t*pt + f, h*p + yy)``. Two kernels (``kernels/unpatchify_{reader,writer}.cpp``) stage each unit's
-96 half-tiles and write its 192 rows; bit-identical to the reference by construction (no arithmetic).
-Requires ``patch_size == 16`` and a 16-patch-wide tile (the face geometry); fp32 tokens.
-"""
+"""Unpatchify as one page-remap program over TILE-layout fp32 tokens, no arithmetic: the 1 KB face of a (t, h) unit's
+feature group ``(c, f, yy)`` is canvas row ``(c, t*pt + f, h*p + yy)``. Needs patch_size 16 and 16-patch-wide tiles."""
 
 from __future__ import annotations
 
