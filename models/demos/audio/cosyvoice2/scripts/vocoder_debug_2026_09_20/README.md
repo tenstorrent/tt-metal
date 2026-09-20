@@ -34,3 +34,38 @@ imported by anything under `tt/`.
   intermediate tensors by mutating graph outputs, per-Euler-step divergence
   tracking) is reusable if the vocoder fix doesn't fully resolve the
   audio-quality complaint.
+
+## The real root cause: `TtStft` silently corrupt at >= 65,536 samples (added later, 2026-09-20)
+
+The vocoder-port bug that made the audio noisy/robotic/metallic was `TtStft`
+(`tt/hifigan/stft.py`): its framing conv used a weight hoisted with
+`ttnn.prepare_conv_weights` and returned garbage (PCC ~0.27, output ~30x too
+small) for any input of 65,536 samples or more -- every real utterance longer
+than ~2.7 s at 24 kHz. Fixed in commit `1cefdec6fc`; confirmed by ear. These
+scripts are how it was found and pinned down. Outputs (wavs, dumps) go to
+`$COSYVOICE2_DEBUG_OUT` (default `/tmp/cosyvoice2_debug`), never the repo. All
+need the device and `PYTHONPATH` set so `import ttnn` and `models.` resolve.
+
+- `f0_dtype_check.py` — F0 predictor device vs torch on the real 464-frame mel
+  at bf16 and fp32, expressed in audibility terms (cents of pitch error,
+  accumulated phase drift in cycles, voiced/unvoiced flips). Showed the earlier
+  "F0 drift" numbers were already fp32 and that F0 error is small in cents.
+- `f0_ablation_ab.py` — same mel, same noise draw, six runs: official class,
+  torch reference, TT as shipped, TT decoder with torch F0 injected ("A"),
+  torch decoder with TT F0 injected ("B"), torch with a different noise draw.
+  Phase-insensitive log-mel distance per frame plus wavs to listen to. "A" not
+  improving when F0 was corrected is what pointed at the decode path.
+- `decode_stage_bisect.py` — taps every TT sub-module of `TtHiFTDecoder.decode`
+  against a float64 torch reference (identical mel and excitation on both
+  sides): CUM error (accumulated) vs LOCAL error (added by that stage), with
+  gain so a level error is visible. Every module was locally accurate; the
+  error entered through the `stft` tap.
+- `stft_length_sweep.py` — `TtStft` vs `torch.stft` from 480 samples to 80 s.
+  Pytest boundary cases: `tests/pcc/test_stft.py`.
+- `repro_prepare_conv_weights_2p16.py` — standalone, pure-ttnn repro of the
+  defect (no CosyVoice imports), suitable for an upstream report.
+- `conv_config_matrix.py` — the 2x2 {prepared, raw weight} x {accurate, safe
+  config} matrix on the six 128-ch k=11 convs at length 18560, each against
+  float64 truth. Showed prepared == raw there and that the "safe" fallback is
+  the *less* accurate config (2.7% vs 0.4%), which led to the resolver change
+  in `conv.py`/`upsample.py`.
