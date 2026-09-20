@@ -2,12 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """--fullpipe-samples: an operator-facing knob on how many readings the full-pipeline gate takes
 per verdict (reported as their median). The BEFORE bookend and every check_full_pipeline_latency
-call both read PERF_MCP_FULLPIPE_SAMPLES (default 3) -- 3 filters random per-sample noise so it is
-not mistaken for a real win/regression, at the cost of ~3x the wall-clock per call. On a large model
-where a cold kernel cache alone can cost minutes per reading (see perf_mcp.py's board_over_abort_limit
-docstring: "with a cold kernel cache it runs for twelve minutes instead of two"), that 3x is material,
-so this lets an operator trade the noise filter for speed on purpose, per model, from the CLI --
-rather than only via the PERF_MCP_FULLPIPE_SAMPLES env var directly.
+call both read PERF_MCP_FULLPIPE_SAMPLES (default 1, i.e. no median) -- favouring speed, since a
+cold kernel cache alone can cost minutes per reading (see perf_mcp.py's board_over_abort_limit
+docstring: "with a cold kernel cache it runs for twelve minutes instead of two"), and that cost is
+paid once per sample. Raising it (e.g. 3) filters random per-sample noise from being mistaken for a
+real win/regression, at that many times the wall-clock per call -- this lets an operator make that
+tradeoff explicitly, per model, from the CLI, rather than only via the PERF_MCP_FULLPIPE_SAMPLES env
+var directly.
 
 Mirrors the existing --matmul-sweep-iters -> PERF_MCP_MATMUL_SWEEP_ITERS wiring (cli.py add_argument
 -> commands/optimize.py cmd_optimize -> os.environ), so BEFORE and AFTER stay comparable at
@@ -43,14 +44,14 @@ def _parse(monkeypatch, argv):
     return seen
 
 
-def test_the_flag_defaults_to_3_matching_the_engines_own_default(monkeypatch):
+def test_the_flag_defaults_to_1_matching_the_engines_own_default(monkeypatch):
     ns = _parse(monkeypatch, ["optimize", "m"])["args"]
-    assert ns.fullpipe_samples == 3
-
-
-def test_the_flag_parses_a_lower_value(monkeypatch):
-    ns = _parse(monkeypatch, ["optimize", "m", "--fullpipe-samples", "1"])["args"]
     assert ns.fullpipe_samples == 1
+
+
+def test_the_flag_parses_a_higher_value(monkeypatch):
+    ns = _parse(monkeypatch, ["optimize", "m", "--fullpipe-samples", "3"])["args"]
+    assert ns.fullpipe_samples == 3
 
 
 def _run_cmd_optimize_up_to_the_disk_gate(monkeypatch, optimize_mod, args):

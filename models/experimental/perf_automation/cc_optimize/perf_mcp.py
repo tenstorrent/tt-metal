@@ -278,7 +278,7 @@ _PCC_BANKED = "pcc_banked"
 _DECODE_STUCK_MARKER = "TRACE_DECODE_ADVANCE=stuck"
 # Must match the BEFORE bookend (run.py sets 3): AFTER = min over 1-sample readings vs
 # BEFORE = median of 3 manufactured the full noise range as a gain on every run.
-_FULLPIPE_SAMPLES = max(1, int(os.environ.get("PERF_MCP_FULLPIPE_SAMPLES", "3")))
+_FULLPIPE_SAMPLES = max(1, int(os.environ.get("PERF_MCP_FULLPIPE_SAMPLES", "1")))
 # How far two readings of one stage's read set may differ and still be treated as the same
 # measurement. The working set is a property of the build, so agreeing samples are the evidence that
 # the number is an observation rather than instrumentation noise -- and only an observation may be

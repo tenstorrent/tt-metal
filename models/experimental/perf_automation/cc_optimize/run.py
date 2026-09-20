@@ -582,7 +582,7 @@ def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str
     )
     env = cc_env(repo_root, devices)
     env.update(mcp_env)
-    env.setdefault("PERF_MCP_FULLPIPE_SAMPLES", "3")
+    env.setdefault("PERF_MCP_FULLPIPE_SAMPLES", "1")
     if label == "BEFORE":
         # THE BASELINE IS THE ONE MEASUREMENT NOTHING ELSE CAN SUBSTITUTE FOR. Every lever attempt
         # this run is scored against it (_fullpipe_reference_ms fails closed with no baseline: no
