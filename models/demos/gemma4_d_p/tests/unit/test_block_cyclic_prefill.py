@@ -31,15 +31,17 @@ def test_chunk_mapping_and_sliding_groups(cp, start, mode, monkeypatch):
     expected = torch.stack([tokens[(tokens // local) % cp == rank] for rank in range(cp)])
     torch.testing.assert_close(positions, expected)
 
-    monkeypatch.setattr(SlidingChunk, "_stage", lambda self, name, values, seq_dim=None: values)
+    monkeypatch.setattr(
+        SlidingChunk, "_stage", lambda self, name, values, seq_dim=None: self._buffers.setdefault(name, values)
+    )
     sliding = SlidingChunk(SimpleNamespace(cp_degree=cp), chunk, capacity)
     sliding.update(start, positions, mode=mode)
-    restore = sliding.output_indices.reshape(cp, local)
+    restore = sliding._buffers["output"].reshape(cp, local)
     for rank in range(cp):
         q = positions[rank]
         results = []
-        for origin, indices in zip(sliding.group_starts, sliding.q_indices):
-            idx = indices.reshape(cp, local)[rank]
+        for group, origin in enumerate(sliding.group_starts):
+            idx = sliding._buffers[f"q{group}"].reshape(cp, local)[rank]
             # Encode both the supplied Q identity and the absolute SDPA row.
             results.append(torch.stack((q[idx], origin.item() + rank * local + torch.arange(local)), dim=-1))
         restored = torch.cat(results)[restore[rank]]
@@ -54,6 +56,11 @@ def test_chunk_mapping_and_sliding_groups(cp, start, mode, monkeypatch):
     [
         (0, 4300, SlidingChunkMode.ALIGNED),
         (8192, 16384, SlidingChunkMode.ALIGNED),
+        (1024, 7000, SlidingChunkMode.ALIGNED),
+        (7168, 8192, SlidingChunkMode.ALIGNED),
+        (9216, 15000, SlidingChunkMode.ALIGNED),
+        (1024, 8193, SlidingChunkMode.TWO_GROUPS),
+        (7168, 9000, SlidingChunkMode.TWO_GROUPS),
         (32, 64, SlidingChunkMode.SINGLE_GROUP),
         (3168, 8192, SlidingChunkMode.SINGLE_GROUP),
         (3168, 8193, SlidingChunkMode.TWO_GROUPS),
@@ -67,27 +74,90 @@ def test_sliding_mode_uses_only_real_query_groups(start, end, expected):
     assert sliding.select_mode(start, end) == expected
 
 
-@pytest.mark.parametrize("start", [0, 8192, 24576])
-def test_aligned_sliding_has_one_call_and_no_adapter_work(start, monkeypatch):
-    sliding = SlidingChunk(SimpleNamespace(cp_degree=8), 8192, 32768)
-    monkeypatch.setattr(sliding, "_stage", lambda *a, **k: pytest.fail("Aligned SWA must not stage gather inputs"))
+@pytest.mark.parametrize("cp", [4, 8])
+@pytest.mark.parametrize("group", [0, 1, 3])
+@pytest.mark.parametrize("block", [0, 1, 3])
+def test_aligned_sliding_has_one_call_and_no_gathers(cp, group, block, monkeypatch):
+    chunk, local = 8192, 8192 // cp
+    start = group * chunk + block * local
+    end = min((group + 1) * chunk, start + local + 17)
+    sliding = SlidingChunk(SimpleNamespace(cp_degree=cp), chunk, 32768)
+    monkeypatch.setattr(sliding, "_stage", lambda name, values, seq_dim=None: sliding._buffers.setdefault(name, values))
     monkeypatch.setattr(sliding, "_gather_rows", lambda *a, **k: pytest.fail("Aligned SWA must not gather Q"))
-    sliding.update(start, chunk_positions(start, 8192, 8), mode=SlidingChunkMode.ALIGNED)
+    positions = chunk_positions(start, chunk, cp)
+    mode = sliding.select_mode(start, end)
+    assert mode == SlidingChunkMode.ALIGNED
+    sliding.update(start, positions, mode=mode)
+    assert set(sliding._buffers) == {"start0"}
+    assert not sliding._expanded_indices
+    native_rows = group * chunk + torch.arange(chunk).reshape(cp, local)
+    torch.testing.assert_close(positions[positions < end], native_rows[positions < end])
     calls = []
-    query, output, metadata = object(), object(), object()
+    query, output = object(), object()
+    metadata = SimpleNamespace(slot_idx=object(), kv_actual_global=torch.tensor([start]))
 
     def attention(**kwargs):
         calls.append(kwargs)
         return output
 
     assert sliding.attention(query, metadata, attention, scale=0.5) is output
-    assert calls == [dict(tt_q=query, prefill_metadata=metadata, scale=0.5)]
+    assert len(calls) == 1
+    assert calls[0]["tt_q"] is query
+    assert calls[0]["scale"] == 0.5
+    assert calls[0]["prefill_metadata"].slot_idx is metadata.slot_idx
+    assert calls[0]["prefill_metadata"].kv_actual_global.item() == group * chunk
+    assert metadata.kv_actual_global.item() == start
+
+
+def test_sliding_gather_indices_shared_across_layers_and_refreshed_in_place(monkeypatch):
+    sliding = SlidingChunk(SimpleNamespace(cp_degree=8), 8192, 32768)
+    repeats = []
+
+    def stage(name, values, seq_dim=None):
+        sliding._buffers[name] = values
+        return values
+
+    def repeat(indices, shape, optional_output_tensor=None):
+        repeats.append(indices)
+        result = indices.repeat(tuple(shape))
+        if optional_output_tensor is not None:
+            optional_output_tensor.copy_(result)
+            return optional_output_tensor
+        return result
+
+    monkeypatch.setattr(sliding, "_stage", stage)
+    monkeypatch.setattr(ttnn, "repeat", repeat)
+    monkeypatch.setattr(ttnn, "gather", lambda tensor, dim, index, **kw: torch.gather(tensor, dim, index))
+    tensors = [torch.randn(1, heads, 16384, width) for heads, width in [(2, 4), (1, 8)]]
+    addresses = None
+    for start, end in [(1056, 9000), (7008, 8192), (2048, 7000), (7008, 9000)]:
+        mode = sliding.select_mode(start, end)
+        sliding.update(start, chunk_positions(start, 8192, 8), mode=mode)
+        if mode == SlidingChunkMode.ALIGNED:
+            continue
+        names = [f"q{group}" for group in range(len(sliding.group_starts))] + ["output"]
+        for layer in range(3):
+            previous_repeats = len(repeats)
+            for tensor in tensors:
+                for name in names:
+                    actual = sliding._gather_rows(tensor, name)
+                    expected = torch.gather(
+                        tensor, 2, sliding._buffers[name].expand(1, tensor.shape[1], -1, tensor.shape[3])
+                    )
+                    torch.testing.assert_close(actual, expected)
+            if layer or addresses is not None:
+                assert len(repeats) == previous_repeats, "Each layer must reuse the staged indices"
+        current_addresses = {key: tensor.data_ptr() for key, tensor in sliding._expanded_indices.items()}
+        if addresses is not None:
+            assert current_addresses == addresses
+        addresses = current_addresses
 
 
 @pytest.mark.parametrize(
     "start,end,mode,match",
     [
-        (32, 1056, SlidingChunkMode.ALIGNED, "chunk-aligned"),
+        (32, 1056, SlidingChunkMode.ALIGNED, "CP-block-aligned"),
+        (1024, 8193, SlidingChunkMode.ALIGNED, "within one group"),
         (7008, 9000, SlidingChunkMode.SINGLE_GROUP, "cannot span two"),
     ],
 )
@@ -257,10 +327,16 @@ def test_device_block_cyclic_cache_attention_replay(mesh_device, global_cache):
         if cache is not None:
             previous[label] = [ttnn.to_torch(shard).float() for shard in ttnn.get_device_tensors(cache)[::tp]]
     buffer_addresses = {key: value.buffer_address() for key, value in metadata._buffers.items()}
+    sliding_addresses = {key: value.buffer_address() for key, value in metadata.sliding._buffers.items()}
+    expanded_addresses = {key: value.buffer_address() for key, value in metadata.sliding._expanded_indices.items()}
     try:
         for slot, start, end in [
             (0, 0, 1056),
             (1, 1056, 9000),
+            (0, local, 7000),
+            (1, chunk - local, 8192),
+            (1, chunk - local, 9000),
+            (0, chunk + local, 15001),
             (0, 7008, 8192),
             (0, 7008, 9000),
             (1, 8192, 12001),
@@ -278,6 +354,12 @@ def test_device_block_cyclic_cache_attention_replay(mesh_device, global_cache):
                     ttnn.copy_host_to_device_tensor(host_tensor(src), dst)
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
             assert buffer_addresses == {key: value.buffer_address() for key, value in metadata._buffers.items()}
+            assert sliding_addresses == {
+                key: value.buffer_address() for key, value in metadata.sliding._buffers.items()
+            }
+            assert expanded_addresses == {
+                key: value.buffer_address() for key, value in metadata.sliding._expanded_indices.items()
+            }
             written = flat < ((end + 31) // 32 * 32)
             expected_k[slot, :, flat[written]] = k[0, :, written]
             if v is not None:
