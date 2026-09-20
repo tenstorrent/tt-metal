@@ -186,7 +186,10 @@ def test_binary_min_int32_bcast(input_shape_a, input_shape_b, low_a, high_a, low
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([2, 2, 1024, 1024])),
+        # Optional-output / queue_id coverage only; numerical range is covered
+        # by test_binary_min_int32. A 1024×1024 tile without the extra batch
+        # keeps this cheaper than the [2, 2, 1024, 1024] full-range case.
+        (torch.Size([1, 1, 1024, 1024])),
     ),
 )
 @pytest.mark.parametrize(

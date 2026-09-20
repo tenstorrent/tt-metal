@@ -199,9 +199,10 @@ def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, **op_kw
     are inplace: they write into lhs and the result is read back from that
     tensor rather than the return value.
 
-    ``op_kwargs`` (e.g. ``fast_and_approximate_mode``) are forwarded only to
-    the device op. Torch-valid golden arguments (e.g. isclose ``rtol``/``atol``)
-    go in ``golden_kwargs`` and are also passed to the device op.
+    Inputs are uploaded as ``ttnn.bfloat16``. ``op_kwargs`` (e.g.
+    ``fast_and_approximate_mode``) are forwarded only to the device op.
+    Torch-valid golden arguments (e.g. isclose ``rtol``/``atol``) go in
+    ``golden_kwargs`` and are also passed to the device op.
     """
     tt_a = to_tt_tensor(input_a, device)
     tt_b = to_tt_tensor(input_b, device)

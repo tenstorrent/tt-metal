@@ -9,7 +9,6 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     pairwise_inputs,
     run_binary,
-    to_tt_tensor,
 )
 
 pytestmark = pytest.mark.use_module_device
@@ -99,17 +98,21 @@ def test_isclose(device, rtol, atol, equal_nan):
     Kernel: |a - b| <= atol + rtol * |b|, with an explicit Inf/NaN fix-up
     matching torch.isclose (equal_nan selects both-NaN => 1).
 
-    Two dest-precision exceptions, both empty on the default (1e-5, 1e-8):
+    Two dest-precision exceptions, both empty on the default (1e-5, 1e-8).
+    Expected is built from the inputs and device arithmetic, not from whether
+    the observed result already disagrees with torch:
 
-    1) Underflow FTZ of |a-b|: when |a| and |b| are in [2^{-126}, 2^{-119}]
-       (≈ 1.18e-38 … 1.50e-36), the bf16 difference underflows to 0 on
-       device so isclose is True while torch sees a nonzero gap.
+    1) Underflow FTZ of |a-b|: dest packing flushes subnormal differences
+       (|a-b|_fp32 < 2^{-126}) to 0, so isclose is True while torch still
+       sees a nonzero gap. Min-normal |a-b| = 2^{-126} is representable and
+       stays nonzero. Typical on this grid when both |a| and |b| sit in
+       [2^{-126}, 2^{-119}).
        Example (atol=0): 1.175e-38 vs 1.185e-38 → torch False, device True.
 
-    2) Tolerance fence: SFPU |a-b| is fp32 dest; torch.isclose on bf16
-       rounds |a-b| to bf16. When the rounded difference equals atol but
-       the fp32 difference is slightly larger, torch says close and the
-       device does not.
+    2) Tolerance fence (atol > 0 only): SFPU |a-b| is fp32 dest; torch.isclose
+       on bf16 rounds |a-b| to bf16. When the rounded difference equals atol
+       but the fp32 difference is slightly larger, torch says close and the
+       device does not. At atol=0 this predicate is dest FTZ, not a fence.
        Example (atol=1): 6.007e-08 vs -1.0 → torch |a-b|_bf16 = 1.0,
        device |a-b|_fp32 = 1.00000012.
     """
@@ -121,36 +124,42 @@ def test_isclose(device, rtol, atol, equal_nan):
     golden = golden.float()
     result = result.float()
 
-    underflow_eq = (result == 1) & (golden == 0) & (input_a.abs() < (2.0**-118)) & (input_b.abs() < (2.0**-118))
-    result = torch.where(underflow_eq, golden, result)
+    # Dest FTZ: subnormal |a-b| in dest packs to 0, so isclose is True.
+    # Min-normal |a-b| = 2^{-126} is kept, so the bound is strict.
+    diff_fp32 = (input_a.float() - input_b.float()).abs()
+    dest_sub_flushed = torch.isfinite(input_a) & torch.isfinite(input_b) & (diff_fp32 < (2.0**-126))
+    adjusted_golden = torch.where(dest_sub_flushed, torch.ones_like(golden), golden)
 
+    # Tolerance fence (atol > 0 only): torch |a-b| rounded to bf16 equals
+    # atol, fp32 dest difference is strictly larger. At atol=0 this is the
+    # FTZ case above (diff_bf16 == 0 and diff_fp32 > 0), not a fence.
     diff_bf16 = (input_a - input_b).abs()
     atol_bf16 = torch.tensor(atol, dtype=torch.bfloat16)
-    fence = (result == 0) & (golden == 1) & (diff_bf16 == atol_bf16)
-    result = torch.where(fence, golden, result)
+    fence = (atol > 0) & (diff_bf16 == atol_bf16) & (diff_fp32 > float(atol))
+    adjusted_golden = torch.where(fence, torch.zeros_like(adjusted_golden), adjusted_golden)
 
-    assert_equal(golden, result)
+    assert_equal(adjusted_golden, result)
 
 
 @pytest.mark.parametrize("ttnn_op, is_max", [(ttnn.minimum, False), (ttnn.maximum, True)])
-@pytest.mark.parametrize("dtype", ["bfloat16"])
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 def test_minmax_special_values(device, ttnn_op, is_max, dtype):
     """Cross product of ±0, ±1, ±inf, NaN for ttnn.minimum / ttnn.maximum.
 
-    SFPSWAP compares in sign-magnitude and treats NaN as +inf, so it does not
-    propagate NaN the way torch.minimum / torch.maximum do. Operand order
-    does not change this: minimum(nan, x) matches minimum(x, nan).
+    bfloat16 dest uses SFPSWAP (sign-magnitude, NaN as +inf). Operand order
+    does not change this: minimum(nan, x) matches minimum(x, nan). Dest packing
+    also drops the zero sign bit.
 
-    call                                  torch    ttnn
-    ------------------------------------  -------  --------
-    minimum(x, nan)   x finite or -inf    NaN      x
-    minimum(+inf, nan)                    NaN      +inf
-    minimum(nan, nan)                     NaN      +inf
-    maximum(x, nan)   any x               NaN      +inf
+    call                                  torch    ttnn bf16    ttnn fp32
+    ------------------------------------  -------  -----------  -----------
+    minimum(x, nan)   x finite or -inf    NaN      x            x
+    minimum(+inf, nan)                    NaN      +inf         +inf
+    minimum(nan, nan)                     NaN      +inf         NaN
+    maximum(x, nan)   any x               NaN      +inf         NaN
 
-    Dest packing also drops the zero sign bit: IEEE min(+0, -0) is -0 and
-    max(-0, -0) is -0, but the device writes +0. Expected values are built
-    from those two rules.
+    float32 maximum matches torch (IEEE NaN-propagate). float32 minimum still
+    treats one-sided NaN as +inf; both-NaN stays NaN. IEEE min(+0, -0) is -0
+    and max(-0, -0) is -0; bf16 dest writes +0, fp32 dest keeps a sign bit.
     """
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
@@ -165,16 +174,24 @@ def test_minmax_special_values(device, ttnn_op, is_max, dtype):
     inf = torch.tensor(float("inf"), dtype=torch_dtype)
     a_cmp = torch.where(torch.isnan(input_a), inf, input_a)
     b_cmp = torch.where(torch.isnan(input_b), inf, input_b)
-    expected = torch.maximum(a_cmp, b_cmp) if is_max else torch.minimum(a_cmp, b_cmp)
-    expected = torch.where(expected == 0, torch.zeros_like(expected), expected)
 
-    tt_a = to_tt_tensor(input_a, device)
-    tt_b = to_tt_tensor(input_b, device)
+    if dtype == "float32" and is_max:
+        expected = torch.maximum(input_a, input_b)
+    else:
+        expected = torch.maximum(a_cmp, b_cmp) if is_max else torch.minimum(a_cmp, b_cmp)
+        if dtype == "float32":
+            expected = torch.where(torch.isnan(input_a) & torch.isnan(input_b), input_a, expected)
+        else:
+            expected = torch.where(expected == 0, torch.zeros_like(expected), expected)
+
+    tt_a = ttnn.from_torch(input_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_b = ttnn.from_torch(input_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     result = ttnn.to_torch(ttnn_op(tt_a, tt_b))
 
     assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=0, allow_nonfinite=True)
-    zero = result == 0
-    assert not torch.signbit(result[zero]).any()
+    if dtype == "bfloat16":
+        zero = result == 0
+        assert not torch.signbit(result[zero]).any()
 
 
 @pytest.mark.parametrize(
@@ -215,10 +232,11 @@ def test_special_values(device, op_name, dtype):
 
     x_torch = torch.tensor(x_vals, dtype=torch_dtype)
     y_torch = torch.tensor(y_vals, dtype=torch_dtype)
-    z_torch = torch_fn(x_torch, y_torch)
+    golden = torch_fn(x_torch, y_torch)
 
-    x_tt = to_tt_tensor(x_torch, device)
-    y_tt = to_tt_tensor(y_torch, device)
-    z_tt = run_binary(device, ttnn_fn, x_tt, y_tt)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn_fn(x_tt, y_tt)
+    tt_out = ttnn.to_torch(z_tt)
 
-    assert_equal(z_torch, z_tt)
+    assert_equal(golden.float(), tt_out.float())
