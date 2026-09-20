@@ -1,22 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Time-packed 1-D ops for the vocoder's narrow late bands.
-
-With 8 or 16 channels a ``(T, C)`` fp32 row is a 32- or 64-byte DRAM page and every op in the band runs at a few
-GB/s. Packing ``k`` consecutive time steps into one row, ``(T, C) -> (T / k, k * C)`` (a plain row-major reshape),
-gives 128-byte pages and ``k``x fewer of them. Every op in an AMP block is shift-invariant with an integer rate, so
-each has an exact packed form as a dense conv over packed rows:
-
-* a dilated ``Conv1d`` becomes a ``Conv1d`` on ``k * C_in -> k * C_out`` with a few taps;
-* the 2x anti-alias upsampler becomes ``k * C -> 2k * C``, the 2x downsampler ``2k * C -> k * C``;
-* ``SnakeBeta`` keeps working elementwise with its per-channel parameters tiled ``k`` times.
-
-The packed weights are read off the reference op's impulse responses (``packed_weight``), so any shift-invariant
-torch op can be packed without deriving index arithmetic by hand. The dense form multiplies zeros where the
-original coupling is absent, but conv3d already pads the channel dim to 32, so at ``k * C = 32`` the FLOPs are
-unchanged while the channel pad/trim ops disappear. Only the global sequence ends differ from the unpacked op: a
-replicate pad of packed rows repeats the last ``k`` samples instead of the last one.
-"""
+"""Time-packed 1-D ops for the vocoder's narrow (8-16 channel) bands: ``(T, C) -> (T / k, k * C)`` turns 32/64-byte
+DRAM pages into 128-byte ones; every shift-invariant op has an exact packed form read off its impulse responses."""
 
 from __future__ import annotations
 
@@ -32,14 +17,10 @@ from .module import Module
 def packed_weight(
     op, *, c_in: int, c_out: int, k_in: int, k_out: int, support: int, q_half: int | None = None
 ) -> torch.Tensor:
-    """Dense packed weight ``(k_out * c_out, k_in * c_in, K')`` of a shift-invariant torch op.
-
-    ``op`` maps ``(1, c_in, L)`` to ``(1, c_out, L * k_out / k_in)`` (no bias) and commutes with shifts by ``k_in``
-    input / ``k_out`` output samples. ``support`` bounds the op's receptive field in input samples. The result is a
-    "same"-padded odd-length kernel (zero taps pad an asymmetric reach), so ``F.conv1d(X', W', padding=K'//2)`` on
-    packed rows reproduces ``op`` away from the sequence ends. ``q_half`` fixes ``K' = 2 * q_half + 1`` (a weight
-    with chance zero taps must keep the kernel its module was built for); ``None`` trims zero taps symmetrically.
-    """
+    """Dense packed weight ``(k_out * c_out, k_in * c_in, K')`` of a shift-invariant torch op ``(1, c_in, L) ->
+    (1, c_out, L * k_out / k_in)`` (no bias, receptive field <= ``support`` input samples). The result is an odd "same"
+    kernel; ``q_half`` fixes ``K' = 2 * q_half + 1`` (a weight with chance zero taps keeps its module's kernel) and
+    ``None`` trims zero taps symmetrically."""
     q_max = -(-(support + k_in) // k_in) + 1
     rows = 2 * q_max + 5
     t0 = rows // 2
@@ -108,10 +89,8 @@ def kaiser_taps(ratio: int = 2, kernel_size: int = 12) -> torch.Tensor:
 
 
 class PackedConv1d(Conv1dViaConv3d):
-    """A dilated "same" ``Conv1d`` on ``k``-packed rows: ``(B, T/k, k*C_in) -> (B, T/k, k*C_out)``.
-
-    Loads the ordinary ``(C_out, C_in, K)`` torch weight and bias and packs them at load time.
-    """
+    """A dilated "same" ``Conv1d`` on ``k``-packed rows, ``(B, T/k, k*C_in) -> (B, T/k, k*C_out)``; loads the ordinary
+    ``(C_out, C_in, K)`` torch weight and bias and packs them at load time."""
 
     def __init__(self, in_channels: int, out_channels: int, *, kernel_size: int, dilation: int = 1, pack: int, **kw):
         support = (kernel_size - 1) * dilation + 1
@@ -157,12 +136,9 @@ def _packed_resample_weight(taps, channels, k_in, k_out, up, q_half=None):
 
 
 class PackedResample(Conv1dViaConv3d):
-    """A fixed depthwise 2x resampler (up or down) as a dense conv on packed rows.
-
-    ``k_in`` input slots per row, ``k_out`` output slots per row (``k_out = 2 * k_in`` up, ``k_in / 2`` down). The
-    taps come from the checkpoint filter when it carries one, else the kaiser-sinc default. Replicate padding at the
-    sequence ends becomes a replicate halo of packed rows when T-sharded (zeros when unsharded).
-    """
+    """A fixed depthwise 2x resampler (up or down) as a dense conv on packed rows: ``k_in`` input slots per row,
+    ``k_out`` output slots (``2 * k_in`` up, ``k_in / 2`` down). Taps come from the checkpoint filter if present, else
+    the kaiser-sinc default; replicate end padding becomes a replicate halo of packed rows when T-sharded."""
 
     def __init__(self, channels: int, *, k_in: int, k_out: int, up: bool, **kw):
         taps = kaiser_taps()
@@ -186,10 +162,8 @@ class PackedResample(Conv1dViaConv3d):
 
 
 class PackedActivation1d(Module):
-    """``UpSample1d(2x) -> SnakeBeta -> DownSample1d(2x)`` on ``k``-packed rows: three ops plus the snake's layout
-    round trip, against ~25 today. Loads the unpacked ``Activation1d`` state (``act.alpha``, ``act.beta`` and the
-    optional resampler filters), tiling the per-channel snake parameters over the ``2k`` slots of the upsampled row.
-    """
+    """``UpSample1d(2x) -> SnakeBeta -> DownSample1d(2x)`` on ``k``-packed rows. Loads the unpacked ``Activation1d``
+    state, tiling the per-channel snake parameters over the ``2k`` slots of the upsampled row."""
 
     def __init__(
         self,
