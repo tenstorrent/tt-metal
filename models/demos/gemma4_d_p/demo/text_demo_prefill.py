@@ -197,21 +197,9 @@ def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, co
         mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
     )
     device_input_tokens = ttnn.to_device(host_input_tokens, device=mesh_device)
-    device_positions = ttnn.to_device(
-        ttnn.from_torch(
-            torch.arange(0, chunk_size, dtype=torch.int32).unsqueeze(0),
-            device=None,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
-        ),
-        device=mesh_device,
-    )
-
-    model.set_prefill_rope_positions(device_positions)
     model._prefill_metadata_external = True
 
-    stage_breakdown_ms = {"tokens": 0.0, "metadata": 0.0, "rope": 0.0}
+    stage_breakdown_ms = {"tokens": 0.0, "metadata": 0.0}
 
     def _stage(chunk_idx):
         """Host-side refresh of everything that varies per chunk. Never inside a trace."""
@@ -230,20 +218,8 @@ def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, co
         stage_breakdown_ms["tokens"] += (time.time() - _t) * 1000
 
         _t = time.time()
-        model.prefill_metadata.update(slot_idx=0, kv_actual_global=chunk_start)
+        model.prefill_metadata.update(slot_idx=0, actual_start=chunk_start, actual_end=chunk_start + chunk_size)
         stage_breakdown_ms["metadata"] += (time.time() - _t) * 1000
-
-        # Update absolute token positions across CP ranks.
-        _t = time.time()
-        pos_host = ttnn.from_torch(
-            torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
-            device=None,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
-        )
-        ttnn.copy_host_to_device_tensor(pos_host, device_positions)
-        stage_breakdown_ms["rope"] += (time.time() - _t) * 1000
 
         return chunk_start
 
@@ -496,21 +472,10 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
     )
     device_input_tokens = ttnn.to_device(host_input_tokens, device=mesh_device)
-    device_positions = ttnn.to_device(
-        ttnn.from_torch(
-            torch.arange(0, chunk_size, dtype=torch.int32).unsqueeze(0),
-            device=None,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
-        ),
-        device=mesh_device,
-    )
-    model.set_prefill_rope_positions(device_positions)
     model._prefill_metadata_external = True
 
     def _stage(idx):
-        """Refresh tokens, ring metadata, semaphores, and RoPE positions before replay."""
+        """Refresh tokens and request metadata before replay."""
         chunk_start = idx * chunk_size
         staged = ttnn.from_torch(
             tokens_all[:, chunk_start : chunk_start + chunk_size].contiguous(),
@@ -520,15 +485,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
             mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
         ttnn.copy_host_to_device_tensor(staged, device_input_tokens)
-        model.prefill_metadata.update(slot_idx=0, kv_actual_global=chunk_start)
-        pos_host = ttnn.from_torch(
-            torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
-            device=None,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
-        )
-        ttnn.copy_host_to_device_tensor(pos_host, device_positions)
+        model.prefill_metadata.update(slot_idx=0, actual_start=chunk_start, actual_end=chunk_start + chunk_size)
         return chunk_start
 
     def _make_forward(lt):

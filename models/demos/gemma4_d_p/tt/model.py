@@ -187,7 +187,8 @@ class Gemma4Model:
             )
 
         # When True the caller refreshes the ring metadata itself, outside any trace.
-        self.prefill_metadata = PrefillMetadata(mesh_config)
+        self.prefill_metadata = PrefillMetadata(mesh_config, prefill_chunk_size, max_seq_len, max_local_batch_size)
+        self._rope_prefill_positions = self.prefill_metadata.positions
         self._prefill_metadata_external = False
         self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
@@ -290,21 +291,39 @@ class Gemma4Model:
         on_layer_complete=None,
         d2h_service=None,
         metadata_msg=None,
+        *,
+        actual_start=None,
+        actual_end=None,
     ):
         """Prefill one user's chunk and return its final decoder hidden states.
 
-        ``hidden_states`` holds this TP device's 1/TP of the chunk's rows, as
-        ``transform_and_embed_prefill_inputs_device`` returns them. The caller owns
-        trace staging. Migration acknowledgements follow each layer's KV writes.
+        ``hidden_states`` holds this TP device's 1/TP of the CP shard's rows,
+        as ``transform_and_embed_prefill_inputs_device`` returns them. Inputs use
+        block-cyclic CP order; starts are 32-token aligned. Before trace replay,
+        stage ``prefill_metadata.update(slot_idx=..., actual_start=..., actual_end=...)``.
+        Migration acknowledgements follow each layer's KV writes.
         """
-        tp = self.mesh_config.tp_degree if self.mesh_config is not None else 1
-        seq_len = hidden_states.shape[2] * tp
+        if actual_start is not None:
+            if chunk_start_idx not in (0, actual_start):
+                raise ValueError("actual_start and chunk_start_idx disagree")
+            chunk_start_idx = actual_start
+        seq_len = hidden_states.shape[2] * self.mesh_config.tp_degree
+        if seq_len * self.mesh_config.cp_degree != self.prefill_chunk_size:
+            raise ValueError("hidden_states must contain one full CP/TP-sharded prefill chunk")
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
             raise ValueError("Ring prefill processes one user per call")
         if d2h_service is not None and metadata_msg is None:
             raise ValueError("metadata_msg is required for D2H layer acknowledgements")
         if not self._prefill_metadata_external:
-            self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)
+            self.prefill_metadata.update(
+                slot_idx=user_id,
+                actual_start=chunk_start_idx,
+                actual_end=(
+                    actual_end
+                    if actual_end is not None
+                    else min(chunk_start_idx + self.prefill_chunk_size, self.max_seq_len)
+                ),
+            )
 
         gathered_rope = {}
         if self._rope_prefill_positions is not None:

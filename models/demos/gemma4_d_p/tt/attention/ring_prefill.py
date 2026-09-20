@@ -132,6 +132,7 @@ def write_chunk_to_global_ring_cache(
     num_layers=1,
     slot_idx=0,
     prefill_metadata=None,
+    actual_end=None,
 ):
     """Append one packed global-attention chunk to its CP-local history."""
 
@@ -151,6 +152,7 @@ def write_chunk_to_global_ring_cache(
             layer_idx=layer_idx,
             num_layers=num_layers,
             kv_actual_global=kv_actual_global_t,
+            valid_global=prefill_metadata.actual_end,
             cluster_axis=mesh_config.cp_axis,
         )
     else:
@@ -161,6 +163,7 @@ def write_chunk_to_global_ring_cache(
             layer_idx=layer_idx,
             num_layers=num_layers,
             kv_actual_global=kv_actual_global,
+            valid_global=actual_end,
             cluster_axis=mesh_config.cp_axis,
         )
 
@@ -310,6 +313,7 @@ def write_chunk_to_sliding_ring_cache(
     num_layers=1,
     slot_idx=0,
     prefill_metadata=None,
+    actual_end=None,
 ):
     """Append one sliding-attention chunk (K and V) to its CP-local history."""
 
@@ -330,6 +334,7 @@ def write_chunk_to_sliding_ring_cache(
                 layer_idx=layer_idx,
                 num_layers=num_layers,
                 kv_actual_global=kv_actual_global_t,
+                valid_global=prefill_metadata.actual_end,
                 cluster_axis=mesh_config.cp_axis,
             )
         else:
@@ -340,6 +345,7 @@ def write_chunk_to_sliding_ring_cache(
                 layer_idx=layer_idx,
                 num_layers=num_layers,
                 kv_actual_global=kv_actual_global,
+                valid_global=actual_end,
                 cluster_axis=mesh_config.cp_axis,
             )
 
@@ -368,7 +374,53 @@ def sliding_ring_prefill_attention(
     num_layers=1,
     slot_idx=0,
 ):
-    """Attend this rank's Q shard over the cached prefix via the CP ring, with separate K and V caches.
+    """Attend sliding layers using separate K and V ring caches."""
+    return prefill_metadata.sliding.attention(
+        attention_fn=_ring_prefill_attention,
+        tt_q=tt_q,
+        cache_k=cache_k,
+        cache_v=cache_v,
+        mesh_config=mesh_config,
+        ccl_manager=ccl_manager,
+        prefill_metadata=prefill_metadata,
+        num_local_kv_heads=num_local_kv_heads,
+        head_dim=head_dim,
+        max_seq_len=max_seq_len,
+        logical_n=logical_n,
+        kv_actual_global=kv_actual_global,
+        sliding_window_size=sliding_window_size,
+        scale=scale,
+        compute_kernel_config=compute_kernel_config,
+        program_config=program_config,
+        layer_idx=layer_idx,
+        num_layers=num_layers,
+        slot_idx=slot_idx,
+        gather_buffer_key=gather_buffer_key,
+    )
+
+
+def _ring_prefill_attention(
+    tt_q,
+    cache_k,
+    cache_v,
+    mesh_config,
+    ccl_manager,
+    prefill_metadata,
+    num_local_kv_heads,
+    head_dim,
+    max_seq_len,
+    logical_n,
+    kv_actual_global,
+    sliding_window_size=None,
+    scale=1.0,
+    compute_kernel_config=None,
+    program_config=None,
+    layer_idx=0,
+    num_layers=1,
+    slot_idx=0,
+    gather_buffer_key=None,
+):
+    """Attend this rank's Q shard over the whole cached prefix, via the CP ring.
 
     ``logical_n`` fixes the cache capacity at capture. Device metadata supplies
     the valid prefix on each replay; ``kv_actual_global`` is the prefix before
