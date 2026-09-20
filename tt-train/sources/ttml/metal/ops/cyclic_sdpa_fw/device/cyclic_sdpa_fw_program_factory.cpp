@@ -161,6 +161,7 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
     make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);      // P^T
     make_cb(tt::CBIndex::c_20, Bt, tt::DataFormat::Float32);          // r = exp(a (m_old - m_new)), full tile
     make_cb(tt::CBIndex::c_23, Bt, tt::DataFormat::Float32);          // colmax S^T, row layout (scratch)
+    make_cb(tt::CBIndex::c_9, Bt, tt::DataFormat::Float32);           // lse in row layout, before its transpose
     // ---- The finished row, at its last visit: O in bf16 and lse in column layout.
     make_cb(tt::CBIndex::c_21, rowT, tt::DataFormat::Float16_b);      // O_i
     make_cb(tt::CBIndex::c_22, Bt, tt::DataFormat::Float32);          // lse_i
@@ -243,6 +244,7 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
     unpack_mode[tt::CBIndex::c_14] = UnpackToDestMode::UnpackToDestFp32;
     unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;
     unpack_mode[tt::CBIndex::c_20] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;
     const auto compute = CreateKernel(
         program, kComputePath, region,
         ComputeConfig{

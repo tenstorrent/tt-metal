@@ -37,10 +37,15 @@
 // S^T - m is the FPU's row-broadcast subtraction, which reads S^T at 19 bits
 // (rounded to nearest by the packer): P carries that 5e-4 relative rounding
 // of the score, the same one sdpa_fw's and the backward's own probabilities
-// carry; the lse stays flat in N because the rescale factors are exact. All SFPU work is on the math thread: the SFPU's programmable
-// constants are shared between the threads, and a pack-thread exponential
-// was corrupted by the math thread's reciprocal and logarithm (measured:
-// the exponent came out scaled by 11).
+// carry; the lse stays flat in N because the rescale factors are exact.
+//
+// The threads. The probabilities' exponential -- the bulk of the SFPU work
+// -- runs on the pack thread after the math thread's commit, overlapping the
+// next column's FPU subtraction and the packs; every other SFPU operation
+// (on exact unpack-to-dest copies) stays on the math thread, and the CB
+// protocol keeps the two apart in time (see pack_sfpu). The SFPU's
+// programmable constants are shared between the threads, so the exponential
+// reloads its own before every run and restores register 11's -1.0 after.
 //
 // The state travels in the packet: read through the seed views (c_13 m,
 // c_14 l, c_15 O^T), packed back through the out views (c_18, c_19, c_17)
@@ -344,6 +349,137 @@ inline void exp_tile(const uint32_t tile) {
 }  // namespace math_sfpu
 #endif
 
+#if defined(TRISC_PACK)
+// The same exponential on the pack thread, for the probabilities: the bulk
+// of the SFPU work, run on the committed half of the destination file while
+// the math thread forms the next column's S^T - m, as the backward and
+// ttnn's streaming kernel do. It never runs at the same time as a
+// math-thread SFPU operation: the math thread's next SFPU work (the sum's
+// rescale) starts after the probabilities are pushed, which is after every
+// exponential here. (Every other SFPU operation stays on the math thread:
+// they consume unpack-to-dest copies, which the pack thread's SFPU read
+// before the unpacker had finished writing them -- measured as a moving
+// 3e-3 to 2e-2 error on O.)
+namespace pack_sfpu {
+
+// tile_regs_wait gates only the packer on the math thread's commit; the
+// vector unit's loads need their own gate on the same semaphore.
+inline void wait_for_math_done() {
+    TTI_SEMWAIT(p_stall::STALL_SFPU, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
+}
+
+// The packer waits for the vector unit's last store before reading a tile.
+inline void wait_before_pack() {
+    TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU);
+}
+
+
+// 2^f for f in [0, 1) as 1 + c1 f + c2 f^2 + c3 f^3 + c4 f^4.
+constexpr uint32_t kExpC1 = 0x3F316B63u;
+constexpr uint32_t kExpC2 = 0x3E771229u;
+constexpr uint32_t kExpC3 = 0x3D55FC32u;
+constexpr uint32_t kExpC4 = 0x3C5BFB9Cu;
+
+constexpr uint32_t kBiasReg = p_sfpu::LREG6;
+constexpr uint32_t kC1Reg = p_sfpu::LREG7;
+constexpr uint32_t kScaleReg = p_sfpu::LREG12;
+constexpr uint32_t kC2Reg = p_sfpu::LREG13;
+constexpr uint32_t kC3Reg = p_sfpu::LREG14;
+constexpr uint32_t kC4Reg = p_sfpu::LREG11;  // borrowed from the sfpi compiler's -1.0, see exp_release
+
+constexpr uint32_t kMadNegateVa = 1u;
+constexpr uint32_t kSetExpFromInt = 0u;
+constexpr uint32_t kCastIntToFloat = 0u;
+constexpr uint32_t kGtSetVd = 8u;
+
+inline void load_constant(const uint32_t reg, const uint32_t bits) {
+    TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_UPPER, static_cast<uint16_t>(bits >> 16));
+    TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_LOWER, static_cast<uint16_t>(bits & 0xFFFFu));
+}
+
+inline void program_constant(const uint32_t reg, const uint32_t bits) {
+    load_constant(p_sfpu::LREG0, bits);
+    TTI_SFPCONFIG(0, reg, 0);
+}
+
+inline void init() {
+    ckernel::sfpu::_init_sfpu_config_reg();
+}
+
+// The address modes and every constant the exponential relies on, reloaded
+// before every run of tiles: the other SFPU operations program these too.
+inline void exp_prepare() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+    constexpr float exp_scale = __builtin_bit_cast(float, scaler_bits);
+    constexpr uint32_t inv_ln2_bits = __builtin_bit_cast(uint32_t, exp_scale * 1.4426950408889634F);
+    program_constant(kScaleReg, inv_ln2_bits);
+    program_constant(kC2Reg, kExpC2);
+    program_constant(kC3Reg, kExpC3);
+    program_constant(kC4Reg, kExpC4);
+    load_constant(kBiasReg, exp_bias_bits);
+    load_constant(kC1Reg, kExpC1);
+}
+
+// Register 11 back to the -1.0 every sfpi-compiled kernel assumes.
+inline void exp_release() {
+    program_constant(p_sfpu::LREG11, 0xBF800000u);
+}
+
+#define FW_EXP_STEP_P(step, x, i, f, column)                                                                   \
+    if constexpr (step == 0) TTI_SFPLOAD(x, InstrModLoadStore::DEFAULT, ADDR_MOD_7, column);               \
+    if constexpr (step == 1) TTI_SFPMAD(x, kScaleReg, kBiasReg, x, 0);                                      \
+    if constexpr (step == 2)                                                                                 \
+        TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_ZERO, 0, x, x, i, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);     \
+    if constexpr (step == 3) TTI_SFPCAST(i, f, kCastIntToFloat);                                            \
+    if constexpr (step == 4) TTI_SFPMAD(f, p_sfpu::LCONST_1, x, f, kMadNegateVa);                           \
+    if constexpr (step == 5) TTI_SFPGT(0, p_sfpu::LCONST_0, x, kGtSetVd);                                   \
+    if constexpr (step == 6) TTI_SFPAND(0, x, i, 0);                                                         \
+    if constexpr (step == 7) TTI_SFPMAD(f, kC4Reg, kC3Reg, x, 0);                                           \
+    if constexpr (step == 8) TTI_SFPMAD(x, f, kC2Reg, x, 0);                                                \
+    if constexpr (step == 9) TTI_SFPMAD(x, f, kC1Reg, x, 0);                                                \
+    if constexpr (step == 10) TTI_SFPMAD(x, f, p_sfpu::LCONST_1, x, 0);                                     \
+    if constexpr (step == 11) TTI_SFPSETEXP(0, x, i, kSetExpFromInt);                                       \
+    if constexpr (step == 12 && column == 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);    \
+    if constexpr (step == 12 && column != 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_6, column);
+
+constexpr uint32_t kExpSteps = 13;
+
+template <uint32_t step>
+inline void exp_pair_step() {
+    FW_EXP_STEP_P(step, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
+    FW_EXP_STEP_P(step, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG5, 2);
+}
+
+template <uint32_t step = 0>
+inline void exp_pair_body() {
+    exp_pair_step<step>();
+    if constexpr (step + 1 < kExpSteps) {
+        exp_pair_body<step + 1>();
+    }
+}
+
+// A face is 16 x 16: four groups of four rows, each two vectors; the two
+// chains interleaved instruction by instruction.
+inline void exp_face() {
+    constexpr int kBodyLen = 2 * kExpSteps;
+    TTI_REPLAY(0, kBodyLen, 1, 1);
+    exp_pair_body();
+#pragma GCC unroll 4
+    for (uint32_t i = 1; i < 4u; ++i) {
+        TTI_REPLAY(0, kBodyLen, 0, 0);
+    }
+}
+
+// One tile: the LLK's framing sets the dst address, runs the body on each of
+// the four faces, and clears the address.
+inline void exp_tile(const uint32_t tile) {
+    _llk_math_eltwise_unary_sfpu_params_(exp_face, tile, VectorMode::RC);
+}
+
+}  // namespace pack_sfpu
+#endif
+
 // exp(a x) in place on a DST tile, on the math thread's SFPU (see math_sfpu).
 // FW_EXPERIMENT_* are timing experiments only (the results are wrong).
 constexpr uint32_t scaler_bf16_bits = scaler_bits >> 16;  // exact: the scale is a power of two
@@ -576,43 +712,46 @@ void kernel_main() {
 
         // ---- 3. P^T = exp(a (S^T - m_new)): the FPU's row-broadcast
         // subtraction from L1 (S^T at 19 bits, m_new's row 0 through SrcB),
-        // then the exponential; two key tiles per acquire.
+        // then the exponential on the pack thread; a column per acquire.
 #ifndef FW_EXPERIMENT_NO_PROBS
         {
             DeviceZoneScopedN("PROBS");
             cb_reserve_back(cb_probs, score_tiles);
             for (uint32_t a = 0; a < Bt; ++a) {
                 const uint32_t live = n_live(a);
-                for (uint32_t b0 = 0; b0 < live; b0 += kGroup) {
-                    const uint32_t n = (live - b0 < kGroup) ? live - b0 : kGroup;
-                    tile_regs_acquire();
-                    reconfig_data_format(cb_scores, cb_max_plain);
-                    bcast_init<EltwiseBinaryType::ELWSUB, BroadcastType::ROW>(cb_scores, cb_max_plain);
-                    for (uint32_t i = 0; i < kGroup; ++i) {
-                        if (i >= n) {
-                            break;
-                        }
-                        sub_tiles_bcast_rows(cb_scores, cb_max_plain, (b0 + i) * Bt + a, a, i);
+                tile_regs_acquire();
+                reconfig_data_format(cb_scores, cb_max_plain);
+                bcast_init<EltwiseBinaryType::ELWSUB, BroadcastType::ROW>(cb_scores, cb_max_plain);
+                for (uint32_t b = 0; b < Bt; ++b) {
+                    if (b >= live) {
+                        break;
                     }
-                    for (uint32_t i = 0; i < kGroup; ++i) {
-                        if (i >= n) {
-                            break;
-                        }
-                        exp_scaled(i);
-                    }
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_reconfig_data_format(cb_probs);
-                    pack_rounding(true);
-                    for (uint32_t i = 0; i < kGroup; ++i) {
-                        if (i >= n) {
-                            break;
-                        }
-                        pack_tile</* out_of_order */ true>(i, cb_probs, (b0 + i) * Bt + a);
-                    }
-                    pack_rounding(false);
-                    tile_regs_release();
+                    sub_tiles_bcast_rows(cb_scores, cb_max_plain, b * Bt + a, a, b);
                 }
+                tile_regs_commit();
+                tile_regs_wait();
+#ifndef FW_EXPERIMENT_NO_EXP
+                PACK((pack_sfpu::wait_for_math_done()));
+                PACK((pack_sfpu::exp_prepare()));
+                for (uint32_t b = 0; b < Bt; ++b) {
+                    if (b >= live) {
+                        break;
+                    }
+                    PACK((pack_sfpu::exp_tile(b)));
+                }
+                PACK((pack_sfpu::exp_release()));
+                PACK((pack_sfpu::wait_before_pack()));
+#endif
+                pack_reconfig_data_format(cb_probs);
+                pack_rounding(true);
+                for (uint32_t b = 0; b < Bt; ++b) {
+                    if (b >= live) {
+                        break;
+                    }
+                    pack_tile</* out_of_order */ true>(b, cb_probs, b * Bt + a);
+                }
+                pack_rounding(false);
+                tile_regs_release();
             }
             cb_push_back(cb_probs, score_tiles);
             cb_wait_front(cb_probs, score_tiles);

@@ -3344,6 +3344,14 @@ void check_cyclic_forward(
             worst_lse_base = std::max(worst_lse_base, lse_err_base);
             EXPECT_TRUE(std::isfinite(rms)) << "head " << h << at;
             if (std::getenv("TTML_CYCLIC_FW_DEBUG") != nullptr && b == 0 && h == 0) {
+                // Relative RMS of O per 32-row block, to see where an error sits.
+                std::printf("    O relative RMS per row block:");
+                for (uint32_t r0 = 0; r0 < N; r0 += 32) {
+                    const xt::xarray<float> got = xt::view(ours_O, b, h, xt::range(r0, r0 + 32), xt::all());
+                    const xt::xarray<float> want = xt::view(r.O, xt::range(r0, r0 + 32), xt::all());
+                    std::printf(" %.1e", relative_rms(got, want));
+                }
+                std::printf("\n");
                 for (uint32_t i = 0; i < N; i += (N >= 256 ? N / 8 : 8)) {
                     std::printf(
                         "    row %3u: lse ref %9.4f ours %9.4f base %9.4f | O[0..3] ref %8.4f %8.4f %8.4f %8.4f ours %8.4f "
@@ -3463,4 +3471,36 @@ TEST(CyclicSdpaFwTimingTest, DISABLED_TimeTheForward) {
         "  cyclic_sdpa_fw heads %u/%u N %u d %u %s Bt %u%s%s: %.2f ms, %.1f TFLOP/s\n", heads, kv_heads, N, d,
         causal ? "causal" : "dense", Bt, experiment ? " experiment " : "", experiment ? experiment : "", cyc_s * 1e3,
         flop / cyc_s / 1e12);
+}
+
+// One profiled launch of the cyclic forward, then an explicit device close
+// (the profiler writes its CSV on a real close only; see the backward's
+// profile test). Shape from TTML_CYCLIC_FW_TIME as in the timing test
+// (default 4 heads, 2048 rows, d 64, Bt 4, causal).
+//
+//   TT_METAL_DEVICE_PROFILER=1 ttml_tests \
+//     --gtest_filter=CyclicSdpaFwProfileTest.* --gtest_also_run_disabled_tests
+TEST(CyclicSdpaFwProfileTest, DISABLED_ProfileTheForward) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    uint32_t heads = 4, kv_heads = 4, N = 2048, d = 64, Bt = 4, causal_u = 1;
+    if (const char* env = std::getenv("TTML_CYCLIC_FW_TIME"); env != nullptr && *env != '\0') {
+        std::sscanf(env, "%u:%u:%u:%u:%u:%u", &heads, &kv_heads, &N, &d, &Bt, &causal_u);
+    }
+    xt::xarray<float> Q = xt::zeros<float>({1u, heads, N, d});
+    xt::xarray<float> K = xt::zeros<float>({1u, kv_heads, N, d});
+    xt::xarray<float> V = xt::zeros<float>({1u, kv_heads, N, d});
+    for (uint32_t h = 0; h < heads; ++h) {
+        xt::view(Q, 0, h, xt::all(), xt::all()) = random_bf16_matrix(N, d, 3000u + h);
+    }
+    for (uint32_t g = 0; g < kv_heads; ++g) {
+        xt::view(K, 0, g, xt::all(), xt::all()) = random_bf16_matrix(N, d, 4000u + g);
+        xt::view(V, 0, g, xt::all(), xt::all()) = random_bf16_matrix(N, d, 5000u + g);
+    }
+    const auto q = ttml::core::from_xtensor(Q, device);
+    const auto k = ttml::core::from_xtensor(K, device);
+    const auto v = ttml::core::from_xtensor(V, device);
+    const auto mask = causal_u != 0 ? ttml::metal::AttentionMaskType::Causal : ttml::metal::AttentionMaskType::None;
+    auto [o, l] = ttml::metal::cyclic_sdpa_fw(q, k, v, Bt, mask);
+    tt::tt_metal::distributed::Finish(device->mesh_command_queue());
+    ttml::autograd::ctx().close_device();
 }
