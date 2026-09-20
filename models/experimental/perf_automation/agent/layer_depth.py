@@ -305,6 +305,64 @@ def _declared_stack_count(model_root) -> int:
         return 0
 
 
+# A BLOCK STACK NEEDS MORE THAN ONE BLOCK TO BE ITSELF, the same reason MIN_TOKEN_WINDOW is 2 on the
+# other axis. The first block of a stack is the one that allocates what the rest reuse, so a depth of
+# one profiles the pass that is least like the others. Two is the smallest depth containing a
+# steady-state block, and it is what the coverage bridge has independently proven on every model it
+# has sized so far -- this names that floor rather than inventing a second answer.
+MIN_COVERAGE_DEPTH = 2
+
+
+def depth_var_names(model_root=None, stages=None) -> list:
+    """Every environment variable this model expresses a depth cap through, set or not.
+
+    THE NAMES COME FROM THE MODEL. `stack_knob_repair.stage_names` reads the model's own declared
+    stages out of its source, and the positional spelling covers as many stacks as the checkpoint
+    declares, so nothing here assumes a stage is called any particular thing.
+    """
+    names = [ENV]
+    _stages = list(stages or [])
+    if not _stages and model_root is not None:
+        try:
+            from .stack_knob_repair import stage_names
+
+            _stages = list(stage_names(model_root) or [])
+        except Exception:  # noqa: BLE001 -- an unreadable source leaves the positional form below
+            _stages = []
+    names += [stage_layers_var(st) for st in _stages]
+    # THE POSITIONAL VOCABULARY, FOR AS MANY STACKS AS THE MODEL HAS. The generator emits
+    # TT_PERF_STACK{i}_LAYERS one per stack it discovered, so the count is the model's, not a bound
+    # to pick: declared_sections counts the repeated-block stacks straight off the checkpoint's own
+    # tensor names. This was range(8) -- a number I chose, which would have missed the ninth cap on
+    # a model with nine stacks and probed seven names that cannot exist on a model with one.
+    names += [stack_layers_var(i) for i in range(_declared_stack_count(model_root))]
+    seen: dict = {}
+    for n in names:
+        seen[n] = None
+    return list(seen)
+
+
+def fallback_depth_caps(environ=None, model_root=None, stages=None) -> dict:
+    """The cap to apply to a PROFILED run that arrived without one. Empty when one is already set.
+
+    AN UNCAPPED CAPTURE IS NOT A SLOW CAPTURE -- IT IS NO CAPTURE. Every route that carries the
+    proven cap to the profiler is conditional (the coverage probe may run in another process, and
+    the cache it persists is looked up by a path spelling that has diverged before), so "no cap at
+    all" stays reachable however many of those routes are repaired. Profiling a deep repeating stack
+    unbounded overflows the device marker buffers, so the profiler emits no ops csv and the gate
+    surfaces as a crash indistinguishable from a device fault.
+
+    This is the floor under all of them: it never overrides a cap that did arrive, and it stands down
+    entirely when a gate has armed FORCE_ALL to ask for full depth on purpose.
+    """
+    src = os.environ if environ is None else environ
+    if str(src.get(FORCE_ALL) or "").strip() == "1":
+        return {}
+    if active_depth_caps(environ=src, model_root=model_root, stages=stages):
+        return {}
+    return {name: str(MIN_COVERAGE_DEPTH) for name in depth_var_names(model_root=model_root, stages=stages)}
+
+
 def active_depth_caps(environ=None, model_root=None, stages=None) -> dict:
     """Every depth cap in force, as {variable: layers}. Empty means full depth.
 
@@ -335,22 +393,7 @@ def active_depth_caps(environ=None, model_root=None, stages=None) -> dict:
             return 0
         return n if n > 0 else 0
 
-    names = [ENV]
-    _stages = list(stages or [])
-    if not _stages and model_root is not None:
-        try:
-            from .stack_knob_repair import stage_names
-
-            _stages = list(stage_names(model_root) or [])
-        except Exception:  # noqa: BLE001 -- an unreadable source leaves the positional form below
-            _stages = []
-    names += [stage_layers_var(st) for st in _stages]
-    # THE POSITIONAL VOCABULARY, FOR AS MANY STACKS AS THE MODEL HAS. The generator emits
-    # TT_PERF_STACK{i}_LAYERS one per stack it discovered, so the count is the model's, not a bound
-    # to pick: declared_sections counts the repeated-block stacks straight off the checkpoint's own
-    # tensor names. This was range(8) -- a number I chose, which would have missed the ninth cap on
-    # a model with nine stacks and probed seven names that cannot exist on a model with one.
-    names += [stack_layers_var(i) for i in range(_declared_stack_count(model_root))]
+    names = depth_var_names(model_root=model_root, stages=stages)
 
     out: dict = {}
     for name in names:

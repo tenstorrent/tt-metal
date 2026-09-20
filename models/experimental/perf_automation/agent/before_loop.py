@@ -433,6 +433,11 @@ def before_loop(
     """Run Stage 1 end to end. run_profiled_factory(perf_test_repo_rel, case)
     is called AFTER discovery so stage 5 profiles what stage 3 found."""
     model_root = Path(config["model_root"]).resolve()
+    # The SAME directory, named WITHOUT following symlinks. A worktree run stages an untracked model
+    # dir as a link back to the source repo, so .resolve() names it outside the tree it is being run
+    # in -- and every path derived from that spelling escapes too. model_root stays resolved because
+    # the git queries below need the real checkout; only the naming of in-tree paths uses this one.
+    model_root_in_tree = Path(os.path.abspath(config["model_root"]))
     tt_root = Path(tt_metal_root or os.environ.get("TT_METAL_HOME", PKG_ROOT.parents[2]))
 
     run = Run.create(runs_root, config=None, label=model_root.name)
@@ -793,7 +798,7 @@ def before_loop(
         getattr(model_runner, "last_usage", None),
     )
     # perf test path: discovery returns model-root-relative; pytest runs from tt-metal root
-    perf_rel = config.get("perf_test") or os.path.relpath(model_root / pathmap["perf_test"]["path"], tt_root)
+    perf_rel = config.get("perf_test") or os.path.relpath(model_root_in_tree / pathmap["perf_test"]["path"], tt_root)
     case = config.get("case") or pathmap["perf_test"]["case"]
     # SELF-HEAL the case: the discovery agent (or a stale config) can emit a case id that selects
     # NOTHING (e.g. 'device_params0-0' vs the real 'device_params0') -> preflight would hard-fail.

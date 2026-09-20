@@ -1622,6 +1622,26 @@ def make_run_profiled(
                 env.update(json.loads(_prof))
             except (ValueError, TypeError):
                 pass
+        # THE LAST POINT AT WHICH "NO CAP ARRIVED" IS STILL FIXABLE. Every earlier route that carries
+        # the proven cap here is conditional, and this is the one place that knows the profiler is
+        # about to be launched. Applied to the PROFILED run's env only -- never to os.environ -- so
+        # the correctness and trace gates, which ask for full depth by clearing TT_PERF_LAYERS alone,
+        # do not inherit a per-stage cap and silently grade a two-block model.
+        try:
+            from .layer_depth import fallback_depth_caps
+
+            _fb = fallback_depth_caps(
+                environ=env, model_root=_cc_optimize("run")._model_root_from_node(root, perf_test)
+            )
+            if _fb:
+                env.update(_fb)
+                print(
+                    "  [probe] no depth cap reached the profiler; capturing at the coverage floor: "
+                    + ", ".join(f"{k}={v}" for k, v in sorted(_fb.items())),
+                    flush=True,
+                )
+        except Exception as exc:  # noqa: BLE001 -- a missing floor must never stop the run
+            print(f"  [probe] WARN could not derive a depth floor: {exc}", flush=True)
         try:
             from .profiler_heal import ensure_profiler_patched
 
