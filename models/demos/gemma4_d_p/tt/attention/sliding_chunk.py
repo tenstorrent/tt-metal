@@ -3,6 +3,7 @@
 
 """Adapt rotated Q to the aligned-group contract of sliding ring SDPA."""
 
+from enum import Enum
 from types import SimpleNamespace
 
 import torch
@@ -10,8 +11,14 @@ import torch
 import ttnn
 
 
+class SlidingChunkMode(Enum):
+    ALIGNED = "aligned"
+    SINGLE_GROUP = "single_group"
+    TWO_GROUPS = "two_groups"
+
+
 class SlidingChunk:
-    """Stable trace inputs for two aligned SWA calls and restoring request order."""
+    """Stable trace inputs for native or reordered sliding attention."""
 
     def __init__(self, mesh_config, chunk_size, max_seq_len):
         self.mesh_config = mesh_config
@@ -35,8 +42,29 @@ class SlidingChunk:
             ttnn.copy_host_to_device_tensor(host, self._buffers[name])
         return self._buffers[name]
 
-    def update(self, actual_start, positions):
-        """Stage the two group origins and local gather indices before replay."""
+    def select_mode(self, actual_start, actual_end, mode=None):
+        """Choose the cheapest graph covering the real queries; validate capture overrides."""
+        group_end = (actual_start // self.chunk_size + 1) * self.chunk_size
+        if actual_start % self.chunk_size == 0:
+            required = SlidingChunkMode.ALIGNED
+        elif actual_end <= group_end:
+            required = SlidingChunkMode.SINGLE_GROUP
+        else:
+            required = SlidingChunkMode.TWO_GROUPS
+        if mode is None:
+            return required
+        if mode == SlidingChunkMode.ALIGNED and required != SlidingChunkMode.ALIGNED:
+            raise ValueError("The aligned SWA trace requires a chunk-aligned actual_start")
+        if mode == SlidingChunkMode.SINGLE_GROUP and required == SlidingChunkMode.TWO_GROUPS:
+            raise ValueError("The single-group SWA trace cannot span two chunk groups")
+        return mode
+
+    def update(self, actual_start, positions, *, mode):
+        """Stage only the groups used by the selected SWA graph."""
+        self.mode = mode
+        if mode == SlidingChunkMode.ALIGNED:
+            return
+        num_groups = 1 if mode == SlidingChunkMode.SINGLE_GROUP else 2
         local = self.chunk_size // self.mesh_config.cp_degree
         group_start = actual_start // self.chunk_size * self.chunk_size
         # Cache-local rows relative to the first group, in request order.
@@ -44,12 +72,14 @@ class SlidingChunk:
         rank_rows = torch.arange(local).expand(self.mesh_config.cp_degree, -1)
         self.q_indices = []
         self.group_starts = []
-        for group in range(2):
+        for group in range(num_groups):
             origin = min(group_start + group * self.chunk_size, self.max_seq_len - self.chunk_size)
             group_offset = (origin - group_start) // self.mesh_config.cp_degree
             indices = (rank_rows + group_offset - rows[:, :1]).clamp(0, local - 1)
             self.q_indices.append(self._stage(f"q{group}", indices.reshape(1, 1, -1, 1), seq_dim=2))
             self.group_starts.append(self._stage(f"start{group}", torch.tensor([origin]).reshape(1, 1, 1, 1)))
+        # Padded rows outside the selected groups have discarded outputs.
+        rows = rows.clamp(max=num_groups * local - 1)
         self.output_indices = self._stage("output", rows.reshape(1, 1, -1, 1), seq_dim=2)
 
     @staticmethod
@@ -60,15 +90,21 @@ class SlidingChunk:
         return result
 
     def attention(self, tt_q, prefill_metadata, attention_fn, **kwargs):
-        """Run aligned SWA twice, then restore the input's block-cyclic row order."""
+        """Run one native call or reorder Q across its one or two groups."""
+        if self.mode == SlidingChunkMode.ALIGNED:
+            return attention_fn(tt_q=tt_q, prefill_metadata=prefill_metadata, **kwargs)
         outputs = []
         for indices, start in zip(self.q_indices, self.group_starts):
             query = self._gather_rows(tt_q, indices)
             metadata = SimpleNamespace(slot_idx=prefill_metadata.slot_idx, kv_actual_global=start)
             outputs.append(attention_fn(tt_q=query, prefill_metadata=metadata, **kwargs))
             query.deallocate(True)
-        combined = ttnn.concat(outputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if len(outputs) == 1:
+            combined = outputs[0]
+        else:
+            combined = ttnn.concat(outputs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            for tensor in outputs:
+                tensor.deallocate(True)
         result = self._gather_rows(combined, self.output_indices)
-        for tensor in (*outputs, combined):
-            tensor.deallocate(True)
+        combined.deallocate(True)
         return result
