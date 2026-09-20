@@ -161,6 +161,7 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
     make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);      // P^T
     make_cb(tt::CBIndex::c_20, Bt, tt::DataFormat::Float32);          // r = exp(a (m_old - m_new)), full tile
     make_cb(tt::CBIndex::c_23, Bt, tt::DataFormat::Float32);          // colmax S^T, row layout (scratch)
+    make_cb(tt::CBIndex::c_11, Bt, tt::DataFormat::Float32);          // colmax S^T - m, the lazy-rescale check
     make_cb(tt::CBIndex::c_9, Bt, tt::DataFormat::Float32);           // lse in row layout, before its transpose
     // ---- The finished row, at its last visit: O in bf16 and lse in column layout.
     make_cb(tt::CBIndex::c_21, rowT, tt::DataFormat::Float16_b);      // O_i
@@ -182,7 +183,8 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
     const uint32_t endpoint2_sem = CreateSemaphore(program, region, 0);
 
     std::map<std::string, std::string> defines;
-    // Timing experiments (results wrong): TTML_CYCLIC_FW_EXPERIMENT=NO_EXP,GENERIC_EXP,NO_STATS,NO_PROBS,NO_RESCALE_O,NO_EXACT_PACK
+    // Timing experiments (results wrong): TTML_CYCLIC_FW_EXPERIMENT=NO_EXP,GENERIC_EXP,NO_STATS,NO_PROBS,NO_RESCALE_O,NO_EXACT_PACK;
+    // exact-result variants: NO_LAZY (rescale every timestep), LAZY_TAU=<threshold in scaled-score units>
     if (const char* env = std::getenv("TTML_CYCLIC_FW_EXPERIMENT"); env != nullptr && *env != '\0') {
         std::string list(env);
         size_t pos = 0;
@@ -195,6 +197,8 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
                 defines["FID_O"] = "2";
             } else if (item == "FID_O3") {
                 defines["FID_O"] = "3";
+            } else if (item.rfind("LAZY_TAU=", 0) == 0) {
+                defines["FW_LAZY_THRESHOLD"] = item.substr(9) + "F";  // the lazy-rescale threshold
             } else if (!item.empty()) {
                 defines["FW_EXPERIMENT_" + item] = "1";
             }
