@@ -323,18 +323,6 @@ class ModelOptimizations:
                 "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
                 "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
             }
-            if base_model_name == "Llama-3.1-8B":
-                # Decode-only LoFi for the remaining BFP8 projections. Isolated
-                # DRAM-sharded sweeps on Blackhole (per-device decode shapes, real
-                # geometry) put LoFi well ahead of HiFi2 at identical weight dtype:
-                #   QKV  32x4096x1536  31.7 -> 27.5 us
-                #   WO   32x1024x4096  19.6 -> 16.9 us
-                #   FF2  32x3584x4096  56.0 -> 49.9 us
-                # Prefill fidelity is untouched; see
-                # bringup/artifacts/tt_transformers/optimized_decode/work_log.md.
-                settings["OpFidelity"][OpGroup.LI_QKV_DECODE] = MathFidelitySetting.LOFI
-                settings["OpFidelity"][OpGroup.LI_O_DECODE] = MathFidelitySetting.LOFI
-                settings["OpFidelity"][OpGroup.LI_FF2] = MathFidelitySetting.LOFI
             if model_name.startswith("Phi-3-mini"):  # TODO: Only do this for N150
                 logger.info(
                     f"Model {model_name} is running out of L1 memory under standard high-performance settings, using FP16 accumulate in attention prefill QKV Matmul"
@@ -792,6 +780,7 @@ class ModelArgs:
         # Configure data precision and math fidelity for tensors and kernels
         if self.optimizations is None:
             self.optimizations = DecodersPrecision.accuracy(num_decoders=self.n_layers, model_name=self.model_name)
+        self._apply_measured_decode_fidelity()
 
         self.dummy_weights = dummy_weights
         self.tile_padded_batch_rows = ttnn.TILE_SIZE * int(math.ceil(self.max_batch_size / ttnn.TILE_SIZE))
@@ -3828,6 +3817,39 @@ class ModelArgs:
             if n % i == 0:
                 return i
         return 1  # Fallback to 1 if no divisor found
+
+    # Decode math fidelity measured per SKU. `ModelOptimizations.performance` is built
+    # without a device in scope, so the SKU-specific part of the policy is applied here,
+    # where `device_name` exists -- same discipline as every other measured knob
+    # (LM-head fidelity, DECODE_CCL_TUNING, the working shards, the reader table):
+    # a policy only ships to the SKU whose accuracy gate and ruler validated it.
+    _MEASURED_DECODE_FIDELITY = {
+        # Isolated DRAM-sharded sweeps at the real per-device decode shapes put LoFi well
+        # ahead of HiFi2 at identical weight dtype: QKV 31.7 -> 27.5 us,
+        # WO 19.6 -> 16.9 us, FF2 56.0 -> 49.9 us. Prefill fidelity is untouched.
+        ("Llama-3.1-8B", "P150x4"): {
+            OpGroup.LI_QKV_DECODE: MathFidelitySetting.LOFI,
+            OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
+            OpGroup.LI_FF2: MathFidelitySetting.LOFI,
+        },
+    }
+
+    def _apply_measured_decode_fidelity(self):
+        """Overlay the SKU-measured decode fidelity onto the selected optimization level.
+
+        Only applies to the `performance` level: `accuracy` mode is a correctness
+        reference and must not be silently sped up. See
+        bringup/artifacts/tt_transformers/optimized_decode/work_log.md.
+        """
+        overrides = self._MEASURED_DECODE_FIDELITY.get((self.base_model_name, self.device_name))
+        if not overrides or getattr(self.optimizations, "__name__", None) != "performance":
+            return
+        for decoder_id, conf in self.optimizations.decoder_optimizations.items():
+            conf.op_fidelity_settings.update(overrides)
+        logger.info(
+            f"Applied measured decode fidelity for {self.base_model_name} on {self.device_name}: "
+            + ", ".join(f"{op.value}={setting.value}" for op, setting in overrides.items())
+        )
 
     # Blackhole DRAM-bank reader counts per decode projection role, by validated SKU.
     # A second reader per bank is not a free win: it splits each bank row more finely and
