@@ -129,9 +129,8 @@ class AMPBlock1(Module):
         self.kernel_size = kernel_size
         self.num_branches = len(dilation)
         self.mesh_device = mesh_device
-        # pack (layers/audio_pack.py): None = the depthwise resamplers and dilated convs as they are; 1 = the
-        # anti-alias resamplers as dense convs on unpacked rows; > 1 = everything on time-packed rows
-        # (B, T/pack, pack*C).
+        # pack (layers/audio_pack.py): None = depthwise resamplers and dilated convs as they are; 1 = the anti-alias
+        # resamplers as dense convs on unpacked rows; > 1 = everything on time-packed rows (B, T/pack, pack*C).
         self.pack = pack
 
         act_cls = SnakeBeta if activation == "snakebeta" else Snake
@@ -256,7 +255,7 @@ class Vocoder(Module):
         # "chain": UpSample1d -> SnakeBeta -> DownSample1d as separate ops; "fused": one kernel per activation
         # (layers/audio_aa_snake.py), bit-identical to the chain.
         self.act_mode = act_mode
-        # Transposed convs as polyphase convs over the unstuffed rows (a third of the multiplies, no stuff/pad/slice ops).
+        # Transposed convs as polyphase convs over the unstuffed rows: a third of the multiplies, no stuff/pad/slice.
         self.polyphase_ups = polyphase_ups
         # Set by MiniMaxH3AudioDecoder when the batch is sharded over a mesh axis: (axis, batch) for the readback.
         self.batch_shard_axis = None
@@ -293,8 +292,8 @@ class Vocoder(Module):
         # the pipeline warms the decode eagerly at warmup, which the vocoder frees back to a
         # deterministic state, so capture and replay share one free-list.
 
-        # conv_pre runs replicated under T-sharding: its 8 KB fp32 sticks break the neighbor_pad halo exchange
-        # (tools/conv_pre_shard_probe.py). Channel-TP still shards it: `gather_channel_to_full` rebuilds C_in from the C-shard.
+        # conv_pre runs replicated under T-sharding: its 8 KB fp32 sticks break the neighbor_pad halo exchange (4 KB
+        # sticks are exact). Channel-TP still shards it: `gather_channel_to_full` rebuilds C_in from the C-shard.
         self._conv_pre_unsharded = channel_factor(parallel_config) == 1
         self.conv_pre = _AlignedOutConv1d(
             in_channels=in_channels,
