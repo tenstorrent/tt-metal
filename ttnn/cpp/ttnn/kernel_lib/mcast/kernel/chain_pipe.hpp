@@ -18,23 +18,28 @@ namespace detail {
 // proves the preceding relay read its source, even with CallerManaged. Incoming data_ready is
 // separate, so a receiver can acknowledge its predecessor before waiting for its successor.
 // Payload and readiness are ordinary writes on the same NoC/VC; no fence is needed between them.
-template <uint8_t NOC_ID, auto DATA_READY, auto CONSUMER_READY, auto SIGNAL_SOURCE, DataReadySignal SIGNAL>
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
 struct ChainLink {
     static_assert(
-        mcast_semaphore_id(CONSUMER_READY) != UNUSED_SEM_ID, "Chain forwarding requires a readiness handshake");
+        mcast_semaphore_id(ConsumerReadyBinding{}) != UNUSED_SEM_ID, "Chain forwarding requires a readiness handshake");
     static_assert(
-        mcast_semaphore_id(DATA_READY) != UNUSED_SEM_ID &&
-            mcast_semaphore_id(DATA_READY) != mcast_semaphore_id(CONSUMER_READY),
+        mcast_semaphore_id(DataReadyBinding{}) != UNUSED_SEM_ID &&
+            mcast_semaphore_id(DataReadyBinding{}) != mcast_semaphore_id(ConsumerReadyBinding{}),
         "Invalid chain semaphores");
     static_assert(
-        mcast_semaphore_id(SIGNAL_SOURCE) != UNUSED_SEM_ID &&
-            mcast_semaphore_id(SIGNAL_SOURCE) != mcast_semaphore_id(DATA_READY) &&
-            mcast_semaphore_id(SIGNAL_SOURCE) != mcast_semaphore_id(CONSUMER_READY),
+        mcast_semaphore_id(SignalSourceBinding{}) != UNUSED_SEM_ID &&
+            mcast_semaphore_id(SignalSourceBinding{}) != mcast_semaphore_id(DataReadyBinding{}) &&
+            mcast_semaphore_id(SignalSourceBinding{}) != mcast_semaphore_id(ConsumerReadyBinding{}),
         "Chain forwarding requires a distinct signal-source semaphore");
     Noc noc;
-    decltype(make_mcast_semaphore<DATA_READY>()) data_ready;
-    decltype(make_mcast_semaphore<CONSUMER_READY>()) consumer_ready;
-    decltype(make_mcast_semaphore<SIGNAL_SOURCE>()) signal_source;
+    decltype(make_mcast_semaphore<DataReadyBinding{}>()) data_ready;
+    decltype(make_mcast_semaphore<ConsumerReadyBinding{}>()) consumer_ready;
+    decltype(make_mcast_semaphore<SignalSourceBinding{}>()) signal_source;
     ChainRuntimeArguments args;
 
     FORCE_INLINE ChainLink(const Noc& noc, const ChainRuntimeArguments& args);
@@ -44,36 +49,45 @@ struct ChainLink {
     FORCE_INLINE uint32_t sender_signal_value(uint32_t value) const;
     FORCE_INLINE void publish(uint32_t value);
 };
-}  // namespace detail
 
 // Fixed-sender injector. Guard protects source departure; CallerManaged leaves source lifetime
 // and final write draining to the caller. A distinct local-copy destination always completes before
 // return. Neither guard waits for the whole chain to consume the event.
 // Resource arguments accept numeric IDs or native SemaphoreBindingToken values; all three are required.
-template <uint8_t NOC_ID, auto DATA_READY, auto CONSUMER_READY, auto SIGNAL_SOURCE, DataReadySignal SIGNAL>
-class ChainSenderPipe {
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
+class ChainSenderPipeImpl {
 public:
     using RuntimeArguments = ChainRuntimeArguments;
-    FORCE_INLINE explicit ChainSenderPipe(const Noc& noc, const RuntimeArguments& args);
+    FORCE_INLINE explicit ChainSenderPipeImpl(const Noc& noc, const RuntimeArguments& args);
     template <SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard>
     FORCE_INLINE void send(uint32_t src_l1, uint32_t dst_l1, uint32_t size_bytes);
     template <SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard>
     FORCE_INLINE void send_signal(uint32_t value = VALID);
 
 private:
-    detail::ChainLink<NOC_ID, DATA_READY, CONSUMER_READY, SIGNAL_SOURCE, SIGNAL> link_;
+    detail::ChainLink<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL> link_;
 };
 
 // All hops use the same destination and byte count. Reserve the destination before receiving.
 // A relay acknowledges its predecessor before waiting for successor readiness; no hop may skip
 // an event. The default Guard protects the forwarding source before returning.
-template <uint8_t NOC_ID, auto DATA_READY, auto CONSUMER_READY, auto SIGNAL_SOURCE, DataReadySignal SIGNAL>
-class ChainReceiverPipe {
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
+class ChainReceiverPipeImpl {
 public:
     using RuntimeArguments = ChainRuntimeArguments;
-    FORCE_INLINE explicit ChainReceiverPipe(const Noc& noc, const RuntimeArguments& args);
+    FORCE_INLINE explicit ChainReceiverPipeImpl(const Noc& noc, const RuntimeArguments& args);
     // Drain outstanding NoC atomics, including predecessor acknowledgments, when the pipe leaves scope.
-    FORCE_INLINE ~ChainReceiverPipe();
+    FORCE_INLINE ~ChainReceiverPipeImpl();
     // CallerManaged: flush before modifying/recycling dst_l1, including a later receive that reuses
     // it, and drain outstanding writes before kernel exit. Independent work may precede that flush.
     template <SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard>
@@ -83,8 +97,36 @@ public:
 private:
     template <bool PAYLOAD>
     FORCE_INLINE uint32_t consume_(uint32_t round);
-    detail::ChainLink<NOC_ID, DATA_READY, CONSUMER_READY, SIGNAL_SOURCE, SIGNAL> link_;
+    detail::ChainLink<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL> link_;
 };
+}  // namespace detail
+
+template <
+    uint8_t NOC_ID,
+    McastSemaphoreBinding DATA_READY,
+    McastSemaphoreBinding CONSUMER_READY,
+    McastSemaphoreBinding SIGNAL_SOURCE,
+    DataReadySignal SIGNAL>
+using ChainSenderPipe = detail::ChainSenderPipeImpl<
+    NOC_ID,
+    detail::McastSemaphoreToken<DATA_READY>,
+    detail::McastSemaphoreToken<CONSUMER_READY>,
+    detail::McastSemaphoreToken<SIGNAL_SOURCE>,
+    SIGNAL>;
+
+template <
+    uint8_t NOC_ID,
+    McastSemaphoreBinding DATA_READY,
+    McastSemaphoreBinding CONSUMER_READY,
+    McastSemaphoreBinding SIGNAL_SOURCE,
+    DataReadySignal SIGNAL>
+using ChainReceiverPipe = detail::ChainReceiverPipeImpl<
+    NOC_ID,
+    detail::McastSemaphoreToken<DATA_READY>,
+    detail::McastSemaphoreToken<CONSUMER_READY>,
+    detail::McastSemaphoreToken<SIGNAL_SOURCE>,
+    SIGNAL>;
+
 }  // namespace dataflow_kernel_lib
 
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/chain_pipe.inl"

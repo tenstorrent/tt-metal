@@ -83,10 +83,10 @@ void McastFamily::attach(
             kernel, prefix, static_cast<uint32_t>(kernel.compile_time_args.size()), static_cast<uint32_t>(rt_offset));
         // Check against original prefixes, before padding could hide an invalid binding.
         for (const auto& binding : kernel.buffer_bindings) {
-            const auto entry =
-                std::find_if(kernel.runtime_args.begin(), kernel.runtime_args.end(), [&](const auto& item) {
-                    return item.first == binding.core;
-                });
+            const auto entry = std::find_if(
+                kernel.runtime_args.begin(),
+                kernel.runtime_args.end(),
+                [&](const KernelDescriptor::RuntimeArgs::value_type& item) { return item.first == binding.core; });
             TT_FATAL(
                 entry != kernel.runtime_args.end() && binding.arg_idx < entry->second.size(),
                 "Multicast attachment encountered an invalid buffer binding");
@@ -98,9 +98,10 @@ void McastFamily::attach(
                 TT_FATAL(
                     !(sender || chain) || noc == cfg_.noc, "Multicast sender/forwarder NoC differs from its family");
             }
-            auto entry = std::find_if(kernel.runtime_args.begin(), kernel.runtime_args.end(), [&](const auto& item) {
-                return item.first == core;
-            });
+            auto entry = std::find_if(
+                kernel.runtime_args.begin(),
+                kernel.runtime_args.end(),
+                [&](const KernelDescriptor::RuntimeArgs::value_type& item) { return item.first == core; });
             if (entry == kernel.runtime_args.end()) {
                 kernel.runtime_args.emplace_back(core, std::vector<uint32_t>{});
                 entry = std::prev(kernel.runtime_args.end());

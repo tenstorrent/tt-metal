@@ -52,7 +52,7 @@ std::array<uint32_t, 3> McastFamily::resolve_semaphore_ids_(std::span<const Sema
     for (uint32_t role = 0; role < count; ++role) {
         const auto occupied = [&](uint32_t candidate) {
             return std::find(ids.begin(), ids.begin() + role, candidate) != ids.begin() + role ||
-                   std::any_of(existing.begin(), existing.end(), [&](const auto& sem) {
+                   std::any_of(existing.begin(), existing.end(), [&](const SemaphoreDescriptor& sem) {
                        return sem.core_type == tt::CoreType::WORKER && sem.id == candidate &&
                               sem.core_ranges.intersects(participating_);
                    });

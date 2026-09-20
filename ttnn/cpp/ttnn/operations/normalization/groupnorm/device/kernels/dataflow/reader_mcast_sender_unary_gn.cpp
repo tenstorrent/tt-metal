@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <optional>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
@@ -72,6 +73,12 @@ void kernel_main() {
     constexpr uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
     const uint32_t num_groups = num_batch_group / num_batches;
 
+    // Construct gather readiness once during setup; single-core reductions need no semaphore.
+    std::optional<Semaphore<>> reduce_receiver_sem;
+    if constexpr (num_mcast_cores > 1) {
+        reduce_receiver_sem.emplace(get_named_compile_time_arg_val("reduce_receiver_semaphore_id"));
+    }
+
     constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
     const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
     const uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
@@ -127,11 +134,6 @@ void kernel_main() {
         reduction_mcast_args;
 
     const Noc noc;
-    // The gather consumes partial-statistics readiness before the result broadcast.
-    constexpr uint32_t partial_ready_id = num_mcast_cores > 1
-                                              ? get_named_compile_time_arg_val("reduce_receiver_semaphore_id")
-                                              : reduction_mcast_args.consumer_ready;
-    Semaphore<> reduce_receiver_sem(partial_ready_id);
     auto reduction_pipe = reduction_mcast_args.sender(noc);
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
@@ -330,8 +332,8 @@ void kernel_main() {
 
                             if constexpr (num_mcast_cores > 1) {
                                 // wait for all other cores data ready
-                                reduce_receiver_sem.wait(num_mcast_cores - 1);
-                                reduce_receiver_sem.set(0);
+                                reduce_receiver_sem->wait(num_mcast_cores - 1);
+                                reduce_receiver_sem->set(0);
 
                                 // read data from other cores
                                 for (uint32_t core_i = 0; core_i < num_mcast_cores - 1; ++core_i) {

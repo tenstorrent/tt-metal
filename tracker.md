@@ -72,5 +72,33 @@ preserve them without adding unrelated files to commits.
 - Feedback 4 implementation: removed all three single-kernel overloads; converted
   Conv2D, Conv3D, group-attention and native tests to one-element arrays. Added
   compile-time checks that single-kernel attachment is no longer public.
+- Feedback 5 implementation: explicit structural `McastSemaphoreBinding` carries
+  ID and scope from numeric IDs, native tokens, or nullptr. Typed pipe/decoder
+  templates and return types replace `auto`; chain parameters have descriptive
+  names. Host lambda parameters are explicit too. Native device contracts assert
+  numeric/null and both non-default token scope types. Build/execution pending.
+- Validation: `./build_metal.sh --build-ttnn-tests --enable-ccache` passed
+  (`/tmp/mcast-feedback-build.log`). First partial-grid rotating matmul exposed
+  SFPI C++17 `-ftt-nttp` rejection of class-valued parameters on out-of-line primary
+  template methods. A minimal compiler reproducer isolated this; public value
+  aliases now normalize to native token types for private pipe implementations.
+  The same matmul passed after this kernel-only correction (1 test, 1.80 s;
+  `/tmp/mcast-feedback-matmul-smoke.log`).
+- Focused suite initially failed collection because the existing chain stress
+  test imported deleted `_cores` from the family test. Updated it to the shared
+  `core_set` utility; rerun pending.
+- Completed focused run: 332 pytest cases passed in 214.45 s, including the
+  44 native host tests and native device matrices (`/tmp/mcast-feedback-contracts.log`).
+- Consumer regressions: Conv3D weight-sharing (3 cases) and wrapped GroupNorm
+  (4 cases) passed. Interleaved GroupNorm caught an API compatibility regression:
+  its operation-owned signaling needs the positional decoder's numeric semaphore
+  constants. The decoder now carries explicit binding types, preserving numeric
+  public constants for positional callers and native tokens/nullptr for spec
+  callers. Added a native-token type assertion; the failing GroupNorm case now
+  passes (1.68 s). Full affected consumer and decoder rerun is in progress.
+- The native rerun confirmed the seven negative checks and 44 host contracts
+  again, then exposed SFPI rejecting a dependent static nullptr value. Replaced
+  the trait's stored value with a constexpr value constructor; native Spec smoke
+  now passes (1.97 s). The device matrix and remaining consumers are rerunning.
 - Completion remains unproven until every requirement in the supplied plans has
   direct evidence. Checkboxes track work, not a reduction of the requested scope.

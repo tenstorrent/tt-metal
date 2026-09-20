@@ -20,7 +20,7 @@
 #pragma once
 
 // Increment when public API changes require callers to update their code.
-#define MCAST_PIPE_API_VERSION 25
+#define MCAST_PIPE_API_VERSION 26
 
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_semaphore.hpp"
@@ -31,40 +31,41 @@
 #include "hostdevcommon/common_values.hpp"
 
 namespace dataflow_kernel_lib {
+namespace detail {
 
 // =============================================================================
 // SenderPipe — the broadcasting face of the channel.
 // =============================================================================
 //   * NOC_ID                     — compile-time NoC id; must match the `noc` argument.
-//   * DATA_READY_SEM_ID          — sender-to-receiver data-ready semaphore id.
+//   * DataReadyBinding          — sender-to-receiver data-ready semaphore id.
 //   * PRE_HANDSHAKE              — wait for receiver readiness before sending data or a signal.
-//   * CONSUMER_READY_SEM_ID      — receiver-to-sender readiness semaphore id; required with PRE_HANDSHAKE.
+//   * ConsumerReadyBinding      — receiver-to-sender readiness semaphore id; required with PRE_HANDSHAKE.
 //   * DATA_READY_SIGNAL          — Flag (default) or Counter.
 //   * ROTATING_SENDER            — whether this core sends on some rounds and receives on others.
 // Semaphore arguments accept either legacy numeric IDs or native SemaphoreBindingToken values.
 // An unused readiness role accepts nullptr; no Semaphore is constructed for that role.
 template <
     uint8_t NOC_ID,
-    auto DATA_READY_SEM_ID,
-    bool PRE_HANDSHAKE = true,
-    auto CONSUMER_READY_SEM_ID = UNUSED_SEM_ID,
+    typename DataReadyBinding,
+    bool PRE_HANDSHAKE,
+    typename ConsumerReadyBinding,
     DataReadySignal DATA_READY_SIGNAL = DataReadySignal::Flag,
     bool ROTATING_SENDER = false,
     SenderMcastMode SENDER_MCAST_MODE = SenderMcastMode::Unknown,
     uint32_t MAX_RECTS = 1>
-class SenderPipe {
+class SenderPipeImpl {
     static_assert(MAX_RECTS >= 1 && MAX_RECTS <= MAX_MCAST_RECTANGLES, "Multicast supports one to three rectangles");
     static_assert(
         mcast_wire::concrete(SENDER_MCAST_MODE) || SENDER_MCAST_MODE == SenderMcastMode::Unknown,
         "SenderPipe requires a concrete sender multicast mode or Unknown");
     static_assert(
-        !PRE_HANDSHAKE || detail::mcast_semaphore_id(CONSUMER_READY_SEM_ID) != UNUSED_SEM_ID,
-        "PRE_HANDSHAKE=true requires a real CONSUMER_READY_SEM_ID (the receiver->sender readiness ack). "
+        !PRE_HANDSHAKE || detail::mcast_semaphore_id(ConsumerReadyBinding{}) != UNUSED_SEM_ID,
+        "PRE_HANDSHAKE=true requires a real ConsumerReadyBinding (the receiver->sender readiness ack). "
         "Pass it, or set PRE_HANDSHAKE=false for a fire-and-forget broadcast.");
 
 public:
     // Capture prepared values once. Argument storage may be changed or destroyed after construction.
-    FORCE_INLINE explicit SenderPipe(const Noc& noc, const SenderRuntimeArgumentsFor<MAX_RECTS>& runtime_args);
+    FORCE_INLINE explicit SenderPipeImpl(const Noc& noc, const SenderRuntimeArgumentsFor<MAX_RECTS>& runtime_args);
 
     // ===== DATA channel (a block + a ready signal) =====
     // send() handles receiver readiness when enabled, data multicast, ready signaling, and source L1 protection.
@@ -99,8 +100,8 @@ private:
     FORCE_INLINE void local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
 
     Noc noc_;
-    decltype(detail::make_mcast_semaphore<DATA_READY_SEM_ID>()) data_ready_;
-    decltype(detail::make_mcast_semaphore<CONSUMER_READY_SEM_ID>()) consumer_ready_;
+    decltype(detail::make_mcast_semaphore<DataReadyBinding{}>()) data_ready_;
+    decltype(detail::make_mcast_semaphore<ConsumerReadyBinding{}>()) consumer_ready_;
     SenderRuntimeArgumentsFor<MAX_RECTS> args_;
     // Sender membership selects the payload fence even when src == dst skips a local write.
     bool loopback_ = false;
@@ -109,9 +110,9 @@ private:
 // =============================================================================
 // ReceiverPipe — the listening face of the channel.
 // =============================================================================
-//   * DATA_READY_SEM_ID      — sender-to-receiver data-ready semaphore id.
+//   * DataReadyBinding      — sender-to-receiver data-ready semaphore id.
 //   * PRE_HANDSHAKE          — signal receiver readiness before waiting; must match the SenderPipe's.
-//   * CONSUMER_READY_SEM_ID  — receiver-to-sender readiness semaphore id; required with PRE_HANDSHAKE.
+//   * ConsumerReadyBinding  — receiver-to-sender readiness semaphore id; required with PRE_HANDSHAKE.
 //   * DATA_READY_SIGNAL      — must match the SenderPipe's.
 //   * NUM_SENDERS            — number of stored sender coordinate pairs.
 //   * SenderCoordinates      — indexable coordinate view, stored by value (a pointer by default).
@@ -123,22 +124,22 @@ private:
 // receive() waits for completed delivery; calling it does not start the transfer.
 //
 template <
-    auto DATA_READY_SEM_ID,
-    bool PRE_HANDSHAKE = true,
-    auto CONSUMER_READY_SEM_ID = UNUSED_SEM_ID,
+    typename DataReadyBinding,
+    bool PRE_HANDSHAKE,
+    typename ConsumerReadyBinding,
     DataReadySignal DATA_READY_SIGNAL = DataReadySignal::Flag,
     uint32_t NUM_SENDERS = 1,
     typename SenderCoordinates = const uint32_t*>
-class ReceiverPipe {
+class ReceiverPipeImpl {
     static_assert(
-        !PRE_HANDSHAKE || detail::mcast_semaphore_id(CONSUMER_READY_SEM_ID) != UNUSED_SEM_ID,
-        "PRE_HANDSHAKE=true requires a real CONSUMER_READY_SEM_ID (the receiver->sender readiness ack). "
+        !PRE_HANDSHAKE || detail::mcast_semaphore_id(ConsumerReadyBinding{}) != UNUSED_SEM_ID,
+        "PRE_HANDSHAKE=true requires a real ConsumerReadyBinding (the receiver->sender readiness ack). "
         "Pass it, or set PRE_HANDSHAKE=false to wait the data-ready signal without acking.");
     static_assert(NUM_SENDERS >= 1, "ReceiverPipe needs at least one sender coord pair.");
 
 public:
     // The view supplies NUM_SENDERS virtual NoC coordinate pairs. Pointer-backed storage must outlive the pipe.
-    FORCE_INLINE explicit ReceiverPipe(const Noc& noc, SenderCoordinates sender_coords);
+    FORCE_INLINE explicit ReceiverPipeImpl(const Noc& noc, SenderCoordinates sender_coords);
 
     // Handle receiver readiness, then wait for data from the sender selected by the absolute work round.
     FORCE_INLINE void receive(uint32_t round = 0);
@@ -156,10 +157,46 @@ public:
 
 private:
     Noc noc_;
-    decltype(detail::make_mcast_semaphore<DATA_READY_SEM_ID>()) data_ready_;
-    decltype(detail::make_mcast_semaphore<CONSUMER_READY_SEM_ID>()) consumer_ready_;
+    decltype(detail::make_mcast_semaphore<DataReadyBinding{}>()) data_ready_;
+    decltype(detail::make_mcast_semaphore<ConsumerReadyBinding{}>()) consumer_ready_;
     SenderCoordinates coords_;  // Stored by value; pointer views still require invocation-lived storage.
 };
+
+}  // namespace detail
+
+template <
+    uint8_t NOC_ID,
+    McastSemaphoreBinding DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE = true,
+    McastSemaphoreBinding CONSUMER_READY_SEM_ID = UNUSED_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL = DataReadySignal::Flag,
+    bool ROTATING_SENDER = false,
+    SenderMcastMode SENDER_MCAST_MODE = SenderMcastMode::Unknown,
+    uint32_t MAX_RECTS = 1>
+using SenderPipe = detail::SenderPipeImpl<
+    NOC_ID,
+    detail::McastSemaphoreToken<DATA_READY_SEM_ID>,
+    PRE_HANDSHAKE,
+    detail::McastSemaphoreToken<CONSUMER_READY_SEM_ID>,
+    DATA_READY_SIGNAL,
+    ROTATING_SENDER,
+    SENDER_MCAST_MODE,
+    MAX_RECTS>;
+
+template <
+    McastSemaphoreBinding DATA_READY_SEM_ID,
+    bool PRE_HANDSHAKE = true,
+    McastSemaphoreBinding CONSUMER_READY_SEM_ID = UNUSED_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL = DataReadySignal::Flag,
+    uint32_t NUM_SENDERS = 1,
+    typename SenderCoordinates = const uint32_t*>
+using ReceiverPipe = detail::ReceiverPipeImpl<
+    detail::McastSemaphoreToken<DATA_READY_SEM_ID>,
+    PRE_HANDSHAKE,
+    detail::McastSemaphoreToken<CONSUMER_READY_SEM_ID>,
+    DATA_READY_SIGNAL,
+    NUM_SENDERS,
+    SenderCoordinates>;
 
 }  // namespace dataflow_kernel_lib
 

@@ -5,28 +5,47 @@
 
 namespace dataflow_kernel_lib {
 namespace detail {
-template <uint8_t N, auto D, auto C, auto V, DataReadySignal S>
-FORCE_INLINE ChainLink<N, D, C, V, S>::ChainLink(const Noc& noc, const ChainRuntimeArguments& args) :
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
+FORCE_INLINE ChainLink<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL>::ChainLink(
+    const Noc& noc, const ChainRuntimeArguments& args) :
     noc(noc),
-    data_ready(make_mcast_semaphore<D>()),
-    consumer_ready(make_mcast_semaphore<C>()),
-    signal_source(make_mcast_semaphore<V>()),
+    data_ready(make_mcast_semaphore<DataReadyBinding{}>()),
+    consumer_ready(make_mcast_semaphore<ConsumerReadyBinding{}>()),
+    signal_source(make_mcast_semaphore<SignalSourceBinding{}>()),
     args(args) {
-    ASSERT(noc.get_noc_id() == N);
+    ASSERT(noc.get_noc_id() == NOC_ID);
     ASSERT((args.predecessor_x == NO_CHAIN_NEIGHBOR) == (args.predecessor_y == NO_CHAIN_NEIGHBOR));
     ASSERT((args.successor_x == NO_CHAIN_NEIGHBOR) == (args.successor_y == NO_CHAIN_NEIGHBOR));
     // Never reset consumer_ready or signal_source: a successor may already have acked,
     // and a reconstructed Counter injector must retain its sequence.
 }
 
-template <uint8_t N, auto D, auto C, auto V, DataReadySignal S>
-FORCE_INLINE void ChainLink<N, D, C, V, S>::wait_for_successor() {
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
+FORCE_INLINE void
+ChainLink<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL>::wait_for_successor() {
     consumer_ready.wait(1);  // Per-hop readiness, independent of the group fanout or encoded ACK.
     consumer_ready.set(0);
 }
 
-template <uint8_t N, auto D, auto C, auto V, DataReadySignal S>
-FORCE_INLINE void ChainLink<N, D, C, V, S>::write_successor(uint32_t src, uint32_t dst, uint32_t bytes) {
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
+FORCE_INLINE void
+ChainLink<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL>::write_successor(
+    uint32_t src, uint32_t dst, uint32_t bytes) {
     noc.async_write(
         CoreLocalMem<uint32_t>(src),
         UnicastEndpoint{},
@@ -35,34 +54,60 @@ FORCE_INLINE void ChainLink<N, D, C, V, S>::write_successor(uint32_t src, uint32
         {.noc_x = args.successor_x, .noc_y = args.successor_y, .addr = dst});
 }
 
-template <uint8_t N, auto D, auto C, auto V, DataReadySignal S>
-FORCE_INLINE uint32_t ChainLink<N, D, C, V, S>::sender_signal_value(uint32_t value) const {
-    if constexpr (S == DataReadySignal::Counter) {
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
+FORCE_INLINE uint32_t
+ChainLink<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL>::sender_signal_value(
+    uint32_t value) const {
+    if constexpr (SIGNAL == DataReadySignal::Counter) {
         return signal_source.value() + 1u;
     } else {
         return value;
     }
 }
 
-template <uint8_t N, auto D, auto C, auto V, DataReadySignal S>
-FORCE_INLINE void ChainLink<N, D, C, V, S>::publish(uint32_t value) {
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
+FORCE_INLINE void ChainLink<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL>::publish(
+    uint32_t value) {
     // wait_for_successor() proved the previous relay has read this source. Keep it stable until
     // the next successor ack; incoming data_ready and pipe destruction do not modify it.
     signal_source.set(value);
     signal_source.relay_unicast(noc, data_ready, args.successor_x, args.successor_y);
 }
-}  // namespace detail
 
-template <uint8_t N, auto D, auto C, auto V, DataReadySignal S>
-FORCE_INLINE ChainSenderPipe<N, D, C, V, S>::ChainSenderPipe(const Noc& noc, const RuntimeArguments& args) :
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
+FORCE_INLINE
+ChainSenderPipeImpl<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL>::ChainSenderPipeImpl(
+    const Noc& noc, const RuntimeArguments& args) :
     link_(noc, args) {
     ASSERT(args.predecessor_x == NO_CHAIN_NEIGHBOR);
     ASSERT(link_.has_successor() || args.includes_sender);
 }
 
-template <uint8_t N, auto D, auto C, auto V, DataReadySignal S>
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
 template <SourceL1Guard SOURCE_GUARD>
-FORCE_INLINE void ChainSenderPipe<N, D, C, V, S>::send(uint32_t src_l1, uint32_t dst_l1, uint32_t size_bytes) {
+FORCE_INLINE void
+ChainSenderPipeImpl<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL>::send(
+    uint32_t src_l1, uint32_t dst_l1, uint32_t size_bytes) {
     const bool forward = link_.has_successor();
     const bool local_copy = link_.args.includes_sender && src_l1 != dst_l1;
     if (forward) {
@@ -76,7 +121,7 @@ FORCE_INLINE void ChainSenderPipe<N, D, C, V, S>::send(uint32_t src_l1, uint32_t
             UnicastEndpoint{},
             size_bytes,
             {},
-            {.noc_x = my_x[N], .noc_y = my_y[N], .addr = dst_l1});
+            {.noc_x = my_x[NOC_ID], .noc_y = my_y[NOC_ID], .addr = dst_l1});
     }
     if (local_copy) {
         // The caller can publish its local destination immediately after return, under either guard.
@@ -88,11 +133,18 @@ FORCE_INLINE void ChainSenderPipe<N, D, C, V, S>::send(uint32_t src_l1, uint32_t
     }
 }
 
-template <uint8_t N, auto D, auto C, auto V, DataReadySignal S>
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
 template <SourceL1Guard SOURCE_GUARD>
-FORCE_INLINE void ChainSenderPipe<N, D, C, V, S>::send_signal(uint32_t value) {
+FORCE_INLINE void
+ChainSenderPipeImpl<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL>::send_signal(
+    uint32_t value) {
     ASSERT(value >= VALID);
-    if constexpr (S == DataReadySignal::Counter) {
+    if constexpr (SIGNAL == DataReadySignal::Counter) {
         ASSERT(value == VALID);
     }
     if (link_.has_successor()) {
@@ -104,27 +156,46 @@ FORCE_INLINE void ChainSenderPipe<N, D, C, V, S>::send_signal(uint32_t value) {
     }
 }
 
-template <uint8_t N, auto D, auto C, auto V, DataReadySignal S>
-FORCE_INLINE ChainReceiverPipe<N, D, C, V, S>::ChainReceiverPipe(const Noc& noc, const RuntimeArguments& args) :
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
+FORCE_INLINE ChainReceiverPipeImpl<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL>::
+    ChainReceiverPipeImpl(const Noc& noc, const RuntimeArguments& args) :
     link_(noc, args) {
     ASSERT(args.predecessor_x != NO_CHAIN_NEIGHBOR);
-    if constexpr (S == DataReadySignal::Flag) {
+    if constexpr (SIGNAL == DataReadySignal::Flag) {
         // Clear before the first predecessor acknowledgment permits an incoming signal write.
         link_.data_ready.set(INVALID);
     }
 }
 
-template <uint8_t N, auto D, auto C, auto V, DataReadySignal S>
-FORCE_INLINE ChainReceiverPipe<N, D, C, V, S>::~ChainReceiverPipe() {
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
+FORCE_INLINE ChainReceiverPipeImpl<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL>::
+    ~ChainReceiverPipeImpl() {
     link_.noc.async_atomic_barrier();
 }
 
-template <uint8_t N, auto D, auto C, auto V, DataReadySignal S>
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
 template <bool PAYLOAD>
-FORCE_INLINE uint32_t ChainReceiverPipe<N, D, C, V, S>::consume_(uint32_t round) {
+FORCE_INLINE uint32_t
+ChainReceiverPipeImpl<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL>::consume_(
+    uint32_t round) {
     link_.consumer_ready.up(link_.noc, link_.args.predecessor_x, link_.args.predecessor_y, 1);
     uint32_t value = VALID;
-    if constexpr (S == DataReadySignal::Counter) {
+    if constexpr (SIGNAL == DataReadySignal::Counter) {
         link_.data_ready.wait_min(round + 1);
         value = round + 1;
     } else {
@@ -139,9 +210,15 @@ FORCE_INLINE uint32_t ChainReceiverPipe<N, D, C, V, S>::consume_(uint32_t round)
     return value;
 }
 
-template <uint8_t N, auto D, auto C, auto V, DataReadySignal S>
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
 template <SourceL1Guard SOURCE_GUARD>
-FORCE_INLINE void ChainReceiverPipe<N, D, C, V, S>::receive_and_forward(
+FORCE_INLINE void
+ChainReceiverPipeImpl<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL>::receive_and_forward(
     uint32_t dst_l1, uint32_t size_bytes, uint32_t round) {
     const uint32_t value = consume_<true>(round);
     if (link_.has_successor()) {
@@ -154,8 +231,15 @@ FORCE_INLINE void ChainReceiverPipe<N, D, C, V, S>::receive_and_forward(
     }
 }
 
-template <uint8_t N, auto D, auto C, auto V, DataReadySignal S>
-FORCE_INLINE uint32_t ChainReceiverPipe<N, D, C, V, S>::receive_signal(uint32_t round) {
+template <
+    uint8_t NOC_ID,
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding,
+    DataReadySignal SIGNAL>
+FORCE_INLINE uint32_t
+ChainReceiverPipeImpl<NOC_ID, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, SIGNAL>::receive_signal(
+    uint32_t round) {
     const uint32_t value = consume_<false>(round);
     if (link_.has_successor()) {
         link_.wait_for_successor();
@@ -164,4 +248,6 @@ FORCE_INLINE uint32_t ChainReceiverPipe<N, D, C, V, S>::receive_signal(uint32_t 
     }
     return value;
 }
+}  // namespace detail
+
 }  // namespace dataflow_kernel_lib

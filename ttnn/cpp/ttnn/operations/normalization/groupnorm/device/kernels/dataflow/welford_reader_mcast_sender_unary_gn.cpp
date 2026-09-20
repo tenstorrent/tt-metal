@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <optional>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
@@ -16,13 +17,18 @@
 
 void kernel_main() {
 #ifdef GN_DISTRIBUTED_AG
-    constexpr uint32_t reduce_receiver_semaphore_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
     constexpr uint32_t reduce_sender_semaphore_id = get_named_compile_time_arg_val("reduce_sender_semaphore_id");
 #endif
     constexpr uint32_t num_mcast_cores = get_named_compile_time_arg_val("num_cores_per_mcast_group");
     constexpr uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
     constexpr uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
     constexpr uint32_t num_groups = num_batch_group / num_batches;
+
+    // Construct gather readiness once during setup; single-core reductions need no semaphore.
+    std::optional<Semaphore<>> reduce_receiver_sem;
+    if constexpr (num_mcast_cores > 1) {
+        reduce_receiver_sem.emplace(get_named_compile_time_arg_val("reduce_receiver_semaphore_id"));
+    }
 
     constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
     const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
@@ -146,7 +152,6 @@ void kernel_main() {
     noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(noc_arg_base + num_mcast_cores)));
 
     const Noc noc;
-    Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     reduce_sender_sem.set(VALID);
 #else
@@ -179,11 +184,6 @@ void kernel_main() {
         reduction_mcast_args;
 
     const Noc noc;
-    // The gather consumes partial-statistics readiness before the result broadcast.
-    constexpr uint32_t partial_ready_id = num_mcast_cores > 1
-                                              ? get_named_compile_time_arg_val("reduce_receiver_semaphore_id")
-                                              : reduction_mcast_args.consumer_ready;
-    Semaphore<> reduce_receiver_sem(partial_ready_id);
     auto reduction_pipe = reduction_mcast_args.sender(noc);
 #endif
 
@@ -320,8 +320,8 @@ void kernel_main() {
         // signal/wait lock-step below (which would deadlock a single exchange) is batched here and
         // in the receiver. Sync granularity only: the arithmetic and the mcast'd bytes are identical.
         if constexpr (num_mcast_cores > 1) {
-            reduce_receiver_sem.wait(num_mcast_cores - 1);
-            reduce_receiver_sem.set(0);
+            reduce_receiver_sem->wait(num_mcast_cores - 1);
+            reduce_receiver_sem->set(0);
         }
 #endif
 
@@ -345,8 +345,8 @@ void kernel_main() {
 #ifndef GN_DISTRIBUTED_AG
                 // Wait until all other cores have signaled that their partial data is ready.
                 // (GN_DISTRIBUTED_AG hoists this to a single batched wait before the loop.)
-                reduce_receiver_sem.wait(num_mcast_cores - 1);
-                reduce_receiver_sem.set(0);
+                reduce_receiver_sem->wait(num_mcast_cores - 1);
+                reduce_receiver_sem->set(0);
 #endif
 
                 for (uint32_t i = 1; i < num_mcast_cores; ++i) {

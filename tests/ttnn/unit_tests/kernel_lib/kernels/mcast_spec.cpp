@@ -4,6 +4,19 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
 
+// Numeric IDs retain the legacy scope; native tokens preserve every supported scope.
+static_assert(std::is_same_v<decltype(dataflow_kernel_lib::detail::make_mcast_semaphore<3>()), Semaphore<>>);
+static_assert(std::is_same_v<decltype(dataflow_kernel_lib::detail::make_mcast_semaphore<nullptr>()), std::nullptr_t>);
+static_assert(std::is_same_v<
+              decltype(dataflow_kernel_lib::detail::make_mcast_semaphore<
+                       SemaphoreBindingToken<3, SemScope::DM_LOCAL_CACHED>{}>()),
+              Semaphore<ProgrammableCoreType::TENSIX, SemScope::DM_LOCAL_CACHED>>);
+static_assert(
+    std::is_same_v<
+        decltype(dataflow_kernel_lib::detail::make_mcast_semaphore<SemaphoreBindingToken<3, SemScope::EXTERNAL>{}>()),
+        Semaphore<ProgrammableCoreType::TENSIX, SemScope::EXTERNAL>>);
+static_assert(dataflow_kernel_lib::McastSemaphoreBinding{SemaphoreBindingToken<3, SemScope::EXTERNAL>{}}.id == 3);
+
 void kernel_main() {
     using namespace dataflow_kernel_lib;
     constexpr auto channel = MCAST_SPEC_ARGS(channel);

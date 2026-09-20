@@ -341,7 +341,7 @@ void McastFamily::prepare_arguments_() const {
         group.prepared_.reset();
     }
     const bool has_irregular_receiver_set = std::any_of(
-        groups_.begin(), groups_.end(), [](const auto& group) { return group.receivers_.ranges().size() > 1; });
+        groups_.begin(), groups_.end(), [](const Group& group) { return group.receivers_.ranges().size() > 1; });
     // Resolve the irregular-set policy once because every group uses the same compile-time TransferMode.
     const auto transfer_mode =
         has_irregular_receiver_set && cfg_.irregular_receiver_set_mode == TransferMode::ChainUnicast
@@ -562,7 +562,7 @@ std::vector<std::vector<tt::tt_metal::CoreCoord>> Mcast1D::sender_lines_from_gri
         auto& senders = sender_lines[line];
         TT_FATAL(!senders.empty(), "Mcast1D: receiver line {} has no sender cores", line);
         TT_FATAL(senders.size() == senders_per_line, "Mcast1D: sender lines must have equal length");
-        std::sort(senders.begin(), senders.end(), [shape](const auto& lhs, const auto& rhs) {
+        std::sort(senders.begin(), senders.end(), [shape](const CoreCoord& lhs, const CoreCoord& rhs) {
             return shape == Mcast1DShape::PerRow ? lhs.x < rhs.x : lhs.y < rhs.y;
         });
     }
@@ -601,7 +601,7 @@ std::vector<tt::tt_metal::CoreCoord> Mcast2D::senders_from_grid_(
             }
         }
     }
-    std::sort(senders.begin(), senders.end(), [sender_order](const auto& lhs, const auto& rhs) {
+    std::sort(senders.begin(), senders.end(), [sender_order](const CoreCoord& lhs, const CoreCoord& rhs) {
         if (sender_order == Mcast2DSenderOrder::RowMajor) {
             return lhs.y == rhs.y ? lhs.x < rhs.x : lhs.y < rhs.y;
         }

@@ -8,7 +8,7 @@
 #include <limits>
 #include <map>
 #include <set>
-#include <type_traits>
+#include <tt_stl/overloaded.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt_stl/assert.hpp>
@@ -28,13 +28,10 @@ std::string spec_name(std::string_view prefix, std::string_view field) {
 
 CoreRangeSet node_ranges(const m2::Nodes& nodes) {
     return std::visit(
-        [](const auto& value) {
-            if constexpr (std::is_same_v<std::decay_t<decltype(value)>, CoreCoord>) {
-                return CoreRangeSet(CoreRange(value, value));
-            } else {
-                return CoreRangeSet(value);
-            }
-        },
+        ttsl::overloaded{
+            [](const CoreCoord& value) { return CoreRangeSet(CoreRange(value, value)); },
+            [](const CoreRange& value) { return CoreRangeSet(value); },
+            [](const CoreRangeSet& value) { return value; }},
         nodes);
 }
 
@@ -100,7 +97,7 @@ std::vector<size_t> validate_targets(
                         name) == kernel.runtime_arg_schema.common_runtime_arg_names.end(),
                 "Multicast prefix or argument name is already in use: {}",
                 name);
-            const auto check_bindings = [&](const auto& bindings) {
+            const auto check_bindings = [&]<typename Binding>(const m2::Group<Binding>& bindings) {
                 for (const auto& binding : bindings) {
                     TT_FATAL(binding.accessor_name != name, "Multicast resource accessor is already in use: {}", name);
                 }
@@ -116,8 +113,9 @@ std::vector<size_t> validate_targets(
     std::vector<size_t> indices;
     for (const auto& target : targets) {
         TT_FATAL(selected.insert(target).second, "Duplicate multicast attachment kernel");
-        auto it = std::find_if(
-            spec.kernels.begin(), spec.kernels.end(), [&](const auto& kernel) { return kernel.unique_id == target; });
+        auto it = std::find_if(spec.kernels.begin(), spec.kernels.end(), [&](const m2::KernelSpec& kernel) {
+            return kernel.unique_id == target;
+        });
         TT_FATAL(it != spec.kernels.end(), "Unknown multicast attachment kernel");
         TT_FATAL(it->is_data_movement_kernel(), "Multicast attachment requires a data-movement kernel");
         TT_FATAL(it->num_threads == 1, "Multicast topology requires one kernel thread per node");
@@ -200,9 +198,10 @@ void McastFamily::attach(
             TT_FATAL(semaphore_names.insert(names[role]).second, "Multicast semaphore name is already in use");
             staged.semaphores.push_back({.unique_id = names[role], .target_nodes = participating_});
         } else {
-            auto it = std::find_if(staged.semaphores.begin(), staged.semaphores.end(), [&](const auto& sem) {
-                return sem.unique_id == names[role];
-            });
+            auto it =
+                std::find_if(staged.semaphores.begin(), staged.semaphores.end(), [&](const m2::SemaphoreSpec& sem) {
+                    return sem.unique_id == names[role];
+                });
             TT_FATAL(it != staged.semaphores.end(), "Unknown adopted multicast semaphore");
             TT_FATAL(it->advanced_options.initial_value == 0, "Adopted multicast semaphores must start at zero");
             TT_FATAL(
@@ -223,10 +222,10 @@ void McastFamily::attach(
         const auto nodes = placement(staged, kernel.unique_id);
         const auto base = uniform_varargs(kernel, nodes);
         TT_FATAL(base <= std::numeric_limits<uint32_t>::max() - words, "Multicast runtime vararg count overflows");
-        auto args =
-            std::find_if(staged_args.kernel_run_args.begin(), staged_args.kernel_run_args.end(), [&](const auto& item) {
-                return item.kernel == kernel.unique_id;
-            });
+        auto args = std::find_if(
+            staged_args.kernel_run_args.begin(),
+            staged_args.kernel_run_args.end(),
+            [&](const m2::ProgramRunArgs::KernelRunArgs& item) { return item.kernel == kernel.unique_id; });
         if (args == staged_args.kernel_run_args.end()) {
             TT_FATAL(base == 0, "Missing caller runtime prefix for multicast attachment");
             staged_args.kernel_run_args.push_back({.kernel = kernel.unique_id});

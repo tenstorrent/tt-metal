@@ -52,7 +52,7 @@ namespace dataflow_kernel_lib {
 //   configurable_receiver.receive_and_forward(dst_l1, size_bytes, round);
 namespace detail {
 
-template <auto>
+template <mcast_wire::FamilyMetadata>
 static constexpr bool dependent_false = false;
 
 // These sentinels only make the optional pipe surface well-formed for an absent
@@ -76,18 +76,18 @@ template <
     bool PRESENT,
     mcast_wire::FamilyMetadata METADATA,
     typename Runtime,
-    auto DATA_READY,
-    auto CONSUMER_READY,
-    auto SIGNAL_SOURCE>
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding>
 struct McastArgsImpl;
 
 template <
     mcast_wire::FamilyMetadata METADATA,
     typename Runtime,
-    auto DATA_READY,
-    auto CONSUMER_READY,
-    auto SIGNAL_SOURCE>
-struct McastArgsImpl<true, METADATA, Runtime, DATA_READY, CONSUMER_READY, SIGNAL_SOURCE> {
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding>
+struct McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding> {
     constexpr McastArgsImpl() = default;
     static constexpr bool active = true;
 
@@ -95,15 +95,12 @@ struct McastArgsImpl<true, METADATA, Runtime, DATA_READY, CONSUMER_READY, SIGNAL
     // work: a present zero-fan-out sender still calls send() to perform a degenerate local copy. The
     // per-core role metadata reports which pipe faces this kernel instance may construct and its phase.
     static constexpr uint32_t has_receivers = METADATA.has_remote_receivers;
-    static constexpr auto data_ready = DATA_READY;
-    static constexpr auto consumer_ready = CONSUMER_READY;
     static constexpr uint32_t ack_count = METADATA.ack_count;
     static constexpr uint32_t flags = METADATA.flags;
     static constexpr uint32_t rotating_span = METADATA.rotating_span;
 
     // Pipe behaviour lifted off the flags word (host-computed): the caller never spells these.
-    static constexpr auto transfer_mode = mcast_wire::transfer_mode(flags);
-    static constexpr auto signal_source = SIGNAL_SOURCE;
+    static constexpr TransferMode transfer_mode = mcast_wire::transfer_mode(flags);
     static_assert(
         transfer_mode == TransferMode::Multicast || transfer_mode == TransferMode::ChainUnicast,
         "Invalid family multicast mode");
@@ -149,10 +146,34 @@ struct McastArgsImpl<true, METADATA, Runtime, DATA_READY, CONSUMER_READY, SIGNAL
     static constexpr uint32_t sender_index(uint32_t round) { return round % num_senders; }
     bool should_send(uint32_t round) const;
 
-    auto sender(const Noc& noc) const;
-    auto optional_sender(const Noc& noc) const;
-    auto receiver(const Noc& noc) const;
-    auto optional_receiver(const Noc& noc) const;
+    // Bind resources directly into the pipes; semaphore IDs/tokens are not part of the decoder API.
+    using SenderPipeType = std::conditional_t<
+        transfer_mode == TransferMode::ChainUnicast,
+        ChainSenderPipeImpl<noc_index, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, signal>,
+        SenderPipeImpl<
+            noc_index,
+            DataReadyBinding,
+            pre_handshake,
+            ConsumerReadyBinding,
+            signal,
+            rotating,
+            sender_mcast_mode,
+            rectangle_capacity ? rectangle_capacity : 1>>;
+    using ReceiverPipeType = std::conditional_t<
+        transfer_mode == TransferMode::ChainUnicast,
+        ChainReceiverPipeImpl<noc_index, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, signal>,
+        ReceiverPipeImpl<
+            DataReadyBinding,
+            pre_handshake,
+            ConsumerReadyBinding,
+            signal,
+            num_senders,
+            decltype(Runtime::coordinates(0))>>;
+
+    SenderPipeType sender(const Noc& noc) const;
+    std::optional<SenderPipeType> optional_sender(const Noc& noc) const;
+    ReceiverPipeType receiver(const Noc& noc) const;
+    std::optional<ReceiverPipeType> optional_receiver(const Noc& noc) const;
 
     uint32_t sender_x() const {
         return Runtime::read(mcast_wire::sender_coords_offset(rotating_span) + mcast_wire::SENDER_X);
@@ -170,10 +191,10 @@ private:
 template <
     mcast_wire::FamilyMetadata METADATA,
     typename Runtime,
-    auto DATA_READY,
-    auto CONSUMER_READY,
-    auto SIGNAL_SOURCE>
-struct McastArgsImpl<false, METADATA, Runtime, DATA_READY, CONSUMER_READY, SIGNAL_SOURCE> {
+    typename DataReadyBinding,
+    typename ConsumerReadyBinding,
+    typename SignalSourceBinding>
+struct McastArgsImpl<false, METADATA, Runtime, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding> {
     constexpr McastArgsImpl() = default;
     static constexpr bool active = false;
     static constexpr uint32_t has_receivers = 0;
@@ -240,9 +261,15 @@ struct McastArgs : detail::McastArgsImpl<
                        (get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::FAMILY),
                        detail::positional_mcast_metadata<CT_BASE>(),
                        detail::PositionalMcastRuntime<RT_BASE>,
-                       detail::positional_mcast_semaphore<CT_BASE, mcast_wire::DATA_READY>(),
-                       detail::positional_mcast_semaphore<CT_BASE, mcast_wire::CONSUMER_READY>(),
-                       detail::positional_mcast_semaphore<CT_BASE, mcast_wire::SIGNAL_SOURCE>()> {
+                       SemaphoreBindingToken<
+                           detail::positional_mcast_semaphore<CT_BASE, mcast_wire::DATA_READY>(),
+                           SemScope::LOCAL_NONATOMIC>,
+                       SemaphoreBindingToken<
+                           detail::positional_mcast_semaphore<CT_BASE, mcast_wire::CONSUMER_READY>(),
+                           SemScope::LOCAL_NONATOMIC>,
+                       SemaphoreBindingToken<
+                           detail::positional_mcast_semaphore<CT_BASE, mcast_wire::SIGNAL_SOURCE>(),
+                           SemScope::LOCAL_NONATOMIC>> {
     static_assert(
         get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::ABSENT ||
             get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::FAMILY,
