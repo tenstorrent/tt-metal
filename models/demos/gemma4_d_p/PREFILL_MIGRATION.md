@@ -65,16 +65,16 @@ Each score is Pearson correlation between a TT cache head and its GPU counterpar
 
 For example, layer minima of `0.98, 0.94, 0.96` produce running minima of `0.98, 0.94, 0.94`. PCC is correlation, not the percentage of matching values.
 
-The regression threshold is **0.91**, calibrated on this capture with whole-vector FP32 PCC. The 8K, 16K, and 128K scores matched the original full UMD readback exactly.
+The regression threshold is **0.91**, calibrated on this capture with FP32 PCC. The 8K, 16K, and 128K scores matched the original full UMD readback exactly.
 
 | Context | Minimum PCC | Global rotary K | Global V | Sliding K | Sliding V |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 8K | 0.920747 | 0.951169 | 0.948299 | 0.945258 | 0.920747 |
 | 16K | 0.929830 | 0.954082 | 0.952419 | 0.950691 | 0.929830 |
 | 128K | 0.934371 | 0.950708 | 0.954783 | 0.948936 | 0.934371 |
-| 256K | 0.920261 | 0.936534 | 0.943244 | 0.937629 | 0.920261 |
+| 256K | 0.916657 | 0.936483 | 0.939160 | 0.935219 | 0.916657 |
 
-The lowest measured score is sliding V, layer 39, head 9 at 256K: **0.920261**, leaving about **0.0103** above the threshold. This is a regression floor for one captured prompt and the current precision. Longer prefixes produce different correlation statistics, so minima need not decrease with context length. See [PCC performance](PCC_PERFORMANCE.md) for timings.
+The lowest measured score is sliding V, layer 39, head 9 at 256K: **0.916657**, leaving about **0.0067** above the threshold. This is a regression floor for one captured prompt and the current precision. Longer prefixes produce different correlation statistics, so minima need not decrease with context length. See [PCC performance](PCC_PERFORMANCE.md) for timings.
 
 ## Gate 1: GPU-trace comparison
 
