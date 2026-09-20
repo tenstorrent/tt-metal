@@ -61,13 +61,11 @@ struct zero_comp_traits {
     // every float width, else the per-format integer container.
     using container_t = std::conditional_t<is_float, sfpi::vFloat, typename dst_container<FMT>::type>;
 
-    // sfpmem mode for the raw 8-bit SFPLOAD/SFPSTORE path.
-    static constexpr std::uint32_t sfpmem8 =
-        (FMT == DataFormat::UInt8) ? ckernel::p_sfpu::sfpmem::UINT8 : ckernel::p_sfpu::sfpmem::INT8;
+    static constexpr auto sfpi_layout = FMT == DataFormat::UInt8 ? sfpi::DataLayout::U8 : sfpi::DataLayout::SM8;
 
     static inline __attribute__((always_inline)) sfpi::vInt load() {
         if constexpr (is_raw8) {
-            return sfpi::vInt(__builtin_rvtt_sfpload(0, sfpmem8, sfpi::SFPLOAD_ADDR_MODE_NOINC));
+            return sfpi::vInt(sfpi::dst_reg[0].mode<sfpi_layout>());
         } else {
             container_t c = sfpi::dst_reg[0];
             return sfpi::as<sfpi::vInt>(c);
@@ -78,7 +76,7 @@ struct zero_comp_traits {
     static inline __attribute__((always_inline)) result_t one() { return result_t(1); }
     static inline __attribute__((always_inline)) void store(result_t r) {
         if constexpr (is_raw8) {
-            __builtin_rvtt_sfpstore(r.get(), 0, sfpmem8, ckernel::ADDR_MOD_6);
+            sfpi::dst_reg[0].mode<sfpi_layout>(ckernel::ADDR_MOD_6) = r;
         } else {
             sfpi::dst_reg[0].mode<>(ckernel::ADDR_MOD_6) = sfpi::as<container_t>(r);
         }
