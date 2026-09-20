@@ -78,11 +78,50 @@ void CyclicSDPABackwardDeviceOperation::validate_on_program_cache_miss(
     const uint32_t N = static_cast<uint32_t>(shape[2]);
     const uint32_t d = static_cast<uint32_t>(shape[3]);
     TT_FATAL(d % kTile == 0U, "cyclic_sdpa_bw needs a head dimension that is a multiple of {}; got {}", kTile, d);
-    for (const auto* t : {&tensor_args.key, &tensor_args.value, &tensor_args.grad_output}) {
+    TT_FATAL(
+        tensor_args.grad_output.logical_shape() == shape,
+        "cyclic_sdpa_bw takes grad_output of the query's shape {}; got {}",
+        shape,
+        tensor_args.grad_output.logical_shape());
+    // Grouped-query attention: key and value may carry fewer heads than the
+    // query, a divisor of its head count; the heads of a group share one key
+    // head and add into one dK and one dV. Everything else about the shape
+    // must agree.
+    const auto key_shape = tensor_args.key.logical_shape();
+    TT_FATAL(
+        tensor_args.value.logical_shape() == key_shape,
+        "cyclic_sdpa_bw takes key and value of one shape; got key {} and value {}",
+        key_shape,
+        tensor_args.value.logical_shape());
+    TT_FATAL(
+        key_shape.rank() == 4U && key_shape[0] == shape[0] && key_shape[2] == shape[2] && key_shape[3] == shape[3],
+        "cyclic_sdpa_bw takes key and value of the query's batch, sequence length and head dimension; query is "
+        "{}, key is {}",
+        shape,
+        key_shape);
+    const uint32_t q_heads = static_cast<uint32_t>(shape[1]);
+    const uint32_t kv_heads = static_cast<uint32_t>(key_shape[1]);
+    TT_FATAL(
+        kv_heads >= 1U && q_heads % kv_heads == 0U,
+        "cyclic_sdpa_bw: the {} query heads must be a multiple of the {} key/value heads (grouped-query "
+        "attention shares one key head among a whole number of query heads)",
+        q_heads,
+        kv_heads);
+    if (tensor_args.preallocated_grad_query.has_value()) {
         TT_FATAL(
-            t->logical_shape() == shape,
-            "cyclic_sdpa_bw takes query, key, value and grad_output of one shape; {} differs",
-            enchantum::to_string(t->dtype()));
+            tensor_args.preallocated_grad_query->logical_shape() == shape,
+            "cyclic_sdpa_bw: preallocated grad_query {} must have the query's shape {}",
+            tensor_args.preallocated_grad_query->logical_shape(),
+            shape);
+    }
+    for (const auto* t : {&tensor_args.preallocated_grad_key, &tensor_args.preallocated_grad_value}) {
+        if (t->has_value()) {
+            TT_FATAL(
+                (*t)->logical_shape() == key_shape,
+                "cyclic_sdpa_bw: preallocated grad_key and grad_value {} must have the key's shape {}",
+                (*t)->logical_shape(),
+                key_shape);
+        }
     }
 
     const uint32_t chunks = args.sequence_chunks;
@@ -144,21 +183,23 @@ void CyclicSDPABackwardDeviceOperation::validate_on_program_cache_miss(
 
 CyclicSDPABackwardDeviceOperation::spec_return_value_t CyclicSDPABackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
-    const auto make_spec = [&](const std::optional<ttnn::Tensor>& preallocated) {
+    // dQ has the query's shape, dK and dV the key's: with grouped-query
+    // attention that is fewer heads.
+    const auto make_spec = [&](const std::optional<ttnn::Tensor>& preallocated, const ttnn::Tensor& like) {
         if (preallocated.has_value()) {
             return preallocated->tensor_spec();
         }
         return tt::tt_metal::TensorSpec(
-            tensor_args.query.logical_shape(),
+            like.logical_shape(),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::FLOAT32,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 tt::tt_metal::MemoryConfig{}));
     };
     return {
-        make_spec(tensor_args.preallocated_grad_query),
-        make_spec(tensor_args.preallocated_grad_key),
-        make_spec(tensor_args.preallocated_grad_value)};
+        make_spec(tensor_args.preallocated_grad_query, tensor_args.query),
+        make_spec(tensor_args.preallocated_grad_key, tensor_args.key),
+        make_spec(tensor_args.preallocated_grad_value, tensor_args.value)};
 }
 
 CyclicSDPABackwardDeviceOperation::tensor_return_value_t CyclicSDPABackwardDeviceOperation::create_output_tensors(
@@ -189,8 +230,10 @@ ttsl::hash::hash_t CyclicSDPABackwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // args carries rows_per_block_tiles, the mask type and the barrier flag,
     // all of which change the compiled kernels, so they must be in the hash.
+    // The key's shape too: its head count sets the grouped-query decode in
+    // the runtime arguments and the seeded column path in the kernels.
     return tt::tt_metal::operation::hash_operation<CyclicSDPABackwardDeviceOperation>(
-        args, tensor_args.query.dtype(), tensor_args.query.logical_shape());
+        args, tensor_args.query.dtype(), tensor_args.query.logical_shape(), tensor_args.key.logical_shape());
 }
 
 }  // namespace ttml::metal::ops::cyclic_sdpa_bw::device

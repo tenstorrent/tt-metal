@@ -165,7 +165,17 @@ void kernel_main() {
     const uint32_t chunks = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 2u);
     const uint32_t pairs = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 3u);
     const uint32_t heads = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 4u);
-    const uint32_t pair_table_arg = core_coords_arg + 2u * kCores + 5u;
+    // Grouped-query attention: K, V, dK and dV have kv_heads heads per batch,
+    // heads_per_group query heads each, kv_slices = batch x kv_heads slices in
+    // all. A slice index idx (below) is decoded as idx = sub x kv_slices + bg:
+    // bg is the (batch, key head) slice the key-side tensors are addressed by,
+    // sub which of the group's query heads this is. With one query head per
+    // key head kv_slices = heads and the decode is the identity.
+    const uint32_t kv_slices = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 5u);
+    const uint32_t q_heads = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 6u);
+    const uint32_t kv_heads = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 7u);
+    const uint32_t heads_per_group = get_arg_val<uint32_t>(core_coords_arg + 2u * kCores + 8u);
+    const uint32_t pair_table_arg = core_coords_arg + 2u * kCores + 9u;
     constexpr uint32_t qWt = get_compile_time_arg_val(1);
     constexpr uint32_t vWt = get_compile_time_arg_val(2);
     constexpr uint32_t release_sem_id = get_compile_time_arg_val(3);
@@ -368,15 +378,21 @@ void kernel_main() {
     for (uint32_t s = 0; s < slice_count; ++s) {
     // Slices are pair-major: all heads of pair 0, then of pair 1 (see the host).
     const uint32_t sl = first_slice + s * slice_stride;
-    const uint32_t bh = sl % heads;
+    const uint32_t idx = sl % heads;
     const uint32_t pair = sl / heads;
+    // Which (batch, key head) the key-side tensors belong to, and which query
+    // head of that group this slice is (see the header above). The query-side
+    // tensors are addressed by the (batch, query head) slice bh.
+    const uint32_t bg = idx % kv_slices;
+    const uint32_t sub = idx / kv_slices;
+    const uint32_t bh = (bg / kv_heads) * q_heads + (bg % kv_heads) * heads_per_group + sub;
     const uint32_t row_chunk = get_arg_val<uint32_t>(pair_table_arg + 2u * pair);
     const uint32_t col_chunk = get_arg_val<uint32_t>(pair_table_arg + 2u * pair + 1u);
     row_base = (bh * chunks + row_chunk) * 2u * kCores * row_tiles;
     val_base = (bh * chunks + row_chunk) * 2u * kCores * val_tiles;
     stat_base = (bh * chunks + row_chunk) * 2u * kCores * Bt;
-    col_row_base = (bh * chunks + col_chunk) * 2u * kCores * row_tiles;
-    col_val_base = (bh * chunks + col_chunk) * 2u * kCores * val_tiles;
+    col_row_base = (bg * chunks + col_chunk) * 2u * kCores * row_tiles;
+    col_val_base = (bg * chunks + col_chunk) * 2u * kCores * val_tiles;
     visited[0] = false;
     visited[1] = false;
 

@@ -156,13 +156,27 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     // schedule's N is a chunk, not the whole sequence.
     const uint32_t chunks = std::max(1U, args.sequence_chunks);
     const uint32_t pairs = static_cast<uint32_t>(std::max<size_t>(1, args.row_chunks.size()));
-    const uint32_t heads = static_cast<uint32_t>(shape[0]) * static_cast<uint32_t>(shape[1]);
+    const uint32_t batch = static_cast<uint32_t>(shape[0]);
+    const uint32_t q_heads = static_cast<uint32_t>(shape[1]);
+    const uint32_t heads = batch * q_heads;
     const uint32_t slices = heads * pairs;
+    // Grouped-query attention: K and V carry kv_heads heads, each shared by
+    // heads_per_group query heads (validated to divide). Every query head is
+    // still its own slice -- its dQ is its own -- but the heads of a group add
+    // into one dK and one dV, so they must run in turn on one core group, and
+    // every visit of a column starts from what DRAM holds (the seeded path,
+    // as in a ring step). kv_slices is the number of (batch, key head) slices
+    // the key-side tensors are addressed by.
+    const uint32_t kv_heads = static_cast<uint32_t>(key.logical_shape()[1]);
+    const uint32_t heads_per_group = q_heads / kv_heads;
+    const uint32_t kv_slices = batch * kv_heads;
     // Chunk pairs that share a row chunk (dQ) or a column chunk (dK, dV) write
     // the same gradient rows; run side by side as slices of different groups
     // they would accumulate into them at once. Slices are dealt pair-major
-    // (slice = pair * heads + head), so with a group count that divides the
-    // head count every pair of one head lands in the same group, in turn.
+    // (slice = pair * heads + idx, idx = sub * kv_slices + bg; see the relay
+    // reader), so with a group count that divides kv_slices every query head
+    // of one key head, and every pair of it, lands in the same group, in
+    // turn: a divisor of kv_slices divides heads too.
     bool pairs_share_outputs = false;
     for (uint32_t p = 0; p < pairs; ++p) {
         for (uint32_t q = p + 1U; q < pairs; ++q) {
@@ -170,24 +184,26 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
                 (args.row_chunks[p] == args.row_chunks[q]) || (args.col_chunks[p] == args.col_chunks[q]);
         }
     }
+    const bool slices_share_outputs = pairs_share_outputs || heads_per_group > 1U;
     const uint32_t N = static_cast<uint32_t>(shape[2]) / chunks;
     const uint32_t d = static_cast<uint32_t>(shape[3]);
 
     auto layout = plan_layout(
         device->compute_with_storage_grid_size(), N, args.rows_per_block_tiles, slices, args.max_groups);
-    if (pairs_share_outputs) {
-        uint32_t g = std::min(layout.groups, heads);
-        while (heads % g != 0U) {
+    if (slices_share_outputs) {
+        uint32_t g = std::min(layout.groups, kv_slices);
+        while (kv_slices % g != 0U) {
             --g;
         }
         if (g != layout.groups) {
             layout = plan_layout(device->compute_with_storage_grid_size(), N, args.rows_per_block_tiles, slices, g);
         }
     }
-    // The pair table the kernels decode a slice with: pairs x (row chunk,
-    // column chunk). Appended after everything else so the address slots
-    // that override_runtime_arguments patches stay where they are.
-    std::vector<uint32_t> pair_table = {chunks, pairs, heads};
+    // The pair table the kernels decode a slice with: the head arithmetic,
+    // then pairs x (row chunk, column chunk). Appended after everything else
+    // so the address slots that override_runtime_arguments patches stay where
+    // they are.
+    std::vector<uint32_t> pair_table = {chunks, pairs, heads, kv_slices, q_heads, kv_heads, heads_per_group};
     for (uint32_t p = 0; p < pairs; ++p) {
         pair_table.push_back(args.row_chunks.empty() ? 0U : args.row_chunks[p]);
         pair_table.push_back(args.col_chunks.empty() ? 0U : args.col_chunks[p]);
@@ -301,7 +317,10 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     if (dense) {
         sync_defines["DENSE_MODE"] = "1";
     }
-    if (args.accumulate_into_outputs) {
+    // Seed every column's gradients from DRAM: when accumulating into the
+    // outputs, and whenever several query heads share a key head, since the
+    // second head of a group must add to what the first left there.
+    if (args.accumulate_into_outputs || heads_per_group > 1U) {
         sync_defines["SEED_COLUMN_GRADIENTS"] = "1";
     }
     std::map<std::string, std::string> compute_defines = sync_defines;

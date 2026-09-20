@@ -30,6 +30,11 @@ namespace ttml::metal {
 // given rather than recomputed: log_sum_exp and row_scalar come from the
 // forward pass.
 //
+// Grouped-query attention: key and value may have fewer heads than the query
+// (a divisor of its head count). The query heads sharing a key head run in
+// turn on one core group and add into one dK and one dV, which then have the
+// key's shape.
+//
 // Returns dQ, dK, dV in Float32.
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_bw(
     const ttnn::Tensor& query,
