@@ -199,7 +199,7 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
             } else if (item.rfind("EXP_GUARD=", 0) == 0) {
                 defines["FW_EXP_GUARD"] = item.substr(10);  // 0 none (wrong), 1 mask, 2 clamp
             } else if (item.rfind("LAZY_TAU=", 0) == 0) {
-                defines["FW_LAZY_THRESHOLD"] = item.substr(9) + "F";  // the lazy-rescale threshold
+                defines["FW_LAZY_THRESHOLD"] = "(static_cast<float>(" + item.substr(9) + "))";  // the lazy-rescale threshold
             } else if (!item.empty()) {
                 defines["FW_EXPERIMENT_" + item] = "1";
             }

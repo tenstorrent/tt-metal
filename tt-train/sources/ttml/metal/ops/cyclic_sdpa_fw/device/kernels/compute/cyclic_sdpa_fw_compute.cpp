@@ -695,7 +695,12 @@ void kernel_main() {
                 const uint32_t live = n_live(a);
                 tile_regs_acquire();
                 reconfig_data_format(cb_query, cb_key);
-                mm_block_init<kFidS>(cb_key, cb_query, /* transpose */ 1, /* ct */ 1, /* rt */ live, /* kt */ qWt);
+#ifdef FW_EXPERIMENT_NO_TRANSPOSE
+                constexpr uint32_t kTransposeQ = 0;  // timing experiment: K Q instead of K Q^T, results wrong
+#else
+                constexpr uint32_t kTransposeQ = 1;
+#endif
+                mm_block_init<kFidS>(cb_key, cb_query, kTransposeQ, /* ct */ 1, /* rt */ live, /* kt */ qWt);
                 for (uint32_t k = 0; k < qWt; ++k) {
                     mm_block<kFidS>(cb_key, cb_query, k, a * qWt + k, 0, /* ct */ 1, /* rt */ live, /* kt */ qWt);
                 }
@@ -1030,13 +1035,26 @@ void kernel_main() {
                 }
             };
 
-            for (uint32_t a = 0; a < Bt; ++a) {
-                probs_column(a);
-                if (a > 0u) {
-                    sum_and_update(a - 1u);
+            // The exact path copies the state into DST through the unpacker,
+            // whose handshake with the math thread waits for an idle vector
+            // unit; the pack thread's exponential, stalled on the next
+            // column's commit, is not idle, and the two wait for each other
+            // (a hang, met in training, where the maximum does grow). So a
+            // timestep with any rescaled tile runs its columns in order:
+            // each column's sums after its own exponential, none of them
+            // under the next column's.
+            // (One call site per stage: the kernel is near the config
+            // buffer's size limit at d = 128.)
+            const bool exact_any = !fresh && need_mask != 0u;
+            const uint32_t lag = exact_any ? 0u : 1u;
+            for (uint32_t a = 0; a < Bt + lag; ++a) {
+                if (a < Bt) {
+                    probs_column(a);
+                }
+                if (a >= lag) {
+                    sum_and_update(a - lag);
                 }
             }
-            sum_and_update(Bt - 1u);
         }
 
         // ---- 6. The finished row: O = (O^T / l)^T in bfloat16, lse = a m + ln l.

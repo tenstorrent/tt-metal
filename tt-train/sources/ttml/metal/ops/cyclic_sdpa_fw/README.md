@@ -52,22 +52,37 @@ share a *column* chunk (columns have no outputs) but not a row chunk (both
 would finish the same rows; the ring merges such partials from separate
 launches).
 
-## How it works, in one paragraph
+## How it works, in two paragraphs
 
 Per timestep a core holds `K_j, V_j` (and `V_j^T`, transposed once per
 residency interval) and receives a packet: `Q_i` first, then the state
 `(O_i^T, m_i, l_i)` after the previous consumer has updated it. It forms
-`S^T = K Q^T` for the block, reduces the column maximum, `m_new = max(m_old,
-colmax)`, `r = exp(a (m_old - m_new))`, `P^T = exp(a (S^T - m_new))`,
-`l_new = r l_old + colsum P^T`, `O^T <- r O^T + V^T P^T`, all in Float32 in
-the destination registers (the scores go through the source registers'
-19 bits once, on the way into the maximum; `m` is a maximum of those
-rounded scores and so exact; the exponential is the backward's polynomial,
-2.9e-6). At a row's last visit the consumer finishes it -- `O = (O^T / l)^T`
-in bfloat16, `lse = a m + ln l` -- and the write kernel stores it. A row's
-first visit starts from nothing; between streaks the raw state spills to
-the scratch tensors and the endpoint words of the backward order the
-reload after the spill.
+`S^T = K Q^T` for the block and the column maximum of every query tile,
+then, per query tile, `P^T = exp(a (S^T - m))`, `l += colsum P^T` and
+`O^T += V^T P^T`, all in Float32 in the destination registers (the scores
+go through the source registers' 19 bits once, on the way into the maximum
+and the exponential, which is the backward's polynomial at 9.5e-5). At a
+row's last visit the consumer finishes it -- `O = (O^T / l)^T` in bfloat16,
+`lse = a m + ln l` -- and the write kernel stores it. A row's first visit
+starts from nothing; between streaks the raw state spills to the scratch
+tensors and the endpoint words of the backward order the reload after the
+spill.
+
+The running maximum is *lazy*, as in FlashAttention-4: `m` is only a
+reference point, and the finished row comes out the same for any reference
+as long as `exp(a (S - m))` cannot overflow, so a query tile whose block
+maximum stays within 8 (in units of the scaled scores; e^8 in Float32 is
+nowhere near overflow) of the `m` it carries keeps that `m`. No rescale
+factor is computed, the block sum and the products are added onto `l` and
+`O^T` where they lie by the packer's L1 accumulate, and nothing of the state
+passes through the destination registers. Only when a tile's maximum grows
+past the threshold -- the first visits of a row, then rarely -- does it
+take the exact path: `m_new = m_old + max(colmax - m_old, 0)`, `r =
+exp(-a max(colmax - m_old, 0))`, `l = r l_old + colsum`, `O^T = r O^T + V^T
+P^T`, every factor exact. The check is the FPU's `colmax - m` compared on
+the unpack thread and broadcast to the other two through the mailboxes.
+`TTML_CYCLIC_FW_EXPERIMENT=NO_LAZY` rescales every timestep (the same
+results, slower); `LAZY_TAU=<x>` sets the threshold.
 
 ## What to expect
 
