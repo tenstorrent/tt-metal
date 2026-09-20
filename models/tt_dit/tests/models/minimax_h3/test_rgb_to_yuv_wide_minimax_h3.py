@@ -36,16 +36,27 @@ def _timed(mesh_device, fn, n=10):
 def test_wide_rows_match_planes(mesh_device, h, w, t):
     torch.manual_seed(0)
     rgb = ttnn.from_torch(
-        (torch.rand(3, h, w, t) * 2 - 1).to(torch.bfloat16), device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+        (torch.rand(3, h, w, t) * 2 - 1).to(torch.bfloat16),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
     )
     coefficients = ttnn.experimental.yuv_bt601_coefficients()
     planes, ms_plain = _timed(mesh_device, lambda: ttnn.experimental.rgb_to_yuv(rgb, coefficients=coefficients))
-    wide, ms_wide = _timed(mesh_device, lambda: ttnn.experimental.rgb_to_yuv(rgb, coefficients=coefficients, wide_rows=True))
+    wide, ms_wide = _timed(
+        mesh_device, lambda: ttnn.experimental.rgb_to_yuv(rgb, coefficients=coefficients, wide_rows=True)
+    )
     for name, plain_t, wide_t in zip(("Y", "Cb", "Cr"), planes, wide):
         ref = ttnn.to_torch(plain_t)
         got = ttnn.to_torch(wide_t)
-        assert tuple(got.shape) == (1, ref.shape[1], ref.shape[2] * ref.shape[3]), f"{name}: wide shape {tuple(got.shape)}"
+        assert tuple(got.shape) == (
+            1,
+            ref.shape[1],
+            ref.shape[2] * ref.shape[3],
+        ), f"{name}: wide shape {tuple(got.shape)}"
         got = got.reshape(ref.shape)
         n_diff = int((got != ref).sum())
-        logger.info(f"YUVWIDE {name} ({h},{w},{t}): plain {ms_plain:.3f} ms, wide {ms_wide:.3f} ms; differing bytes {n_diff}")
+        logger.info(
+            f"YUVWIDE {name} ({h},{w},{t}): plain {ms_plain:.3f} ms, wide {ms_wide:.3f} ms; differing bytes {n_diff}"
+        )
         assert torch.equal(got, ref), f"{name}: {n_diff} bytes differ between the wide rows and the planes"

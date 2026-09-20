@@ -90,7 +90,9 @@ class FusedActivation1d(Module):
             beta = beta.reshape(-1) + self.eps
             assert alpha.numel() == self.channels and beta.numel() == self.channels
             r = self.rows_per_tile
-            state["ab"] = torch.stack([alpha.float().repeat(r), beta.float().repeat(r)]).reshape(1, 2, 1024).contiguous()
+            state["ab"] = (
+                torch.stack([alpha.float().repeat(r), beta.float().repeat(r)]).reshape(1, 2, 1024).contiguous()
+            )
         if "upsample.filter" in state:
             self._up_taps = state.pop("upsample.filter").reshape(-1).float().tolist()
         if "downsample.lowpass.filter" in state:
@@ -167,7 +169,9 @@ class FusedActivation1d(Module):
 
         def cb(index, page_bytes, pages, fmt=ttnn.float32):
             fmt_desc = ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=page_bytes)
-            return ttnn.CBDescriptor(total_size=page_bytes * pages, core_ranges=core_grid, format_descriptors=[fmt_desc])
+            return ttnn.CBDescriptor(
+                total_size=page_bytes * pages, core_ranges=core_grid, format_descriptors=[fmt_desc]
+            )
 
         def align64(n):
             return -(-n // _DRAM_READ_ALIGN) * _DRAM_READ_ALIGN
@@ -227,7 +231,11 @@ class FusedActivation1d(Module):
             kernel_source=f"{KERNEL_DIR}/aa_snake_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             compile_time_args=built["reader_ct"],
-            common_runtime_args=[x.buffer_address(), self.ab.data.buffer_address(), self._flags_tensor().buffer_address()],
+            common_runtime_args=[
+                x.buffer_address(),
+                self.ab.data.buffer_address(),
+                self._flags_tensor().buffer_address(),
+            ],
             config=ttnn.ReaderConfigDescriptor(),
             **common,
         )
@@ -275,8 +283,12 @@ class FusedActivation1d(Module):
         assert x.buffer_aligned_page_size() == width * 4, "the kernel reads whole unpadded DRAM pages"
         # The accessor args baked into the kernels assume DRAM-interleaved pages, and the program hash packs
         # (t_sticks, batch, pack) into fixed bit fields.
-        assert x.memory_config().buffer_type == ttnn.BufferType.DRAM and not x.is_sharded(), "x must be DRAM interleaved"
-        assert t_sticks < (1 << 20) and batch < 16 and pack < 16, f"shape ({batch}, {t_sticks}, pack {pack}) exceeds the key's fields"
+        assert (
+            x.memory_config().buffer_type == ttnn.BufferType.DRAM and not x.is_sharded()
+        ), "x must be DRAM interleaved"
+        assert (
+            t_sticks < (1 << 20) and batch < 16 and pack < 16
+        ), f"shape ({batch}, {t_sticks}, pack {pack}) exceeds the key's fields"
 
         if self._sharded:
             pad_rows = -(-5 // pack)
@@ -293,7 +305,11 @@ class FusedActivation1d(Module):
             halo_t, halo = x, 0
 
         out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([batch, rows, width]), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device, ttnn.DRAM_MEMORY_CONFIG
+            ttnn.Shape([batch, rows, width]),
+            ttnn.float32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
         )
         program = self._descriptor(batch, t_sticks, pack, halo, halo_t, out)
         out = ttnn.generic_op([halo_t, self.ab.data, self._flags_tensor(), out], program)

@@ -26,7 +26,11 @@ SINGLE_DEVICE = [pytest.param((1, 1), {"l1_small_size": 65536}, id="single_devic
 MESH = [
     pytest.param(
         (4, 8),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True, "l1_small_size": 65536},
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "require_exact_physical_num_devices": True,
+            "l1_small_size": 65536,
+        },
         id="mesh4x8_tshard8",
     )
 ]
@@ -114,7 +118,9 @@ def test_fused_matches_chain(mesh_device, channels, pack, rows, stage):
         if n_diff:
             idx = torch.nonzero(got != ref)[:8]
             for b_i, t_i, c_i in idx.tolist():
-                logger.info(f"  first mismatches: [{b_i},{t_i},{c_i}] got {got[b_i, t_i, c_i].item()!r} ref {ref[b_i, t_i, c_i].item()!r}")
+                logger.info(
+                    f"  first mismatches: [{b_i},{t_i},{c_i}] got {got[b_i, t_i, c_i].item()!r} ref {ref[b_i, t_i, c_i].item()!r}"
+                )
         assert torch.equal(got, ref), f"stage {stage}: {n_diff} values differ (max |diff| {float(diff.max()):.3e})"
 
 
@@ -128,7 +134,9 @@ def test_fused_matches_chain_t_sharded(mesh_device, channels, pack, rows):
     mesh_rows, mesh_cols = tuple(mesh_device.shape)
     pc = ParallelFactor(factor=mesh_cols, mesh_axis=1)
     preset = resolve_mesh_preset((mesh_rows, mesh_cols), required=False)
-    ccl = CCLManager(mesh_device, num_links=preset.get("num_links", 1), topology=preset.get("topology", ttnn.Topology.Linear))
+    ccl = CCLManager(
+        mesh_device, num_links=preset.get("num_links", 1), topology=preset.get("topology", ttnn.Topology.Linear)
+    )
     batch = 2
     total = rows * mesh_cols
     x = torch.randn(batch, total * pack, channels) * 0.5
@@ -139,7 +147,9 @@ def test_fused_matches_chain_t_sharded(mesh_device, channels, pack, rows):
     fused.load_torch_state_dict(dict(state))
     act = Activation1d(
         channels=channels,
-        activation=SnakeBeta(channels, alpha_logscale=True, mesh_device=mesh_device, dtype=ttnn.float32, parallel_config=pc),
+        activation=SnakeBeta(
+            channels, alpha_logscale=True, mesh_device=mesh_device, dtype=ttnn.float32, parallel_config=pc
+        ),
         **common,
     )
     act.load_torch_state_dict(dict(state))
@@ -148,7 +158,9 @@ def test_fused_matches_chain_t_sharded(mesh_device, channels, pack, rows):
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(mesh_rows, mesh_cols), dims=[0, 1])
 
     def shard(t):
-        return ttnn.from_torch(t, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32, mesh_mapper=mapper)
+        return ttnn.from_torch(
+            t, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32, mesh_mapper=mapper
+        )
 
     def gather(t):
         # (mesh_rows * batch, total_rows, width): the mesh rows are replicas and must agree.
@@ -173,5 +185,7 @@ def test_fused_matches_chain_t_sharded(mesh_device, channels, pack, rows):
         if n_diff:
             idx = torch.nonzero(got != ref)[:8]
             for b_i, t_i, c_i in idx.tolist():
-                logger.info(f"  first mismatches: [{b_i},{t_i},{c_i}] got {got[b_i, t_i, c_i].item()!r} ref {ref[b_i, t_i, c_i].item()!r}")
+                logger.info(
+                    f"  first mismatches: [{b_i},{t_i},{c_i}] got {got[b_i, t_i, c_i].item()!r} ref {ref[b_i, t_i, c_i].item()!r}"
+                )
         assert torch.equal(got, ref), f"{n_diff} values differ on the mesh (max |diff| {float(diff.max()):.3e})"

@@ -1249,12 +1249,20 @@ class MiniMaxH3Vae:
             full_runs = len(chunk_latents) // run
             for g in range(full_runs):
                 for w in range(grid_cols):
-                    waves.append({"mains": [g * run + w], "extra": (g * run + grid_cols, w), "flush": w == grid_cols - 1})
+                    waves.append(
+                        {"mains": [g * run + w], "extra": (g * run + grid_cols, w), "flush": w == grid_cols - 1}
+                    )
             for k in range(full_runs * run, len(chunk_latents)):
                 waves.append({"mains": [k], "extra": None, "flush": False})
         else:
             for i in range(0, len(chunk_latents), chunks_per_wave):
-                waves.append({"mains": list(range(i, min(i + chunks_per_wave, len(chunk_latents)))), "extra": None, "flush": False})
+                waves.append(
+                    {
+                        "mains": list(range(i, min(i + chunks_per_wave, len(chunk_latents)))),
+                        "extra": None,
+                        "flush": False,
+                    }
+                )
         extra_tiles: dict[int, list[torch.Tensor]] = {}
 
         def prepare_host(wave):

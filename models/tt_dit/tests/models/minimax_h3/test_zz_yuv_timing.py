@@ -44,7 +44,6 @@ _MESH_4X8_TRACE = pytest.param(
 SERVING_MESHES = [_MESH_4X8_TRACE, *GALAXY_MESHES[1:]]
 
 
-
 def _write_frame_crcs(video, height: int, path: str) -> None:
     """One line per frame: crc32 of the planar frame, then of the four row bands of its Y plane (the
     strip stitch's mesh rows), so two runs compare at the raw level and a difference has a location."""
@@ -57,8 +56,11 @@ def _write_frame_crcs(video, height: int, path: str) -> None:
     with open(path, "w") as handle:
         for index, frame in enumerate(frames):
             luma = frame[:height]
-            bands = " ".join(f"{zlib.crc32(np.ascontiguousarray(luma[r : r + band]).tobytes()):08x}" for r in range(0, height, band))
+            bands = " ".join(
+                f"{zlib.crc32(np.ascontiguousarray(luma[r : r + band]).tobytes()):08x}" for r in range(0, height, band)
+            )
             handle.write(f"{index} {zlib.crc32(np.ascontiguousarray(frame).tobytes()):08x} {bands}\n")
+
 
 @pytest.mark.timeout(5400)
 @pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"{d}s" for d in DURATIONS_S])

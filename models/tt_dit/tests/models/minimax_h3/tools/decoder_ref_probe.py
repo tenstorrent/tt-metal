@@ -33,7 +33,9 @@ def _reference_module():
         pass
     src = os.environ.get("MINIMAX_H3_REF_SRC")
     if not src or not os.path.isfile(src):
-        pytest.skip("pinned diffusers reference not installed; set MINIMAX_H3_REF_SRC to its autoencoder_kl_minimax_h3.py")
+        pytest.skip(
+            "pinned diffusers reference not installed; set MINIMAX_H3_REF_SRC to its autoencoder_kl_minimax_h3.py"
+        )
     import diffusers.models.autoencoders as pkg
 
     name = "diffusers.models.autoencoders.autoencoder_kl_minimax_h3"

@@ -194,7 +194,9 @@ def _yuv_planar_d2h(
                         continue
                     buf = distributed_buf.get_shard(c)
                     if buf is not None:
-                        coords_and_shards.append((c, _as_hwt(_host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim], T)))
+                        coords_and_shards.append(
+                            (c, _as_hwt(_host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim], T))
+                        )
                 return coords_and_shards
 
             Y_coords_shards = _extract_local(host_Y)

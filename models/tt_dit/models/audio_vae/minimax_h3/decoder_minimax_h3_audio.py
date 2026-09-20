@@ -101,7 +101,9 @@ class MiniMaxH3AudioDecoder(Module):
             if parallel_config is None or parallel_config.mesh_axis == batch_shard_axis:
                 raise ValueError("batch_shard_axis needs a T-sharded decoder and must differ from the T-shard axis")
             if mesh_shape[batch_shard_axis] < 2:
-                raise ValueError(f"mesh axis {batch_shard_axis} has length {mesh_shape[batch_shard_axis]}; nothing to shard")
+                raise ValueError(
+                    f"mesh axis {batch_shard_axis} has length {mesh_shape[batch_shard_axis]}; nothing to shard"
+                )
         self._pad_masks: dict = {}
 
         # H3's audio channel schedule differs from LTX's at both ends, so every conv misses
@@ -205,7 +207,9 @@ class MiniMaxH3AudioDecoder(Module):
         axis = self.batch_shard_axis
         mesh_shape = tuple(self.mesh_device.shape)
         batch = x_BTC.shape[0]
-        assert mesh_shape[axis] >= batch, f"mesh axis {axis} ({mesh_shape[axis]} devices) is shorter than the batch {batch}"
+        assert (
+            mesh_shape[axis] >= batch
+        ), f"mesh axis {axis} ({mesh_shape[axis]} devices) is shorter than the batch {batch}"
         rows = torch.cat([x_BTC[i % batch : i % batch + 1] for i in range(mesh_shape[axis])], dim=0)
         dims = [None, None]
         dims[axis] = 0

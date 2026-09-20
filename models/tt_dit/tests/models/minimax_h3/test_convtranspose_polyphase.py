@@ -96,4 +96,6 @@ def test_polyphase_matches_zero_stuffed(mesh_device, in_channels, out_channels, 
     logger.info(f"  polyphase vs stuffed on device: rms {rms_dd:.3e}, ends max {ends_dd:.3e}, max |out| {scale:.3e}")
     assert errors["polyphase"] <= 1.2 * errors["stuffed"], f"polyphase form is less accurate: {errors}"
     assert ends <= 1e-2 * scale, f"sequence ends differ from torch by {ends:.3e} (max |out| {scale:.3e}): crop bug"
-    assert ends_dd <= max(10 * rms_dd, 1e-6 * scale), f"the device forms disagree at the ends: {ends_dd:.3e} vs rms {rms_dd:.3e}"
+    assert ends_dd <= max(
+        10 * rms_dd, 1e-6 * scale
+    ), f"the device forms disagree at the ends: {ends_dd:.3e} vs rms {rms_dd:.3e}"
