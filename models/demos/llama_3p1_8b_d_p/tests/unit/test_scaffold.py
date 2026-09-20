@@ -11,8 +11,19 @@ check that copy-paste worked.
 
 import subprocess
 import sys
+from pathlib import Path
 
 ADAPTER_MODULE = "models.demos.llama_3p1_8b_d_p.tt.runners.adapters.llama_3p1_8b"
+
+# resolve() first so these hold however pytest was invoked.
+PACKAGE_TESTS_DIR = Path(__file__).resolve().parents[1]
+# unit -> tests -> llama_3p1_8b_d_p -> demos -> models -> repo root.
+PREFILL_TESTS_YAML = (
+    Path(__file__).resolve().parents[5] / "tests" / "pipeline_reorg" / "blaze_models_prefill_tests.yaml"
+)
+
+# upload-artifact's reject list, verbatim from the error it raises. NTFS-safe naming.
+ARTIFACT_INVALID_CHARS = frozenset('":<>|*?\r\n\\/')
 
 # Anything in this set at adapter-import time breaks the H2D producers, which import the module only
 # to read the registry. The prefill engine's docs make this a hard contract.
@@ -37,6 +48,68 @@ def test_adapter_is_import_light():
     )
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True).stdout.strip()
     assert out == "", f"adapter import pulled in heavy modules: {out}"
+
+
+def test_hardware_labels_partition_the_suite(request):
+    """tt-blaze#4152: every cell carries exactly one of ``cpu_only`` / ``device_required``.
+
+    The pipeline runs ``-m device_required`` on dispatch and ``-m cpu_only`` where a CPU leg exists,
+    so the two sets have to cover the suite and not overlap. An unlabelled cell is the failure that
+    matters: it runs in neither leg, so it silently stops being tested while both legs stay green.
+
+    Read off the live session rather than by shelling out to ``pytest --collect-only``. The
+    subprocess version deadlocks: collecting this package opens the mesh (the device fixtures'
+    parametrization is resolved at collection time), and the parent session already holds those
+    devices, so the child blocks on the device lock until the job's wall clock runs out. It also
+    tells the truth about whatever is actually running -- under ``-k`` or ``-m`` the child would
+    re-collect the whole package and disagree with the session it is supposedly describing.
+    """
+    items = request.session.items
+    assert items, "no collected items to check"
+
+    unlabelled = [
+        i.nodeid for i in items if not (i.get_closest_marker("cpu_only") or i.get_closest_marker("device_required"))
+    ]
+    both = [i.nodeid for i in items if i.get_closest_marker("cpu_only") and i.get_closest_marker("device_required")]
+    assert not unlabelled, f"{len(unlabelled)} cell(s) carry neither label, e.g. {unlabelled[:5]}"
+    assert not both, f"{len(both)} cell(s) carry both labels, e.g. {both[:5]}"
+
+    # Both legs non-empty, or a selector typo reads as a clean run of nothing. Only meaningful when
+    # the session really did collect the whole package: a deliberate `-m cpu_only` leg is
+    # legitimately one-sided, and so is `pytest test_scaffold.py`, which collects only device-free
+    # cells. Keying on markexpr/keyword alone is not enough -- it let plain
+    # `pytest test_scaffold.py` fail, which is the most ordinary thing a developer does here.
+    collected_files = {Path(str(i.fspath)).resolve() for i in items}
+    full_run = collected_files >= {p.resolve() for p in PACKAGE_TESTS_DIR.rglob("test_*.py")}
+    if full_run and not (request.config.option.markexpr or request.config.option.keyword):
+        cpu_only = sum(1 for i in items if i.get_closest_marker("cpu_only"))
+        assert cpu_only and cpu_only < len(items), f"cpu_only={cpu_only} of {len(items)}"
+
+
+def test_stage_names_make_valid_artifact_names():
+    """This package's CI stage names must survive being interpolated into an artifact name.
+
+    The workflow builds ``test-log-<stage name> [<sku>] (attempt N)`` and
+    ``triage_output_<stage name> ...``, and upload-artifact rejects a forward slash and friends
+    outright. A violation does not fail the job: the upload step exits 1 behind
+    ``continue-on-error``, the container hook reports it as "Executing the custom container
+    implementation failed", and the job still reports success -- so the only symptom is scary
+    annotations plus a missing log, which is easy to read as runner flake and ignore. The natural
+    name for a multi-module stage is a slash-separated list, so this is easy to reintroduce.
+
+    Scoped to the stages this package owns. The same bug in another team's stage is just as real,
+    but failing Llama's leg over it would put the alarm in the wrong place.
+    """
+    import yaml
+
+    stages = yaml.safe_load(PREFILL_TESTS_YAML.read_text())
+    mine = [e["name"] for e in stages if isinstance(e, dict) and "Llama-3.1-8B" in str(e.get("name", ""))]
+    assert mine, f"no Llama-3.1-8B stages found in {PREFILL_TESTS_YAML.name}; did the name or path change?"
+
+    for name in mine:
+        for artifact in (f"test-log-{name} [bh_sc1] (attempt 1)", f"triage_output_{name} [bh_sc1] (attempt 1)"):
+            offending = sorted(ARTIFACT_INVALID_CHARS & set(artifact))
+            assert not offending, f"stage {name!r} yields artifact name {artifact!r} containing {offending}"
 
 
 def test_weight_cache_path_uses_sp_times_tp(tmp_path, monkeypatch):

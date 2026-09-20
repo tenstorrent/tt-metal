@@ -1278,6 +1278,173 @@
   sp_config: sc1
 
 
+# ===== Llama-3.1-8B ====================================================================================
+
+# Per-module PCC vs the torch reference for the dense-GQA prefill stack (tt-blaze#4152): MLP, RoPE,
+# KV cache, attention, decoder layer, prefill model + chunk loop, and the runner adapter.
+#
+# Needs NO staged mounts, unlike every other entry in this file. The PCC tests build the reference
+# and the device model from the same random weights at a reduced layer count and vocab, so nothing
+# is read from /mnt/models -- see models/demos/llama_3p1_8b_d_p/tests/unit/test_model_vs_ref.py for
+# why that still covers every dimension that governs correctness. The two tests that do want the
+# real checkpoint are opt-in (LLAMA31_8B_REAL_WEIGHTS / LLAMA31_REF_CHECKPOINT) and skip here, so
+# this stage cannot break on a checkpoint move.
+#
+# Runs the 1x1 single-card arms and the production 4x8 (SP=4 x TP=8) ones, which is everything a
+# galaxy can open: a Blackhole fabric only comes up across the whole allocation, so the 1x8 and 4x2
+# arms are not sub-meshes this sku can take and are skipped here by
+# models/demos/llama_3p1_8b_d_p/tests/conftest.py -- a loudbox covers those. The torus_xy profile is
+# what makes the 4x8 arms open at all; FABRIC_2D_TORUS_XY with RELAXED_INIT comes from each arm's
+# device_params. The 4x8 arms drive the SP ring cache-read, and the real-checkpoint full-model run
+# remains its own stage (tt-blaze#4150).
+#
+# `-m device_required` is tt-blaze#4152's selector. Every cell in the package carries exactly one of
+# `cpu_only` / `device_required`, derived from whether it requests a device fixture -- see
+# models/demos/llama_3p1_8b_d_p/tests/conftest.py, asserted by
+# test_hardware_labels_partition_the_suite -- so this stage claims only the cells that need the
+# allocation and does not spend a 32-chip galaxy on the ~87 device-free ones.
+#
+# Those ~87 are deliberately NOT registered here, and cannot be: every impl invocation in
+# .github/workflows/blaze-models-prefill-tests.yaml passes `enabled-skus: bh_*`, so a `cpu_medium`
+# entry in this file would be filtered out of the matrix and silently never run -- worse than
+# absent. Giving them a PR-CI home needs a new impl leg in that workflow (or an entry in a matrix
+# whose workflow already has a CPU invocation); until then `-m cpu_only` is a one-liner to run by
+# hand and the labels are in place for whoever adds the leg.
+  # Commas, not slashes, in the module list: the workflow interpolates this name straight into
+  # `test-log-<name> (attempt N)` and `triage_output_<name> ...`, and upload-artifact rejects a
+  # forward slash outright (NTFS-safe naming). With slashes the test-log upload exits 1, which the
+  # container hook then reports as "Executing the custom container implementation failed" -- three
+  # scary annotations on a job that is otherwise green, and no uploaded log to check. The
+  # triage_output upload carries the same name, so it would have failed the same way exactly when
+  # it matters most: on a hang, which is the only time it has files to upload.
+- name: "(Llama-3.1-8B) prefill module PCC (MLP, RoPE, KV, attention, decoder, model)"
+  fabric_profile: torus_xy
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/llama_3p1_8b_d_p/tests -m device_required -v --tb=short -p no:randomly
+    '
+  test_type: llama_3p1_8b_prefill_module_pcc
+  test_tags: [llama_3p1_8b, transformer, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      # 4.5 min measured on a bh_sc1 Galaxy (100 passed, 16 skipped): the device-free half is
+      # seconds, and the cost is one mesh open/close plus kernel JIT per device parametrization.
+      # The skips are the arms this sku cannot open -- a Blackhole fabric only comes up across the
+      # whole allocation, so a 32-chip Galaxy runs the 1x1 and production 4x8 arms and skips the
+      # 1x8/4x2/2x2 ones (models/demos/llama_3p1_8b_d_p/tests/conftest.py), which a loudbox and a
+      # QuietBox cover instead. Headroom for cold kernel JIT, which this stage pays in full -- it
+      # has no weight cache to warm and no golden to read.
+      timeout: 40
+      tier: 2
+      release_ready: false
+  owner_id: U08HM8SL5U4 # Maciek Dragula
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+# tt-blaze#4150's acceptance run, and the reason it is a stage of its own rather than another cell
+# in the module suite above: it is the first time real weights, mesh sharding at 32 chips, the CCLs
+# and the chunk loop all run together, and it is the only stage that grades the cache against a
+# CPU-generated golden instead of against a same-process torch reference.
+#
+# 32 layers / real HF weights / SP=4 x TP=8 on one galaxy / 2 chunks of 1024 over a 2048-token
+# golden, checked per layer on both K and V. Requires staged mounts:
+#   weights           -> /mnt/models/meta-llama/Llama-3.1-8B-Instruct  (the 4-shard safetensors)
+#   PREFILL_TRACE_DIR -> /mnt/models/llama-3.1-8b-prefill-cache/golden/llama31_8b_kv_2048_32L
+#                        metadata.json + kv_cache/layer_{0..31}.safetensors, K in the **meta**
+#                        frame (what blaze decode reads) and stored bf16. The check round-trips it
+#                        through bfloat8_b first; comparing bf16 against the bf8 cache costs ~0.94
+#                        and reads as a real bug. Regenerate with
+#                        models/demos/llama_3p1_8b_d_p/scripts/generate_golden_kv_cache.py.
+# Both real-weight cells are opt-in behind LLAMA31_8B_REAL_WEIGHTS so they stay out of the module
+# stage, which must not depend on a mount. There is no tilized weight cache for this model yet, so
+# the run cold-loads the 16 GB checkpoint every time -- that read dominates the timeout.
+- name: "(Llama-3.1-8B) full-model prefill KV accuracy 2048@1024, 32L real weights"
+  fabric_profile: torus_xy
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export LLAMA31_8B_REAL_WEIGHTS=1
+    export PREFILL_TRACE_DIR=/mnt/models/llama-3.1-8b-prefill-cache/golden/llama31_8b_kv_2048_32L
+
+    # One pytest per cell, NOT -k "real_checkpoint and galaxy" in a single session. Both cells load
+    # the full 16 GB checkpoint, and two resident copies plus the upload staging tensors exceed host
+    # RAM on this sku. It does not fail as a MemoryError -- it stalls silently in weight upload and
+    # burns the whole timeout, which is how this was found.
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      for cell in real_checkpoint_hidden_states real_checkpoint_kv_pcc_vs_golden; do
+        python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/unit/test_model_vs_ref.py \
+          -k "${cell} and galaxy" -v --tb=short -p no:randomly
+      done
+    '
+  test_type: llama_3p1_8b_prefill_full_model_kv_pcc
+  test_tags: [llama_3p1_8b, transformer, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Cold 16 GB safetensors read (no tilized cache for this model) plus 32-layer weight upload,
+      # kernel JIT for both chunk buckets, two chunks of prefill, and a 32-layer K+V read-back.
+      timeout: 45
+      tier: 2
+      release_ready: false
+  owner_id: U08HM8SL5U4 # Maciek Dragula
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+# Throughput at the production shape. Separate from the accuracy stage above because it must NOT
+# share a pytest session with it: the accuracy cells read the whole KV cache back to host in Python,
+# which costs more than the prefill and would dominate any timing taken alongside them.
+#
+# No throughput floor is asserted -- there is no target for this model yet, so a gate here would be
+# an invented number. The cells assert only what is structural (per-chunk cost must not collapse as
+# context grows) and log the rest, so CI carries the numbers and a regression is visible in the log
+# before anyone has agreed what "too slow" means.
+- name: "(Llama-3.1-8B) prefill throughput 8k@1024, 32L real weights"
+  fabric_profile: torus_xy
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export LLAMA31_8B_REAL_WEIGHTS=1
+
+    # One pytest per cell, for the same host-RAM reason as the accuracy stage: each cell builds its
+    # own runtime from the 16 GB checkpoint, and two resident copies stall in weight upload.
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      for cell in test_prefill_throughput test_prefill_scaling_with_context; do
+        python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/perf/test_prefill_perf.py \
+          -k "${cell}" -v --tb=short -p no:randomly
+      done
+    '
+  test_type: llama_3p1_8b_prefill_perf
+  test_tags: [llama_3p1_8b, transformer]
+  test_group: module
+  skus:
+    bh_sc1:
+      # Two cells, each paying its own cold 16 GB read and 32-layer upload; the timed loops
+      # themselves are seconds. The scaling cell also warms 9 KV-length buckets.
+      timeout: 40
+      tier: 2
+      release_ready: false
+  owner_id: U08HM8SL5U4 # Maciek Dragula
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
 # ===== Disaggregated prefill, SC4 -- one launcher shared by both entries, keep them adjacent ===========
 
 # 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,
