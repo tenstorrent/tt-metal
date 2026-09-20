@@ -1,14 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Speed/accuracy experiments for the H3 audio decoder on a 4x8 Galaxy at T-shard factor 8.
-
-Each *recipe* is a way of building the shipping decoder differently; every recipe is timed traced (best of 3
-after a warm eager call) and scored against the pinned CPU reference decode of the same latents (PSNR, log-mel
-distance), so speed and accuracy move together in one table. The CPU reference is computed once per clip and
-cached under ``SQZ_REF_DIR`` by ``sqz_reference.py`` (needs the pinned diffusers reference importable).
-
-    SQZ_RECIPES=full,weight,off pytest models/tt_dit/tests/models/minimax_h3/test_audio_decode_squeeze.py -s -k 600lat_b1
-"""
+"""Speed/accuracy experiments for the H3 audio decoder on a 4x8 Galaxy at T-shard 8: each *recipe* builds the decoder
+differently, is timed traced and scored (PSNR, log-mel) against the cached CPU reference decode (``sqz_reference``)."""
 
 import os
 import time
