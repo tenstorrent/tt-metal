@@ -21,8 +21,10 @@ ReduceAffineTransformsOperation::program_factory_t ReduceAffineTransformsOperati
 void ReduceAffineTransformsOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     constexpr std::string_view operation_name = "reduce_affine_transforms";
+    TT_FATAL(attrs.groups_per_head > 0, "reduce_affine_transforms: groups_per_head must be positive");
     TT_FATAL(
-        attrs.local_rows > 0 && attrs.local_rows % 32 == 0 && (attrs.local_rows / 32) % attrs.groups_per_head == 0,
+        attrs.local_rows > 0 && attrs.local_rows % tt::constants::TILE_HEIGHT == 0 &&
+            (attrs.local_rows / tt::constants::TILE_HEIGHT) % attrs.groups_per_head == 0,
         "{}: local_rows must contain a positive whole number of 32-token chunks per group",
         operation_name);
     kda_factory_detail::check_actual_start(in.a, in.actual_start, operation_name);
@@ -46,7 +48,6 @@ void ReduceAffineTransformsOperation::validate_on_program_cache_miss(
     };
     check_input_memory_layout(in.a, "a");
     check_input_memory_layout(in.b, "b");
-    TT_FATAL(attrs.groups_per_head > 0, "reduce_affine_transforms: groups_per_head must be positive");
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
 

@@ -130,8 +130,6 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     for (uint32_t distance = 1; distance < G; distance *= 2) {
         if (group < active) {
             send_a.wait_front(a_tiles);
-        }
-        if (group < active) {
             send_b.wait_front(b_tiles);
         }
         if (group + distance < active) {
@@ -151,6 +149,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         }
         // Do not release the next NoC stage until every receiver has consumed the remote buffers and produced its
         // next prefix. Otherwise the following stage can overwrite the remote buffers while compute is reading them.
+        // Inactive dataflow workers must also participate: the barrier counts all G workers for this head.
         synchronize_head_stage<G>(worker_index, group, completed_stages, noc, arrival, release);
     }
 

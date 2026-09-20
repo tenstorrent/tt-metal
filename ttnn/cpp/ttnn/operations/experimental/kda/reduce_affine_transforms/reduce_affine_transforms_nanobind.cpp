@@ -31,6 +31,12 @@ void bind_reduce_affine_transforms(nb::module_& mod) {
             A_total = A_g @ A_total
             B_total = A_g @ B_total + B_g
 
+        On the rank containing both the chronological beginning and end of the
+        sequence, only the head groups are composed. Other ranks compose all
+        groups. If the head ends inside a group, that group's input must contain
+        its head-only summary, as produced by ``summarize_chunk_recurrence``.
+        The separated tail is handled later in the recurrence pipeline.
+
         Args:
             a (ttnn.Tensor): Group multipliers ``[B*H*G, K, K]``. Each leading
                 entry represents one batch-head-group. Must be a TILE-layout

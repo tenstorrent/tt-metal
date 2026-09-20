@@ -138,10 +138,8 @@ TT_KERNEL void compute(uint32_t group) {
         DataflowBuffer chronology(dfb::chronology_compute);
         topology = kda_chronology::receive(chronology);
     }
-    {
-        if (group >= topology.head_groups(G)) {
-            return;
-        }
+    if (group >= topology.head_groups(G)) {
+        return;
     }
     initial_a.wait_front(a_tiles);
     initial_b.wait_front(b_tiles);
