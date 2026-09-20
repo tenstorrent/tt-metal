@@ -294,7 +294,20 @@ Tensor scatter(
     validate_inputs(input_tensor, index_tensor, source_tensor, normalized_dim, opt_reduction_string);
 
     const auto& original_index_tensor_lshape = index_tensor.logical_shape();
-    if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{}) {
+    // An empty operand means there is nothing to scatter: an empty input has no element to write
+    // into, and an empty index selects none, so torch returns the input unchanged either way.
+    // Bail out before the device op, whose factories size the work split as
+    // logical_volume() / input_shape[-1] and divide 0 by 0 when the last dimension is 0 - a SIGFPE
+    // that kills the process rather than an error the caller can catch. The scatter axis is
+    // transposed last before that division, so any zero extent reaches it, not just a zero last
+    // dimension. An empty source implies an empty index here, because validate_inputs requires
+    // index_shape[d] <= source_shape[d] for every d. See #56881.
+    // The tensor is returned as-is rather than copied: clone() and to_memory_config() divide by the
+    // page size and crash on a zero-volume tensor as well, so there is nothing safe to copy it with.
+    // A consequence is that an explicitly requested memory_config is not applied on this path, the
+    // same as on the rank-0 path above. Revisit once zero-volume tensors survive those ops.
+    if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{} ||
+        input_tensor.logical_volume() == 0 || index_tensor.logical_volume() == 0) {
         return input_tensor;
     }
     const auto original_layout = input_tensor.layout();
