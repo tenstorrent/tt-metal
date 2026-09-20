@@ -3,11 +3,9 @@
 
 set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_reflect.cpp
-    sdpa/test_sliding_window_work_plan.cpp
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
     test_async_runtime.cpp
-    conv/test_conv2d.cpp
     matmul/test_matmul_block_caller_owns_constraint.cpp
     test_multi_cq_multi_dev.cpp
     test_multiprod_queue.cpp
@@ -30,7 +28,6 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_capture_arguments_morehdot.cpp
     test_graph_capture_arguments_transpose.cpp
     test_graph_capture_arguments_untilize_with_unpadding.cpp
-    test_graph_query_op_constraints.cpp
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
     test_matmul.cpp
@@ -47,7 +44,6 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES
     ccl/test_ccl_commands.cpp
-    ccl/test_ccl_helpers.cpp
     ccl/test_ccl_reduce_scatter_host_helpers.cpp
     ccl/test_ccl_tensor_slicers.cpp
     ccl/test_erisc_data_mover_with_workers.cpp

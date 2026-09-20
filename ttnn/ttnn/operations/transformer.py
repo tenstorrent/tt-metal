@@ -6,8 +6,6 @@ from typing import Optional
 
 import ttnn
 
-PagedCacheGeometryOverride = ttnn._ttnn.operations.transformer.PagedCacheGeometryOverride
-SparseKVFormat = ttnn._ttnn.operations.transformer.SparseKVFormat
 
 
 def _golden_function(

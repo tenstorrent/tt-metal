@@ -556,26 +556,13 @@ from ttnn.operations.ccl import (
     MMSignalAggregatorMode,
 )
 
-from ttnn.operations.conv2d import (
-    Conv2dConfig,
-    PaddingMode,
-    get_conv_output_dim,
-    Conv2dSliceConfig,
-    Conv2dDRAMSliceHeight,
-    Conv2dDRAMSliceWidth,
-    Conv2dL1Full,
-    Conv2dL1FullSliceConfig,
-    prepare_conv_weights,
-    prepare_conv_bias,
-    prepare_conv_transpose2d_weights,
-    prepare_conv_transpose2d_bias,
-    SlidingWindowParallelConfig,
-    Op2DSliceConfig,
-    Op2DDRAMSliceHeight,
-    Op2DDRAMSliceWidth,
-    Op2DL1Full,
-    Op2DL1FullSliceConfig,
-)
+# Sliding-window sharding/slicing configs (shared by pooling and other 2D ops).
+SlidingWindowParallelConfig = ttnn._ttnn.operations.sliding_window.ParallelConfig
+Op2DSliceConfig = ttnn._ttnn.operations.sliding_window.Op2DSliceConfig
+Op2DDRAMSliceHeight = Op2DSliceConfig.SliceTypeEnum.DRAMSliceHeight
+Op2DDRAMSliceWidth = Op2DSliceConfig.SliceTypeEnum.DRAMSliceWidth
+Op2DL1Full = Op2DSliceConfig.SliceTypeEnum.L1Full
+Op2DL1FullSliceConfig = Op2DSliceConfig(slice_type=Op2DL1Full)
 
 from ttnn.operations.pool import (
     prepare_grid_sample_grid,
@@ -608,15 +595,9 @@ experimental.rgb_to_yuv = rgb_to_yuv
 experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
 experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
 
-Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
-
-from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
-
-transformer.SparseKVFormat = SparseKVFormat
 
 QkvCausalConv1dSiluProgramConfig = ttnn._ttnn.operations.experimental.kda.QkvCausalConv1dSiluProgramConfig
 
-IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 
 import ttnn.graph
 

@@ -17,7 +17,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     reshard/reshard.hpp
     halo/halo.hpp
     pool_generic/generic_pools.hpp
-    conv2d/conv2d.hpp
     matmul/matmul.hpp
     binary_ng/types.hpp
     binary/binary.hpp
@@ -38,8 +37,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     slice_write/slice_write.hpp
     op_slicing/op_slicing.hpp
     # transformer
-    transformer/sdpa_decode/sdpa_decode.hpp
-    transformer/sdpa/sdpa.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
@@ -127,11 +124,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     pool_generic/generic_pools.cpp
     pool_generic/device/pool_op.cpp
     pool_generic/device/pool_multi_core_program_factory.cpp
-    # conv2d
-    conv2d/conv2d.cpp
-    conv2d/device/conv2d_device_operation.cpp
-    conv2d/device/conv2d_op_sharded_program_factory.cpp
-    conv2d/device/conv2d_op_width_sharded_program_factory.cpp
     # binary_ng (device backend; no host op / no nanobind)
     binary_ng/device/binary_ng_device_operation.cpp
     binary_ng/device/binary_ng_program_factory.cpp
@@ -219,16 +211,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     typecast/device/typecast_program_factory.cpp
     typecast/device/typecast_rm_chunked_program_factory.cpp
     typecast/device/typecast_sharded_program_factory.cpp
-    # transformer (Metal 2.0 fork of operations/transformer/sdpa_decode; isolated in ttnn::prim::qsr)
-    transformer/sdpa_decode/sdpa_decode.cpp
-    transformer/sdpa_decode/device/sdpa_decode_device_operation.cpp
-    transformer/sdpa_decode/device/sdpa_decode_program_factory.cpp
-    # transformer (Metal 2.0 fork of operations/transformer/sdpa; isolated in ttnn::prim::qsr)
-    transformer/sdpa/sdpa.cpp
-    transformer/sdpa/device/sdpa_device_operation.cpp
-    transformer/sdpa/device/sdpa_program_factory.cpp
-    transformer/sdpa/device/joint_sdpa_device_operation.cpp
-    transformer/sdpa/device/joint_sdpa_program_factory.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from
@@ -246,7 +228,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     transpose/transpose_nanobind.cpp
     reshard/reshard_nanobind.cpp
     pool_generic/generic_pools_nanobind.cpp
-    conv2d/conv2d_nanobind.cpp
     padded_slice/padded_slice_nanobind.cpp
     slice_write/slice_write_nanobind.cpp
     matmul/matmul_nanobind.cpp
@@ -264,6 +245,4 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     interleaved_to_sharded/interleaved_to_sharded_nanobind.cpp
     # transformer (nested ttnn.experimental.quasar.transformer submodule)
     transformer/transformer_nanobind.cpp
-    transformer/sdpa_decode/sdpa_decode_nanobind.cpp
-    transformer/sdpa/sdpa_nanobind.cpp
 )

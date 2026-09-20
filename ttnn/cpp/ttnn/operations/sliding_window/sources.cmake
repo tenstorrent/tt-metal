@@ -6,11 +6,13 @@ set(TTNN_OP_SLIDING_WINDOW_SRCS
     halo/device/untilize_with_halo_program_factory.cpp
     halo/halo.cpp
     sliding_window.cpp
+    parallel_config_utils.cpp
     op_slicing/op_slicing.cpp
 )
 
 set(TTNN_OP_SLIDING_WINDOW_API_HEADERS
     sliding_window.hpp
+    parallel_config_utils.hpp
     op_slicing/op_slicing.hpp
 )
 

@@ -13,7 +13,6 @@
 # code — needs an actual target split before ownership can split too).
 
 # metalium-developers-convolutions
-add_subdirectory(conv)
 add_subdirectory(pool)
 add_subdirectory(sliding_window)
 
@@ -57,7 +56,6 @@ target_link_libraries(
     INTERFACE
         TTNN::Ops::Bernoulli
         TTNN::Ops::CCL
-        TTNN::Ops::Conv
         TTNN::Ops::Core
         TTNN::Ops::Creation
         TTNN::Ops::DataMovement
@@ -98,7 +96,6 @@ target_sources(
     INTERFACE
         $<TARGET_OBJECTS:TTNN::Ops::Bernoulli>
         $<TARGET_OBJECTS:TTNN::Ops::CCL>
-        $<TARGET_OBJECTS:TTNN::Ops::Conv>
         $<TARGET_OBJECTS:TTNN::Ops::Core>
         $<TARGET_OBJECTS:TTNN::Ops::Creation>
         $<TARGET_OBJECTS:TTNN::Ops::DataMovement>
