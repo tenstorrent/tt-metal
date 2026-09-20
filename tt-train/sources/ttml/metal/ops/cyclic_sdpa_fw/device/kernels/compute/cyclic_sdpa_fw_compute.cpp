@@ -783,14 +783,20 @@ void kernel_main() {
         }
 #endif
 
-        // ---- 3. P^T = exp(a (S^T - m_new)): the FPU's row-broadcast
-        // subtraction from L1 (S^T at 19 bits, m_new's row 0 through SrcB),
-        // then the exponential on the pack thread; a column per acquire.
-#ifndef FW_EXPERIMENT_NO_PROBS
+        // ---- 3-5. Per query tile a: P^T(:, a) = exp(a (S^T - m)) -- the
+        // FPU's row-broadcast subtraction from L1 (S^T at 19 bits, m's row 0
+        // through SrcB) and the exponential on the pack thread -- then, one
+        // query tile behind, l += colsum P^T and O^T += V^T P^T. The lag is
+        // the overlap: while the pack thread exponentiates column a in one
+        // half of the destination file, the math thread reduces and
+        // multiplies column a - 1 in the other. P^T is stored a column at a
+        // time (tile a * Bt + b) so a column's sums can start before the
+        // next column's exponential ends.
         {
-            DeviceZoneScopedN("PROBS");
+            DeviceZoneScopedN("PROBS-SUM-UPDATE");
             cb_reserve_back(cb_probs, score_tiles);
-            for (uint32_t a = 0; a < Bt; ++a) {
+
+            const auto probs_column = [&](uint32_t a) {
                 const uint32_t live = n_live(a);
                 tile_regs_acquire();
                 reconfig_data_format(cb_scores, cb_max_plain);
@@ -815,85 +821,38 @@ void kernel_main() {
                 PACK((pack_sfpu::exp_release()));
                 PACK((pack_sfpu::wait_before_pack()));
 #endif
+                // The column's tiles, relative to this push's write pointer.
                 pack_reconfig_data_format(cb_probs);
                 pack_rounding(true);
                 for (uint32_t b = 0; b < Bt; ++b) {
                     if (b >= live) {
                         break;
                     }
-                    pack_tile</* out_of_order */ true>(b, cb_probs, b * Bt + a);
+                    pack_tile</* out_of_order */ true>(b, cb_probs, b);
                 }
                 pack_rounding(false);
                 tile_regs_release();
-            }
-            cb_push_back(cb_probs, score_tiles);
-            cb_wait_front(cb_probs, score_tiles);
-        }
-#else
-        cb_reserve_back(cb_probs, score_tiles);
-        cb_push_back(cb_probs, score_tiles);
-        cb_wait_front(cb_probs, score_tiles);
-#endif
+                cb_push_back(cb_probs, Bt);
+            };
 
-        // ---- 4. l_new = r l_old + colsum P^T.
-#ifndef FW_EXPERIMENT_NO_STATS
-        {
-            DeviceZoneScopedN("SUM");
-            constexpr uint32_t kSumReg = 0, kOldReg = 1, kRReg = 2;
-            for (uint32_t a = 0; a < Bt; ++a) {
-                const uint32_t live = n_live(a);
-                tile_regs_acquire();
+            // colsum P^T(:, a) into register kSumReg (row 0; the other rows
+            // hold the reduction's leftovers, never read).
+            constexpr uint32_t kSumReg = 0;
+            const auto block_sum = [&](uint32_t a, uint32_t live) {
                 reconfig_data_format(cb_probs, cb_reduce_scaler);
                 reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_probs, cb_reduce_scaler, cb_sum_out);
                 for (uint32_t b = 0; b < Bt; ++b) {
                     if (b >= live) {
                         break;
                     }
-                    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_probs, cb_reduce_scaler, b * Bt + a, 0, kSumReg);
+                    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_probs, cb_reduce_scaler, a * Bt + b, 0, kSumReg);
                 }
                 reduce_uninit();
-                const bool rescaled = ((need_mask >> a) & 1u) != 0u;
-                if (rescaled && !fresh) {
-                    // r l_old + l_blk in row 0, all exact (the other rows
-                    // hold the reduction's leftovers times r: never read).
-                    reconfig_data_format_srca(cb_probs, cb_rescale);
-                    copy_init(cb_rescale);
-                    copy_tile(cb_rescale, a, kRReg);
-                    reconfig_data_format_srca(cb_rescale, cb_sum_seed);
-                    copy_init(cb_sum_seed);
-                    copy_tile(cb_sum_seed, a, kOldReg);
-                    mul_binary_tile_init();
-                    mul_binary_tile(kOldReg, kRReg, kOldReg);
-                    add_binary_tile_init();
-                    add_binary_tile(kSumReg, kOldReg, kSumReg);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_reconfig_data_format(cb_sum_out);
-                if (!rescaled) {
-                    // l_old + l_blk: the packer adds onto l where it lies.
-                    pack_reconfig_l1_acc(true);
-                }
-                pack_tile</* out_of_order */ true>(kSumReg, cb_sum_out, a);
-                if (!rescaled) {
-                    pack_reconfig_l1_acc(false);
-                }
-                tile_regs_release();
-            }
-        }
-#endif
-
-        // ---- 5. O^T <- r O^T + V^T P^T, on the packet where it lies. A
-        // rescaled query tile: two output tiles per acquire with r in the
-        // register above them, the products accumulated in DST. A tile that
-        // keeps its m: the products alone, up to four per acquire, added
-        // onto O^T by the packer (L1 accumulate) -- no copies through DST.
-        {
-            DeviceZoneScopedN("UPDATE-O");
-            constexpr uint32_t kRReg = kOutGroup;
-            constexpr uint32_t kAccGroup = (qWt > 4u) ? 4u : qWt;
-            // V^T is the first operand (bf16, SrcB), P^T the second (Float32, SrcA).
-            const auto products = [&](uint32_t a, uint32_t k0, uint32_t nk, uint32_t live) {
+            };
+            // V^T P^T(:, a) for output tiles k0 .. k0 + nk - 1 into registers
+            // reg0 ..; V^T is the first operand (bf16, SrcB), P^T the second
+            // (Float32, SrcA).
+            const auto products = [&](uint32_t a, uint32_t k0, uint32_t nk, uint32_t reg0, uint32_t live) {
                 reconfig_data_format(cb_probs, cb_value_t);
                 mm_init<kFidO>(cb_value_t, cb_probs, /* transpose */ 0);
                 for (uint32_t i = 0; i < nk; ++i) {
@@ -901,18 +860,42 @@ void kernel_main() {
                         if (b >= live) {
                             break;
                         }
-                        mm_tiles<kFidO>(cb_value_t, cb_probs, (k0 + i) * Bt + b, b * Bt + a, i);
+                        mm_tiles<kFidO>(cb_value_t, cb_probs, (k0 + i) * Bt + b, a * Bt + b, reg0 + i);
                     }
                 }
             };
-            for (uint32_t a = 0; a < Bt; ++a) {
+
+            // A rescaled query tile (exact path): l = r l_old + colsum, then
+            // O^T two tiles per acquire with r in the register above them,
+            // the products accumulated in DST. A tile that keeps its m (and a
+            // fresh row): the sum and the first output tiles in one acquire,
+            // the rest four per acquire, added onto l and O^T in L1 by the
+            // packer (fresh rows written outright).
+            constexpr uint32_t kRReg = kOutGroup;
+            constexpr uint32_t kFirstGroup = (qWt > 3u) ? 3u : qWt;
+            constexpr uint32_t kAccGroup = (qWt > 4u) ? 4u : qWt;
+            const auto sum_and_update = [&](uint32_t a) {
                 const uint32_t live = n_live(a);
-#ifdef FW_EXPERIMENT_NO_RESCALE_O
-                const bool rescaled = false;
-#else
                 const bool rescaled = ((need_mask >> a) & 1u) != 0u;
-#endif
+                cb_wait_front(cb_probs, (a + 1u) * Bt);
                 if (rescaled && !fresh) {
+                    tile_regs_acquire();
+                    block_sum(a, live);
+                    reconfig_data_format_srca(cb_probs, cb_rescale);
+                    copy_init(cb_rescale);
+                    copy_tile(cb_rescale, a, 2);
+                    reconfig_data_format_srca(cb_rescale, cb_sum_seed);
+                    copy_init(cb_sum_seed);
+                    copy_tile(cb_sum_seed, a, 1);
+                    mul_binary_tile_init();
+                    mul_binary_tile(1, 2, 1);
+                    add_binary_tile_init();
+                    add_binary_tile(kSumReg, 1, kSumReg);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_reconfig_data_format(cb_sum_out);
+                    pack_tile</* out_of_order */ true>(kSumReg, cb_sum_out, a);
+                    tile_regs_release();
                     for (uint32_t k0 = 0; k0 < qWt; k0 += kOutGroup) {
                         const uint32_t nk = (qWt - k0 < kOutGroup) ? qWt - k0 : kOutGroup;
                         tile_regs_acquire();
@@ -934,7 +917,7 @@ void kernel_main() {
                             }
                             mul_binary_tile(i, kRReg, i);
                         }
-                        products(a, k0, nk, live);
+                        products(a, k0, nk, 0, live);
                         tile_regs_commit();
                         tile_regs_wait();
                         pack_reconfig_data_format(cb_out_out);
@@ -946,32 +929,58 @@ void kernel_main() {
                         }
                         tile_regs_release();
                     }
-                } else {
-                    // Fresh rows start from nothing; unrescaled rows add on.
-                    const bool accumulate = !fresh;
-                    for (uint32_t k0 = 0; k0 < qWt; k0 += kAccGroup) {
-                        const uint32_t nk = (qWt - k0 < kAccGroup) ? qWt - k0 : kAccGroup;
-                        tile_regs_acquire();
-                        products(a, k0, nk, live);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_reconfig_data_format(cb_out_out);
-                        if (accumulate) {
-                            pack_reconfig_l1_acc(true);
-                        }
-                        for (uint32_t i = 0; i < kAccGroup; ++i) {
-                            if (i >= nk) {
-                                break;
-                            }
-                            pack_tile</* out_of_order */ true>(i, cb_out_out, a * qWt + k0 + i);
-                        }
-                        if (accumulate) {
-                            pack_reconfig_l1_acc(false);
-                        }
-                        tile_regs_release();
+                    return;
+                }
+                const bool accumulate = !fresh;
+                constexpr uint32_t nk0 = kFirstGroup;
+                tile_regs_acquire();
+                block_sum(a, live);
+                products(a, 0, nk0, kSumReg + 1, live);
+                tile_regs_commit();
+                tile_regs_wait();
+                // (l and O^T share the Float32 format: one pack configuration.)
+                pack_reconfig_data_format(cb_sum_out);
+                if (accumulate) {
+                    pack_reconfig_l1_acc(true);
+                }
+                pack_tile</* out_of_order */ true>(kSumReg, cb_sum_out, a);
+                for (uint32_t i = 0; i < kFirstGroup; ++i) {
+                    pack_tile</* out_of_order */ true>(kSumReg + 1 + i, cb_out_out, a * qWt + i);
+                }
+                if (accumulate) {
+                    pack_reconfig_l1_acc(false);
+                }
+                tile_regs_release();
+                for (uint32_t k0 = nk0; k0 < qWt; k0 += kAccGroup) {
+                    const uint32_t nk = (qWt - k0 < kAccGroup) ? qWt - k0 : kAccGroup;
+                    tile_regs_acquire();
+                    products(a, k0, nk, 0, live);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_reconfig_data_format(cb_out_out);
+                    if (accumulate) {
+                        pack_reconfig_l1_acc(true);
                     }
+                    for (uint32_t i = 0; i < kAccGroup; ++i) {
+                        if (i >= nk) {
+                            break;
+                        }
+                        pack_tile</* out_of_order */ true>(i, cb_out_out, a * qWt + k0 + i);
+                    }
+                    if (accumulate) {
+                        pack_reconfig_l1_acc(false);
+                    }
+                    tile_regs_release();
+                }
+            };
+
+            for (uint32_t a = 0; a < Bt; ++a) {
+                probs_column(a);
+                if (a > 0u) {
+                    sum_and_update(a - 1u);
                 }
             }
+            sum_and_update(Bt - 1u);
         }
 
         // ---- 6. The finished row: O = (O^T / l)^T in bfloat16, lse = a m + ln l.
