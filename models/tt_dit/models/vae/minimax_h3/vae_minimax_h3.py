@@ -379,6 +379,8 @@ class MiniMaxH3Vae:
         # Blend the tile grid on device and read back the assembled canvas, instead of reading
         # overlapping tiles and blending them on host.
         self.device_stitch = device_stitch
+        # How a device-stitched wave shares tiles: "strips" (default) is the gather blend factored along the mesh,
+        # same bits as "gather" at ~1/4 of the programs and bytes; "neighbor" exchanges only the overlap strips.
         self.stitch_exchange = stitch_exchange
         # `(mean, std)` of the ImageNet normalization the decoder's pixels are still in. Set it and
         # the de-normalization is folded into `proj_out`, so `decode` emits `[-1, 1]` pixels and the
@@ -1069,10 +1071,8 @@ class MiniMaxH3Vae:
                 canvas_shape = tuple(canvas.shape)
                 canvas_dtype = str(canvas.dtype)
                 if output_type == "yuv420":
-                    # The readback's host half -- the shard wrap and the planar scatter, both
-                    # GIL-releasing -- goes to a worker, so it runs while the next wave's decoder
-                    # is already on the device. One frame in flight, and the queue is FIFO, so
-                    # `canvases` still comes out in chunk order.
+                    # The readback's GIL-releasing host half runs on a worker while the next wave's decoder is on the
+                    # device. One frame in flight on a FIFO queue, so `canvases` still comes out in chunk order.
                     finish = self._read_canvas_yuv(canvas, defer=True)
                     ttnn.deallocate(canvas)
                     frames, canvas_h, canvas_w = canvas_shape[-3], canvas_shape[-2], canvas_shape[-1]
@@ -1103,18 +1103,8 @@ class MiniMaxH3Vae:
         return canvases
 
     def _decode_clips_strip_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
-        """The gather stitch factored along the mesh: each device blends only what it reads back.
-
-        Same wave packing and grid-aligned placement as the neighbour form -- tile ``(chunk k, r, c)``
-        on device ``(r, k * grid_cols + c)`` -- so a mesh column holds a tile column and a mesh row
-        holds the tile rows of every chunk in the wave. Then, per `StripTileStitcher`: an axis-0
-        gather brings each device its column, it H-blends and trims the column and keeps the
-        ``1/mesh_rows`` of the rows it will read back; an axis-1 gather brings each device every
-        column's row strip, it W-blends and trims them into its rows of the canvas, and the
-        readback keeps the ``1/mesh_cols`` of the columns it will read back. Against the gather
-        form that is ~1/4 of the gather bytes (one column and one row of strips instead of the
-        whole wave) and ~1/4 of the programs, for the same bits.
-        """
+        """The gather stitch factored along the mesh: each device blends only what it reads back. Tile ``(k, r, c)``
+        lands on device ``(r, k * grid_cols + c)``; `StripTileStitcher` does the column and row stages. Same bits."""
         from .stitch_device_minimax_h3 import StripTileStitcher, unpatchify_device
 
         (y_starts, y_lengths, y_overlaps), (x_starts, x_lengths, x_overlaps) = self._decode_tile_grid(
@@ -1138,9 +1128,8 @@ class MiniMaxH3Vae:
             assert (
                 self.ccl_manager is not None
             ), "the strip stitch's float readback needs a CCLManager on a multi-host mesh"
-        # The W-blend to the right of a column reads the last `edge_width` columns of its ORIGINAL
-        # tiles; one uniform width covers every seam, the blend takes the tail it needs. 0 means a
-        # single-column grid: no W seam, no edge strip.
+        # The W-blend right of a column reads the last `edge_width` columns of its ORIGINAL tiles; one uniform width
+        # covers every seam (the blend takes the tail it needs); 0 is a single-column grid with no W seam or edge strip.
         edge_width = max(x_overlaps) if x_overlaps else 0
 
         if self._stitcher is None or not isinstance(self._stitcher, StripTileStitcher):
@@ -1149,10 +1138,8 @@ class MiniMaxH3Vae:
         decoder = self.decoder
         profile = self._profile
 
-        # The wave's host work (tiling, the grid-aligned batch, the upload) runs while the previous wave is still on the
-        # device, so the readback's wait never finds the next wave's tokens unprepared.
-        # Wave plan. Dense (one idle mesh column): in wave w of a run of grid_cols waves the idle column decodes tile column w
-        # of an extra chunk and every device keeps that row strip; after the run the extra chunk's row stage runs on them.
+        # Wave plan. Dense (one idle mesh column): in wave w of a run of grid_cols waves the idle column decodes tile
+        # column w of an extra chunk and every device keeps that row strip; that chunk's row stage runs after the run.
         dense = chunks_per_wave == 1 and mesh_cols == grid_cols + 1
         waves: list[dict] = []
         if dense:
