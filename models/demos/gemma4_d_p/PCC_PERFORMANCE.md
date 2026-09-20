@@ -2,6 +2,40 @@
 
 The validator uses FP32 for its block buffer and accumulated statistics. It combines centered statistics across blocks into one whole-head correlation, using an 8 MiB reusable buffer. TT readback stays BF16 until copied into that buffer.
 
+## Mock 256K result
+
+Measured on 2026-09-20 with FP32 PCC, 16 OpenMP/MKL threads, an 8×4 Blackhole mesh, six allocated slots, and one comparison of slot 0. All 1680 scores passed the **0.91** threshold; minimum PCC was **0.916656673**.
+
+| Phase | Time |
+| --- | ---: |
+| Python/pytest startup and runner imports | 9.5 s |
+| Device/fabric initialization, model config and KV allocation | 7.4 s |
+| Cached weight loading and model construction | 1m 00.4s |
+| Compile warmup and H2D/completion-service setup | 15.1 s |
+| Migration table build and export, first call | 56.6 s |
+| Migration table build and export, second call | 54.5 s |
+| Trace capture and completion warmup | 2.1 s |
+| Producer startup, prompt loading and first input | 12.8 s |
+| Prefill execution and chunk delivery, 32 chunks | 14.4 s |
+| Producer completion, table import and device-map loading | 13.5 s |
+| GPU reference loading and conversion | 49.5 s |
+| TT readback, host gathering and address checks | 1m 29.1s |
+| PCC and finite-value checks | 2m 58.1s |
+| Validation logging and JSON report writing | 0.02 s |
+| Service cleanup, trace release and mesh closure | 0.67 s |
+| Device-driver teardown, process destruction and pytest exit | 7.1 s |
+| **Total elapsed** | **9m 30.9s** |
+
+Validation took **5m 16.8s**. The table accounts for the complete pytest process lifetime. Startup, table handling, and teardown are measured between log timestamps; validation uses the existing `perf_counter` phase timers. Values are rounded. The weight-loading interval includes model construction; the compile interval includes its warmup forward pass and service creation.
+
+The migration table contains **80,609,280 populated address entries**: 1640 layer/head/KV combinations × 8192 blocks of 32 tokens × six slots. Its protobuf file is **1.69 GiB**. Two mock-mode branches in the shared runner independently build and export it, taking **56.6 s + 54.5 s**. Those intervals include address generation, table population, serialization, and disk writes. The table describes the full allocated cache capacity; GPU validation reads one populated slot. Importing the table for address checks and loading the device map take another **13.5 s**, including waiting for producer exit.
+
+Reference loading processes **212.5 GiB** of BF16 KV in **49.5 s**, or **4.29 GiB/s** including FP32 conversion and filesystem-cache effects. TT readback, host gathering, and table-address checks take **89.1 s**. PCC checks **1680 scores in 178.1 s**, or **9.43 scores/s**. Prefill execution and chunk delivery take **14.4 s** for the 32 chunks.
+
+The reference was read from `/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135`. Writable HF and model caches, table exports, and logs were under `/tmp`. No files were written under `/mnt`. Weight and kernel caches were warm; storage caches were not dropped.
+
+Evidence: [complete phase breakdown](/tmp/gemma4-fp32-mock256k-breakdown.json), [PCC scores and validation timings](/tmp/gemma4-fp32-mock256k/test_prefill_migration_mock_250/gemma4_slot0.json), [runner log](/tmp/gemma4-fp32-mock256k/test_prefill_migration_mock_250/runner.log), [producer log](/tmp/gemma4-fp32-mock256k/test_prefill_migration_mock_250/producer.log), [pytest log](/tmp/gemma4-fp32-mock256k-pytest.log), and [elapsed-time measurement](/tmp/gemma4-fp32-mock256k-run.json).
+
 ## Command-queue measurements
 
 These earlier measurements use TTNN command-queue reads, on-device untilize, PyTorch host gathering, and whole-vector FP32 PCC. Each row checks one slot with six allocated, all 60 layers, and all 1680 scores. Those FP32 scores matched the original UMD results exactly.
