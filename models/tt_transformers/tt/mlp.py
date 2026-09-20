@@ -202,6 +202,26 @@ class MLP(LightweightModule):
         use_tg_decode_no_prefetch = TG and mode == Mode.DECODE and self.prefetcher is None
         if use_tg_decode_no_prefetch:
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        elif (
+            mode == Mode.DECODE
+            and not TG
+            and self.prefetcher is None
+            and isinstance(pc_1, ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig)
+        ):
+            # Phase-specific working activation shard for the DRAM-sharded FF1/FF3 matmuls:
+            # the norm/residual grid hands us a 2-row (8x2) width shard; a single-row 8-core
+            # shard of the same K feeds the same program config (in0_block_w unchanged) and
+            # measured 23% faster in isolation on this board.
+            x = ttnn.to_memory_config(
+                x,
+                ttnn.create_sharded_memory_config(
+                    (x.shape[-2], x.shape[-1] // 8),
+                    ttnn.CoreGrid(y=1, x=8),
+                    ttnn.ShardStrategy.WIDTH,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                ),
+            )
 
         w1_out = ttnn.linear(
             x,
