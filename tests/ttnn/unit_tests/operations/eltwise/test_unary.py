@@ -1080,6 +1080,24 @@ def test_remainder_divisor_guard(device, expect_error):
         ttnn.remainder(uint32_tensor, 3.0)
 
 
+@pytest.mark.parametrize(
+    "ttnn_op, ttnn_dtype, extra_kwargs",
+    [
+        (ttnn.sign, ttnn.int32, {}),
+        (ttnn.sqrt, ttnn.int32, {}),
+        (ttnn.neg, ttnn.uint32, {}),
+        (ttnn.signbit, ttnn.uint32, {}),
+        (ttnn.leaky_relu, ttnn.int32, {"negative_slope": 0.1}),
+    ],
+)
+def test_unary_rejects_unsupported_integer_dtype(ttnn_op, ttnn_dtype, extra_kwargs, device, expect_error):
+    torch_dtype = torch.int32 if ttnn_dtype == ttnn.int32 else torch.int64
+    input_data = torch.zeros((1, 1, 32, 32), dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(input_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not support integer input dtype"):
+        ttnn_op(input_tensor, **extra_kwargs)
+
+
 @pytest.mark.parametrize("scalar", [1.5, 2.0])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -1764,20 +1782,11 @@ def test_unary_hardswish_ttnn(input_shapes, low, high, torch_dtype, ttnn_dtype, 
 
 
 @pytest.mark.parametrize("torch_dtype,ttnn_dtype", [(torch.int32, ttnn.int32), (torch.uint32, ttnn.uint32)])
-def test_unary_hardswish_integer_releases_every_input_tile(torch_dtype, ttnn_dtype, device):
-    """The integer path is hardsigmoid-only, but must still pop all input pages across a multi-tile tensor."""
-    grid = device.compute_with_storage_grid_size()
-    # The input CB holds two tiles. Give at least one worker three tiles so a missing pop blocks its reader.
-    num_tiles = 2 * grid.x * grid.y + 1
-    input_data = torch.zeros((1, 1, 32, 32 * num_tiles), dtype=torch_dtype)
+def test_unary_hardswish_rejects_integer_input(torch_dtype, ttnn_dtype, device, expect_error):
+    input_data = torch.zeros((1, 1, 32, 32), dtype=torch_dtype)
     input_tensor = ttnn.from_torch(input_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output = ttnn.to_torch(ttnn.hardswish(input_tensor), dtype=torch_dtype)
-    # Integer hardswish preserves the existing integer-path contract: the hardsigmoid result is
-    # packed as Float32 bits. hardsigmoid(0) is 0.5f == 0x3f000000.
-    golden = torch.full_like(input_data, 0x3F000000)
-
-    assert torch.equal(output, golden)
+    with expect_error(RuntimeError, "does not support integer input dtype"):
+        ttnn.hardswish(input_tensor)
 
 
 @pytest.mark.parametrize(
