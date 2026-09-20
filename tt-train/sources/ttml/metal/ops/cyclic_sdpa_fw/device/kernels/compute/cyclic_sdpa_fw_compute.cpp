@@ -101,9 +101,10 @@ constexpr uint32_t Bt = get_compile_time_arg_val(5);
 constexpr uint32_t score_tiles = Bt * Bt;
 // The destination file is half-synchronised: four Float32 tiles for the math
 // thread while the pack thread drains the other four. Every stage works in
-// groups that fit: two key tiles of a score column, two output tiles of a
-// query tile, two query tiles' statistics, with one register above them.
-constexpr uint32_t kGroup = (Bt > 2u) ? 2u : Bt;
+// groups that fit: score tiles of a column (the scores and the probabilities
+// need no other register, so all Bt <= 4 of them), two output tiles of a
+// query tile with r above them, two query tiles' statistics.
+constexpr uint32_t kGroup = Bt;
 constexpr uint32_t kOutGroup = (qWt > 2u) ? 2u : qWt;
 // The exponential's bias constant: 127, nothing folded in (exp(a x) exactly).
 constexpr uint32_t exp_bias_bits = 0x42FE0000u;
@@ -135,13 +136,16 @@ constexpr uint32_t cb_output = tt::CBIndex::c_21;
 constexpr uint32_t cb_lse = tt::CBIndex::c_22;
 constexpr uint32_t cb_slot_release = tt::CBIndex::c_7;
 
-// Math fidelity per matmul, as the backward measured them: the scores are
-// neutral at HiFi3; the products with a 19-bit operand in SrcA run at HiFi4.
+// Math fidelity per matmul, measured on the forward: the scores lose (lse
+// 4.7e-4 -> 1.15e-3) below HiFi3; the output matmul, P^T's 19 bits in SrcA,
+// is as accurate at HiFi3 as at HiFi4 (O RMS 1.71e-3 both), so HiFi3. Time
+// barely moves either way (HiFi2 everywhere saves 0.2 of 5.7 ms): the kernel
+// is not FPU-bound.
 #ifndef FID_S
 #define FID_S 3
 #endif
 #ifndef FID_O
-#define FID_O 4
+#define FID_O 3
 #endif
 constexpr MathFidelity fid(int phases) {
     return phases == 2 ? MathFidelity::HiFi2 : phases == 3 ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
@@ -409,13 +413,11 @@ void kernel_main() {
         }
         {
             DeviceZoneScopedN("WAIT-PACKET");
+            // Q and the column only: the scores and the block maximum need
+            // nothing of the state, which the previous consumer is still
+            // finishing while this core computes them.
             cb_wait_front(cb_query, Bt * qWt);
             cb_wait_front(cb_key, Bt * qWt);
-            cb_wait_front(cb_max_seed, Bt);
-            cb_wait_front(cb_max_plain, Bt);
-            cb_wait_front(cb_sum_seed, Bt);
-            cb_wait_front(cb_sum_plain, Bt);
-            cb_wait_front(cb_out_seed, Bt * qWt);
         }
         cb_reserve_back(cb_max_out, Bt);
         cb_reserve_back(cb_sum_out, Bt);
@@ -509,10 +511,18 @@ void kernel_main() {
         }
 
         // ---- 2b. m_new = max(m_old, colmax S^T) as a full tile, and
-        // r = exp(a (m_old - m_new)), exact.
+        // r = exp(a (m_old - m_new)), exact. The state is needed from here on.
+        {
+            DeviceZoneScopedN("WAIT-STATE");
+            cb_wait_front(cb_max_seed, Bt);
+            cb_wait_front(cb_max_plain, Bt);
+            cb_wait_front(cb_sum_seed, Bt);
+            cb_wait_front(cb_sum_plain, Bt);
+            cb_wait_front(cb_out_seed, Bt * qWt);
+        }
         {
             DeviceZoneScopedN("RESCALE");
-            constexpr uint32_t kNewReg = 0, kOldReg = 1, kDiffReg = 2;
+            constexpr uint32_t kNewReg = 0, kDiffReg = 1;
             if (!fresh) {
                 cb_reserve_back(cb_rescale, Bt);
             }
@@ -520,12 +530,13 @@ void kernel_main() {
                 tile_regs_acquire();
                 broadcast_row0_to_dst(kNewReg, cb_block_max, a);  // the block maximum down every row
                 if (!fresh) {
+                    // m_old exact; m_new = max(m_old, m_blk) into the new
+                    // register, then m_old - m_new in m_old's own.
                     reconfig_data_format_srca(cb_scores, cb_max_seed);
                     copy_init(cb_max_seed);
-                    copy_tile(cb_max_seed, a, kOldReg);
                     copy_tile(cb_max_seed, a, kDiffReg);
                     binary_max_tile_init();
-                    binary_max_tile(kNewReg, kOldReg, kNewReg);
+                    binary_max_tile(kNewReg, kDiffReg, kNewReg);
                     sub_binary_tile_init();
                     sub_binary_tile(kDiffReg, kNewReg, kDiffReg);
                     exp_scaled(kDiffReg);
@@ -548,6 +559,11 @@ void kernel_main() {
             unpacker_fence();
         }
 #else
+        cb_wait_front(cb_max_seed, Bt);
+        cb_wait_front(cb_max_plain, Bt);
+        cb_wait_front(cb_sum_seed, Bt);
+        cb_wait_front(cb_sum_plain, Bt);
+        cb_wait_front(cb_out_seed, Bt * qWt);
         cb_reserve_back(cb_block_max, Bt);
         cb_push_back(cb_block_max, Bt);
         cb_wait_front(cb_block_max, Bt);
