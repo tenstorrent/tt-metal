@@ -20,6 +20,7 @@ from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt import masked_bucket_trace as mbt
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
+from models.demos.blackhole.qwen36.tt.pd_transfer import GdnSnapshotPool
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
@@ -1826,23 +1827,34 @@ class Qwen36Model:
         # QWEN36_PREFILL_TIMING=1: per-phase wall times of one serving prefill call (perf triage, default off).
         _timing = os.environ.get("QWEN36_PREFILL_TIMING", "0") == "1"
         _tp = time.perf_counter if _timing else (lambda: 0.0)
-        _t = {"bind": 0.0, "prefill": 0.0, "logits": 0.0, "snapshot": 0.0, "unbind": 0.0, "write_slot": 0.0}
-        # QWEN36_GDN_SLOT_DEVICE_COPY=1: write each user's B=1 scratch state into its decode slot ON DEVICE
+        _t = {
+            "bind": 0.0,
+            "prefill": 0.0,
+            "logits": 0.0,
+            "snapshot": 0.0,
+            "unbind": 0.0,
+            "hist": 0.0,
+            "write_slot": 0.0,
+        }
+        # Slot-copy mode 1/2: write each user's B=1 scratch state into its decode slot ON DEVICE
         # (clone -> row write, consumed before the next user's trace replay, so the clone never coexists
         # with a replay's baked-address intermediates) instead of the host to_torch/from_torch round trip
         # of ~75 MB fp32 recurrent state per request (24 layers x [4, Nv, Dk, Dv]), which costs ~100 ms.
         # 1 = clone + slice/concat/copy row write (~600 small ops/request, ~28 ms); 2 = ttnn.fill_cache for the recurrent
         # state (one indexed in-place write per layer, no clone) + masked ttnn.where row write for the conv taps.
-        # QWEN36_PLAIN_GDN_SLOT_DEVICE_COPY (default 0 = the host round trip) is THIS path's knob; the speculative join
-        # (prefill_for_spec, _spec_slot_device_copy) keeps QWEN36_SPEC_GDN_SLOT_DEVICE_COPY / QWEN36_GDN_SLOT_DEVICE_COPY.
-        # The device-side modes were validated exact at copy time (QWEN36_GDN_SLOT_VERIFY=1) yet a plain server's SECOND
-        # and later requests still drifted from the eager decode with mode 2, while the host path reproduces the eager
-        # decode request after request (profiles/fix_val2.out, run_plain_probe7.sh HW); until that residue is understood
-        # the served plain path pays the ~90 ms host copy per request for exactness.
-        try:
-            _dev_copy = int(os.environ.get("QWEN36_PLAIN_GDN_SLOT_DEVICE_COPY", "0") or 0)
-        except ValueError:
-            _dev_copy = 0
+        # The mode is resolved by _plain_gdn_slot_copy_mode (knobs, default 2, and the TT_DECODE_BUCKETING downgrade), the
+        # SAME resolver warmup_gdn_slot_write uses, so the warm-up compiles exactly the programs this path will run.
+        # History: the 2026-09-15 "second and later requests drift with mode 2" (profiles/fix_val2.out) was the decode
+        # BUCKETING + device-sampling row aliasing, not the device copy: mode 2 was validated exact and deterministic on
+        # 2026-09-20 with TT_DECODE_BUCKETING=0 (det probe 9/9, conc 1-8 all match, GSM8K-100 0.81, 130+ slot writes
+        # without drift; PLAN.md 15:10). With bucketing ON the device copy is therefore downgraded to the host path
+        # (QWEN36_PLAIN_GDN_SLOT_DEVICE_COPY_FORCE=1 keeps it). The packed conv history of the written slot is rebuilt
+        # on device too (gdn/tp.py pack_hist_device, QWEN36_GDN_HIST_DEVICE_PACK), timed as `hist` in [PREFILL_TIMING].
+        _dev_copy = self._plain_gdn_slot_copy_mode()
+        # QWEN36_GDN_HIST_FIX=1 (default): after a device-side slot write, rebuild the written slot's packed conv history
+        # (conv_hist_packed[slot]) -- on device inside the per-user loop below when the GDN layers report the device pack
+        # ready (constants built at warm-up), else with the host repack after the loop.
+        _hist_fix = os.environ.get("QWEN36_GDN_HIST_FIX", "1") == "1"
         # Prefill/decode disaggregation (pd_transfer.py): a producer instance parks each request's host GDN snapshot
         # under its slot (pd_gdn_capture) for export, which needs the host snapshot path; pd_skip_gdn_slot_write
         # skips the decode-slot write on an instance that never decodes.
@@ -1892,6 +1904,7 @@ class Qwen36Model:
                     ttnn.synchronize_device(self.mesh_device)
                 if _dev_copy == 2:
                     slot = int(empty_slots[u])
+                    _h = 0.0
                     for dn in dn_states:
                         _, _, rec_b, conv_b = prev_by_dn[dn][:4]
                         rec_src = dn.rec_state
@@ -1913,6 +1926,13 @@ class Qwen36Model:
                                 ttnn.deallocate(c)
                                 c = c_c
                             dn._write_index(conv_b[m], c, slot, dim=1)
+                        if _hist_fix and dn.hist_device_pack_ready():
+                            # Packed conv history of this slot, built ON DEVICE from the scratch taps just written above
+                            # (pack_hist_device -> fill_cache into conv_hist_packed[slot]); the decode trace reads that
+                            # buffer at its baked address. Replaces the host repack (~340 ms/request over the layers).
+                            _th = _tp()
+                            dn._sync_conv_hist_packed(slot=slot, taps=dn.conv_states)
+                            _h += _tp() - _th
                     if os.environ.get("QWEN36_GDN_SLOT_VERIFY", "0") == "1":
                         # Probe: read back the copied slot row and its scratch source; log the first layers that differ.
                         bad = []
@@ -1941,7 +1961,8 @@ class Qwen36Model:
                         )
                     _t["prefill"] += _t2 - _t1
                     _t["logits"] += _t3 - _t2
-                    _t["snapshot"] += _tp() - _t3
+                    _t["hist"] += _h
+                    _t["snapshot"] += _tp() - _t3 - _h
                     continue
                 if _dev_copy:
                     slot = int(empty_slots[u])
@@ -1966,11 +1987,18 @@ class Qwen36Model:
                     continue
                 # Snapshot this user's B=1 scratch state (host round trip — the next user's reset
                 # overwrites the scratch in place; see prefill_traced_bucket_batched for why not clone).
-                rec_snap, conv_snap = self._snapshot_gdn_scratch_host(dn_states, comp)
+                rec_snap, conv_snap = self._snapshot_gdn_scratch_host(dn_states)
                 per_user_rec.append(rec_snap)
                 per_user_conv.append(conv_snap)
                 if _pd_capture is not None:
-                    _pd_capture[int(empty_slots[u])] = (per_user_rec[-1], per_user_conv[-1])
+                    # A capture nobody staged (a request P prefilled that never got a StageReq) sits under its
+                    # slot until the slot is reused: give its pooled buffers back before parking the new one,
+                    # otherwise the entry stays busy in the pool for the life of the process.
+                    slot_u = int(empty_slots[u])
+                    stale = _pd_capture.pop(slot_u, None)
+                    if stale is not None:
+                        self.pd_gdn_snapshot_release(*stale)
+                    _pd_capture[slot_u] = (per_user_rec[-1], per_user_conv[-1])
                 _t4 = _tp()
                 _t["prefill"] += _t2 - _t1
                 _t["logits"] += _t3 - _t2
@@ -1982,22 +2010,29 @@ class Qwen36Model:
             self._unbind_gdn_prefill_scratch(prev)
             _t["unbind"] += _tp() - _t5
 
-        if _dev_copy and os.environ.get("QWEN36_GDN_HIST_FIX", "1") == "1":
+        if _dev_copy and _hist_fix:
             # The device-side slot write above rewrote row `slot` of the K conv taps but NOT the fused plain-decode
             # conv's packed history (conv_hist_packed), which the decode trace reads at a baked address. Nothing eager
             # runs between this prefill and the next traced decode step, so repack the written rows now (per slot, in
-            # place; a full rebuild only if the packed buffer does not exist yet). The host write_slot path below does
-            # this inside write_slot (sync_hist=True).
+            # place; a full rebuild only if the packed buffer does not exist yet) -- unless mode 2 already did it on
+            # device inside the loop (hist_device_pack_ready). The host write_slot path below does this inside write_slot.
+            _th = _tp()
             for dn in dn_states:
-                if getattr(dn, "_decode_fused_conv", False):
+                if getattr(dn, "_decode_fused_conv", False) and not (_dev_copy == 2 and dn.hist_device_pack_ready()):
                     for u in range(N):
                         dn._sync_conv_hist_packed(slot=int(empty_slots[u]))
+            _t["hist"] += _tp() - _th
 
         # Write each user's snapshot into its decode slot, preserving the other live rows.
         _t6 = _tp()
         if not _dev_copy and not getattr(self, "pd_skip_gdn_slot_write", False):
             for u in range(N):
                 self._write_gdn_slot(int(empty_slots[u]), per_user_rec[u], per_user_conv[u])
+        if _pd_capture is None:
+            # Nobody else holds the snapshots (a P/D producer releases them after staging): return the
+            # pooled host buffers so the next request's snapshot reuses them.
+            for u in range(len(per_user_rec)):
+                self.pd_gdn_snapshot_release(per_user_rec[u], per_user_conv[u])
         _t["write_slot"] += _tp() - _t6
         if _timing:
             lens = [int(v) for v in valid_lens] if valid_lens is not None else [int(t.shape[1]) for t in token_ids_list]
@@ -2007,16 +2042,47 @@ class Qwen36Model:
             )
         return host_logits
 
-    def warmup_gdn_slot_write(self):
-        """Pre-compile the QWEN36_GDN_SLOT_DEVICE_COPY=2 slot-write programs (ttnn.fill_cache on the recurrent state, masked
-        ttnn.where + copy on the conv taps) and upload the per-slot row masks, using the B=1 scratch as the (zero) source.
-        No-op unless the knob is 2 and the batched GDN buffers exist. Writes zeros into decode slot rows that hold no live
-        sequence at warmup time, which is what they contain anyway."""
+    def _plain_gdn_slot_copy_mode(self):
+        """Resolved mode of the plain serving path's per-request GDN slot write (prefill_paged_slots): 0 = host
+        to_torch/from_torch round trip, 1 = clone + slice/concat/copy row write, 2 = ttnn.fill_cache (recurrent state) +
+        _write_index tap row writes, all on device. Read from QWEN36_PLAIN_GDN_SLOT_DEVICE_COPY, else the older
+        QWEN36_GDN_SLOT_DEVICE_COPY (model_config.py defaults it to 2), else 2. A device mode with TT_DECODE_BUCKETING
+        unset/1 is downgraded to 0 (warning once) unless QWEN36_PLAIN_GDN_SLOT_DEVICE_COPY_FORCE=1: decode bucketing
+        re-slices the live rows per step and, combined with the device-side slot write, was the configuration that
+        produced request-to-request drift (2026-09-15). ONE resolver for the request path and warmup_gdn_slot_write, so
+        the warm-up compiles exactly the programs the requests run (a mismatch = ~450 ms of compiles on the first served
+        request, after the traces are captured)."""
+        raw = os.environ.get("QWEN36_PLAIN_GDN_SLOT_DEVICE_COPY")
+        if raw is None:
+            raw = os.environ.get("QWEN36_GDN_SLOT_DEVICE_COPY", "2")
         try:
-            mode = int(os.environ.get("QWEN36_GDN_SLOT_DEVICE_COPY", "0") or 0)
+            mode = int(raw or 0)
         except ValueError:
             mode = 0
+        if (
+            mode
+            and os.environ.get("TT_DECODE_BUCKETING", "1") == "1"
+            and os.environ.get("QWEN36_PLAIN_GDN_SLOT_DEVICE_COPY_FORCE", "0") != "1"
+        ):
+            if not getattr(self, "_warned_dev_copy_bucketing", False):
+                self._warned_dev_copy_bucketing = True
+                logger.warning(
+                    f"QWEN36_PLAIN_GDN_SLOT_DEVICE_COPY={mode} with TT_DECODE_BUCKETING on is the combination that "
+                    "drifted (2026-09-15); using the host slot write. Set TT_DECODE_BUCKETING=0 for the device copy "
+                    "(validated exact 2026-09-20) or QWEN36_PLAIN_GDN_SLOT_DEVICE_COPY_FORCE=1 to override."
+                )
+            mode = 0
+        return mode
+
+    def warmup_gdn_slot_write(self):
+        """Pre-compile the mode-2 slot-write programs of prefill_paged_slots (ttnn.fill_cache on the recurrent state and
+        the per-slot _write_index slice/concat/copy tap row writes), using the B=1 scratch as the (zero) source. Gated by
+        the SAME resolver as the request path (_plain_gdn_slot_copy_mode): no-op unless it resolves to 2 and the batched
+        GDN buffers exist. Writes zeros into decode slot rows that hold no live sequence at warmup time, which is what
+        they contain anyway."""
+        mode = self._plain_gdn_slot_copy_mode()
         if mode != 2 or self.num_devices <= 1:
+            logger.info(f"[prefill] GDN slot-write warm-up skipped (resolved slot-copy mode {mode})")
             return
         dn_states = [layer.attention for layer in self.layers if not layer.is_full_attention]
         if not dn_states or dn_states[0].rec_state is None or dn_states[0].B <= 1:
@@ -2048,7 +2114,7 @@ class Qwen36Model:
             self._unbind_gdn_prefill_scratch(prev)
         ttnn.synchronize_device(self.mesh_device)
         logger.info(
-            f"[prefill] warmed the device-side GDN slot-write programs (QWEN36_GDN_SLOT_DEVICE_COPY=2): fill_cache + {B}-slot tap row writes"
+            f"[prefill] warmed the device-side GDN slot-write programs (slot-copy mode 2): fill_cache + {B}-slot tap row writes"
         )
 
     def _gdn_slot_row_mask(self, like, slot):
@@ -2074,49 +2140,68 @@ class Qwen36Model:
             cache[key] = m
         return m
 
-    def _snapshot_gdn_scratch_host(self, dn_states, comp):
-        """Host snapshot of the B=1 GDN scratch of every GDN layer: rec_snap[li] [n_dev, Nv, Dk, Dv] (fp32),
-        conv_snap[li][m] [n_dev, 1, D].
+    def _snapshot_gdn_scratch_host(self, dn_states):
+        """Host snapshot of the B=1 GDN scratch of every GDN layer, device-major (pd_transfer.GdnSnapshotPool):
+        rec [n_dev, L, Nv, Dk, Dv] in the recurrent-state dtype (fp32), taps [n_dev, L, K, C] bf16.
 
-        Default (QWEN36_GDN_SNAPSHOT_DEVICE_UNTILIZE=1): concat all layers on device, untilize on device and
-        read ROW_MAJOR once per state type -- the host read is then a memcpy (host-side untilize of ~150 MB of
-        fp32 tile tensors cost ~150 ms per request). =0: the original per-tensor ttnn.to_torch of TILE tensors.
+        Default (QWEN36_GDN_SNAPSHOT_DEVICE_UNTILIZE=1): concat all layers on device, untilize on device and DMA
+        each state type ONCE straight into a pooled host buffer (ttnn.copy_device_to_host_tensor into a
+        from_torch-borrowed row-major host tensor): no mesh composer, no host-side concat, no per-layer copy.
+        Measured on P150x4 for the 151 MB fp32 state: ~6 ms into a reused (pinned) buffer, ~42 ms into a fresh
+        one, vs ~103 ms for the ConcatMeshToTensor read plus ~150 MB of host re-copies it replaced. The device
+        transients are freed before returning (nothing outlives the per-user window under the parked traces).
+        =0: the original per-tensor TILE reads through the composer, stacked into the same layout (debug).
         """
-        if os.environ.get("QWEN36_GDN_SNAPSHOT_DEVICE_UNTILIZE", "1") != "1" or not dn_states:
-            rec = [ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states]
-            conv = [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_states]
-            return rec, conv
-        L = len(dn_states)
         n_dev = self.num_devices
-        K = dn_states[0].K
+        if os.environ.get("QWEN36_GDN_SNAPSHOT_DEVICE_UNTILIZE", "1") != "1" or not dn_states:
+            comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            rec = torch.stack([ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_states], dim=1)
+            taps = torch.stack(
+                [
+                    torch.stack(
+                        [ttnn.to_torch(c, mesh_composer=comp).reshape(n_dev, -1) for c in dn.conv_states], dim=1
+                    )
+                    for dn in dn_states
+                ],
+                dim=1,
+            )
+            return rec, taps
+        pool = getattr(self, "_gdn_snapshot_pool", None)
+        if pool is None:
+            pool = self._gdn_snapshot_pool = GdnSnapshotPool(self)  # host memory only: trace-safe at request time
         rec_cat = ttnn.concat([dn.rec_state for dn in dn_states], dim=0)  # per device [L, Nv, Dk, Dv]
         rec_rm = ttnn.to_layout(rec_cat, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(rec_cat)
-        rec_all = ttnn.to_torch(rec_rm, mesh_composer=comp)  # [n_dev*L, Nv, Dk, Dv]
-        ttnn.deallocate(rec_rm)
-        rec_all = rec_all.reshape(n_dev, L, *rec_all.shape[1:])
-        taps_cat = ttnn.concat([c for dn in dn_states for c in dn.conv_states], dim=0)  # per device [L*K, 1, D]
+        taps_cat = ttnn.concat([c for dn in dn_states for c in dn.conv_states], dim=0)  # per device [L*K, 1, C]
         taps_rm = ttnn.to_layout(taps_cat, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(taps_cat)
-        taps_all = ttnn.to_torch(taps_rm, mesh_composer=comp)  # [n_dev*L*K, 1, D]
-        ttnn.deallocate(taps_rm)
-        taps_all = taps_all.reshape(n_dev, L, K, 1, -1)
-        rec = [rec_all[:, li].contiguous() for li in range(L)]
-        conv = [[taps_all[:, li, m].contiguous() for m in range(K)] for li in range(L)]
-        return rec, conv
+        try:
+            return pool.read(rec_rm, taps_rm)
+        finally:
+            ttnn.deallocate(rec_rm)
+            ttnn.deallocate(taps_rm)
+
+    def pd_gdn_snapshot_release(self, rec_snap, conv_snap=None):
+        """Hand a snapshot from _snapshot_gdn_scratch_host back to the host pool once it has been consumed
+        (written into a decode slot or packed for transfer). A P/D producer calls this after staging."""
+        pool = getattr(self, "_gdn_snapshot_pool", None)
+        if pool is not None:
+            pool.release(rec_snap, conv_snap)
 
     def _write_gdn_slot(self, slot, rec_snap, conv_snap):
-        """Upload one request's B=1 GDN state snapshot (host torch, per GDN layer) and write it
+        """Upload one request's B=1 GDN state snapshot (host torch, device-major) and write it
         into decode `slot` of the batched buffers via TPGatedDeltaNet.write_slot (preserving the
         other live rows). Shapes/mappers mirror _assemble_per_user_gdn (mesh dim 0 = devices).
 
-        rec_snap[li]:  host [num_devices, Nv, Dk, Dv]; conv_snap[li]: list of K host [num_devices, 1, D].
+        rec_snap:  host [num_devices, L, Nv, Dk, Dv]; conv_snap: host [num_devices, L, K, D]
+        (the _snapshot_gdn_scratch_host layout).
         """
         mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
         dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        n_dev = self.num_devices
         for li, dn in enumerate(dn_layers):
             rec = ttnn.from_torch(
-                rec_snap[li],
+                rec_snap[:, li].contiguous(),
                 dtype=dn.rec_state.dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
@@ -2124,7 +2209,7 @@ class Qwen36Model:
             )
             convs = [
                 ttnn.from_torch(
-                    conv_snap[li][m],
+                    conv_snap[:, li, m].contiguous().view(n_dev, 1, -1),
                     dtype=dn.conv_states[m].dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.mesh_device,

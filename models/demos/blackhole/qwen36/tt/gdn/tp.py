@@ -24,6 +24,151 @@ def _addr(t):
         return "?"
 
 
+# QWEN36_GDN_HIST_DEVICE_PACK (default 1): build a slot's packed conv-history tiles ON DEVICE from its K tap rows
+# (pack_hist_device) instead of the host repack (_per_device_rows to_torch reads -> _pack_head_tiles -> from_torch), which
+# cost ~340 ms per served request over the GDN layers. 0 = host repack (fallback, bitwise identical result).
+_HIST_DEVICE_PACK = os.environ.get("QWEN36_GDN_HIST_DEVICE_PACK", "1") == "1"
+# Shared per-mesh constants of the device pack, keyed by (id(mesh), Nv, Nk, Dk, Dv, C): every GDN layer of a model has the
+# same geometry, so one ~4 MB set serves all of them. Built ONLY by hist_pack_consts(..., build=True) from
+# TPGatedDeltaNet.__init__, i.e. before ANY trace (chunk-prefill or decode) is captured: a buffer allocated after a
+# capture shares addresses with that trace's freed intermediates and is clobbered by every replay (see
+# _flip_hist_parity); lookups after that never allocate.
+_HIST_PACK_CONSTS = {}
+_HIST_PACK_EXACT = None
+
+
+def pack_head_tiles_host(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
+    """rows: list of 4 torch [C] vectors (one device's channels) -> [Nv, 4, 32, 32] bf16 packed head tiles.
+    Channel chunk c (32 channels) of head h's [q_hk | k_hk | v_h] row goes to tile row 2c + parity (the kernel packs user
+    b's token with parity b & 1 so every DRAM->L1 segment keeps its 64 B alignment class); taps are stored on both
+    parities so one tap tile serves every user. Host reference of pack_hist_device."""
+    rf = Nv // Nk
+    kd = Nk * Dk
+    out = torch.zeros(Nv, 4, 32, 32, dtype=torch.bfloat16)
+    for h in range(Nv):
+        hk = h // rf
+        for j, r in enumerate(rows):
+            r = r.reshape(-1).to(torch.bfloat16)
+            chunks = torch.cat(
+                [
+                    r[hk * Dk : (hk + 1) * Dk],
+                    r[kd + hk * Dk : kd + (hk + 1) * Dk],
+                    r[2 * kd + h * Dv : 2 * kd + (h + 1) * Dv],
+                ]
+            ).reshape(-1, 32)
+            n = chunks.shape[0]
+            for par in (0, 1) if both_parities else (parity,):
+                out[h, j, par : 2 * n + par : 2, :] = chunks
+    return out
+
+
+def hist_pack_selection_host(Nv, Nk, Dk, Dv, C, parity):
+    """[Nv, 1, 32, C] 0/1 selection: P[h, 0, 2c + parity, k] = 1 iff channel k is the c-th 32-chunk of head h's
+    [q_hk | k_hk | v_h] row. Row 2c + parity of the pack is then P[h, 0, 2c + parity, :] . (channel-spread tap)."""
+    rf = Nv // Nk
+    kd = Nk * Dk
+    P = torch.zeros(Nv, 1, 32, C, dtype=torch.bfloat16)
+    for h in range(Nv):
+        hk = h // rf
+        chans = torch.cat(
+            [
+                torch.arange(hk * Dk, (hk + 1) * Dk),
+                torch.arange(kd + hk * Dk, kd + (hk + 1) * Dk),
+                torch.arange(2 * kd + h * Dv, 2 * kd + (h + 1) * Dv),
+            ]
+        ).reshape(-1, 32)
+        for c in range(chans.shape[0]):
+            P[h, 0, 2 * c + parity, chans[c]] = 1.0
+    return P
+
+
+def hist_pack_consts(mesh, Nv, Nk, Dk, Dv, C, build=False):
+    """The device-pack constants for one mesh/geometry (shared by every layer), or None when they were not built yet
+    and build is False. build=True allocates them (warm-up only): the channel-spread mask E_T [1, 1, 32, C]
+    (E_T[col, k] = 1 iff k % 32 == col) and the per-parity selections P[par] [Nv, 1, 32, C], bf16 TILE DRAM, replicated.
+    """
+    global _HIST_PACK_EXACT
+    key = (id(mesh), int(Nv), int(Nk), int(Dk), int(Dv), int(C))
+    consts = _HIST_PACK_CONSTS.get(key)
+    if consts is not None or not build:
+        return consts
+    assert C % 32 == 0 and Dk % 32 == 0 and Dv % 32 == 0 and (2 * Dk + Dv) // 32 * 2 <= 32, (Nv, Nk, Dk, Dv, C)
+
+    def dev(t):
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+
+    ET = torch.eye(32, dtype=torch.bfloat16).repeat(1, C // 32).reshape(1, 1, 32, C)
+    consts = {
+        "ET": dev(ET),
+        "P": tuple(dev(hist_pack_selection_host(Nv, Nk, Dk, Dv, C, par)) for par in (0, 1)),
+        "Nv": int(Nv),
+        "C": int(C),
+    }
+    if _HIST_PACK_EXACT is None:
+        _HIST_PACK_EXACT = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+        )
+    _HIST_PACK_CONSTS[key] = consts
+    return consts
+
+
+def release_hist_pack_consts():
+    """Free every shared device-pack constant (tests that close the mesh)."""
+    for consts in _HIST_PACK_CONSTS.values():
+        ttnn.deallocate(consts["ET"])
+        for p in consts["P"]:
+            ttnn.deallocate(p)
+    _HIST_PACK_CONSTS.clear()
+
+
+def pack_hist_device(consts, taps, parity, fused=True):
+    """One slot's packed conv history [Nv, 4, 32, 32] bf16 (per device) built on device from its 4 tap rows.
+
+    taps: list of 4 device tensors, each logically [.., 1, C] bf16 TILE (this device's channels of tap j; leading dims 1).
+    Exact chain (every output element is ONE bf16 product by 1.0 plus zeros, fp32-accumulated):
+      RT_j = E_T * tap_j      (row broadcast; RT_j[col, k] = tap_j[k] if k % 32 == col else 0)   [1, 1, 32, C]
+      out  = P[parity] @ RT^T (HiFi4, fp32 acc)                                                  [Nv, 1, 32, 32] per tap
+    fused=True (default) concatenates the RT_j first and runs ONE matmul of the [1, 1, Nv*32, C] view of P against
+    [1, 4, 32, C]^T -> [1, 4, Nv*32, 32], then permutes to [Nv, 4, 32, 32] (~0.55 ms/layer incl. the slot write);
+    fused=False runs one matmul per tap and concats the 4 outputs along dim 1 (~1.0 ms/layer). Both are validated
+    bitwise against pack_head_tiles_host for both parities by tests/hist_device_pack_scratch.py (P150x4).
+    Returns a new tensor the caller owns; every temporary is freed here."""
+    Nv, C = consts["Nv"], consts["C"]
+    ET, P = consts["ET"], consts["P"][parity & 1]
+    rts = []
+    for t in taps:
+        t4 = ttnn.reshape(t, (1, 1, 1, C)) if len(t.shape) != 4 else t  # view (leading dims only): never deallocated
+        rts.append(ttnn.multiply(ET, t4))
+    if fused:
+        rt = ttnn.concat(rts, dim=1)  # [1, 4, 32, C]
+        for r in rts:
+            ttnn.deallocate(r)
+        P2 = ttnn.reshape(P, (1, 1, Nv * 32, C))  # view (tile-aligned merge of the leading dims)
+        out = ttnn.matmul(P2, rt, transpose_b=True, compute_kernel_config=_HIST_PACK_EXACT)  # [1, 4, Nv*32, 32]
+        ttnn.deallocate(rt)
+        out4 = ttnn.reshape(out, (4, Nv, 32, 32))  # tile-aligned split of dim 2: a view
+        packed = ttnn.permute(out4, (1, 0, 2, 3))  # [Nv, 4, 32, 32]
+        if _addr(out4) != _addr(out):
+            ttnn.deallocate(out4)
+        ttnn.deallocate(out)
+        return packed
+    outs = []
+    for r in rts:
+        outs.append(ttnn.matmul(P, r, transpose_b=True, compute_kernel_config=_HIST_PACK_EXACT))  # [Nv, 1, 32, 32]
+        ttnn.deallocate(r)
+    packed = ttnn.concat(outs, dim=1)  # [Nv, 4, 32, 32]
+    for o in outs:
+        ttnn.deallocate(o)
+    return packed
+
+
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
@@ -335,6 +480,12 @@ class TPGatedDeltaNet:
         self._zero_conv_carry = None
         self._zero_rec = None
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
+        # Shared constants of the device-side packed-history repack (pack_hist_device), allocated HERE -- at layer
+        # construction, before ANY trace is captured. Allocating them later (e.g. from the prefill warm-up hook, which
+        # runs after the chunk-prefill trace capture) places them in that trace's freed-intermediate address range and
+        # every prefill replay then clobbers them (observed: deterministic garbage decodes, 2026-09-20).
+        if _HIST_DEVICE_PACK and self._decode_fused_conv:
+            self._hist_pack_consts(build=True)
 
     def reset_state(self):
         def z(shape):
@@ -1459,28 +1610,9 @@ class TPGatedDeltaNet:
         return self._kda_dec_const
 
     def _pack_head_tiles(self, rows, parity=0, both_parities=False):
-        """rows: list of 4 torch [C] vectors (this device's channels) -> [Nv, 4, 32, 32] bf16 packed head tiles.
-        Channel chunk c goes to row 2c + parity (the kernel packs user b's token with parity b & 1 so every DRAM->L1
-        segment keeps its 64 B alignment class); taps are stored on both parities so one tap tile serves every user."""
-        Nv, Nk, Dk, Dv = self.Nv, self.Nk, self.Dk, self.Dv
-        rf = Nv // Nk
-        kd = Nk * Dk
-        out = torch.zeros(Nv, 4, 32, 32, dtype=torch.bfloat16)
-        for h in range(Nv):
-            hk = h // rf
-            for j, r in enumerate(rows):
-                r = r.reshape(-1).to(torch.bfloat16)
-                chunks = torch.cat(
-                    [
-                        r[hk * Dk : (hk + 1) * Dk],
-                        r[kd + hk * Dk : kd + (hk + 1) * Dk],
-                        r[2 * kd + h * Dv : 2 * kd + (h + 1) * Dv],
-                    ]
-                ).reshape(-1, 32)
-                n = chunks.shape[0]
-                for par in (0, 1) if both_parities else (parity,):
-                    out[h, j, par : 2 * n + par : 2, :] = chunks
-        return out
+        """rows: list of 4 torch [C] vectors (this device's channels) -> [Nv, 4, 32, 32] bf16 packed head tiles
+        (pack_head_tiles_host; the host reference of the device pack)."""
+        return pack_head_tiles_host(rows, self.Nv, self.Nk, self.Dk, self.Dv, parity, both_parities)
 
     def _per_device_rows(self, tensors, row=0):
         """[[torch row per device] per tensor] for mesh tensors holding this layer's per-device [.., C] rows (row `row`)."""
@@ -1530,11 +1662,13 @@ class TPGatedDeltaNet:
             )
         return self._conv_taps_packed
 
-    def _sync_conv_hist_packed(self, slot=None):
+    def _sync_conv_hist_packed(self, slot=None, taps=None):
         """Eagerly bring conv_hist_packed in line with conv_states after they were rewritten (prefill capture, reset,
         batched assembly, slot writes). Only when the fused-conv decode path is enabled. slot=None rebuilds every slot;
-        an int repacks that slot only. Host round trip -> must be called from eager (non-traced) code, which all
-        conv_states writers are; the decode path itself then never needs to rebuild (reads inside a trace capture fault).
+        an int repacks that slot only -- on device (pack_hist_device, QWEN36_GDN_HIST_DEVICE_PACK=1 and the constants
+        built at warm-up) from `taps` (the slot's K [.., 1, C] device tap rows, e.g. the B=1 prefill scratch's
+        conv_states) or, when taps is None, from row `slot` of conv_states; otherwise the host round trip (must then be
+        called from eager code, which all conv_states writers are).
         """
         if not self._decode_fused_conv or self.conv_states is None:
             self._hist_packed_valid = False
@@ -1543,6 +1677,14 @@ class TPGatedDeltaNet:
             self._hist_packed_valid = False
             self._ensure_conv_hist_packed()
             return
+        if _HIST_DEVICE_PACK and self._hist_pack_consts() is not None:
+            self._sync_conv_hist_packed_device(slot, taps)
+            return
+        if _HIST_DEVICE_PACK and not getattr(self, "_hist_pack_warned", False):
+            self._hist_pack_warned = True
+            logger.warning(
+                "[hist] device pack constants were not built at warm-up (warmup_hist_device_pack); using the host repack"
+            )
         rows = [
             [ttnn.to_torch(d).reshape(-1, d.shape[-1])[slot].float() for d in ttnn.get_device_tensors(c)]
             for c in self.conv_states
@@ -1553,6 +1695,63 @@ class TPGatedDeltaNet:
         if _HIST_DEBUG:
             logger.info(f"[hist] repacked slot {slot} into {_addr(self.conv_hist_packed)}")
         self._hist_packed_valid = True
+
+    def hist_device_pack_ready(self):
+        """True when a per-slot repack goes through the device chain (knob on, fused-conv decode, constants built at
+        warm-up): callers may then pass the slot's tap tensors straight to _sync_conv_hist_packed(slot, taps=...)."""
+        return bool(_HIST_DEVICE_PACK and self._decode_fused_conv and self._hist_pack_consts() is not None)
+
+    def _hist_pack_consts(self, build=False):
+        return hist_pack_consts(self.mesh, self.Nv, self.Nk, self.Dk, self.Dv, self.qkv_dim_tp, build=build)
+
+    def _sync_conv_hist_packed_device(self, slot, taps=None):
+        """Repack decode slot `slot` of conv_hist_packed ON DEVICE from its K tap rows (`taps`, or row `slot` of
+        conv_states): pack_hist_device at the slot's parity, then one ttnn.fill_cache into the [B, Nv*4, 32, 32] view of
+        the packed buffer (in place, keeping the address the decode trace baked; batch_idx is a runtime arg so every slot
+        shares one program). ~7 device ops, no host round trip. Temporaries freed before returning."""
+        consts = self._hist_pack_consts()
+        assert consts is not None, "device pack constants not built"
+        B = self.conv_hist_packed.shape[0]
+        assert 0 <= slot < B, f"slot {slot} out of range [0,{B})"
+        own = []
+        if taps is None:
+            if self.conv_states[0].shape[1] == 1:
+                # Bmax == 1 (write_slot / pd_transfer.import_gdn_slot / warmup on a B=1 build): row `slot` IS the whole
+                # [1, 1, C] buffer, and a full-range ttnn.slice returns its INPUT (slice.cpp no-op path: same buffer, no
+                # copy) -- slicing here would hand back the live decode taps and the deallocate below would free them
+                # under the decode trace. Read them directly and own nothing (same guard as _write_index's n == 1).
+                taps = list(self.conv_states)
+            else:
+                taps = [self._slice_along(self.conv_states[m], 1, slot, slot + 1) for m in range(self.K)]  # [1, 1, C]
+                # Belt and braces: only free a slice that is a distinct buffer from the batched taps.
+                batched = {_addr(c) for c in self.conv_states}
+                own = [t for t in taps if _addr(t) not in batched]
+        packed = pack_hist_device(consts, taps, slot & 1)  # [Nv, 4, 32, 32]
+        for t in own:
+            ttnn.deallocate(t)
+        src = ttnn.reshape(packed, (1, self.Nv * 4, 32, 32))  # view
+        dst = ttnn.reshape(self.conv_hist_packed, (B, self.Nv * 4, 32, 32))  # view of the trace-baked buffer
+        ttnn.fill_cache(dst, src, slot)
+        ttnn.deallocate(packed)  # src / dst are reshape views: never deallocated
+        if _HIST_DEBUG:
+            logger.info(f"[hist] device-repacked slot {slot} (parity {slot & 1}) into {_addr(self.conv_hist_packed)}")
+        self._hist_packed_valid = True
+
+    def warmup_hist_device_pack(self):
+        """Warm-up hook (call before the decode trace is captured, with the batched buffers bound): run the per-slot
+        device repack once per parity so its programs are compiled (the constants themselves were allocated in __init__,
+        before any trace; nothing is allocated here beyond per-call temporaries). The rows repacked (every slot) are
+        rebuilt from their own conv_states rows, i.e. unchanged. No-op unless the fused-conv decode path and
+        QWEN36_GDN_HIST_DEVICE_PACK are on, the constants exist and the packed buffer exists."""
+        if not (_HIST_DEVICE_PACK and self._decode_fused_conv) or self.conv_hist_packed is None:
+            return False
+        if self._hist_pack_consts() is None:
+            logger.warning("[hist] device pack constants missing at warm-up (not built in __init__); host repack stays")
+            return False
+        B = self.conv_hist_packed.shape[0]
+        for slot in range(B):  # slice program hash includes the slot offset: compile every row's repack now
+            self._sync_conv_hist_packed_device(slot)
+        return True
 
     def _ensure_conv_hist_packed(self):
         """(Re)build the packed history [Bmax, Nv, 4, 32, 32] from conv_states when they changed (prefill, reset,

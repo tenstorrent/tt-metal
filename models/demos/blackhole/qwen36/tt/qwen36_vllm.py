@@ -55,10 +55,15 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 
     # supports_async_decode=False: async decode assumes on-device token/position continuity, which
     # corrupts Qwen's GDN scan. supports_sample_on_device=True: on-device sampling is decode-only.
+    # stable_decode_slots=True: the GDN recurrent/conv state lives in per-slot device buffers, so
+    # the plugin pins each request to one decode row (== its state slot) for its whole lifetime
+    # and leaves finished rows as pad rows (token 0, position -1) instead of condensing the batch.
+    # It then never issues a slot_remap, so _remap_gdn_slots below is not reached from that plugin.
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": False,
         "supports_sample_on_device": True,
+        "stable_decode_slots": True,
     }
 
     def _validate_device_sampling_request(self, requested):
@@ -328,17 +333,28 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             self._decode_logged = True
             logger.info("Decode trace replay active (Qwen)")
         model = self.model[0]
-        # Batched serving: apply vLLM's condense slot_remap to the per-slot GDN recurrent/conv state
-        # BEFORE the decode trace reads it. The plugin remaps its own buffers (and the seed RNG via
-        # super().decode_forward), but GDN state is model-internal, so mirror the same reindex here.
-        # slot_remap is passed through unchanged so the seed-RNG remap inside super() still runs.
+        # Batched serving: apply a plugin slot_remap to the per-slot GDN recurrent/conv state BEFORE
+        # the decode trace reads it. A plugin that honours ``stable_decode_slots`` keeps every
+        # request on its own row and never sends one; an older plugin condenses its batch and does,
+        # and GDN state is model-internal, so mirror its reindex here. slot_remap is passed through
+        # unchanged so the seed-RNG remap inside super() still runs.
         if model.num_devices > 1 and model.args.max_batch_size > 1:
             slot_remap = kwargs.get("slot_remap")
             if slot_remap is not None:
+                # Reached only from a plugin that still condenses its batch. Say so once:
+                # with stable_decode_slots honoured this line never appears in the log.
+                if not getattr(self, "_slot_remap_logged", False):
+                    self._slot_remap_logged = True
+                    logger.warning(
+                        "[gdn] applying a plugin slot_remap (the plugin is not keeping decode rows "
+                        f"stable; stable_decode_slots not honoured): {[int(s) for s in slot_remap]}"
+                    )
                 model._remap_gdn_slots(slot_remap)
         # Decode bucketing (default on; TT_DECODE_BUCKETING=0 off): slice host inputs to the
-        # smallest power-of-2 width >= active prefix [0:num_active) before the base forward.
-        # No runner edit / output re-pad — plugin reads unpadded_batch_size in slot order.
+        # smallest power-of-2 width that still covers every live row before the base forward.
+        # No runner edit / output re-pad: the output (sampled tokens or logits) covers only the
+        # bucket, and the plugin's ``unpadded_batch_size`` for a stable-row decode stops at the
+        # highest live row (``InputBatch.step_rows``), so it never indexes past the bucket.
         # Each width keeps its own trace metadata, inputs, and output.
         args = list(args)
 
@@ -357,7 +373,15 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         if os.environ.get("TT_DECODE_BUCKETING", "1") == "1" and tokens is not None:
             start_pos = _read("start_pos", 1)
             width = int(tokens.shape[0])
-            num_active = int((start_pos != -1).sum()) if start_pos is not None else width
+            # The bucket must cover the HIGHEST live row, not just the live COUNT: under
+            # stable_decode_slots a live request can sit at any row with pad rows (start_pos -1)
+            # below it, and a row sliced off here would silently skip its decode step and its GDN
+            # state update. For a front-packed batch (rows [0:num_active) live) both are equal.
+            if start_pos is not None:
+                live_rows = (start_pos != -1).nonzero()
+                num_active = int(live_rows.max()) + 1 if live_rows.numel() > 0 else 1
+            else:
+                num_active = width
             num_active = max(1, min(num_active, width))
             bucket = min(width, 1 << max(0, (num_active - 1).bit_length()))  # smallest pow2 >= num_active
             # Keep full width when slot_remap is set: remap indexes the full slot space (tokens /
@@ -425,9 +449,19 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             if prev is not None:
                 model._unbind_gdn_prefill_scratch(prev)
         if batched:
-            # Compile the device-side slot-write programs (QWEN36_GDN_SLOT_DEVICE_COPY=2: fill_cache + masked where) and
-            # upload the per-slot row masks now, so the first real request does not pay ~450 ms for it.
+            # Compile the device-side slot-write programs (slot-copy mode 2, model._plain_gdn_slot_copy_mode: fill_cache +
+            # per-slot tap row writes) now, so the first real request does not pay ~450 ms for it.
             model.warmup_gdn_slot_write()
+            # Build the shared constants of the device-side packed-history repack (gdn/tp.py pack_hist_device) and
+            # compile its programs NOW, before warmup_model_decode captures the decode trace: a buffer allocated after
+            # that capture would alias the trace's freed intermediates. Per served request this replaces the host repack
+            # of conv_hist_packed[slot] (~340 ms over the GDN layers) with ~7 device ops per layer.
+            n_hist = sum(
+                bool(layer.attention.warmup_hist_device_pack()) for layer in model.layers if not layer.is_full_attention
+            )
+            if n_hist:
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(f"[prefill] warmed the device-side GDN packed-history repack on {n_hist} GDN layers")
 
     def warmup_model_decode(self, *args, **kwargs):
         # Defer to WarmupForwardMixin, which warms the paged-SDPA + GDN decode path at pos 0.

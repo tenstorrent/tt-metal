@@ -14,6 +14,14 @@ also parks the snapshot under the request's slot, and `model.pd_skip_gdn_slot_wr
 write (a pure-prefill instance never decodes). `export_kv_blocks` reads the request's blocks out of the
 paged caches.
 
+Snapshot layout (device-major, one host tensor per state type; `GdnSnapshotPool`): `rec` is
+`[n_dev, L, Nv, Dk, Dv]` in the model's recurrent-state dtype (fp32 by default) and `taps` is
+`[n_dev, L, K, C]` bf16, L = GDN layers, K = conv taps, C = qkv_dim_tp. Device d's shard of every layer
+is contiguous, so the D side uploads it with one borrowed row-major transfer per state type and P's
+read is one DMA per state type straight into the host buffer. The host buffers come from a pool the
+prefill side reuses across requests (the second read into a pinned buffer runs at PCIe rate); the
+consumer of a snapshot hands it back with `model.pd_gdn_snapshot_release(rec, taps)` when done.
+
 Decode side: `import_kv_blocks` fills the request's blocks via `paged_fill_cache` over its page-table
 row; `import_gdn_slot` writes the snapshot into the request's decode slot through `_write_gdn_slot`
 (the same path the served prefill uses). The decode instance then continues the request with one
@@ -307,9 +315,115 @@ def import_warmup(model, max_bucket: int = 2048):
     logger.info(f"[pd] import warm-up: buckets <= {max_bucket} in {time.perf_counter() - t0:.1f} s")
 
 
+# --------------------------------------------------------------------------------------
+# GDN snapshot: host staging pool (prefill side) + layout helpers
+# --------------------------------------------------------------------------------------
+
+_TORCH_DTYPE = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
+
+
+def gdn_snapshot_dims(model):
+    """(n_dev, L, K, (Nv, Dk, Dv), C, rec ttnn dtype, taps ttnn dtype) of the model's GDN state."""
+    dn_layers = [layer.attention for layer in model.layers if not layer.is_full_attention]
+    dn0 = dn_layers[0]
+    rec_shape = tuple(dn0.rec_state.shape)  # [B, Nv, Dk, Dv]
+    return (
+        model.num_devices,
+        len(dn_layers),
+        dn0.K,
+        (rec_shape[1], rec_shape[2], rec_shape[3]),
+        int(dn0.conv_states[0].shape[-1]),
+        dn0.rec_state.dtype,
+        dn0.conv_states[0].dtype,
+    )
+
+
+class GdnSnapshotPool:
+    """Reusable host buffers for the prefill-side GDN snapshot, read by direct DMA.
+
+    Each entry is a pair of torch buffers, `rec` `[n_dev*L, Nv, Dk, Dv]` and `taps` `[n_dev*L*K, 1, C]`, wrapped
+    once as ROW_MAJOR host mesh tensors sharded on dim 0 (ttnn.from_torch borrows the torch memory, so the
+    ttnn tensor is a view). `read` copies the device-untilized snapshot tensors into an entry with
+    `ttnn.copy_device_to_host_tensor` -- no mesh composer, no host concat -- and returns the device-major views
+    `rec [n_dev, L, Nv, Dk, Dv]`, `taps [n_dev, L, K, C]`. Reusing an entry keeps its pages faulted in and its
+    pinned-memory mapping cached (measured on P150x4: 151 MB fp32 in ~6 ms reused vs ~42 ms into a fresh
+    buffer vs ~103 ms through the composer), so consumers return entries with `release` once they have copied
+    or uploaded the snapshot. The pool grows to the number of snapshots alive at once (P: one per request of a
+    prefill step until the connector stages it).
+    """
+
+    def __init__(self, model):
+        self.model = model
+        n_dev, L, K, (Nv, Dk, Dv), C, rec_dtype, taps_dtype = gdn_snapshot_dims(model)
+        self.n_dev, self.L, self.K, self.C = n_dev, L, K, C
+        self.rec_shape = (n_dev * L, Nv, Dk, Dv)
+        self.taps_shape = (n_dev * L * K, 1, C)
+        self.rec_dtype, self.taps_dtype = rec_dtype, taps_dtype
+        if rec_dtype not in _TORCH_DTYPE or taps_dtype not in _TORCH_DTYPE:
+            raise ValueError(f"GdnSnapshotPool: unsupported GDN state dtypes rec={rec_dtype} taps={taps_dtype}")
+        self.mapper = ttnn.ShardTensorToMesh(model.mesh_device, dim=0)
+        self._free = []  # entries: (rec_host, rec_tt, taps_host, taps_tt)
+        self._busy = {}  # rec_host.data_ptr() -> entry
+        self.total = 0
+
+    def _new(self):
+        rec_host = torch.empty(self.rec_shape, dtype=_TORCH_DTYPE[self.rec_dtype])
+        taps_host = torch.empty(self.taps_shape, dtype=_TORCH_DTYPE[self.taps_dtype])
+        rec_tt = ttnn.from_torch(rec_host, dtype=self.rec_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.mapper)
+        taps_tt = ttnn.from_torch(
+            taps_host, dtype=self.taps_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.mapper
+        )
+        self.total += 1
+        logger.info(
+            f"[pd] GDN snapshot pool: +1 buffer ({(rec_host.numel() * rec_host.element_size() + taps_host.numel() * taps_host.element_size()) / 2**20:.0f} MiB), "
+            f"{self.total} total"
+        )
+        return (rec_host, rec_tt, taps_host, taps_tt)
+
+    def read(self, rec_rm, taps_rm):
+        """DMA the device tensors `rec_rm` (per device [L, Nv, Dk, Dv], ROW_MAJOR) and `taps_rm` (per device
+        [L*K, 1, C], ROW_MAJOR) into a pool entry; returns the device-major host views (rec, taps)."""
+        entry = self._free.pop() if self._free else self._new()
+        rec_host, rec_tt, taps_host, taps_tt = entry
+        try:
+            ttnn.copy_device_to_host_tensor(rec_rm, rec_tt, blocking=True)
+            ttnn.copy_device_to_host_tensor(taps_rm, taps_tt, blocking=True)
+        except Exception:
+            self._free.append(entry)  # a failed DMA must not strand a ~150 MB pinned entry
+            raise
+        self._busy[rec_host.data_ptr()] = entry
+        return rec_host.view(self.n_dev, self.L, *self.rec_shape[1:]), taps_host.view(
+            self.n_dev, self.L, self.K, self.C
+        )
+
+    def release(self, rec, taps=None):
+        """Return the entry `rec` was read into. Unknown tensors are ignored (logged), never re-pooled."""
+        entry = self._busy.pop(rec.data_ptr(), None) if isinstance(rec, torch.Tensor) else None
+        if entry is None:
+            logger.warning("[pd] GDN snapshot pool: release of a snapshot the pool did not hand out; ignored")
+            return
+        self._free.append(entry)
+
+
+def as_device_major(rec_snap, conv_snap):
+    """Normalize a GDN snapshot to the device-major pair (rec [n_dev, L, Nv, Dk, Dv], taps [n_dev, L, K, C]).
+    Accepts that pair as-is, or the per-layer lists (rec_snap[li] [n_dev, Nv, Dk, Dv], conv_snap[li][m]
+    [n_dev, 1, C]) an older producer emits."""
+    if isinstance(rec_snap, torch.Tensor) and isinstance(conv_snap, torch.Tensor):
+        if rec_snap.dim() != 5 or conv_snap.dim() != 4:
+            raise ValueError(
+                f"GDN snapshot: expected rec [n_dev, L, Nv, Dk, Dv] and taps [n_dev, L, K, C], got "
+                f"{tuple(rec_snap.shape)} and {tuple(conv_snap.shape)}"
+            )
+        return rec_snap, conv_snap
+    rec = torch.stack(list(rec_snap), dim=1)  # [n_dev, L, Nv, Dk, Dv]
+    taps = torch.stack([torch.stack([c.reshape(c.shape[0], -1) for c in taps_l], dim=1) for taps_l in conv_snap], dim=1)
+    return rec, taps  # taps [n_dev, L, K, C]
+
+
 def import_gdn_slot(model, slot, rec_snap, conv_snap, mode=None):
-    """Write one request's GDN snapshot (`prefill_paged_slots` capture layout: rec_snap[li] host
-    `[n_dev, Nv, Dk, Dv]`, conv_snap[li][m] host `[n_dev, 1, D]`) into decode `slot`.
+    """Write one request's GDN snapshot (device-major: `rec` host `[n_dev, L, Nv, Dk, Dv]`, `taps` host
+    `[n_dev, L, K, C]`; the per-layer list form is accepted too) into decode `slot`.
 
     mode "trace" (default) = TracedGdnImporter: host memcpy into fixed row-major staging tensors + one replayed
     per-slot trace (tilize, fill_cache rows, tap row writes, packed-history row write for all layers).
@@ -321,6 +435,7 @@ def import_gdn_slot(model, slot, rec_snap, conv_snap, mode=None):
     """
     mode = mode or os.environ.get("QWEN36_PD_GDN_IMPORT", "trace")
     t0 = time.perf_counter()
+    rec_snap, conv_snap = as_device_major(rec_snap, conv_snap)
     if mode == "host":
         model._write_gdn_slot(int(slot), rec_snap, conv_snap)
     elif mode == "trace":
@@ -330,23 +445,21 @@ def import_gdn_slot(model, slot, rec_snap, conv_snap, mode=None):
     logger.debug(f"[pd] imported GDN state into slot {slot} ({mode}) in {1e3 * (time.perf_counter() - t0):.1f} ms")
 
 
-def _import_gdn_slot_fillcache(model, slot, rec_snap, conv_snap):
+def _import_gdn_slot_fillcache(model, slot, rec, taps):
     mesh = model.mesh_device
     n_dev = model.num_devices
     mapper = ttnn.ShardTensorToMesh(mesh, dim=0)
     dn_layers = [layer.attention for layer in model.layers if not layer.is_full_attention]
     L = len(dn_layers)
-    assert len(rec_snap) == L and len(conv_snap) == L, f"snapshot has {len(rec_snap)} GDN layers, model {L}"
+    if rec.shape[1] != L or taps.shape[1] != L:
+        raise ValueError(f"snapshot has {rec.shape[1]}/{taps.shape[1]} GDN layers, model {L}")
     K = dn_layers[0].K
     dn0 = dn_layers[0]
-    # ---- recurrent state: [L][n_dev, Nv, Dk, Dv] -> device-major [n_dev*L, Nv, Dk, Dv], one upload ----
-    rec_all = torch.stack(rec_snap, dim=1)  # [n_dev, L, Nv, Dk, Dv]
-    rec_all = rec_all.reshape(n_dev * L, *rec_all.shape[2:]).contiguous()
+    # device-major snapshot: one upload per state type, no host reshuffle
+    rec_all = rec.reshape(n_dev * L, *rec.shape[2:])  # [n_dev*L, Nv, Dk, Dv]
     rec_dev = _upload(model, rec_all, dn0.rec_state.dtype, mapper)  # per device [L, Nv, Dk, Dv]
-    # ---- conv taps: [L][K][n_dev, 1, C] -> [n_dev*L*K, 1, C], one upload ----
-    taps = torch.stack([torch.stack(conv_snap[li], dim=1) for li in range(L)], dim=1)  # [n_dev, L, K, 1, C]
-    taps = taps.reshape(n_dev * L * K, 1, taps.shape[-1]).contiguous()
-    taps_dev = _upload(model, taps, dn0.conv_states[0].dtype, mapper)  # per device [L*K, 1, C]
+    taps_all = taps.reshape(n_dev * L * K, 1, taps.shape[-1])  # [n_dev*L*K, 1, C]
+    taps_dev = _upload(model, taps_all, dn0.conv_states[0].dtype, mapper)  # per device [L*K, 1, C]
     for li, dn in enumerate(dn_layers):
         rec_l = dn._slice_along(rec_dev, 0, li, li + 1)  # [1, Nv, Dk, Dv]
         if rec_l.dtype != dn.rec_state.dtype:
@@ -371,9 +484,8 @@ def _import_gdn_slot_fillcache(model, slot, rec_snap, conv_snap):
 
 
 def gdn_state_nbytes(rec_snap, conv_snap):
-    n = sum(t.numel() * t.element_size() for t in rec_snap)
-    n += sum(c.numel() * c.element_size() for taps in conv_snap for c in taps)
-    return n
+    rec, taps = as_device_major(rec_snap, conv_snap)
+    return rec.numel() * rec.element_size() + taps.numel() * taps.element_size()
 
 
 def kv_nbytes(kv):
@@ -495,21 +607,19 @@ class TracedGdnImporter:
             self._verified_pack = False
         return self._gidx
 
-    def _host_hist(self, conv_snap, slot):
-        """Packed history rows for all layers/devices at parity slot & 1, vectorized (torch ops only)."""
+    def _host_hist(self, taps, slot):
+        """Packed history rows for all layers/devices at parity slot & 1, vectorized (torch ops only).
+        taps: device-major [n_dev, L, K, C]."""
         gidx = self._gather_index()
         par = slot & 1
         n = self._n_chunks
-        # taps [L, K, n_dev, C] -> gather channels -> [L, K, n_dev, Nv, n, 32]
-        taps = torch.stack(
-            [torch.stack([conv_snap[li][j].reshape(self.n_dev, -1) for j in range(self.K)]) for li in range(self.L)]
-        )
-        g = taps[..., gidx].to(torch.bfloat16).reshape(self.L, self.K, self.n_dev, self.Nv, n, 32)
+        # [n_dev, L, K, C] -> gather channels -> [n_dev, L, K, Nv, n, 32]
+        g = taps[..., gidx].to(torch.bfloat16).reshape(self.n_dev, self.L, self.K, self.Nv, n, 32)
         out = torch.zeros(self.n_dev, self.L, self.Nv, 4, 32, 32, dtype=torch.bfloat16)
-        out[..., par : 2 * n + par : 2, :] = g.permute(2, 0, 3, 1, 4, 5)  # [n_dev, L, Nv, K, n, 32]
+        out[..., par : 2 * n + par : 2, :] = g.permute(0, 1, 3, 2, 4, 5)  # [n_dev, L, Nv, K, n, 32]
         if not self._verified_pack:
             # one-time check against the layer's own scalar packer
-            ref = self.dn[0]._pack_head_tiles([conv_snap[0][j][0].reshape(-1) for j in range(self.K)], parity=par)
+            ref = self.dn[0]._pack_head_tiles([taps[0, 0, j].reshape(-1) for j in range(self.K)], parity=par)
             if not torch.equal(ref, out[0, 0]):
                 raise RuntimeError("vectorized packed-history layout differs from _pack_head_tiles")
             self._verified_pack = True
@@ -520,14 +630,15 @@ class TracedGdnImporter:
         ttnn.copy_host_to_device_tensor(h, dst)
         return h  # keep alive until the replay is synchronized
 
-    def import_slot(self, slot: int, rec_snap, conv_snap):
+    def import_slot(self, slot: int, rec, taps):
+        """rec: host [n_dev, L, Nv, Dk, Dv]; taps: host [n_dev, L, K, C] (device-major, see module docstring).
+        Both are already in the staging tensors' row order, so the uploads are borrowed views (no host copy)."""
         t0 = time.perf_counter()
-        rec_all = torch.stack(rec_snap, dim=1).reshape(self.n_dev * self.L, self.Nv, self.Dk, self.Dv).contiguous()
-        taps = torch.stack([torch.stack(conv_snap[li], dim=1) for li in range(self.L)], dim=1)
-        taps = taps.reshape(self.n_dev * self.L * self.K, 1, self.C).contiguous()
-        refs = [self._upload(rec_all, self.rec_rm), self._upload(taps, self.taps_rm)]
+        rec_all = rec.reshape(self.n_dev * self.L, self.Nv, self.Dk, self.Dv)
+        taps_all = taps.reshape(self.n_dev * self.L * self.K, 1, self.C)
+        refs = [self._upload(rec_all, self.rec_rm), self._upload(taps_all, self.taps_rm)]
         if self.with_hist:
-            refs.append(self._upload(self._host_hist(conv_snap, slot), self.hist_rm))
+            refs.append(self._upload(self._host_hist(taps, slot), self.hist_rm))
         t1 = time.perf_counter()
         if slot not in self.traces:
             self.capture(slot)
@@ -550,6 +661,7 @@ def get_traced_importer(model) -> "TracedGdnImporter":
 
 def verify_gdn_slot(model, slot, rec_snap, conv_snap, tag=""):
     """Read back decode `slot` (recurrent state, conv taps, packed history) and compare with the snapshot."""
+    rec_snap, taps_snap = as_device_major(rec_snap, conv_snap)
     comp = ttnn.ConcatMeshToTensor(model.mesh_device, dim=0)
     dn_layers = [layer.attention for layer in model.layers if not layer.is_full_attention]
     n_dev = model.num_devices
@@ -559,19 +671,19 @@ def verify_gdn_slot(model, slot, rec_snap, conv_snap, tag=""):
         r = dn._slice_along(dn.rec_state, 0, slot, slot + 1)
         got = ttnn.to_torch(r, mesh_composer=comp).float()  # [n_dev, Nv, Dk, Dv]
         ttnn.deallocate(r)
-        worst_rec = max(worst_rec, float((got - rec_snap[li].float()).abs().max()))
+        worst_rec = max(worst_rec, float((got - rec_snap[:, li].float()).abs().max()))
         for m in range(dn.K):
             c = dn._slice_along(dn.conv_states[m], 1, slot, slot + 1)
             gotc = ttnn.to_torch(c, mesh_composer=comp).float().reshape(n_dev, -1)  # [n_dev, C]
             ttnn.deallocate(c)
-            worst_tap = max(worst_tap, float((gotc - conv_snap[li][m].float().reshape(n_dev, -1)).abs().max()))
+            worst_tap = max(worst_tap, float((gotc - taps_snap[:, li, m].float()).abs().max()))
         if dn.conv_hist_packed is not None:
             h = dn._slice_along(dn.conv_hist_packed, 0, slot, slot + 1)
             goth = ttnn.to_torch(h, mesh_composer=comp).to(torch.bfloat16)  # [n_dev, Nv, 4, 32, 32]
             ttnn.deallocate(h)
             ref = torch.stack(
                 [
-                    dn._pack_head_tiles([conv_snap[li][j][d].reshape(-1) for j in range(dn.K)], parity=slot & 1)
+                    dn._pack_head_tiles([taps_snap[d, li, j].reshape(-1) for j in range(dn.K)], parity=slot & 1)
                     for d in range(n_dev)
                 ]
             )
