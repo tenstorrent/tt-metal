@@ -1617,7 +1617,7 @@ void assign_pgd_pinnings_to_rank_bound_physical_graph(
         }
     }
 
-    log_info(
+    log_debug(
         tt::LogFabric,
         "Rank-bound PGD pinning enrichment: assigned pinnings to {}/{} logical mesh(es)",
         assigned,
