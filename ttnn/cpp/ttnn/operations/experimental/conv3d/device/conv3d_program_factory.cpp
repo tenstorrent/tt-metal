@@ -302,9 +302,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         });
     }
 
-    // In-kernel fp32 operand split (Conv3dConfig::operand_split): the tilized activation tiles are split on
-    // the SFPU into hi = bf16(x) and lo = x - hi, packed into two CBs that replace vol2col_tiled as the matmul
-    // in0, and a second weight CB carries W_lo. validate() has already required fp32 data + fp32 dest.
+    // In-kernel fp32 operand split (Conv3dConfig::operand_split): the SFPU splits the tilized activation into hi/lo
+    // CBs that replace vol2col_tiled as the matmul in0, and a second weight CB carries W_lo.
     const bool operand_split = config.operand_split;
     TT_FATAL(
         !operand_split || (use_fp32_exact && tensor_args.weight_lo_tensor.has_value()),
@@ -921,9 +920,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             unpack_to_dest_mode[cb_reduction_acc_tiled_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
         if (operand_split) {
-            // The tilize of fp32 rows is lossless only when its INPUT CB unpacks to dest (the SrcA route
-            // rounds to TF32, which would leave the residual with ~3 bits), and the split then reads the
-            // tilized tiles back into DST exactly. The matmul consumes x_hi / x_lo, not these CBs.
+            // The tilize of fp32 rows is lossless only when its INPUT CB unpacks to dest (the SrcA route rounds to
+            // TF32), and the split then reads the tilized tiles back into DST exactly.
             unpack_to_dest_mode[cb_vol2col_rm_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[cb_vol2col_tiled_id] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
