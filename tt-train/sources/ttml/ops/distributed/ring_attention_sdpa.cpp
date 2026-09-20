@@ -257,6 +257,9 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
         mesh_device,
         ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
     const ttnn::Tensor no_contrib = pad_lse_to_intermediates_layout(neg_inf_n());
+    // The forward's phases, under the same TTML_RING_PROFILE switch as the backward's.
+    RingBackwardProfile fw_profile(mesh_device);
+    fw_profile.mark("forward: setup");
 
     const auto partial = [&](const ttnn::Tensor& q,
                              const ttnn::Tensor& k,
@@ -269,6 +272,7 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
         // Chips the launch does not select run nothing and must contribute
         // nothing: an lse of -inf does that.
         ttnn::copy(no_contrib, step_inter);
+        fw_profile.mark("forward: no-contribution fill");
         if (forward_kind == RingForwardKind::Ttnn) {
             ttml::metal::ring_ttnn_sdpa_fw(
                 q, k, v, ring_size, cp_axis, step, mask, Direction::Backward, /* zigzag */ true, who,
@@ -277,7 +281,9 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
             ttml::metal::ring_zigzag_sdpa_fw(
                 q, k, v, ring_size, cp_axis, step, who, mask, Direction::Backward, step_out, step_inter);
         }
+        fw_profile.mark(mask == AttentionMaskType::Causal ? "forward: kernel, causal pair" : "forward: kernel, dense pair");
         combine_partial(out_acc, lse_acc, step_out, step_inter, batch_num, heads, n);
+        fw_profile.mark("forward: combine");
     };
 
     for (uint32_t step = 0; step < ring_size; ++step) {
@@ -297,10 +303,12 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
         if (step + 1U < ring_size) {
             k_current = ttnn_fixed::distributed::ring_shift(k_current, cp_axis, Direction::Backward, shift_transport);
             v_current = ttnn_fixed::distributed::ring_shift(v_current, cp_axis, Direction::Backward, shift_transport);
+            fw_profile.mark("forward: shift K, V");
         }
     }
 
     const ttnn::Tensor out_fp32 = cat_rows(out_lo, out_hi);
+    fw_profile.mark("forward: finish (cat, typecast)");
     auto out = autograd::create_tensor(ttnn::typecast(out_fp32, query_tensor.dtype()));
     const ttnn::Tensor lse_full = cat_rows(lse_lo, lse_hi);
 
