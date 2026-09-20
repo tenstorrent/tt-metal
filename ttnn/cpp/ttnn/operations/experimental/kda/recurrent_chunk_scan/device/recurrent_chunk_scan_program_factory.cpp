@@ -436,7 +436,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         tensor_coords,
         device,
         attrs.sequence_parallel_axis,
-        attrs.num_chunks * attrs.groups_per_head * 32,
+        attrs.num_chunks * attrs.groups_per_head * tt::constants::TILE_HEIGHT,
         reader_kernel_name);
 }
 

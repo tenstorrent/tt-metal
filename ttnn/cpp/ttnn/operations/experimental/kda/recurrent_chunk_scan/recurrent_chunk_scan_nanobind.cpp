@@ -20,6 +20,12 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             Y_n     = q_decay_n @ S_n + intra_n @ U_n
             S_{n+1} = final_decay_n * S_n + k_dec_t_n @ U_n
 
+        If the chronological head/tail split falls inside a group, the running
+        state is replaced with ``tail_entry_states`` before the first tail chunk.
+        If the split falls between groups, no internal reset is needed: the caller
+        supplies the correct tail seed through ``group_entry_states``, as produced
+        by ``affine_exclusive_scan`` in the grouped recurrence pipeline.
+
         Args:
             v_beta (ttnn.Tensor): Prepared values ``[B*H*G, N, 32, V]``.
             kd (ttnn.Tensor): Prepared decayed keys ``[B*H*G, N, 32, K]``.

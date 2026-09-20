@@ -124,7 +124,6 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
     DataflowBuffer tail_entry_states(dfb::tail_entry_states);
     Noc noc;
 
-    uint32_t reset_chunk = 0;
     kda_chronology::Topology topology{};
     {
         DataflowBuffer chronology(dfb::chronology_compute);
@@ -137,7 +136,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
         kda_chronology::store(words, topology);
         chronology.push_back(1);
     }
-    reset_chunk = topology.reset_chunk(head % groups_per_head, groups_per_head);
+    const uint32_t reset_chunk = topology.reset_chunk(head % groups_per_head, groups_per_head);
     if constexpr (summary) {
         DataflowBuffer writer_chronology(*dfb::get_token_if_present<"chronology_writer">());
         writer_chronology.reserve_back(1);
@@ -172,7 +171,7 @@ TT_KERNEL void reader(uint32_t head, uint32_t value_block, uint32_t num_chunks) 
                 seed_zero<key_value_tiles>(state, noc);
                 seed_identity<Kt, Vt>(summary_seed, noc, value_block);
             }
-        } else if constexpr (!summary) {
+        } else {
             if (reset_chunk != 0 && chunk == reset_chunk) {
                 const auto tail_entry_states_accessor = TensorAccessor(tensor::tail_entry_states);
                 read_and_publish_value_slice<Vt, Vt_full>(

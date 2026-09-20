@@ -317,24 +317,21 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
             final_decay,
             state_update,
             state_temporary);
-        {
-            const uint32_t snapshot_chunk = split_chunk;
-            if (snapshot_chunk != 0 && chunk + 1 == snapshot_chunk) {
-                state_ring.wait_front(key_value_tiles);
-                summary_ring.wait_front(key_value_tiles);
-                pack_reconfig_data_format(summary_head_output.get_id());
-                elementwise<ElementwiseOperation::SUBTRACT, Kt * Vt, Vt>(summary_ring, state_ring, summary_head_output);
-                copy<Kt * Vt, Vt>(state_ring, summary_head_state);
-                pack_reconfig_data_format(dfb::state_update);
-                state.wait_front(key_value_tiles);
-                summary_seed.wait_front(key_value_tiles);
-                copy<key_value_tiles, key_value_tiles>(state, state_ring);
-                state_ring.pop_front(key_value_tiles);
-                state.pop_front(key_value_tiles);
-                copy<key_value_tiles, key_value_tiles>(summary_seed, summary_ring);
-                summary_ring.pop_front(key_value_tiles);
-                summary_seed.pop_front(key_value_tiles);
-            }
+        if (split_chunk != 0 && chunk + 1 == split_chunk) {
+            state_ring.wait_front(key_value_tiles);
+            summary_ring.wait_front(key_value_tiles);
+            pack_reconfig_data_format(summary_head_output.get_id());
+            elementwise<ElementwiseOperation::SUBTRACT, Kt * Vt, Vt>(summary_ring, state_ring, summary_head_output);
+            copy<Kt * Vt, Vt>(state_ring, summary_head_state);
+            pack_reconfig_data_format(dfb::state_update);
+            state.wait_front(key_value_tiles);
+            summary_seed.wait_front(key_value_tiles);
+            copy<key_value_tiles, key_value_tiles>(state, state_ring);
+            state_ring.pop_front(key_value_tiles);
+            state.pop_front(key_value_tiles);
+            copy<key_value_tiles, key_value_tiles>(summary_seed, summary_ring);
+            summary_ring.pop_front(key_value_tiles);
+            summary_seed.pop_front(key_value_tiles);
         }
         kd.pop_front(chunk_key_tiles);
         v_beta.pop_front(chunk_value_tiles);
@@ -405,15 +402,13 @@ template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary>
 TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
 
-    uint32_t reset_chunk = 0;
     kda_chronology::Topology topology{};
     {
         DataflowBuffer chronology(dfb::chronology_compute);
         topology = kda_chronology::receive(chronology);
     }
-    {
-        reset_chunk = topology.reset_chunk(group, topology.local_rows / 32 / num_chunks);
-    }
+    const uint32_t reset_chunk =
+        topology.reset_chunk(group, topology.local_rows / tt::constants::TILE_HEIGHT / num_chunks);
     if constexpr (summary) {
         compute_summary<Ct, Kt, Vt>(num_chunks, reset_chunk);
     } else {

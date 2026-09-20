@@ -107,7 +107,7 @@ TT_KERNEL void writer(uint32_t head, uint32_t value_block, uint32_t num_chunks, 
             auto topology =
                 kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_read_ptr()));
             chronology.pop_front(1);
-            uint32_t groups = topology.local_rows / 32 / num_chunks;
+            const uint32_t groups = topology.local_rows / tt::constants::TILE_HEIGHT / num_chunks;
             split_group = topology.split_group(groups);
             split_in_group = topology.split_in_group(groups);
             local_split = topology.local_split;
