@@ -265,7 +265,6 @@ def test_hybrid_routed_expert_isl_sweep(
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
 @pytest.mark.parametrize("num_tokens", _K3_TOKEN_SWEEP, ids=[f"t{t}" for t in _K3_TOKEN_SWEEP])
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
-@pytest.mark.extended_model
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
 def test_hybrid_routed_expert_k3_sweep(device, num_tokens: int, x_row_major: bool):
     """Fully-packed buffer at each token count, as in the reference's K3 sweep."""
@@ -284,7 +283,6 @@ def test_hybrid_routed_expert_k3_sweep(device, num_tokens: int, x_row_major: boo
 
 
 @pytest.mark.parametrize("weight_scale, weights_dtype, pcc_threshold, min_cap_frac", _K3_SATURATION_CASES)
-@pytest.mark.extended_model
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU routed expert is Blackhole-only")
 def test_hybrid_routed_expert_k3_saturated(
     device,
