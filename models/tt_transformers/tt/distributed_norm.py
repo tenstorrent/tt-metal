@@ -137,7 +137,9 @@ class DistributedNorm(LightweightModule):
         # That is a pre-existing latent bug: fixing it would newly activate the Galaxy-only
         # ATTN_LN_AG_CONFIG / FFN_LN_AG_CONFIG entries, which cannot be measured on this
         # host, so it is left alone. The measured decode tuning is applied through
-        # DECODE_CCL_TUNING below, which is what these calls actually read.
+        # DECODE_CCL_TUNING below, which is what these calls actually read. Whoever does fix
+        # it must also decide precedence: with the guard working, the ag_config_key entry and
+        # DECODE_CCL_TUNING would both claim chunks_per_sync/num_workers_per_link for decode.
         decode_ccl = self.args.model_config["DECODE_CCL_TUNING"] if mode == Mode.DECODE else None
 
         # Distributed norm already performs a gather
