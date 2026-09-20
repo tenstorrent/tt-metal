@@ -42,9 +42,11 @@
 
 #include "autograd/auto_context.hpp"
 #include "metal/operations.hpp"
+#include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "metal/ops/cyclic_sdpa_bw/device/parity_snake.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa.hpp"
 
 namespace {
 
@@ -2742,6 +2744,128 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_CompareAcrossHeadDimensions) {
     }
     for (uint32_t d : {64u, 128u, 256u}) {
         compare_with_sdpa_bw(55, 11, 5, /* Bt */ 2, /* groups */ 2, d);
+    }
+}
+
+// The two forwards on one chip: tt-train's sdpa_fw (one query tile row per
+// core pass, K and V re-read per row; the ring's step forward today) against
+// ttnn's chunk-blocked flash-attention forward at several chunk sizes. The
+// ring's launch shapes, causal (the diagonal step) and dense (the others).
+// Useful FLOPs: two matmuls of 2 N^2 d per head, halved by the triangle.
+// Prints the max difference of the outputs too, as a coarse sanity check.
+TEST(CyclicSdpaBwTimingTest, DISABLED_CompareForwardsWithTtnn) {
+    using namespace tt::tt_metal;
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto grid = device->compute_with_storage_grid_size();
+    struct Shape {
+        uint32_t heads, kv_heads, N, d;
+    };
+    for (const auto sh : {Shape{4, 4, 4096, 64}, Shape{20, 10, 5632, 64}, Shape{32, 8, 5632, 128}}) {
+        for (const bool causal : {true, false}) {
+            xt::xarray<float> Q = xt::zeros<float>({1u, sh.heads, sh.N, sh.d});
+            xt::xarray<float> K = xt::zeros<float>({1u, sh.kv_heads, sh.N, sh.d});
+            xt::xarray<float> V = xt::zeros<float>({1u, sh.kv_heads, sh.N, sh.d});
+            for (uint32_t h = 0; h < sh.heads; ++h) {
+                xt::view(Q, 0, h, xt::all(), xt::all()) = random_bf16_matrix(sh.N, sh.d, 3000u + h);
+            }
+            for (uint32_t g = 0; g < sh.kv_heads; ++g) {
+                xt::view(K, 0, g, xt::all(), xt::all()) = random_bf16_matrix(sh.N, sh.d, 4000u + g);
+                xt::view(V, 0, g, xt::all(), xt::all()) = random_bf16_matrix(sh.N, sh.d, 5000u + g);
+            }
+            const auto q = ttml::core::from_xtensor(Q, device);
+            const auto k = ttml::core::from_xtensor(K, device);
+            const auto v = ttml::core::from_xtensor(V, device);
+            const auto mask = causal ? ttml::metal::AttentionMaskType::Causal : ttml::metal::AttentionMaskType::None;
+
+            const auto time_it = [&](const auto& call) {
+                call();  // warm: program cache and kernel build
+                std::vector<double> samples;
+                for (uint32_t r = 0; r < 5; ++r) {
+                    const auto start = std::chrono::steady_clock::now();
+                    call();
+                    samples.push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+                }
+                std::sort(samples.begin(), samples.end());
+                return samples[samples.size() / 2];
+            };
+            const double flop = (causal ? 2.0 : 4.0) * static_cast<double>(sh.N) * sh.N * sh.d * sh.heads;
+            const auto report = [&](const char* name, double seconds) {
+                std::printf(
+                    "  %s: %.2f ms, %.1f TFLOP/s (%.1f%% of the 110-core LoFi peak)\n", name, seconds * 1e3,
+                    flop / seconds / 1e12, 100.0 * flop / seconds / 1e12 / 594.0);
+            };
+            std::printf(
+                "heads=%u kv_heads=%u N=%u d=%u %s\n", sh.heads, sh.kv_heads, sh.N, sh.d, causal ? "causal" : "dense");
+
+            ttnn::Tensor ours;
+            const double ours_s = time_it([&]() {
+                const auto fw = ttml::metal::sdpa_fw(q, k, v, mask, std::nullopt, 0.0F, /*return_intermediates=*/true);
+                ours = fw[0].value();
+                distributed::Finish(device->mesh_command_queue());
+            });
+            report("tt-train sdpa_fw (per tile row, with lse)", ours_s);
+            const auto ours_xt = ttml::core::to_xtensor(ours);
+            // A Float32 host reference at the small shape, so the two outputs
+            // are graded against the truth and not only against each other.
+            std::optional<xt::xarray<float>> ref_O;
+            if (sh.N <= 4096u) {
+                xt::xarray<float> O = xt::zeros<float>({1u, sh.heads, sh.N, sh.d});
+                const uint32_t hpg = sh.heads / sh.kv_heads;
+                for (uint32_t h = 0; h < sh.heads; ++h) {
+                    const auto r = reference_from_inputs(
+                        xt::xarray<float>(xt::view(Q, 0, h, xt::all(), xt::all())),
+                        xt::xarray<float>(xt::view(K, 0, h / hpg, xt::all(), xt::all())),
+                        xt::xarray<float>(xt::view(V, 0, h / hpg, xt::all(), xt::all())),
+                        xt::xarray<float>(xt::view(Q, 0, h, xt::all(), xt::all())),  // dO unused here
+                        causal);
+                    xt::view(O, 0, h, xt::all(), xt::all()) = r.O;
+                }
+                ref_O = O;
+                std::printf("    tt-train relative RMS vs Float32 reference: %.2e\n", relative_rms(ours_xt, O));
+            }
+
+            // Two settings of ttnn's kernel: its defaults, and the precise
+            // ones -- exact exponential, HiFi4 matmuls, Float32 accumulation
+            // -- since the defaults trade accuracy for speed.
+            for (const bool precise : {false, true}) {
+            for (const uint32_t chunk : {128u, 256u, 512u}) {
+                if (sh.N % chunk != 0u) {
+                    continue;
+                }
+                ttnn::operations::transformer::SDPAProgramConfig cfg{
+                    .compute_with_storage_grid_size = grid,
+                    .sub_core_grids = std::nullopt,
+                    .q_chunk_size = chunk,
+                    .k_chunk_size = chunk,
+                    .exp_approx_mode = precise ? std::optional<bool>(false) : std::nullopt};
+                const std::optional<ttnn::DeviceComputeKernelConfig> kernel_cfg =
+                    precise ? std::optional<ttnn::DeviceComputeKernelConfig>(ttml::core::ComputeKernelConfig::precise())
+                            : std::nullopt;
+                ttnn::Tensor theirs;
+                double theirs_s = 0.0;
+                try {
+                    theirs_s = time_it([&]() {
+                        theirs = ttnn::transformer::scaled_dot_product_attention(
+                            q, k, v, std::nullopt, causal, std::nullopt, std::nullopt, std::nullopt, cfg, kernel_cfg);
+                        distributed::Finish(device->mesh_command_queue());
+                    });
+                } catch (const std::exception& e) {
+                    std::printf("  ttnn sdpa, chunk %u%s: does not fit (%.80s)\n", chunk, precise ? " precise" : "", e.what());
+                    continue;
+                }
+                const std::string name =
+                    "ttnn sdpa, chunk " + std::to_string(chunk) + (precise ? " precise" : " default") + " (no lse)";
+                report(name.c_str(), theirs_s);
+                const auto theirs_xt = ttml::core::to_xtensor(theirs);
+                const float diff = xt::amax(xt::abs(theirs_xt - ours_xt))();
+                const float scale = xt::amax(xt::abs(ours_xt))();
+                std::printf("    max |ttnn - ours| %.3e on scale %.3e (%.2fx faster)\n", diff, scale, ours_s / theirs_s);
+                if (ref_O.has_value()) {
+                    std::printf("    ttnn relative RMS vs Float32 reference: %.2e\n", relative_rms(theirs_xt, *ref_O));
+                }
+            }
+            }
+        }
     }
 }
 
