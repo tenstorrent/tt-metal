@@ -160,8 +160,7 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
     make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);      // S^T, 19-bit rounded
     make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);      // P^T
     make_cb(tt::CBIndex::c_20, Bt, tt::DataFormat::Float32);          // r = exp(a (m_old - m_new)), full tile
-    make_cb(tt::CBIndex::c_23, Bt, tt::DataFormat::Float32);          // colmax S^T, row layout (scratch)
-    make_cb(tt::CBIndex::c_11, Bt, tt::DataFormat::Float32);          // colmax S^T - m, the lazy-rescale check
+    make_cb(tt::CBIndex::c_23, Bt, tt::DataFormat::Float32);          // colmax S^T (- m), row layout (scratch)
     make_cb(tt::CBIndex::c_9, Bt, tt::DataFormat::Float32);           // lse in row layout, before its transpose
     // ---- The finished row, at its last visit: O in bf16 and lse in column layout.
     make_cb(tt::CBIndex::c_21, rowT, tt::DataFormat::Float16_b);      // O_i
@@ -197,6 +196,8 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
                 defines["FID_O"] = "2";
             } else if (item == "FID_O3") {
                 defines["FID_O"] = "3";
+            } else if (item.rfind("EXP_GUARD=", 0) == 0) {
+                defines["FW_EXP_GUARD"] = item.substr(10);  // 0 none (wrong), 1 mask, 2 clamp
             } else if (item.rfind("LAZY_TAU=", 0) == 0) {
                 defines["FW_LAZY_THRESHOLD"] = item.substr(9) + "F";  // the lazy-rescale threshold
             } else if (!item.empty()) {

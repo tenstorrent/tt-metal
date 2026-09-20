@@ -71,6 +71,8 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/negative.h"
+#include "api/compute/eltwise_unary/relu.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/mask.h"
@@ -128,8 +130,7 @@ constexpr uint32_t cb_reduce_scaler = tt::CBIndex::c_27;
 constexpr uint32_t cb_scores = tt::CBIndex::c_10;        // S^T, 19-bit rounded
 constexpr uint32_t cb_probs = tt::CBIndex::c_12;         // P^T, 19-bit rounded
 constexpr uint32_t cb_rescale = tt::CBIndex::c_20;       // r, full tile, exact
-constexpr uint32_t cb_block_max = tt::CBIndex::c_23;     // colmax S^T, row layout (scratch)
-constexpr uint32_t cb_check = tt::CBIndex::c_11;         // colmax S^T - m_old, row 0 (the lazy-rescale check)
+constexpr uint32_t cb_block_max = tt::CBIndex::c_23;     // colmax S^T (fresh rows) or colmax S^T - m, row 0 (scratch)
 constexpr uint32_t cb_max_seed = tt::CBIndex::c_13;      // m, full tile, exact (unpack to dest)
 constexpr uint32_t cb_max_plain = tt::CBIndex::c_25;     // m, the same memory, for the FPU broadcasts
 constexpr uint32_t cb_sum_seed = tt::CBIndex::c_14;      // l, exact (unpack to dest)
@@ -167,6 +168,20 @@ void mm_tiles(uint32_t in0, uint32_t in1, uint32_t t0, uint32_t t1, uint32_t ids
     UNPACK((llk_unpack_AB_matmul(in0, in1, t0, t1)));
     MATH((llk_math_matmul<MF, MM_THROTTLE>(idst)));
 }
+// One k-slice of an rt x ct block of output tiles: in0's tiles t0 + r * kt
+// (row-major, kt tiles a row) against in1's t1 + c, into DST idst + r * ct
+// + c. With ct = 1 the in1 tile is unpacked once and reused down the rt
+// rows: the operand traffic of rt + 1 tiles instead of 2 rt.
+template <MathFidelity MF>
+void mm_block_init(uint32_t in0, uint32_t in1, uint32_t transpose, uint32_t ct, uint32_t rt, uint32_t kt) {
+    MATH((llk_math_matmul_init<MF, MM_THROTTLE>(in0, in1, transpose, ct, rt)));
+    UNPACK((llk_unpack_AB_matmul_init(in0, in1, transpose, ct, rt, kt)));
+}
+template <MathFidelity MF>
+void mm_block(uint32_t in0, uint32_t in1, uint32_t t0, uint32_t t1, uint32_t idst, uint32_t ct, uint32_t rt, uint32_t kt) {
+    UNPACK((llk_unpack_AB_matmul(in0, in1, t0, t1, ct, rt, kt)));
+    MATH((llk_math_matmul<MF, MM_THROTTLE>(idst, ct, rt)));
+}
 
 // The packer's "round to a 10-bit mantissa" control: on, a Float32 pack
 // lands the 19 bits the Src registers keep, rounded to nearest rather than
@@ -196,12 +211,15 @@ void unpacker_fence() {
 // carries keeps that m: no new maximum, no r = exp(a (m_old - m_new)), no
 // rescale of l, and the output products can be added onto O^T in L1 by the
 // packer instead of being multiplied through DST. The check itself is the
-// FPU's difference colmax - m (row 0 of the tiles in cb_check, packed by the
-// tile above) compared on the unpack thread, which owns the circular
-// buffers' read pointers; the verdict reaches the other two threads through
-// the mailboxes, so all three take the same branches. Positive Float32
-// numbers order like their bit patterns and negative ones are negative as
-// integers, so the comparison is on the raw words.
+// FPU's difference colmax - m (row 0 of the tiles in cb_block_max, formed in
+// the maximum's own acquire) compared on the unpack thread, which owns the
+// circular buffers' read pointers; the verdict reaches the other two threads
+// through the mailboxes, so all three take the same branches. Positive
+// Float32 numbers order like their bit patterns and negative ones are
+// negative as integers, so the comparison is on the raw words.
+#ifndef FW_EXP_GUARD
+#define FW_EXP_GUARD 2  // see the exponential's steps
+#endif
 #ifndef FW_LAZY_THRESHOLD
 #define FW_LAZY_THRESHOLD 8.0F
 #endif
@@ -212,11 +230,16 @@ uint32_t lazy_need_mask() {
         constexpr float threshold = FW_LAZY_THRESHOLD / scale;
         constexpr int32_t threshold_bits = __builtin_bit_cast(int32_t, threshold);
         for (uint32_t a = 0; a < Bt; ++a) {
-            const uint32_t address = get_tile_l1_byte_address(get_operand_id(cb_check), a);
+            const uint32_t address = get_tile_l1_byte_address(get_operand_id(cb_block_max), a);
             const volatile int32_t* words = reinterpret_cast<const volatile int32_t*>(address);
             bool need = false;
             // Row 0 of a 32 x 32 tile: the first row of face 0 and of face 1.
-            for (uint32_t c = 0; c < 16u; ++c) {
+#ifdef FW_EXPERIMENT_CHECK_ONE
+            constexpr uint32_t kCheckWords = 1u;  // timing experiment: results wrong
+#else
+            constexpr uint32_t kCheckWords = 16u;
+#endif
+            for (uint32_t c = 0; c < kCheckWords; ++c) {
                 need |= words[c] > threshold_bits;
                 need |= words[256u + c] > threshold_bits;
             }
@@ -281,28 +304,25 @@ void broadcast_row0_to_dst(const uint32_t idst, const uint32_t cb_statistics, co
 // the LLK's own per-tile framing (dst address, the four faces, clear) wraps
 // the face body. The programmable constants are shared with the sfpi-compiled
 // operations (max, sub, mul, reciprocal, log), which program what they need
-// in their inits; ours are (re)programmed in exp_prepare, and register 11's
-// -1.0, which sfpi code assumes without an init, is put back in exp_release.
+// in their inits; ours are (re)programmed in exp_prepare.
 // See the backward kernel for the derivation of every step.
 namespace math_sfpu {
 
-// 2^f for f in [0, 1) as 1 + c1 f + c2 f^2 + c3 f^3 + c4 f^4.
-constexpr uint32_t kExpC1 = 0x3F316B63u;
-constexpr uint32_t kExpC2 = 0x3E771229u;
-constexpr uint32_t kExpC3 = 0x3D55FC32u;
-constexpr uint32_t kExpC4 = 0x3C5BFB9Cu;
+// 2^f for f in [0, 1) as 1 + c1 f + c2 f^2 + c3 f^3 (minimax, 9.5e-5
+// relative: under the 19 bits the probabilities are stored at).
+constexpr uint32_t kExpC1 = 0x3F31F01Eu;
+constexpr uint32_t kExpC2 = 0x3E691DD8u;
+constexpr uint32_t kExpC3 = 0x3D9DFC59u;
 
 constexpr uint32_t kBiasReg = p_sfpu::LREG6;
 constexpr uint32_t kC1Reg = p_sfpu::LREG7;
 constexpr uint32_t kScaleReg = p_sfpu::LREG12;
 constexpr uint32_t kC2Reg = p_sfpu::LREG13;
 constexpr uint32_t kC3Reg = p_sfpu::LREG14;
-constexpr uint32_t kC4Reg = p_sfpu::LREG11;  // borrowed from the sfpi compiler's -1.0, see exp_release
 
 constexpr uint32_t kMadNegateVa = 1u;
 constexpr uint32_t kSetExpFromInt = 0u;
 constexpr uint32_t kCastIntToFloat = 0u;
-constexpr uint32_t kGtSetVd = 8u;
 
 inline void load_constant(const uint32_t reg, const uint32_t bits) {
     TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_UPPER, static_cast<uint16_t>(bits >> 16));
@@ -328,34 +348,65 @@ inline void exp_prepare() {
     program_constant(kScaleReg, inv_ln2_bits);
     program_constant(kC2Reg, kExpC2);
     program_constant(kC3Reg, kExpC3);
-    program_constant(kC4Reg, kExpC4);
     load_constant(kBiasReg, exp_bias_bits);
     load_constant(kC1Reg, kExpC1);
 }
 
-// Register 11 back to the -1.0 every sfpi-compiled kernel assumes.
-inline void exp_release() {
-    program_constant(p_sfpu::LREG11, 0xBF800000u);
-}
-
-#define FW_EXP_STEP(step, x, i, f, column)                                                                   \
+#if FW_EXP_GUARD == 2
+// The argument clamped at the bias (exp(a x) for a x < -88 is 0 as 2^-127
+// flushes) by one max against the zero constant, whose min half the
+// hardware drops.
+#define FW_EXP_STEP(step, x, i, f, column)                                                                 \
+    if constexpr (step == 0) TTI_SFPLOAD(x, InstrModLoadStore::DEFAULT, ADDR_MOD_7, column);               \
+    if constexpr (step == 1) TTI_SFPMAD(x, kScaleReg, kBiasReg, x, 0);                                      \
+    if constexpr (step == 2) TTI_SFPSWAP(0, p_sfpu::LCONST_0, x, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);           \
+    if constexpr (step == 3)                                                                                 \
+        TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_ZERO, 0, x, x, i, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);     \
+    if constexpr (step == 4) TTI_SFPCAST(i, f, kCastIntToFloat);                                            \
+    if constexpr (step == 5) TTI_SFPMAD(f, p_sfpu::LCONST_1, x, f, kMadNegateVa);                           \
+    if constexpr (step == 6) TTI_SFPMAD(f, kC3Reg, kC2Reg, x, 0);                                           \
+    if constexpr (step == 7) TTI_SFPMAD(x, f, kC1Reg, x, 0);                                                \
+    if constexpr (step == 8) TTI_SFPMAD(x, f, p_sfpu::LCONST_1, x, 0);                                      \
+    if constexpr (step == 9) TTI_SFPSETEXP(0, x, i, kSetExpFromInt);                                        \
+    if constexpr (step == 10 && column == 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);    \
+    if constexpr (step == 10 && column != 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_6, column);
+constexpr uint32_t kExpSteps = 11;
+#elif FW_EXP_GUARD == 1
+// The backward's guard: a negative argument's mask, and the integer part
+// masked to zero.
+#define FW_EXP_STEP(step, x, i, f, column)                                                                 \
     if constexpr (step == 0) TTI_SFPLOAD(x, InstrModLoadStore::DEFAULT, ADDR_MOD_7, column);               \
     if constexpr (step == 1) TTI_SFPMAD(x, kScaleReg, kBiasReg, x, 0);                                      \
     if constexpr (step == 2)                                                                                 \
         TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_ZERO, 0, x, x, i, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);     \
     if constexpr (step == 3) TTI_SFPCAST(i, f, kCastIntToFloat);                                            \
     if constexpr (step == 4) TTI_SFPMAD(f, p_sfpu::LCONST_1, x, f, kMadNegateVa);                           \
-    if constexpr (step == 5) TTI_SFPGT(0, p_sfpu::LCONST_0, x, kGtSetVd);                                   \
+    if constexpr (step == 5) TTI_SFPGT(0, p_sfpu::LCONST_0, x, 8);                                          \
     if constexpr (step == 6) TTI_SFPAND(0, x, i, 0);                                                         \
-    if constexpr (step == 7) TTI_SFPMAD(f, kC4Reg, kC3Reg, x, 0);                                           \
-    if constexpr (step == 8) TTI_SFPMAD(x, f, kC2Reg, x, 0);                                                \
-    if constexpr (step == 9) TTI_SFPMAD(x, f, kC1Reg, x, 0);                                                \
-    if constexpr (step == 10) TTI_SFPMAD(x, f, p_sfpu::LCONST_1, x, 0);                                     \
-    if constexpr (step == 11) TTI_SFPSETEXP(0, x, i, kSetExpFromInt);                                       \
-    if constexpr (step == 12 && column == 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);    \
-    if constexpr (step == 12 && column != 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_6, column);
-
-constexpr uint32_t kExpSteps = 13;
+    if constexpr (step == 7) TTI_SFPMAD(f, kC3Reg, kC2Reg, x, 0);                                           \
+    if constexpr (step == 8) TTI_SFPMAD(x, f, kC1Reg, x, 0);                                                \
+    if constexpr (step == 9) TTI_SFPMAD(x, f, p_sfpu::LCONST_1, x, 0);                                      \
+    if constexpr (step == 10) TTI_SFPSETEXP(0, x, i, kSetExpFromInt);                                       \
+    if constexpr (step == 11 && column == 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);    \
+    if constexpr (step == 11 && column != 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_6, column);
+constexpr uint32_t kExpSteps = 12;
+#else
+// No guard: a timing experiment, wrong wherever a x < -88 (every masked score).
+#define FW_EXP_STEP(step, x, i, f, column)                                                                 \
+    if constexpr (step == 0) TTI_SFPLOAD(x, InstrModLoadStore::DEFAULT, ADDR_MOD_7, column);               \
+    if constexpr (step == 1) TTI_SFPMAD(x, kScaleReg, kBiasReg, x, 0);                                      \
+    if constexpr (step == 2)                                                                                 \
+        TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_ZERO, 0, x, x, i, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);     \
+    if constexpr (step == 3) TTI_SFPCAST(i, f, kCastIntToFloat);                                            \
+    if constexpr (step == 4) TTI_SFPMAD(f, p_sfpu::LCONST_1, x, f, kMadNegateVa);                           \
+    if constexpr (step == 5) TTI_SFPMAD(f, kC3Reg, kC2Reg, x, 0);                                           \
+    if constexpr (step == 6) TTI_SFPMAD(x, f, kC1Reg, x, 0);                                                \
+    if constexpr (step == 7) TTI_SFPMAD(x, f, p_sfpu::LCONST_1, x, 0);                                      \
+    if constexpr (step == 8) TTI_SFPSETEXP(0, x, i, kSetExpFromInt);                                        \
+    if constexpr (step == 9 && column == 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);     \
+    if constexpr (step == 9 && column != 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_6, column);
+constexpr uint32_t kExpSteps = 10;
+#endif
 
 template <uint32_t step>
 inline void exp_pair_step() {
@@ -417,23 +468,21 @@ inline void wait_before_pack() {
 }
 
 
-// 2^f for f in [0, 1) as 1 + c1 f + c2 f^2 + c3 f^3 + c4 f^4.
-constexpr uint32_t kExpC1 = 0x3F316B63u;
-constexpr uint32_t kExpC2 = 0x3E771229u;
-constexpr uint32_t kExpC3 = 0x3D55FC32u;
-constexpr uint32_t kExpC4 = 0x3C5BFB9Cu;
+// 2^f for f in [0, 1) as 1 + c1 f + c2 f^2 + c3 f^3 (minimax, 9.5e-5
+// relative: under the 19 bits the probabilities are stored at).
+constexpr uint32_t kExpC1 = 0x3F31F01Eu;
+constexpr uint32_t kExpC2 = 0x3E691DD8u;
+constexpr uint32_t kExpC3 = 0x3D9DFC59u;
 
 constexpr uint32_t kBiasReg = p_sfpu::LREG6;
 constexpr uint32_t kC1Reg = p_sfpu::LREG7;
 constexpr uint32_t kScaleReg = p_sfpu::LREG12;
 constexpr uint32_t kC2Reg = p_sfpu::LREG13;
 constexpr uint32_t kC3Reg = p_sfpu::LREG14;
-constexpr uint32_t kC4Reg = p_sfpu::LREG11;  // borrowed from the sfpi compiler's -1.0, see exp_release
 
 constexpr uint32_t kMadNegateVa = 1u;
 constexpr uint32_t kSetExpFromInt = 0u;
 constexpr uint32_t kCastIntToFloat = 0u;
-constexpr uint32_t kGtSetVd = 8u;
 
 inline void load_constant(const uint32_t reg, const uint32_t bits) {
     TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_UPPER, static_cast<uint16_t>(bits >> 16));
@@ -459,34 +508,65 @@ inline void exp_prepare() {
     program_constant(kScaleReg, inv_ln2_bits);
     program_constant(kC2Reg, kExpC2);
     program_constant(kC3Reg, kExpC3);
-    program_constant(kC4Reg, kExpC4);
     load_constant(kBiasReg, exp_bias_bits);
     load_constant(kC1Reg, kExpC1);
 }
 
-// Register 11 back to the -1.0 every sfpi-compiled kernel assumes.
-inline void exp_release() {
-    program_constant(p_sfpu::LREG11, 0xBF800000u);
-}
-
-#define FW_EXP_STEP_P(step, x, i, f, column)                                                                   \
+#if FW_EXP_GUARD == 2
+// The argument clamped at the bias (exp(a x) for a x < -88 is 0 as 2^-127
+// flushes) by one max against the zero constant, whose min half the
+// hardware drops.
+#define FW_EXP_STEP_P(step, x, i, f, column)                                                                 \
+    if constexpr (step == 0) TTI_SFPLOAD(x, InstrModLoadStore::DEFAULT, ADDR_MOD_7, column);               \
+    if constexpr (step == 1) TTI_SFPMAD(x, kScaleReg, kBiasReg, x, 0);                                      \
+    if constexpr (step == 2) TTI_SFPSWAP(0, p_sfpu::LCONST_0, x, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);           \
+    if constexpr (step == 3)                                                                                 \
+        TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_ZERO, 0, x, x, i, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);     \
+    if constexpr (step == 4) TTI_SFPCAST(i, f, kCastIntToFloat);                                            \
+    if constexpr (step == 5) TTI_SFPMAD(f, p_sfpu::LCONST_1, x, f, kMadNegateVa);                           \
+    if constexpr (step == 6) TTI_SFPMAD(f, kC3Reg, kC2Reg, x, 0);                                           \
+    if constexpr (step == 7) TTI_SFPMAD(x, f, kC1Reg, x, 0);                                                \
+    if constexpr (step == 8) TTI_SFPMAD(x, f, p_sfpu::LCONST_1, x, 0);                                      \
+    if constexpr (step == 9) TTI_SFPSETEXP(0, x, i, kSetExpFromInt);                                        \
+    if constexpr (step == 10 && column == 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);    \
+    if constexpr (step == 10 && column != 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_6, column);
+constexpr uint32_t kExpSteps = 11;
+#elif FW_EXP_GUARD == 1
+// The backward's guard: a negative argument's mask, and the integer part
+// masked to zero.
+#define FW_EXP_STEP_P(step, x, i, f, column)                                                                 \
     if constexpr (step == 0) TTI_SFPLOAD(x, InstrModLoadStore::DEFAULT, ADDR_MOD_7, column);               \
     if constexpr (step == 1) TTI_SFPMAD(x, kScaleReg, kBiasReg, x, 0);                                      \
     if constexpr (step == 2)                                                                                 \
         TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_ZERO, 0, x, x, i, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);     \
     if constexpr (step == 3) TTI_SFPCAST(i, f, kCastIntToFloat);                                            \
     if constexpr (step == 4) TTI_SFPMAD(f, p_sfpu::LCONST_1, x, f, kMadNegateVa);                           \
-    if constexpr (step == 5) TTI_SFPGT(0, p_sfpu::LCONST_0, x, kGtSetVd);                                   \
+    if constexpr (step == 5) TTI_SFPGT(0, p_sfpu::LCONST_0, x, 8);                                          \
     if constexpr (step == 6) TTI_SFPAND(0, x, i, 0);                                                         \
-    if constexpr (step == 7) TTI_SFPMAD(f, kC4Reg, kC3Reg, x, 0);                                           \
-    if constexpr (step == 8) TTI_SFPMAD(x, f, kC2Reg, x, 0);                                                \
-    if constexpr (step == 9) TTI_SFPMAD(x, f, kC1Reg, x, 0);                                                \
-    if constexpr (step == 10) TTI_SFPMAD(x, f, p_sfpu::LCONST_1, x, 0);                                     \
-    if constexpr (step == 11) TTI_SFPSETEXP(0, x, i, kSetExpFromInt);                                       \
-    if constexpr (step == 12 && column == 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);    \
-    if constexpr (step == 12 && column != 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_6, column);
-
-constexpr uint32_t kExpSteps = 13;
+    if constexpr (step == 7) TTI_SFPMAD(f, kC3Reg, kC2Reg, x, 0);                                           \
+    if constexpr (step == 8) TTI_SFPMAD(x, f, kC1Reg, x, 0);                                                \
+    if constexpr (step == 9) TTI_SFPMAD(x, f, p_sfpu::LCONST_1, x, 0);                                      \
+    if constexpr (step == 10) TTI_SFPSETEXP(0, x, i, kSetExpFromInt);                                       \
+    if constexpr (step == 11 && column == 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);    \
+    if constexpr (step == 11 && column != 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_6, column);
+constexpr uint32_t kExpSteps = 12;
+#else
+// No guard: a timing experiment, wrong wherever a x < -88 (every masked score).
+#define FW_EXP_STEP_P(step, x, i, f, column)                                                                 \
+    if constexpr (step == 0) TTI_SFPLOAD(x, InstrModLoadStore::DEFAULT, ADDR_MOD_7, column);               \
+    if constexpr (step == 1) TTI_SFPMAD(x, kScaleReg, kBiasReg, x, 0);                                      \
+    if constexpr (step == 2)                                                                                 \
+        TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_ZERO, 0, x, x, i, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);     \
+    if constexpr (step == 3) TTI_SFPCAST(i, f, kCastIntToFloat);                                            \
+    if constexpr (step == 4) TTI_SFPMAD(f, p_sfpu::LCONST_1, x, f, kMadNegateVa);                           \
+    if constexpr (step == 5) TTI_SFPMAD(f, kC3Reg, kC2Reg, x, 0);                                           \
+    if constexpr (step == 6) TTI_SFPMAD(x, f, kC1Reg, x, 0);                                                \
+    if constexpr (step == 7) TTI_SFPMAD(x, f, p_sfpu::LCONST_1, x, 0);                                      \
+    if constexpr (step == 8) TTI_SFPSETEXP(0, x, i, kSetExpFromInt);                                        \
+    if constexpr (step == 9 && column == 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);     \
+    if constexpr (step == 9 && column != 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_6, column);
+constexpr uint32_t kExpSteps = 10;
+#endif
 
 template <uint32_t step>
 inline void exp_pair_step() {
@@ -539,7 +619,6 @@ void exp_scaled(const uint32_t idst) {
 #else
     MATH((math_sfpu::exp_prepare()));
     MATH((math_sfpu::exp_tile(idst)));
-    MATH((math_sfpu::exp_release()));
 #endif
 }
 
@@ -602,10 +681,11 @@ void kernel_main() {
         cb_reserve_back(cb_sum_out, Bt);
         cb_reserve_back(cb_out_out, Bt * qWt);
 
-        // ---- 1. S^T = K Q^T, a column of the score grid two key tiles at a
-        // time (half the destination file, so the math thread's next group
-        // overlaps the pack thread's packs of this one), packed rounded to
-        // the 19 bits the FPU reads back.
+        // ---- 1. S^T = K Q^T, a column of the score grid per acquire (half
+        // the destination file, so the math thread's next column overlaps
+        // the pack thread's packs of this one): the block matmul, the query
+        // tile unpacked once per k and reused down the live key tiles;
+        // packed rounded to the 19 bits the FPU reads back.
         {
             DeviceZoneScopedN("SCORES");
             cb_reserve_back(cb_scores, score_tiles);
@@ -613,35 +693,27 @@ void kernel_main() {
             pack_rounding(true);
             for (uint32_t a = 0; a < Bt; ++a) {
                 const uint32_t live = n_live(a);
-                for (uint32_t b0 = 0; b0 < live; b0 += kGroup) {
-                    const uint32_t n = (live - b0 < kGroup) ? live - b0 : kGroup;
-                    tile_regs_acquire();
-                    reconfig_data_format(cb_query, cb_key);
-                    mm_init<kFidS>(cb_key, cb_query, /* transpose */ 1);
-                    for (uint32_t i = 0; i < kGroup; ++i) {
-                        if (i >= n) {
-                            break;
-                        }
-                        for (uint32_t k = 0; k < qWt; ++k) {
-                            mm_tiles<kFidS>(cb_key, cb_query, (b0 + i) * qWt + k, a * qWt + k, i);
-                        }
-                    }
-                    if (diagonal && a >= b0 && a < b0 + n) {
-                        // The triangle, -inf where the key index exceeds the query index.
-                        reconfig_data_format(cb_attn_mask, cb_zero_tile);
-                        add_init(cb_attn_mask, cb_zero_tile, /* acc_to_dest */ true);
-                        add_tiles(cb_attn_mask, cb_zero_tile, kMaskTriangle, 0, a - b0);
-                    }
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    for (uint32_t i = 0; i < kGroup; ++i) {
-                        if (i >= n) {
-                            break;
-                        }
-                        pack_tile</* out_of_order */ true>(i, cb_scores, (b0 + i) * Bt + a);
-                    }
-                    tile_regs_release();
+                tile_regs_acquire();
+                reconfig_data_format(cb_query, cb_key);
+                mm_block_init<kFidS>(cb_key, cb_query, /* transpose */ 1, /* ct */ 1, /* rt */ live, /* kt */ qWt);
+                for (uint32_t k = 0; k < qWt; ++k) {
+                    mm_block<kFidS>(cb_key, cb_query, k, a * qWt + k, 0, /* ct */ 1, /* rt */ live, /* kt */ qWt);
                 }
+                if (diagonal) {
+                    // The triangle, -inf where the key index exceeds the query index.
+                    reconfig_data_format(cb_attn_mask, cb_zero_tile);
+                    add_init(cb_attn_mask, cb_zero_tile, /* acc_to_dest */ true);
+                    add_tiles(cb_attn_mask, cb_zero_tile, kMaskTriangle, 0, a);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t b = 0; b < Bt; ++b) {
+                    if (b >= live) {
+                        break;
+                    }
+                    pack_tile</* out_of_order */ true>(b, cb_scores, b * Bt + a);
+                }
+                tile_regs_release();
             }
             pack_rounding(false);
             cb_push_back(cb_scores, score_tiles);
@@ -652,83 +724,69 @@ void kernel_main() {
         // row's, else those the check below says (see lazy_need_mask).
         uint32_t need_mask = (1u << Bt) - 1u;
 
-        // ---- 2. The block maximum per query tile, row layout, to scratch;
-        // two query tiles per acquire.
+        // ---- 2. Per query tile, the block maximum less the m the row
+        // carries (the block maximum itself for a fresh row): the reductions
+        // into DST -- all Bt tiles in one acquire, before the state is needed
+        // -- then the FPU's difference with the DST tile through SrcA and m
+        // from L1 through SrcB; row layout, to scratch. The unpack thread
+        // then reads the verdict off row 0.
 #ifndef FW_EXPERIMENT_NO_STATS
         {
             DeviceZoneScopedN("MAX");
+            static_assert(Bt <= 4u, "the block maxima of a timestep share one half of the destination file");
             cb_reserve_back(cb_block_max, Bt);
-            for (uint32_t a0 = 0; a0 < Bt; a0 += 2u) {
-                const uint32_t na = (Bt - a0 < 2u) ? Bt - a0 : 2u;
-                tile_regs_acquire();
-                for (uint32_t jx = 0; jx < 2u; ++jx) {
-                    if (jx >= na) {
-                        break;
-                    }
-                    const uint32_t a = a0 + jx;
-                    const uint32_t reg = jx;
-                    const uint32_t live = n_live(a);
-                    reconfig_data_format(cb_scores, cb_reduce_scaler);
-                    reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_scores, cb_reduce_scaler, cb_block_max);
-                    for (uint32_t b = 0; b < Bt; ++b) {
-                        if (b >= live) {
-                            break;
-                        }
-                        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_scores, cb_reduce_scaler, b * Bt + a, 0, reg);
-                    }
-                    reduce_uninit();
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_reconfig_data_format(cb_block_max);
-                for (uint32_t jx = 0; jx < 2u; ++jx) {
-                    if (jx >= na) {
-                        break;
-                    }
-                    pack_tile</* out_of_order */ true>(jx, cb_block_max, a0 + jx);
-                }
-                tile_regs_release();
-            }
-            cb_push_back(cb_block_max, Bt);
-            cb_wait_front(cb_block_max, Bt);
-        }
-
-        // ---- 2b. m_new = max(m_old, colmax S^T) as a full tile, and
-        // r = exp(a (m_old - m_new)), exact. The state is needed from here on.
-        {
-            DeviceZoneScopedN("WAIT-STATE");
-            cb_wait_front(cb_max_seed, Bt);
-            cb_wait_front(cb_max_plain, Bt);
-            cb_wait_front(cb_sum_seed, Bt);
-            cb_wait_front(cb_sum_plain, Bt);
-            cb_wait_front(cb_out_seed, Bt * qWt);
-        }
-#ifndef FW_EXPERIMENT_NO_LAZY
-        if (!fresh) {
-            DeviceZoneScopedN("CHECK");
-            cb_reserve_back(cb_check, Bt);
             tile_regs_acquire();
-            reconfig_data_format(cb_block_max, cb_max_plain);
-            sub_init(cb_block_max, cb_max_plain);
             for (uint32_t a = 0; a < Bt; ++a) {
-                sub_tiles(cb_block_max, cb_max_plain, a, a, a);
+                const uint32_t live = n_live(a);
+                reconfig_data_format(cb_scores, cb_reduce_scaler);
+                reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_scores, cb_reduce_scaler, cb_block_max);
+                for (uint32_t b = 0; b < Bt; ++b) {
+                    if (b >= live) {
+                        break;
+                    }
+                    reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_scores, cb_reduce_scaler, b * Bt + a, 0, a);
+                }
+                reduce_uninit();
+            }
+            {
+                DeviceZoneScopedN("WAIT-STATE");
+                cb_wait_front(cb_max_seed, Bt);
+                cb_wait_front(cb_max_plain, Bt);
+                cb_wait_front(cb_sum_seed, Bt);
+                cb_wait_front(cb_sum_plain, Bt);
+                cb_wait_front(cb_out_seed, Bt * qWt);
+            }
+            if (!fresh) {
+                reconfig_data_format(cb_scores, cb_max_plain);
+                sub_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_max_plain);
+                for (uint32_t a = 0; a < Bt; ++a) {
+                    sub_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_max_plain, a, a);
+                }
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_reconfig_data_format(cb_check);
+            pack_reconfig_data_format(cb_block_max);
             for (uint32_t a = 0; a < Bt; ++a) {
-                pack_tile</* out_of_order */ true>(a, cb_check, a);
+                pack_tile</* out_of_order */ true>(a, cb_block_max, a);
             }
             tile_regs_release();
-            cb_push_back(cb_check, Bt);
-            cb_wait_front(cb_check, Bt);
-            need_mask = lazy_need_mask();
-            cb_pop_front(cb_check, Bt);
-        }
+            cb_push_back(cb_block_max, Bt);
+            cb_wait_front(cb_block_max, Bt);
+#ifndef FW_EXPERIMENT_NO_LAZY
+            if (!fresh) {
+                need_mask = lazy_need_mask();
+            }
 #endif
+        }
+
+        // ---- 2c. For the query tiles that rescale: with d = max(colmax - m_old, 0)
+        // down every row, m_new = m_old + d (the maximum, to the difference's
+        // 19 bits -- any reference works as long as P^T and r use the same
+        // one, and they read this tile) and r = exp(-a d). A fresh row takes
+        // the block maximum as its m.
         {
             DeviceZoneScopedN("RESCALE");
-            constexpr uint32_t kNewReg = 0, kDiffReg = 1;
+            constexpr uint32_t kDReg = 0, kNewReg = 1;
             if (!fresh) {
                 cb_reserve_back(cb_rescale, Bt);
             }
@@ -737,26 +795,26 @@ void kernel_main() {
                     continue;  // m stays the reference it is; no r
                 }
                 tile_regs_acquire();
-                broadcast_row0_to_dst(kNewReg, cb_block_max, a);  // the block maximum down every row
+                broadcast_row0_to_dst(kDReg, cb_block_max, a);
                 if (!fresh) {
-                    // m_old exact; m_new = max(m_old, m_blk) into the new
-                    // register, then m_old - m_new in m_old's own.
+                    relu_tile_init();
+                    relu_tile(kDReg);
                     reconfig_data_format_srca(cb_scores, cb_max_seed);
                     copy_init(cb_max_seed);
-                    copy_tile(cb_max_seed, a, kDiffReg);
-                    binary_max_tile_init();
-                    binary_max_tile(kNewReg, kDiffReg, kNewReg);
-                    sub_binary_tile_init();
-                    sub_binary_tile(kDiffReg, kNewReg, kDiffReg);
-                    exp_scaled(kDiffReg);
+                    copy_tile(cb_max_seed, a, kNewReg);  // m_old, exact
+                    add_binary_tile_init();
+                    add_binary_tile(kNewReg, kDReg, kNewReg);
+                    negative_tile_init();
+                    negative_tile(kDReg);
+                    exp_scaled(kDReg);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_reconfig_data_format(cb_max_out);
-                pack_tile</* out_of_order */ true>(kNewReg, cb_max_out, a);
+                pack_tile</* out_of_order */ true>(fresh ? kDReg : kNewReg, cb_max_out, a);
                 if (!fresh) {
                     pack_reconfig_data_format(cb_rescale);
-                    pack_tile</* out_of_order */ true>(kDiffReg, cb_rescale, a);
+                    pack_tile</* out_of_order */ true>(kDReg, cb_rescale, a);
                 }
                 tile_regs_release();
             }
@@ -764,7 +822,7 @@ void kernel_main() {
                 cb_push_back(cb_rescale, Bt);
                 cb_wait_front(cb_rescale, Bt);
             }
-            // m_new is read back below through the seed view of the same memory.
+            // m_new is read back below through the plain view of the same memory.
             unpacker_fence();
         }
 #else
@@ -818,7 +876,6 @@ void kernel_main() {
                     }
                     PACK((pack_sfpu::exp_tile(b)));
                 }
-                PACK((pack_sfpu::exp_release()));
                 PACK((pack_sfpu::wait_before_pack()));
 #endif
                 // The column's tiles, relative to this push's write pointer.
@@ -854,14 +911,13 @@ void kernel_main() {
             // (Float32, SrcA).
             const auto products = [&](uint32_t a, uint32_t k0, uint32_t nk, uint32_t reg0, uint32_t live) {
                 reconfig_data_format(cb_probs, cb_value_t);
-                mm_init<kFidO>(cb_value_t, cb_probs, /* transpose */ 0);
-                for (uint32_t i = 0; i < nk; ++i) {
-                    for (uint32_t b = 0; b < Bt; ++b) {
-                        if (b >= live) {
-                            break;
-                        }
-                        mm_tiles<kFidO>(cb_value_t, cb_probs, (k0 + i) * Bt + b, a * Bt + b, reg0 + i);
+                mm_block_init<kFidO>(cb_value_t, cb_probs, /* transpose */ 0, /* ct */ 1, /* rt */ nk, /* kt */ Bt);
+                for (uint32_t b = 0; b < Bt; ++b) {
+                    if (b >= live) {
+                        break;
                     }
+                    // The P^T tile once, V^T's nk tiles of key tile b streamed.
+                    mm_block<kFidO>(cb_value_t, cb_probs, k0 * Bt + b, a * Bt + b, reg0, /* ct */ 1, /* rt */ nk, /* kt */ Bt);
                 }
             };
 
