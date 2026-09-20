@@ -1510,6 +1510,14 @@ def run_chunked_transformer_updated(
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
 
+    # Opt-in whole-prefill host timing for CI comparisons; normal accuracy/perf legs keep
+    # their historical iteration count and first-iteration exclusion.
+    host_warmup_iters = int(os.environ.get("TT_PREFILL_PERF_WARMUP_ITERS", "0"))
+    if host_warmup_iters < 0:
+        raise ValueError("TT_PREFILL_PERF_WARMUP_ITERS must be nonnegative")
+    total_iters = host_warmup_iters + num_iters
+    iteration_host_seconds = []
+
     def format_duration(seconds: float) -> str:
         return f"{seconds:7.3f}s"
 
@@ -1518,8 +1526,8 @@ def run_chunked_transformer_updated(
         PASS/FAIL). Returns (failures, table_lines): failures are the human-readable out-of-band messages
         (empty if all chunks pass or there is no baseline) so the caller can assert after the table is
         printed; table_lines is the rendered table for the caller to emit as a summary."""
-        # Iteration 0 includes compile/JIT effects; exclude it from perf stats.
-        samples = iteration_chunk_times[1:]
+        # Exclude explicit warmup passes, or iteration 0 for the historical mode.
+        samples = iteration_chunk_times[host_warmup_iters or 1 :]
         if not samples:
             logger.warning("No post-warmup iterations available for chunk timing stats (need num_iters >= 2)")
             return [], []
@@ -1974,7 +1982,8 @@ def run_chunked_transformer_updated(
         assert trace_controller.num_segments > 0, "use_trace captured 0 segments — nothing to replay"
 
     profiler.start("tt_forward")
-    for it in range(num_iters):
+    for it in range(total_iters):
+        iter_host_start = time.perf_counter()
         iter_start = time.time()
         chunk_times: list[float] = []
         for c in range(n_chunks):
@@ -2064,15 +2073,16 @@ def run_chunked_transformer_updated(
                     f"({fused_host_seconds / chunk_seconds * 100:.1f}% of {chunk_seconds * 1000:.2f} ms chunk)"
                 )
         iter_total = time.time() - iter_start
+        iteration_host_seconds.append(time.perf_counter() - iter_host_start)
         iteration_chunk_times.append(chunk_times)
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
-        # Drop iter 0's per-layer MLA/FFN samples (the compile iteration), same as the chunk-time table.
-        if it == 0:
+        # Drop warmup MLA/FFN samples at the same boundary as the chunk-time table.
+        if it == (host_warmup_iters - 1 if host_warmup_iters else 0):
             reset_block_timings()
     profiler.end("tt_forward")
 
     if profile_call_counts is not None:
-        expected_calls_per_layer = n_chunks * num_iters
+        expected_calls_per_layer = n_chunks * total_iters
         serial_counts = [counts["serial"] for counts in profile_call_counts.values()]
         overlap_counts = [counts["overlap"] for counts in profile_call_counts.values()]
         if expected_overlap_profile in ("", "0", "off", "none"):
@@ -2094,6 +2104,35 @@ def run_chunked_transformer_updated(
         f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, " f"num_iters={num_iters})"
     )
     perf_failures, perf_table_lines = print_duration_table(iteration_chunk_times)
+    if host_warmup_iters:
+        measured = iteration_host_seconds[host_warmup_iters:]
+        report = {
+            "variant": variant.name,
+            "git_sha": os.environ.get("GITHUB_SHA"),
+            "use_trace": use_trace,
+            "num_layers": num_layers,
+            "n_chunks": n_chunks,
+            "chunk_tokens": CHUNK,
+            "preload_tokens": preload_isl,
+            "warmup_iters": host_warmup_iters,
+            "measured_iters": num_iters,
+            "warmup_seconds": iteration_host_seconds[:host_warmup_iters],
+            "measured_seconds": measured,
+            "min_seconds": min(measured),
+            "scope": "All chunks through the prefill transformer, including token transfer, "
+            "per-chunk synchronization and cleanup; excludes model initialization. "
+            "No final norm, LM head or sampling; last layer is KV-only.",
+            "env": {
+                name: os.environ.get(name)
+                for name in ("LOGURU_LEVEL", "TT_METAL_SHM_TRACKING_DISABLED", "OMP_NUM_THREADS")
+            },
+        }
+        report_name = f"{variant.name}_L{num_layers}_c{n_chunks}_p{preload_isl}_{use_trace}_host_e2e"
+        summary_path = emit_summary("perf", report_name, "Whole-prefill host E2E", [json.dumps(report, indent=2)])
+        if summary_path is not None:
+            json_dir = summary_path.parent.parent / "perf_json"
+            json_dir.mkdir(parents=True, exist_ok=True)
+            (json_dir / f"{report_name}.json").write_text(json.dumps(report, indent=2) + "\n")
     timing_lines = [f"  {key}: {profiler.get(key) * 1000:.2f} ms" for key in profiler.times]
     if perf_table_lines:
         # tp_shard_kv was a parametrize axis, so both legs ran inside ONE CI job sharing one

@@ -706,6 +706,7 @@
   cmd: |
     export MESH_DEVICE=TG
     export TT_METAL_SHM_TRACKING_DISABLED=1
+    export TT_PREFILL_PERF_WARMUP_ITERS=10
     export LOGURU_LEVEL=ERROR
     export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
     export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
