@@ -4,25 +4,22 @@
 
 #include "api/compile_time_args.h"
 #include "dev_mem_map.h"
-
-// A CCE reaches GDDR through its remapper at a flat 64-bit address, not over the NOC, so the two
-// GDDR addresses arrive as low/high pairs of 32-bit compile-time args.
-constexpr uint64_t join_addr(uint32_t low, uint32_t high) { return (static_cast<uint64_t>(high) << 32) | low; }
+#include "experimental/cce_gddr.h"
 
 void kernel_main() {
-    constexpr uint64_t src_gddr_addr = join_addr(get_compile_time_arg_val(0), get_compile_time_arg_val(1));
-    constexpr uint64_t dst_gddr_addr = join_addr(get_compile_time_arg_val(2), get_compile_time_arg_val(3));
-    constexpr uint32_t staging_addr = get_compile_time_arg_val(4) + MEM_L1_UNCACHED_BASE;
-    constexpr uint32_t num_words = get_compile_time_arg_val(5);
+    constexpr uint32_t src_buffer_address = get_compile_time_arg_val(0);
+    constexpr uint32_t dst_buffer_address = get_compile_time_arg_val(1);
+    constexpr uint32_t mimir_index = get_compile_time_arg_val(2);
+    constexpr uint32_t staging_l1_address = get_compile_time_arg_val(3);
+    constexpr uint32_t num_words = get_compile_time_arg_val(4);
+    constexpr uint32_t num_slots = get_compile_time_arg_val(5);
+    constexpr uint32_t slot_stride = get_compile_time_arg_val(6);
+    constexpr uint32_t slot_base = get_compile_time_arg_val(7);
+    constexpr uint32_t staging_uncached_address = staging_l1_address + MEM_L1_UNCACHED_BASE;
 
-    volatile uint32_t* src = reinterpret_cast<volatile uint32_t*>(src_gddr_addr);
-    volatile uint32_t* dst = reinterpret_cast<volatile uint32_t*>(dst_gddr_addr);
-    volatile tt_l1_ptr uint32_t* staging = reinterpret_cast<tt_l1_ptr uint32_t*>(staging_addr);
-
-    for (uint32_t i = 0; i < num_words; i++) {
-        staging[i] = src[i];
-    }
-    for (uint32_t i = 0; i < num_words; i++) {
-        dst[i] = staging[i];
+    for (uint32_t slot = 0; slot < num_slots; slot++) {
+        const uint64_t offset = static_cast<uint64_t>(slot_base + slot) * slot_stride;
+        experimental::cce_gddr_read(mimir_index, src_buffer_address + offset, staging_uncached_address, num_words);
+        experimental::cce_gddr_write(mimir_index, dst_buffer_address + offset, staging_uncached_address, num_words);
     }
 }
