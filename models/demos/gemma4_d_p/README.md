@@ -4,7 +4,7 @@ This package supports only the dense **Gemma4-31B-it** variant and owns its cont
 
 The `models/demos/gemma4` implementation is independent of this package. Model, attention, weight-loading, and test helpers are local to `gemma4_d_p`. TTNN and model-independent utilities under `models/common`, `models/demos/common/prefill`, and `models/tt_transformers` are shared. The prefill service uses the shared engine under `models/demos/common/prefill`.
 
-For the runner, producer, and service validation, see [Prefill service](PREFILL_SERVICE.md).
+For the runner, producer, and service validation, see [Prefill service](docs/PREFILL_SERVICE.md).
 
 ## Run
 
