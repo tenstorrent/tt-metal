@@ -1165,24 +1165,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t in0_sender_nx = in0_sender_noc.x;
         const uint32_t in0_sender_ny = in0_sender_noc.y;
 
-        // Reader runtime arg layout (must match unified_routed_expert_ffn_reader.cpp):
-        //   0..2: tensor addrs (x, counts, idx). The per-expert gate/up/down
-        //     base addresses are passed as the arrays after start_addr below.
-        //   3: my_mt
-        //   4: my_nt_gu
-        //   5: my_nt_d
-        //   6..15: in1 multicast args
-        //  16..25: in0 multicast args
-        //  26: act_ready_sem_id  27: act_valid_sem_id
-        //  28: up_go_sem_id  29: up_done_sem_id
-        //  30..36: COUNTS_BCAST (is_counts_reader, rect x0,y0,x1,y1, sem, receivers)
-        //  37..38: DOWN_SPLIT go/done sem ids
-        //  39..39+2*GRID_X-1: M-row NoC coord table (GRID_X pairs of x, y)
-        //  39+2*GRID_X: start_addr (expert_region_offsets)
+        // Per-core schedule and multicast metadata. Tensor bindings are common args.
+        // Reader: 0..2 M/N indices, 3..22 input multicast, 23..26 activation/up sems,
+        // 27..33 counts multicast, 34..37 down/weight sems, then the M-row NoC table.
         std::vector<uint32_t> reader_args = {
-            x_buffer->address(),
-            counts_buffer->address(),
-            idx_buffer->address(),
             my_mt,
             my_nt_gu,
             my_nt_d,
@@ -1243,62 +1229,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
-        // start_addr — reader arg at M_ROW_NOC_RT_OFFSET + 2*GRID_X (see layout
-        // comment). Same buffer the writer gets. Always read (x is the shared
-        // buffer; each expert's rows begin at start[global_id]).
-        reader_args.push_back(start_buffer->address());
-        // Per-expert weight base addresses, appended after start_addr in three
-        // contiguous blocks of experts_per_chip each: gate[0..N), up[0..N),
-        // down[0..N).
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
-            reader_args.push_back(t.gate_projs[e].buffer()->address());
-        }
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
-            reader_args.push_back(t.up_projs[e].buffer()->address());
-        }
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
-            reader_args.push_back(t.down_projs[e].buffer()->address());
-        }
-        // FUSE_BIAS: per-expert bias base addresses in three further blocks
-        // (gate_bias[0..N), up_bias[0..N), down_bias[0..N)) after the weights.
-        if (fuse_bias) {
-            for (uint32_t e = 0; e < experts_per_chip; ++e) {
-                reader_args.push_back(t.gate_biases[e].buffer()->address());
-            }
-            for (uint32_t e = 0; e < experts_per_chip; ++e) {
-                reader_args.push_back(t.up_biases[e].buffer()->address());
-            }
-            for (uint32_t e = 0; e < experts_per_chip; ++e) {
-                reader_args.push_back(t.down_biases[e].buffer()->address());
-            }
-        }
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
 
-        // Writer runtime arg layout (must match unified_routed_expert_ffn_writer.cpp):
-        //   0: output_addr  1: my_mt  2: my_nt_d
-        //   3: start_addr (expert_region_offsets)
-        //   4: my_nt_gu  5: is_up_sender (gy==0)
-        //   6: up_go_sem_id  7: up_done_sem_id  (UP_SPLIT local same-core handshake)
-        //   8..8+N-1: per-expert `up` base addresses
+        // Writer: 0..3 M/N indices and sender role, 4..7 up/down sems,
+        // then the weight multicast rectangle and semaphores.
         std::vector<uint32_t> writer_args = {
-            out_buffer->address(),                 // 0
-            my_mt,                                 // 1
-            my_nt_d,                               // 2
-            start_buffer->address(),               // 3
-            my_nt_gu,                              // 4
-            static_cast<uint32_t>(is_in1_sender),  // 5 is_up_sender
-            up_go_sem_id,                          // 6
-            up_done_sem_id,                        // 7
-        };
-        // Per-expert `up` base addresses (UP_SPLIT)
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
-            writer_args.push_back(t.up_projs[e].buffer()->address());
-        }
-        // DOWN_SPLIT: per-expert down base addresses follow the up block (DOWN_RT),
-        // then the two dedicated go/done sem ids.
-        for (uint32_t e = 0; e < experts_per_chip; ++e) {
-            writer_args.push_back(t.down_projs[e].buffer()->address());
-        }
+            my_mt, my_nt_d, my_nt_gu, static_cast<uint32_t>(is_in1_sender), up_go_sem_id, up_done_sem_id};
         writer_args.push_back(down_go_sem_id);
         writer_args.push_back(down_done_sem_id);
         // IN1_WRITER_MCAST (9): the NoC-0 rectangle (the writer swaps the corners for
@@ -1335,13 +1271,17 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_args);
     }
 
-    return cached_program_t{
+    // Reader: x, counts, index table, region offsets, gate/up/down weights, optional biases.
+    // Writer: output, region offsets, up/down weights. Both tables are uniform across workers.
+    tt::tt_metal::SetCommonRuntimeArgs(
+        program, reader_kernel_id, std::vector<uint32_t>(4 + (fuse_bias ? 6 : 3) * experts_per_chip));
+    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, std::vector<uint32_t>(2 + 2 * experts_per_chip));
+    cached_program_t cached_program{
         std::move(program),
         UnifiedRoutedExpertFfnSharedVariables{
-            .reader_kernel_id = reader_kernel_id,
-            .writer_kernel_id = writer_kernel_id,
-            .compute_kernel_id = compute_kernel_id,
-            .cores = std::move(cores)}};
+            .reader_kernel_id = reader_kernel_id, .writer_kernel_id = writer_kernel_id}};
+    override_runtime_arguments(cached_program, op, t, tensor_return_value);
+    return cached_program;
 }
 
 void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
@@ -1350,66 +1290,27 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     const UnifiedRoutedExpertFfnInputs& t,
     Tensor& tensor_return_value) {
     auto& program = cached_program.program;
-    const auto reader_id = cached_program.shared_variables.reader_kernel_id;
-    const auto writer_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& cores = cached_program.shared_variables.cores;
-
-    const uint32_t N = op.experts_per_chip;
-    const bool has_bias = op.fuse_bias;
-    const uint32_t x_addr = t.x.buffer()->address();
-    const uint32_t counts_addr = t.counts.buffer()->address();
-    const uint32_t idx_addr = t.global_expert_idx_table.buffer()->address();
-    const uint32_t out_addr = tensor_return_value.buffer()->address();
-    const uint32_t start_addr = t.expert_region_offsets->buffer()->address();
-
-    // Reader runtime-arg tail (see create()): [start_addr][gate*N][up*N][down*N]
-    // (+ [gbias*N][ubias*N][dbias*N] when fuse_bias). Recover start_addr's index
-    // from the fixed tail length so the per-expert address blocks that follow it
-    // land at the same slots the kernel reads.
-    const size_t weights_len = static_cast<size_t>(3u * N) + (has_bias ? static_cast<size_t>(3u * N) : 0u);
-
-    for (const auto& core : cores) {
-        auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, reader_id, core);
-        reader_args[0] = x_addr;
-        reader_args[1] = counts_addr;
-        reader_args[2] = idx_addr;
-        const size_t start_idx = reader_args.size() - weights_len - 1;
-        reader_args[start_idx] = start_addr;
-        size_t w = start_idx + 1;
-        for (uint32_t e = 0; e < N; ++e) {
-            reader_args[w++] = t.gate_projs[e].buffer()->address();
+    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, cached_program.shared_variables.reader_kernel_id);
+    auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, cached_program.shared_variables.writer_kernel_id);
+    reader_args[0] = t.x.buffer()->address();
+    reader_args[1] = t.counts.buffer()->address();
+    reader_args[2] = t.global_expert_idx_table.buffer()->address();
+    reader_args[3] = t.expert_region_offsets->buffer()->address();
+    writer_args[0] = tensor_return_value.buffer()->address();
+    writer_args[1] = reader_args[3];
+    size_t reader_slot = 4;
+    for (const auto* weights : {&t.gate_projs, &t.up_projs, &t.down_projs}) {
+        for (const auto& weight : *weights) {
+            reader_args[reader_slot++] = weight.buffer()->address();
         }
-        for (uint32_t e = 0; e < N; ++e) {
-            reader_args[w++] = t.up_projs[e].buffer()->address();
-        }
-        for (uint32_t e = 0; e < N; ++e) {
-            reader_args[w++] = t.down_projs[e].buffer()->address();
-        }
-        if (has_bias) {
-            for (uint32_t e = 0; e < N; ++e) {
-                reader_args[w++] = t.gate_biases[e].buffer()->address();
+    }
+    // Reuse the up/down addresses already collected for the reader.
+    std::copy_n(reader_args.data() + 4 + op.experts_per_chip, 2 * op.experts_per_chip, writer_args.data() + 2);
+    if (op.fuse_bias) {
+        for (const auto* biases : {&t.gate_biases, &t.up_biases, &t.down_biases}) {
+            for (const auto& bias : *biases) {
+                reader_args[reader_slot++] = bias.buffer()->address();
             }
-            for (uint32_t e = 0; e < N; ++e) {
-                reader_args[w++] = t.up_biases[e].buffer()->address();
-            }
-            for (uint32_t e = 0; e < N; ++e) {
-                reader_args[w++] = t.down_biases[e].buffer()->address();
-            }
-        }
-
-        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
-        writer_args[0] = out_addr;
-        writer_args[3] = start_addr;
-        // Per-expert `up` then `down` base addresses follow the 8 fixed args (the kernel's
-        // UP_RT / DOWN_RT). Indexed from the FRONT: the tail holds the DOWN_SPLIT sem pair
-        // and the IN1_WRITER_MCAST block, so counting back from the end overwrites those
-        // and leaves both address blocks stale on a program-cache hit.
-        size_t wa = 8;
-        for (uint32_t e = 0; e < N; ++e) {
-            writer_args[wa++] = t.up_projs[e].buffer()->address();
-        }
-        for (uint32_t e = 0; e < N; ++e) {
-            writer_args[wa++] = t.down_projs[e].buffer()->address();
         }
     }
 }
