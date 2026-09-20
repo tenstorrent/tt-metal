@@ -736,9 +736,12 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     bpu = max(8, -(-(T + max_generated_tokens) // BLOCK_SIZE))
     bpu = ((bpu + 7) // 8) * 8
     total_blocks = B * bpu
-    kv_cache_shape = [total_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    # +1 spare block: the traced masked-bucket prefill writes its pad rows into the LAST physical block (the model's
+    # default pad block), which must therefore not belong to any user (the page tables below map 0..total_blocks-1).
+    kv_cache_shape = [total_blocks + 1, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=B)
-    _log_device_memory(model, f"after KV alloc (B={B}, blocks={total_blocks})")
+    assert model._pad_kv_block == total_blocks, (model._pad_kv_block, total_blocks)
+    _log_device_memory(model, f"after KV alloc (B={B}, blocks={total_blocks} + 1 pad block)")
     page_table = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])  # [B, bpu]
 
     # Prefill routes: T<=256 grouped single-pass; T>256 prefill_chunked_peruser (per-user).

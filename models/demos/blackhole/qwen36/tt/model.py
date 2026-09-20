@@ -2662,16 +2662,41 @@ class Qwen36Model:
             ttnn.ROW_MAJOR_LAYOUT,
         )
         _dma(pt, self._chunk_full_page_table_buf, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        _dma(
-            mbt.fill_pt_row(pt, chunk_start, actual_len, bucket, self._pad_kv_block, block_size),
-            tr.bufs.fill_pt,
-            ttnn.int32,
-            ttnn.ROW_MAJOR_LAYOUT,
+        # Never trust the page-table row past the request's real blocks (every device count). vLLM leaves STALE block
+        # ids there (BlockTable.add_row does not clear the tail) and, with prefix caching off, the request's own block
+        # is usually one of them, so the old "use the row's own non-zero entry" rule made the fixed-width fill write
+        # the bucket's pad rows INTO the request's real block (63/64-token prompts: nondeterministic logits; chip-1
+        # server repro profiles/pd/p1b_serve_chip1.log, row [2, 2, 0, ...] -> fill_pt [2, 2]). Pad rows always go to
+        # the scratch block instead (fill_pt_row default). The SDPA table above is unchanged (its stale tail is only
+        # read for causally masked columns). TP>1 takes the very same row through this very function: the serving
+        # plugin (vllm-tt-plugin/src/vllm_tt_plugin/input_batch.py block_tables_for_rows, called from
+        # model_runner.py) slices vLLM's block table rows unchanged for every device count and the replay
+        # replicates the row to every device, so the safe rule applies there too.
+        # QWEN36_PREFILL_TRUST_PT_TAIL=1 restores the old row rule (rollback only; the alias guard still fires).
+        _trust_tail = os.environ.get("QWEN36_PREFILL_TRUST_PT_TAIL", "0") == "1"
+        # The scratch block must not be a real block of THIS request anywhere in its prefix (earlier chunks
+        # included); fill_pt_row checks the current chunk's blocks, this covers the ones a long prompt filled before.
+        # Only when the fill has pad entries at all: a chunk whose real blocks fill the bucket writes no pad rows,
+        # so the pad block's identity is irrelevant (demos map the whole pool incl. the pad block to their users).
+        n_real_total = -(-(chunk_start + actual_len) // block_size)
+        n_pad = bucket // block_size - (n_real_total - chunk_start // block_size)
+        assert n_pad == 0 or not bool((pt[0, :n_real_total] == int(self._pad_kv_block)).any()), (
+            f"pad KV block {self._pad_kv_block} is one of the request's real blocks {pt[0, :n_real_total].tolist()}; "
+            f"the KV cache must carry one spare block the scheduler never hands out"
         )
+        fill_pt = mbt.fill_pt_row(
+            pt, chunk_start, actual_len, bucket, self._pad_kv_block, block_size, trust_tail=_trust_tail
+        )
+        _dma(fill_pt, tr.bufs.fill_pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         _dma(m, tr.bufs.mask_f32, ttnn.float32, ttnn.TILE_LAYOUT)
         _dma(m, tr.bufs.mask_q, ttnn.bfloat16, ttnn.TILE_LAYOUT)
         _dma(mbt.host_conv_sel(actual_len, bucket, K), tr.bufs.conv_sel, ttnn.bfloat16, ttnn.TILE_LAYOUT)
 
+        if os.environ.get("QWEN36_PREFILL_DEBUG", "0") == "1":
+            logger.info(
+                f"[PREFILL_DEBUG] bucket={bucket} actual_len={actual_len} chunk_start={chunk_start} "
+                f"fill_pt={fill_pt[0].tolist()} sdpa_pt[:6]={pt[0, :6].tolist()} pad_block={self._pad_kv_block}"
+            )
         ttnn.execute_trace(self.device, tr.trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(self.device)
         refs.clear()
@@ -3578,7 +3603,10 @@ class Qwen36Model:
                     # rows), conv_states[m] -> [nd, Bg, D]; sliced per user below (_write_gdn_slot contract).
                     grp_host = (
                         [ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_layers],
-                        [[ttnn.to_torch(dn.conv_states[m], mesh_composer=comp) for m in range(dn.K)] for dn in dn_layers],
+                        [
+                            [ttnn.to_torch(dn.conv_states[m], mesh_composer=comp) for m in range(dn.K)]
+                            for dn in dn_layers
+                        ],
                     )
                 else:
                     # Clone the group's batched GDN state (survives the next group's scratch reset).
@@ -3594,7 +3622,10 @@ class Qwen36Model:
                     self._write_gdn_slot(
                         u,
                         [rec_h[li][rows].contiguous() for li in range(len(dn_layers))],
-                        [[conv_h[li][m][:, i : i + 1, :].contiguous() for m in range(dn.K)] for li, dn in enumerate(dn_layers)],
+                        [
+                            [conv_h[li][m][:, i : i + 1, :].contiguous() for m in range(dn.K)]
+                            for li, dn in enumerate(dn_layers)
+                        ],
                     )
 
         ttnn.deallocate(cos)
