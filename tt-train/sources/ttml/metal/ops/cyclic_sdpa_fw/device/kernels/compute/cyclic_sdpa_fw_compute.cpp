@@ -27,17 +27,17 @@
 //      lse = a m + ln l in column layout, for the write kernel.
 //
 // The statistics' representation. The column reductions produce a row-layout
-// tile (one value per query in row 0; the other rows are masked to zero,
-// since the reduction leaves partial results there). m travels as a *full*
-// tile, every row the same, made once per visit by the FPU as ones x tile
-// (a matmul against the all-ones tile, which reads the row-layout block
-// maximum through a source register at 19 bits -- exact, since it is a
-// maximum of 19-bit-rounded scores); a full tile needs no broadcast, so
-// S^T - m, r = exp(a (m_old - m_new)) and the rescales of O^T and l are
-// plain SFPU operations on exact copies, and the running sum l stays exact.
-// l itself travels in row layout; the only 19-bit read of it is the FPU
-// broadcast of 1/l at the row's last visit, which the bfloat16 output does
-// not notice. All SFPU work is on the math thread: the SFPU's programmable
+// tile: one value per query in row 0, and whatever partial results the
+// reduction leaves in the other rows -- which nothing reads: every use is a
+// row broadcast of row 0 through SrcB (19 bits), or a row-0 mask before the
+// lse. m travels as a *full* tile, every row the same, made once per visit
+// from the broadcast block maximum (exact: a maximum of 19-bit-rounded
+// scores), so r = exp(a (m_old - m_new)) and the rescales of O^T and l are
+// plain SFPU operations on exact copies and the running sum l stays exact.
+// S^T - m is the FPU's row-broadcast subtraction, which reads S^T at 19 bits
+// (rounded to nearest by the packer): P carries that 5e-4 relative rounding
+// of the score, the same one sdpa_fw's and the backward's own probabilities
+// carry; the lse stays flat in N because the rescale factors are exact. All SFPU work is on the math thread: the SFPU's programmable
 // constants are shared between the threads, and a pack-thread exponential
 // was corrupted by the math thread's reciprocal and logarithm (measured:
 // the exponent came out scaled by 11).
@@ -119,12 +119,12 @@ constexpr uint32_t cb_transpose_fence = tt::CBIndex::c_8;
 constexpr uint32_t cb_ones_column = tt::CBIndex::c_28;
 constexpr uint32_t cb_ones_row = tt::CBIndex::c_29;
 constexpr uint32_t cb_reduce_scaler = tt::CBIndex::c_27;
-constexpr uint32_t cb_scores = tt::CBIndex::c_10;        // S^T, 19-bit rounded: the reduce's operand
-constexpr uint32_t cb_scores_exact = tt::CBIndex::c_11;  // S^T, exact: the subtraction's source
+constexpr uint32_t cb_scores = tt::CBIndex::c_10;        // S^T, 19-bit rounded
 constexpr uint32_t cb_probs = tt::CBIndex::c_12;         // P^T, 19-bit rounded
 constexpr uint32_t cb_rescale = tt::CBIndex::c_20;       // r, full tile, exact
 constexpr uint32_t cb_block_max = tt::CBIndex::c_23;     // colmax S^T, row layout (scratch)
-constexpr uint32_t cb_max_seed = tt::CBIndex::c_13;      // m, full tile, exact
+constexpr uint32_t cb_max_seed = tt::CBIndex::c_13;      // m, full tile, exact (unpack to dest)
+constexpr uint32_t cb_max_plain = tt::CBIndex::c_25;     // m, the same memory, for the FPU broadcasts
 constexpr uint32_t cb_sum_seed = tt::CBIndex::c_14;      // l, exact (unpack to dest)
 constexpr uint32_t cb_sum_plain = tt::CBIndex::c_26;     // l, the same memory, for the FPU broadcast
 constexpr uint32_t cb_out_seed = tt::CBIndex::c_15;
@@ -201,14 +201,22 @@ void transpose_value_block() {
     cb_wait_front(cb_value_t, Bt * vWt);
 }
 
-// A row-layout statistic broadcast down the rows of a DST tile: ones x tile,
-// one matmul (HiFi4; the statistic goes through SrcA at 19 bits, see the
-// top of the file). Leaves the matmul configured for (ones, cb).
-void broadcast_rows(const uint32_t cb_stat, const uint32_t tile, const uint32_t idst) {
-    reconfig_data_format(cb_stat, cb_reduce_scaler);
-    mm_init<MathFidelity::HiFi4>(cb_reduce_scaler, cb_stat, /* transpose */ 0);
-    mm_tiles<MathFidelity::HiFi4>(cb_reduce_scaler, cb_stat, 0, tile, idst);
+// Broadcast row 0 of a statistic tile down the rows of a DST tile, through
+// SrcB at 19 bits (the backward's broadcast_statistic_rows_to_dst): the
+// statistic's other rows, whatever the reduction left there, are not read.
+// The source must be a plain (not unpack-to-dest) buffer: the 32-bit unary
+// broadcast path does not broadcast (measured), the 19-bit one does.
+void broadcast_row0_to_dst(const uint32_t idst, const uint32_t cb_statistics, const uint32_t stat_tile) {
+    reconfig_data_format_srcb(cb_statistics);
+    UNPACK((llk_unpack_A_init<BroadcastType::ROW, false, EltwiseBinaryReuseDestType::NONE, false>(
+        false, false, cb_statistics)));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          ckernel::DataCopyType::B2D,
+          DST_ACCUM_MODE,
+          BroadcastType::ROW>(cb_statistics)));
+    unary_bcast<BroadcastType::ROW>(cb_statistics, stat_tile, idst);
 }
+
 
 
 #if defined(TRISC_MATH)
@@ -404,6 +412,7 @@ void kernel_main() {
             cb_wait_front(cb_query, Bt * qWt);
             cb_wait_front(cb_key, Bt * qWt);
             cb_wait_front(cb_max_seed, Bt);
+            cb_wait_front(cb_max_plain, Bt);
             cb_wait_front(cb_sum_seed, Bt);
             cb_wait_front(cb_sum_plain, Bt);
             cb_wait_front(cb_out_seed, Bt * qWt);
@@ -414,15 +423,13 @@ void kernel_main() {
 
         // ---- 1. S^T = K Q^T, a column of the score grid two key tiles at a
         // time (half the destination file, so the math thread's next group
-        // overlaps the pack thread's packs of this one), packed once, exactly:
-        // the reduce reads the same memory through its plain view at 19 bits,
-        // which only lowers the block maximum by 2^-11 relative -- harmless,
-        // since any m gives a consistent (P, l, lse).
+        // overlaps the pack thread's packs of this one), packed rounded to
+        // the 19 bits the FPU reads back.
         {
             DeviceZoneScopedN("SCORES");
             cb_reserve_back(cb_scores, score_tiles);
-            cb_reserve_back(cb_scores_exact, score_tiles);
-            pack_reconfig_data_format(cb_scores_exact);
+            pack_reconfig_data_format(cb_scores);
+            pack_rounding(true);
             for (uint32_t a = 0; a < Bt; ++a) {
                 const uint32_t live = n_live(a);
                 for (uint32_t b0 = 0; b0 < live; b0 += kGroup) {
@@ -450,19 +457,18 @@ void kernel_main() {
                         if (i >= n) {
                             break;
                         }
-                        pack_tile</* out_of_order */ true>(i, cb_scores_exact, (b0 + i) * Bt + a);
+                        pack_tile</* out_of_order */ true>(i, cb_scores, (b0 + i) * Bt + a);
                     }
                     tile_regs_release();
                 }
             }
+            pack_rounding(false);
             cb_push_back(cb_scores, score_tiles);
-            cb_push_back(cb_scores_exact, score_tiles);
             cb_wait_front(cb_scores, score_tiles);
-            cb_wait_front(cb_scores_exact, score_tiles);
         }
 
         // ---- 2. The block maximum per query tile, row layout, to scratch;
-        // two query tiles per acquire (data and mask registers in pairs).
+        // two query tiles per acquire.
 #ifndef FW_EXPERIMENT_NO_STATS
         {
             DeviceZoneScopedN("MAX");
@@ -475,7 +481,7 @@ void kernel_main() {
                         break;
                     }
                     const uint32_t a = a0 + jx;
-                    const uint32_t reg = 2u * jx;
+                    const uint32_t reg = jx;
                     const uint32_t live = n_live(a);
                     reconfig_data_format(cb_scores, cb_reduce_scaler);
                     reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_scores, cb_reduce_scaler, cb_block_max);
@@ -486,14 +492,6 @@ void kernel_main() {
                         reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_scores, cb_reduce_scaler, b * Bt + a, 0, reg);
                     }
                     reduce_uninit();
-                    // Row 0 only: the reduction leaves partial results in the
-                    // other rows (measured). mask_tile takes its mask in the
-                    // register above.
-                    reconfig_data_format_srca(cb_scores, cb_ones_row);
-                    copy_init(cb_ones_row);
-                    copy_tile(cb_ones_row, 0, reg + 1u);
-                    mask_tile_init();
-                    mask_tile(reg, reg + 1u);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -502,7 +500,7 @@ void kernel_main() {
                     if (jx >= na) {
                         break;
                     }
-                    pack_tile</* out_of_order */ true>(2u * jx, cb_block_max, a0 + jx);
+                    pack_tile</* out_of_order */ true>(jx, cb_block_max, a0 + jx);
                 }
                 tile_regs_release();
             }
@@ -520,9 +518,9 @@ void kernel_main() {
             }
             for (uint32_t a = 0; a < Bt; ++a) {
                 tile_regs_acquire();
-                broadcast_rows(cb_block_max, a, kNewReg);  // the block maximum down every row
+                broadcast_row0_to_dst(kNewReg, cb_block_max, a);  // the block maximum down every row
                 if (!fresh) {
-                    reconfig_data_format_srca(cb_block_max, cb_max_seed);
+                    reconfig_data_format_srca(cb_scores, cb_max_seed);
                     copy_init(cb_max_seed);
                     copy_tile(cb_max_seed, a, kOldReg);
                     copy_tile(cb_max_seed, a, kDiffReg);
@@ -560,35 +558,25 @@ void kernel_main() {
         }
 #endif
 
-        // ---- 3. P^T = exp(a (S^T - m_new)), the subtraction exact on the
-        // SFPU; two key tiles per acquire, m_new in the register above them.
+        // ---- 3. P^T = exp(a (S^T - m_new)): the FPU's row-broadcast
+        // subtraction from L1 (S^T at 19 bits, m_new's row 0 through SrcB),
+        // then the exponential; two key tiles per acquire.
 #ifndef FW_EXPERIMENT_NO_PROBS
         {
             DeviceZoneScopedN("PROBS");
             cb_reserve_back(cb_probs, score_tiles);
-            constexpr uint32_t kMaxReg = kGroup;
             for (uint32_t a = 0; a < Bt; ++a) {
                 const uint32_t live = n_live(a);
                 for (uint32_t b0 = 0; b0 < live; b0 += kGroup) {
                     const uint32_t n = (live - b0 < kGroup) ? live - b0 : kGroup;
                     tile_regs_acquire();
-                    reconfig_data_format_srca(cb_scores, cb_max_seed);
-                    copy_init(cb_max_seed);
-                    copy_tile(cb_max_seed, a, kMaxReg);
-                    reconfig_data_format_srca(cb_max_seed, cb_scores_exact);
-                    copy_init(cb_scores_exact);
+                    reconfig_data_format(cb_scores, cb_max_plain);
+                    bcast_init<EltwiseBinaryType::ELWSUB, BroadcastType::ROW>(cb_scores, cb_max_plain);
                     for (uint32_t i = 0; i < kGroup; ++i) {
                         if (i >= n) {
                             break;
                         }
-                        copy_tile(cb_scores_exact, (b0 + i) * Bt + a, i);
-                    }
-                    sub_binary_tile_init();
-                    for (uint32_t i = 0; i < kGroup; ++i) {
-                        if (i >= n) {
-                            break;
-                        }
-                        sub_binary_tile(i, kMaxReg, i);
+                        sub_tiles_bcast_rows(cb_scores, cb_max_plain, (b0 + i) * Bt + a, a, i);
                     }
                     for (uint32_t i = 0; i < kGroup; ++i) {
                         if (i >= n) {
@@ -636,14 +624,10 @@ void kernel_main() {
                     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_probs, cb_reduce_scaler, b * Bt + a, 0, kSumReg);
                 }
                 reduce_uninit();
-                reconfig_data_format_srca(cb_probs, cb_ones_row);
-                copy_init(cb_ones_row);
-                copy_tile(cb_ones_row, 0, kSumReg + 1u);
-                mask_tile_init();
-                mask_tile(kSumReg, kSumReg + 1u);
                 if (!fresh) {
-                    // r l_old + l_blk in row 0, all exact.
-                    reconfig_data_format_srca(cb_ones_row, cb_rescale);
+                    // r l_old + l_blk in row 0, all exact (the other rows
+                    // hold the reduction's leftovers times r: never read).
+                    reconfig_data_format_srca(cb_probs, cb_rescale);
                     copy_init(cb_rescale);
                     copy_tile(cb_rescale, a, kRReg);
                     reconfig_data_format_srca(cb_rescale, cb_sum_seed);
@@ -747,10 +731,10 @@ void kernel_main() {
                     for (uint32_t k0 = 0; k0 < qWt; k0 += kOutGroup) {
                         const uint32_t nk = (qWt - k0 < kOutGroup) ? qWt - k0 : kOutGroup;
                         tile_regs_acquire();
-                        broadcast_rows(cb_sum_plain, a, kInvReg);
+                        broadcast_row0_to_dst(kInvReg, cb_sum_plain, a);
                         recip_tile_init</* legacy_compat */ false>();
                         recip_tile</* legacy_compat */ false>(kInvReg);
-                        reconfig_data_format_srca(cb_sum_plain, cb_out_seed);
+                        reconfig_data_format_srca(cb_scores, cb_out_seed);
                         copy_init(cb_out_seed);
                         for (uint32_t i = 0; i < kOutGroup; ++i) {
                             if (i >= nk) {
@@ -843,11 +827,11 @@ void kernel_main() {
             DeviceZoneScopedN("T-POPS");
             cb_pop_front(cb_query, Bt * qWt);
             cb_pop_front(cb_max_seed, Bt);
+            cb_pop_front(cb_max_plain, Bt);
             cb_pop_front(cb_sum_seed, Bt);
             cb_pop_front(cb_sum_plain, Bt);
             cb_pop_front(cb_out_seed, Bt * qWt);
             cb_pop_front(cb_scores, score_tiles);
-            cb_pop_front(cb_scores_exact, score_tiles);
             cb_pop_front(cb_probs, score_tiles);
             cb_pop_front(cb_block_max, Bt);
             if (!fresh) {

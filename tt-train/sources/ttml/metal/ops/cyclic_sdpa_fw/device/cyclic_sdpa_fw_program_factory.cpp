@@ -121,7 +121,18 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
     // seed view and packed through an out view onto the same memory.
     make_cb(tt::CBIndex::c_0, 2U * rowT, tt::DataFormat::Float16_b);  // Q_i
     make_view_pair(tt::CBIndex::c_15, tt::CBIndex::c_17, rowT);       // O^T
-    make_view_pair(tt::CBIndex::c_13, tt::CBIndex::c_18, Bt);         // m
+    // m has a third view too: exact copies through c_13 (unpack to dest), the
+    // FPU's row-broadcast subtraction reads its row 0 through c_25.
+    CreateCircularBuffer(
+        program, region,
+        CircularBufferConfig(
+            2U * Bt * fp32_tile,
+            {{tt::CBIndex::c_13, tt::DataFormat::Float32},
+             {tt::CBIndex::c_18, tt::DataFormat::Float32},
+             {tt::CBIndex::c_25, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_13, fp32_tile)
+            .set_page_size(tt::CBIndex::c_18, fp32_tile)
+            .set_page_size(tt::CBIndex::c_25, fp32_tile));
     // l has a third view: the compute kernel reads it exactly through c_14
     // (unpack to dest) for the running sum, and through c_26 as a plain
     // matmul operand for the FPU broadcast of 1/l.
@@ -146,15 +157,7 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
     make_cb(tt::CBIndex::c_27, 1, tt::DataFormat::Float16_b);         // reduce scaler: all ones
     make_cb(tt::CBIndex::c_29, 1, tt::DataFormat::Float16_b);         // ones row (the row-0 mask)
     // ---- Intermediates of one timestep.
-    // S^T, packed once, exactly, through c_11 (unpack to dest: the SFPU
-    // subtraction's source) and read at 19 bits through c_10 by the FPU's
-    // column-max reduce: two views of one memory.
-    CreateCircularBuffer(
-        program, region,
-        CircularBufferConfig(
-            scoreT * fp32_tile, {{tt::CBIndex::c_10, tt::DataFormat::Float32}, {tt::CBIndex::c_11, tt::DataFormat::Float32}})
-            .set_page_size(tt::CBIndex::c_10, fp32_tile)
-            .set_page_size(tt::CBIndex::c_11, fp32_tile));
+    make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);      // S^T, 19-bit rounded
     make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);      // P^T
     make_cb(tt::CBIndex::c_20, Bt, tt::DataFormat::Float32);          // r = exp(a (m_old - m_new)), full tile
     make_cb(tt::CBIndex::c_23, Bt, tt::DataFormat::Float32);          // colmax S^T, row layout (scratch)
@@ -226,13 +229,10 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
             .defines = defines});
 
     const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(d)));
-    // Read straight into DST, all 32 bits: the exact copy of S^T, the state
-    // (m, l, O^T) and r. None of these is a matmul or FPU-reduce operand; the
-    // block maximum scratch and the plain view of l are (the FPU broadcasts
-    // them as ones x tile), so they stay in the default mode -- see the
-    // compute kernel.
+    // Read straight into DST, all 32 bits: the state (m, l, O^T) and r, by
+    // copies only. The FPU's operands -- S^T, P^T, the block maximum, the
+    // plain views of m and l -- stay in the default mode (see the kernel).
     std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;
     unpack_mode[tt::CBIndex::c_13] = UnpackToDestMode::UnpackToDestFp32;
     unpack_mode[tt::CBIndex::c_14] = UnpackToDestMode::UnpackToDestFp32;
     unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;

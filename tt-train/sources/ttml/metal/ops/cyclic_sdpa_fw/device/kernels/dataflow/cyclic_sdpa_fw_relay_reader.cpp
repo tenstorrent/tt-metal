@@ -91,6 +91,7 @@ void kernel_main() {
     // through the out views.
     constexpr uint32_t cb_query = tt::CBIndex::c_0;
     constexpr uint32_t cb_max_seed = tt::CBIndex::c_13;
+    constexpr uint32_t cb_max_plain = tt::CBIndex::c_25;  // the same memory, the compute kernel's FPU view
     constexpr uint32_t cb_sum_seed = tt::CBIndex::c_14;
     constexpr uint32_t cb_sum_plain = tt::CBIndex::c_26;  // the same memory, the compute kernel's matmul view
     constexpr uint32_t cb_out_seed = tt::CBIndex::c_15;
@@ -255,6 +256,7 @@ void kernel_main() {
                 cb_reserve_back(cb_query, row_tiles);
             }
             cb_reserve_back(cb_max_seed, Bt);
+            cb_reserve_back(cb_max_plain, Bt);
             cb_reserve_back(cb_sum_seed, Bt);
             cb_reserve_back(cb_sum_plain, Bt);
             cb_reserve_back(cb_out_seed, row_tiles);
@@ -302,6 +304,7 @@ void kernel_main() {
             if (receiver == my_core) {
                 cb_reserve_back(cb_query, row_tiles);
                 cb_reserve_back(cb_max_seed, Bt);
+                cb_reserve_back(cb_max_plain, Bt);
                 cb_reserve_back(cb_sum_seed, Bt);
                 cb_reserve_back(cb_sum_plain, Bt);
                 cb_reserve_back(cb_out_seed, row_tiles);
@@ -371,6 +374,7 @@ void kernel_main() {
             noc_async_read_barrier();
         }
         cb_push_back(cb_max_seed, Bt);
+        cb_push_back(cb_max_plain, Bt);
         cb_push_back(cb_sum_seed, Bt);
         cb_push_back(cb_sum_plain, Bt);
         cb_push_back(cb_out_seed, row_tiles);
