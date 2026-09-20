@@ -3,142 +3,72 @@
 ## Request contract
 
 IS/dgen/tt-llm-engine owns scheduling, resident KV history, padding, and token
-packing. Gemma consumes one fixed-size chunk in CP-rank order and the request
-`(slot_id, actual_start, actual_end)`. Real tokens occupy the absolute interval
-`[actual_start, actual_end)`; the prefix before it must already be cached.
-The output preserves the input row order; upstream discards padded rows.
+packing. Gemma consumes a fixed-size chunk in CP-rank order plus
+`(slot_id, actual_start, actual_end)`. Real tokens occupy `[actual_start, actual_end)`;
+the preceding prefix must already be cached. Callers discard padded outputs.
 
-For chunk size C, CP degree P, and L=C/P, cache row i on rank r represents
-`(i // L)*C + r*L + i%L`. With `g=start//C`, `b=(start//L)%P`, and `o=start%L`,
-the local write begins at `(g+1)*L` for r<b, `g*L+o` for r=b, and `g*L` for r>b.
-Input row j must contain the token belonging to that cache row plus j. This
-includes a wrap within the boundary rank; a simple global roll is insufficient.
+Start must be 32-token aligned. End can be unaligned:
+`0 <= start < end <= min(start + chunk_size, max_seq_len)`.
 
-Example: C=8192, P=8, start=7008, end=9000. Rank 0 receives positions 8192–9215
-(9000 onward is padding). Rank 6 receives 7008–7167 followed by 14336–15199
-(padding); rank 7 receives 7168–8191. Upstream must supply this layout.
+For chunk size C, CP degree P, and local size L=C/P, cache row i on rank r holds
+position `(i // L)*C + r*L + i%L`. Pack each rank's new Q rows in increasing
+absolute-position order, including padding to L rows.
 
-**Current operator limit:** start must be a multiple of 32, not necessarily C.
-End can be unaligned; require `start < end <= min(start+C, max_seq_len)`.
-Supporting starts such as 7000 requires sub-tile cache writes and corresponding
-RoPE/SDPA changes; do not silently round a request down.
+Example: C=8192, P=8, start=7008, end=9000. Rank 6 receives 7008–7167 followed
+by padding at 14336–15199; rank 7 receives 7168–8191; rank 0 receives
+8192–9215, with 9000 onward padded. RoPE uses these same absolute positions.
 
-## Existing operator behavior
+## Native operations
 
-- `update_padded_kv_cache`: uses `kv_actual_global=start` for the per-rank write
-  offset and `valid_global=end` to stop at ceil32(end). The final partial tile
-  still contains pad values. Consumers must honor end; this is not zero-padding
-  for bytewise migration comparisons.
-- RoPE: DeepSeek's `rotary_embedding_indexed` uses the same local write offset.
-  Gemma already gathers replicated RoPE tables through device position indices;
-  supplying the correct rotated positions preserves its packed channel layouts.
-- Global ring SDPA: `slot_id` and `kv_actual_isl_tensor=start` enable rotated Q
-  mapping on device. This metadata API derives its bound from start+C, clamped
-  to cache capacity; it has no compatible end tensor. Causality prevents padded
-  keys (positions >=end) from affecting real queries (positions <end).
-- Sliding ring SDPA: its work plan and halo exchange require aligned, complete
-  groups. Forwarding a rotated start is insufficient. Gemma uses native SWA
-  directly when start is aligned to a CP block (`C/P`) and the real queries
-  stay within one group. SWA gets the aligned group start; RoPE, cache writes,
-  and global SDPA retain the request start. Otherwise, it gathers Q into the
-  aligned groups intersecting `[start,end)`, calls SWA once per group, then
-  restores request order. A range ending at the first group's boundary needs
-  only one call; only crossing that boundary requires two. Padded rows do not
-  increase the group count, and their outputs are discarded. Expanded gather
-  indices are allocated per head-count/head-width pair during warmup, then
-  refreshed in place once per request and shared across matching SWA layers.
+- `update_padded_kv_cache`: `kv_actual_global=start` selects each rank's write
+  offset; `valid_global=end` stops writes at ceil32(end), including final-tile pads.
+- RoPE: Gemma gathers its tables using staged block-cyclic position indices.
+- Global and sliding ring SDPA: `kv_actual_isl_tensor=start` maps local Q rows
+  to absolute positions. The metadata path derives the padded extent as
+  `min(start + C, cache_capacity)`. Causal masking prevents padding after end
+  from affecting real query rows.
+- Sliding SDPA handles both Q segments natively, including a compute block
+  crossing the wrap. It reads local KV and exchanges predecessor tails in one
+  invocation. Aligned ranks send one tail; a split destination receives two.
+  Metadata callers reserve two halo slots because offsets change during replay.
+  Halo size is `ceil((window - 1) / k_chunk_size) * k_chunk_size` per slot.
+- Scalar SDPA uses `kv_actual_isl=start`, `logical_n=end`; both are tile-aligned.
+  Partial groups and runtime cache reuse are supported. Circular KV retains
+  its aligned-group scalar contract; circular metadata remains unsupported.
 
-Relevant implementations: `tt/attention/ring_prefill.py`, `tt/model.py`,
-`tt/prefill_metadata.py`; shared operator contracts live under
-`ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/` and
-`ttnn/cpp/ttnn/operations/transformer/sdpa/`. DeepSeek's reference position mapping
-is `models/demos/deepseek_v3_d_p/tt/mla/utils.py::rotated_chip_positions`.
+No Gemma-specific Q gathers, output restoration, mode selection, or extra
+attention calls are needed. The physical KV layout is unchanged.
 
-## Changes
-
-1. Extend Gemma's metadata object with validated request bounds, rotated RoPE
-   indices, and sliding gather indices/group starts. Keep device addresses stable.
-   Stage all buffers before trace capture/replay, never inside the captured graph.
-2. Accept actual_start/actual_end at the model boundary, retaining aligned demo
-   compatibility. Feed staged RoPE indices through the existing gather/packing
-   path, pass end to both cache writers, and use the SWA adaptation above.
-3. Update demo staging to use the same request metadata. No scheduler, producer,
-   shared kernel, DeepSeek, or cache-address-table changes: physical KV layout
-   does not change. This checkout has no registered Gemma serving adapter; its
-   eventual adapter must call the metadata staging API before each replay.
-
-## Tests
-
-- Host mapping/validation: aligned, rank-boundary, mid-rank, cross-group, partial
-  tails, cache-end padding, invalid bounds, and both Galaxy mesh orientations.
-  Compare mapping with independently enumerated global cache ownership.
-- Synthetic device tests: packed global and separate sliding cache writes plus
-  attention against PyTorch, with resident prefixes and two user slots. Check
-  real output rows, retained prefixes, and untouched cache tiles beyond end.
-- Replay each selected trace with changed starts/ends/slots to catch captured
-  host scalars; compare rotated RoPE lookup with absolute-position lookup. No model weights
-  are needed. Run existing Gemma host tests and normal pre-commit hooks.
-
-## Upstream check (2026-09-20)
-
-Checked merged GPT-OSS PRs [#51438](https://github.com/tenstorrent/tt-metal/pull/51438),
-[#53153](https://github.com/tenstorrent/tt-metal/pull/53153), and
-[#54935](https://github.com/tenstorrent/tt-metal/pull/54935), plus the active runner
-PR [#56519](https://github.com/tenstorrent/tt-metal/pull/56519). They do not add
-rotated sliding groups. Upstream main's sliding work-plan blob matches this
-checkout (`a88eab0176c0e36efeb063000468e57a656a98a7`). Circular-cache trace support
-is separately tracked in open issue [#56115](https://github.com/tenstorrent/tt-metal/issues/56115).
-Dynamic-length PR [#55115](https://github.com/tenstorrent/tt-metal/pull/55115)
-does not support combining tensor logical_n with KV-pad rotation.
-
-The SWA workaround is isolated in `tt/attention/sliding_chunk.py`. Replace its
-call from `sliding_ring_prefill_attention` when native rotated SWA is available,
-then remove its metadata staging hook. No changes to RoPE or cache layout needed.
-
-## Usage and validation
+## Calling and tracing
 
 Eager: `model(hidden_states, user_id=slot, actual_start=start, actual_end=end)`.
-The hidden states must already have the service's block-cyclic CP row order.
-For tracing, set `model._prefill_metadata_external = True` and capture separate
-graphs keyed by `SlidingChunkMode` (defined in `tt/attention/sliding_chunk.py`):
+The hidden states must already have the request's CP row order.
 
-- `ALIGNED`: one SWA call, no adapter gathers; CP-block-aligned start within one group.
-- `SINGLE_GROUP`: one SWA call with input/output reordering.
-- `TWO_GROUPS`: two SWA calls, for real queries spanning two groups.
+Capture one trace after warmup with `model._prefill_metadata_external = True`.
+Before each replay, copy tokens into the fixed input buffer and call:
 
-Before warmup/capture, call `prefill_metadata.update(..., sliding_mode=mode)`
-to select the graph explicitly. All three can be captured using `[0,chunk_size)`.
-Before replay, call `update(slot_idx=slot, actual_start=start, actual_end=end)`
-without an override and select the trace using `prefill_metadata.sliding.mode`.
-Copy tokens into the fixed input buffer before replay. Updating only scalar
-buffers is insufficient: RoPE and the selected SWA graph also need staging.
-Trace selection is host-side; a captured graph cannot switch its SWA call count.
-
-Validated on Blackhole Galaxy (2026-09-20), without model weights:
-
-```sh
-python_env/bin/python -m pytest models/demos/gemma4_d_p/tests/unit -k 'not device' -q
-python_env/bin/python -m pytest models/demos/gemma4_d_p/tests/unit/test_block_cyclic_prefill.py -k device -sv
+```python
+model.prefill_metadata.update(slot_idx=slot, actual_start=start, actual_end=end)
 ```
 
-109 host tests passed. All four device cases passed (global/sliding × 8x4/4x8),
-selecting among three traces per case across `(start,end)` = `(0,1056)`, `(1056,9000)`,
-`(7008,8192)`, `(7008,9000)`, `(8192,12001)`, `(15392,16381)` and two user slots.
-Additional requests start at CP-block boundaries, both within and across groups,
-and switch back to reordered traces. Tests check
-absolute RoPE lookup, attention PCC >=0.995, cache PCC >=0.999, stable metadata
-and shared-index addresses, and exact preservation of prior KV, later tiles,
-and the other slot.
+The same trace handles aligned, rotated, partial, and rewound requests.
+Metadata tensor addresses remain stable. Input and metadata staging precede
+trace timing.
 
-`tests/test_block_cyclic_golden.py` contains just a packing utility and one
-unparameterized 256K test. It tokenizes the Gutenberg input, checks the token IDs
-against the GPU trace, and runs 54 requests with seed 42: 53 starts off the 8K
-boundary, 53 rewinds larger than one tile, and 51 unaligned ends. All requests
-select among three traces using a fixed token buffer. Tokens and metadata are
-uploaded and synchronized before timing; warmup and capture are logged separately.
-It compares
-all heads and all positions in the final decoder layer's packed KV cache against
-`/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135`, requiring PCC >=0.98.
+## Validation
+
+- C++ work-plan tests enumerate required causal K chunks and halo addresses,
+  including mid-block wraps, partial/cache-end Q, and circular-cache regression.
+- Shared SDPA tests cover Gemma and GPT-OSS shapes, Q blocks 64/128, scalar
+  cache reuse, determinism, mixed sliding/global metadata traces, and circular KV.
+- Gemma operator tests replay one trace across slots, offsets, and partial ends
+  on 8x4 and 4x8. They check attention against PyTorch, absolute RoPE values,
+  written KV, unchanged prefix/future tiles, and the other user's cache.
+- `tests/test_block_cyclic_golden.py` has a packing utility and one 256K test.
+  It tokenizes the Gutenberg text, verifies token IDs, and replays 54 requests
+  with random tile-aligned starts, unaligned ends, and rewinds. It compares all
+  final-layer KV heads and positions against the GPU trace (PCC >=0.98).
+  The BFP8 aligned baseline is PCC 0.983890 against that BF16 reference.
 
 ```sh
 HF_MODEL=google/gemma-4-31B-it \
@@ -148,17 +78,17 @@ HF_HUB_OFFLINE=1 \
 python_env/bin/python -m pytest models/demos/gemma4_d_p/tests/test_block_cyclic_golden.py -sv
 ```
 
-The standalone test passed in 150.48 seconds with final-layer PCC 0.983890.
-Sharing expanded indices reduced total replay time across the same 54 requests
-from 30.056 to 28.724 seconds. `[8352,13591)` took 319.131 ms (previously
-337.502 ms); `[3168,9270)` took 370.767 ms (previously 397.769 ms).
-These timings exclude input/metadata staging, including index expansion.
-The canonical 256K/8192/8x4 test also passed: its first two replays took
-243.9 ms and 256.1 ms, matching the prior aligned baseline of 243.8/255.8 ms.
+Measured on Blackhole 8x4 with the same inputs and synchronized trace timing:
 
-The BFP8 model's native single-SWA aligned baseline is also PCC 0.983890 against this BF16
-GPU trace, so this end-to-end test uses 0.98. A stricter exploratory check found
-per-head sliding V scores of 0.987504 (layer 24) and 0.981308 (layer 25) for both
-aligned and rotated runs; a per-head 0.99 requirement rejects the aligned model
-too. The focused operator tests retain the stricter thresholds above.
-Serving integration is not exercised by these direct model/operator tests.
+| Request | Previous Gemma workaround | Native SWA |
+| --- | ---: | ---: |
+| `[0, 4300)` | 243.8 ms | 244.1 ms |
+| `[3168, 9270)` | 370.8 ms | 255.4 ms |
+| `[8352, 13591)` | 319.1 ms | 263.1 ms |
+| `[258016, 262144)` | 683.3 ms | 620.4 ms |
+| All 54 replays | 28.72 s | 23.30 s |
+| Canonical chunks 1 / 2 | 243.9 / 256.1 ms | 244.7 / 256.5 ms |
+
+Golden PCC remains 0.983890. Staging, warmup, and capture are excluded from
+replay timing.
+Serving integration is not exercised by these direct tests.

@@ -312,8 +312,7 @@ def sliding_ring_prefill_attention(
     slot_idx=0,
 ):
     """Attend sliding layers using separate K and V ring caches."""
-    return prefill_metadata.sliding.attention(
-        attention_fn=_ring_prefill_attention,
+    return _ring_prefill_attention(
         tt_q=tt_q,
         cache_k=cache_k,
         cache_v=cache_v,
@@ -378,20 +377,11 @@ def _ring_prefill_attention(
     cp = mesh_config.cp_degree
     cache_seq = ring_cache_seq_len(max_seq_len, cp)
 
-    # Buffer size depends on the mode, and the two requirements are opposites.
-    #
-    # Dense (no window): ring_joint gathers the entire per-device shard, so the buffer
-    # must span the FULL cache capacity — not logical_n, which survives a 2-chunk run
-    # and then fails "gather dim 2 too small".
-    #
-    # Sliding: only the predecessor halo is exchanged, and the op *requires* a compact
-    # buffer (gathered rows < cache_seq * ring), rejecting a full-capacity one with
-    # "requires a compact halo buffer". Size it to the halo, which is the window
-    # rounded up to whole k chunks.
+    # Rotated SWA can need two predecessor tails; global attention gathers the cache.
     if sliding_window_size:
         k_chunk = program_config.k_chunk_size
         halo_tokens = -(-(sliding_window_size - 1) // k_chunk) * k_chunk
-        gather_seq = max(halo_tokens, TILE_HEIGHT)
+        gather_seq = 2 * max(halo_tokens, TILE_HEIGHT)
     else:
         gather_seq = cache_seq * cp
     buffer_k = ccl_manager.get_ring_gather_buffer(
