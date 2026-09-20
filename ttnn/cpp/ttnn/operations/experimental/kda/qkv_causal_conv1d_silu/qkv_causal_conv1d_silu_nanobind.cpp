@@ -25,6 +25,13 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 tap0 * x[t-3] + tap1 * x[t-2] + tap2 * x[t-1] + tap3 * x[t]
             q, k, v = split(silu(convolved), [q_width, k_width, v_width])
 
+        At the logical sequence start, preceding tokens come from the caller's
+        incoming ``history``. Other ranks begin with ``predecessor_carry``. On a
+        rank containing both the chronological head and tail, the tail also
+        restarts from ``predecessor_carry`` instead of the adjacent local head
+        rows. The kernel derives these boundaries from ``actual_start`` and its
+        mesh coordinate.
+
         Args:
             input (ttnn.Tensor): Current tokens ``[1, T, Q+K+V]``. Must be an
                 interleaved ROW_MAJOR BFLOAT16 device tensor.

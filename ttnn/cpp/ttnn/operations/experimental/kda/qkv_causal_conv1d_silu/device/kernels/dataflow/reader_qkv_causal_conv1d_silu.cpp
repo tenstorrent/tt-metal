@@ -38,6 +38,7 @@ template <uint32_t block_ct, uint32_t num_blocks, uint32_t sp_rank, uint32_t sp_
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
+    const auto predecessor_carry = TensorAccessor(tensor::predecessor_carry);
     const auto tap0 = TensorAccessor(tensor::tap0);
     const auto tap1 = TensorAccessor(tensor::tap1);
     const auto tap2 = TensorAccessor(tensor::tap2);
@@ -64,8 +65,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         load_weight_block<block_ct>(noc, weights, tap0, tap1, tap2, tap3, tile_bytes, 0);
     }
 
-    constexpr uint32_t tile_width = 32;
-    constexpr uint32_t tile_height = 32;
+    constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
+    constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
     constexpr uint32_t block_row_bytes = block_ct * tile_width * sizeof(uint16_t);
     constexpr uint32_t block_offset_scale = tile_width * sizeof(uint16_t);
     for (uint32_t item = 0; item < wi_count; ++item) {
@@ -77,6 +78,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             load_weight_block<block_ct>(noc, weights, tap0, tap1, tap2, tap3, tile_bytes, ct_start);
         }
 
+        // Tile-aligned actual_start and local_rows make the split tile-aligned,
+        // so every row in this tile uses the same segment boundary.
         int32_t row_floor = 0;
         if (local_split_row != 0 && mt * tile_height >= local_split_row) {
             row_floor = static_cast<int32_t>(local_split_row);
@@ -97,7 +100,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                             {.offset_bytes = row * block_row_bytes});
                     };
                     if (initial_from_predecessor || row_floor != 0) {
-                        read_history(TensorAccessor(tensor::predecessor_carry));
+                        read_history(predecessor_carry);
                     } else {
                         read_history(history);
                     }
