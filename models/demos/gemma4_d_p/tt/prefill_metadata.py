@@ -48,14 +48,15 @@ class PrefillMetadata:
             ttnn.copy_host_to_device_tensor(host, self._buffers[name])
         return self._buffers[name]
 
-    def update(self, *, slot_idx, actual_start, actual_end):
-        """Stage all request inputs outside trace capture, before executing or replaying."""
+    def update(self, *, slot_idx, actual_start, actual_end, sliding_mode=None):
+        """Stage inputs before replay; sliding_mode can override graph selection for capture."""
         if not 0 <= slot_idx < self.num_users:
             raise ValueError(f"slot_idx must be in [0, {self.num_users}), got {slot_idx}")
         if actual_start < 0 or actual_start % ttnn.TILE_SIZE:
             raise ValueError(f"actual_start must be nonnegative and 32-token aligned, got {actual_start}")
         if not actual_start < actual_end <= min(actual_start + self.chunk_size, self.max_seq_len):
             raise ValueError("require actual_start < actual_end <= min(actual_start + chunk_size, max_seq_len)")
+        mode = self.sliding.select_mode(actual_start, actual_end, sliding_mode)
         self.slot_idx = self._stage("slot", torch.tensor([slot_idx]).reshape(1, 1, 1, 1))
         self.kv_actual_global = self._stage("start", torch.tensor([actual_start]).reshape(1, 1, 1, 1))
         self.actual_end = self._stage("end", torch.tensor([actual_end]).reshape(1, 1, 1, 1))
@@ -63,4 +64,4 @@ class PrefillMetadata:
         # Padded rows can extend beyond the RoPE table; their output is discarded.
         safe_positions = positions.masked_fill(positions >= self.max_seq_len, 0)
         self.positions = self._stage("positions", safe_positions.reshape(1, -1), seq_dim=1)
-        self.sliding.update(actual_start, positions)
+        self.sliding.update(actual_start, positions, mode=mode)

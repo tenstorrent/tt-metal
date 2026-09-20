@@ -18,12 +18,13 @@ from transformers import AutoTokenizer
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.gemma4_d_p.config import MeshConfig
+from models.demos.gemma4_d_p.tt.attention.sliding_chunk import SlidingChunkMode
 from models.demos.gemma4_d_p.tt.common import create_tt_model
 from models.demos.gemma4_d_p.tt.model import _cp_chunk_major_row_order
 from models.demos.gemma4_d_p.tt.prefill_metadata import chunk_positions
 
 
-def prefill_chunk(model, token_ids, actual_start, actual_end, *, device_tokens, trace_id, pad_token_id=0):
+def prefill_chunk(model, token_ids, actual_start, actual_end, *, device_tokens, trace_ids, pad_token_id=0):
     """Stage a block-cyclic request; return synchronized trace replay time in milliseconds."""
     mesh_config = model.mesh_config
     positions = chunk_positions(actual_start, model.prefill_chunk_size, mesh_config.cp_degree).flatten()
@@ -38,6 +39,7 @@ def prefill_chunk(model, token_ids, actual_start, actual_end, *, device_tokens, 
     )
     ttnn.copy_host_to_device_tensor(host_tokens, device_tokens)
     model.prefill_metadata.update(slot_idx=0, actual_start=actual_start, actual_end=actual_end)
+    trace_id = trace_ids[model.prefill_metadata.sliding.mode]
     ttnn.synchronize_device(mesh_config.device)
     start = time.perf_counter()
     ttnn.execute_trace(mesh_config.device, trace_id, cq_id=0, blocking=False)
@@ -65,7 +67,8 @@ def test_block_cyclic_prefill_256k():
         l1_small_size=16384,
         trace_region_size=int(os.getenv("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000)),
     )
-    trace_id = None
+    trace_ids = {}
+    trace_outputs = []
     try:
         mesh_config = MeshConfig(mesh_device)
         _, model, caches, _ = create_tt_model(
@@ -79,20 +82,23 @@ def test_block_cyclic_prefill_256k():
             mesh_mapper=mesh_config.shard_mapper(mesh_dims=(1, None)),
         )
         model._prefill_metadata_external = True
-        ttnn.synchronize_device(mesh_device)
+        for mode in SlidingChunkMode:
+            model.prefill_metadata.update(slot_idx=0, actual_start=0, actual_end=chunk_size, sliding_mode=mode)
+            ttnn.synchronize_device(mesh_device)
 
-        start = time.perf_counter()
-        output = model(model.transform_and_embed_prefill_inputs_device(device_tokens))
-        ttnn.synchronize_device(mesh_device)
-        output.deallocate(True)
-        logger.info("Warmup {:.3f} ms", (time.perf_counter() - start) * 1000)
+            start = time.perf_counter()
+            output = model(model.transform_and_embed_prefill_inputs_device(device_tokens))
+            ttnn.synchronize_device(mesh_device)
+            output.deallocate(True)
+            logger.info("{} warmup {:.3f} ms", mode.value, (time.perf_counter() - start) * 1000)
 
-        start = time.perf_counter()
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        output = model(model.transform_and_embed_prefill_inputs_device(device_tokens))
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        ttnn.synchronize_device(mesh_device)
-        logger.info("Trace capture {:.3f} ms", (time.perf_counter() - start) * 1000)
+            start = time.perf_counter()
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            trace_ids[mode] = trace_id
+            trace_outputs.append(model(model.transform_and_embed_prefill_inputs_device(device_tokens)))
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            ttnn.synchronize_device(mesh_device)
+            logger.info("{} trace capture {:.3f} ms", mode.value, (time.perf_counter() - start) * 1000)
 
         rng = random.Random(42)
         actual_end = 0
@@ -106,10 +112,16 @@ def test_block_cyclic_prefill_256k():
                 actual_start,
                 actual_end,
                 device_tokens=device_tokens,
-                trace_id=trace_id,
+                trace_ids=trace_ids,
                 pad_token_id=tokenizer.pad_token_id,
             )
-            logger.info("Prefill [{}, {}): device={:.3f} ms (trace replay)", actual_start, actual_end, elapsed_ms)
+            logger.info(
+                "Prefill [{}, {}): device={:.3f} ms ({} trace)",
+                actual_start,
+                actual_end,
+                elapsed_ms,
+                model.prefill_metadata.sliding.mode.value,
+            )
 
         # Restore absolute token order in the final-layer KV cache.
         row_order = _cp_chunk_major_row_order(context_len, mesh_config.cp_degree, chunk_size).argsort()
@@ -123,7 +135,9 @@ def test_block_cyclic_prefill_256k():
         logger.info("Final-layer KV cache vs GPU: PCC {:.6f}", pcc)
         assert passed, f"Final-layer KV cache PCC {pcc:.6f} < 0.98"
     finally:
-        if trace_id is not None:
+        for trace_id in trace_ids.values():
             ttnn.release_trace(mesh_device, trace_id)
+        for output in trace_outputs:
+            output.deallocate(True)
         ttnn.close_mesh_device(mesh_device)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
