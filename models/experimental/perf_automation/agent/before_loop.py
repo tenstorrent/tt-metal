@@ -709,12 +709,37 @@ def before_loop(
     if pathmap is None:
         raise _last_exc if _last_exc else RuntimeError("discover produced no pathmap")
     if pcc_abs is not None:
-        from .perf_test_gen import generate_perf_test
-
         _task = "main"
         if os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False"):
             _stem = Path(str(config["pcc_test"]).partition("::")[0]).stem
             _task = (_stem[5:] if _stem.startswith("test_") else _stem) or "main"
+    if pcc_abs is not None and config.get("perf_test"):
+        # AN EXPLICIT --perf-test IS ALREADY A DECISION, NOT A HINT. generate_perf_test always
+        # regenerates from scratch (force=True, "so a stale/partial perf test is NEVER reused") and
+        # its own docstring calls that intentional -- but that guarantee is worthless work when the
+        # operator already named the exact workload to profile, and paying for it anyway means an
+        # operator-supplied, already-working perf test can be discarded by a failed regeneration
+        # attempt before --perf-test is ever consulted (before_loop.py:801 previously read it only
+        # AFTER this block had already run or raised). Skip generation entirely and populate the same
+        # pathmap shape generation would have, so every downstream reader (perf_rel/case here, and
+        # pathmap["pipelines"]/["is_multimodal"] in run.py) sees an identical contract either way.
+        _pt_path, _, _pt_case = str(config["perf_test"]).partition("::")
+        pathmap["perf_test"] = {
+            "path": _pt_path,
+            "case": _pt_case,
+            "note": "explicit --perf-test (auto-generation skipped)",
+        }
+        pathmap["perf_tests"] = [pathmap["perf_test"]]
+        pathmap["pipelines"] = [{"task": _task, "perf_test": config["perf_test"], "pcc_test": pcc_override["path"]}]
+        pathmap["is_multimodal"] = False
+        print(
+            f"      perf test -> {config['perf_test']} (explicit --perf-test; auto-generation skipped)",
+            file=sys.stderr,
+            flush=True,
+        )
+    elif pcc_abs is not None:
+        from .perf_test_gen import generate_perf_test
+
         # WALK BEFORE WRITING. generate_perf_test has always accepted `stacks` and has always had a
         # multi-stack branch behind it -- one depth variable per stack instead of a single
         # TT_PERF_LAYERS -- and no production caller ever passed it, so that branch had never run.

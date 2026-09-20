@@ -131,6 +131,37 @@ def test_before_loop_all_mocks_produces_manifest_and_baseline(tmp_path, model_ro
     assert manifest2["discovery_review"]["decision"] == "continue"
 
 
+def test_an_explicit_perf_test_skips_generation_entirely(tmp_path, model_root, monkeypatch):
+    """--perf-test used to be consulted only AFTER generate_perf_test had already run (or raised) --
+    so an operator-supplied, already-working perf test paid for a wasted (and possibly failing)
+    regeneration on every run, and a failure there could crash the whole run before --perf-test was
+    ever read. generate_perf_test must not be called at all when config['perf_test'] is set."""
+    from agent import perf_test_gen as _ptg
+
+    def _must_not_be_called(*a, **k):
+        raise AssertionError("generate_perf_test was called despite an explicit --perf-test")
+
+    monkeypatch.setattr(_ptg, "generate_perf_test", _must_not_be_called)
+    result = _run(tmp_path, model_root, config_extra={"perf_test": "model/test_e2e.py::test_perf"})
+    manifest = json.loads((Path(result["run_dir"]) / "manifest.json").read_text())
+    assert manifest["perf_test_resolved"]["path"] == "model/test_e2e.py::test_perf"
+
+
+def test_an_explicit_perf_test_still_populates_pipelines_and_multimodal(tmp_path, model_root, monkeypatch):
+    """Downstream readers (run.py's pathmap["pipelines"]/["is_multimodal"]) must see the identical
+    contract whether the perf test was generated or supplied explicitly -- these were previously
+    only ever set inside the generation branch."""
+    from agent import perf_test_gen as _ptg
+
+    monkeypatch.setattr(_ptg, "generate_perf_test", lambda *a, **k: (_ for _ in ()).throw(AssertionError("called")))
+    result = _run(tmp_path, model_root, config_extra={"perf_test": "model/test_e2e.py::test_perf"})
+    manifest = json.loads((Path(result["run_dir"]) / "manifest.json").read_text())
+    assert manifest["pathmap"]["pipelines"] and manifest["pathmap"]["pipelines"][0]["perf_test"] == (
+        "model/test_e2e.py::test_perf"
+    )
+    assert manifest["pathmap"]["is_multimodal"] is False
+
+
 def test_before_loop_fatal_flag_stops_run(tmp_path, model_root):
     def fatal_runner(prompt):
         return json.dumps(
