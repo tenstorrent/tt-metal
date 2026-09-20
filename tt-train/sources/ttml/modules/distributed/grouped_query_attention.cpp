@@ -114,8 +114,26 @@ ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
         TT_FATAL(
             !mask.has_value(),
             "Non-causal mask is not supported in CP mode for now, pass nullopt if you want to use causal mask");
+        // The trainer's choice of backward, transport and layout; the block
+        // height from the planner unless the config pins it.
+        const auto& opts = ops::distributed::ring_attention_options();
+        uint32_t rows_per_block_tiles = 1U;
+        if (opts.backward_kind != ops::distributed::RingBackwardKind::TwoPass) {
+            rows_per_block_tiles = opts.rows_per_block_tiles != 0U
+                                       ? opts.rows_per_block_tiles
+                                       : ops::distributed::plan_rows_per_block_tiles(
+                                             query_with_heads->get_value(), opts.layout);
+        }
         attention = ops::distributed::ring_attention_sdpa(
-            query_with_heads, key_with_heads, value_with_heads, std::nullopt, ttml::metal::AttentionMaskType::Causal);
+            query_with_heads,
+            key_with_heads,
+            value_with_heads,
+            std::nullopt,
+            ttml::metal::AttentionMaskType::Causal,
+            opts.backward_kind,
+            rows_per_block_tiles,
+            opts.shift_transport,
+            opts.layout);
     } else {
         attention = ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
     }

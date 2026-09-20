@@ -93,4 +93,23 @@ autograd::TensorPtr ring_attention_sdpa(
     ttnn_fixed::distributed::RingShiftTransport shift_transport = ttnn_fixed::distributed::RingShiftTransport::Fifo,
     ttml::metal::ops::RingLayout layout = ttml::metal::ops::RingLayout::Contiguous);
 
+// How a model's attention runs the ring, set once by the trainer from its
+// config and read by the distributed attention module at every call. The
+// defaults are the original path: two-pass backward, FIFO shifts, the
+// contiguous layout. rows_per_block_tiles = 0 lets plan_rows_per_block_tiles
+// choose for the cyclic kinds.
+struct RingAttentionOptions {
+    RingBackwardKind backward_kind{RingBackwardKind::TwoPass};
+    uint32_t rows_per_block_tiles{0U};
+    ttnn_fixed::distributed::RingShiftTransport shift_transport{ttnn_fixed::distributed::RingShiftTransport::Fifo};
+    ttml::metal::ops::RingLayout layout{ttml::metal::ops::RingLayout::Contiguous};
+};
+RingAttentionOptions& ring_attention_options();
+
+// The planner's block height for a cyclic backward on this query's local
+// sequence: the tallest of 4, 2, 1 tiles whose schedule divides the chunk
+// (half the local rows on zigzag) and whose core count has a rectangle on
+// this device's grid. Logs its choice, in words, once per distinct shape.
+uint32_t plan_rows_per_block_tiles(const ttnn::Tensor& query, ttml::metal::ops::RingLayout layout);
+
 }  // namespace ttml::ops::distributed
