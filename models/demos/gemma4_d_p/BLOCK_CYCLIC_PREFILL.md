@@ -37,11 +37,12 @@ RoPE/SDPA changes; do not silently round a request down.
   to cache capacity; it has no compatible end tensor. Causality prevents padded
   keys (positions >=end) from affecting real queries (positions <end).
 - Sliding ring SDPA: its work plan and halo exchange require aligned, complete
-  groups. Forwarding a rotated start is insufficient. Gemma will gather Q into
-  two aligned groups, call existing SWA for each, then gather back to request
-  order. Dummy Q rows do not interact with real Q rows. The second group is
-  clamped to the last cache group for end-of-cache padding. This costs two SWA
-  calls; a native rotated halo kernel is a future performance improvement.
+  groups. Forwarding a rotated start is insufficient. Gemma uses native SWA
+  directly for chunk-aligned starts. For other starts, it gathers Q into the
+  aligned groups intersecting `[start,end)`, calls SWA once per group, then
+  restores request order. A range ending at the first group's boundary needs
+  only one call; only crossing that boundary requires two. Padded rows do not
+  increase the group count, and their outputs are discarded.
 
 Relevant implementations: `tt/attention/ring_prefill.py`, `tt/model.py`,
 `tt/prefill_metadata.py`; shared operator contracts live under
@@ -70,8 +71,8 @@ is `models/demos/deepseek_v3_d_p/tt/mla/utils.py::rotated_chip_positions`.
 - Synthetic device tests: packed global and separate sliding cache writes plus
   attention against PyTorch, with resident prefixes and two user slots. Check
   real output rows, retained prefixes, and untouched cache tiles beyond end.
-- Replay one trace with changed starts/ends/slots to catch captured host scalars;
-  compare rotated RoPE lookup with absolute-position lookup. No model weights
+- Replay each selected trace with changed starts/ends/slots to catch captured
+  host scalars; compare rotated RoPE lookup with absolute-position lookup. No model weights
   are needed. Run existing Gemma host tests and normal pre-commit hooks.
 
 ## Upstream check (2026-09-20)
@@ -94,10 +95,20 @@ then remove its metadata staging hook. No changes to RoPE or cache layout needed
 
 Eager: `model(hidden_states, user_id=slot, actual_start=start, actual_end=end)`.
 The hidden states must already have the service's block-cyclic CP row order.
-For tracing, set `model._prefill_metadata_external = True`; before capture/replay,
-call `model.prefill_metadata.update(slot_idx=slot, actual_start=start, actual_end=end)`
-and copy the new input into its existing device buffer. Updating only the three
-scalar buffers is insufficient: RoPE and the SWA adapter also need staging.
+For tracing, set `model._prefill_metadata_external = True` and capture separate
+graphs keyed by `SlidingChunkMode` (defined in `tt/attention/sliding_chunk.py`):
+
+- `ALIGNED`: one SWA call, no adapter gathers.
+- `SINGLE_GROUP`: one SWA call with input/output reordering.
+- `TWO_GROUPS`: two SWA calls, for real queries spanning two groups.
+
+Before warmup/capture, call `prefill_metadata.update(..., sliding_mode=mode)`
+to select the graph explicitly. All three can be captured using `[0,chunk_size)`.
+Before replay, call `update(slot_idx=slot, actual_start=start, actual_end=end)`
+without an override and select the trace using `prefill_metadata.sliding.mode`.
+Copy tokens into the fixed input buffer before replay. Updating only scalar
+buffers is insufficient: RoPE and the selected SWA graph also need staging.
+Trace selection is host-side; a captured graph cannot switch its SWA call count.
 
 Validated on Blackhole Galaxy (2026-09-20), without model weights:
 
@@ -106,9 +117,9 @@ python_env/bin/python -m pytest models/demos/gemma4_d_p/tests/unit -k 'not devic
 python_env/bin/python -m pytest models/demos/gemma4_d_p/tests/unit/test_block_cyclic_prefill.py -k device -sv
 ```
 
-61 host tests passed. All four device cases passed (global/sliding × 8x4/4x8),
-using one trace per case across `(start,end)` = `(0,1056)`, `(1056,9000)`,
-`(7008,9000)`, `(8192,12001)`, `(15392,16381)` and two user slots. Tests check
+88 host tests passed. All four device cases passed (global/sliding × 8x4/4x8),
+selecting among three traces per case across `(start,end)` = `(0,1056)`, `(1056,9000)`,
+`(7008,8192)`, `(7008,9000)`, `(8192,12001)`, `(15392,16381)` and two user slots. Tests check
 absolute RoPE lookup, attention PCC >=0.995, cache PCC >=0.999, stable metadata
 addresses, and exact preservation of prior KV, later tiles, and the other slot.
 
@@ -116,8 +127,9 @@ addresses, and exact preservation of prior KV, later tiles, and the other slot.
 unparameterized 256K test. It tokenizes the Gutenberg input, checks the token IDs
 against the GPU trace, and runs 54 requests with seed 42: 53 starts off the 8K
 boundary, 53 rewinds larger than one tile, and 51 unaligned ends. All requests
-replay one trace using a fixed token buffer. Tokens and metadata are uploaded and
-synchronized before the timer; warmup and capture are logged separately. It compares
+select among three traces using a fixed token buffer. Tokens and metadata are
+uploaded and synchronized before timing; warmup and capture are logged separately.
+It compares
 all heads and all positions in the final decoder layer's packed KV cache against
 `/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135`, requiring PCC >=0.98.
 
@@ -129,11 +141,12 @@ HF_HUB_OFFLINE=1 \
 python_env/bin/python -m pytest models/demos/gemma4_d_p/tests/test_block_cyclic_golden.py -sv
 ```
 
-The traced standalone test passed in 137.58 seconds, with final-layer PCC 0.983890.
-Its first two replays took 392.546 ms and 397.450 ms on this run. The canonical
-256K/8192/8x4 traced test also passed on this branch, with initial replays of
-393.1 ms and 405.1 ms. Both paths currently use the two-pass SWA adapter, including
-aligned requests; these timings include that additional device work.
+The standalone test passed in 145.97 seconds with final-layer PCC 0.983890.
+The canonical 256K/8192/8x4 test also passed: its first two replays took 243.8 ms
+and 255.8 ms, restoring the aligned path from 393.1 ms and 405.1 ms. In the
+randomized test, `[8352,13591)` uses one reordered SWA call (337.502 ms);
+`[3168,9270)` spans two groups and uses two calls (397.769 ms).
+
 The BFP8 model's native single-SWA aligned baseline is also PCC 0.983890 against this BF16
 GPU trace, so this end-to-end test uses 0.98. A stricter exploratory check found
 per-head sliding V scores of 0.987504 (layer 24) and 0.981308 (layer 25) for both
