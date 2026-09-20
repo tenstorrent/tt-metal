@@ -271,7 +271,9 @@ void kernel_main() {
             if constexpr (return_lse) {
                 // One lse tile per query row tile of the chunk; the compute kernel pushes Sq_chunk_t
                 // of them, the rows past out_row_tile_count are padding and are popped unwritten.
-                constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse);
+                // kernel_main is no template, so this branch is compiled without return_lse too: the
+                // tile size must not be evaluated for the -1 placeholder then.
+                constexpr uint32_t lse_tile_bytes = return_lse ? get_tile_size(cb_lse) : 0u;
                 const uint32_t lse_tile_id = lse_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
                 write_block(
                     noc,
