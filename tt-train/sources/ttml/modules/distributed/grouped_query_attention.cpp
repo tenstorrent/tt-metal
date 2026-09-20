@@ -133,7 +133,9 @@ ttml::autograd::TensorPtr DistributedGroupedQueryAttention::operator()(
             opts.backward_kind,
             rows_per_block_tiles,
             opts.shift_transport,
-            opts.layout);
+            opts.layout,
+            opts.forward_kind,
+            opts.forward_chunk_size);
     } else {
         attention = ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
     }

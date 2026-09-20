@@ -24,6 +24,7 @@
 #include "metal/common/const_utils.hpp"
 #include "metal/ops/ring_sdpa_bw/ring_sdpa_bw.hpp"
 #include "metal/ops/ring_sdpa_fw/ring_sdpa_fw.hpp"
+#include "metal/ops/ring_ttnn_sdpa_fw/ring_ttnn_sdpa_fw.hpp"
 #include "metal/ops/cyclic_sdpa_bw/device/cyclic_sdpa_bw_program_factory.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
@@ -208,7 +209,9 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
     const autograd::TensorPtr& value,
     RingBackwardKind backward_kind,
     uint32_t rows_per_block_tiles,
-    ttnn_fixed::distributed::RingShiftTransport shift_transport) {
+    ttnn_fixed::distributed::RingShiftTransport shift_transport,
+    RingForwardKind forward_kind,
+    uint32_t forward_chunk_size) {
     using ttml::metal::AttentionMaskType;
     using ttml::metal::ops::ZigzagVisitor;
     using Direction = ttnn_fixed::distributed::RingShiftDirection;
@@ -266,8 +269,14 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
         // Chips the launch does not select run nothing and must contribute
         // nothing: an lse of -inf does that.
         ttnn::copy(no_contrib, step_inter);
-        ttml::metal::ring_zigzag_sdpa_fw(
-            q, k, v, ring_size, cp_axis, step, who, mask, Direction::Backward, step_out, step_inter);
+        if (forward_kind == RingForwardKind::Ttnn) {
+            ttml::metal::ring_ttnn_sdpa_fw(
+                q, k, v, ring_size, cp_axis, step, mask, Direction::Backward, /* zigzag */ true, who,
+                forward_chunk_size, step_out, step_inter);
+        } else {
+            ttml::metal::ring_zigzag_sdpa_fw(
+                q, k, v, ring_size, cp_axis, step, who, mask, Direction::Backward, step_out, step_inter);
+        }
         combine_partial(out_acc, lse_acc, step_out, step_inter, batch_num, heads, n);
     };
 
@@ -509,7 +518,9 @@ autograd::TensorPtr ring_attention_sdpa(
     RingBackwardKind backward_kind,
     uint32_t rows_per_block_tiles,
     ttnn_fixed::distributed::RingShiftTransport shift_transport,
-    ttml::metal::ops::RingLayout layout) {
+    ttml::metal::ops::RingLayout layout,
+    RingForwardKind forward_kind,
+    uint32_t forward_chunk_size) {
     if (!autograd::ctx().is_parallelism_context_initialized() ||
         !autograd::ctx().get_parallelism_context().is_cp_enabled()) {
         return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
@@ -520,7 +531,8 @@ autograd::TensorPtr ring_attention_sdpa(
             mask_type == ttml::metal::AttentionMaskType::Causal,
             "The zigzag layout balances a causal ring; for an unmasked one the contiguous layout is already "
             "balanced");
-        return ring_attention_sdpa_zigzag(query, key, value, backward_kind, rows_per_block_tiles, shift_transport);
+        return ring_attention_sdpa_zigzag(
+            query, key, value, backward_kind, rows_per_block_tiles, shift_transport, forward_kind, forward_chunk_size);
     }
 
     const auto& pctx = autograd::ctx().get_parallelism_context();
@@ -587,17 +599,34 @@ autograd::TensorPtr ring_attention_sdpa(
             ttnn::copy(no_contrib_intermediate, intermediate_tensor);
         }
 
-        auto [out_tensor, inter_tensor] = ttml::metal::ring_sdpa_fw(
-            query_tensor,
-            k_current,
-            v_current,
-            ring_size,
-            cp_axis_value,
-            step,
-            mask_type,
-            ttml::metal::ops::ring_sdpa_fw::RingDirection::Backward,
-            output_tensor,
-            intermediate_tensor);
+        if (forward_kind == RingForwardKind::Ttnn) {
+            ttml::metal::ring_ttnn_sdpa_fw(
+                query_tensor,
+                k_current,
+                v_current,
+                ring_size,
+                cp_axis_value,
+                step,
+                mask_type,
+                ttml::metal::ops::ring_ttnn_sdpa_fw::RingDirection::Backward,
+                /* zigzag */ false,
+                ttml::metal::ops::ZigzagVisitor::Any,
+                forward_chunk_size,
+                output_tensor,
+                intermediate_tensor);
+        } else {
+            ttml::metal::ring_sdpa_fw(
+                query_tensor,
+                k_current,
+                v_current,
+                ring_size,
+                cp_axis_value,
+                step,
+                mask_type,
+                ttml::metal::ops::ring_sdpa_fw::RingDirection::Backward,
+                output_tensor,
+                intermediate_tensor);
+        }
 
         // Extract logsumexp from column 0 of intermediate
         // Intermediate shape: (B, H, S, 32) FP32, logsumexp in column 0

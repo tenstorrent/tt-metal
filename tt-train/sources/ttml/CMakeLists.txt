@@ -190,6 +190,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
+    # Ring SDPA Forward through ttnn's chunk-blocked kernel with its lse output
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_ttnn_sdpa_fw/ring_ttnn_sdpa_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_ttnn_sdpa_fw/device/ring_ttnn_sdpa_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_ttnn_sdpa_fw/device/ring_ttnn_sdpa_fw_program_factory.cpp
     # Ring SDPA Forward (for ring attention / context parallelism)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/ring_sdpa_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_device_operation.cpp
