@@ -849,8 +849,9 @@ Gradients run_relay(
             relay_reader_args.push_back(1u);  // slice_count
             relay_reader_args.push_back(1u);  // slice_stride
             // One chunk, one pair (0, 0): the whole sequence against itself;
-            // as many heads as groups, one slice each.
-            for (const uint32_t v : {1u, 1u, groups, 0u, 0u}) {
+            // as many heads as groups, one slice each, one query head per key
+            // head (kv_slices = q_heads = kv_heads = groups, heads_per_group 1).
+            for (const uint32_t v : {1u, 1u, groups, groups, groups, groups, 1u, 0u, 0u}) {
                 relay_reader_args.push_back(v);
             }
             SetRuntimeArgs(program, reader, core, relay_reader_args);
@@ -860,7 +861,8 @@ Gradients run_relay(
                  static_cast<uint32_t>(coordinator.x), static_cast<uint32_t>(coordinator.y),
                  static_cast<uint32_t>(mcast_start.x), static_cast<uint32_t>(mcast_start.y),
                  static_cast<uint32_t>(mcast_end.x), static_cast<uint32_t>(mcast_end.y),
-                 c == 1u ? 1u : 0u, 1u, 1u, /* chunks */ 1u, /* pairs */ 1u, /* heads */ groups, 0u, 0u});
+                 c == 1u ? 1u : 0u, 1u, 1u, /* chunks */ 1u, /* pairs */ 1u, /* heads */ groups,
+                 /* kv_slices, q_heads, kv_heads, heads_per_group */ groups, groups, groups, 1u, 0u, 0u});
             SetRuntimeArgs(program, compute, core, {c, 1u});
         }
     }
@@ -1524,6 +1526,364 @@ TEST(CyclicSdpaBwDenseOpTest, AccumulateTwiceDoublesTallBlocksFourHeads) {
 }
 TEST(CyclicSdpaBwDenseOpTest, AccumulateTwiceDoublesShortBlocks) {
     check_accumulate_twice(/* batch */ 2, /* heads */ 3, /* C */ 2, /* Bt */ 1, /* dense */ true);
+}
+
+// ------------------------------------------------------- grouped-query heads
+// Grouped-query attention: kv_heads key/value heads per batch, each shared by
+// heads_per_group = q_heads / kv_heads query heads. Every query head is its
+// own problem for dQ; the heads of a group add into one dK and one dV. The op
+// runs a group's heads in turn on one core group and seeds every column's
+// gradients from DRAM, so the sums come out in head order.
+namespace {
+
+// The backward of one head on the host from given (bf16-rounded) inputs, with
+// the same arithmetic as make_reference -- for inputs shared between heads.
+Reference reference_from_inputs(
+    const xt::xarray<float>& Q,
+    const xt::xarray<float>& K,
+    const xt::xarray<float>& V,
+    const xt::xarray<float>& dO,
+    bool causal) {
+    Reference r;
+    r.N = static_cast<uint32_t>(Q.shape()[0]);
+    r.d = static_cast<uint32_t>(Q.shape()[1]);
+    const uint32_t N = r.N;
+    const uint32_t d = r.d;
+    const float scale = 1.0F / std::sqrt(static_cast<float>(d));
+    r.Q = Q;
+    r.K = K;
+    r.V = V;
+    r.dO = dO;
+
+    const xt::xarray<float> S = xt::linalg::dot(r.Q, xt::transpose(r.K)) * scale;
+    xt::xarray<float> P = xt::zeros<float>({N, N});
+    std::vector<float> lse(N, 0.0F);
+    for (uint32_t i = 0; i < N; ++i) {
+        const uint32_t last = causal ? i : N - 1u;
+        float m = -std::numeric_limits<float>::infinity();
+        for (uint32_t j = 0; j <= last; ++j) {
+            m = std::max(m, S(i, j));
+        }
+        float sum = 0.0F;
+        for (uint32_t j = 0; j <= last; ++j) {
+            sum += std::exp(S(i, j) - m);
+        }
+        lse[i] = m + std::log(sum);
+        for (uint32_t j = 0; j <= last; ++j) {
+            P(i, j) = std::exp(S(i, j) - lse[i]);
+        }
+    }
+    r.O = xt::linalg::dot(P, r.V);
+    const xt::xarray<float> dP = xt::linalg::dot(r.dO, xt::transpose(r.V));
+    std::vector<float> u(N, 0.0F);
+    for (uint32_t i = 0; i < N; ++i) {
+        float sum = 0.0F;
+        for (uint32_t c = 0; c < d; ++c) {
+            sum += r.dO(i, c) * r.O(i, c);
+        }
+        u[i] = sum;
+    }
+    xt::xarray<float> dS = xt::zeros<float>({N, N});
+    for (uint32_t i = 0; i < N; ++i) {
+        const uint32_t last = causal ? i : N - 1u;
+        for (uint32_t j = 0; j <= last; ++j) {
+            dS(i, j) = P(i, j) * (dP(i, j) - u[i]) * scale;
+        }
+    }
+    r.dQ = xt::linalg::dot(dS, r.K);
+    r.dK = xt::linalg::dot(xt::transpose(dS), r.Q);
+    r.dV = xt::linalg::dot(xt::transpose(P), r.dO);
+    r.lse_tile = xt::zeros<float>({1u, 1u, N, kTile});
+    r.u_tile = xt::zeros<float>({1u, 1u, N, kTile});
+    for (uint32_t i = 0; i < N; ++i) {
+        r.lse_tile(0, 0, i, 0) = lse[i];
+        r.u_tile(0, 0, i, 0) = u[i];
+    }
+    return r;
+}
+
+struct GqaProblem {
+    uint32_t batch{}, q_heads{}, kv_heads{}, N{}, d{};
+    std::vector<Reference> heads;   // per (batch, query head), at b * q_heads + h
+    xt::xarray<float> Q, dO;        // (B, H, N, d)
+    xt::xarray<float> K, V;         // (B, G, N, d)
+    xt::xarray<float> lse, u;       // (B, H, N, 32)
+    xt::xarray<float> dK, dV;       // (B, G, N, d): the group's heads, summed in head order
+};
+
+GqaProblem make_gqa_problem(uint32_t batch, uint32_t q_heads, uint32_t kv_heads, uint32_t N, uint32_t d, bool dense) {
+    GqaProblem p;
+    p.batch = batch;
+    p.q_heads = q_heads;
+    p.kv_heads = kv_heads;
+    p.N = N;
+    p.d = d;
+    const uint32_t hpg = q_heads / kv_heads;
+    p.Q = xt::zeros<float>({batch, q_heads, N, d});
+    p.dO = xt::zeros<float>({batch, q_heads, N, d});
+    p.K = xt::zeros<float>({batch, kv_heads, N, d});
+    p.V = xt::zeros<float>({batch, kv_heads, N, d});
+    p.lse = xt::zeros<float>({batch, q_heads, N, kTile});
+    p.u = xt::zeros<float>({batch, q_heads, N, kTile});
+    p.dK = xt::zeros<float>({batch, kv_heads, N, d});
+    p.dV = xt::zeros<float>({batch, kv_heads, N, d});
+    for (uint32_t b = 0; b < batch; ++b) {
+        for (uint32_t g = 0; g < kv_heads; ++g) {
+            const uint32_t bg = b * kv_heads + g;
+            const auto K = random_bf16_matrix(N, d, 1000u + 50u * bg);
+            const auto V = random_bf16_matrix(N, d, 1001u + 50u * bg);
+            xt::view(p.K, b, g, xt::all(), xt::all()) = K;
+            xt::view(p.V, b, g, xt::all(), xt::all()) = V;
+            xt::xarray<float> dK_sum = xt::zeros<float>({N, d});
+            xt::xarray<float> dV_sum = xt::zeros<float>({N, d});
+            for (uint32_t j = 0; j < hpg; ++j) {
+                const uint32_t h = g * hpg + j;
+                const uint32_t bh = b * q_heads + h;
+                const auto Q = random_bf16_matrix(N, d, 2000u + 50u * bh);
+                const auto dO = random_bf16_matrix(N, d, 2001u + 50u * bh);
+                Reference r = reference_from_inputs(Q, K, V, dO, /* causal */ !dense);
+                xt::view(p.Q, b, h, xt::all(), xt::all()) = Q;
+                xt::view(p.dO, b, h, xt::all(), xt::all()) = dO;
+                xt::view(p.lse, b, h, xt::all(), xt::all()) = xt::view(r.lse_tile, 0, 0, xt::all(), xt::all());
+                xt::view(p.u, b, h, xt::all(), xt::all()) = xt::view(r.u_tile, 0, 0, xt::all(), xt::all());
+                dK_sum = dK_sum + r.dK;  // head order, as the device adds them
+                dV_sum = dV_sum + r.dV;
+                p.heads.push_back(std::move(r));  // b-major, h-minor: b * q_heads + h
+            }
+            xt::view(p.dK, b, g, xt::all(), xt::all()) = dK_sum;
+            xt::view(p.dV, b, g, xt::all(), xt::all()) = dV_sum;
+        }
+    }
+    return p;
+}
+
+struct GqaOutputs {
+    xt::xarray<float> dQ, dK, dV;
+};
+
+// Upload the problem and run the op; with `twice`, accumulate two launches
+// into preallocated sums so every gradient should come out doubled.
+GqaOutputs run_gqa_op(const GqaProblem& p, uint32_t Bt, bool dense, bool twice = false) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto q = ttml::core::from_xtensor(p.Q, device);
+    const auto k = ttml::core::from_xtensor(p.K, device);
+    const auto v = ttml::core::from_xtensor(p.V, device);
+    const auto dO = ttml::core::from_xtensor(p.dO, device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(p.lse, device);
+    const auto u = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(p.u, device);
+    const auto mask = dense ? ttml::metal::AttentionMaskType::None : ttml::metal::AttentionMaskType::Causal;
+    if (!twice) {
+        const auto [gq, gk, gv] = ttml::metal::cyclic_sdpa_bw(q, k, v, dO, lse, u, Bt, false, mask);
+        return {ttml::core::to_xtensor(gq), ttml::core::to_xtensor(gk), ttml::core::to_xtensor(gv)};
+    }
+    auto acc_q = ttnn::zeros_like(q, ttnn::DataType::FLOAT32);
+    auto acc_k = ttnn::zeros_like(k, ttnn::DataType::FLOAT32);
+    auto acc_v = ttnn::zeros_like(v, ttnn::DataType::FLOAT32);
+    for (int pass = 0; pass < 2; ++pass) {
+        std::tie(acc_q, acc_k, acc_v) = ttml::metal::cyclic_sdpa_bw(
+            q, k, v, dO, lse, u, Bt, false, mask, /* accumulate */ true, acc_q, acc_k, acc_v);
+    }
+    return {ttml::core::to_xtensor(acc_q), ttml::core::to_xtensor(acc_k), ttml::core::to_xtensor(acc_v)};
+}
+
+xt::xarray<float> slice_of(const xt::xarray<float>& x, uint32_t b, uint32_t h) {
+    return xt::xarray<float>(xt::view(x, b, h, xt::all(), xt::all()));
+}
+
+float relative_rms(const xt::xarray<float>& got, const xt::xarray<float>& want) {
+    const float num = xt::sum(xt::square(got - want))();
+    const float den = xt::sum(xt::square(want))();
+    return std::sqrt(num / den);
+}
+
+void expect_slice_close(
+    const xt::xarray<float>& got, const xt::xarray<float>& want, uint32_t b, uint32_t h, const char* what,
+    float factor = 1.0F) {
+    const auto g = slice_of(got, b, h);
+    const float scale = xt::amax(xt::abs(want))() * factor;
+    const float err = xt::amax(xt::abs(g - factor * want))();
+    EXPECT_LT(err, 0.06F * scale) << what << " (" << b << ", " << h << "): max error " << err << " against scale "
+                                  << scale;
+}
+
+void check_gqa(
+    uint32_t batch, uint32_t q_heads, uint32_t kv_heads, uint32_t C, uint32_t Bt, bool dense = false,
+    bool twice = false) {
+    const uint32_t N = 2u * C * Bt * kTile;
+    const auto p = make_gqa_problem(batch, q_heads, kv_heads, N, 64u, dense);
+    const auto out = run_gqa_op(p, Bt, dense, twice);
+    const float factor = twice ? 2.0F : 1.0F;
+    ASSERT_EQ(out.dK.shape()[1], kv_heads) << "dK must have the key's head count";
+    ASSERT_EQ(out.dV.shape()[1], kv_heads) << "dV must have the key's head count";
+    for (uint32_t b = 0; b < batch; ++b) {
+        for (uint32_t h = 0; h < q_heads; ++h) {
+            expect_slice_close(out.dQ, p.heads[b * q_heads + h].dQ, b, h, "dQ", factor);
+        }
+        for (uint32_t g = 0; g < kv_heads; ++g) {
+            expect_slice_close(out.dK, slice_of(p.dK, b, g), b, g, "dK", factor);
+            expect_slice_close(out.dV, slice_of(p.dV, b, g), b, g, "dV", factor);
+        }
+    }
+}
+
+}  // namespace
+
+TEST(CyclicSdpaBwGqaTest, TwoHeadsPerKeyHead) {
+    check_gqa(/* batch */ 2, /* q_heads */ 4, /* kv_heads */ 2, /* C */ 2, /* Bt */ 1);
+}
+TEST(CyclicSdpaBwGqaTest, TwoHeadsPerKeyHeadTallBlocks) {
+    check_gqa(2, 4, 2, 2, 2);
+}
+TEST(CyclicSdpaBwGqaTest, FourHeadsPerKeyHead) {
+    check_gqa(1, 8, 2, 2, 1);
+}
+// One key head, so one core group runs all eight query heads in turn.
+TEST(CyclicSdpaBwGqaTest, EightHeadsOneKeyHead) {
+    check_gqa(1, 8, 1, 2, 2);
+}
+// Six (batch, key head) slices: the groups take them side by side and in turn.
+TEST(CyclicSdpaBwGqaTest, ThreeBatches) {
+    check_gqa(3, 4, 2, 2, 1);
+}
+TEST(CyclicSdpaBwGqaTest, FourTileBlocks) {
+    check_gqa(1, 4, 2, 2, 4);
+}
+TEST(CyclicSdpaBwGqaTest, WiderHead) {
+    const auto p = make_gqa_problem(1, 4, 2, 2u * 2u * 1u * kTile, 128u, false);
+    const auto out = run_gqa_op(p, 1, false);
+    for (uint32_t h = 0; h < 4; ++h) {
+        expect_slice_close(out.dQ, p.heads[h].dQ, 0, h, "dQ");
+    }
+    for (uint32_t g = 0; g < 2; ++g) {
+        expect_slice_close(out.dK, slice_of(p.dK, 0, g), 0, g, "dK");
+        expect_slice_close(out.dV, slice_of(p.dV, 0, g), 0, g, "dV");
+    }
+}
+TEST(CyclicSdpaBwGqaDenseTest, TwoHeadsPerKeyHead) {
+    check_gqa(2, 4, 2, 2, 1, /* dense */ true);
+}
+TEST(CyclicSdpaBwGqaDenseTest, FourHeadsPerKeyHeadTallBlocks) {
+    check_gqa(1, 8, 2, 2, 2, /* dense */ true);
+}
+TEST(CyclicSdpaBwGqaTest, AccumulateTwiceDoubles) {
+    check_gqa(2, 4, 2, 2, 2, /* dense */ false, /* twice */ true);
+}
+TEST(CyclicSdpaBwGqaDenseTest, AccumulateTwiceDoubles) {
+    check_gqa(1, 8, 2, 2, 1, /* dense */ true, /* twice */ true);
+}
+
+TEST(CyclicSdpaBwGqaTest, RefusesHeadCountsThatDoNotDivide) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t N = 2u * 2u * kTile;
+    const auto q = ttml::core::from_xtensor(xt::xarray<float>(xt::zeros<float>({1u, 3u, N, 64u})), device);
+    const auto k = ttml::core::from_xtensor(xt::xarray<float>(xt::zeros<float>({1u, 2u, N, 64u})), device);
+    const auto stat = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        xt::xarray<float>(xt::zeros<float>({1u, 3u, N, kTile})), device);
+    EXPECT_ANY_THROW(ttml::metal::cyclic_sdpa_bw(q, k, k, q, stat, stat, 1));
+}
+
+// The grouped result is the per-head result summed. Run the same problem with
+// K and V repeated to every query head -- plain multi-head attention -- and
+// add the heads of each group on the host in head order, which is the order
+// the device adds them in: one Float32 add of the seed at each handover.
+// dQ does not depend on the grouping at all and must match bit for bit.
+TEST(CyclicSdpaBwGqaTest, MatchesRepeatedKeysSummedInHeadOrder) {
+    const uint32_t batch = 2, q_heads = 4, kv_heads = 2, C = 2, Bt = 2, d = 64;
+    const uint32_t hpg = q_heads / kv_heads;
+    const uint32_t N = 2u * C * Bt * kTile;
+    const auto p = make_gqa_problem(batch, q_heads, kv_heads, N, d, false);
+    const auto grouped = run_gqa_op(p, Bt, false);
+
+    GqaProblem repeated = p;
+    repeated.kv_heads = q_heads;
+    repeated.K = xt::zeros<float>({batch, q_heads, N, d});
+    repeated.V = xt::zeros<float>({batch, q_heads, N, d});
+    for (uint32_t b = 0; b < batch; ++b) {
+        for (uint32_t h = 0; h < q_heads; ++h) {
+            xt::view(repeated.K, b, h, xt::all(), xt::all()) = xt::view(p.K, b, h / hpg, xt::all(), xt::all());
+            xt::view(repeated.V, b, h, xt::all(), xt::all()) = xt::view(p.V, b, h / hpg, xt::all(), xt::all());
+        }
+    }
+    const auto per_head = run_gqa_op(repeated, Bt, false);
+
+    const auto count_mismatches = [](const xt::xarray<float>& a, const xt::xarray<float>& b, float& worst) {
+        uint32_t n = 0;
+        worst = 0.0F;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (a.flat(i) != b.flat(i)) {
+                ++n;
+                worst = std::max(worst, std::abs(a.flat(i) - b.flat(i)));
+            }
+        }
+        return n;
+    };
+    float worst = 0.0F;
+    EXPECT_EQ(count_mismatches(grouped.dQ, per_head.dQ, worst), 0u) << "dQ differs between grouped and repeated keys, worst " << worst;
+    for (uint32_t b = 0; b < batch; ++b) {
+        for (uint32_t g = 0; g < kv_heads; ++g) {
+            xt::xarray<float> dK_sum = xt::zeros<float>({N, d});
+            xt::xarray<float> dV_sum = xt::zeros<float>({N, d});
+            for (uint32_t j = 0; j < hpg; ++j) {
+                dK_sum = dK_sum + slice_of(per_head.dK, b, g * hpg + j);
+                dV_sum = dV_sum + slice_of(per_head.dV, b, g * hpg + j);
+            }
+            const float scale_k = xt::amax(xt::abs(dK_sum))();
+            const float scale_v = xt::amax(xt::abs(dV_sum))();
+            const uint32_t nk = count_mismatches(slice_of(grouped.dK, b, g), dK_sum, worst);
+            std::printf("  gqa vs repeated (%u, %u): dK %u words differ, worst %.3e of %.3e\n", b, g, nk, worst, scale_k);
+            EXPECT_LT(worst, 1e-5F * scale_k) << "dK (" << b << ", " << g << ")";
+            const uint32_t nv = count_mismatches(slice_of(grouped.dV, b, g), dV_sum, worst);
+            std::printf("  gqa vs repeated (%u, %u): dV %u words differ, worst %.3e of %.3e\n", b, g, nv, worst, scale_v);
+            EXPECT_LT(worst, 1e-5F * scale_v) << "dV (" << b << ", " << g << ")";
+        }
+    }
+}
+
+// Through the real forward, whose statistics are the ones a model hands over,
+// and side by side with the repository's two-pass backward, which has
+// grouped-query attention of its own. Both are graded against the host
+// reference; the relative RMS of each is printed so the two can be compared.
+TEST(CyclicSdpaBwGqaTest, ConsumesTheRealForwardAndAgreesWithTheTwoPassBackward) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t batch = 1, q_heads = 4, kv_heads = 2, C = 4, Bt = 2, d = 64;
+    const uint32_t N = 2u * C * Bt * kTile;
+    const auto p = make_gqa_problem(batch, q_heads, kv_heads, N, d, false);
+    const auto q = ttml::core::from_xtensor(p.Q, device);
+    const auto k = ttml::core::from_xtensor(p.K, device);
+    const auto v = ttml::core::from_xtensor(p.V, device);
+    const auto dO = ttml::core::from_xtensor(p.dO, device);
+
+    const auto forward = ttml::metal::sdpa_fw(
+        q, k, v, ttml::metal::AttentionMaskType::Causal, std::nullopt, 0.0F, /*return_intermediates=*/true);
+    const auto attn_output = forward[0].value();
+    const auto intermediates = forward[1].value();
+    const auto O = ttml::core::to_xtensor(attn_output);
+    for (uint32_t h = 0; h < q_heads; ++h) {
+        expect_slice_close(O, p.heads[h].O, 0, h, "sdpa_fw output against O = P V");
+    }
+
+    const auto [cq, ck, cv] = ttml::metal::cyclic_sdpa_bw_from_forward(q, k, v, dO, attn_output, intermediates, Bt);
+    const auto [tq, tk, tv] = ttml::metal::sdpa_bw(
+        dO, attn_output, q, k, v, intermediates, ttml::metal::AttentionMaskType::Causal);
+    ASSERT_EQ(tk.logical_shape()[1], kv_heads) << "the two-pass backward returns dK with the key's head count";
+    const auto cyclic = GqaOutputs{ttml::core::to_xtensor(cq), ttml::core::to_xtensor(ck), ttml::core::to_xtensor(cv)};
+    const auto two_pass = GqaOutputs{ttml::core::to_xtensor(tq), ttml::core::to_xtensor(tk), ttml::core::to_xtensor(tv)};
+
+    const auto grade = [&](const char* what, const xt::xarray<float>& c, const xt::xarray<float>& t,
+                           const xt::xarray<float>& want, uint32_t h) {
+        expect_slice_close(c, want, 0, h, (std::string("cyclic ") + what).c_str());
+        expect_slice_close(t, want, 0, h, (std::string("two-pass ") + what).c_str());
+        std::printf(
+            "  %s head %u: relative RMS cyclic %.2e, two-pass %.2e\n", what, h, relative_rms(slice_of(c, 0, h), want),
+            relative_rms(slice_of(t, 0, h), want));
+    };
+    for (uint32_t h = 0; h < q_heads; ++h) {
+        grade("dQ", cyclic.dQ, two_pass.dQ, p.heads[h].dQ, h);
+    }
+    for (uint32_t g = 0; g < kv_heads; ++g) {
+        grade("dK", cyclic.dK, two_pass.dK, slice_of(p.dK, 0, g), g);
+        grade("dV", cyclic.dV, two_pass.dV, slice_of(p.dV, 0, g), g);
+    }
 }
 
 // What a ring step sequence does on one chip: the same Q, dO and statistics

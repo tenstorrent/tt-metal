@@ -41,10 +41,12 @@ which the ring driver arranges.
 
 | tensor | shape | type | notes |
 |---|---|---|---|
-| `query`, `key`, `value`, `grad_output` | `(B, H, N, d)` | bfloat16 | tile layout, interleaved, on device; one shape for all four |
+| `query`, `grad_output` | `(B, H, N, d)` | bfloat16 | tile layout, interleaved, on device |
+| `key`, `value` | `(B, G, N, d)` | bfloat16 | `G = H` for multi-head attention; `G` a divisor of `H` for grouped-query attention (see below) |
 | `log_sum_exp`, `row_scalar` (`D`) | `(B, H, N, 1)` or `(B, H, N, 32)` | Float32 | one value per row, read from column 0 of the row's tile |
 | `attn_output` (from-forward overload) | `(B, H, N, d)` | bfloat16 | `D` is formed from it in Float32 |
-| dQ, dK, dV (returned) | `(B, H, N, d)` | Float32 | see "accumulating" below |
+| dQ (returned) | `(B, H, N, d)` | Float32 | see "accumulating" below |
+| dK, dV (returned) | `(B, G, N, d)` | Float32 | the key's shape: one gradient per key head |
 
 Constraints, each checked with a message naming what failed:
 
@@ -55,9 +57,35 @@ Constraints, each checked with a message naming what failed:
   pair live). There is no mask-tensor path; `Arbitrary` is rejected.
 * Operands bfloat16 (the matmul source registers take no Float32),
   statistics Float32.
-* Not supported: dropout, grouped-query attention (`K`/`V` with fewer heads
-  than `Q`), head dimensions that are not multiples of 32, sharded or
-  row-major tensors.
+* Not supported: dropout, head dimensions that are not multiples of 32,
+  sharded or row-major tensors.
+
+## Grouped-query attention
+
+`K` and `V` may carry fewer heads than `Q`: `G` key heads, each shared by
+`H / G` query heads (query head `h` uses key head `h / (H / G)`, as the
+repository's `sdpa_fw` and `sdpa_bw` have it). Every query head is still one
+slice of the launch, with its own dQ; the query heads of one key head add
+their dK and dV into the one gradient of that head. The op runs them in turn
+on one core group -- the planner caps the group count to a divisor of
+`B x G`, so a key head's query heads never run side by side -- and reads
+every column's running dK and dV from DRAM before adding to them, so the sum
+comes out in head order, one Float32 rounding per head away from summing the
+per-head results (measured: a third of the words differ from the host's sum
+by one unit in the last place, none by more). dK and dV then have the key's
+shape, and the outputs the op allocates for them start from zero. With `G = H` nothing changes: the slice
+decode is the identity and the column gradients are seeded only when
+`accumulate_into_outputs` asks.
+
+Cost: the heads of a group run one after another on the same cores rather
+than side by side, so a launch with few key heads has fewer groups than it
+has slices (`slices = B x H x pairs`, `groups <= B x G`). Each head's pass
+over a key chunk reloads the chunk's `K` and `V` into L1 and hands its dK and
+dV over through DRAM; with `H / G` heads that is `H / G` loads and handovers
+per column where a fused schedule would need one. The merged schedule that
+runs the heads of a group as one taller problem (Algorithm 5 with a
+staircase mask; see the companion repository) is the optimisation on top,
+to be built if these fixed costs show at the ring's launch shapes.
 
 ## Accumulating into running sums
 
@@ -182,6 +210,10 @@ groups side by side (wider on ties). If none fits it fails with
     slices = batch * heads * pairs
     groups = min(slices, how many rectangles fit the grid, max_groups)
 
+With grouped-query attention `groups` is further capped to a divisor of
+`batch * key heads`, so the query heads of one key head run in turn on one
+group (see "Grouped-query attention").
+
 groups run side by side and take the remaining slices in turn. Shapes used
 in the tests and benchmarks (Blackhole p150, 11x10 compute grid):
 
@@ -272,9 +304,9 @@ by the packer, not truncated) and the bfloat16 inputs themselves.
 
 ## Testing and measuring
 
-Correctness: `ttml_tests --gtest_filter='CyclicSdpaBw*'` (84 tests: the
-relay, groups, the op, dense mode, chunk pairs, the endpoint protocol,
-against the real forward). Ring correctness on a loudbox:
+Correctness: `ttml_tests --gtest_filter='CyclicSdpaBw*'` (the relay,
+groups, the op, dense mode, chunk pairs, grouped-query heads, the endpoint
+protocol, against the real forward and the repository's two-pass backward). Ring correctness on a loudbox:
 `LoudboxRingSDPATest.*`.
 
 Measurement tests are `DISABLED_*` and take environment knobs:

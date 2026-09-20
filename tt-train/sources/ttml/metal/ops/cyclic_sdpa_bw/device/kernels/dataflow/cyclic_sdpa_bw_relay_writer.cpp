@@ -84,6 +84,11 @@ void kernel_main() {
     const uint32_t chunks = get_arg_val<uint32_t>(arg++);
     const uint32_t pairs = get_arg_val<uint32_t>(arg++);
     const uint32_t heads = get_arg_val<uint32_t>(arg++);
+    // Grouped-query attention, as in the relay reader: dK and dV are addressed
+    // by the (batch, key head) slice, idx % kv_slices. The other three fields
+    // of the header are the reader's; only kv_slices is needed here.
+    const uint32_t kv_slices = get_arg_val<uint32_t>(arg++);
+    arg += 3u;  // q_heads, kv_heads, heads_per_group
     const uint32_t pair_table_arg = arg;
 
     constexpr uint32_t kCores = get_compile_time_arg_val(0);
@@ -184,10 +189,10 @@ void kernel_main() {
 
     for (uint32_t s = 0; s < slice_count; ++s) {
     const uint32_t sl = first_slice + s * slice_stride;  // pair-major, as the reader
-    const uint32_t bh = sl % heads;
+    const uint32_t bg = (sl % heads) % kv_slices;        // the (batch, key head) slice
     const uint32_t col_chunk = get_arg_val<uint32_t>(pair_table_arg + 2u * (sl / heads) + 1u);
-    row_base = (bh * chunks + col_chunk) * 2u * kCores * row_tiles;
-    val_base = (bh * chunks + col_chunk) * 2u * kCores * val_tiles;
+    row_base = (bg * chunks + col_chunk) * 2u * kCores * row_tiles;
+    val_base = (bg * chunks + col_chunk) * 2u * kCores * val_tiles;
     for (uint32_t t = 0; t < kTimesteps; ++t) {
         const auto pair = sched.pair(my_core, t);
         // Global timestep across slices; the progress word and the barrier

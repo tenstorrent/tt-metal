@@ -54,21 +54,23 @@ void RingCyclicSDPABackwardDeviceOperation::validate_on_program_cache_hit(
 RingCyclicSDPABackwardDeviceOperation::spec_return_value_t
 RingCyclicSDPABackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    const auto make_spec = [&](const std::optional<ttnn::Tensor>& preallocated) {
+    // dQ has the query's shape, dK and dV the key's: with grouped-query
+    // attention that is fewer heads.
+    const auto make_spec = [&](const std::optional<ttnn::Tensor>& preallocated, const ttnn::Tensor& like) {
         if (preallocated.has_value()) {
             return preallocated->tensor_spec();
         }
         return tt::tt_metal::TensorSpec(
-            tensor_args.query.logical_shape(),
+            like.logical_shape(),
             tt::tt_metal::TensorLayout(
                 tt::tt_metal::DataType::FLOAT32,
                 tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
                 tt::tt_metal::MemoryConfig{}));
     };
     return {
-        make_spec(tensor_args.preallocated_grad_query),
-        make_spec(tensor_args.preallocated_grad_key),
-        make_spec(tensor_args.preallocated_grad_value)};
+        make_spec(tensor_args.preallocated_grad_query, tensor_args.query),
+        make_spec(tensor_args.preallocated_grad_key, tensor_args.key),
+        make_spec(tensor_args.preallocated_grad_value, tensor_args.value)};
 }
 
 RingCyclicSDPABackwardDeviceOperation::tensor_return_value_t
@@ -97,7 +99,7 @@ ttsl::hash::hash_t RingCyclicSDPABackwardDeviceOperation::compute_program_hash(
     // The step is in the hash because it decides, per chip, whether there is a
     // program at all and which schedule it runs.
     return tt::tt_metal::operation::hash_operation<RingCyclicSDPABackwardDeviceOperation>(
-        args, tensor_args.query.dtype(), tensor_args.query.logical_shape());
+        args, tensor_args.query.dtype(), tensor_args.query.logical_shape(), tensor_args.key.logical_shape());
 }
 
 }  // namespace ttml::metal::ops::ring_cyclic_sdpa_bw
