@@ -686,9 +686,12 @@
   test_group: module
   skus:
     bh_sc1:
-      # Measured 7:39 on one galaxy. Cheap because it is one depth, one chunk count and one iteration
-      # -- the point is the captured-trace path, not the sweep.
-      timeout: 20
+      # 7:39 is the compute; the weight load dominates and is what this has to cover. On run
+      # 35488280449 the L24 load ran ~3m40s per MLA layer and had reached only layer 19 of 24 when
+      # the 20 min cap killed it, before the test body started -- six MLA layers is ~22 min on a
+      # cold TTNN cache. 45 = ~22 load + ~8 compute + device open, with room for a cold kernel JIT
+      # cache. Sized against measurement, not against the warm-cache number.
+      timeout: 45
       tier: 2
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
