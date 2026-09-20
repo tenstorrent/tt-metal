@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
@@ -15,9 +16,9 @@ namespace ckernel::sfpu {
 // (false) rounding mode should be used.
 template <bool floor>
 sfpi_inline void calculate_div_int32_body(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-    constexpr uint dst_tile_size_sfpi = 32;
+    constexpr std::uint32_t dst_tile_size_sfpi = 32;
 
     sfpi::vInt b_orig = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
@@ -51,8 +52,10 @@ sfpi_inline void calculate_div_int32_body(
     // We add a special mantissa alignment factor 2.0f**(23+10), which shifts
     // the mantissa so that we extract the top 22 bits of the result.
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
-    sfpi::vInt sign = a_orig ^ b_orig;
     sfpi::vMag q_m = sfpi::exman(q_f);
+    // Keep q_f out of the live set at the XOR. Profiler builds otherwise
+    // exceed Blackhole's local-register budget here.
+    sfpi::vInt sign = a_orig ^ b_orig;
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  We split into 23-bit chunks.
@@ -145,7 +148,7 @@ sfpi_inline void calculate_div_int32_body(
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 sfpi_inline void calculate_div_int32_floor(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_div_int32_body<true>(dst_index_in0, dst_index_in1, dst_index_out);
@@ -155,7 +158,7 @@ sfpi_inline void calculate_div_int32_floor(
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 sfpi_inline void calculate_div_int32_trunc(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_div_int32_body<false>(dst_index_in0, dst_index_in1, dst_index_out);
