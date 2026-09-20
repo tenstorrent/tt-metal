@@ -30,13 +30,14 @@ namespace {
 // sequence within a (slot, layer) row. Covers block-cyclic layouts up to 64 banks.
 constexpr uint32_t kMaxRunStep = 64;
 
-
 // Dual-write budget, in estimated payload bytes (entries mirror + runs). While the estimate
 // stays within the budget, STRIDED_ROWS configs ALSO mirror every chunk into `entries` so
 // pre-runs readers keep working (they ignore `runs` and the compression tag).
 //
 // The budget is 0 by default to enable compression by default
 constexpr uint64_t kDefaultDualWriteMaxBytes = 0;  // compress by default
+// Ceiling on an opted-in budget: just under protobuf's 2 GiB (2^31) message cap, so a
+// dual-written message stays serializable (wire estimates below).
 constexpr uint64_t kDualWriteMaxBytesCeiling = (2ull << 30) - (64ull << 20);  // 2 GiB − 64 MiB
 constexpr uint64_t kEntryWireEstimate = 48;
 constexpr uint64_t kRunWireEstimate = 72;
@@ -89,7 +90,8 @@ uint32_t delta_period(std::span<const KvCacheLocation> row) {
 }
 
 // Newest format_version this reader knows. 0 = legacy (pre-tag) files; 1 = compression tags.
-// Bump when the wire format changes incompatibly; old readers must keep working via dual-write.
+// Bump when the wire format changes incompatibly; old readers keep working only if the
+// `entries` mirror is opted into (off by default).
 constexpr uint32_t kMaxKnownFormatVersion = 1;
 
 // Wire conversion, with fail-closed validation of the declared tag.
