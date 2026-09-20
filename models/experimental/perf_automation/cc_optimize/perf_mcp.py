@@ -1462,6 +1462,22 @@ def _op_has_attempt(op_code: str, attempts: list):
     return None
 
 
+def _last_recorded_note(op_code: str) -> str:
+    """The most recent recorded attempt's own note for this op, from the FULL unfiltered log --
+    including a wedge/crash record (kernel_detected_in_source=False), which the per-op ladder's
+    detected-filtered `attempts` list drops before termination_check ever sees it.
+
+    A target the agent already tried carried only a generic 'a prior attempt did not clear it' --
+    the exact reason (a crash message, a wedge, a PCC failure) stayed in the log file and a fresh
+    round starting on the same target had no way to see it without going and reading the log
+    itself. This carries that exact reason forward into next_target.reason instead, same as a human
+    handing off a shift would say what actually broke, not just that something did."""
+    for a in reversed(_load_attempts_all()):
+        if _op_match(op_code, a) and a.get("note"):
+            return str(a["note"])
+    return ""
+
+
 _SEALED_OP_MARKERS = (
     "conv",
     "untilize",
@@ -7873,6 +7889,15 @@ def termination_check() -> dict:
         can_stop = False
     halt = next((b for b in blocking if b.get("next_rung") == "tt-lang:install-required"), None)
     # DETERMINISTIC SELECTION: the single op+rung the agent must work next (largest-gap blocking op).
+    # CARRY THE EXACT REASON FORWARD, not just the fact that a prior try existed. blocking[0]["reason"]
+    # is a per-gate TEMPLATE (same text on attempt 1 and attempt 5); _last_recorded_note reads what
+    # actually happened last time (a crash message, a wedge, a PCC miss) from the log and appends it,
+    # so a fresh round starting on a target someone already tried is not starting blind on WHY it
+    # failed -- it still has to prove a fix by measuring, same as ever, but it knows what broke.
+    _target_reason = blocking[0]["reason"]
+    _prior_note = _last_recorded_note(blocking[0]["op"])
+    if _prior_note and _prior_note not in _target_reason:
+        _target_reason = _target_reason.rstrip() + " | Last recorded attempt on this target: " + _prior_note
     next_target = (
         {
             "op": blocking[0]["op"],
@@ -7881,7 +7906,7 @@ def termination_check() -> dict:
             "bound_by": blocking[0]["bound_by"],
             "rung": blocking[0]["next_rung"],
             "gap_ms": blocking[0]["gap_ms"],
-            "reason": blocking[0]["reason"],
+            "reason": _target_reason,
             # WHERE THIS OP LIVES. Without it the agent has an op and a metric, and the metric names
             # only the recurring stage -- so it worked that stage regardless of where the ranking
             # pointed. Discovered from the capture's own marks; "" when the capture carried none.
