@@ -238,6 +238,7 @@ def _distributed_prefix(
     carry = ttnn.to_memory_config(initial_state, working_memory)
     carry = ttnn.reshape(carry, (1, batch_heads, key_dim, value_dim))
     entry_states: list[ttnn.Tensor] = []
+    # Apply chip transforms chronologically: O(sp_size) graph nodes, bounded by mesh size, not token count.
     for step in range(gathered.shape[0]):
         # Keep chronological slots until the final device-indexed entry selection.
         entry_states.append(carry)

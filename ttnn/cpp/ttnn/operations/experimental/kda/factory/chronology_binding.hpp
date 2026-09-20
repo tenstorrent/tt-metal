@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 namespace ttnn::experimental::prim::kda_factory_detail {
 // Rank belongs to mesh placement, not to caller-owned tensor data. The mesh

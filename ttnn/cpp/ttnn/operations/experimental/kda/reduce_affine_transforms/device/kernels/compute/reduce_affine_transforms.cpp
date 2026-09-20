@@ -119,6 +119,8 @@ void copy(DataflowBuffer& in, DataflowBuffer& out, DataflowBuffer& send, uint32_
 
 template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::stage_a);
+
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t b_tiles = Kt * Vt;
     DataflowBuffer initial_a(dfb::initial_a);
@@ -141,7 +143,6 @@ TT_KERNEL void compute(uint32_t group) {
             return;
         }
     }
-    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::stage_a);
     initial_a.wait_front(a_tiles);
     initial_b.wait_front(b_tiles);
     copy(initial_a, stage_a, send_a, a_tiles);

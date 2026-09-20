@@ -3,6 +3,7 @@
 
 #pragma once
 #include <cstdint>
+#include <tt-metalium/constants.hpp>
 namespace kda_chronology {
 namespace selection {
 constexpr uint32_t record_width = 8;  // One aligned 32-byte UINT32 record.
@@ -27,9 +28,13 @@ struct Topology {
     uint32_t split;
     uint32_t local_rows;
     uint32_t reserved;
-    uint32_t group_chunks(uint32_t groups) const { return local_rows / 32 / groups; }
-    uint32_t split_group(uint32_t groups) const { return head_rows / 32 / group_chunks(groups); }
-    uint32_t split_in_group(uint32_t groups) const { return head_rows / 32 % group_chunks(groups); }
+    uint32_t group_chunks(uint32_t groups) const { return local_rows / tt::constants::TILE_HEIGHT / groups; }
+    uint32_t split_group(uint32_t groups) const {
+        return head_rows / tt::constants::TILE_HEIGHT / group_chunks(groups);
+    }
+    uint32_t split_in_group(uint32_t groups) const {
+        return head_rows / tt::constants::TILE_HEIGHT % group_chunks(groups);
+    }
     uint32_t reset_chunk(uint32_t group, uint32_t groups) const {
         return local_split && group == split_group(groups) ? split_in_group(groups) : 0;
     }
@@ -68,6 +73,11 @@ inline Topology receive(Buffer& buffer) {
     buffer.pop_front(1);
     return result;
 }
+// The caller supplies a nonnegative, TILE_HEIGHT-aligned absolute position as UINT32.
+// Values may exceed the mesh span; the modulo below maps them to physical partitions.
+// Value validation is intentionally omitted: actual_start is read on device and can
+// change on every trace replay, so a host check at capture would not validate replay.
+// The caller must preserve this contract on every update; misalignment is unchecked.
 inline Topology derive(uint32_t actual_start, uint32_t rank, uint32_t partitions, uint32_t rows) {
     const uint32_t first_rank = (actual_start / rows) % partitions;
     const bool split = partitions > 1 && actual_start % rows != 0;

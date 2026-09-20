@@ -403,6 +403,8 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary>
 TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
+
     uint32_t reset_chunk = 0;
     kda_chronology::Topology topology{};
     {
@@ -412,7 +414,6 @@ TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
     {
         reset_chunk = topology.reset_chunk(group, topology.local_rows / 32 / num_chunks);
     }
-    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
     if constexpr (summary) {
         compute_summary<Ct, Kt, Vt>(num_chunks, reset_chunk);
     } else {

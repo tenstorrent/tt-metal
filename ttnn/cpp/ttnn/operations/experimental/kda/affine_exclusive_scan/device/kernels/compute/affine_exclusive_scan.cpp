@@ -172,6 +172,8 @@ FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) 
 
 template <uint32_t Kt, uint32_t Vt, uint32_t G>
 TT_KERNEL void compute(uint32_t group) {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
+
     constexpr uint32_t affine_a_tiles = Kt * Kt;
     constexpr uint32_t affine_b_tiles = Kt * Vt;
     DataflowBuffer initial_a(dfb::initial_a);
@@ -193,7 +195,6 @@ TT_KERNEL void compute(uint32_t group) {
         topology = kda_chronology::receive(chronology);
     }
     const uint32_t reset_group = topology.reset_group(G);
-    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
     initial_a.wait_front(affine_a_tiles);
     const bool reset_worker = group == reset_group;
     if (!reset_worker) {
