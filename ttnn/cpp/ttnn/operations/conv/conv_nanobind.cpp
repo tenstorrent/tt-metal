@@ -6,11 +6,9 @@
 
 #include <nanobind/nanobind.h>
 
-#include "conv_transpose2d/conv_transpose2d_nanobind.hpp"
 
 namespace ttnn::operations::conv {
 
 void py_module(nb::module_& mod) {
-    ttnn::operations::conv::conv_transpose2d::bind_conv_transpose2d(mod);
 }
 }  // namespace ttnn::operations::conv
