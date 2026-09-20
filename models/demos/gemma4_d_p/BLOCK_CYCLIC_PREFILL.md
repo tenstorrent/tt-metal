@@ -38,11 +38,15 @@ RoPE/SDPA changes; do not silently round a request down.
   keys (positions >=end) from affecting real queries (positions <end).
 - Sliding ring SDPA: its work plan and halo exchange require aligned, complete
   groups. Forwarding a rotated start is insufficient. Gemma uses native SWA
-  directly for chunk-aligned starts. For other starts, it gathers Q into the
+  directly when start is aligned to a CP block (`C/P`) and the real queries
+  stay within one group. SWA gets the aligned group start; RoPE, cache writes,
+  and global SDPA retain the request start. Otherwise, it gathers Q into the
   aligned groups intersecting `[start,end)`, calls SWA once per group, then
   restores request order. A range ending at the first group's boundary needs
   only one call; only crossing that boundary requires two. Padded rows do not
-  increase the group count, and their outputs are discarded.
+  increase the group count, and their outputs are discarded. Expanded gather
+  indices are allocated per head-count/head-width pair during warmup, then
+  refreshed in place once per request and shared across matching SWA layers.
 
 Relevant implementations: `tt/attention/ring_prefill.py`, `tt/model.py`,
 `tt/prefill_metadata.py`; shared operator contracts live under
@@ -98,7 +102,7 @@ The hidden states must already have the service's block-cyclic CP row order.
 For tracing, set `model._prefill_metadata_external = True` and capture separate
 graphs keyed by `SlidingChunkMode` (defined in `tt/attention/sliding_chunk.py`):
 
-- `ALIGNED`: one SWA call, no adapter gathers.
+- `ALIGNED`: one SWA call, no adapter gathers; CP-block-aligned start within one group.
 - `SINGLE_GROUP`: one SWA call with input/output reordering.
 - `TWO_GROUPS`: two SWA calls, for real queries spanning two groups.
 
@@ -117,11 +121,14 @@ python_env/bin/python -m pytest models/demos/gemma4_d_p/tests/unit -k 'not devic
 python_env/bin/python -m pytest models/demos/gemma4_d_p/tests/unit/test_block_cyclic_prefill.py -k device -sv
 ```
 
-88 host tests passed. All four device cases passed (global/sliding × 8x4/4x8),
+109 host tests passed. All four device cases passed (global/sliding × 8x4/4x8),
 selecting among three traces per case across `(start,end)` = `(0,1056)`, `(1056,9000)`,
-`(7008,8192)`, `(7008,9000)`, `(8192,12001)`, `(15392,16381)` and two user slots. Tests check
+`(7008,8192)`, `(7008,9000)`, `(8192,12001)`, `(15392,16381)` and two user slots.
+Additional requests start at CP-block boundaries, both within and across groups,
+and switch back to reordered traces. Tests check
 absolute RoPE lookup, attention PCC >=0.995, cache PCC >=0.999, stable metadata
-addresses, and exact preservation of prior KV, later tiles, and the other slot.
+and shared-index addresses, and exact preservation of prior KV, later tiles,
+and the other slot.
 
 `tests/test_block_cyclic_golden.py` contains just a packing utility and one
 unparameterized 256K test. It tokenizes the Gutenberg input, checks the token IDs
@@ -141,11 +148,13 @@ HF_HUB_OFFLINE=1 \
 python_env/bin/python -m pytest models/demos/gemma4_d_p/tests/test_block_cyclic_golden.py -sv
 ```
 
-The standalone test passed in 145.97 seconds with final-layer PCC 0.983890.
-The canonical 256K/8192/8x4 test also passed: its first two replays took 243.8 ms
-and 255.8 ms, restoring the aligned path from 393.1 ms and 405.1 ms. In the
-randomized test, `[8352,13591)` uses one reordered SWA call (337.502 ms);
-`[3168,9270)` spans two groups and uses two calls (397.769 ms).
+The standalone test passed in 150.48 seconds with final-layer PCC 0.983890.
+Sharing expanded indices reduced total replay time across the same 54 requests
+from 30.056 to 28.724 seconds. `[8352,13591)` took 319.131 ms (previously
+337.502 ms); `[3168,9270)` took 370.767 ms (previously 397.769 ms).
+These timings exclude input/metadata staging, including index expansion.
+The canonical 256K/8192/8x4 test also passed: its first two replays took
+243.9 ms and 256.1 ms, matching the prior aligned baseline of 243.8/255.8 ms.
 
 The BFP8 model's native single-SWA aligned baseline is also PCC 0.983890 against this BF16
 GPU trace, so this end-to-end test uses 0.98. A stricter exploratory check found
