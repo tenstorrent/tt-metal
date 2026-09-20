@@ -1426,15 +1426,20 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
         sat_hard_constraint_encode_calls_ += engine.get_state().sat_hard_constraint_encode_calls;
         sat_exclusions_encoded_ = 0;
     }
-    while (sat_exclusions_encoded_ < excluded_idx.size()) {
-        if (!engine.block(excluded_idx[sat_exclusions_encoded_])) {
-            MappingResult<TargetNode, GlobalNode> failure;
-            failure.success = false;
-            failure.error_message =
-                "TopologyMappingEnumerationSession: failed to append blocking clause for excluded mapping";
-            return stamp_elapsed(std::move(failure));
-        }
-        ++sat_exclusions_encoded_;
+    for (; sat_exclusions_encoded_ < excluded_idx.size(); ++sat_exclusions_encoded_) {
+        // block() returns false only when the excluded mapping is not representable in the CURRENT encoding —
+        // a target left unmapped, or a candidate global that arc-consistency pruned from that target's domain.
+        // This happens legitimately after a restart/re-encode (e.g. the soft-minimize fallback re-encodes with
+        // different pruning): a solution found under the previous encoding can reference a global the new
+        // encoding no longer offers. Such a mapping can never be produced by the current solver, so its
+        // blocking clause is redundant — skip it. (block() builds the clause in a local buffer and only emits
+        // it once fully valid, so a false return leaves the solver untouched; nothing partial is added.)
+        //
+        // This MUST be tolerant, not fatal: engines enumerate solutions in different orders, so which prior
+        // exclusions go stale after a restart is engine-dependent. Aborting here made valid multi-solution
+        // sweeps (split-host meshes whose hard host-cap is infeasible, forcing the soft-minimize restart) fail
+        // under kissat while passing under CaDiCaL purely due to solution ordering.
+        (void)engine.block(excluded_idx[sat_exclusions_encoded_]);
     }
 
     std::vector<int> raw;
