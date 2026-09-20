@@ -83,16 +83,16 @@ def golden_cache_heads(key, value, layer, real_len):
 
 
 def cache_pcc(expected, actual):
-    """Compute whole-head PCC with a bounded FP64 workspace."""
+    """Compute whole-head PCC with a bounded FP32 workspace."""
     if expected.shape != actual.shape or expected.numel() == 0:
         raise ValueError("KV comparison requires matching nonempty shapes")
     expected = expected.reshape(expected.shape[0], -1)
     actual = actual.reshape(actual.shape[0], -1)
     rows_per_block = max(1, 1024 * 1024 // expected.shape[1])
-    buffer = torch.empty((2, min(rows_per_block, expected.shape[0]), expected.shape[1]), dtype=torch.float64)
+    buffer = torch.empty((2, min(rows_per_block, expected.shape[0]), expected.shape[1]), dtype=torch.float32)
     count = 0
-    mean = torch.zeros(2, dtype=torch.float64)
-    covariance = torch.zeros(2, 2, dtype=torch.float64)
+    mean = torch.zeros(2, dtype=torch.float32)
+    covariance = torch.zeros(2, 2, dtype=torch.float32)
     identical = True
     for start in range(0, expected.shape[0], rows_per_block):
         end = min(start + rows_per_block, expected.shape[0])
