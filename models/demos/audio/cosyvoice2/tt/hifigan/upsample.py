@@ -69,7 +69,13 @@ class TtConvTranspose1d:
         # CosyVoice2's 3-stage topology introduces), but the failure mode is silent by
         # nature and conv_transpose2d shares the same compute-config plumbing as
         # conv1d, so this is verified on the same terms rather than assumed safe.
-        # Maps (length, batch_size) -> the compute_config that measured correct.
+        # Same reasoning for `prepare_conv_transpose2d_weights` vs.
+        # tenstorrent/tt-metal#55545 (filed against `prepare_conv_weights`, but the
+        # same hoisted-weight-prep pattern on the same hardware) -- not
+        # independently confirmed broken here either, but `_verify_and_resolve`
+        # checks both axes together regardless, same as TtConv1d.
+        # Maps (length, batch_size) -> the (weight, bias, compute_config) triple
+        # that measured correct.
         self._verified_config: dict = {}
 
     @classmethod
@@ -147,34 +153,39 @@ class TtConvTranspose1d:
 
     def _verify_and_resolve(self, nhwc, weight, bias, length: int, batch_size: int, out, key):
         """First call for this geometry only -- see TtConv1d._verify_and_resolve,
-        same reasoning and same mechanism."""
-        ref = self._conv_transpose(nhwc, weight, bias, length, batch_size, self._safe_compute_config)
+        same reasoning (a single raw-weight + safe-config reference, catching
+        either the compute-config axis or the weight-prep axis at once) and
+        same mechanism, adapted for conv_transpose2d."""
+        ref = self._conv_transpose(nhwc, self.weight, self.bias, length, batch_size, self._safe_compute_config)
         a = float(ttnn.to_torch(out).float().abs().max())
         b = float(ttnn.to_torch(ref).float().abs().max())
         ok = a == a and abs(a - b) <= 0.02 * max(b, 1e-9)
         if ok:
             ttnn.deallocate(ref)
-            self._verified_config[key] = self.compute_config
+            self._verified_config[key] = (weight, bias, self.compute_config)
             return out
         logger.warning(
-            f"accurate_compute_config disagrees with safe_compute_config at ConvTranspose1d("
-            f"{self.in_channels}->{self.out_channels}, k={self.kernel_size}, s={self.stride}) "
-            f"length {length}: max|out| {a:.4g} vs {b:.4g}; using the safe config for this geometry"
+            f"prepared weight and/or accurate_compute_config disagrees with the raw-weight/"
+            f"safe-config reference at ConvTranspose1d({self.in_channels}->{self.out_channels}, "
+            f"k={self.kernel_size}, s={self.stride}) length {length}: max|out| {a:.4g} vs {b:.4g}; "
+            "using raw weights + safe compute config for this geometry"
         )
-        self._verified_config[key] = self._safe_compute_config
+        self._verified_config[key] = (self.weight, self.bias, self._safe_compute_config)
         ttnn.deallocate(out)
         return ref
 
     def __call__(self, x, length: int, batch_size: int = 1):
         """x: ttnn [B, L, C_in] -> (ttnn [B, L_out, C_out], L_out)."""
         nhwc = ttnn.reshape(x, (batch_size, 1, length, self.in_channels))
-        weight, bias = self._prepared(nhwc, length, batch_size)
         key = (length, batch_size)
         if self.compute_config is None:
+            weight, bias = self._prepared(nhwc, length, batch_size)
             out = self._conv_transpose(nhwc, weight, bias, length, batch_size, None)
         elif key in self._verified_config:
-            out = self._conv_transpose(nhwc, weight, bias, length, batch_size, self._verified_config[key])
+            weight, bias, compute_config = self._verified_config[key]
+            out = self._conv_transpose(nhwc, weight, bias, length, batch_size, compute_config)
         else:
+            weight, bias = self._prepared(nhwc, length, batch_size)
             out = self._conv_transpose(nhwc, weight, bias, length, batch_size, self.compute_config)
             out = self._verify_and_resolve(nhwc, weight, bias, length, batch_size, out, key)
         lo = self.out_length(length)

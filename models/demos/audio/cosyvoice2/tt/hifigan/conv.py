@@ -42,13 +42,16 @@ def accurate_compute_config(device):
     CosyVoice2's 3-stage HiFT introduces. `HiFi4` with `fp32_dest_acc_en=False`
     (same `packer_l1_acc=True`) measured correct at the same shape (PCC 0.9999),
     so the disagreement is specifically the `fp32_dest_acc_en` + `packer_l1_acc`
-    combination, not HiFi4 itself. This is the same *class* of issue
-    `TtConv1d._prepared`'s docstring already documents for `prepare_conv_weights`
-    on Wormhole (a disagreement up to 1e37 at some input lengths) -- a different
-    symptom, same lesson: an "accurate" compute config is not safe to trust
-    unverified at an unfamiliar shape on this hardware. `TtConv1d` verifies this
-    config against `safe_compute_config` once per geometry and falls back if
-    they disagree; see `TtConv1d._verify_and_resolve`. `TtConvTranspose1d` in
+    combination, not HiFi4 itself. This is the same *class* of issue as
+    tenstorrent/tt-metal#55545, which documents `ttnn.prepare_conv_weights`
+    disagreeing with the op's own internal preparation on Wormhole (up to
+    1e37 at some input lengths, confirmed to still reproduce on this build
+    at this same Conv1d(128->128, k=11) architecture) -- a different
+    symptom, same lesson: neither an "accurate" compute config nor a
+    "prepared" weight is safe to trust unverified at an unfamiliar shape on
+    this hardware. `TtConv1d._verify_and_resolve` checks both together
+    (fast path vs. a raw-weight + safe-config reference) once per geometry
+    and falls back to whichever measured correct. `TtConvTranspose1d` in
     upsample.py verifies the same way, on the same suspicion.
     """
     return ttnn.init_device_compute_kernel_config(
@@ -136,11 +139,13 @@ class TtConv1d:
         self.conv_config = ttnn.Conv1dConfig(weights_dtype=weights_dtype, deallocate_activation=False)
         self.compute_config = accurate_compute_config(device) if high_fidelity else None
         self._safe_compute_config = safe_compute_config(device) if high_fidelity else None
-        # Verify accurate_compute_config against safe_compute_config once per
-        # geometry rather than trust it -- see accurate_compute_config's
-        # docstring for the measured disagreement this guards against. Maps
-        # (input_length, batch_size) -> the compute_config that measured correct
-        # for that geometry, so a disagreement is resolved once, not re-checked
+        # Verify the fast path (prepared weight + accurate_compute_config)
+        # against a maximally-conservative reference (raw weight +
+        # safe_compute_config) once per geometry rather than trust it -- see
+        # `_verify_and_resolve`'s docstring for the two independent, silent
+        # defects this catches. Maps (input_length, batch_size) -> the
+        # (weight, bias, compute_config) triple that measured correct for
+        # that geometry, so a disagreement is resolved once, not re-checked
         # (and not silently re-broken) on every subsequent call.
         self._verified_config: dict = {}
 
@@ -224,37 +229,69 @@ class TtConv1d:
         )
 
     def _verify_and_resolve(self, x, weight, bias, input_length: int, batch_size: int, out, key):
-        """First call for this geometry only: compare accurate_compute_config's
-        result (`out`, already computed) against safe_compute_config's. Caches
-        whichever config measured correct in `_verified_config[key]`, so every
-        later call at this geometry goes straight to the right config in one
-        conv -- this only runs once per geometry, not once per call.
+        """First call for this geometry only: compare the fast path's
+        already-computed result (`out` -- prepared weight + accurate
+        compute config) against ONE maximally-conservative reference
+        computed together: raw, unprepared weight + safe_compute_config.
+
+        A single combined reference rather than two separate per-axis
+        verifications, because this catches either of two independent,
+        silent defects at once, and correctness only needs to know "is the
+        fast path right for this geometry," not which knob would have been
+        to blame:
+
+        * `accurate_compute_config`'s `fp32_dest_acc_en` + `packer_l1_acc`
+          combination -- see `accurate_compute_config`'s docstring (found at
+          CosyVoice2's `source_downs` shape, PCC 0.0011 vs. expected ~0.9999).
+        * `ttnn.prepare_conv_weights` silently disagreeing with the op's own
+          internal weight preparation on Wormhole -- up to `1e37` at some
+          input lengths (tenstorrent/tt-metal#55545). Confirmed to still
+          reproduce on this build at this exact `Conv1d(128->128, k=11)`
+          architecture (CosyVoice2's HiFT source resblocks): disagreement at
+          `L=9217`, using the reference report's own repro script unmodified
+          -- NOT the same lengths that report's build found bad (8193/8321/
+          8577/8705, all fine here). The affected lengths are build/ttnn-
+          version-specific, which is exactly why this is a per-geometry
+          runtime check rather than a fixed exclusion list: no one-time test
+          of "our real utterance lengths are fine today" is a durable
+          guarantee against a defect this sparse and silent.
+
+        Caches whichever `(weight, bias, compute_config)` triple measured
+        correct in `_verified_config[key]`, so every later call at this
+        geometry goes straight to it in one conv -- this only runs once per
+        geometry, not once per call. (`self.compute_config is None`, i.e.
+        `high_fidelity=False`, skips this entirely and is not covered by
+        this check -- not exercised by the real vocoder, which always builds
+        `high_fidelity=True`.)
         """
-        ref, _ = self._conv(x, weight, bias, input_length, batch_size, self._safe_compute_config)
+        ref, _ = self._conv(x, self.weight, self.bias, input_length, batch_size, self._safe_compute_config)
         a = float(ttnn.to_torch(out).float().abs().max())
         b = float(ttnn.to_torch(ref).float().abs().max())
         ok = a == a and abs(a - b) <= 0.02 * max(b, 1e-9)  # a != a catches NaN/inf
         if ok:
             ttnn.deallocate(ref)
-            self._verified_config[key] = self.compute_config
+            self._verified_config[key] = (weight, bias, self.compute_config)
             return out
         logger.warning(
-            f"accurate_compute_config disagrees with safe_compute_config at Conv1d("
-            f"{self.in_channels}->{self.out_channels}, k={self.kernel_size}, s={self.stride}) "
-            f"length {input_length}: max|out| {a:.4g} vs {b:.4g}; using the safe config for this geometry"
+            f"prepared weight and/or accurate_compute_config disagrees with the raw-weight/"
+            f"safe-config reference at Conv1d({self.in_channels}->{self.out_channels}, "
+            f"k={self.kernel_size}, s={self.stride}) length {input_length}: max|out| {a:.4g} vs {b:.4g}; "
+            "using raw weights + safe compute config for this geometry"
         )
-        self._verified_config[key] = self._safe_compute_config
+        self._verified_config[key] = (self.weight, self.bias, self._safe_compute_config)
         ttnn.deallocate(out)
         return ref
 
     def __call__(self, x, input_length: int, batch_size: int = 1):
-        weight, bias = self._prepared(x, input_length, batch_size)
         key = (input_length, batch_size)
         if self.compute_config is None:
+            weight, bias = self._prepared(x, input_length, batch_size)
             out, out_length = self._conv(x, weight, bias, input_length, batch_size, None)
         elif key in self._verified_config:
-            out, out_length = self._conv(x, weight, bias, input_length, batch_size, self._verified_config[key])
+            weight, bias, compute_config = self._verified_config[key]
+            out, out_length = self._conv(x, weight, bias, input_length, batch_size, compute_config)
         else:
+            weight, bias = self._prepared(x, input_length, batch_size)
             out, out_length = self._conv(x, weight, bias, input_length, batch_size, self.compute_config)
             out = self._verify_and_resolve(x, weight, bias, input_length, batch_size, out, key)
         # ttnn.conv1d yields the flattened conv layout, not [N, L, C]. Restoring
