@@ -13,7 +13,9 @@ Tensor real(const ComplexTensor& input_tensor, const std::optional<MemoryConfig>
     return operations::complex_unary::_real(input_tensor, output_mem_config);
 }
 Tensor imag(const ComplexTensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
-    auto output_mem_config = memory_config.value_or(input_tensor.real().memory_config());
+    // The imaginary component's own config, not the real one's: the two are independent tensors, and
+    // an unset memory_config must leave the component where it is.
+    auto output_mem_config = memory_config.value_or(input_tensor.imag().memory_config());
     return operations::complex_unary::_imag(input_tensor, output_mem_config);
 }
 Tensor angle(const ComplexTensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {

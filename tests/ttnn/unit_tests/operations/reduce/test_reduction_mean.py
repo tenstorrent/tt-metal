@@ -79,7 +79,7 @@ def test_mean_scaling(device, shape, dim, keepdim, dtype):
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("shape", [(2, 3, 4, 5), (7, 17, 41, 31)])
@@ -99,7 +99,7 @@ def test_mean_scaling_factor(device, shape, dim, scalar, dtype):
     output_tensor = ttnn.mean(input_tensor, dim=dim, scalar=scalar)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("mem_config", [None, ttnn.DRAM_MEMORY_CONFIG, "block", "height"])
@@ -189,4 +189,4 @@ def test_mean_fp32_fast_and_approximate_mode_no_dim(device, input_shape, fast_an
     if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
     else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)

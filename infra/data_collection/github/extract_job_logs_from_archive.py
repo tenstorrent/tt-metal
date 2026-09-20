@@ -1,0 +1,157 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Unpack a GitHub run-attempt log archive into the <job_id>.log layout this pipeline expects.
+
+GitHub serves a run attempt's job logs as one zip:
+
+    GET /repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/logs
+
+which replaces calling /actions/jobs/{job_id}/logs once per job.
+
+Entries must be matched to jobs by NAME, not id: GitHub mints a fresh set of job ids for
+every attempt, so the ids in attempt n's jobs list do not appear in attempt n-1's. Entry
+names are the job name with "/" rewritten to "_" and nothing else changed, so that
+substitution is the primary match. Emoji and characters like "[", "]" and "," survive
+byte-for-byte; the "?" that `unzip -l` shows is its own display rendering.
+
+A normalized comparison (lowercased, everything but [a-z0-9] dropped) is a second tier in
+case that substitution ever changes. It is not the primary match because it maps distinct
+names onto one key ("a/b" and "a-b" both become "ab"), and a wrong match is worse than a
+missing one: it files a job's failure signature and runner telemetry under another job.
+
+So a name that does not resolve to exactly one job is left unmapped on purpose, for the
+caller to fall back on a per-job request.
+
+Reading the zip in Python rather than shelling out to `unzip` also keeps archive-supplied
+names off the filesystem: the only paths written are <job_id>.log. `unzip` can fail to
+create a name containing emoji and, with no tty to answer its "continue?" prompt, aborts
+and leaves a silently partial extraction.
+"""
+
+import argparse
+import json
+import pathlib
+import re
+import sys
+import zipfile
+from collections import Counter, defaultdict
+
+# Top-level archive entries are the whole-job logs, named "<ordinal>_<job name>.txt".
+# The per-job subdirectories below them hold the same content split per step.
+TOP_LEVEL_JOB_LOG = re.compile(r"^(?P<ordinal>\d+)_(?P<name>.*)\.txt$")
+
+_NON_ALNUM = re.compile(r"[^a-z0-9]")
+
+
+def archive_name_for(job_name: str) -> str:
+    """The entry name GitHub gives a job's log."""
+    return job_name.replace("/", "_")
+
+
+def normalize(name: str) -> str:
+    return _NON_ALNUM.sub("", name.lower())
+
+
+def _unique_index(jobs: list, key) -> dict:
+    """key(job name) -> job id, for keys that exactly one job produces.
+
+    Keys several jobs produce are dropped rather than resolved by list order.
+    """
+    grouped = defaultdict(list)
+    for job in jobs:
+        job_id = job.get("id")
+        name = job.get("name")
+        if job_id is None or not name:
+            continue
+        grouped[key(str(name))].append(int(job_id))
+    return {k: ids[0] for k, ids in grouped.items() if len(ids) == 1}
+
+
+def resolve_entries(archive: zipfile.ZipFile, jobs: list) -> dict:
+    """Archive entry name -> job id, for entries that map to exactly one job.
+
+    Ambiguity is checked both ways -- a name several jobs match, and a job several entries
+    claim -- so what survives is strictly one-to-one.
+    """
+    by_archive_name = _unique_index(jobs, archive_name_for)
+    by_normalized = _unique_index(jobs, normalize)
+
+    resolved = {}
+    for entry in archive.infolist():
+        if entry.is_dir() or "/" in entry.filename:
+            continue
+        matched = TOP_LEVEL_JOB_LOG.match(entry.filename)
+        if not matched:
+            continue
+        name = matched.group("name")
+
+        job_id = by_archive_name.get(name)
+        if job_id is None:
+            job_id = by_normalized.get(normalize(name))
+        if job_id is None:
+            continue
+        resolved[entry.filename] = job_id
+
+    claimed_more_than_once = {job_id for job_id, count in Counter(resolved.values()).items() if count > 1}
+    return {entry: job_id for entry, job_id in resolved.items() if job_id not in claimed_more_than_once}
+
+
+def extract(archive_path: pathlib.Path, jobs: list, logs_dir: pathlib.Path) -> tuple:
+    """Write each resolved entry to <job_id>.log, leaving any that already exists alone.
+
+    Nothing is overwritten because the caller walks attempts newest-first: a job re-run in
+    a later attempt must keep that attempt's log. Returns (written, resolved) so the walk
+    can tell an unusable archive from one that simply had nothing new.
+    """
+    written = 0
+    resolved = 0
+    with zipfile.ZipFile(archive_path) as archive:
+        for entry_name, job_id in resolve_entries(archive, jobs).items():
+            resolved += 1
+            target_path = logs_dir / f"{job_id}.log"
+            if target_path.exists() and target_path.stat().st_size > 0:
+                continue
+            with archive.open(entry_name) as source, open(target_path, "wb") as target:
+                while chunk := source.read(1024 * 1024):
+                    target.write(chunk)
+            written += 1
+    return written, resolved
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--archive", required=True, type=pathlib.Path)
+    parser.add_argument("--jobs-json", required=True, type=pathlib.Path)
+    parser.add_argument("--logs-dir", required=True, type=pathlib.Path)
+    args = parser.parse_args()
+
+    if not args.logs_dir.is_dir():
+        print(f"[Warning] logs dir does not exist: {args.logs_dir}", file=sys.stderr)
+        return 1
+
+    try:
+        jobs = json.loads(args.jobs_json.read_text()).get("jobs") or []
+    except (OSError, ValueError) as exc:
+        print(f"[Warning] could not read jobs payload: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        written, resolved = extract(args.archive, jobs, args.logs_dir)
+    except (OSError, zipfile.BadZipFile) as exc:
+        print(f"[Warning] could not unpack the attempt log archive: {exc}", file=sys.stderr)
+        return 1
+
+    # Resolving nothing means the archive was unusable. Resolving but writing nothing is
+    # expected during a walk: a later attempt already supplied those logs.
+    if resolved == 0:
+        print("[Warning] attempt log archive contained no recognizable job logs", file=sys.stderr)
+        return 1
+
+    print(f"[info] recovered {written} job logs from the archive in 1 request ({resolved - written} already present)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

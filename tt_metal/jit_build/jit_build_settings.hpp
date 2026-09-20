@@ -121,6 +121,10 @@ class JitBuildSettings {
 public:
     // Returns the full kernel name
     virtual const std::string& get_full_kernel_name() const = 0;
+
+    // Zone tu-id registry key: identical across runs and across compile-time-arg variants of one source;
+    // get_full_kernel_name() embeds a per-variant hash.
+    virtual std::string get_profiler_zone_src_id() const { return this->get_full_kernel_name(); }
     // Returns the compiler optimization level
     virtual std::string_view get_compiler_opt_level() const = 0;
     // Returns the linker optimization level
@@ -142,8 +146,12 @@ public:
     //  - DFB bindings
     //  - Semaphore bindings
     //  - Tensor bindings
+    // prefetcher_pipe_id is 0xFF unless the binding is a PrefetcherPipe relay, in which case
+    // it identifies the persistent slot the relay-token constructor aligns from on TRISC.
     virtual void process_dataflow_buffer_binding_handles(
-        std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const {}
+        std::function<
+            void(const std::string& accessor_name, uint16_t logical_dfb_id, bool is_relay, uint8_t prefetcher_pipe_id)>)
+        const {}
     virtual void process_semaphore_binding_handles(
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)

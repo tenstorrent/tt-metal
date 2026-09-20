@@ -44,7 +44,7 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
 
     // Resource names
     const DFBSpecName C0{"c0"};  // src0 (legacy CB c_0)
-    const DFBSpecName C1{"c1"};  // tensor scratch (legacy CB c_1)
+    const ScratchpadSpecName C1{"c1"};  // tensor scratch (legacy CB c_1)
     const TensorParamName INPUT{"input"};
     const TensorParamName START{"start"};
     const TensorParamName END{"end"};
@@ -60,11 +60,9 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
         .num_entries = num_input_tiles,
         .data_format_metadata = cb_data_format,
     };
-    DataflowBufferSpec c1_dfb{
+    ScratchpadSpec c1_scratch{
         .unique_id = C1,
-        .entry_size = single_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = cb_data_format,
+        .size_per_node = single_tile_size,
     };
 
     // --- Common reader args: num_unpadded_per_dim..., num_padded_per_dim..., input_shape...
@@ -112,7 +110,6 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
     }
 
     // --- Reader KernelSpec ---
-    // c_1 (tensor scratch) is a real produce-then-consume scratch FIFO on the reader → self-loop binding.
     KernelSpec reader{
         .unique_id = READER,
         .source =
@@ -120,9 +117,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
             "reader_unary_unpad_dims_interleaved_start_id_tensor_args.cpp",
         .compiler_options = {},
         .dfb_bindings =
-            {DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{.dfb_spec_name = C1, .accessor_name = "cb_tensor", .endpoint_type = DFBEndpointType::PRODUCER},
-             DFBBinding{.dfb_spec_name = C1, .accessor_name = "cb_tensor", .endpoint_type = DFBEndpointType::CONSUMER}},
+            {DFBBinding{.dfb_spec_name = C0, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = C1, .accessor_name = "cb_tensor"}},
         .tensor_bindings =
             {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "in"},
              TensorBinding{.tensor_parameter_name = START, .accessor_name = "start"},
@@ -220,7 +216,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
     ProgramSpec spec;
     spec.name = "slice_tile_tensor_args";
     spec.kernels = {reader, writer};
-    spec.dataflow_buffers = {c0_dfb, c1_dfb};
+    spec.dataflow_buffers = {c0_dfb};
+    spec.scratchpads = {c1_scratch};
     spec.tensor_parameters = {input_param, start_param, end_param, output_param};
     spec.work_units = {WorkUnitSpec{
         .name = "slice_tile_tensor_args_wu",

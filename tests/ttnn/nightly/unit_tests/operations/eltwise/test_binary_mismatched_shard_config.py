@@ -55,4 +55,4 @@ def test_add_with_mismatched_width_shard_configs(device):
 
     # Verify correctness with PCC and ULP
     assert_with_pcc(c_torch, c_result, 0.9999)
-    assert_with_ulp(c_torch, c_result, ulp_threshold=1)
+    assert_with_ulp(expected_result=c_torch, actual_result=c_result, ulp_threshold=1)

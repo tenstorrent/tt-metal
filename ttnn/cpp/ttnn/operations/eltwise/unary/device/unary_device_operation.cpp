@@ -12,6 +12,103 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::unary {
+namespace {
+
+// is_integer_dtype doesn't include INT8 as of now because no unary op has native INT8 implementation yet.
+bool is_integer_dtype(DataType dtype) {
+    return dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16 ||
+           dtype == DataType::UINT8;
+}
+
+bool is_int32(DataType dtype) { return dtype == DataType::INT32; }
+bool is_uint32(DataType dtype) { return dtype == DataType::UINT32; }
+bool is_unsigned_int(DataType dtype) {
+    return dtype == DataType::UINT32 || dtype == DataType::UINT16 || dtype == DataType::UINT8;
+}
+bool is_int32_uint32(DataType dtype) { return is_int32(dtype) || is_uint32(dtype); }
+bool is_int32_uint32_uint16(DataType dtype) { return is_int32_uint32(dtype) || dtype == DataType::UINT16; }
+bool is_relu_family_int(DataType dtype) { return is_int32(dtype) || is_unsigned_int(dtype); }
+
+// Integer dtypes that unary_op_utils.cpp maps to a distinct init/LLK (or a dtype-agnostic kernel).
+bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
+    switch (op_type) {
+        case UnaryOpType::ABS: return is_unsigned_int(dtype);
+        case UnaryOpType::ABS_INT32:
+        case UnaryOpType::CLAMP_TSS:
+        case UnaryOpType::GEZ:
+        case UnaryOpType::GTZ:
+        case UnaryOpType::LEZ:
+        case UnaryOpType::LTZ:
+        case UnaryOpType::NEG:
+        case UnaryOpType::SIGNBIT: return is_int32(dtype);
+
+        case UnaryOpType::REMAINDER: return is_uint32(dtype);
+
+        case UnaryOpType::LEAKY_RELU: return is_unsigned_int(dtype);
+
+        case UnaryOpType::ADD_UNARY_SFPU:
+        case UnaryOpType::MAXIMUM:
+        case UnaryOpType::MINIMUM:
+        case UnaryOpType::RSUB:
+        case UnaryOpType::SUB_UNARY_SFPU:
+        case UnaryOpType::UNARY_EQ:
+        case UnaryOpType::UNARY_GE:
+        case UnaryOpType::UNARY_GT:
+        case UnaryOpType::UNARY_LE:
+        case UnaryOpType::UNARY_LT:
+        case UnaryOpType::UNARY_NE:
+        case UnaryOpType::WHERE_TSS: return is_int32_uint32(dtype);
+
+        case UnaryOpType::BITWISE_AND:
+        case UnaryOpType::BITWISE_OR:
+        case UnaryOpType::BITWISE_XOR:
+        case UnaryOpType::EQZ:
+        case UnaryOpType::FILL:
+        case UnaryOpType::LEFT_SHIFT:
+        case UnaryOpType::LOGICAL_NOT_UNARY:
+        case UnaryOpType::NEZ:
+        case UnaryOpType::RIGHT_SHIFT:
+        case UnaryOpType::SQUARE: return is_int32_uint32_uint16(dtype);
+
+        case UnaryOpType::BITWISE_NOT: return is_int32_uint32(dtype);
+
+        case UnaryOpType::RELU:
+        case UnaryOpType::RELU6:
+        case UnaryOpType::RELU_MAX:
+        case UnaryOpType::RELU_MIN: return is_relu_family_int(dtype);
+
+        // Copy / typecast kernels; valid on integer tiles without a separate integer LLK.
+        case UnaryOpType::BITCAST:
+        case UnaryOpType::IDENTITY:
+        case UnaryOpType::TYPECAST: return true;
+
+        default: return false;
+    }
+}
+
+void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype) {
+    if (!is_integer_dtype(input_dtype)) {
+        return;
+    }
+    // A TYPECAST in a multi-op chain changes the dtype for later ops; this checker only
+    // sees the original tensor dtype, so skip rather than reject a valid post-cast float op.
+    if (op_chain.size() > 1) {
+        for (const auto& op : op_chain) {
+            if (op.type() == UnaryOpType::TYPECAST) {
+                return;
+            }
+        }
+    }
+    for (const auto& op : op_chain) {
+        TT_FATAL(
+            unary_op_supports_integer_dtype(op.type(), input_dtype),
+            "Unary: {} does not support integer input dtype {}",
+            op.type(),
+            input_dtype);
+    }
+}
+
+}  // namespace
 
 ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
     return ttsl::hash::hash_objects_with_default_seed(
@@ -43,6 +140,8 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.buffer() != nullptr,
         "Unary: Operands need to be allocated in buffers on the device. Buffer is null.");
+
+    validate_integer_input_dtype(args.op_chain, input_tensor.dtype());
 
     for (const auto& op : args.op_chain) {
         if (op.type() == operations::unary::UnaryOpType::LGAMMA) {
@@ -99,13 +198,10 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (output_tensor.has_value()) {
-        const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
-        const auto preallocated_output_shape = output_tensor->logical_shape();
-        TT_FATAL(
-            preallocated_output_shape == computed_output_shape,
-            "Unary: Preallocated output shape must match computed shape. Computed: {}, Preallocated: {}",
-            computed_output_shape,
-            preallocated_output_shape);
+        // The preallocated output's shape is checked inside compute_output_specs (binary_ng
+        // pattern), which also covers the program-cache-hit path. Call it here so the check still
+        // runs when the program cache is disabled and compute_program_hash is never reached.
+        compute_output_specs(args, tensor_args);
 
         TT_FATAL(
             output_tensor->layout() == input_tensor.layout(),
@@ -117,11 +213,20 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
 
 tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // Unary is elementwise, so the shape the op produces is the input's logical shape.
+    const auto output_shape = tensor_args.input.logical_shape();
+
     if (tensor_args.output_tensor.has_value()) {
+        // Check before returning the preallocated spec: taking the expected shape from the return
+        // value instead would compare the preallocated tensor against itself.
+        const auto preallocated_output_shape = tensor_args.output_tensor->logical_shape();
+        TT_FATAL(
+            preallocated_output_shape == output_shape,
+            "Unary: Preallocated output shape must match computed shape. Computed: {}, Preallocated: {}",
+            output_shape,
+            preallocated_output_shape);
         return tensor_args.output_tensor->tensor_spec();
     }
-
-    const auto output_shape = tensor_args.input.logical_shape();
 
     if (args.memory_config.is_sharded()) {
         const auto output_layout = tensor_args.input.layout();
@@ -137,7 +242,7 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
                     tensor_args.input.padded_shape(),
                     padded_out_shape);
             } else {
-                shard_spec_opt = generate_shard_spec_all_cores(tensor_args.input, padded_out_shape, memory_layout);
+                shard_spec_opt = generate_output_shard_spec(tensor_args.input, padded_out_shape, memory_layout);
             }
         }
 

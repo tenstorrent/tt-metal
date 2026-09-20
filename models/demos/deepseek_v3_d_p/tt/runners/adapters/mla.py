@@ -3,7 +3,7 @@
 
 """``MLAPrefillAdapter`` — shared adapter base for the DeepSeek-V3 model family.
 
-DeepSeek-V3 and Kimi-K2.6 share one architecture (MLA attention + MoE) and one TT
+DeepSeek-V3 and Kimi-K2.7 share one architecture (MLA attention + MoE) and one TT
 implementation (``TtPrefillTransformer`` driven by ``TtPrefillRuntime``); they
 differ only in static dimensions, default paths, HF-config quirks, and a couple of
 device knobs. The adapter is pure glue: it tells the engine where this model's
@@ -11,7 +11,7 @@ config / weights / trace live and how to build its runtime. All operational beha
 (running a chunk, the KV layout, the migration table, PCC) lives on the runtime
 (``TtPrefillRuntime``) the build returns; the engine drives those + owns all comms.
 
-Concrete models (``deepseek_v3.py``, ``kimi_k2_6.py``) subclass this and set the
+Concrete models (``deepseek_v3.py``, ``kimi_k2_7.py``) subclass this and set the
 identity / default-path attributes, overriding a method only where they genuinely
 diverge (e.g. Kimi's L1-small routing semaphores). A non-MLA architecture subclasses
 ``PrefillModelAdapter`` directly and builds its own runtime.
@@ -37,7 +37,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 
 
 def unwrap_multimodal_config(cfg):
-    """Unwrap a multimodal wrapper config (Kimi K2.5/K2.6) to its inner text_config.
+    """Unwrap a multimodal wrapper config (Kimi K2.7-Code) to its inner text_config.
 
     The LM fields the rest of the code reads (hidden_size, n_routed_experts, ...)
     live under ``text_config``. Also stubs ``quantization_config.weight_block_size``
@@ -140,7 +140,6 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             is_last_rank=params.is_last_rank,
             kv_only_last_layer=params.kv_only_last_layer,
             dflash_enabled=params.dflash_enabled,
-            tp_shard_kv=params.tp_shard_kv,
             routing_use_l1_small_for_semaphores=self.routing_use_l1_small_for_semaphores,
             sparse_kv_cache_format=self.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
             use_trace=params.use_trace,

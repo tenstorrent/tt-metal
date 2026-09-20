@@ -16,10 +16,11 @@
 // in named args could collide and be served a stale binary. WS5 routes it through
 // the shared experimental::blaze::hash_named_args_schema() helper.
 //
-// These tests lock in BOTH directions on the generic-op hasher:
+// These tests lock in the generic-op hasher's contract:
 //   * schema-sensitive  -- any schema difference (incl. the previously-missing
 //                          per-core-array variant's name/length) => DIFFERENT hash
-//   * value-insensitive  -- values-only difference => SAME hash
+//   * runtime-value-insensitive  -- runtime-values-only difference => SAME hash
+//   * compile-time-value-sensitive  -- compile-time value difference => DIFFERENT hash
 //
 // Host-only: compute_program_descriptor_hash() is a pure function, so these use
 // plain TEST(...) and open no device.
@@ -52,7 +53,7 @@ const CoreCoord kCore1{1, 0};
 
 // Wrap named args in an otherwise-fixed single-kernel ProgramDescriptor and hash it
 // via the ttnn generic-op hasher under test. Everything except blaze_named_args is
-// held constant, so the only varying hash input is the named-arg schema.
+// held constant, so only the compile-time names/values and runtime-arg schema vary.
 ttsl::hash::hash_t program_hash(const experimental::blaze::NamedKernelArgs& args) {
     KernelDescriptor kernel = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
@@ -74,6 +75,13 @@ experimental::blaze::NamedKernelArgs per_core_array(
 }
 
 }  // namespace genop_named_args_hash_test
+
+TEST(GenericOpNamedArgsHash, CompileTimeValueChangesHash) {
+    using namespace genop_named_args_hash_test;
+    experimental::blaze::NamedKernelArgs a{.named_compile_time_args = {{"kernel.value", 1}}};
+    experimental::blaze::NamedKernelArgs b{.named_compile_time_args = {{"kernel.value", 2}}};
+    EXPECT_NE(program_hash(a), program_hash(b));
+}
 
 TEST(GenericOpNamedArgsHash, SchemaDifferenceChangesHash) {
     using namespace genop_named_args_hash_test;
