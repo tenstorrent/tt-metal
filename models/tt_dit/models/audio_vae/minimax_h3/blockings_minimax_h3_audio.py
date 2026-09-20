@@ -91,8 +91,8 @@ def h3_audio_channel_widths(
     return pairs
 
 
-# Swept on one chip with the operand split on, at the per-device AMP shapes: T_out / C_out blocks only, so the per-output
-# reduction order and the output are unchanged (torch.equal); 2-3x per conv over the LTX-tuned rows.
+# Swept on one chip with the operand split on, at the per-device AMP shapes: T_out / C_out blocks only, so the
+# per-output reduction order and the output are unchanged (torch.equal); 2-3x per conv over the LTX-tuned rows.
 _SWEPT_BLOCKINGS = {  # (C_in, C_out, k) -> (C_out_block, T_out_block); C_in_block stays the stub's
     (32, 32, 7): (32, 32),  # k7 d1 T15000: 0.652 -> 0.304 ms (2.14x)
     (64, 64, 7): (32, 32),  # k7 d1 T7500: 0.898 -> 0.292 ms (3.07x)
@@ -109,11 +109,8 @@ def register_h3_audio_blockings(*, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK,
     """Seed ``_FP32_BLOCKINGS`` for every H3 audio conv shape. Returns the number added.
 
     ``setdefault``, so a swept value that later lands in ``conv3d.py`` wins over these.
-    Kernels cover every size the model can present: 1 and 3 (projections), 4/7/8/9/10/11 (AMP
-    blocks, strided encoder convs and transposed upsamplers), and the packed bands' effective
-    kernels (5, 15, 17, 27 for the packed AMP convs and resamplers), which used to miss every
-    table and fall to the (32, 32, 1) default -- a one-row temporal block instead of eight.
-    Registering every size up to 32 costs dict entries only, so no packing factor can miss again.
+    Kernels cover every size the model can present, 1 to 32: projections, AMP blocks, strided encoder convs, transposed
+    upsamplers and the packed bands' effective kernels (5, 15, 17, 27); the unused sizes cost dict entries only.
     """
     kernels = tuple(range(1, 33))
     added = 0
