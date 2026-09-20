@@ -887,6 +887,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     }
 
     cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
+    // (A Float32 running output with return_lse, like Float32 statistics, breaks the kernel: its
+    // intermediate formats are assumed bf16 in places. The bf16 accumulator's rounding compounds over
+    // the K chunks into a few percent RMS on the output; left as it is for now.)
     cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);

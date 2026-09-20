@@ -245,6 +245,8 @@ struct DeviceConfig {
     std::string cp_shift_transport = "fifo";       // fifo | direct
     std::string cp_layout = "contiguous";          // contiguous | zigzag
     uint32_t cp_rows_per_block_tiles = 0;          // 0 = the planner picks; else 1, 2 or 4
+    std::string cp_forward = "two_pass";           // two_pass | ttnn
+    uint32_t cp_forward_chunk = 256;               // ttnn's query/key chunk, rows
 };
 
 ttml::ops::distributed::RingAttentionOptions ring_attention_options_from(const DeviceConfig &config) {
@@ -280,6 +282,17 @@ ttml::ops::distributed::RingAttentionOptions ring_attention_options_from(const D
         throw std::runtime_error("cp_rows_per_block_tiles must be 0 (auto), 1, 2 or 4");
     }
     opts.rows_per_block_tiles = config.cp_rows_per_block_tiles;
+    if (config.cp_forward == "two_pass") {
+        opts.forward_kind = RingForwardKind::TwoPass;
+    } else if (config.cp_forward == "ttnn") {
+        opts.forward_kind = RingForwardKind::Ttnn;
+    } else {
+        throw std::runtime_error("cp_forward must be two_pass or ttnn; got " + config.cp_forward);
+    }
+    if (config.cp_forward_chunk == 0 || config.cp_forward_chunk % 32 != 0) {
+        throw std::runtime_error("cp_forward_chunk must be a positive multiple of 32");
+    }
+    opts.forward_chunk_size = config.cp_forward_chunk;
     return opts;
 }
 
@@ -298,6 +311,14 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     config.cp_layout = device_node["cp_layout"].as<std::string>(config.cp_layout);
     config.cp_rows_per_block_tiles =
         device_node["cp_rows_per_block_tiles"].as<uint32_t>(config.cp_rows_per_block_tiles);
+    config.cp_forward = device_node["cp_forward"].as<std::string>(config.cp_forward);
+    config.cp_forward_chunk = device_node["cp_forward_chunk"].as<uint32_t>(config.cp_forward_chunk);
+    if (const char *env = std::getenv("TTML_CP_FORWARD"); env != nullptr && *env != '\0') {
+        config.cp_forward = env;
+    }
+    if (const char *env = std::getenv("TTML_CP_FORWARD_CHUNK"); env != nullptr && *env != '\0') {
+        config.cp_forward_chunk = static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+    }
     if (const char *env = std::getenv("TTML_CP_BACKWARD"); env != nullptr && *env != '\0') {
         config.cp_backward = env;
     }
@@ -499,7 +520,9 @@ int main(int argc, char **argv) {
         fmt::println("  Device IDs: {}", device_config.device_ids);
         if (device_config.enable_cp) {
             fmt::println(
-                "  Ring attention: backward {}, shifts {}, layout {}, block height {}",
+                "  Ring attention: forward {} (chunk {}), backward {}, shifts {}, layout {}, block height {}",
+                device_config.cp_forward,
+                device_config.cp_forward_chunk,
                 device_config.cp_backward,
                 device_config.cp_shift_transport,
                 device_config.cp_layout,

@@ -71,6 +71,16 @@ enum class RingBackwardKind {
     CyclicInPlace,
 };
 
+// Which per-step forward the ring runs. TwoPass is tt-train's sdpa_fw (one
+// query tile row per core pass, K and V re-read per row). Ttnn is ttnn's
+// chunk-blocked flash-attention kernel with its lse output, 5-9x faster at
+// the ring's launch shapes, Float32 accumulation; its lse is within 2-3e-2
+// of the truth where sdpa_fw is within 1e-2.
+enum class RingForwardKind {
+    TwoPass,
+    Ttnn,
+};
+
 // shift_transport is how every ring shift in the forward and the backward
 // moves its bytes (see ttnn_fixed::distributed::RingShiftTransport). It is
 // orthogonal to backward_kind: both backwards shift the same tensors.
@@ -91,7 +101,10 @@ autograd::TensorPtr ring_attention_sdpa(
     RingBackwardKind backward_kind = RingBackwardKind::TwoPass,
     uint32_t rows_per_block_tiles = 1U,
     ttnn_fixed::distributed::RingShiftTransport shift_transport = ttnn_fixed::distributed::RingShiftTransport::Fifo,
-    ttml::metal::ops::RingLayout layout = ttml::metal::ops::RingLayout::Contiguous);
+    ttml::metal::ops::RingLayout layout = ttml::metal::ops::RingLayout::Contiguous,
+    RingForwardKind forward_kind = RingForwardKind::TwoPass,
+    // ttnn's query/key chunk for the Ttnn forward, in rows (256 fits L1 at d = 128).
+    uint32_t forward_chunk_size = 256U);
 
 // How a model's attention runs the ring, set once by the trainer from its
 // config and read by the distributed attention module at every call. The
@@ -103,6 +116,8 @@ struct RingAttentionOptions {
     uint32_t rows_per_block_tiles{0U};
     ttnn_fixed::distributed::RingShiftTransport shift_transport{ttnn_fixed::distributed::RingShiftTransport::Fifo};
     ttml::metal::ops::RingLayout layout{ttml::metal::ops::RingLayout::Contiguous};
+    RingForwardKind forward_kind{RingForwardKind::TwoPass};
+    uint32_t forward_chunk_size{256U};
 };
 RingAttentionOptions& ring_attention_options();
 

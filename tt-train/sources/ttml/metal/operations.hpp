@@ -8,6 +8,7 @@
 #include "ops/cyclic_sdpa_bw/cyclic_sdpa_bw.hpp"
 #include "ops/ring_cyclic_sdpa_bw/ring_cyclic_sdpa_bw.hpp"
 #include "ops/ring_zigzag_sdpa/ring_zigzag_sdpa.hpp"
+#include "ops/ring_ttnn_sdpa_fw/ring_ttnn_sdpa_fw.hpp"
 #include "ops/cross_entropy_fw/cross_entropy_fw.hpp"
 #include "ops/frobenius_normalize/frobenius_normalize.hpp"
 #include "ops/k_split_gram_matmul/k_split_gram_matmul.hpp"
