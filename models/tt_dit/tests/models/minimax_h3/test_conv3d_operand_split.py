@@ -2,13 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The in-kernel fp32 operand split (`split_mode="kernel"`, `Conv3dConfig.operand_split`) against the three-conv
-host split (`"full"`) it replaces, at H3 audio shapes, one chip.
-
-Same operands reach the matrix engine in both forms; only the summation differs (one fp32 DST accumulation of
-three K passes versus three K accumulations plus two fp32 SFPU adds), so the two must agree to a few fp32 ulp and
-both must sit far below the unsplit conv's error against a float64 reference. Also times the three forms.
-"""
+"""The in-kernel fp32 operand split (`split_mode="kernel"`) against the three-conv host split (`"full"`) at H3 audio
+shapes, one chip: same operands, only the fp32 summation order differs, so they must agree to a few ulp; also timed."""
 
 import copy
 import time
