@@ -17,7 +17,7 @@ export \
 export PREFILL_TTNN_CACHE="$TT_CACHE_PATH"
 ```
 
-The default GPU reference is already in validation channel order. See [Prepared GPU reference](PREFILL_MIGRATION.md#prepared-gpu-reference) to create another copy.
+The default GPU reference is in validation channel order. See [Prepared GPU reference](PREFILL_MIGRATION.md#prepared-gpu-reference) to create another copy.
 
 ### Mock, 16K
 
@@ -107,8 +107,8 @@ flowchart TD
     R["Runner loads model<br/>Allocates six KV slots"] --> T["Exports KV address table<br/>and device map"]
     T --> P["Producer sends exact GPU-capture tokens<br/>to slot 0"]
     P --> F["TT runs prefill chunk by chunk<br/>Writes KV into slot 0"]
-    F --> A["Producer drains device layer acknowledgments"]
-    A --> S["Producer sends shutdown sentinel"]
+    F --> A["Runner synchronizes device completion"]
+    A --> S["Runner receives shutdown sentinel"]
     S --> H["Runner's test hook runs<br/>Mesh and KV remain alive"]
 
     H --> Q["TTNN reads slot 0's full prefix<br/>Host gathers and reorders shards"]
