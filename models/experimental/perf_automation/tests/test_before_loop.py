@@ -144,7 +144,48 @@ def test_an_explicit_perf_test_skips_generation_entirely(tmp_path, model_root, m
     monkeypatch.setattr(_ptg, "generate_perf_test", _must_not_be_called)
     result = _run(tmp_path, model_root, config_extra={"perf_test": "model/test_e2e.py::test_perf"})
     manifest = json.loads((Path(result["run_dir"]) / "manifest.json").read_text())
-    assert manifest["perf_test_resolved"]["path"] == "model/test_e2e.py::test_perf"
+    # BARE path, not the full 'path::case' node id -- stage-mark injection and every other file-
+    # system reader downstream opens this as a .py file, and '...test_e2e.py::test_perf' is not one.
+    # Caught live: --perf-test worked right up until this exact step raised FileNotFoundError.
+    # (case is asserted separately below via _split_perf_test directly: the mock `collect` this
+    # harness wires in always self-heals any case to its own fixed collected id, so the INTEGRATION
+    # test here can only pin down path, not which of --case/the node's own case won.)
+    assert manifest["perf_test_resolved"]["path"] == "model/test_e2e.py"
+    assert "::" not in manifest["perf_test_resolved"]["path"]
+
+
+def test_the_split_helper_lets_a_separate_case_win_over_the_nodes_own(tmp_path, model_root):
+    """--case/-k is the more explicit of the two when both are given -- unit-level, since the mock
+    `collect` wired into the integration harness self-heals any case to its own fixed id and cannot
+    observe which source actually won."""
+    from agent.before_loop import _split_explicit_perf_test
+
+    path, case = _split_explicit_perf_test("model/test_e2e.py::test_perf", explicit_case="test_other")
+    assert path == "model/test_e2e.py" and case == "test_other"
+
+
+def test_the_split_helper_falls_back_to_the_nodes_own_case(tmp_path, model_root):
+    from agent.before_loop import _split_explicit_perf_test
+
+    path, case = _split_explicit_perf_test("model/test_e2e.py::test_perf", explicit_case=None)
+    assert path == "model/test_e2e.py" and case == "test_perf"
+
+
+def test_the_split_helper_handles_a_bare_path_with_no_case_suffix(tmp_path, model_root):
+    from agent.before_loop import _split_explicit_perf_test
+
+    path, case = _split_explicit_perf_test("model/test_e2e.py", explicit_case="test_perf")
+    assert path == "model/test_e2e.py" and case == "test_perf"
+
+
+def test_an_explicit_perf_test_with_no_case_suffix_still_resolves(tmp_path, model_root, monkeypatch):
+    """A bare 'path' (no '::case') for --perf-test must not crash the split, end to end."""
+    from agent import perf_test_gen as _ptg
+
+    monkeypatch.setattr(_ptg, "generate_perf_test", lambda *a, **k: (_ for _ in ()).throw(AssertionError("called")))
+    result = _run(tmp_path, model_root, config_extra={"perf_test": "model/test_e2e.py", "case": "test_perf"})
+    manifest = json.loads((Path(result["run_dir"]) / "manifest.json").read_text())
+    assert manifest["perf_test_resolved"]["path"] == "model/test_e2e.py"
 
 
 def test_an_explicit_perf_test_still_populates_pipelines_and_multimodal(tmp_path, model_root, monkeypatch):

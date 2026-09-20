@@ -316,6 +316,18 @@ def mock_collect_cases(tt_root, perf_test, env=None):
     return [f"{perf_test}::test_mock[mock]"], "1 test collected"
 
 
+def _split_explicit_perf_test(node: str, explicit_case: str | None) -> tuple[str, str]:
+    """An operator-supplied --perf-test is a single 'path::case' node id (its own CLI help says so).
+    Split it into the bare .py path every downstream file-system reader (stage-mark injection,
+    pytest collection) expects, plus the case to run -- gluing '::case' onto the path made a path
+    that literally ends in '.py::test_main_perf', which can never be opened.
+
+    explicit_case (a separately-passed --case/-k) wins when given, since it is the more deliberate
+    of the two overrides; the node's own embedded case is the fallback."""
+    path, _, node_case = str(node or "").partition("::")
+    return path, explicit_case or node_case
+
+
 # ---- the driver --------------------------------------------------------------
 
 
@@ -723,7 +735,7 @@ def before_loop(
         # AFTER this block had already run or raised). Skip generation entirely and populate the same
         # pathmap shape generation would have, so every downstream reader (perf_rel/case here, and
         # pathmap["pipelines"]/["is_multimodal"] in run.py) sees an identical contract either way.
-        _pt_path, _, _pt_case = str(config["perf_test"]).partition("::")
+        _pt_path, _pt_case = _split_explicit_perf_test(config["perf_test"], config.get("case"))
         pathmap["perf_test"] = {
             "path": _pt_path,
             "case": _pt_case,
@@ -822,9 +834,10 @@ def before_loop(
         getattr(model_runner, "model", "mock"),
         getattr(model_runner, "last_usage", None),
     )
-    # perf test path: discovery returns model-root-relative; pytest runs from tt-metal root
-    perf_rel = config.get("perf_test") or os.path.relpath(model_root_in_tree / pathmap["perf_test"]["path"], tt_root)
-    case = config.get("case") or pathmap["perf_test"]["case"]
+    # perf test path: discovery returns model-root-relative; pytest runs from tt-metal root.
+    _explicit_perf, _explicit_case = _split_explicit_perf_test(config.get("perf_test"), config.get("case"))
+    perf_rel = _explicit_perf or os.path.relpath(model_root_in_tree / pathmap["perf_test"]["path"], tt_root)
+    case = _explicit_case or pathmap["perf_test"]["case"]
     # SELF-HEAL the case: the discovery agent (or a stale config) can emit a case id that selects
     # NOTHING (e.g. 'device_params0-0' vs the real 'device_params0') -> preflight would hard-fail.
     # Validate against the test's ACTUAL collected ids and auto-correct to a collectable case (best

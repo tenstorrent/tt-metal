@@ -71,7 +71,7 @@ def test_before_loop_names_the_perf_test_without_following_the_link():
 
     assert "model_root_in_tree = Path(os.path.abspath(config[" in body, "the non-following spelling is gone"
     assert 'model_root = Path(config["model_root"]).resolve()' in body, "model_root must stay resolved for gitio"
-    line = next(ln for ln in body.splitlines() if "perf_rel = config.get(" in ln)
+    line = next(ln for ln in body.splitlines() if ln.strip().startswith("perf_rel = "))
     nxt = body.splitlines()[body.splitlines().index(line) + 1]
     assert "model_root_in_tree" in line + nxt, "perf_rel still names the perf test through the resolved root"
 
