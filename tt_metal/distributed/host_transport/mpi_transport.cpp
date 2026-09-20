@@ -155,6 +155,13 @@ std::string MpiTransport::describe() const {
 MpiTransport::~MpiTransport() {
     // Point-to-point requests can be cancelled, unlike MPI RMA ones, so a
     // half-finished stream tears down instead of leaking.
+    //
+    // Known gap: DistributedContext::cancel() is MPI_Cancel followed by
+    // MPI_Request_free, which does not establish completion -- MPI may still
+    // touch a buffer after this returns. The ring outlives us (the socket that
+    // owns it is destroyed after the transport), but credit_inbox_/outbox_ are
+    // members and do not. Closing this needs cancel-then-wait in the shared
+    // request abstraction, which is outside this change; see the PR thread.
     for (auto& r : pending_send_) {
         r->cancel();
     }
