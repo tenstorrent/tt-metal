@@ -75,6 +75,7 @@
 #include "api/compute/transpose.h"
 #include "api/compute/transpose_dest.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
 
 #ifndef DENSE_MODE
@@ -98,6 +99,8 @@ constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
 constexpr uint32_t block_size = get_compile_time_arg_val(4);
 constexpr uint32_t Bt = get_compile_time_arg_val(5);
 constexpr uint32_t score_tiles = Bt * Bt;
+// The exponential's bias constant: 127, nothing folded in (exp(a x) exactly).
+constexpr uint32_t exp_bias_bits = 0x42FE0000u;
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
 constexpr uint32_t cb_key = tt::CBIndex::c_1;
@@ -201,12 +204,146 @@ void broadcast_rows(const uint32_t cb_stat, const uint32_t tile, const uint32_t 
     mm_tiles<MathFidelity::HiFi4>(cb_reduce_scaler, cb_stat, 0, tile, idst);
 }
 
-// exp(a x) in place on a DST tile, on the math thread's SFPU.
+
+#if defined(TRISC_MATH)
+// The backward kernel's exponential, on the math thread: 2^z with z = a x / ln 2
+// + bias as a two-chain polynomial in raw SFPU instructions, relative error
+// within 2.9e-6. (The generic exp_tile measured 4.3 of a launch's 10 ms; the
+// 21-bit exponential sdpa_fw uses is biased by ~1e-3 and, compounded through
+// the rescale factors of 32 hops, put the lse off by 3e-2.) The backward runs
+// it on the pack thread; here every SFPU operation is on the math thread, so
+// the LLK's own per-tile framing (dst address, the four faces, clear) wraps
+// the face body. The programmable constants are shared with the sfpi-compiled
+// operations (max, sub, mul, reciprocal, log), which program what they need
+// in their inits; ours are (re)programmed in exp_prepare, and register 11's
+// -1.0, which sfpi code assumes without an init, is put back in exp_release.
+// See the backward kernel for the derivation of every step.
+namespace math_sfpu {
+
+// 2^f for f in [0, 1) as 1 + c1 f + c2 f^2 + c3 f^3 + c4 f^4.
+constexpr uint32_t kExpC1 = 0x3F316B63u;
+constexpr uint32_t kExpC2 = 0x3E771229u;
+constexpr uint32_t kExpC3 = 0x3D55FC32u;
+constexpr uint32_t kExpC4 = 0x3C5BFB9Cu;
+
+constexpr uint32_t kBiasReg = p_sfpu::LREG6;
+constexpr uint32_t kC1Reg = p_sfpu::LREG7;
+constexpr uint32_t kScaleReg = p_sfpu::LREG12;
+constexpr uint32_t kC2Reg = p_sfpu::LREG13;
+constexpr uint32_t kC3Reg = p_sfpu::LREG14;
+constexpr uint32_t kC4Reg = p_sfpu::LREG11;  // borrowed from the sfpi compiler's -1.0, see exp_release
+
+constexpr uint32_t kMadNegateVa = 1u;
+constexpr uint32_t kSetExpFromInt = 0u;
+constexpr uint32_t kCastIntToFloat = 0u;
+constexpr uint32_t kGtSetVd = 8u;
+
+inline void load_constant(const uint32_t reg, const uint32_t bits) {
+    TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_UPPER, static_cast<uint16_t>(bits >> 16));
+    TTI_SFPLOADI(reg, sfpi::SFPLOADI_MOD0_LOWER, static_cast<uint16_t>(bits & 0xFFFFu));
+}
+
+inline void program_constant(const uint32_t reg, const uint32_t bits) {
+    load_constant(p_sfpu::LREG0, bits);
+    TTI_SFPCONFIG(0, reg, 0);
+}
+
+inline void init() {
+    ckernel::sfpu::_init_sfpu_config_reg();
+}
+
+// The address modes and every constant the exponential relies on, reloaded
+// before every run of tiles: the other SFPU operations program these too.
+inline void exp_prepare() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
+    constexpr float exp_scale = __builtin_bit_cast(float, scaler_bits);
+    constexpr uint32_t inv_ln2_bits = __builtin_bit_cast(uint32_t, exp_scale * 1.4426950408889634F);
+    program_constant(kScaleReg, inv_ln2_bits);
+    program_constant(kC2Reg, kExpC2);
+    program_constant(kC3Reg, kExpC3);
+    program_constant(kC4Reg, kExpC4);
+    load_constant(kBiasReg, exp_bias_bits);
+    load_constant(kC1Reg, kExpC1);
+}
+
+// Register 11 back to the -1.0 every sfpi-compiled kernel assumes.
+inline void exp_release() {
+    program_constant(p_sfpu::LREG11, 0xBF800000u);
+}
+
+#define FW_EXP_STEP(step, x, i, f, column)                                                                   \
+    if constexpr (step == 0) TTI_SFPLOAD(x, InstrModLoadStore::DEFAULT, ADDR_MOD_7, column);               \
+    if constexpr (step == 1) TTI_SFPMAD(x, kScaleReg, kBiasReg, x, 0);                                      \
+    if constexpr (step == 2)                                                                                 \
+        TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_ZERO, 0, x, x, i, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);     \
+    if constexpr (step == 3) TTI_SFPCAST(i, f, kCastIntToFloat);                                            \
+    if constexpr (step == 4) TTI_SFPMAD(f, p_sfpu::LCONST_1, x, f, kMadNegateVa);                           \
+    if constexpr (step == 5) TTI_SFPGT(0, p_sfpu::LCONST_0, x, kGtSetVd);                                   \
+    if constexpr (step == 6) TTI_SFPAND(0, x, i, 0);                                                         \
+    if constexpr (step == 7) TTI_SFPMAD(f, kC4Reg, kC3Reg, x, 0);                                           \
+    if constexpr (step == 8) TTI_SFPMAD(x, f, kC2Reg, x, 0);                                                \
+    if constexpr (step == 9) TTI_SFPMAD(x, f, kC1Reg, x, 0);                                                \
+    if constexpr (step == 10) TTI_SFPMAD(x, f, p_sfpu::LCONST_1, x, 0);                                     \
+    if constexpr (step == 11) TTI_SFPSETEXP(0, x, i, kSetExpFromInt);                                       \
+    if constexpr (step == 12 && column == 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);    \
+    if constexpr (step == 12 && column != 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_6, column);
+
+constexpr uint32_t kExpSteps = 13;
+
+template <uint32_t step>
+inline void exp_pair_step() {
+    FW_EXP_STEP(step, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
+    FW_EXP_STEP(step, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG5, 2);
+}
+
+template <uint32_t step = 0>
+inline void exp_pair_body() {
+    exp_pair_step<step>();
+    if constexpr (step + 1 < kExpSteps) {
+        exp_pair_body<step + 1>();
+    }
+}
+
+// A face is 16 x 16: four groups of four rows, each two vectors; the two
+// chains interleaved instruction by instruction.
+inline void exp_face() {
+    constexpr int kBodyLen = 2 * kExpSteps;
+    TTI_REPLAY(0, kBodyLen, 1, 1);
+    exp_pair_body();
+#pragma GCC unroll 4
+    for (uint32_t i = 1; i < 4u; ++i) {
+        TTI_REPLAY(0, kBodyLen, 0, 0);
+    }
+}
+
+// One tile: the LLK's framing sets the dst address, runs the body on each of
+// the four faces, and clears the address.
+inline void exp_tile(const uint32_t tile) {
+    _llk_math_eltwise_unary_sfpu_params_(exp_face, tile, VectorMode::RC);
+}
+
+}  // namespace math_sfpu
+#endif
+
+// exp(a x) in place on a DST tile, on the math thread's SFPU (see math_sfpu).
+// FW_EXPERIMENT_* are timing experiments only (the results are wrong).
+constexpr uint32_t scaler_bf16_bits = scaler_bits >> 16;  // exact: the scale is a power of two
 void exp_scaled(const uint32_t idst) {
+#ifdef FW_EXPERIMENT_NO_EXP
+    (void)idst;
+#elif defined(FW_EXPERIMENT_GENERIC_EXP)
     binop_with_scalar_tile_init();
     mul_unary_tile(idst, scaler_bits);
     exp_tile_init</* approx */ false>();
     exp_tile</* approx */ false>(idst);
+#elif defined(FW_EXPERIMENT_SDPA_EXP)
+    sdpa_exp_tile_scaled<scaler_bits, scaler_bf16_bits>(idst);
+#else
+    MATH((math_sfpu::exp_prepare()));
+    MATH((math_sfpu::exp_tile(idst)));
+    MATH((math_sfpu::exp_release()));
+#endif
 }
 
 
@@ -223,6 +360,7 @@ void kernel_main() {
     constexpr uint32_t kTimesteps = sched.num_timesteps();
 
     compute_kernel_hw_startup(cb_query, cb_key, cb_scores);
+    MATH((math_sfpu::init()));
     copy_init(cb_query);
     matmul_init(cb_key, cb_query);
     cb_wait_front(cb_attn_mask, 2);
@@ -302,7 +440,9 @@ void kernel_main() {
                     pack_rounding(true);
                     pack_tile</* out_of_order */ true>(b, cb_scores, b * Bt + a);
                     pack_rounding(false);
+#ifndef FW_EXPERIMENT_NO_EXACT_PACK
                     pack_tile</* out_of_order */ true>(b, cb_scores_exact, b * Bt + a);
+#endif
                 }
                 tile_regs_release();
             }
@@ -313,6 +453,7 @@ void kernel_main() {
         }
 
         // ---- 2. The block maximum per query tile, row layout, to scratch.
+#ifndef FW_EXPERIMENT_NO_STATS
         {
             DeviceZoneScopedN("MAX");
             constexpr uint32_t kMaxReg = 0, kRowMaskReg = 1;
@@ -385,8 +526,19 @@ void kernel_main() {
             // m_new is read back below through the seed view of the same memory.
             unpacker_fence();
         }
+#else
+        cb_reserve_back(cb_block_max, Bt);
+        cb_push_back(cb_block_max, Bt);
+        cb_wait_front(cb_block_max, Bt);
+        if (!fresh) {
+            cb_reserve_back(cb_rescale, Bt);
+            cb_push_back(cb_rescale, Bt);
+            cb_wait_front(cb_rescale, Bt);
+        }
+#endif
 
         // ---- 3. P^T = exp(a (S^T - m_new)), the subtraction exact on the SFPU.
+#ifndef FW_EXPERIMENT_NO_PROBS
         {
             DeviceZoneScopedN("PROBS");
             cb_reserve_back(cb_probs, score_tiles);
@@ -434,8 +586,14 @@ void kernel_main() {
             cb_push_back(cb_probs, score_tiles);
             cb_wait_front(cb_probs, score_tiles);
         }
+#else
+        cb_reserve_back(cb_probs, score_tiles);
+        cb_push_back(cb_probs, score_tiles);
+        cb_wait_front(cb_probs, score_tiles);
+#endif
 
         // ---- 4. l_new = r l_old + colsum P^T.
+#ifndef FW_EXPERIMENT_NO_STATS
         {
             DeviceZoneScopedN("SUM");
             constexpr uint32_t kSumReg = 0, kOldReg = 1, kRReg = 2;
@@ -476,6 +634,7 @@ void kernel_main() {
                 tile_regs_release();
             }
         }
+#endif
 
         // ---- 5. O^T <- r O^T + V^T P^T, on the packet where it lies.
         {
@@ -484,7 +643,11 @@ void kernel_main() {
             for (uint32_t a = 0; a < Bt; ++a) {
                 const uint32_t live = n_live(a);
                 tile_regs_acquire();
+#ifdef FW_EXPERIMENT_NO_RESCALE_O
+                if (false) {
+#else
                 if (!fresh) {
+#endif
                     reconfig_data_format_srca(cb_probs, cb_rescale);
                     copy_init(cb_rescale);
                     copy_tile(cb_rescale, a, kRReg);

@@ -171,6 +171,22 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
     const uint32_t endpoint2_sem = CreateSemaphore(program, region, 0);
 
     std::map<std::string, std::string> defines;
+    // Timing experiments (results wrong): TTML_CYCLIC_FW_EXPERIMENT=NO_EXP,GENERIC_EXP,NO_STATS,NO_PROBS,NO_RESCALE_O,NO_EXACT_PACK
+    if (const char* env = std::getenv("TTML_CYCLIC_FW_EXPERIMENT"); env != nullptr && *env != '\0') {
+        std::string list(env);
+        size_t pos = 0;
+        while (pos <= list.size()) {
+            const size_t next = list.find(',', pos);
+            const std::string item = list.substr(pos, next == std::string::npos ? std::string::npos : next - pos);
+            if (!item.empty()) {
+                defines["FW_EXPERIMENT_" + item] = "1";
+            }
+            if (next == std::string::npos) {
+                break;
+            }
+            pos = next + 1;
+        }
+    }
     const bool dense = args.mask_type == ttml::metal::AttentionMaskType::None;
     if (dense) {
         defines["DENSE_MODE"] = "1";
