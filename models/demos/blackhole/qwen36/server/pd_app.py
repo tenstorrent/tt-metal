@@ -205,6 +205,9 @@ def vllm_argv(config: BundleConfig, role: str) -> list[str]:
         str(config.max_model_len),
         "--kv-transfer-config",
         json.dumps(kv_transfer_config(config, role)),
+        # tt-inference-server hands the weights over as a local snapshot path; keep the public model id stable
+        "--served-model-name",
+        MODEL_ID,
         "--host",
         "127.0.0.1",
         "--port",
