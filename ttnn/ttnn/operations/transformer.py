@@ -6,7 +6,6 @@ from typing import Optional
 
 import ttnn
 
-SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
 PagedCacheGeometryOverride = ttnn._ttnn.operations.transformer.PagedCacheGeometryOverride
 SparseKVFormat = ttnn._ttnn.operations.transformer.SparseKVFormat
 
