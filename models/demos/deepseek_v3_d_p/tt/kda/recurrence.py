@@ -165,7 +165,7 @@ def _summarize_chunk_groups(
     summary_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
 ) -> _AffineTransform:
-    """Summarize whole groups, transported at the affine-prefix BF16 boundary."""
+    """Summarize whole groups for the single-rank path at the BF16 prefix boundary."""
     a, b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
         groups_per_head=groups_per_head,
@@ -174,6 +174,7 @@ def _summarize_chunk_groups(
         actual_start=actual_start,
         sequence_parallel_axis=sequence_parallel_axis,
     )
+    # A single sequence rank has no split tail, so only the head summaries are needed.
     ttnn.deallocate(tail_a)
     ttnn.deallocate(tail_b)
     return _AffineTransform(a, b)
@@ -269,9 +270,9 @@ def _distributed_prefix(
 
     chronological_entries = ttnn.concat(entry_states, dim=0, memory_config=working_memory)
     local_entries = selections.select_local_entry_state(chronological_entries, memory_config=working_memory)
-    entry = ttnn.reshape(local_entries, (batch_heads, key_dim, value_dim))
+    local_entry_state = ttnn.reshape(local_entries, (batch_heads, key_dim, value_dim))
     final_state = ttnn.reshape(ttnn.to_memory_config(carry, output_memory), (batch_heads, key_dim, value_dim))
-    return entry, final_state
+    return local_entry_state, final_state
 
 
 def _last_group_state(
@@ -303,6 +304,8 @@ def _ordinary_group_scan(
     prefix_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
 ) -> RecurrenceResult:
+    """Scan groups on a single sequence rank, where no split-tail reset is needed."""
+    # Tail inputs are unused on this path; reuse the head summaries and initial state.
     group_entry_states = ttnn.experimental.kda.affine_exclusive_scan(
         summary.a,
         summary.b,
@@ -423,7 +426,7 @@ def _scan_sp_grouped_chunks(
     )
     head_a, head_b, tail_a, tail_b = parts
     head = _AffineTransform(head_a, head_b)
-    entry, tail_entry_states = _partition_prefix(
+    local_entry_state, prefix_final_state = _partition_prefix(
         head,
         initial_state,
         groups_per_head=groups,
@@ -433,15 +436,16 @@ def _scan_sp_grouped_chunks(
         selections=selections,
         compute_config=compute_config,
     )
+    # The chronological prefix ends where the split tail begins, supplying its seed.
     group_entry_states = ttnn.experimental.kda.affine_exclusive_scan(
         head_a,
         head_b,
-        entry,
+        local_entry_state,
         groups,
         local_rows=geometry.local_rows,
         tail_a=tail_a,
         tail_b=tail_b,
-        tail_entry_states=tail_entry_states,
+        tail_entry_states=prefix_final_state,
         actual_start=actual_start,
         sequence_parallel_axis=sequence_parallel_axis,
         memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
@@ -450,7 +454,7 @@ def _scan_sp_grouped_chunks(
     scan = _scan_chunks(
         grouped,
         group_entry_states,
-        tail_entry_states,
+        prefix_final_state,
         groups_per_head=groups,
         actual_start=actual_start,
         sequence_parallel_axis=sequence_parallel_axis,
@@ -459,14 +463,18 @@ def _scan_sp_grouped_chunks(
     output = ttnn.reshape(
         scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
     )
+    # Keep the gather in the fixed graph: the device selector chooses the completed
+    # tail when split, or the prefix's final state when unsplit, at runtime.
     gathered = ttnn.all_gather(
         _last_group_state(scan.final_state, geometry, groups),
         dim=0,
         cluster_axis=sequence_parallel_axis,
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
     )
-    final = selections.select_final_state(gathered, tail_entry_states)
-    return RecurrenceResult(output, ttnn.reshape(final, (geometry.batch_heads, geometry.key_dim, geometry.value_dim)))
+    final_state = selections.select_final_state(gathered, prefix_final_state)
+    return RecurrenceResult(
+        output, ttnn.reshape(final_state, (geometry.batch_heads, geometry.key_dim, geometry.value_dim))
+    )
 
 
 class KDARecurrence:
@@ -528,7 +536,12 @@ class KDARecurrence:
                 raise ValueError("summary_group_chunks must divide the constructed local chunk count")
             self._groups = self._geometry.num_chunks // self._summary_group_chunks
             self._summary_memory = _group_summary_memory_config(device, batch * heads * self._groups, key_dim)
-        self._execute = self._run_sp if self._sequence_parallel else self._run_grouped if grouped else self._run_direct
+        if self._sequence_parallel:
+            self._execute = self._run_sp
+        elif grouped:
+            self._execute = self._run_grouped
+        else:
+            self._execute = self._run_direct
 
     def _prepare(
         self,
