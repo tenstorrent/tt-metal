@@ -63,8 +63,9 @@ class KdaState:
     ``recurrent`` is TP-local and must be replicated across the SP axis.
     ``convolution`` is the BF16 row-major DRAM stream tail with shape
     ``[B, kernel_size - 1, Q_local + K_local + V_local]``. Its channels are
-    sharded across TP and the complete tail is replicated across SP. The halo
-    exchange derives each partition entry carry from it. Construct state with
+    sharded across TP and the complete tail is replicated across SP. This history
+    seeds the logical sequence start; the halo exchange supplies predecessor
+    histories from projected tokens for the other segments. Construct state with
     :meth:`ttKDA.allocate_state` or reuse a state returned by :meth:`ttKDA.forward`.
     """
 
@@ -315,7 +316,7 @@ class ttKDA:
         decay_rank: ttnn.Tensor,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Evaluate the decay and write gates consumed by the recurrence."""
-        config, weights = self.config, self.weights
+        weights = self.weights
         # Preserve the sigmoid result at the FP32 precision required by chunk preparation.
         beta_for_recurrence = ttnn.sigmoid(
             ttnn.typecast(
