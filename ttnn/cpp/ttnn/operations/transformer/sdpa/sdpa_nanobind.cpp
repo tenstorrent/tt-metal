@@ -661,13 +661,18 @@ void bind_sdpa(nb::module_& mod) {
                 sliding-window attention. Defaults to None.
             sliding_window_size (int, optional): Causal attention window in tokens. The ring reader and
                 compute kernels prune K chunks outside the window. Ring attention currently supports the
-                GPT-OSS specialization: a 128-token window, local 8Q:1K:1V heads with D64, BF16 Q,
-                BFP8_B K/V, SP4 production or SP8 test topology, and chunked prefill without joint tokens.
+                SP4/SP8 chunked prefill with BF16 Q, BFP8_B K/V, matching K/V heads, Q blocks 64/128,
+                K blocks 128, and no joint tokens. The rounded window must fit one local Q slab.
+                KV-pad rotation supports tile-aligned starts and partial groups natively. Compact K/V
+                buffers need two predecessor-halo slots for wrapped Q. Metadata traces that may wrap Q
+                must reserve both slots; aligned traces can retain one slot. Each slot holds
+                ceil((window - 1) / 128) * 128 tokens.
             circular_kv_cache (bool): The sliding KV cache is a circular buffer of whole chunk-sized
                 slabs (chunk group g lives in local slab g % n_slabs; the writer wraps host-side). The
                 slab count is derived on-device from the cache/Q geometry (>= 2 whole slabs required).
                 logical_n / kv_actual_isl stay TRUE ABSOLUTE values. Requires sliding_window_size +
-                kv_actual_isl. Defaults to False (unbounded cache, unchanged behavior).
+                kv_actual_isl with complete aligned groups. The metadata path is unsupported.
+                Defaults to False.
             persistent_output_buffer_joint_k (ttnn.Tensor, optional): Persistent buffer for the
                 gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
             persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
@@ -677,8 +682,8 @@ void bind_sdpa(nb::module_& mod) {
                 Must be supplied together with kv_actual_isl_tensor. Defaults to None.
             kv_actual_isl_tensor (ttnn.Tensor, optional): Prior valid global KV length read on-device
                 during trace replay. Has the same one-element UINT32 ROW_MAJOR DRAM contract as slot_id
-                and must be supplied together with it. Its value must be tile-aligned and leave enough
-                cache capacity for the current chunk. Defaults to None.
+                and must be supplied together with it. Its value must be tile-aligned and below cache
+                capacity. Padded Q rows beyond the cache boundary are ignored. Defaults to None.
             kv_cache_num_layers (int, optional): Number of layers packed into each cache-user slot.
                 None uses 1. The selected cache batch is
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
@@ -698,9 +703,10 @@ void bind_sdpa(nb::module_& mod) {
 
         Metadata (trace-safe) path: slot_id / kv_actual_isl_tensor replace the host kv_cache_batch_idx /
         kv_actual_isl (mixing the two forms is rejected) and the cache batch is slot * kv_cache_num_layers +
-        kv_cache_layer_idx on both forms. logical_n stays the real total valid length: on chunked shapes the
-        kernels derive it on-device as kv_actual_isl[0] + chunk and the program hash does not key it, so one
-        program serves every chunk depth.
+        kv_cache_layer_idx on both forms. On chunked shapes the kernels derive the padded logical extent
+        as min(kv_actual_isl[0] + chunk, cache_capacity). The current chunk's actual end is not supplied;
+        callers discard padded outputs. Causality protects real query rows from future padding. One
+        program and one trace serve aligned and rotated chunks at every depth.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -789,8 +795,8 @@ void bind_sdpa(nb::module_& mod) {
                 Must be supplied together with kv_actual_isl_tensor. Defaults to None.
             kv_actual_isl_tensor (ttnn.Tensor, optional): Prior valid global KV length read on-device
                 during trace replay. Has the same one-element UINT32 ROW_MAJOR DRAM contract as slot_id
-                and must be supplied together with it. Its value must be tile-aligned and leave enough
-                cache capacity for the current chunk. Defaults to None.
+                and must be supplied together with it. Its value must be tile-aligned and below cache
+                capacity. Padded Q rows beyond the cache boundary are ignored. Defaults to None.
             kv_cache_num_layers (int, optional): Number of layers packed into each cache-user slot.
                 None uses 1. The selected cache batch is
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.

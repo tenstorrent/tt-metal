@@ -39,7 +39,7 @@ void kernel_main() {
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     // See the halo reader: appended after the per-output accessors, with a valid fallback offset so the
     // unconditionally-instantiated TensorAccessorArgs<> never names a non-accessor compile arg. Reader and
-    // writer MUST relocate to the same range or their cb_output page counts drift apart.
+    // writer use the same link ranges to keep cb_output page counts equal.
     // The tuple itself has no offset accessor; the last element's next offset is where the
     // accessors end.
     constexpr uint32_t halo_meta_flag_idx = std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset();
@@ -55,6 +55,7 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t worker_link = get_arg_val<uint32_t>(arg_idx++);
 
     std::array<uint32_t, num_inputs> output_batch_head_stride_pages;
     std::array<uint32_t, num_inputs> input_batch_head_count;
@@ -76,21 +77,22 @@ void kernel_main() {
         const uint32_t halo_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t cache_local_tile_rows = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t source_device = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t baked_start_Ht = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t ring_size_rt = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
         Noc meta_noc;
         CircularBuffer cb_meta(meta_cb_id);
         const uint32_t kv_actual_isl = trace_metadata::read_metadata_scalar_u32(
             meta_noc, kv_meta_args, kv_actual_isl_addr, cb_meta.get_write_ptr());
-        const uint32_t tail_start_Ht = ring_attention_all_gather::compute_halo_tail_start_Ht(
+        const auto sources = ring_attention_all_gather::compute_halo_sources(
             kv_actual_isl, q_local_tile_rows, ring_size_rt, halo_tile_rows, source_device, cache_local_tile_rows);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             const uint32_t input_Wt = get_arg_val<uint32_t>(arg_idx++);
-            const uint32_t runtime_origin = tail_start_Ht * input_Wt;
-            const uint32_t baked_origin = baked_start_Ht * input_Wt;
-            ring_attention_all_gather::relocate_halo_range(
-                runtime_origin, baked_origin, input_tile_id_start[input_idx], input_tile_id_end[input_idx]);
-            input_origin_page[input_idx] = runtime_origin;
+            const uint32_t pages = sources.count * halo_tile_rows * input_Wt;
+            ASSERT(pages <= output_batch_head_stride_pages[input_idx]);
+            const auto range = ring_attention_all_gather::compute_link_page_range(pages, num_links, worker_link);
+            input_tile_id_start[input_idx] = range.start;
+            input_tile_id_end[input_idx] = range.end;
+            input_origin_page[input_idx] = 0;
         }
     }
 

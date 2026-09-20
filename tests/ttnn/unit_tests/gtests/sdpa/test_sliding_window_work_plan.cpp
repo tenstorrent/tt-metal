@@ -6,7 +6,10 @@
 // factory, reader and compute kernels (sliding_window_work_plan.hpp). The plan is pure integer math
 // over the chunked block-cyclic K/V layout, so its contract is pinned here without a device.
 
+#include <algorithm>
 #include <cstdint>
+#include <set>
+#include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -161,8 +164,10 @@ TEST(SlidingWindowWorkPlan, RemoteRangesStartInsideTheHalo) {
                     EXPECT_EQ(rc.first_compact_k_chunk, 0u) << where;
                     continue;
                 }
-                const uint32_t halo_start = chunked_sliding_halo_source_start_tile(
-                    rc.source_ring_id, g.q_local_tile_rows, g.ring_size, logical_k, halo, g.slabs);
+                const auto mapping = build_sliding_q_mapping(
+                    logical_k - g.ring_size * g.q_local_tile_rows, logical_k, g.q_local_tile_rows, g.ring_size, device);
+                const uint32_t halo_start =
+                    sliding_halo_sources(mapping, g.q_local_tile_rows, g.ring_size, halo, g.slabs).first_start_tile;
                 const uint32_t range_start = rc.first_k_chunk * g.k_chunk_tile_rows;
                 EXPECT_GE(range_start, halo_start) << where;
                 EXPECT_EQ(rc.first_compact_k_chunk, (range_start - halo_start) / g.k_chunk_tile_rows) << where;
@@ -214,3 +219,85 @@ TEST(SlidingWindowWorkPlan, PinnedDevice0Geometry) {
 }
 
 }  // namespace
+
+TEST(SlidingWindowWorkPlan, RotatedQueriesCoverExactlyTheirCausalWindows) {
+    for (uint32_t ring : {4u, 8u}) {
+        for (uint32_t local : {8u, 32u, 64u}) {
+            const uint32_t group = ring * local;
+            const uint32_t capacity = 3 * group;
+            for (uint32_t window : {128u, std::min(1024u, local * 32)}) {
+                const uint32_t halo = chunked_sliding_halo_tile_rows(window, 32, 4);
+                for (uint32_t start : {0u, 1u, local - 1, local, group - 1, group + 1, capacity - 3}) {
+                    for (uint32_t length : {1u, local + 1, group}) {
+                        const uint32_t end = std::min(start + length, capacity);
+                        for (uint32_t device = 0; device < ring; ++device) {
+                            std::vector<uint32_t> positions;
+                            for (uint32_t token = start; token < end; ++token) {
+                                if (token / local % ring == device) {
+                                    positions.push_back(token);
+                                }
+                            }
+                            const auto mapping = build_sliding_q_mapping(start, end, local, ring, device);
+                            const auto sources = sliding_halo_sources(mapping, local, ring, halo);
+                            ASSERT_EQ(mapping.q_valid_tile_count, positions.size());
+                            EXPECT_EQ(
+                                sources.count,
+                                mapping.q_pre_wrap_tile_count &&
+                                        mapping.q_valid_tile_count > mapping.q_pre_wrap_tile_count
+                                    ? 2u
+                                    : 1u);
+                            for (uint32_t qsize : {2u, 4u}) {
+                                for (uint32_t q = 0; q < local; q += qsize) {
+                                    SCOPED_TRACE(
+                                        ::testing::Message()
+                                        << "ring=" << ring << " local=" << local << " start=" << start << " end=" << end
+                                        << " device=" << device << " q=" << q << " qsize=" << qsize
+                                        << " window=" << window);
+                                    const auto plan = build_sliding_q_work_plan(
+                                        q,
+                                        qsize,
+                                        device,
+                                        local,
+                                        ring,
+                                        window,
+                                        32,
+                                        capacity / ring,
+                                        4,
+                                        end,
+                                        0,
+                                        &mapping);
+                                    ASSERT_TRUE(plan.is_valid);
+                                    if (q >= positions.size()) {
+                                        EXPECT_EQ(plan.total_k_chunk_count, 1u);
+                                        continue;
+                                    }
+                                    std::set<std::pair<uint32_t, uint32_t>> expected, actual;
+                                    for (uint32_t row = q; row < std::min<uint32_t>(q + qsize, positions.size());
+                                         ++row) {
+                                        const uint32_t pos = positions[row];
+                                        const uint32_t left = (window - 1 + 31) / 32;
+                                        for (uint32_t k = pos > left ? pos - left : 0; k <= pos; ++k) {
+                                            expected.emplace(k / local % ring, (k / group * local + k % local) / 4);
+                                        }
+                                    }
+                                    for (uint32_t work = 0; work < plan.total_k_chunk_count; ++work) {
+                                        const auto ref = plan.k_chunk_at(work);
+                                        EXPECT_TRUE(actual.emplace(ref.source_ring_id, ref.source_k_chunk).second);
+                                        if (ref.source_ring_id != device) {
+                                            const uint32_t compact = ref.compact_k_chunk * 4;
+                                            ASSERT_LT(compact, sources.count * halo);
+                                            const uint32_t origin =
+                                                compact < halo ? sources.first_start_tile : sources.second_start_tile;
+                                            EXPECT_EQ(origin + compact % halo, ref.source_k_chunk * 4);
+                                        }
+                                    }
+                                    EXPECT_EQ(actual, expected);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

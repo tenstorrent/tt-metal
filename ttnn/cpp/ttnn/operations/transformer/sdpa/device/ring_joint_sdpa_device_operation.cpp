@@ -332,7 +332,8 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             chunk_capacity);
     }
 
-    if (args.has_sliding_window() && tensor_args.is_chunked()) {
+    if (args.has_sliding_window() && tensor_args.is_chunked() &&
+        (!kv_pad_rotation_active(args, tensor_args) || args.circular_kv_cache)) {
         const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
         // One complete group is enough: at logical_n == q_group_size device 0 clips its
         // window at token 0 and devices 1..R-1 consume predecessors within that group.
@@ -354,6 +355,16 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
                 args.logical_n - args.kv_actual_isl.value() == q_group_size,
                 "Chunked sliding KV-pad rotation requires the new Q chunk to fill exactly one ring group");
         }
+    }
+    if (args.has_sliding_window() && kv_pad_rotation_active(args, tensor_args)) {
+        const uint32_t local = tensor_args.input_q.logical_shape()[2];
+        const uint32_t start = args.kv_actual_isl.value_or(0);
+        const uint32_t second_slab_start = (start / local + args.ring_size) * local;
+        const bool needs_two = start % local != 0 && args.logical_n > second_slab_start;
+        const uint32_t halo = sliding_halo_token_count(args.sliding_window_size.value(), args.get_k_chunk_size());
+        TT_FATAL(
+            tensor_args.gathered_k.logical_shape()[2] >= halo * (needs_two ? 2 : 1),
+            "Sliding attention requires one predecessor-halo slot, or two when scalar Q wraps");
     }
 }
 
@@ -684,10 +695,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         // slab-major addressing and would read garbage from a wrapped cache.
         TT_FATAL(
             args.has_sliding_window() && is_chunked, "circular_kv_cache requires chunked sliding-window attention");
-        // Metadata first: on that path kv_actual_isl is read on-device (host value absent), so the
-        // rotation check below would otherwise mask the real reason. The metadata-path halo helper
-        // (compute_halo_tail_start_Ht, ring_attention_all_gather_metadata.hpp) derives the source slab
-        // without the circular wrap, so circular caches must stay off that path.
+        // Metadata halo addressing supports only unbounded caches.
         TT_FATAL(!tensor_args.has_metadata(), "circular_kv_cache does not support the trace-safe metadata path");
         TT_FATAL(
             has_kv_pad_rotation,
