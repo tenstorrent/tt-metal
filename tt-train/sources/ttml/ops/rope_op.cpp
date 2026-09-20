@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/rope_op.hpp"
 
 #include <numbers>
@@ -210,8 +211,32 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
     }
 
     // positions column vector [L,1]
-    // positions column vector [L,1]
     xt::xarray<float> pos = xt::arange<float>(static_cast<float>(sequence_length));
+    // Zigzag ring layout: the trainer deals the sequence to the chips as 2d
+    // chunks with chip r holding chunks r and 2d - 1 - r back to back, and
+    // the caches are sharded contiguously along the sequence by the mapper
+    // below, so the positions must be in the same dealt order -- row
+    // (2r + slot) n + k of the cache is token (chunk) n + k. Only when the
+    // caches are being sharded across a context-parallel ring.
+    if (mesh_mapper != nullptr && autograd::ctx().is_parallelism_context_initialized() &&
+        autograd::ctx().get_parallelism_context().is_cp_enabled() &&
+        ttml::ops::distributed::ring_attention_options().layout == ttml::metal::ops::RingLayout::Zigzag) {
+        const uint32_t d = autograd::ctx().get_parallelism_context().get_cp_size();
+        TT_FATAL(
+            sequence_length % (2U * d) == 0U,
+            "zigzag ring layout: the sequence of {} rows must be 2 x {} equal chunks",
+            sequence_length,
+            d);
+        const uint32_t n = sequence_length / (2U * d);
+        for (uint32_t rank = 0; rank < d; ++rank) {
+            for (uint32_t slot = 0; slot < 2U; ++slot) {
+                const uint32_t chunk = slot == 0U ? rank : 2U * d - 1U - rank;
+                for (uint32_t k = 0; k < n; ++k) {
+                    pos((2U * rank + slot) * n + k) = static_cast<float>(chunk * n + k);
+                }
+            }
+        }
+    }
     pos.reshape({sequence_length, 1u});  // member reshape
 
     // θ = pos * inv_freq  -> broadcast to [L,D]

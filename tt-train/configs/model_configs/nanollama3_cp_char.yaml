@@ -1,0 +1,17 @@
+# A Llama-shaped model for the context-parallel ring on the eight-board
+# Blackhole loudbox: 20 query heads on 10 key/value heads (grouped-query
+# attention, ratio 2) of 64 dims, a sequence of 8 x 5632 tokens so that each
+# chip holds 5632 rows -- the shape whose cyclic backward fills the 110-core
+# grid (C = 22 at block height 4, five groups of 22; see the op's README).
+# Character tokens (vocab auto-detected from the text), four blocks: enough
+# layers to time a step, few enough to leave the attention as the cost.
+transformer_config:
+  model_type: "llama"
+  num_heads: 20
+  num_groups: 10
+  embedding_dim: 1280
+  dropout_prob: 0.0
+  num_blocks: 4
+  max_sequence_length: 45056
+  runner_type: default
+  theta: 500000.0

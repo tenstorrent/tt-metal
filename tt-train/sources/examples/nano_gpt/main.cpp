@@ -26,6 +26,7 @@
 #include "models/llama.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/losses.hpp"
+#include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/remote_optimizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
@@ -235,7 +236,52 @@ struct DeviceConfig {
     bool enable_ddp = false;
     bool enable_tp = false;
     bool enable_cp = false;
+
+    // Context parallel: how the ring attention runs. Strings as in the yaml
+    // (see parse_device_config); the environment variables TTML_CP_BACKWARD,
+    // TTML_CP_SHIFT_TRANSPORT, TTML_CP_LAYOUT and TTML_CP_ROWS_PER_BLOCK_TILES
+    // override them, so one config can be run both ways.
+    std::string cp_backward = "two_pass";          // two_pass | cyclic | cyclic_in_place
+    std::string cp_shift_transport = "fifo";       // fifo | direct
+    std::string cp_layout = "contiguous";          // contiguous | zigzag
+    uint32_t cp_rows_per_block_tiles = 0;          // 0 = the planner picks; else 1, 2 or 4
 };
+
+ttml::ops::distributed::RingAttentionOptions ring_attention_options_from(const DeviceConfig &config) {
+    using namespace ttml::ops::distributed;
+    using ttml::ttnn_fixed::distributed::RingShiftTransport;
+    using ttml::metal::ops::RingLayout;
+    RingAttentionOptions opts;
+    if (config.cp_backward == "two_pass") {
+        opts.backward_kind = RingBackwardKind::TwoPass;
+    } else if (config.cp_backward == "cyclic") {
+        opts.backward_kind = RingBackwardKind::Cyclic;
+    } else if (config.cp_backward == "cyclic_in_place") {
+        opts.backward_kind = RingBackwardKind::CyclicInPlace;
+    } else {
+        throw std::runtime_error("cp_backward must be two_pass, cyclic or cyclic_in_place; got " + config.cp_backward);
+    }
+    if (config.cp_shift_transport == "fifo") {
+        opts.shift_transport = RingShiftTransport::Fifo;
+    } else if (config.cp_shift_transport == "direct") {
+        opts.shift_transport = RingShiftTransport::Direct;
+    } else {
+        throw std::runtime_error("cp_shift_transport must be fifo or direct; got " + config.cp_shift_transport);
+    }
+    if (config.cp_layout == "contiguous") {
+        opts.layout = RingLayout::Contiguous;
+    } else if (config.cp_layout == "zigzag") {
+        opts.layout = RingLayout::Zigzag;
+    } else {
+        throw std::runtime_error("cp_layout must be contiguous or zigzag; got " + config.cp_layout);
+    }
+    if (config.cp_rows_per_block_tiles != 0 && config.cp_rows_per_block_tiles != 1 &&
+        config.cp_rows_per_block_tiles != 2 && config.cp_rows_per_block_tiles != 4) {
+        throw std::runtime_error("cp_rows_per_block_tiles must be 0 (auto), 1, 2 or 4");
+    }
+    opts.rows_per_block_tiles = config.cp_rows_per_block_tiles;
+    return opts;
+}
 
 DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     DeviceConfig config;
@@ -247,6 +293,23 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
     config.enable_tp = device_node["enable_tp"].as<bool>(false);
     config.enable_cp = device_node["enable_cp"].as<bool>(false);
+    config.cp_backward = device_node["cp_backward"].as<std::string>(config.cp_backward);
+    config.cp_shift_transport = device_node["cp_shift_transport"].as<std::string>(config.cp_shift_transport);
+    config.cp_layout = device_node["cp_layout"].as<std::string>(config.cp_layout);
+    config.cp_rows_per_block_tiles =
+        device_node["cp_rows_per_block_tiles"].as<uint32_t>(config.cp_rows_per_block_tiles);
+    if (const char *env = std::getenv("TTML_CP_BACKWARD"); env != nullptr && *env != '\0') {
+        config.cp_backward = env;
+    }
+    if (const char *env = std::getenv("TTML_CP_SHIFT_TRANSPORT"); env != nullptr && *env != '\0') {
+        config.cp_shift_transport = env;
+    }
+    if (const char *env = std::getenv("TTML_CP_LAYOUT"); env != nullptr && *env != '\0') {
+        config.cp_layout = env;
+    }
+    if (const char *env = std::getenv("TTML_CP_ROWS_PER_BLOCK_TILES"); env != nullptr && *env != '\0') {
+        config.cp_rows_per_block_tiles = static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+    }
 
     auto mesh_shape_node = device_node["mesh_shape"];
     bool multidevice = config.enable_ddp || config.enable_tp || config.enable_cp;
@@ -434,6 +497,16 @@ int main(int argc, char **argv) {
         fmt::println("  Distributed data-parallel enabled: {}", device_config.enable_ddp);
         fmt::println("  Mesh shape: {}", device_config.mesh_shape);
         fmt::println("  Device IDs: {}", device_config.device_ids);
+        if (device_config.enable_cp) {
+            fmt::println(
+                "  Ring attention: backward {}, shifts {}, layout {}, block height {}",
+                device_config.cp_backward,
+                device_config.cp_shift_transport,
+                device_config.cp_layout,
+                device_config.cp_rows_per_block_tiles == 0 ? std::string("planner") :
+                                                              std::to_string(device_config.cp_rows_per_block_tiles));
+            ttml::ops::distributed::ring_attention_options() = ring_attention_options_from(device_config);
+        }
 
         ttml::autograd::ctx().initialize_parallelism_context(
             {.enable_ddp = device_config.enable_ddp,
@@ -549,7 +622,7 @@ int main(int argc, char **argv) {
     CachedHostData cached_data;
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, device, &cached_data](std::vector<DatasetSample> &&samples) {
+        [sequence_length, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -563,6 +636,39 @@ int main(int argc, char **argv) {
             for (auto &[features, target_span] : samples) {
                 std::copy(features.begin(), features.end(), std::back_inserter(data));
                 std::copy(target_span.begin(), target_span.end(), std::back_inserter(targets));
+            }
+            // Zigzag ring layout: deal each sample's sequence to the chips as
+            // 2d chunks, chip r holding chunks r and 2d - 1 - r back to back,
+            // so that the contiguous sequence shard the mapper below gives
+            // chip r is exactly its two chunks. Targets go the same way (the
+            // loss is per token) and the RoPE positions follow in rope_op.
+            if (is_pctx_initialized() && device_config.enable_cp && device_config.cp_layout == "zigzag") {
+                const auto d = ttml::autograd::ctx().get_parallelism_context().get_cp_size();
+                if (sequence_length % (2U * d) != 0U) {
+                    throw std::runtime_error(fmt::format(
+                        "zigzag ring layout: the sequence of {} tokens must be 2 x {} equal chunks",
+                        sequence_length,
+                        d));
+                }
+                const size_t n = sequence_length / (2U * d);
+                const auto deal = [&](std::vector<uint32_t> &flat) {
+                    std::vector<uint32_t> dealt(flat.size());
+                    for (size_t b = 0; b < flat.size() / sequence_length; ++b) {
+                        const size_t base = b * sequence_length;
+                        for (uint32_t rank = 0; rank < d; ++rank) {
+                            for (uint32_t slot = 0; slot < 2U; ++slot) {
+                                const size_t chunk = slot == 0U ? rank : 2U * d - 1U - rank;
+                                std::copy_n(
+                                    flat.begin() + static_cast<std::ptrdiff_t>(base + chunk * n),
+                                    static_cast<std::ptrdiff_t>(n),
+                                    dealt.begin() + static_cast<std::ptrdiff_t>(base + (2U * rank + slot) * n));
+                            }
+                        }
+                    }
+                    flat.swap(dealt);
+                };
+                deal(data);
+                deal(targets);
             }
             auto end_timer = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();

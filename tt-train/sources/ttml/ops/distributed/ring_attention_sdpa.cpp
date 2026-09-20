@@ -24,6 +24,7 @@
 #include "metal/common/const_utils.hpp"
 #include "metal/ops/ring_sdpa_bw/ring_sdpa_bw.hpp"
 #include "metal/ops/ring_sdpa_fw/ring_sdpa_fw.hpp"
+#include "metal/ops/cyclic_sdpa_bw/device/cyclic_sdpa_bw_program_factory.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
@@ -860,6 +861,62 @@ autograd::TensorPtr ring_attention_sdpa(
     out->set_node(autograd::add_backward_node(std::move(grad_fn), out, query, key, value));
 
     return out;
+}
+
+RingAttentionOptions& ring_attention_options() {
+    static RingAttentionOptions options;
+    return options;
+}
+
+uint32_t plan_rows_per_block_tiles(const ttnn::Tensor& query, ttml::metal::ops::RingLayout layout) {
+    const auto [batch, heads, local_rows, dim] = query.logical_shape().to_array_4D();
+    const uint32_t chunk = layout == ttml::metal::ops::RingLayout::Zigzag ? local_rows / 2U : local_rows;
+    auto* device = query.device();
+    const auto grid = device->compute_with_storage_grid_size();
+    // One log line per distinct decision, not per layer per step.
+    static std::unordered_set<std::string> logged;
+    std::string reason;
+    for (const uint32_t Bt : {4U, 2U, 1U}) {
+        const uint32_t block_rows = 2U * Bt * 32U;
+        if (chunk % block_rows != 0U) {
+            reason += fmt::format("Bt={}: chunk of {} rows is not a multiple of {}; ", Bt, chunk, block_rows);
+            continue;
+        }
+        const uint32_t C = chunk / block_rows;
+        try {
+            const auto plan = ttml::metal::ops::cyclic_sdpa_bw::device::plan_layout(
+                grid, chunk, Bt, /* slices */ batch * heads, /* max_groups */ 0U);
+            const std::string key = fmt::format("{}x{}x{}x{}/{}/{}", batch, heads, local_rows, dim, chunk, Bt);
+            if (logged.insert(key).second) {
+                fmt::print(
+                    "ring attention planner: local sequence {} rows ({} layout, chunk {}), {} heads x batch {}: "
+                    "block height {} tiles, {} cores per schedule as a {}x{} rectangle, {} groups side by side "
+                    "on the {}x{} grid.{}\n",
+                    local_rows,
+                    layout == ttml::metal::ops::RingLayout::Zigzag ? "zigzag" : "contiguous",
+                    chunk,
+                    heads,
+                    batch,
+                    Bt,
+                    C,
+                    plan.group_width,
+                    plan.group_height,
+                    plan.groups,
+                    grid.x,
+                    grid.y,
+                    reason.empty() ? "" : " (" + reason + ")");
+            }
+            return Bt;
+        } catch (const std::exception& e) {
+            reason += fmt::format("Bt={}: C={} has no rectangle; ", Bt, C);
+        }
+    }
+    TT_THROW(
+        "ring attention planner: no block height fits a chunk of {} rows on the {}x{} grid ({})",
+        chunk,
+        grid.x,
+        grid.y,
+        reason);
 }
 
 }  // namespace ttml::ops::distributed
