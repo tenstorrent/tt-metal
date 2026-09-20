@@ -512,6 +512,12 @@ def cmd_optimize(args) -> int:
         print("error: " + _tf)
         return 1
     os.environ["PERF_MCP_DEVICES"] = (getattr(args, "devices", "") or "").strip()
+    # Both the BEFORE bookend (this env var's own default) and every check_full_pipeline_latency
+    # verdict read PERF_MCP_FULLPIPE_SAMPLES, so passing --fullpipe-samples here keeps the two
+    # comparable at whatever sample count the operator picks -- see run.py's own note on why a
+    # mismatched sample count between the two manufactured a false gain from noise on every run.
+    if getattr(args, "fullpipe_samples", None) is not None:
+        os.environ["PERF_MCP_FULLPIPE_SAMPLES"] = str(args.fullpipe_samples)
     if os.environ.get("PERF_MCP_SUPERVISED") != "1":
         _sweep_stale_perf_mcp()
         try:

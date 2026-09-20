@@ -11525,6 +11525,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     popt.add_argument("--matmul-sweep-iters", type=int, default=5, help="matmul-sweep timed reps per config")
     popt.add_argument("--matmul-sweep-max-shapes", type=int, default=0, help="matmul-sweep distinct-shape cap (0=all)")
     popt.add_argument(
+        "--fullpipe-samples",
+        type=int,
+        default=3,
+        help="full-pipeline gate (BEFORE bookend + every check_full_pipeline_latency verdict): "
+        "readings per call, reported as their median. 3 filters random per-sample noise so it is not "
+        "mistaken for a real win/regression, at the cost of ~3x the wall-clock per call -- material on "
+        "a large model where a cold kernel cache alone can cost minutes per reading. Lower it (e.g. 1) "
+        "to trade that noise filter for speed; BEFORE and AFTER always read the same value, so a lower "
+        "setting stays internally comparable, it is just less protected against a single noisy reading "
+        "being banked as a commit.",
+    )
+    popt.add_argument(
         "--fresh",
         action="store_true",
         dest="fresh",
