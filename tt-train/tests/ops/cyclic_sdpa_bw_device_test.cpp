@@ -2858,6 +2858,70 @@ TEST(TtnnSdpaLseTest, GroupedHeadsDenseWiderHead) {
     check_ttnn_sdpa_with_lse(4, 2, 1024, 128, /* causal */ false, /* chunk */ 128);
 }
 
+// The fused online-softmax merge of a ring step's partial into the running
+// accumulators, on one chip (a ring of one, step 0, so the chip runs it),
+// against the host's arithmetic.
+TEST(RingSoftmaxMergeTest, MergesAPartialIntoTheAccumulators) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t B = 1, H = 2, S = 128, d = 64;
+    xt::xarray<float> out = xt::zeros<float>({B, H, S, d});
+    xt::xarray<float> step = xt::zeros<float>({B, H, S, d});
+    xt::xarray<float> lse = xt::zeros<float>({B, H, S, 32u});
+    xt::xarray<float> step_lse = xt::zeros<float>({B, H, S, 32u});
+    for (uint32_t h = 0; h < H; ++h) {
+        xt::view(out, 0, h, xt::all(), xt::all()) = random_bf16_matrix(S, d, 9000u + h);
+        xt::view(step, 0, h, xt::all(), xt::all()) = random_bf16_matrix(S, d, 9100u + h);
+        for (uint32_t r = 0; r < S; ++r) {
+            lse(0, h, r, 0) = 2.0F + 0.05F * static_cast<float>((r * 7 + h) % 40);
+            step_lse(0, h, r, 0) = 1.0F + 0.07F * static_cast<float>((r * 3 + 2 * h) % 50);
+            // Garbage in the other columns, as the kernels leave it.
+            for (uint32_t c = 1; c < 32; ++c) {
+                step_lse(0, h, r, c) = -std::numeric_limits<float>::infinity();
+            }
+        }
+    }
+    // Row 5 of head 0 has no contribution yet: the merge must take the step's values.
+    lse(0, 0, 5, 0) = -std::numeric_limits<float>::infinity();
+
+    auto out_t = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(out, device);
+    auto lse_t = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(lse, device);
+    const auto step_t = ttml::core::from_xtensor(step, device);  // bf16
+    const auto step_lse_t = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(step_lse, device);
+    const auto [new_out_t, new_lse_t] = ttml::metal::ring_softmax_merge(
+        out_t, lse_t, step_t, step_lse_t, /* ring_size */ 1, /* axis */ 0, /* step */ 0);
+    EXPECT_EQ(new_out_t.buffer()->address(), out_t.buffer()->address()) << "the merge is in place";
+    const auto got_out = ttml::core::to_xtensor(new_out_t);
+    const auto got_lse = ttml::core::to_xtensor(new_lse_t);
+
+    float worst_out = 0.0F, worst_lse = 0.0F;
+    for (uint32_t h = 0; h < H; ++h) {
+        for (uint32_t r = 0; r < S; ++r) {
+            const float a = lse(0, h, r, 0), b = step_lse(0, h, r, 0);
+            const float m = std::max(a, b);
+            const float ea = std::exp(a - m), eb = std::exp(b - m), sum = ea + eb;
+            const float want_lse = m + std::log(sum);
+            worst_lse = std::max(worst_lse, std::abs(got_lse(0, h, r, 0) - want_lse));
+            for (uint32_t c = 0; c < d; ++c) {
+                const float want = (ea * out(0, h, r, c) + eb * step(0, h, r, c)) / sum;
+                worst_out = std::max(worst_out, std::abs(got_out(0, h, r, c) - want));
+            }
+        }
+    }
+    std::printf("  merge: max |dO| %.3e, max |dlse| %.3e\n", worst_out, worst_lse);
+    if (std::getenv("RING_MERGE_DEBUG") != nullptr) {
+        for (uint32_t r = 0; r < 3; ++r) {
+            std::printf(
+                "    row %u: a %.4f b %.4f | got lse cols 0,1,5,31: %.4f %.4f %.4f %.4f | got O[0] %.4f (O %.4f step %.4f)\n",
+                r, lse(0, 0, r, 0), step_lse(0, 0, r, 0), got_lse(0, 0, r, 0), got_lse(0, 0, r, 1), got_lse(0, 0, r, 5),
+                got_lse(0, 0, r, 31), got_out(0, 0, r, 0), out(0, 0, r, 0), step(0, 0, r, 0));
+        }
+    }
+    // The SFPU's exp and log in Float32 mode land within ~2e-3 on the lse, as the
+    // ttnn elementwise chain this replaces did; O is well inside 1e-3.
+    EXPECT_LT(worst_out, 2e-3F);
+    EXPECT_LT(worst_lse, 5e-3F);
+}
+
 // The two forwards on one chip: tt-train's sdpa_fw (one query tile row per
 // core pass, K and V re-read per row; the ring's step forward today) against
 // ttnn's chunk-blocked flash-attention forward at several chunk sizes. The

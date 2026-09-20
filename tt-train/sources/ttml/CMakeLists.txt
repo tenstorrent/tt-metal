@@ -190,6 +190,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
+    # The ring forward's fused online-softmax merge
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_softmax_merge/ring_softmax_merge.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_softmax_merge/device/ring_softmax_merge_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_softmax_merge/device/ring_softmax_merge_program_factory.cpp
     # Ring SDPA Forward through ttnn's chunk-blocked kernel with its lse output
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_ttnn_sdpa_fw/ring_ttnn_sdpa_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_ttnn_sdpa_fw/device/ring_ttnn_sdpa_fw_device_operation.cpp
