@@ -1,9 +1,9 @@
 {
  "last_run": {
-  "run_id": "35461161503",
-  "timestamp": "2026-09-19T18:41:00Z"
+  "run_id": "35480399102",
+  "timestamp": "2026-09-20T01:06:00Z"
  },
- "run_id": "35461161503",
+ "run_id": "35480399102",
  "open_prs": {
   "52106": {
    "issue": 51660,
@@ -218,6 +218,11 @@
    "issue": 57090,
    "branch": "repo-assist/fix-issue-57090-dedupe-mesh-graph-descriptors",
    "status": "opened this run, [skip ci] docs/config-only; collapsed glm52/kimi27 mgd textprotos (verified byte-identical) to shared sc1_mgd/sc4_mgd, updated run_multirank_pcc.sh + RUN_COMMANDS.md"
+  },
+  "56827_concat_width_retry": {
+   "issue": 56827,
+   "branch": "repo-assist/fix-issue-56827-concat-block-sharded-width-ragged",
+   "status": "opened this run (retry after #56864 was auto-closed without merge/comment despite green checks); real padded_shape()[-1] instead of shard capacity for width cursor, output range clipped; added parametrized regression test; CI outcome unknown yet, check next run; docker unavailable so unverified locally"
   }
  },
  "issues_labeled": [
@@ -1442,8 +1447,8 @@
   },
   "56323": "2026-09-12: confirmed root cause, noted contributor Kaustubh1235 already volunteered to fix, no dup PR opened",
   "56827": {
-   "date": "2026-09-17",
-   "note": "commented linking fix PR, confirmed root cause matches #56603 defect class on width axis"
+   "date": "2026-09-20",
+   "note": "commented linking new fix PR (re-attempt after #56864 auto-closed)"
   },
   "56938": {
    "date": "2026-09-18",
@@ -1460,9 +1465,18 @@
   "56526": {
    "date": "2026-09-19T01:15:00Z",
    "note": "confirmed root cause (Int32 output routed through FP32_TO_INT8, 7-bit sign-magnitude, saturates at +-127) against current ckernel_sfpu_quant.h on both WH/BH; reporter's linked gist patch is a non-trivial SFPU replay-buffer rewrite, too risky to apply blind without HW access -- encouraged reporter to submit their own PR"
+  },
+  "56967": {
+   "date": "2026-09-20",
+   "note": "confirmed LO16 vs UINT16 naming discrepancy against current llk_defs.h, no bug label"
   }
  },
  "run_history": [
+  {
+   "run_id": "35480399102",
+   "date": "2026-09-20T01:06:00Z",
+   "summary": "Task5: checked CI on 14 open repo-assist PRs pending outcome (53690/54246/54792/55847/56375/56195/56428/56790/56817/56864-closed/56943/56956/56997) -- all green except #56195 (RTL Sim CI failure but details_url is the same known broken placeholder domain already flagged as infra noise elsewhere, not a real code defect). Task1/2: reviewed ~100 newest open issues (cursor #57096 down through #56755) -- most already labeled/assigned to humans with active fix PRs; confirmed #56865 (vLLM sampling regression) assigned to iwroszTT with draft PR #56467 already addressing it, #56824/#56781/#56769/#56776 assigned to reporters, #57095/#57028/#57011/#56802/#56801/#56803/#56792/#56783 are maintainer-authored perf/infra notes needing no action. Commented on #56967 (LO16 vs tt-isa-documentation UINT16 naming discrepancy in tt-llk) after verifying current llk_defs.h on Blackhole+Wormhole match reporter's citations exactly (LO16=6, no value-9 entry) -- naming-clarity only, not labeled bug. Task3: investigated #56827 (concat block-sharded width ragged-tail corruption) -- confirmed still open, no other PR fixes it (only #56603 fixes the height mirror, itself unmerged), prior repo-assist PR #56864 was auto-closed without merge/comment despite 5/5 green checks for unclear reasons; re-implemented the fix on a fresh branch (real padded_shape()[-1] instead of shard capacity for the per-input cursor, output range clipped via std::min), added a parametrized regression test (2/3 inputs x row/col orientation) adapted from the issue's own repro; opened new ready-for-review PR, commented on issue linking it. Task8: refreshed monthly summary #55015 (added #57092/#57093 PR items, replaced stale #56827/#56864 closed-PR suggested-action with the new PR)."
+  },
   {
    "run_id": "35461161503",
    "date": "2026-09-19T18:41:00Z",
@@ -1517,31 +1531,6 @@
    "run_id": "34548588178",
    "date": "2026-09-11T01:02:00Z",
    "summary": "Task5: re-verified all 13 tracked repo-assist PRs via get_check_runs/pull_request_read - CI unchanged (all green/behind/blocked except 55435 still stuck on RTL Sim CI failure w/ broken details_url, and 54246 now mergeable_state=dirty needing rebase, flagged for maintainer). Task1/2/3: reviewed newest ~30 issues (56194 down to 56066); confirmed 56173 (missing packaged kernel sources for sdpa/grid_sample/scatter/point_to_point) already has open fix PR #56174, no duplicate; deep-dived #56194 (Quasar STRIDED-DFB batched pack_tile L1 offset collision) - verified root cause exactly against current source across 4 cited files (llk_pack_tile_api.h, dataflow_buffer_interface.h, llk_io.h, cb_api.h), no existing fix PR found, opened surgical fix PR (repo-assist/fix-issue-56194-quasar-strided-pack-tile-index) scaling per-tile index step by stride_size_tiles in both branches of get_output_tile_index(); reviewed #56171 (SDPA decode k_chunk_size=32 boundary bug, plausible but did not conclusively pin exact fix site in reader/compute mask logic this run, left unlabeled/unfixed for next run with more budget), #56192 (perf-test flakiness near threshold, recentering-only fix, no code defect), #56122 (empty stub issue referencing #51355, no action). Task8: updated monthly summary #55015 with new run history + refreshed suggested actions."
-  },
-  {
-   "run_id": "34446136498",
-   "date": "2026-09-10T06:44:00Z",
-   "summary": "Task1/2: labeled #56046 (bug, GLM-5.2 L78 prefill weight-build degradation) and #55744 (bug, Quasar dfb read_tile_value race, already assigned); scanned newest ~30 issues (56046 down to 55744), confirmed 56008/55996/55995/56021 already have open fix PRs, no duplicates; rest are tracking/feature/perf issues with no confirmed defect. Task5: re-verified all 13 tracked repo-assist PRs via get_check_runs/pull_request_read - no state changes since prior run (55435 still stuck on RTL Sim CI failure w/ broken details_url; rest unchanged green/blocked/behind). Task6: nudged 3 never-before-pinged dirty-mergeable author-blocked PRs: #40339 (Initial Gentoo support), #41596 (Support aarch64), #43180 (Quasar Binary SFPU add test). Task8: updated monthly summary #55015 with new run history + refreshed suggested actions."
-  },
-  {
-   "run_id": "34423418759",
-   "date": "2026-09-10T01:02:00Z",
-   "summary": "Task5: re-verified all tracked repo-assist PRs via pull_request_read - confirmed 55293 (softplus+bias) and 55424 (clamp output_tensor) MERGED; 54792/54932/53113/55847/53690/54666/51868/54246/54862/55670/55688/55435 all unchanged (green/behind/blocked, no CI regressions). Task1/2: reviewed newest ~20 issues (56031 down to 55972) - all umbrella/tracking (55913,55909), Metal2.0 architectural ports, model-bringup process issues (56001/55974/55971/55970 Voxtral), or design-decision issues needing new op surface (56029 GLM indexer bound, 56027 MuonWithAdamW dual-LR contract, 56030 GLM padded-prefill test gap, 55972 SDPA work balancing) - none confirmed as small-fix-eligible defects, none labeled/fixed. Task6: nudged 3 never-before-pinged author-blocked dirty-mergeable PRs: 35515 (approved, needs rebase), 38036 (dirty + unaddressed CHANGES_REQUESTED), 43247 (5 approvals, needs rebase). Task8: updated monthly summary #55015 with new run history entry and refreshed suggested actions list (added 54792/55435 review-ready-but-stale items, added 3 new stale-PR follow-up items)."
-  },
-  {
-   "run_id": "34389318110",
-   "date": "2026-09-09T21:37:00Z",
-   "summary": "Task1/2: labeled #55900 bug (DM_DYNAMIC_NOC BH multicast/read hang, reproducible, well-documented by kinginu, mechanism not fully established, no fix PR); reviewed #55965 (already bug-labeled+assigned), #55918/#55917 (shield_prefill deadlock/race issues, both already fixed via linked PR #55741, no dup), #55920 (eltwise perf-test alignment tracking, already assigned), #55913 (LLK Sanitizer epic tracker) - no action on any. Task5: re-verified tracked PRs; #55293 (softplus+bias) confirmed MERGED 2026-09-09T11:24:16Z by maintainer; #55847/#55670/#55435/#54932/#53690/#54246/#53113/#54666/#51868 all unchanged (get_check_runs showed 0 new failures across all). Task6: nudged 3 never-before-pinged author-blocked (dirty/merge-conflict) PRs: #35274, #35279, #35334. Task8: updated monthly summary #55015."
-  },
-  {
-   "run_id": "34320027304",
-   "date": "2026-09-09T06:30:00Z",
-   "summary": "Reviewed newest ~15 open issues for triage. Confirmed #55838 already fixed on main (no action). Confirmed #55881/#55817/#55823 already have open fix PRs (no duplicates). Reviewed #55834 (qwen accuracy gate, feature request, no fix PR) and #55827 (ttnn.sign NaN, open design question) - deferred action to next run. Re-checked CI on repo-assist open PRs: #55293 (softplus) now fully green (PR-Gate success, ~99 checks, test added, partially codeowner-approved) and ready for maintainer review; #55847 (gather clamp) still only pre-checks green; #54792/#54932/#55435 stale (mergeable_state=behind, low recent activity); #55424 (clamp output_tensor) confirmed MERGED. Updated monthly summary issue #55015."
-  },
-  {
-   "run_id": "34263416428",
-   "date": "2026-09-08T18:36:00Z",
-   "summary": "Task1/2: labeled 4 fresh community bug reports (#55797 reciprocal fp32 BH Newton-refinement underflow, #55798 softplus fp32 exp-tail clamp missing, #55799 repeat_bw TT_FATAL/empty-grad/wrong-shape, #55800 unary output_tensor shape guard compares against itself) - each already has an open community fix PR (55801/55802/55803/55804), so no duplicate fix PR opened, just labeled bug after confirming root cause against current source. Task5: re-verified check-runs on tracked PRs; #55435 RTL Sim CI now green (was failing 09-07, resolved itself/reran); #54932/#54792 unchanged green; #53690 unchanged. Task8: this update."
   }
  ],
  "no_action_reviewed": [
@@ -1581,7 +1570,8 @@
   "56945: fix PR #56932 already merged/open, closes issue (2026-09-19)",
   "56976: matmul L1-interleaved 4x slowdown, unlabeled, confirmed root cause (create_simple_matmul_program_config all_dram_interleaved gate) but architectural perf issue, too risky for quick fix, left for maintainer (2026-09-19)",
   "57081/57066/57055/57042/57028: newest issues all from established maintainers (rtawfik01, blozano-tt, bbradelTT, nathan-TT), no welcome needed, already labeled or maintainer-tracked (2026-09-19)",
-  "57083 (labeled performance monitoring + commented root cause; left fix to maintainer, architectural fabric config change)"
+  "57083 (labeled performance monitoring + commented root cause; left fix to maintainer, architectural fabric config change)",
+  "2026-09-20: reviewed ~100 newest issues (#57096-#56755): #56865 vLLM sampling regression assigned+draft-PR-linked (#56467), #56824/#56781/#56769/#56776 assigned to reporters with active investigation, #57095/#57028/#57011/#56802/#56801/#56803/#56792/#56783 maintainer-authored perf/infra notes, no repo-assist action needed on any"
  ],
  "resolved": {
   "52673": {
@@ -1624,5 +1614,5 @@
   }
  },
  "task8_last_update": "2026-09-19T12:36:57Z",
- "ci_pattern_note": "2026-09-18: multiple recently-opened repo-assist PRs (56997/56943/56956 etc) show pr-gate.yaml conclusion=action_required (not failure/success) -- appears to be a repo-side approval/gating state for these branches, not a code defect; monitor next run to see if it resolves or needs maintainer action"
+ "ci_pattern_note": "2026-09-20: PR #56195 shows RTL Sim CI failure with details_url=github.com/tenstorrernt (typo domain) -- same broken-placeholder pattern already seen on #55434/#51868, treating as infra noise not a code defect until a real job log can be fetched."
 }
