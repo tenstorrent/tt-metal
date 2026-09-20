@@ -627,13 +627,18 @@ def _golden_function_round(input_tensor_a, decimals=None, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.round, golden_function=_golden_function_round)
 
 
-def _golden_function_selu(input_tensor_a, *args, **kwargs):
+def _golden_function_selu(input_tensor_a, *args, scale=1.0507, alpha=1.67326, **kwargs):
     import torch
 
-    return torch.nn.functional.selu(input_tensor_a)
+    # torch.nn.functional.selu has no scale/alpha parameters (it hardcodes the canonical
+    # constants), so selu's real, kernel-forwarded scale/alpha (unary_nanobind.cpp) must be
+    # applied here directly rather than via torch's built-in. Defaults match ttnn.selu's own
+    # nb::arg defaults and torch's hardcoded SELU constants, so unscaled calls are unaffected.
+    return torch.where(input_tensor_a >= 0, scale * input_tensor_a, scale * alpha * (torch.exp(input_tensor_a) - 1))
 
 
 ttnn.attach_golden_function(ttnn.selu, golden_function=_golden_function_selu)
+
 
 
 def _golden_function_tanhshrink(input_tensor_a, *args, **kwargs):

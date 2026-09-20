@@ -143,3 +143,27 @@ def test_selu_atol(low, high, expected_Atol, device):
     tt_result = ttnn.selu(tt_in)
     result = ttnn.to_torch(tt_result)
     torch.allclose(golden, result, atol=expected_Atol)
+
+
+@pytest.mark.parametrize(
+    "scale, alpha",
+    [
+        (1.0507, 1.67326),  # ttnn.selu's own defaults (unary_nanobind.cpp)
+        (3.0, 2.0),  # non-default: regression for #57116
+        (0.5, 0.1),
+    ],
+)
+def test_selu_scale_alpha_golden(scale, alpha, device):
+    # ttnn.selu's registered golden used to call torch.nn.functional.selu(input_tensor_a),
+    # which hardcodes the canonical SELU constants and silently ignores scale/alpha -- the
+    # golden was identical for every (scale, alpha) pair. Pin the golden itself (host-only,
+    # no device dependency) against the closed-form definition so a future regression back to
+    # the old torch.nn.functional.selu call fails here immediately.
+    torch.manual_seed(0)
+    x = torch.empty(64).uniform_(-5, 5)
+    expected = torch.where(x >= 0, scale * x, scale * alpha * (torch.exp(x) - 1))
+
+    golden_function = ttnn.get_golden_function(ttnn.selu)
+    golden = golden_function(x, scale=scale, alpha=alpha)
+
+    torch.testing.assert_close(golden, expected)
