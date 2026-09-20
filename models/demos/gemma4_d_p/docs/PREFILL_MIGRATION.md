@@ -122,6 +122,14 @@ The shared migration driver migrates `0→5` and checks destination bytes agains
 
 This covers one prompt and one source slot at four context lengths. It does not validate distinct prompts across all six slots or a decode endpoint's layout. Loopback cases skip unless `GEMMA4_TEST_LOOPBACK=1`; both gates skip when the GPU trace is absent.
 
+## CI
+
+The **Blaze Models Prefill tests** workflow runs `mock-256k` nightly on `bh_sc1`. Select `gemma4_prefill_kv_pcc` for a manual run, or `gemma4_d_p` to include the standalone sanity test too. The migration job uses the `disagg_prefill` group, 1D fabric, 16 CPU threads, and a 30-minute step limit; its launcher limits pytest to 25 minutes.
+
+Workers require the canonical offline HF configuration, a complete compatible TT weight cache, and the prepared GPU capture above. Missing inputs fail the job. The test allocates six slots and compares slot 0 against the GPU capture at the same 0.91 PCC threshold.
+
+Runner progress is streamed to the CI console. The `gemma4-mock256k-*` artifact contains runner and producer logs, JUnit XML, the device map, and the PCC report when available. The address table stays in worker-local `/tmp` and is removed after the run. The mock job does not require tt-llm-engine.
+
 ## Host-only checks
 
 ```bash
