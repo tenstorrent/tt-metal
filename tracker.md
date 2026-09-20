@@ -69,5 +69,8 @@ preserve them without adding unrelated files to commits.
   attachment APIs and eager rectangular wrappers are preserved. Removed explicit
   preparation from operation callers and Python bindings; revised native/Python
   lifecycle and negative-input tests. Build/execution pending.
+- Feedback 4 implementation: removed all three single-kernel overloads; converted
+  Conv2D, Conv3D, group-attention and native tests to one-element arrays. Added
+  compile-time checks that single-kernel attachment is no longer public.
 - Completion remains unproven until every requirement in the supplied plans has
   direct evidence. Checkboxes track work, not a reduction of the requested scope.

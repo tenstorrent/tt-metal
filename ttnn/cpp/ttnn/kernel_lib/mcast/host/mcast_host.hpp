@@ -157,13 +157,6 @@ public:
         tt::tt_metal::ProgramDescriptor&,
         std::string_view prefix,
         std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels) const;
-    void attach(
-        tt::tt_metal::ProgramDescriptor& descriptor,
-        std::string_view prefix,
-        tt::tt_metal::KernelDescriptor& kernel) const {
-        const std::array kernels{std::ref(kernel)};
-        attach(descriptor, prefix, kernels);
-    }
 
     // ProgramSpec path: attach named resources, argument schemas, and per-core run arguments.
     void attach(
@@ -331,13 +324,6 @@ public:
         tt::tt_metal::ProgramDescriptor&,
         std::string_view prefix,
         std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels) const;
-    void attach(
-        tt::tt_metal::ProgramDescriptor& descriptor,
-        std::string_view prefix,
-        tt::tt_metal::KernelDescriptor& kernel) const {
-        const std::array kernels{std::ref(kernel)};
-        attach(descriptor, prefix, kernels);
-    }
 
     // ProgramSpec path: attach named resources, argument schemas, and per-core run arguments.
     void attach(
@@ -418,13 +404,6 @@ public:
         tt::tt_metal::ProgramDescriptor&,
         std::string_view prefix,
         std::span<const std::reference_wrapper<tt::tt_metal::KernelDescriptor>> kernels) const;
-    void attach(
-        tt::tt_metal::ProgramDescriptor& descriptor,
-        std::string_view prefix,
-        tt::tt_metal::KernelDescriptor& kernel) const {
-        const std::array kernels{std::ref(kernel)};
-        attach(descriptor, prefix, kernels);
-    }
 
     // ProgramSpec path: attach named resources, argument schemas, and per-core run arguments.
     void attach(

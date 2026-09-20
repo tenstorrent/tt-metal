@@ -43,6 +43,14 @@ static_assert(!ExposesInternalMcastAccessors<Mcast2D>);
 template <typename T>
 concept ExposesPreparation = requires(T value) { value.prepare_arguments(); };
 static_assert(!ExposesPreparation<McastFamily>);
+template <typename T>
+concept AcceptsSingleKernel =
+    requires(T value, tt::tt_metal::ProgramDescriptor descriptor, tt::tt_metal::KernelDescriptor kernel) {
+        value.attach(descriptor, "channel", kernel);
+    };
+static_assert(!AcceptsSingleKernel<McastFamily>);
+static_assert(!AcceptsSingleKernel<Mcast1D>);
+static_assert(!AcceptsSingleKernel<Mcast2D>);
 
 class McastHostFixture : public ::ttnn::TTNNFixtureWithSuiteDevice<McastHostFixture> {};
 
@@ -1152,7 +1160,7 @@ TEST_F(McastHostFixture, DescriptorAppendPadsPerKernelAndPreservesBindings) {
     kernel.buffer_bindings = {{.core = {1, 0}, .arg_idx = 2}};
     kernel.common_runtime_args = {71};
     // Direct references work both before and after moving a kernel into the descriptor.
-    family.attach(desc, "first", kernel);
+    family.attach(desc, "first", std::array{std::ref(kernel)});
     EXPECT_EQ(
         kernel.named_compile_time_args,
         (KernelDescriptor::NamedCompileTimeArgs{{"op", 99}, {"first_ct_offset", 2}, {"first_rt_offset", 3}}));
@@ -1175,12 +1183,12 @@ TEST_F(McastHostFixture, DescriptorAppendPadsPerKernelAndPreservesBindings) {
     desc.kernels.push_back(std::move(kernel));
     const auto old_ct_size = desc.kernels[0].compile_time_args.size();
     const auto old_rt_size = desc.kernels[0].runtime_args[0].second.size();
-    family.attach(desc, "second", desc.kernels[0]);
+    family.attach(desc, "second", std::array{std::ref(desc.kernels[0])});
     EXPECT_EQ(desc.semaphores.size(), 4u);
     EXPECT_EQ(desc.kernels[0].named_compile_time_args[3].second, old_ct_size);
     EXPECT_EQ(desc.kernels[0].named_compile_time_args[4].second, old_rt_size);
     const auto before = desc.kernels[0].compile_time_args;
-    EXPECT_ANY_THROW(family.attach(desc, "second", desc.kernels[0]));
+    EXPECT_ANY_THROW(family.attach(desc, "second", std::array{std::ref(desc.kernels[0])}));
     EXPECT_EQ(desc.semaphores.size(), 4u);
     EXPECT_EQ(desc.kernels[0].compile_time_args, before);
     attach_absent(desc.kernels[0], "absent");
@@ -1822,7 +1830,7 @@ TEST_F(McastHostFixture, ProgramBindingAllocatesOnceAndAppendsResolvedIds) {
     ProgramDescriptor descriptor;
     KernelDescriptor kernel;
     kernel.core_ranges = participants;
-    EXPECT_ANY_THROW(family.attach(descriptor, "weights", kernel));
+    EXPECT_ANY_THROW(family.attach(descriptor, "weights", std::array{std::ref(kernel)}));
     tt::tt_metal::experimental::ProgramSpec spec;
     tt::tt_metal::experimental::ProgramRunArgs run_args;
     EXPECT_ANY_THROW(family.attach(spec, run_args, "weights", {}));

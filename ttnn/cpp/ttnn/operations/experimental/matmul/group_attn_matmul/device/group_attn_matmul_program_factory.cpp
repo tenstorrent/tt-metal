@@ -403,7 +403,7 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
         num_blocks_written += num_output_blocks_per_core;
     }
 
-    in1_mcast.attach(desc, "in1_mcast", reader_desc);
+    in1_mcast.attach(desc, "in1_mcast", std::array{std::ref(reader_desc)});
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc));

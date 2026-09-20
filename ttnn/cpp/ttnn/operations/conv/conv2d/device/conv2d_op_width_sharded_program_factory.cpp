@@ -625,7 +625,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     post_conv2d_op_memory_checks_descriptor(desc, operation_attributes, tensor_args, reader_indices_actual_page_size);
 
     if (activation_mcast.has_value()) {
-        activation_mcast->attach(desc, "activation_mcast", act_kernel_desc);
+        activation_mcast->attach(desc, "activation_mcast", std::array{std::ref(act_kernel_desc)});
     } else {
         ttnn::kernel_lib::host::attach_absent(act_kernel_desc, "activation_mcast");
     }

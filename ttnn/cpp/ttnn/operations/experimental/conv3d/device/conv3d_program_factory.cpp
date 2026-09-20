@@ -1277,7 +1277,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(compute_desc));
     if (weights_mcast_family) {
-        weights_mcast_family->attach(desc, "weights_mcast", writer_desc);
+        weights_mcast_family->attach(desc, "weights_mcast", std::array{std::ref(writer_desc)});
     } else {
         mcast::attach_absent(writer_desc, "weights_mcast");
     }
