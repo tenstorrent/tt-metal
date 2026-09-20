@@ -25,6 +25,19 @@ def _gemma4_is_host_weight(key):
     return any(key.endswith(s) for s in _GEMMA4_HOST_WEIGHT_SUFFIXES)
 
 
+def weight_cache_identity(hf_model_id, num_layers, mesh_shape, precision):
+    return dict(
+        model_name=os.path.basename(str(hf_model_id).rstrip("/")) or "gemma4",
+        n_layers=num_layers,
+        mesh_shape=tuple(mesh_shape),
+        build_variant={
+            "prefill_cache_layout": 1,
+            "global_projection": "qk",
+            "precision": {k: str(v) for k, v in sorted(precision._overrides.items())},
+        },
+    )
+
+
 def create_tt_model(
     mesh_config,
     prefill_chunk_size,
@@ -70,15 +83,8 @@ def create_tt_model(
 
     # Reuse cached device weights; load embeddings and layer scalars from the host weight cache.
     _precision_for_variant = Gemma4Precision.load(hf_model_id)
-    cache_identity = dict(
-        model_name=os.path.basename(str(hf_model_id).rstrip("/")) or "gemma4",
-        n_layers=model_args.num_hidden_layers,
-        mesh_shape=tuple(mesh_device.shape),
-        build_variant={
-            "prefill_cache_layout": 1,
-            "global_projection": "qk",
-            "precision": {k: str(v) for k, v in sorted(_precision_for_variant._overrides.items())},
-        },
+    cache_identity = weight_cache_identity(
+        hf_model_id, model_args.num_hidden_layers, mesh_device.shape, _precision_for_variant
     )
     loaded_real_weights = False
     if state_dict is None:

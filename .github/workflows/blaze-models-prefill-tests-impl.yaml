@@ -186,7 +186,7 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     runs-on: ${{ matrix.test-group.runs_on }}
     outputs:
-      test-result: ${{ steps.run-test.outcome }}
+      test-result: ${{ matrix.test-group.test_type == 'gemma4_prefill_kv_pcc' && steps.run-gemma4-test.outcome || steps.run-test.outcome }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -212,6 +212,7 @@ jobs:
 
       - name: ${{ matrix.test-group.name }}
         id: run-test
+        if: ${{ matrix.test-group.test_type != 'gemma4_prefill_kv_pcc' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./.github/actions/run-with-log
         with:
@@ -226,6 +227,24 @@ jobs:
             echo "Running: ${{ matrix.test-group.name }}"
             echo "$CMD"
             eval "$CMD"
+
+      - name: ${{ matrix.test-group.name }}
+        id: run-gemma4-test
+        if: ${{ matrix.test-group.test_type == 'gemma4_prefill_kv_pcc' }}
+        shell: bash
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        working-directory: /home/user/tt-metal
+        env:
+          TEST_COMMAND: ${{ matrix.test-group.cmd }}
+          TEST_LOG: generated/test_logs/${{ matrix.test-group.name }}.log
+        run: |
+          mkdir -p "$(dirname "$TEST_LOG")"
+          printf '[==tt-log-start-line==]\n' > "$TEST_LOG"
+          set +e
+          bash -eo pipefail -c "$TEST_COMMAND" 2>&1 | tee -a "$TEST_LOG"
+          status=${PIPESTATUS[0]}
+          printf '\n[==tt-log-finish-line==] exit_code=%s\n' "$status" | tee -a "$TEST_LOG"
+          exit "$status"
 
       # The container-hook runner streams a plain `run:` step's stdout but not a
       # composite action's, so the run-with-log test step above produces no console
@@ -255,6 +274,15 @@ jobs:
         with:
           name: test-log-${{ matrix.test-group.name }} (attempt ${{ github.run_attempt }})
           path: /home/user/tt-metal/generated/test_logs/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: ⬆️ Upload Gemma4 validation results
+        if: always() && !cancelled() && matrix.test-group.test_type == 'gemma4_prefill_kv_pcc'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: gemma4-mock256k-${{ inputs.resource-prefix }}-${{ strategy.job-index }} (attempt ${{ github.run_attempt }})
+          path: ${{ env.PREFILL_SUMMARIES }}/gemma4_mock256k/
           if-no-files-found: warn
           retention-days: 30
 
