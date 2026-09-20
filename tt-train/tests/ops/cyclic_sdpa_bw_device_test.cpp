@@ -33,6 +33,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -3247,4 +3248,145 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_ScaleTheHeadDimension) {
     for (uint32_t d : {32u, 64u, 128u, 256u}) {
         time_one_size(64, 8, 8, d);
     }
+}
+
+// ------------------------------------------------------------ the forward
+// The forward pass on the cyclic schedule (cyclic_sdpa_fw, tt-flash-attn's
+// Algorithm 8), against the Float32 host reference and against sdpa_fw, whose
+// intermediates carry the same statistic (lse in column 0 of a (B, H, S, 32)
+// Float32 tile). Grouped heads, causal and dense, every block height.
+namespace {
+void check_cyclic_forward(
+    uint32_t batch, uint32_t heads, uint32_t kv_heads, uint32_t N, uint32_t d, bool causal, uint32_t Bt,
+    uint32_t max_groups = 0) {
+    using namespace tt::tt_metal;
+    auto* device = &ttml::autograd::ctx().get_device();
+    xt::xarray<float> Q = xt::zeros<float>({batch, heads, N, d});
+    xt::xarray<float> K = xt::zeros<float>({batch, kv_heads, N, d});
+    xt::xarray<float> V = xt::zeros<float>({batch, kv_heads, N, d});
+    for (uint32_t b = 0; b < batch; ++b) {
+        for (uint32_t h = 0; h < heads; ++h) {
+            xt::view(Q, b, h, xt::all(), xt::all()) = random_bf16_matrix(N, d, 9000u + 37u * b + h);
+        }
+        for (uint32_t g = 0; g < kv_heads; ++g) {
+            xt::view(K, b, g, xt::all(), xt::all()) = random_bf16_matrix(N, d, 9500u + 37u * b + g);
+            xt::view(V, b, g, xt::all(), xt::all()) = random_bf16_matrix(N, d, 9700u + 37u * b + g);
+        }
+    }
+    const auto q = ttml::core::from_xtensor(Q, device);
+    const auto k = ttml::core::from_xtensor(K, device);
+    const auto v = ttml::core::from_xtensor(V, device);
+    const auto mask = causal ? ttml::metal::AttentionMaskType::Causal : ttml::metal::AttentionMaskType::None;
+
+    const auto [out_t, lse_t] = ttml::metal::cyclic_sdpa_fw(q, k, v, Bt, mask, std::nullopt, std::nullopt, max_groups);
+    ASSERT_EQ(out_t.logical_shape(), ttnn::Shape({batch, heads, N, d}));
+    ASSERT_EQ(lse_t.logical_shape(), ttnn::Shape({batch, heads, N, 32u}));
+    ASSERT_EQ(out_t.dtype(), ttnn::DataType::BFLOAT16);
+    ASSERT_EQ(lse_t.dtype(), ttnn::DataType::FLOAT32);
+    const auto ours_O = ttml::core::to_xtensor(out_t);
+    const auto ours_lse = ttml::core::to_xtensor(lse_t);
+
+    const auto fw = ttml::metal::sdpa_fw(q, k, v, mask, std::nullopt, 0.0F, /*return_intermediates=*/true);
+    const auto base_O = ttml::core::to_xtensor(fw[0].value());
+    const auto base_lse = ttml::core::to_xtensor(fw[1].value());
+
+    const uint32_t hpg = heads / kv_heads;
+    const std::string at = " (batch " + std::to_string(batch) + ", heads " + std::to_string(heads) + "/" +
+                           std::to_string(kv_heads) + ", N " + std::to_string(N) + ", d " + std::to_string(d) +
+                           (causal ? ", causal" : ", dense") + ", Bt " + std::to_string(Bt) + ")";
+    float worst_rms = 0.0F;
+    float worst_lse = 0.0F;
+    float worst_rms_base = 0.0F;
+    float worst_lse_base = 0.0F;
+    for (uint32_t b = 0; b < batch; ++b) {
+        for (uint32_t h = 0; h < heads; ++h) {
+            const auto r = reference_from_inputs(
+                xt::xarray<float>(xt::view(Q, b, h, xt::all(), xt::all())),
+                xt::xarray<float>(xt::view(K, b, h / hpg, xt::all(), xt::all())),
+                xt::xarray<float>(xt::view(V, b, h / hpg, xt::all(), xt::all())),
+                xt::xarray<float>(xt::view(Q, b, h, xt::all(), xt::all())),
+                causal);
+            xt::xarray<float> ref_lse = xt::view(r.lse_tile, 0, 0, xt::all(), 0);
+            xt::xarray<float> ours_l = xt::view(ours_lse, b, h, xt::all(), 0);
+            xt::xarray<float> base_l = xt::view(base_lse, b, h, xt::all(), 0);
+            const float lse_err = xt::amax(xt::abs(ours_l - ref_lse))();
+            const float lse_err_base = xt::amax(xt::abs(base_l - ref_lse))();
+            const float rms = relative_rms(slice_of(ours_O, b, h), r.O);
+            const float rms_base = relative_rms(slice_of(base_O, b, h), r.O);
+            worst_rms = std::max(worst_rms, rms);
+            worst_lse = std::max(worst_lse, lse_err);
+            worst_rms_base = std::max(worst_rms_base, rms_base);
+            worst_lse_base = std::max(worst_lse_base, lse_err_base);
+            EXPECT_TRUE(std::isfinite(rms)) << "head " << h << at;
+            if (std::getenv("TTML_CYCLIC_FW_DEBUG") != nullptr && b == 0 && h == 0) {
+                for (uint32_t i = 0; i < N; i += (N >= 256 ? N / 8 : 8)) {
+                    std::printf(
+                        "    row %3u: lse ref %9.4f ours %9.4f base %9.4f | O[0..3] ref %8.4f %8.4f %8.4f %8.4f ours %8.4f "
+                        "%8.4f %8.4f %8.4f\n",
+                        i, ref_lse(i), ours_l(i), base_l(i), r.O(i, 0), r.O(i, 1), r.O(i, 2), r.O(i, 3),
+                        ours_O(b, h, i, 0), ours_O(b, h, i, 1), ours_O(b, h, i, 2), ours_O(b, h, i, 3));
+                }
+                for (uint32_t i : {0u, 1u, 31u, 32u, 33u, 63u}) {
+                    if (i < N) {
+                        std::printf("    row %3u: lse ref %9.4f ours %9.4f | O ref %8.4f ours %8.4f\n", i, ref_lse(i),
+                                    ours_l(i), r.O(i, 0), ours_O(b, h, i, 0));
+                    }
+                }
+            }
+            // The other 31 columns of an lse tile must be exact zeros (the
+            // backward reads column 0; the merge broadcasts it).
+            const float rest = xt::amax(xt::abs(xt::view(ours_lse, b, h, xt::all(), xt::range(1, 32))))();
+            EXPECT_EQ(rest, 0.0F) << "lse tile columns 1..31 are not zero, head " << h << at;
+        }
+    }
+    std::printf(
+        "  cyclic_sdpa_fw%s: O relative RMS %.2e (sdpa_fw %.2e), lse max |err| %.2e (sdpa_fw %.2e)\n",
+        at.c_str(), worst_rms, worst_rms_base, worst_lse, worst_lse_base);
+    // bf16 output of a Float32 accumulator: the rounding of the output alone
+    // is 2e-3 RMS; sdpa_fw measures 5e-3 to 1e-2 at these shapes.
+    EXPECT_LT(worst_rms, 1.5e-2F) << at;
+    EXPECT_LT(worst_lse, 1e-2F) << at;
+}
+}  // namespace
+
+TEST(CyclicSdpaFwTest, OneCoreCausal) {
+    check_cyclic_forward(1, 1, 1, /* N */ 64, /* d */ 64, /* causal */ true, /* Bt */ 1);
+}
+
+TEST(CyclicSdpaFwTest, TwoCoresCausal) {
+    check_cyclic_forward(1, 1, 1, 128, 64, true, 1);
+}
+
+TEST(CyclicSdpaFwTest, FourCoresCausalBlockHeights) {
+    for (uint32_t Bt : {1u, 2u, 4u}) {
+        check_cyclic_forward(1, 1, 1, 8u * Bt * 32u, 64, true, Bt);
+    }
+}
+
+TEST(CyclicSdpaFwTest, FourCoresDense) {
+    for (uint32_t Bt : {1u, 2u}) {
+        check_cyclic_forward(1, 1, 1, 8u * Bt * 32u, 64, false, Bt);
+    }
+}
+
+TEST(CyclicSdpaFwTest, HeadDimension128) {
+    check_cyclic_forward(1, 1, 1, 256, 128, true, 1);
+    check_cyclic_forward(1, 1, 1, 512, 128, true, 2);
+}
+
+TEST(CyclicSdpaFwTest, ManyHeadsAndGroups) {
+    // Two batches, four heads: eight slices dealt to the groups, and in turn
+    // when capped to three groups.
+    check_cyclic_forward(2, 4, 4, 128, 64, true, 1);
+    check_cyclic_forward(2, 4, 4, 128, 64, true, 1, /* max_groups */ 3);
+}
+
+TEST(CyclicSdpaFwTest, GroupedQueryHeads) {
+    check_cyclic_forward(1, 4, 2, 128, 64, true, 1);
+    check_cyclic_forward(1, 6, 2, 256, 64, false, 2);
+}
+
+TEST(CyclicSdpaFwTest, SixteenCores) {
+    check_cyclic_forward(1, 1, 1, 1024, 64, true, 1);
+    check_cyclic_forward(1, 1, 1, 2048, 64, true, 2);
 }
