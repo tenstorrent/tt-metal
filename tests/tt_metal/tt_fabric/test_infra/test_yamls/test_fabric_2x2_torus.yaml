@@ -1,0 +1,123 @@
+# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Single-galaxy 2x2 inter-mesh torus repro for #56298. Every mesh opens with the
+# SAME fabric config on a 2x2 4-stage ring MGD (four 2x2 stages, ring-connected
+# on one BH galaxy). For each torus topology (X, Y, XY) the InterMesh group drives
+# routing across the inter-mesh links -- which under the fix never enable deadlock
+# avoidance, whichever direction -- and the IntraMesh group is the control
+# (intra-mesh routing is untouched). Run against BOTH the Z-routed MGD
+# (single_galaxy_2x2_z_ring_4stage_ring) and the non-Z MGD
+# (single_galaxy_2x2_ring_4stage_ring) so inter-mesh links are exercised on Z and
+# on the normal N/S/E/W routers under all three torus topologies. Checks the torus
+# fabric does not hang/starve.
+#
+#   ./tools/scaleout/exabox/run_fabric_tests.sh --hosts <one BH galaxy> --image none --mpi-if none \
+#     --mesh-graph-desc-path tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_2x2_z_ring_4stage_ring_mesh_graph_descriptor.textproto \
+#     --test-config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2x2_torus.yaml \
+#     --filter name.Torus
+
+Tests:
+
+  - name: "TorusXInterMeshNeighborExchange"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Torus
+      torus_config: X
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 30000
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: inter_mesh
+
+  - name: "TorusXIntraMeshNeighborExchange"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Torus
+      torus_config: X
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 30000
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: intra_mesh
+
+  - name: "TorusYInterMeshNeighborExchange"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Torus
+      torus_config: Y
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 30000
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: inter_mesh
+
+  - name: "TorusYIntraMeshNeighborExchange"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Torus
+      torus_config: Y
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 30000
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: intra_mesh
+
+  - name: "TorusXYInterMeshNeighborExchange"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 30000
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: inter_mesh
+
+  - name: "TorusXYIntraMeshNeighborExchange"
+    sync: true
+    enable_flow_control: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 30000
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: intra_mesh
