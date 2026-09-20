@@ -2,12 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unpatchify straight from the TILE-layout fp32 token tensor (1, S_pad, D), reader.
-//
-// Tokens of one (t, h) unit are the W = 16 consecutive rows (t*H + h)*16 .. +16: one half (two face rows) of a
-// tile row. Inside a fp32 tile the 16 features of a 16-aligned group for those 16 tokens are one 1 KB face,
-// which is exactly one output canvas row (c, frame t*pt + f, pixel row h*p + yy). So the unit's data is the
-// 96 half-tiles of that tile row, staged here as 96 contiguous 2 KB reads; the writer only remaps pages.
+// Unpatchify straight from the TILE-layout fp32 token tensor (1, S_pad, D), reader: a (t, h) unit's 16 tokens are one
+// half of a tile row, so its data is the 96 half-tiles of that row, staged as 96 contiguous 2 KB reads for the writer.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
