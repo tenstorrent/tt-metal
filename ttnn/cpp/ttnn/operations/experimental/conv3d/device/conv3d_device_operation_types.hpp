@@ -48,11 +48,8 @@ struct Conv3dConfig {
     std::array<uint32_t, 3> dilation;
     uint32_t alignment;
     tt::tt_metal::CoreCoord compute_with_storage_grid_size;
-    // fp32 operand split inside the kernel: each tilized activation tile is split into hi = bf16(x)
-    // and the exact residual lo = x - hi on the SFPU, and the matmul accumulates x_hi*W_hi + x_hi*W_lo
-    // + x_lo*W_hi in one fp32 DST pass, with W_lo supplied as `weight_lo_tensor`. Recovers the mantissa
-    // bits the matrix engine's TF32 operand path drops, in one launch and one vol2col gather instead
-    // of three convs plus the host-side split and adds. Requires fp32 data, fp32 dest accumulation.
+    // In-kernel fp32 operand split: x -> hi = bf16(x), lo = x - hi on the SFPU, then x_hi*W_hi + x_hi*W_lo + x_lo*W_hi
+    // in one fp32 DST pass (W_lo = `weight_lo_tensor`), recovering the bits TF32 drops. Needs fp32 data and fp32 dest.
     bool operand_split;
 
     static constexpr auto attribute_names = std::make_tuple(
