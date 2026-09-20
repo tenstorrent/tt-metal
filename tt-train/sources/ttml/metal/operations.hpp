@@ -6,6 +6,7 @@
 
 #include "ops/cross_entropy_bw/cross_entropy_bw.hpp"
 #include "ops/cyclic_sdpa_bw/cyclic_sdpa_bw.hpp"
+#include "ops/cyclic_sdpa_fw/cyclic_sdpa_fw.hpp"
 #include "ops/ring_cyclic_sdpa_bw/ring_cyclic_sdpa_bw.hpp"
 #include "ops/ring_zigzag_sdpa/ring_zigzag_sdpa.hpp"
 #include "ops/ring_ttnn_sdpa_fw/ring_ttnn_sdpa_fw.hpp"
