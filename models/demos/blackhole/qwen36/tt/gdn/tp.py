@@ -1190,29 +1190,25 @@ class TPGatedDeltaNet:
         permutation matrix (swap for flipped slots, identity otherwise) over the whole [B, Nv*4, 32, 32] tensor
         is exact for bf16 and takes ~1 ms; the host repack it replaces (`_pack_head_tiles` for every slot of
         every layer) took ~20 s per remap at 32 users, stalling decode for tens of seconds under P/D churn."""
-        key = tuple(flipped)
-        cache = self.__dict__.setdefault("_hist_flip_perm_cache", {})
-        perm = cache.get(key)
-        if perm is None:
-            eye = torch.eye(32, dtype=torch.bfloat16)
-            swap = torch.zeros(32, 32, dtype=torch.bfloat16)
-            for c in range(16):
-                swap[2 * c, 2 * c + 1] = 1.0
-                swap[2 * c + 1, 2 * c] = 1.0
-            P = eye.repeat(self.B, 1, 1, 1)
-            for b in flipped:
-                P[b, 0] = swap
-            perm = ttnn.from_torch(
-                P.expand(self.B, self.Nv * 4, 32, 32).contiguous(),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-            )
-            if len(cache) >= 64:
-                ttnn.deallocate(cache.pop(next(iter(cache))))
-            cache[key] = perm
+        # Built per call and freed right after: a buffer that stays allocated after the decode trace was
+        # captured shares addresses with the trace's freed intermediates and is clobbered by every replay
+        # (a cached permutation here produced garbage decodes under batch churn).
+        eye = torch.eye(32, dtype=torch.bfloat16)
+        swap = torch.zeros(32, 32, dtype=torch.bfloat16)
+        for c in range(16):
+            swap[2 * c, 2 * c + 1] = 1.0
+            swap[2 * c + 1, 2 * c] = 1.0
+        P = eye.repeat(self.B, 1, 1, 1)
+        for b in flipped:
+            P[b, 0] = swap
+        perm = ttnn.from_torch(
+            P.expand(self.B, self.Nv * 4, 32, 32).contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
         exact = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
         )
@@ -1221,6 +1217,7 @@ class TPGatedDeltaNet:
         out5 = ttnn.reshape(out, (self.B, self.Nv, 4, 32, 32))
         ttnn.copy(out5, self.conv_hist_packed)  # in place: the decode trace bakes this buffer's address
         ttnn.deallocate(out)  # h4 / out5 are reshape VIEWS sharing their source buffers: never deallocate them
+        ttnn.deallocate(perm)
         if _HIST_DEBUG:
             logger.info(f"[hist] flipped parity of slots {flipped} on device")
 
