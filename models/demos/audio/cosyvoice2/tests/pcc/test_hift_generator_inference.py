@@ -84,13 +84,19 @@ def test_device_hift_generator_inference_matches_torch_reference(device, mel_fra
     ref = TorchHiFTGeneratorInferenceRef(decode_ref, f0_ref, source_w, source_b)
 
     mel = torch.randn(1, mel_frames, 80) * 0.5
+    # SineGen2's harmonic excitation noise is a real per-call random draw in
+    # upstream inference (see TtHiFTGenerator.inference's docstring) -- shared
+    # here, not left to each side's own default, so this stays a comparison
+    # of the computation, not of two independent random draws.
+    audio_len = mel_frames * ref.upsample_scale
+    sine_noise = torch.randn(1, audio_len, ref.harmonic_num + 1)
     with torch.no_grad():
-        want = ref.inference(mel)
+        want = ref.inference(mel, sine_noise=sine_noise)
 
     dec = TtHiFTDecoder(device, decode_ref, dtype=ttnn.bfloat16)
     tt_gen = TtHiFTGenerator(device, ref, dec)
     mel_dev = ttnn.from_torch(mel, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    got_dev = tt_gen.inference(mel_dev, mel_frames, 1)
+    got_dev = tt_gen.inference(mel_dev, mel_frames, 1, sine_noise=sine_noise)
     got = ttnn.to_torch(got_dev).reshape(1, -1).float()
 
     assert got.shape == want.shape

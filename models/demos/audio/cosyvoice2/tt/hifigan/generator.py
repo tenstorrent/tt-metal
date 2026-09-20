@@ -604,14 +604,27 @@ class TorchHiFTGeneratorInferenceRef:
         self.noise_std = noise_std
         self.voiced_threshold = voiced_threshold
 
-    def inference(self, mel: torch.Tensor) -> torch.Tensor:
+    def inference(self, mel: torch.Tensor, sine_noise: torch.Tensor | None = None) -> torch.Tensor:
         """mel: [1, T_mel, 80] channels-last. Returns waveform [1, L]. f0 is
         computed internally by `self.f0_predictor_ref`, matching real upstream
         `HiFTGenerator.inference`'s own signature (`speech_feat` only, no
-        separate f0 argument)."""
+        separate f0 argument).
+
+        `sine_noise`: the harmonic excitation's per-call random noise (real
+        upstream's `SineGen2.forward` draws this unconditionally, every real
+        call -- see `TtHiFTGenerator.inference`'s docstring for why this
+        isn't optional for a realistic synthesis, and why the *other*,
+        separately-drawn "branch noise" is correctly never reproduced here).
+        `None` draws a fresh real draw (matching real upstream's own
+        behavior); pass an explicit tensor (shape `[1, T_mel *
+        self.upsample_scale, harmonic_num+1]`) for a reproducible PCC
+        comparison against `TtHiFTGenerator.inference`'s own `sine_noise`.
+        """
         mel_cf = mel.transpose(1, 2)  # -> [1, 80, T_mel], TorchHiFTDecodeRef's/f0_predictor's own convention
         f0_mel_rate = self.f0_predictor_ref(mel_cf)  # [1, T_mel] Hz
         f0_audio = f0_mel_rate.repeat_interleave(self.upsample_scale, dim=1).unsqueeze(-1)  # [1, T_audio, 1]
+        if sine_noise is None:
+            sine_noise = torch.randn(1, f0_audio.shape[1], self.harmonic_num + 1)
         sine_merge, _, _ = TtSourceModuleHnNSF.torch_reference(
             f0_audio,
             self.source_linear_weight,
@@ -622,6 +635,7 @@ class TorchHiFTGeneratorInferenceRef:
             sine_amp=self.sine_amp,
             noise_std=self.noise_std,
             voiced_threshold=self.voiced_threshold,
+            noise=sine_noise,
         )
         s_cf = sine_merge.transpose(1, 2)  # -> [1, 1, T_audio]
         return self.decode_ref.decode(mel_cf, s_cf)
@@ -653,16 +667,48 @@ class TtHiFTGenerator:
         )
         self.dtype = dtype
 
-    def inference(self, mel, mel_frames: int, batch_size: int = 1):
+    def inference(self, mel, mel_frames: int, batch_size: int = 1, sine_noise: torch.Tensor | None = None):
         """mel: ttnn [B, T_mel, 80] (straight from `TtCausalMaskedDiffWithXvec`,
         unchanged). Returns ttnn [B, L, 1] waveform. f0 is computed here by the
         real `TtConvRNNF0Predictor`, not supplied externally -- matching real
         upstream `HiFTGenerator.inference`'s own signature (`speech_feat`
         only). `TtSineGen2.__call__` (source.py) casts f0 to fp32 internally
-        if needed, so no explicit cast here."""
+        if needed, so no explicit cast here.
+
+        `sine_noise`: host `torch.Tensor`, shape `[batch_size, mel_frames *
+        self.upsample_scale, harmonic_num+1]`, or `None` to draw a fresh real
+        draw here -- see the module-level note below for why this can't just
+        default to zero. Real upstream's `SineGen2.forward` draws this noise
+        unconditionally on every real inference call (no eval-mode bypass,
+        unlike the separate, genuinely-unused "branch noise"
+        `SourceModuleHnNSF.forward` also draws -- that one's `noise`/`uv`
+        outputs are discarded by real `HiFTGenerator.inference`, `s, _, _ =
+        self.m_source(s)`, confirmed dead code, not reproduced here for
+        exactly that reason). Pass an explicit tensor (matching
+        `TorchHiFTGeneratorInferenceRef.inference`'s own `sine_noise`) for a
+        reproducible PCC comparison.
+
+        Confirmed missing here (defaulted to a hard zero via
+        `TtSineGen2.__call__`'s own `noise=None` fallback -- explicitly
+        documented there as "wrong for synthesis" but never wired up) by a
+        stage-by-stage bisection against the real official
+        `HiFTGenerator`/`ConvRNNF0Predictor` classes (own weights, same real
+        mel): every other stage matched to float32 precision once the real
+        model's own random noise draw was captured and fed into both sides.
+        Zero noise collapses unvoiced-region excitation (`sine_waves * uv +
+        n` with `uv=0`) to a hard, exact zero instead of the natural noise
+        floor the model was trained on -- a real, structural source of the
+        reported "noisy, robotic" audio quality, not a precision artifact.
+        """
         f0_mel_rate = self.f0_predictor(mel, mel_frames, batch_size)  # ttnn [B, T_mel]
         f0_mel_rate = ttnn.reshape(f0_mel_rate, (batch_size, mel_frames, 1))
         f0_audio = ttnn.repeat_interleave(f0_mel_rate, self.upsample_scale, dim=1)  # [B, T_audio, 1]
-        sine_merge, _, _ = self.source(f0_audio)
+        audio_len = mel_frames * self.upsample_scale
+        harmonics = self.source.sine_gen.harmonic_num + 1
+        if sine_noise is None:
+            sine_noise = torch.randn(batch_size, audio_len, harmonics)
+        sine_noise_dev = ttnn.from_torch(sine_noise, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device)
+        sine_merge, _, _ = self.source(f0_audio, sine_noise=sine_noise_dev)
         ttnn.deallocate(f0_audio)
+        ttnn.deallocate(sine_noise_dev)
         return self.decoder.decode(mel, sine_merge, mel_frames, batch_size)
