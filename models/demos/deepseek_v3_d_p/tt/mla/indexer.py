@@ -22,7 +22,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
 
@@ -305,6 +304,7 @@ class TtIndexer:
         (qr) is passed into forward(), not held here — so the indexer holds no MLA weights."""
         self.config = config
         self.mesh_device = mesh_device
+        self._is_blackhole = mesh_device.arch() == ttnn.Arch.BLACKHOLE
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
         mesh_shape = list(mesh_device.shape)
@@ -702,7 +702,7 @@ class TtIndexer:
 
     def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
         """Return the model-gated Blackhole config for an indexer matmul."""
-        if not is_blackhole():
+        if not self._is_blackhole:
             return None
         entry = get_matmul_config(weight_name, seq_len_local)
         candidates = entry if isinstance(entry, list) else [entry]
