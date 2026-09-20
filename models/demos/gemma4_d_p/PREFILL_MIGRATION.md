@@ -57,7 +57,7 @@ KV occupies **212.5 GiB**. The loader reads each head's requested token prefix a
 
 ## PCC definition and threshold
 
-Each score is Pearson correlation between a TT cache head and its GPU counterpart, flattened over the entire requested token prefix and the compared channels. Global rotary K and V are scored separately. There are 1680 scores per context. The validator uses a reusable FP32 buffer of at most 8 MiB and accumulates centered statistics across blocks in FP32. This produces one whole-head PCC; it does not average block correlations. TT readback remains BF16 until copied into that buffer.
+Each score is Pearson correlation between a TT cache head and its GPU counterpart, flattened over the entire requested token prefix and the compared channels. Global rotary K and V are scored separately. There are 1680 scores per context. The validator uses a reusable FP32 buffer of at most 8 MiB and accumulates centered statistics across blocks in FP32. Each block uses three dot products for the two sums of squares and the cross-product. Nonfinite inputs propagate into these statistics and are rejected before a score is returned. This produces one whole-head PCC; it does not average block correlations. TT readback remains BF16 until copied into that buffer.
 
 - `layer_minima`: the lowest head score for each cache type in the current layer. It can increase between layers.
 - `running_min_pcc`: the lowest score seen across all layers checked so far. It cannot increase.
@@ -72,9 +72,9 @@ The regression threshold is **0.91**, calibrated on this capture with FP32 PCC. 
 | 8K | 0.920747 | 0.951169 | 0.948299 | 0.945258 | 0.920747 |
 | 16K | 0.929830 | 0.954082 | 0.952419 | 0.950691 | 0.929830 |
 | 128K | 0.934371 | 0.950708 | 0.954783 | 0.948936 | 0.934371 |
-| 256K | 0.916657 | 0.936483 | 0.939160 | 0.935219 | 0.916657 |
+| 256K | 0.916626 | 0.936422 | 0.939127 | 0.935193 | 0.916626 |
 
-The lowest measured score is sliding V, layer 39, head 9 at 256K: **0.916657**, leaving about **0.0067** above the threshold. This is a regression floor for one captured prompt and the current precision. Longer prefixes produce different correlation statistics, so minima need not decrease with context length. See [PCC performance](PCC_PERFORMANCE.md) for timings.
+The lowest measured score is sliding V, layer 39, head 9 at 256K: **0.916626**, leaving about **0.0066** above the threshold. This is a regression floor for one captured prompt and the current precision. Longer prefixes produce different correlation statistics, so minima need not decrease with context length. See [PCC performance](PCC_PERFORMANCE.md) for timings.
 
 ## Gate 1: GPU-trace comparison
 
