@@ -111,4 +111,26 @@ using one trace per case across `(start,end)` = `(0,1056)`, `(1056,9000)`,
 `(7008,9000)`, `(8192,12001)`, `(15392,16381)` and two user slots. Tests check
 absolute RoPE lookup, attention PCC >=0.995, cache PCC >=0.999, stable metadata
 addresses, and exact preservation of prior KV, later tiles, and the other slot.
-The full 60-layer model and serving integration were not run.
+
+`tests/test_block_cyclic_golden.py` contains just a packing utility and one
+unparameterized 256K test. It tokenizes the Gutenberg input, checks the token IDs
+against the GPU trace, and runs 54 requests with seed 42: 53 starts off the 8K
+boundary, 53 rewinds larger than one tile, and 51 unaligned ends. It compares
+all heads and all positions in the final decoder layer's packed KV cache against
+`/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135`, requiring PCC >=0.98.
+
+```sh
+HF_MODEL=google/gemma-4-31B-it \
+HF_HOME=/mnt/models/huggingface \
+TT_CACHE_PATH=/mnt/models/huggingface/tt_cache/gemma4_d_p/google--gemma-4-31B-it \
+HF_HUB_OFFLINE=1 \
+python_env/bin/python -m pytest models/demos/gemma4_d_p/tests/test_block_cyclic_golden.py -sv
+```
+
+The standalone test passed in 134.53 seconds, with final-layer PCC 0.983890.
+The BFP8 model's native single-SWA aligned baseline is also PCC 0.983890 against this BF16
+GPU trace, so this end-to-end test uses 0.98. A stricter exploratory check found
+per-head sliding V scores of 0.987504 (layer 24) and 0.981308 (layer 25) for both
+aligned and rotated runs; a per-head 0.99 requirement rejects the aligned model
+too. The focused operator tests retain the stricter thresholds above.
+Serving integration is not exercised by these direct model/operator tests.
