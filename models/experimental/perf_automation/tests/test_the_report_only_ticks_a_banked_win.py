@@ -151,3 +151,52 @@ def test_no_op_match_available_does_not_blank_the_report(summary, monkeypatch):
     op = "MatmulDeviceOperation 32 x 2688 x 131072"
     attempts = [_attempt(op, "grid", -109.32), _commit(op, "grid")]
     assert summary._win_set(attempts) == {0}
+
+
+# ------------------------------------------- the pair does not agree on the lever it names
+
+
+def test_a_commit_naming_another_lever_still_banks_the_state_it_saved(summary):
+    """op + rung is not a link the two rows can be held to, because only one of them chose it.
+
+    The commit row takes its rung from whatever target is current when git_commit runs, not from the
+    attempt that earned the win, so the pair routinely disagrees on BOTH fields -- measured on
+    voxtral_4b_tts_2603, a fold win banked by a row calling itself structural-order and a kv-cache
+    win banked by one calling itself trace-capture. Requiring agreement dropped five of seven real
+    commits and rendered a 5.56x run as a single tick.
+
+    What both rows do carry is the end-to-end reading at the moment of the commit, and the winning
+    attempt is the one that produced it.
+    """
+    attempts = [
+        _attempt("ReshapeViewDeviceOperation", "fold", -129.36, fullpipe_ms=242.2569),
+        _commit("MatmulDeviceOperation 64 x 128 x 64", "structural-order", fullpipe_ms=242.2569),
+    ]
+    assert summary._win_set(attempts) == {0}
+
+
+def test_a_win_no_commit_banked_is_still_not_a_win(summary):
+    """The narrowing must keep doing its job: a measured improvement nothing saved never ticks."""
+    attempts = [
+        _attempt("MatmulDeviceOperation 2048 x 3072 x 9216", "dtype", -0.02, fullpipe_ms=137.5312),
+        _commit("MatmulDeviceOperation 2048 x 3072 x 9216", "grid", fullpipe_ms=124.5104),
+    ]
+    assert summary._win_set(attempts) == set()
+
+
+def test_each_commit_banks_its_own_win_and_not_a_neighbour(summary):
+    """A run is a staircase of distinct readings, so the link must not smear across steps."""
+    attempts = [
+        _attempt("A", "fold", -129.36, fullpipe_ms=242.2569),
+        _commit("X", "structural-order", fullpipe_ms=242.2569),
+        _attempt("B", "fidelity", -52.91, fullpipe_ms=177.0374),
+        _commit("Y", "grid", fullpipe_ms=177.0374),
+        _attempt("C", "grid", -4.52, fullpipe_ms=172.5126),
+    ]
+    assert summary._win_set(attempts) == {0, 2}
+
+
+def test_a_row_with_no_reading_is_not_banked_by_one_that_has_none_either(summary):
+    """Two absent readings are not a match; that would bank every unmeasured attempt at once."""
+    attempts = [_attempt("A", "fold", -12.0), _commit("X", "structural-order")]
+    assert summary._win_set(attempts) == set()

@@ -928,6 +928,25 @@ def _is_win(attempt) -> bool:
         return False
 
 
+def _banks_the_same_state(win: dict, commit_row: dict) -> bool:
+    """Whether a commit row banked the end-to-end state this winning attempt reached.
+
+    THE TWO ROWS CANNOT BE MATCHED ON THE LEVER THEY NAME. The commit row takes its rung from the
+    target that happens to be current when git_commit runs, not from the attempt that earned the
+    win, so the pair routinely disagrees -- a fold win banked by a row calling itself structural-
+    order, a kv-cache win banked by one calling itself trace-capture. Requiring the names to agree
+    dropped five of seven real, committed wins on voxtral_4b_tts_2603 and rendered a 5.56x run as a
+    single tick.
+
+    What the two rows DO agree on is the measurement: the commit row records the end-to-end reading
+    taken at the moment of the commit, which is the reading the winning attempt produced. Equality
+    of that one number is the evidence that this commit is the one that banked this win, and it
+    needs no new field -- both rows already carry it.
+    """
+    fp = win.get("fullpipe_ms")
+    return isinstance(fp, (int, float)) and commit_row.get("fullpipe_ms") == fp
+
+
 def _win_set(attempts, baseline_ms=None) -> set:
     """Delegates to the ledger, which owns which attempts actually reduced the measured time --
     then narrows to attempts that were also BANKED.
@@ -936,8 +955,10 @@ def _win_set(attempts, baseline_ms=None) -> set:
     (perf_mcp._record_committed_win) proves the second one. It writes a SEPARATE row for that --
     the attempt that measured the win never carries a commit marker, and the commit row never
     carries the delta that proves it was a win -- so neither row can answer this about itself.
-    Matched back by op + rung via perf_mcp's own _op_match, the same rule every other op/rung
-    comparison in this tool already uses, rather than a second, looser one here.
+    Matched back either by the end-to-end reading the two rows share (_banks_the_same_state, which
+    is what links them whenever the commit named a different lever than the attempt that earned the
+    win) or by op + rung via perf_mcp's own _op_match, the same rule every other op/rung comparison
+    in this tool already uses.
 
     ABSENT ENTIRELY means unknown, not "not banked": commit_record is a newer field, and reading
     its total absence as "nothing was banked" would blank every historical report to zero ticks,
@@ -966,11 +987,10 @@ def _win_set(attempts, baseline_ms=None) -> set:
         rung = str(a.get("kernel_kind") or "").strip().lower()
         sig = a.get("op_signature")
         for b in rows:
-            if (
-                isinstance(b, dict)
-                and b.get("commit_record")
-                and str(b.get("kernel_kind") or "").strip().lower() == rung
-                and _match(sig, b)
+            if not isinstance(b, dict) or not b.get("commit_record"):
+                continue
+            if _banks_the_same_state(a, b) or (
+                str(b.get("kernel_kind") or "").strip().lower() == rung and _match(sig, b)
             ):
                 banked.add(i)
                 break
