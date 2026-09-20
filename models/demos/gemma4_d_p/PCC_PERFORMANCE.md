@@ -1,84 +1,8 @@
 # Gemma4 GPU KV PCC performance
 
-## 256K result
+The validator uses FP32 for its block buffer and accumulated statistics. It combines centered statistics across blocks into one whole-head correlation, using an 8 MiB reusable buffer. TT readback stays BF16 until copied into that buffer.
 
-The optimized **mock 256K test passed in 12m 12s**, with all 1680 scores above the unchanged **0.91** threshold. Minimum PCC was **0.916626098**. Validation took **7m 24s**, 2.68× faster than the slow prepared-reference run. Full elapsed time improved by 2.35× versus that run and 1.60× versus the original 19-minute run.
-
-| Phase | Original reference, 4 threads | Prepared reference, 4 threads | Optimized, 16 threads |
-| --- | ---: | ---: | ---: |
-| GPU reference loading and conversion | 6m 05s | 2m 42s | 0m 51s |
-| TT readback, host gathering, and address checks | 2m 39s | 4m 21s | 1m 36s |
-| PCC and finite-value checks | 6m 31s | 12m 46s | 4m 57s |
-| Total validation | 15m 15s | 19m 50s | 7m 24s |
-| Everything outside validation | 4m 13s | 8m 50s | 4m 48s |
-| Total elapsed | 19m 28s | 28m 40s | 12m 12s |
-
-All runs use 262144 captured Gutenberg tokens, 60 layers, six allocated slots, and one full comparison of slot 0. The two prepared-reference runs read the same `/mnt/models/huggingface/gpu_traces/gemma4_d_p/gutenberg-135` capture. The final run used writable HF/model caches under `/tmp`; it wrote nothing under `/mnt`. All 675 local cache files (35.63 GiB), including host weights, were verified byte-for-byte against the canonical 8×4 cache after the test. Filesystem caches were not dropped, so reference-loading and setup differences also include cache state and storage effects. The slow run's elapsed time was observed from its process lifetime; the final run was timed around pytest.
-
-### Why the prepared-reference run was slower
-
-The new reference path **did take effect**. Loading improved from 364.74 s to 162.31 s, and all 1680 scores were identical to the original-reference run. The slowdown came from other phases: PCC added 375.21 s, readback/host work added 102.23 s, and work outside validation added 276.86 s.
-
-A controlled CPU check compared identical tensors from both reference layouts using the unchanged PCC function. Sliding K took 0.529 s with the original layout and 0.536 s with the prepared layout; sliding V improved from 0.609 s to 0.536 s. The prepared layout did not reproduce the PCC regression.
-
-The existing CPU path repeatedly allocated large tensors. One 256K sliding head occupies 256 MiB in FP32; stacking both operands and centering them creates additional full-size arrays. A representative four-thread call incurred about **492,000 minor page faults** and around **0.9–1.0 CPU-seconds in the kernel**. These are memory-allocation/page-mapping costs, not disk page faults. The controlled reusable-buffer measurements largely removed them. Host gathering also built several full-cache intermediates before converting the result to FP32.
-
-This identifies an allocation-sensitive bottleneck and removes it. It does **not** establish why the earlier session's unchanged operations ran faster: the original run had no per-operation CPU profile. Likewise, the 226-second quiet interval after its fabric-ready message cannot be attributed to a specific startup call retrospectively. In the instrumented final run, opening the mesh took 4.42 s, HF configuration 0.12 s, KV allocation 0.37 s, and model construction/compilation 100.53 s; the long quiet interval did not recur.
-
-### Changes
-
-- Store prepared GPU heads contiguously in validation channel order, avoiding repeated channel gathers and packing.
-- Copy each TT host shard directly to its final token/head positions in one BF16 output allocation. Avoid intermediate concatenations and a whole-cache FP32 copy.
-- Compute PCC in a reusable FP64 buffer of at most **16 MiB**. Combine block means and centered cross-products into one whole-head correlation; do not average block PCCs. Finite-value, constant-input, and shape checks remain.
-- Default the Gemma4 migration test to **16 OpenMP threads**, retaining the environment override.
-- Log reference, readback, and PCC seconds after every layer and save them in `gemma4_slot0.json`.
-
-The 16 MiB limit describes the PCC workspace, not total process memory. Reference tensors, TT host buffers, migration metadata, and finite-check temporaries also occupy memory. TT conversion now happens inside the small PCC blocks and is included in PCC time.
-
-### Thread scaling
-
-All **4, 8, 16, 32, and 64** thread settings were measured. These are **PCC-only estimates** from two trials of each representative pair of captured GPU sliding K, sliding V, global rotary K, and global V heads at full 256K. Medians are weighted by the model's 800/800/40/40 scores. They are not five full hardware runs.
-
-| Threads | Original full-head FP32 PCC | Bounded FP64 PCC |
-| --- | ---: | ---: |
-| 4 | 1007.0 s | 666.6 s |
-| 8 | 761.5 s | 412.4 s |
-| 16 | 623.7 s | 300.6 s |
-| 32 | 573.8 s | 336.0 s |
-| 64 | 596.3 s | 361.6 s |
-
-Sixteen threads was fastest for the final implementation on this host. The complete hardware run measured 297.07 s of PCC, close to the 300.64 s estimate. Increasing the thread count beyond 16 did not improve this workload. Direct host gathering at 16 threads took 0.088 s for a full sliding K tensor versus 0.847 s for the previous gather; all output values matched exactly. These isolated gather times exclude device transfer and address checks.
-
-### Final readback breakdown
-
-| Stage | Time |
-| --- | ---: |
-| Device slicing and untilize dispatch | 6.12 s |
-| Command-queue read, including pending device work | 14.07 s |
-| Host-shard access and conversion | 16.12 s |
-| Direct gathering and reader overhead | 25.08 s |
-| Table-address samples, including UMD initialization | 21.51 s |
-| Remaining reader/generator overhead | 13.43 s |
-| Total readback and address checks | 96.32 s |
-
-The command queue moved **212.5 GiB** in 14.07 s: **16.2 GB/s aggregate across 32 devices**. Reference loading and FP32 conversion processed the same 212.5 GiB of BF16 files in 50.99 s, an effective **4.17 GiB/s**; this includes cached file reads and conversion, not just storage bandwidth. PCC checked 1680 head/cache scores in 297.07 s, about **5.65 scores/s**, while reading every requested value.
-
-### Numerical verification
-
-The updated correlation uses FP64 accumulation, so it is not bit-identical to the old whole-vector FP32 calculation. The lower final minimum is a precision difference, not a relaxed threshold. The four cache-type minima were independently checked using full-vector `torch.corrcoef` in FP64, outside the validation timer:
-
-| Cache type | Bounded PCC | Absolute difference from full-vector FP64 |
-| --- | ---: | ---: |
-| global_v | 0.939126651993 | 2.27e-12 |
-| global_k_rotary | 0.936421972916 | 2.14e-13 |
-| sliding_k | 0.935192124262 | 2.78e-13 |
-| sliding_v | 0.916626098454 | 6.06e-13 |
-
-The extra FP64 verification took 2.12 s and is included in total elapsed time under work outside validation. Seventeen host tests also passed, including uneven blocks, noncontiguous BF16/FP32 inputs, changing block means, constants, and nonfinite values. The hardware test passed without changing `GPU_PCC_THRESHOLD`.
-
-Evidence: [hardware pytest log](/tmp/gemma4-optimized-mock256k-pytest.log), [all PCC scores and phase timings](/tmp/gemma4-optimized-mock256k/test_prefill_migration_mock_250/gemma4_slot0.json), [startup/readback/accuracy profile](/tmp/gemma4-optimized-mock256k/test_prefill_migration_mock_250/validation_profile.json), [elapsed and CPU times](/tmp/gemma4-optimized-mock256k-run.json), [combined measurements](/tmp/gemma4-speedup-investigation.json), [thread probes](/tmp/gemma4-pcc-final-thread-probe.json), [gather probe](/tmp/gemma4-gather-optimization-probe.json), and [reference-layout control](/tmp/gemma4-reference-layout-control.json), and [weight-cache verification](/tmp/gemma4-local-weight-verification.json).
-
-## Earlier command-queue measurements
+## Command-queue measurements
 
 These earlier measurements use TTNN command-queue reads, on-device untilize, PyTorch host gathering, and whole-vector FP32 PCC. Each row checks one slot with six allocated, all 60 layers, and all 1680 scores. Those FP32 scores matched the original UMD results exactly.
 
@@ -125,13 +49,13 @@ A CPU-only load pass checked all 60 layers at each supported context, using four
 | 128K | 49.76 s |
 | 256K | 96.39 s |
 
-For comparison, the completed 256K hardware run with the original reference spent **364.74 s** preparing reference tensors, **159.15 s** in the TT reader and address checks, and **391.05 s** in PCC. Validation totaled **914.95 s**; the user measured **19m 27.915s** for the full test. The full prepared-reference runs are reported above; these CPU-only load measurements used different cache and storage conditions.
+For comparison, the completed 256K hardware run with the original reference spent **364.74 s** preparing reference tensors, **159.15 s** in the TT reader and address checks, and **391.05 s** in PCC. Validation totaled **914.95 s**; the user measured **19m 27.915s** for the full test. These CPU-only load measurements used different cache and storage conditions.
 
 During conversion, paired per-layer reads totaled **416.30 s** through the original loader and **69.67 s** through the prepared loader. Those prepared reads immediately followed writing each file, and exclude releasing the previous layer's reference tensors. The separate load pass above better matches the validation loop's reference replacement.
 
 The loader now slices the requested prefix and casts BF16 to FP32. Channel gathers, global KV packing, and source-shard concatenation are performed once by the converter. FP32 conversion and PCC remain runtime work.
 
-Evidence: [per-layer conversion and equality checks](/tmp/gemma4-gpu-traces/gemma4-31b-256k-kv-heads/preparation.json), [all-context CPU load measurements](/tmp/gemma4-prepared-reference-load-times.json), and [recorded 256K baseline metrics](/tmp/gemma4-speedup-investigation.json).
+Evidence: [per-layer conversion and equality checks](/tmp/gemma4-gpu-traces/gemma4-31b-256k-kv-heads/preparation.json), [all-context CPU load measurements](/tmp/gemma4-prepared-reference-load-times.json).
 
 ## Command-queue probe
 
@@ -304,7 +228,7 @@ For full-context Gemma4 numerical validation, the existing fast pattern is to ha
 
 1. **The implemented fast path removes bulk MMIO and generic mesh composition from numerical validation.** It uses the owning mesh, on-device untilize, and PyTorch gathering. The shared external producer still uses UMD. Remaining fast-test time is mainly reference preparation, PCC, and sampled migration-address validation.
 2. **Threading requires checking the binding.** `read_dram_umd` currently holds the Python GIL, so wrapping the existing call in a Python thread pool does not provide parallel raw reads. Multiple processes avoid that limitation but introduce UMD memory allocations and IPC copies. Neither approach was added for this test.
-3. **Reduce PCC passes and temporary copies.** The bounded FP64 reduction measured above now avoids whole-head temporaries and retains finite-value checks. Further changes should be compared against an independent FP64 result.
+3. **Reduce PCC passes and temporary copies.** The bounded FP32 reduction avoids whole-head temporaries and retains finite-value checks.
 4. **Reference conversion/reordering now matters more.** Caching the comparison layout would cost substantial disk space; it is only worth considering for repeated runs. Cached file loading was already a small part of the measured UMD baseline.
 5. **Reuse a producer when startup cost matters.** Table parsing and UMD initialization add tens of seconds per process. The fast hardware test starts a fresh service for each context; it does not incur a separate UMD process startup for full-cache validation, but model loading and table export still contribute to end-to-end runtime.
 

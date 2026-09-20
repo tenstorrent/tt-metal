@@ -57,7 +57,7 @@ KV occupies **212.5 GiB**. The loader reads each head's requested token prefix a
 
 ## PCC definition and threshold
 
-Each score is Pearson correlation between a TT cache head and its GPU counterpart, flattened over the entire requested token prefix and the compared channels. Global rotary K and V are scored separately. There are 1680 scores per context. The validator uses a reusable FP64 buffer of at most 16 MiB and combines centered statistics across blocks. This produces one whole-head PCC; it does not average block correlations. TT readback remains BF16 until copied into that buffer.
+Each score is Pearson correlation between a TT cache head and its GPU counterpart, flattened over the entire requested token prefix and the compared channels. Global rotary K and V are scored separately. There are 1680 scores per context. The validator uses a reusable FP32 buffer of at most 8 MiB and accumulates centered statistics across blocks in FP32. This produces one whole-head PCC; it does not average block correlations. TT readback remains BF16 until copied into that buffer.
 
 - `layer_minima`: the lowest head score for each cache type in the current layer. It can increase between layers.
 - `running_min_pcc`: the lowest score seen across all layers checked so far. It cannot increase.
@@ -65,16 +65,16 @@ Each score is Pearson correlation between a TT cache head and its GPU counterpar
 
 For example, layer minima of `0.98, 0.94, 0.96` produce running minima of `0.98, 0.94, 0.94`. PCC is correlation, not the percentage of matching values.
 
-The regression threshold is **0.91**, calibrated on this capture and the current model precision. The 8K, 16K, and 128K calibration runs used whole-vector FP32 PCC and matched the original full UMD readback exactly. The optimized 256K run uses bounded FP64 PCC, with its four minima independently verified against full-vector FP64:
+The regression threshold is **0.91**, calibrated on this capture with whole-vector FP32 PCC. The 8K, 16K, and 128K scores matched the original full UMD readback exactly.
 
 | Context | Minimum PCC | Global rotary K | Global V | Sliding K | Sliding V |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | 8K | 0.920747 | 0.951169 | 0.948299 | 0.945258 | 0.920747 |
 | 16K | 0.929830 | 0.954082 | 0.952419 | 0.950691 | 0.929830 |
 | 128K | 0.934371 | 0.950708 | 0.954783 | 0.948936 | 0.934371 |
-| 256K | 0.916626 | 0.936422 | 0.939127 | 0.935192 | 0.916626 |
+| 256K | 0.920261 | 0.936534 | 0.943244 | 0.937629 | 0.920261 |
 
-The lowest measured score is sliding V, layer 39, head 9 at 256K: **0.916626**, leaving about **0.0066** above the unchanged threshold. This is a regression floor for one captured prompt and the current precision. Longer prefixes and different accumulation precision produce different correlation statistics, so minima need not decrease with context length. See [PCC performance](PCC_PERFORMANCE.md) for the numerical checks and timings.
+The lowest measured score is sliding V, layer 39, head 9 at 256K: **0.920261**, leaving about **0.0103** above the threshold. This is a regression floor for one captured prompt and the current precision. Longer prefixes produce different correlation statistics, so minima need not decrease with context length. See [PCC performance](PCC_PERFORMANCE.md) for timings.
 
 ## Gate 1: GPU-trace comparison
 
@@ -89,7 +89,7 @@ pytest models/demos/gemma4_d_p/tests/test_prefill_migration.py \
 pytest 'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_migration[mock-128k]' -sv
 ```
 
-The test defaults `OMP_NUM_THREADS` to `16` when it is unset. An exported value overrides this. Measurements at 4, 8, 16, 32, and 64 threads are in [PCC performance](PCC_PERFORMANCE.md).
+The test defaults `OMP_NUM_THREADS` to `16` when it is unset. An exported value overrides this. Phase timings and data volumes are in [PCC performance](PCC_PERFORMANCE.md).
 
 The test uses `GPU_PCC_THRESHOLD` in `tests/test_prefill_migration.py`. Each case starts a fresh runner process and closes its mesh after validation. It retains `producer.log`, the table, the device map, and `gemma4_slot0.json` with every layer/head PCC and total and per-layer phase timings. Each completed layer logs reference-loading, readback, and PCC time. Runner output is saved in `runner.log`. The test sets `PREFILL_PRODUCER_CHECK_PCC=0` because the owning process performs the GPU comparison; the runner synchronizes device completion before leaving its request loop.
 
