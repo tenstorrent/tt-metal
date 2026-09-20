@@ -72,6 +72,7 @@ std::vector<uint64_t> RelaySender::take_credit_latencies_ns() {
 }
 
 bool RelaySender::poll() {
+    PollMark mark{polls_};
     bool progress = false;
     transport_.poll();
 
@@ -150,6 +151,7 @@ RelayReceiver::RelayReceiver(
 }
 
 bool RelayReceiver::poll() {
+    PollMark mark{polls_};
     bool progress = false;
 
     // Refresh first: commit_pages() bounds against the cached bytes_acked, and a

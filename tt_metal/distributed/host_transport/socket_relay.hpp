@@ -36,6 +36,12 @@ public:
 
     virtual std::string describe() const = 0;
 
+    // Bumped after every completed poll. All the counters below start at zero, so
+    // "nothing outstanding" and "never looked" are indistinguishable without it:
+    // a barrier entered before the relay's first poll would otherwise conclude
+    // the stream was already drained.
+    uint64_t polls() const { return polls_.load(std::memory_order_acquire); }
+
     // poll() runs on the relay thread, where an escaping exception would kill the
     // process instead of failing the caller. The flag is atomic so the hot barrier
     // loop can test it without locking; the message is copied under a lock, since
@@ -55,9 +61,16 @@ protected:
         failed_.store(true, std::memory_order_release);
     }
 
+    // Bumps polls_ on every exit path from poll().
+    struct PollMark {
+        std::atomic<uint64_t>& counter;
+        ~PollMark() { counter.fetch_add(1, std::memory_order_release); }
+    };
+
     mutable std::mutex error_mutex_;
     std::string error_;
     std::atomic<bool> failed_{false};
+    std::atomic<uint64_t> polls_{0};
     friend class RelayLoop;
 };
 
@@ -104,7 +117,7 @@ private:
         uint64_t total;  // forwarded total this batch reached
         uint64_t sent_ns;
     };
-    bool sampling_ = false;
+    std::atomic<bool> sampling_{false};
     std::deque<Sample> pending_samples_;
     std::vector<uint64_t> latencies_ns_;
     mutable std::mutex latency_mutex_;

@@ -232,7 +232,13 @@ void MPIRequest::cancel() {
         return;
     }
     MPI_CHECK(MPI_Cancel(&req_));
-    MPI_CHECK(MPI_Request_free(&req_));
+    // MPI_Cancel only marks the request; freeing it here would return while MPI
+    // may still be reading or writing the caller's buffer, which is how a
+    // cancelled transfer outlives the memory it points at. Waiting completes the
+    // request -- cancelled or, if it had already matched, normally -- and is what
+    // actually releases the handle.
+    MPI_Status status{};
+    MPI_CHECK(MPI_Wait(&req_, &status));
     done_ = true;
 }
 
@@ -582,8 +588,7 @@ void MPIContext::reduce_scatter(
         comm_));              // communicator
 }
 
-void MPIContext::scan(
-    ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
+void MPIContext::scan(ttsl::Span<std::byte> send_buf, ttsl::Span<std::byte> recv_buf, ReduceOp op, DType dtype) const {
     TT_FATAL(
         send_buf.size() == recv_buf.size(), "scan: send size {} != recv size {}", send_buf.size(), recv_buf.size());
 

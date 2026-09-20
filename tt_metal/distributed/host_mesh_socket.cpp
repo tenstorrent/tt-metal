@@ -347,9 +347,9 @@ std::vector<uint64_t> HostMeshSocket::take_latency_samples_ns() {
 uint64_t HostMeshSocket::pages_transferred() const {
     uint64_t total = 0;
     for (const auto& connection : impl_->connections) {
-        if (auto* sender = dynamic_cast<const RelaySender*>(connection.relay.get())) {
+        if (const auto* sender = dynamic_cast<const RelaySender*>(connection.relay.get())) {
             total += sender->pages_forwarded();
-        } else if (auto* receiver = dynamic_cast<const RelayReceiver*>(connection.relay.get())) {
+        } else if (const auto* receiver = dynamic_cast<const RelayReceiver*>(connection.relay.get())) {
             total += receiver->pages_arrived();
         }
     }
@@ -362,6 +362,35 @@ void HostMeshSocket::barrier(std::optional<uint32_t> timeout_ms) {
     }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms.value_or(30000));
     const bool drive_here = !impl_->transport.own_relay_thread;
+
+    // The relay's counters are all zero until it has polled, so snapshotting a
+    // target before that reads "nothing outstanding" and drains instantly while
+    // pages still sit in the D2H ring. Wait for a poll that *started* after this
+    // call: one may already have been in flight when we read the counter, so the
+    // first wholly-subsequent poll is the one two ahead.
+    std::vector<uint64_t> fresh;
+    fresh.reserve(impl_->connections.size());
+    for (const auto& connection : impl_->connections) {
+        fresh.push_back(connection.relay->polls() + 2);
+    }
+    while (true) {
+        if (drive_here) {
+            impl_->poll();
+        }
+        bool observed = true;
+        for (size_t i = 0; i < impl_->connections.size(); i++) {
+            const auto& relay = impl_->connections[i].relay;
+            TT_FATAL(!relay->failed(), "HostMeshSocket relay failed: {}", relay->error());
+            observed = observed && relay->polls() >= fresh[i];
+        }
+        if (observed) {
+            break;
+        }
+        TT_FATAL(
+            std::chrono::steady_clock::now() < deadline,
+            "HostMeshSocket::barrier timed out waiting for the relay to observe the socket");
+        std::this_thread::yield();
+    }
 
     // Wait only for what is outstanding now. The peer pipelines ahead, so waiting
     // for full idle would never finish on a socket still being fed.
