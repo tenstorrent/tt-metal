@@ -90,11 +90,12 @@ load_tile_scalar(const Accessor& acc, DataflowBuffer& staging, Noc& noc, uint32_
     }
 }
 
-// Read tile 0 of a [.., H]-wide tensor and broadcast element (row 0, col) over an fp32 tile pushed into `dfb`.
+// Broadcast element (row 0, col) of a [.., H]-wide row tensor over an fp32 tile pushed into `dfb`. Column `col`
+// lives in tile col / 32 (heads 32.. of an Nv > 32 device, e.g. Nv = 48 at TP = 1, sit in the second tile).
 template <bool src_fp32, typename Accessor>
 inline void load_head_scalar(const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t col) {
     dfb.reserve_back(1);
-    const uint32_t value = load_tile_scalar<src_fp32>(acc, dfb, noc, 0, col);
+    const uint32_t value = load_tile_scalar<src_fp32>(acc, dfb, noc, col >> 5, col & 31u);
     fill_scalar_tile(dfb, value);
     dfb.push_back(1);
 }

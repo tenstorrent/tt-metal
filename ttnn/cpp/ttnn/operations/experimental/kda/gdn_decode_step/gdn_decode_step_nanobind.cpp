@@ -11,7 +11,8 @@ void bind_gdn_decode_step(nb::module_& mod) {
     ttnn::bind_function<"gdn_decode_step", "ttnn.experimental.kda.">(
         mod,
         R"doc(
-        One decode step (B = 1) of the gated delta rule with a fused gated RMSNorm, one core per value head.
+        One decode step of the gated delta rule with a fused gated RMSNorm, one core per (value head, user group).
+        Any ``Nv`` up to the core count is supported (per-head scalars are read from tile ``h // 32``; Nv = 48 at TP = 1).
         For value head ``h`` (key head ``h // (Nv/Nk)``), with the token in row 0 of every tile:
             qn = l2norm(q) * scale, kn = l2norm(k)
             S  = S * exp(g[h]);  delta = beta[h] * (v - kn @ S);  S += kn^T @ delta
@@ -19,7 +20,8 @@ void bind_gdn_decode_step(nb::module_& mod) {
         ``state`` is updated in place. Rows 1..31 of q/k/v are ignored (masked to zero).
         Args:
             qkv (ttnn.Tensor): ``[1, 1, 2*Nk*Dk + Nv*Dv]`` BFLOAT16 TILE, post conv+silu, laid out ``[q | k | v]``.
-            beta (ttnn.Tensor): ``[1, 1, Nv]`` FLOAT32 or BFLOAT16 update strengths (sigmoid already applied).
+            beta (ttnn.Tensor): ``[1, 1, Nv]`` FLOAT32 or BFLOAT16 update strengths (sigmoid already applied); Nv > 32
+                spans several tiles.
             g (ttnn.Tensor): ``[1, 1, Nv]`` FLOAT32 or BFLOAT16 log decays.
             state (ttnn.Tensor): ``[1, Nv, Dk, Dv]`` FLOAT32 recurrent state, updated in place.
             weight (ttnn.Tensor): ``[Dv]`` BFLOAT16 gated-norm weight.
@@ -35,7 +37,8 @@ void bind_gdn_decode_step(nb::module_& mod) {
                 SiLU, beta = sigmoid(b), decay = exp(-exp(A) * softplus(a + dt_bias)), gates the output with silu(z) and
                 shifts the packed history in place (slot0 <- slot1, ..., slot3 <- new token).
             conv_taps (ttnn.Tensor, optional): packed taps ``[Nv, 4, 32, 32]`` BFLOAT16 in the same layout (tap 0 = oldest).
-            qkvz_dim (int): column offset of the a|b block in the projection row (= 2*Nk*Dk + 2*Nv*Dv).
+            qkvz_dim (int): column offset of the a|b block in the projection row (= 2*Nk*Dk + 2*Nv*Dv, tile aligned);
+                the ``2*Nv`` a|b columns may span several tiles (Nv = 48: three).
         Returns:
             ttnn.Tensor: ``[1, 1, Nv*Dv]`` normalized output (row 0 valid, padding rows zero).
         )doc",

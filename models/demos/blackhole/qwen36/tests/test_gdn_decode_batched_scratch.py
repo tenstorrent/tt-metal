@@ -4,7 +4,10 @@
 module with a 32-slot state, B = 1..32 active users: output / state agreement + trace-timed per-call time.
 
   QWEN36_GDN_DECODE_FUSED=2 pytest models/demos/blackhole/qwen36/tests/test_gdn_decode_batched_scratch.py -s
+TP=1 mode (one die, Nv=48 per device): MESH_DEVICE=P150 QWEN36_FORCE_TP_PATH=1 ... (mesh shape follows MESH_DEVICE, default (1,4));
+GDN_BATCHED_B=1,8,32 restricts the batch sweep.
 """
+import os
 import time
 
 import pytest
@@ -22,6 +25,8 @@ DEVICE_PARAMS = [
     }
 ]
 BMAX = 32
+_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+_BS = tuple(int(b) for b in os.environ.get("GDN_BATCHED_B", "1,2,4,8,16,32").split(","))
 
 
 def _pcc(a, b):
@@ -47,7 +52,7 @@ def _trace_us(mesh, fn, k=8, reps=3):
     return best / k * 1e6
 
 
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_gdn_decode_batched(mesh_device):
     mesh = mesh_device
@@ -97,7 +102,7 @@ def test_gdn_decode_batched(mesh_device):
             ttnn.copy(snap[1][m], gdn.conv_states[m])
         gdn._hist_packed_valid = False
 
-    for B in (1, 2, 4, 8, 16, 32):
+    for B in _BS:
         x = ttnn.from_torch(
             torch.randn(1, 1, B, dim, dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
@@ -141,5 +146,5 @@ def test_gdn_decode_batched(mesh_device):
             f"untouched={untouched} | original {us_ref:.0f} us  fused {us_f:.0f} us  ({us_ref / us_f:.2f}x)",
             flush=True,
         )
-        assert pcc_out > 0.999 and pcc_rec > 0.9999 and untouched, (B, pcc_out, pcc_rec, untouched)
+        assert pcc_out > 0.999 and pcc_rec > 0.9999 and hist_ok and untouched, (B, pcc_out, pcc_rec, hist_ok, untouched)
         ttnn.deallocate(x)

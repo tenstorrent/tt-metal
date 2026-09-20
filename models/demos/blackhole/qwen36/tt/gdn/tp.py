@@ -199,8 +199,6 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
 class TPGatedDeltaNet:
     """Standalone TP GDN decode (per-device value-head recurrence + all-reduce)."""
 
-    _warned_fused_decode_nv = False  # log the Nv>32 fused-decode fallback once per process, not per layer
-
     def __init__(self, mesh, args, tw, tt_ccl):
         self.mesh = mesh
         self.args = args
@@ -300,20 +298,12 @@ class TPGatedDeltaNet:
         # (ttnn.experimental.kda.gdn_decode_step, one core per value head, state updated in place).
         # =1: fused recurrence + gated norm; =2: additionally the 4-tap conv, the beta/decay gates and silu(z) in the op
         # (projection -> one op -> out-projection), conv states shifted in place by the op.
+        # Any per-device Nv up to the core count is supported (the op addresses the per-head scalars and the a|b block
+        # per tile), so TP=1 (Nv=48: 48 cores at B=1, 96 cores with 4 / 16 users per core at B=8 / 32) takes the same
+        # fused path as TP=4/8. QWEN36_GDN_DECODE_FUSED=0 keeps the composite recurrent_gated_delta_rule_decode_ttnn
+        # path selectable.
         self._decode_fused = os.environ.get("QWEN36_GDN_DECODE_FUSED") in ("1", "2")
         self._decode_fused_conv = os.environ.get("QWEN36_GDN_DECODE_FUSED") == "2"
-        if self._decode_fused and self.Nv > tpc.TILE_SIZE:
-            # ttnn.experimental.kda.gdn_decode_step packs the per-head beta/g (and a|b for the fused conv) into
-            # ONE tile row: TT_FATAL "num_value_heads must fit one tile row (<= 32)" (and 2*Nv <= 32 for mode 2).
-            # TP=1 has Nv=48 -> fall back to the composite recurrent_gated_delta_rule_decode_ttnn path.
-            if not TPGatedDeltaNet._warned_fused_decode_nv:
-                TPGatedDeltaNet._warned_fused_decode_nv = True
-                logger.warning(
-                    f"QWEN36_GDN_DECODE_FUSED={os.environ.get('QWEN36_GDN_DECODE_FUSED')} needs Nv <= 32 per device "
-                    f"(got Nv={self.Nv}, TP={args.num_devices}); using the composite decode recurrence (all GDN layers)"
-                )
-            self._decode_fused = False
-            self._decode_fused_conv = False
         self._norm_w_1d = None
         # packed per-head conv history / taps for the fused-conv op ([Nv, 4, 32, 32] bf16 per device; row 2c of a tile =
         # channel chunk c of the head's [q|k|v] row, slot 3 = newest). Rebuilt from conv_states when they were rewritten.
@@ -1446,29 +1436,35 @@ class TPGatedDeltaNet:
         self._kda_dec_const = {"e_q": dev(e_q), "e_g": dev(e_g), "gate": dev(gate), "norm_w": dev(w_host)}
         return self._kda_dec_const
 
+    def _pack_rows_vec(self, rows, parity):
+        """rows: torch [..., C] (this device's channels) -> [..., Nv, 32, 32] bf16 packed head tiles: channel chunk c of
+        head h's [q(hk) | k(hk) | v(h)] goes to row 2c + parity. One vectorized gather over every head and row (the
+        per-head Python loop this replaces cost ~1.5 s per user at Nv=48 x 48 layers on the TTFT path)."""
+        Nv, Nk, Dk, Dv = self.Nv, self.Nk, self.Dk, self.Dv
+        rf = Nv // Nk
+        kd = Nk * Dk
+        rows = rows.to(torch.bfloat16)
+        lead = rows.shape[:-1]
+        hk = torch.arange(Nv) // rf
+        q = rows[..., :kd].reshape(*lead, Nk, Dk)[..., hk, :]
+        k = rows[..., kd : 2 * kd].reshape(*lead, Nk, Dk)[..., hk, :]
+        v = rows[..., 2 * kd : 2 * kd + Nv * Dv].reshape(*lead, Nv, Dv)
+        chunks = torch.cat([q, k, v], dim=-1).reshape(*lead, Nv, -1, 32)
+        n = chunks.shape[-2]
+        out = torch.zeros(*lead, Nv, 32, 32, dtype=torch.bfloat16)
+        out[..., parity : 2 * n + parity : 2, :] = chunks
+        return out
+
     def _pack_head_tiles(self, rows, parity=0, both_parities=False):
         """rows: list of 4 torch [C] vectors (this device's channels) -> [Nv, 4, 32, 32] bf16 packed head tiles.
         Channel chunk c goes to row 2c + parity (the kernel packs user b's token with parity b & 1 so every DRAM->L1
         segment keeps its 64 B alignment class); taps are stored on both parities so one tap tile serves every user."""
-        Nv, Nk, Dk, Dv = self.Nv, self.Nk, self.Dk, self.Dv
-        rf = Nv // Nk
-        kd = Nk * Dk
-        out = torch.zeros(Nv, 4, 32, 32, dtype=torch.bfloat16)
-        for h in range(Nv):
-            hk = h // rf
-            for j, r in enumerate(rows):
-                r = r.reshape(-1).to(torch.bfloat16)
-                chunks = torch.cat(
-                    [
-                        r[hk * Dk : (hk + 1) * Dk],
-                        r[kd + hk * Dk : kd + (hk + 1) * Dk],
-                        r[2 * kd + h * Dv : 2 * kd + (h + 1) * Dv],
-                    ]
-                ).reshape(-1, 32)
-                n = chunks.shape[0]
-                for par in (0, 1) if both_parities else (parity,):
-                    out[h, j, par : 2 * n + par : 2, :] = chunks
-        return out
+        r = torch.stack([x.reshape(-1) for x in rows])  # [4, C]
+        out = self._pack_rows_vec(r, parity)  # [4, Nv, 32, 32]
+        if both_parities:
+            other = self._pack_rows_vec(r, 1 - parity)
+            out[..., 1 - parity :: 2, :] = other[..., 1 - parity :: 2, :]
+        return out.permute(1, 0, 2, 3).contiguous()
 
     def _per_device_rows(self, tensors, row=0):
         """[[torch row per device] per tensor] for mesh tensors holding this layer's per-device [.., C] rows (row `row`)."""
@@ -1531,10 +1527,14 @@ class TPGatedDeltaNet:
             self._hist_packed_valid = False
             self._ensure_conv_hist_packed()
             return
-        rows = [
-            [ttnn.to_torch(d).reshape(-1, d.shape[-1])[slot].float() for d in ttnn.get_device_tensors(c)]
-            for c in self.conv_states
-        ]
+        rows = []
+        for c in self.conv_states:
+            # read back only the slot's row (device slice), not the whole [1, Bmax, C] tap: 4 x 20 KiB instead of
+            # 4 x 640 KiB per layer at Bmax = 32 (48 layers -> this is the per-admission hand-off cost)
+            sl = self._slice_along(c, 1, slot, slot + 1) if c.shape[1] > 1 else c
+            rows.append([ttnn.to_torch(d).reshape(-1, d.shape[-1])[0].float() for d in ttnn.get_device_tensors(sl)])
+            if sl is not c:
+                ttnn.deallocate(sl)
         packed_slot = self._packed_slot_tensor(rows, slot)
         self._write_index(self.conv_hist_packed, packed_slot, slot, dim=0)
         ttnn.deallocate(packed_slot)
@@ -1545,14 +1545,17 @@ class TPGatedDeltaNet:
         restore). Host round trip; runs eagerly before the first decode step of a prompt - never inside a trace."""
         if self._hist_packed_valid and self.conv_hist_packed is not None:
             return
+        devs = [ttnn.get_device_tensors(c) for c in self.conv_states]  # K x n_dev
+        n_dev = len(devs[0])
+        par = (torch.arange(self.B) & 1).bool().view(-1, 1, 1, 1, 1)
         slots = []
-        for b in range(self.B):
-            rows = self._per_device_rows(self.conv_states, row=b)
-            n_dev = len(rows[0])
-            slots.append(
-                torch.stack([self._pack_head_tiles([rows[j][d] for j in range(4)], parity=b & 1) for d in range(n_dev)])
-            )  # [n_dev, Nv, 4, 32, 32]
-        per_dev = torch.stack(slots, dim=1).reshape(-1, self.Nv, 4, 32, 32)  # [n_dev * Bmax, Nv, 4, 32, 32]
+        for d in range(n_dev):
+            rows = torch.stack(
+                [ttnn.to_torch(devs[j][d]).reshape(-1, devs[j][d].shape[-1])[: self.B] for j in range(4)], dim=1
+            )  # [Bmax, 4, C]: every slot's 4 conv rows of this device, one host round trip per tap
+            packed = torch.where(par, self._pack_rows_vec(rows, 1), self._pack_rows_vec(rows, 0))  # [Bmax, 4, Nv, 32, 32]
+            slots.append(packed.permute(0, 2, 1, 3, 4))  # [Bmax, Nv, 4, 32, 32]
+        per_dev = torch.stack(slots, dim=0).reshape(-1, self.Nv, 4, 32, 32).contiguous()  # [n_dev * Bmax, Nv, 4, 32, 32]
         packed = ttnn.from_torch(
             per_dev,
             dtype=ttnn.bfloat16,

@@ -63,7 +63,9 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     const auto grid = device.compute_with_storage_grid_size();
     const uint32_t num_cores_avail = grid.x * grid.y;
     // work items: plain variant = one value head per core (B = 1); fused variant = (head, user group) with the smallest
-    // even group size (1 for B = 1) that fits the grid -> B=32: 12 heads x 8 groups of 4 users on 96 cores.
+    // even group size (1 for B = 1) that fits the grid. On a 110-core die: Nv=12 (TP=4) B=32 -> 12 heads x 8 groups
+    // of 4 users = 96 cores; Nv=48 (TP=1) B=1 -> 48 cores, B=8 -> 48 x 2 groups of 4 = 96 cores, B=32 -> 48 x 2
+    // groups of 16 = 96 cores (16 users serialised per core).
     const uint32_t B = fused ? static_cast<uint32_t>(in.qkv.logical_shape()[-2]) : 1u;
     uint32_t gs = (B == 1) ? 1u : 2u;
     while (Nv * ((B + gs - 1) / gs) > num_cores_avail) {

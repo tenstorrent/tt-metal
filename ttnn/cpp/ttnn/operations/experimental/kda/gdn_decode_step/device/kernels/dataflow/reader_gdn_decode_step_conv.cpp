@@ -69,16 +69,29 @@ TT_KERNEL void reader(uint32_t head, uint32_t u0, uint32_t nu) {
         pack_head_tile_user<Kt, Vt, Nk>(qkv_acc, cur, noc, hk, h, b, 0);
         noc.async_read_barrier();
         cur.push_back(1);
-        // a[b,h], b[b,h]: row b of the a|b tile, columns h and Nv + h
+        // a[b,h], b[b,h]: row b of the a|b block, columns h and Nv + h past tile ab_page. With 2*Nv <= 32 both sit
+        // in tile ab_page (one read); with Nv = 48 (TP = 1) a spans tiles ab_page..+1 and b tiles ab_page+1..+2, so
+        // the two scalars can come from different tiles (second read into the same staging slot).
+        const uint32_t a_col = h, b_col = Nv + h;
+        const uint32_t a_pg = ab_page + (a_col >> 5), b_pg = ab_page + (b_col >> 5);
         a_s.reserve_back(1);
-        noc.async_read(qkv_acc, a_s, 2048, {.page_id = ab_page, .offset_bytes = 0}, {.offset_bytes = 0});
+        noc.async_read(qkv_acc, a_s, 2048, {.page_id = a_pg, .offset_bytes = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        uint32_t a_bits, b_bits;
+        uint32_t a_bits = 0, b_bits = 0;
         {
             auto lock = a_s.scoped_write_lock(1);
             auto p16 = lock.template get_ptr<volatile uint16_t>();
-            a_bits = static_cast<uint32_t>(p16[tile_elem_index(b, h)]) << 16;
-            b_bits = static_cast<uint32_t>(p16[tile_elem_index(b, Nv + h)]) << 16;
+            a_bits = static_cast<uint32_t>(p16[tile_elem_index(b, a_col & 31u)]) << 16;
+            if (b_pg == a_pg) {
+                b_bits = static_cast<uint32_t>(p16[tile_elem_index(b, b_col & 31u)]) << 16;
+            }
+        }
+        if (b_pg != a_pg) {
+            noc.async_read(qkv_acc, a_s, 2048, {.page_id = b_pg, .offset_bytes = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            auto lock = a_s.scoped_write_lock(1);
+            auto p16 = lock.template get_ptr<volatile uint16_t>();
+            b_bits = static_cast<uint32_t>(p16[tile_elem_index(b, b_col & 31u)]) << 16;
         }
         fill_scalar_tile(a_s, a_bits);
         a_s.push_back(1);

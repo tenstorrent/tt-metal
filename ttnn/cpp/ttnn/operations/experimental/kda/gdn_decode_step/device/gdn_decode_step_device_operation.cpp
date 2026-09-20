@@ -63,7 +63,15 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
         kOp);
     const uint32_t Nv = a.num_value_heads, Nk = a.num_key_heads, Dk = a.key_dim, Dv = a.value_dim;
     TT_FATAL(Nv > 0 && Nk > 0 && Nv % Nk == 0, "{}: num_value_heads must be a multiple of num_key_heads", kOp);
-    TT_FATAL(Nv <= tt::constants::TILE_WIDTH, "{}: num_value_heads must fit one tile row (<= 32)", kOp);
+    // Per-head scalars (beta/g, dt_bias/-exp(A), a|b) are addressed per tile (col / 32), so Nv is bounded only by
+    // the work split: one (value head, user group) per core -> Nv <= cores (Nv = 48 at TP = 1 on a 110-core die).
+    const auto grid = in.qkv.device()->compute_with_storage_grid_size();
+    TT_FATAL(
+        Nv <= grid.x * grid.y,
+        "{}: num_value_heads ({}) must not exceed the compute grid ({} cores)",
+        kOp,
+        Nv,
+        grid.x * grid.y);
     TT_FATAL(
         Dk > 0 && Dv > 0 && Dk % tt::constants::TILE_WIDTH == 0 && Dv % tt::constants::TILE_WIDTH == 0,
         "{}: key_dim and value_dim must be tile aligned",
@@ -79,10 +87,11 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
             kOp,
             qs);
         TT_FATAL(
-            a.qkvz_dim == C + Nv * Dv && a.qkvz_dim % tt::constants::TILE_WIDTH == 0 &&
-                2 * Nv <= tt::constants::TILE_WIDTH,
-            "{}: fused-conv needs qkvz_dim == 2*Nk*Dk + 2*Nv*Dv (tile aligned) and 2*Nv <= 32 (a|b in one tile)",
-            kOp);
+            a.qkvz_dim == C + Nv * Dv && a.qkvz_dim % tt::constants::TILE_WIDTH == 0,
+            "{}: fused-conv needs qkvz_dim == 2*Nk*Dk + 2*Nv*Dv (tile aligned); the a|b block ({} columns) then "
+            "starts on a tile boundary and may span several tiles",
+            kOp,
+            2 * Nv);
         TT_FATAL(
             in.conv_hist.has_value() && in.conv_taps.has_value(), "{}: fused-conv needs conv_hist and conv_taps", kOp);
         check_tiled(*in.conv_hist, "conv_hist", {DataType::BFLOAT16});

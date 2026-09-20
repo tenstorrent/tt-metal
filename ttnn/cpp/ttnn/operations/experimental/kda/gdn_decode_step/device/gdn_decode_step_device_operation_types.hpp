@@ -30,7 +30,7 @@ struct GdnDecodeStepParams {
 
 struct GdnDecodeStepInputs {
     Tensor qkv;     // [1, 1, 2*Nk*Dk + Nv*Dv] bf16, post conv+silu
-    Tensor beta;    // [1, 1, Nv] fp32/bf16
+    Tensor beta;    // [1, 1, Nv] fp32/bf16 (any Nv <= cores; head h in tile h / 32)
     Tensor g;       // [1, 1, Nv] fp32/bf16 (log decay)
     Tensor state;   // [1, Nv, Dk, Dv] fp32, updated in place
     Tensor weight;  // [Dv] bf16 gated-norm weight

@@ -22,16 +22,18 @@ FORCE_INLINE void read_tiles(const Accessor& acc, DataflowBuffer& dfb, Noc& noc,
     dfb.push_back(count);
 }
 
-// Read tile 0 of a [1, 1, H] tensor and broadcast element (row 0, col `col`) over a whole fp32 tile.
+// Read the tile holding column `col` of a [1, 1, H] tensor (tile col / 32: heads 32.. live in the second tile) and
+// broadcast element (row 0, col % 32) over a whole fp32 tile.
 template <bool src_fp32, typename Accessor>
 FORCE_INLINE void load_head_scalar(const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint32_t col) {
     dfb.reserve_back(1);
     constexpr uint32_t src_bytes = src_fp32 ? 4096 : 2048;
-    noc.async_read(acc, dfb, src_bytes, {.page_id = 0}, {.offset_bytes = 0});
+    noc.async_read(acc, dfb, src_bytes, {.page_id = col >> 5}, {.offset_bytes = 0});
     noc.async_read_barrier();
     {
         auto lock = dfb.scoped_write_lock(1);
-        const uint32_t idx = (col < 16 ? 0 : 256) + (col & 15);  // face-major 16x16 tile layout, row 0
+        const uint32_t c = col & 31u;
+        const uint32_t idx = (c < 16 ? 0 : 256) + (c & 15);  // face-major 16x16 tile layout, row 0
         uint32_t value;
         if constexpr (src_fp32) {
             auto p = lock.template get_ptr<volatile uint32_t>();

@@ -11,7 +11,8 @@
 
 namespace ttnn::experimental::kda {
 
-// One decode step of the gated delta rule (B = 1), one core per value head. `state` is updated in place.
+// One decode step of the gated delta rule, one core per (value head, user group); any Nv <= core count (per-head
+// scalars are addressed per tile, heads 32.. live in the second tile). `state` is updated in place.
 // With conv_hist/conv_taps given (packed [Nv, 4, 32, 32] bf16: row c of a tile = channel chunk c of the head's
 // [q|k|v]), `qkv` is the full projection row [q|k|v|z|a|b], `beta` is dt_bias and `g` is -exp(A_log): the 4-tap causal
 // conv + SiLU, beta/decay gates and the silu(z) output gate are computed in-kernel and the packed history is shifted in
