@@ -148,3 +148,80 @@ def test_a_long_op_signature_is_truncated_not_wrapped(run_mod, tmp_path, monkeyp
     monkeypatch.setattr(run_mod, "_perf_mcp", lambda: None)
     out = run_mod._last_attempt_summary(str(p))
     assert "..." in out and len(out.split("[")[0]) <= 48
+
+
+# ---------------------------------------------------------------- _next_target_summary
+
+# AN OUTCOME IS NEWS ONCE. Reprinting the last FINISHED attempt every five minutes meant a lever that
+# takes half an hour to build, gate and measure filled the console with six identical lines about
+# something already over -- and a reader could not tell a slow attempt from a stalled one, because
+# the only thing changing was the clock. Measured on voxtral_4b_tts_2603: eight consecutive prints of
+# one decode grid win, then six of one prefill result. The gate already persists the target it chose,
+# so after the outcome is announced the line can say what is being tried instead.
+
+
+def _target(tmp_path, **kw):
+    """Write the target file beside a kernel log, the way termination_check does."""
+    log = tmp_path / "kernlog.json"
+    log.write_text(json.dumps([_row()]))
+    if kw:
+        Path(str(log) + ".target").write_text(json.dumps(kw))
+    return str(log)
+
+
+def test_no_target_on_file_says_nothing(run_mod, tmp_path):
+    assert run_mod._next_target_summary(_target(tmp_path)) == ""
+
+
+def test_a_malformed_target_says_nothing(run_mod, tmp_path):
+    log = _target(tmp_path)
+    Path(str(log) + ".target").write_text("{not json")
+    assert run_mod._next_target_summary(log) == ""
+
+
+def test_a_target_naming_no_op_says_nothing(run_mod, tmp_path):
+    assert run_mod._next_target_summary(_target(tmp_path, rung="knob:grid")) == ""
+
+
+def test_the_target_is_described_as_op_stack_and_lever(run_mod, tmp_path, monkeypatch):
+    monkeypatch.setattr(run_mod, "_perf_mcp", lambda: None)
+    log = _target(tmp_path, op="MatmulDeviceOperation 32 x 3072 x 9216", rung="knob:grid")
+    out = run_mod._next_target_summary(log)
+    assert "MatmulDeviceOperation 32 x 3072 x 9216" in out
+    assert out.endswith("— grid"), out
+    assert "✓" not in out and "no gain" not in out, "a target has no outcome yet"
+
+
+def test_the_lever_keeps_only_the_rung(run_mod, tmp_path, monkeypatch):
+    """`knob:grid` is the gate's spelling; the heartbeat shows the rung, as the outcome line does."""
+    monkeypatch.setattr(run_mod, "_perf_mcp", lambda: None)
+    log = _target(tmp_path, op="AnOp", rung="knob:fidelity")
+    assert run_mod._next_target_summary(log).endswith("— fidelity")
+
+
+def test_a_long_op_is_truncated_the_same_way_the_outcome_line_truncates_it(run_mod, tmp_path, monkeypatch):
+    """Both lines are read in one column, so they must shorten identically -- one shared helper."""
+    monkeypatch.setattr(run_mod, "_perf_mcp", lambda: None)
+    op = "MatmulDeviceOperation " + "9" * 60
+    log = _target(tmp_path, op=op, rung="knob:grid")
+    out = run_mod._next_target_summary(log)
+    assert "..." in out
+    assert out.split(" [")[0] == run_mod._op_lever_label(op, "grid").split(" [")[0]
+
+
+def test_the_stack_is_asked_for_and_never_typed(run_mod, tmp_path, monkeypatch):
+    """Same rule as the outcome line: the stack comes from the model, so a rename still describes it."""
+    seen = []
+
+    class _M:
+        def stage_of_op(self, op, _prof):
+            seen.append(op)
+            return "a_stage_nobody_typed"
+
+        def _read_baseline_profile(self):
+            return {}
+
+    monkeypatch.setattr(run_mod, "_perf_mcp", lambda: _M())
+    log = _target(tmp_path, op="SomeOp", rung="knob:grid")
+    assert "[a_stage_nobody_typed]" in run_mod._next_target_summary(log)
+    assert seen == ["SomeOp"]

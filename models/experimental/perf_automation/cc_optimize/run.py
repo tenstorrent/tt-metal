@@ -4425,6 +4425,50 @@ def watchdog_decide(ev: dict, agent=_watchdog_ask_agent) -> str:
     return "wait"
 
 
+def _op_lever_label(op: str, rung: str) -> str:
+    """`op [stack] — lever`, the shape both heartbeat lines are read side by side in.
+
+    The stack is resolved through perf_mcp.stage_of_op against the baseline profile -- the same route
+    every other stack attribution in this tool takes -- so a model that names its stages differently
+    is described as it names itself, and nothing here needs to know what any of them are called.
+    """
+    stage = ""
+    try:
+        _m = _perf_mcp()
+        stage = _m.stage_of_op(op, _m._read_baseline_profile()) or ""
+    except Exception:  # noqa: BLE001
+        stage = ""
+    op_disp = op if len(op) <= 44 else op[:41] + "..."
+    return f"{op_disp} [{stage or '?'}] — {rung}"
+
+
+def _next_target_summary(kernel_log: str) -> str:
+    """What the agent is working on NOW, from the target the gate already persists beside the log.
+
+    THE HEARTBEAT WAS ANSWERING A QUESTION NOBODY WAS STILL ASKING. It reprinted the last FINISHED
+    attempt every five minutes, so a lever that takes half an hour to build, gate and measure filled
+    the console with six identical lines describing something already over -- and a reader watching a
+    long round could not tell a slow attempt from a stalled one, because the only thing that changed
+    was the clock. The outcome is worth saying once, when it lands; after that the useful sentence is
+    what is being tried instead.
+
+    No new state and no second source: termination_check already writes the chosen target to
+    `<kernel_log>.target`, which is what _record_wedge_to_log reads to name a wedge. "" whenever it
+    cannot be read or names no op, so the caller keeps its existing line.
+    """
+    try:
+        t = json.loads(Path(str(kernel_log) + ".target").read_text())
+    except Exception:  # noqa: BLE001
+        return ""
+    if not isinstance(t, dict):
+        return ""
+    op = str(t.get("op") or "").strip()
+    if not op:
+        return ""
+    rung = str(t.get("rung") or "").split(":")[-1].strip() or "?"
+    return _op_lever_label(op, rung)
+
+
 def _last_attempt_summary(kernel_log: str) -> str:
     """One line describing the most recent lever attempt on file: which op, which stack, which
     lever, and the outcome -- what the watchdog heartbeat should say instead of a bare timer nobody
@@ -4456,14 +4500,7 @@ def _last_attempt_summary(kernel_log: str) -> str:
         status = "· diverged (uncounted)"
     else:
         status = "· no gain"
-    stage = ""
-    try:
-        _m = _perf_mcp()
-        stage = _m.stage_of_op(op, _m._read_baseline_profile()) or ""
-    except Exception:  # noqa: BLE001
-        stage = ""
-    op_disp = op if len(op) <= 44 else op[:41] + "..."
-    return f"{op_disp} [{stage or '?'}] — {rung}: {status}"
+    return f"{_op_lever_label(op, rung)}: {status}"
 
 
 def _fmt_elapsed(seconds: float) -> str:
@@ -4546,6 +4583,9 @@ def _run_round_with_watchdog(
     _reprieves = [0]  # how many times the watchdog has re-armed this round; see below
     _stuck_since = [None]  # when real progress was last seen; NOT rewound by a reprieve
     _t0 = _now0
+    _reported_attempt = [""]  # the outcome this heartbeat has already announced; see below
+    _current_target = [""]  # the target it is reporting against
+    _target_since = [_now0]  # when THAT target first appeared, so a repeat still carries news
     _last_heartbeat_print = _now0  # THROTTLES THE LINE, NOT THE POLL: the wedge/no-progress checks
     # below still run on the real 60s tick (that timing is load-bearing), but printing on every one
     # of them, for a run that runs for hours, is hundreds of near-identical lines with nothing new in
@@ -4568,8 +4608,27 @@ def _run_round_with_watchdog(
                 if _now - _last_heartbeat_print >= _HEARTBEAT_PRINT_INTERVAL_S:
                     _last_heartbeat_print = _now
                     _last = _last_attempt_summary(kernel_log)
-                    if _last:
+                    # AN OUTCOME IS NEWS ONCE. Said when it lands; after that the line reports what
+                    # is being tried instead, so a half-hour lever reads as work in progress rather
+                    # than as six copies of something already finished.
+                    if _last and _last != _reported_attempt[0]:
+                        _reported_attempt[0] = _last
+                        _current_target[0] = ""
                         print(f"  · {_fmt_elapsed(_now - _t0)}: last tried {_last}", flush=True)
+                    elif _last:
+                        _next = _next_target_summary(kernel_log)
+                        if not _next:
+                            # No target on file: the outcome is still the only thing known.
+                            print(f"  · {_fmt_elapsed(_now - _t0)}: last tried {_last}", flush=True)
+                        else:
+                            if _next != _current_target[0]:
+                                _current_target[0] = _next
+                                _target_since[0] = _now
+                            print(
+                                f"  · {_fmt_elapsed(_now - _t0)}: trying {_next}"
+                                f" ({_fmt_elapsed(_now - _target_since[0])} on it)",
+                                flush=True,
+                            )
                     else:
                         # NOTHING RECORDED YET is a real, different state from "tried and it failed" --
                         # falling back to the plain timer here says exactly that, instead of printing
