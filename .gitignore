@@ -159,6 +159,10 @@ models/experimental/petr/resources/*.pth
 .claude
 .cursor/.DS_store
 
+# Per-galaxy PP rank bindings from gen_pipeline_binding.py (<template>.<hostname>.yaml).
+# Committing one is harmful: a map from the wrong galaxy does not error, it reports wrong numbers.
+models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_request_*.*.yaml
+
 # Generated rank binding files (machine-specific, regenerated at runtime via generate_rank_bindings.py)
 2x4_multi_mesh_cyclic_rank_binding.yaml
 2x8_2x4_3_mesh_rank_binding.yaml
