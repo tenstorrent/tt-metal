@@ -79,7 +79,7 @@ class TtGemmaImageFeedForward(LightweightModule):
 
         x_in = x
         if seq_len >= MAX_MM_SEQ_LEN:  # Too big to compute. Set different program configs based on seqlen
-            # Reshape input to to fit on device and parallelize computation
+            # Reshape input to fit on device and parallelize computation
             x_in = ttnn.reshape(x_in, [batch_size, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
         pc_1 = self.model_config["IMAGE_MLP_FC_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
         pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)

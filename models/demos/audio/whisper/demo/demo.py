@@ -143,7 +143,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     batch_size_per_device=WHISPER_BATCH_SIZE,
 ):
     """
-    Returns a callable with signature (data, sampling_rate, stream), where data is is a 1D numpy array
+    Returns a callable with signature (data, sampling_rate, stream), where data is a 1D numpy array
     and sampling_rate is an int representing the sampling rate used to acquire data, and stream turns
     signals the callable to return a generator if True, yielding the decoded tokens as they are processed, else
     the callable returns the full decoded output.
