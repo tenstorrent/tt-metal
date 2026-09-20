@@ -129,6 +129,7 @@ constexpr uint32_t cb_scores = tt::CBIndex::c_10;        // S^T, 19-bit rounded
 constexpr uint32_t cb_probs = tt::CBIndex::c_12;         // P^T, 19-bit rounded
 constexpr uint32_t cb_rescale = tt::CBIndex::c_20;       // r, full tile, exact
 constexpr uint32_t cb_block_max = tt::CBIndex::c_23;     // colmax S^T, row layout (scratch)
+constexpr uint32_t cb_check = tt::CBIndex::c_11;         // colmax S^T - m_old, row 0 (the lazy-rescale check)
 constexpr uint32_t cb_max_seed = tt::CBIndex::c_13;      // m, full tile, exact (unpack to dest)
 constexpr uint32_t cb_max_plain = tt::CBIndex::c_25;     // m, the same memory, for the FPU broadcasts
 constexpr uint32_t cb_sum_seed = tt::CBIndex::c_14;      // l, exact (unpack to dest)
@@ -185,6 +186,48 @@ void unpacker_fence() {
     cb_push_back(cb_transpose_fence, 1);
     cb_wait_front(cb_transpose_fence, 1);
     cb_pop_front(cb_transpose_fence, 1);
+}
+
+// Lazy rescaling (FlashAttention-4's trick). The running maximum m is only a
+// reference point: the finished row O = O^T / l and lse = a m + ln l come out
+// the same for any m, as long as exp(a (S - m)) does not overflow. So a query
+// tile whose block maximum stays within FW_LAZY_THRESHOLD (in units of the
+// scaled scores, e^8 ~ 3000 in Float32 is nowhere near overflow) of the m it
+// carries keeps that m: no new maximum, no r = exp(a (m_old - m_new)), no
+// rescale of l, and the output products can be added onto O^T in L1 by the
+// packer instead of being multiplied through DST. The check itself is the
+// FPU's difference colmax - m (row 0 of the tiles in cb_check, packed by the
+// tile above) compared on the unpack thread, which owns the circular
+// buffers' read pointers; the verdict reaches the other two threads through
+// the mailboxes, so all three take the same branches. Positive Float32
+// numbers order like their bit patterns and negative ones are negative as
+// integers, so the comparison is on the raw words.
+#ifndef FW_LAZY_THRESHOLD
+#define FW_LAZY_THRESHOLD 8.0F
+#endif
+uint32_t lazy_need_mask() {
+    uint32_t mask = 0u;
+    UNPACK({
+        constexpr float scale = __builtin_bit_cast(float, scaler_bits);
+        constexpr float threshold = FW_LAZY_THRESHOLD / scale;
+        constexpr int32_t threshold_bits = __builtin_bit_cast(int32_t, threshold);
+        for (uint32_t a = 0; a < Bt; ++a) {
+            const uint32_t address = get_tile_l1_byte_address(get_operand_id(cb_check), a);
+            const volatile int32_t* words = reinterpret_cast<const volatile int32_t*>(address);
+            bool need = false;
+            // Row 0 of a 32 x 32 tile: the first row of face 0 and of face 1.
+            for (uint32_t c = 0; c < 16u; ++c) {
+                need |= words[c] > threshold_bits;
+                need |= words[256u + c] > threshold_bits;
+            }
+            mask |= (need ? 1u : 0u) << a;
+        }
+        mailbox_write(ckernel::ThreadId::MathThreadId, mask);
+        mailbox_write(ckernel::ThreadId::PackThreadId, mask);
+    })
+    MATH(mask = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK(mask = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    return mask;
 }
 
 // V_j^T from the resident V_j: Bt x vWt bf16 tiles in, vWt x Bt out, each
@@ -605,6 +648,10 @@ void kernel_main() {
             cb_wait_front(cb_scores, score_tiles);
         }
 
+        // Which query tiles rescale this timestep (bit a): all of a fresh
+        // row's, else those the check below says (see lazy_need_mask).
+        uint32_t need_mask = (1u << Bt) - 1u;
+
         // ---- 2. The block maximum per query tile, row layout, to scratch;
         // two query tiles per acquire.
 #ifndef FW_EXPERIMENT_NO_STATS
@@ -656,6 +703,29 @@ void kernel_main() {
             cb_wait_front(cb_sum_plain, Bt);
             cb_wait_front(cb_out_seed, Bt * qWt);
         }
+#ifndef FW_EXPERIMENT_NO_LAZY
+        if (!fresh) {
+            DeviceZoneScopedN("CHECK");
+            cb_reserve_back(cb_check, Bt);
+            tile_regs_acquire();
+            reconfig_data_format(cb_block_max, cb_max_plain);
+            sub_init(cb_block_max, cb_max_plain);
+            for (uint32_t a = 0; a < Bt; ++a) {
+                sub_tiles(cb_block_max, cb_max_plain, a, a, a);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_check);
+            for (uint32_t a = 0; a < Bt; ++a) {
+                pack_tile</* out_of_order */ true>(a, cb_check, a);
+            }
+            tile_regs_release();
+            cb_push_back(cb_check, Bt);
+            cb_wait_front(cb_check, Bt);
+            need_mask = lazy_need_mask();
+            cb_pop_front(cb_check, Bt);
+        }
+#endif
         {
             DeviceZoneScopedN("RESCALE");
             constexpr uint32_t kNewReg = 0, kDiffReg = 1;
@@ -663,6 +733,9 @@ void kernel_main() {
                 cb_reserve_back(cb_rescale, Bt);
             }
             for (uint32_t a = 0; a < Bt; ++a) {
+                if (((need_mask >> a) & 1u) == 0u) {
+                    continue;  // m stays the reference it is; no r
+                }
                 tile_regs_acquire();
                 broadcast_row0_to_dst(kNewReg, cb_block_max, a);  // the block maximum down every row
                 if (!fresh) {
@@ -779,7 +852,8 @@ void kernel_main() {
                     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(cb_probs, cb_reduce_scaler, b * Bt + a, 0, kSumReg);
                 }
                 reduce_uninit();
-                if (!fresh) {
+                const bool rescaled = ((need_mask >> a) & 1u) != 0u;
+                if (rescaled && !fresh) {
                     // r l_old + l_blk in row 0, all exact (the other rows
                     // hold the reduction's leftovers times r: never read).
                     reconfig_data_format_srca(cb_probs, cb_rescale);
@@ -796,27 +870,52 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_reconfig_data_format(cb_sum_out);
+                if (!rescaled) {
+                    // l_old + l_blk: the packer adds onto l where it lies.
+                    pack_reconfig_l1_acc(true);
+                }
                 pack_tile</* out_of_order */ true>(kSumReg, cb_sum_out, a);
+                if (!rescaled) {
+                    pack_reconfig_l1_acc(false);
+                }
                 tile_regs_release();
             }
         }
 #endif
 
-        // ---- 5. O^T <- r O^T + V^T P^T, on the packet where it lies; two
-        // output tiles per acquire, r in the register above them.
+        // ---- 5. O^T <- r O^T + V^T P^T, on the packet where it lies. A
+        // rescaled query tile: two output tiles per acquire with r in the
+        // register above them, the products accumulated in DST. A tile that
+        // keeps its m: the products alone, up to four per acquire, added
+        // onto O^T by the packer (L1 accumulate) -- no copies through DST.
         {
             DeviceZoneScopedN("UPDATE-O");
             constexpr uint32_t kRReg = kOutGroup;
+            constexpr uint32_t kAccGroup = (qWt > 4u) ? 4u : qWt;
+            // V^T is the first operand (bf16, SrcB), P^T the second (Float32, SrcA).
+            const auto products = [&](uint32_t a, uint32_t k0, uint32_t nk, uint32_t live) {
+                reconfig_data_format(cb_probs, cb_value_t);
+                mm_init<kFidO>(cb_value_t, cb_probs, /* transpose */ 0);
+                for (uint32_t i = 0; i < nk; ++i) {
+                    for (uint32_t b = 0; b < Bt; ++b) {
+                        if (b >= live) {
+                            break;
+                        }
+                        mm_tiles<kFidO>(cb_value_t, cb_probs, (k0 + i) * Bt + b, b * Bt + a, i);
+                    }
+                }
+            };
             for (uint32_t a = 0; a < Bt; ++a) {
                 const uint32_t live = n_live(a);
-                for (uint32_t k0 = 0; k0 < qWt; k0 += kOutGroup) {
-                    const uint32_t nk = (qWt - k0 < kOutGroup) ? qWt - k0 : kOutGroup;
-                    tile_regs_acquire();
 #ifdef FW_EXPERIMENT_NO_RESCALE_O
-                    if (false) {
+                const bool rescaled = false;
 #else
-                    if (!fresh) {
+                const bool rescaled = ((need_mask >> a) & 1u) != 0u;
 #endif
+                if (rescaled && !fresh) {
+                    for (uint32_t k0 = 0; k0 < qWt; k0 += kOutGroup) {
+                        const uint32_t nk = (qWt - k0 < kOutGroup) ? qWt - k0 : kOutGroup;
+                        tile_regs_acquire();
                         reconfig_data_format_srca(cb_probs, cb_rescale);
                         copy_init(cb_rescale);
                         copy_tile(cb_rescale, a, kRReg);
@@ -835,31 +934,42 @@ void kernel_main() {
                             }
                             mul_binary_tile(i, kRReg, i);
                         }
-                    }
-                    // V^T is the first operand (bf16, SrcB), P^T the second (Float32, SrcA).
-                    reconfig_data_format(cb_probs, cb_value_t);
-                    mm_init<kFidO>(cb_value_t, cb_probs, /* transpose */ 0);
-                    for (uint32_t i = 0; i < kOutGroup; ++i) {
-                        if (i >= nk) {
-                            break;
-                        }
-                        for (uint32_t b = 0; b < Bt; ++b) {
-                            if (b >= live) {
+                        products(a, k0, nk, live);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_reconfig_data_format(cb_out_out);
+                        for (uint32_t i = 0; i < kOutGroup; ++i) {
+                            if (i >= nk) {
                                 break;
                             }
-                            mm_tiles<kFidO>(cb_value_t, cb_probs, (k0 + i) * Bt + b, b * Bt + a, i);
+                            pack_tile</* out_of_order */ true>(i, cb_out_out, a * qWt + k0 + i);
                         }
+                        tile_regs_release();
                     }
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_reconfig_data_format(cb_out_out);
-                    for (uint32_t i = 0; i < kOutGroup; ++i) {
-                        if (i >= nk) {
-                            break;
+                } else {
+                    // Fresh rows start from nothing; unrescaled rows add on.
+                    const bool accumulate = !fresh;
+                    for (uint32_t k0 = 0; k0 < qWt; k0 += kAccGroup) {
+                        const uint32_t nk = (qWt - k0 < kAccGroup) ? qWt - k0 : kAccGroup;
+                        tile_regs_acquire();
+                        products(a, k0, nk, live);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_reconfig_data_format(cb_out_out);
+                        if (accumulate) {
+                            pack_reconfig_l1_acc(true);
                         }
-                        pack_tile</* out_of_order */ true>(i, cb_out_out, a * qWt + k0 + i);
+                        for (uint32_t i = 0; i < kAccGroup; ++i) {
+                            if (i >= nk) {
+                                break;
+                            }
+                            pack_tile</* out_of_order */ true>(i, cb_out_out, a * qWt + k0 + i);
+                        }
+                        if (accumulate) {
+                            pack_reconfig_l1_acc(false);
+                        }
+                        tile_regs_release();
                     }
-                    tile_regs_release();
                 }
             }
         }
