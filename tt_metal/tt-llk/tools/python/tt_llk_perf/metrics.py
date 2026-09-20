@@ -42,11 +42,11 @@ def pct(value: "float | None") -> "float | None":
 
 
 def bounded(value: "float | None") -> "float | None":
-    """Clamp a fraction to [0, 1]. The L1 grant counter is the interface ready line, not an accept gated by the
-    request (RTL: request is `o_l1_rden | o_l1_wren`, grant is `i_l1_reqif_ready`), so a port that is ready while
-    idle reports more grants than requests and the clamp is what keeps backpressure at 0 instead of negative. The
-    selector sweep never saw it under load (0 of 924 Blackhole port/op pairs), so loaded ports are unaffected. The
-    scoreboard stall needs the same clamp for a different reason: its two counters start in separate groups.
+    """Clamp a fraction to [0, 1]. The L1 grant counter is the bank arbiter accept in the same cycle (RTL: request
+    is `o_l1_rden | o_l1_wren`, grant is `i_l1_reqif_ready`, granted only to a requesting client), so grants never
+    exceed requests and the selector sweeps saw no such port on Blackhole or Wormhole; the clamp is a guard against
+    counters captured in different passes. The scoreboard stall needs the same clamp for a different reason: its
+    two counters start in separate groups.
     """
     return None if value is None else min(1.0, max(0.0, value))
 
