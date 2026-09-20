@@ -86,8 +86,11 @@ def _load_env_config() -> None:
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
     MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
-    NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
     ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
+    # Default from the adapter's own depth (see prefill_runner.py's MODEL_CFG.NUM_LAYERS
+    # pattern) rather than a literal -- a hardcoded default silently under-covers any model
+    # deeper than that literal when a manifest omits PREFILL_NUM_LAYERS.
+    NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", ADAPTER.model_config.NUM_LAYERS))
 
 
 _load_env_config()
