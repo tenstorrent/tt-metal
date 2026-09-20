@@ -21,13 +21,13 @@ Set `PREFILL_TRACE_DIR` to override it. The capture contains one Gutenberg *Les 
 
 The default `gemma4_kv_heads_v1` reference stores KV heads in validation channel order; see [Prepared GPU reference](#prepared-gpu-reference) for the format.
 
-The original `chunked_group_a_v1` reference remains supported. It stores `kv_cache/layer_N/rows_START_END.safetensors`, with key `kv_post_transform_layer_N`. Each row contains K followed by V, flattened in head order. Sliding rows have width 8192 (16 heads × 256 channels × K/V); global rows have width 4096 (4 heads × 512 channels × K/V). K is captured after normalization and RoPE; V after normalization, before sliding-window eviction.
+The validator also accepts the row-sharded `chunked_group_a_v1` format. It stores `kv_cache/layer_N/rows_START_END.safetensors`, with key `kv_post_transform_layer_N`. Each row contains K followed by V, flattened in head order. Sliding rows have width 8192 (16 heads × 256 channels × K/V); global rows have width 4096 (4 heads × 512 channels × K/V). K is captured after normalization and RoPE; V after normalization, before sliding-window eviction.
 
-When loading the original capture, the validator reconstructs Gemma4's packed global KV and sliding K channel order. The hardware test slices the selected slot and populated prefix on the owning mesh, converts the temporary copy to BF16 row-major on-device, reads it through the TTNN command queue, copies the BF16 host shards directly into chunk-major CP token order. The live BFP8 cache is unchanged. It also checks the first and last populated 32-token block on each CP rank against the exported migration table for every head and layer. These address checks are samples; the GPU comparison covers the full requested prefix. It compares all applicable heads in all 60 layers and reports separate minima for global rotary K, global V, sliding K, and sliding V. Each PCC flattens one head over the entire requested context. Prefill runs chunk-first; validation starts after all chunks finish and runs layer-first. Missing rows, invalid addresses, malformed tensors, and nonfinite values fail.
+When loading a row-sharded capture, the validator reconstructs Gemma4's packed global KV and sliding K channel order. The hardware test slices the selected slot and populated prefix on the owning mesh, converts the temporary copy to BF16 row-major on-device, reads it through the TTNN command queue, copies the BF16 host shards directly into chunk-major CP token order. The live BFP8 cache is unchanged. It also checks the first and last populated 32-token block on each CP rank against the exported migration table for every head and layer. These address checks are samples; the GPU comparison covers the full requested prefix. It compares all applicable heads in all 60 layers and reports separate minima for global rotary K, global V, sliding K, and sliding V. Each PCC flattens one head over the entire requested context. Prefill runs chunk-first; validation starts after all chunks finish and runs layer-first. Missing rows, invalid addresses, malformed tensors, and nonfinite values fail.
 
 ### Prepared GPU reference
 
-The default reference is already prepared. To create another copy from the original capture, run from the tt-metal root with `python_env` active:
+The default reference is already prepared. To prepare a row-sharded capture, run from the tt-metal root with `python_env` active:
 
 ```bash
 export PYTHONPATH="$PWD" TT_METAL_HOME="$PWD" OMP_NUM_THREADS=16
@@ -36,7 +36,7 @@ python -m models.demos.gemma4_d_p.tt.runners.prepare_gpu_reference \
     /tmp/gemma4-gpu-traces/gemma4-31b-256k-kv-heads
 ```
 
-The destination must not already exist. The converter reads the source, writes only to the destination, and verifies every saved head against the original loader at full context. It publishes `metadata.json` after all 60 layers pass. Prompt text and token IDs are preserved; `preparation.json` records per-layer preparation and loading times.
+The destination must not already exist. The converter reads the source, writes only to the destination, and verifies every saved head against the source loader at full context. It publishes `metadata.json` after all 60 layers pass. Prompt text and token IDs are preserved; `preparation.json` records per-layer preparation and loading times.
 
 Select the prepared reference for either mock or loopback:
 
@@ -65,16 +65,16 @@ Each score is Pearson correlation between a TT cache head and its GPU counterpar
 
 For example, layer minima of `0.98, 0.94, 0.96` produce running minima of `0.98, 0.94, 0.94`. PCC is correlation, not the percentage of matching values.
 
-The regression threshold is **0.91**, calibrated on this capture with FP32 PCC. The 8K, 16K, and 128K scores matched the original full UMD readback exactly.
+The regression threshold is **0.91** for this captured prompt. The 256K validation result is:
 
-| Context | Minimum PCC | Global rotary K | Global V | Sliding K | Sliding V |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 8K | 0.920747 | 0.951169 | 0.948299 | 0.945258 | 0.920747 |
-| 16K | 0.929830 | 0.954082 | 0.952419 | 0.950691 | 0.929830 |
-| 128K | 0.934371 | 0.950708 | 0.954783 | 0.948936 | 0.934371 |
-| 256K | 0.916626 | 0.936422 | 0.939127 | 0.935193 | 0.916626 |
+| Cache type | Minimum PCC |
+| --- | ---: |
+| Global rotary K | 0.936422 |
+| Global V | 0.939127 |
+| Sliding K | 0.935193 |
+| Sliding V | 0.916626 |
 
-The lowest measured score is sliding V, layer 39, head 9 at 256K: **0.916626**, leaving about **0.0066** above the threshold. This is a regression floor for one captured prompt and the current precision. Longer prefixes produce different correlation statistics, so minima need not decrease with context length. See [PCC performance](PCC_PERFORMANCE.md) for timings.
+The lowest score is sliding V, layer 39, head 9: **0.916626**, about **0.0066** above the threshold. The threshold is a regression floor for this prompt and model precision. PCC values depend on the token prefix, so minima need not decrease with context length. See [PCC performance](PCC_PERFORMANCE.md) for the test configuration and timing breakdown.
 
 ## Gate 1: GPU-trace comparison
 
