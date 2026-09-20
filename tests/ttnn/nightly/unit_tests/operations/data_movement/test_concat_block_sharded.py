@@ -230,6 +230,48 @@ class TestBlockShardedWidthConcat:
         result = ttnn.to_torch(ttnn.concat([a, b], dim=3, memory_config=out_mem))
         assert_equal(expected, result)
 
+    @pytest.mark.parametrize("num_inputs", [2, 3])
+    @pytest.mark.parametrize(
+        "orientation",
+        [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+        ids=["row_major", "col_major"],
+    )
+    def test_ragged_width_shards(self, device, num_inputs, orientation):
+        """Regression test for #56827: block-sharded width concat with W % grid_cols != 0.
+
+        The last width shard column is part padding (shard_w * grid_cols > real width). The
+        per-input cursor must advance by each input's real width, not its shard capacity, or
+        every input after the first lands offset by the padding and the last input's tail is
+        dropped. uint32 is used because the L1 row-alignment check on shard rows rules out
+        narrower dtypes for these particular (W, grid_cols) combinations.
+        """
+        grid_cols, grid_rows = 3, 2
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_cols - 1, grid_rows - 1))})
+        H, W = 64, 11  # div_up(11, 3) == 4 -> shard capacity 12, one column of padding
+
+        def div_up(a, b):
+            return -(-a // b)
+
+        shard_h, shard_w = div_up(H, grid_rows), div_up(W, grid_cols)
+        out_w = W * num_inputs
+        out_shard_w = div_up(out_w, grid_cols)
+
+        inputs = [
+            (torch.arange(H * W, dtype=torch.int64) + i * 1000).to(torch.int32).reshape(1, 1, H, W)
+            for i in range(num_inputs)
+        ]
+        expected = torch.concat(inputs, dim=3)
+
+        tt_inputs = []
+        for t in inputs:
+            tt = ttnn.from_torch(t, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.uint32)
+            mem = make_block_sharded_config((shard_h, shard_w), grid, orientation)
+            tt_inputs.append(ttnn.to_memory_config(tt, mem))
+
+        out_mem = make_block_sharded_config((shard_h, out_shard_w), grid, orientation)
+        result = ttnn.to_torch(ttnn.concat(tt_inputs, dim=3, memory_config=out_mem)).to(torch.int64)
+        assert torch.equal(expected.to(torch.int64), result)
+
 
 # ---------------------------------------------------------------------------
 # 2. Height concat (dim=2) — block-sharded s2s

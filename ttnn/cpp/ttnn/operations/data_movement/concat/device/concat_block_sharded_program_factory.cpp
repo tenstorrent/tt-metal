@@ -63,7 +63,6 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
     // For ROW_MAJOR: height distributed across grid rows (y), width across grid cols (x)
     // For COL_MAJOR: height distributed across grid cols (x), width across grid rows (y)
     const uint32_t shard_grid_h = row_major_orient ? grid_rows : grid_cols;
-    const uint32_t shard_grid_w = row_major_orient ? grid_cols : grid_rows;
 
     auto* device = input_tensors[0].device();
 
@@ -197,13 +196,18 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
             const uint32_t sw = row_major_orient ? gx : gy;  // shard width index
 
             if (width_concat) {
+                // Ragged block-sharded width: the last shard column can be part padding (shard_w * grid_cols >
+                // real width), so the per-input extent and the core's output range must come from the tensors'
+                // real widths, not shard capacity. Otherwise every input after the first is offset by the padding
+                // and the last input's tail is silently dropped (see #56827).
+                const uint32_t out_total_w = output.padded_shape()[-1];
                 const uint32_t out_col_start = sw * output_shard_w;
-                const uint32_t out_col_end = out_col_start + output_shard_w;
+                const uint32_t out_col_end = std::min(out_col_start + output_shard_w, out_total_w);
                 const uint32_t num_rows_units = to_units_h(output_shard_h);
 
                 uint32_t cum_w = 0;
                 for (uint32_t inp_id = 0; inp_id < num_input_tensors; inp_id++) {
-                    const uint32_t inp_total_w = input_shard_w[inp_id] * shard_grid_w;
+                    const uint32_t inp_total_w = input_tensors[inp_id].padded_shape()[-1];
                     const uint32_t inp_shard_w_val = input_shard_w[inp_id];
 
                     const uint32_t overlap_start = std::max(out_col_start, cum_w);
