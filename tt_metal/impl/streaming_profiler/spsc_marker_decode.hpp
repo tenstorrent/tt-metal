@@ -15,6 +15,7 @@
 #include <cstring>
 #include <cstdint>
 #include <span>
+#include <utility>
 #include <vector>
 
 // SIMDe uses native AVX2 where available and supported host instructions otherwise.
@@ -285,13 +286,13 @@ __attribute__((always_inline)) inline bool spsc_for_format(uint32_t t, H&& handl
     if constexpr (I == kFormats.size()) {
         return false;
     } else if constexpr (!Pred(kFormats[I].kind)) {
-        return spsc_for_format<Pred, I + 1>(t, handle);
+        return spsc_for_format<Pred, I + 1>(t, std::forward<H>(handle));
     } else {
         if (t == kFormats[I].type) {
             handle.template operator()<kFormats[I]>();
             return true;
         }
-        return spsc_for_format<Pred, I + 1>(t, handle);
+        return spsc_for_format<Pred, I + 1>(t, std::forward<H>(handle));
     }
 }
 // Runs handle.template operator()<F>() for every row whose kind Pred accepts, in table order.
@@ -301,7 +302,7 @@ __attribute__((always_inline)) inline void spsc_for_each_format(H&& handle) {
         if constexpr (Pred(kFormats[I].kind)) {
             handle.template operator()<kFormats[I]>();
         }
-        spsc_for_each_format<Pred, I + 1>(handle);
+        spsc_for_each_format<Pred, I + 1>(std::forward<H>(handle));
     }
 }
 
