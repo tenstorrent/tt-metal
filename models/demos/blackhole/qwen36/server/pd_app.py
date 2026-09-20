@@ -214,13 +214,14 @@ def vllm_argv(config: BundleConfig, role: str) -> list[str]:
 
 
 def _cuda_stub_dirs() -> list[str]:
-    """Mooncake's wheel links libcuda.so.1 and libcudart.so.12; on a driverless host both come from wheels
-    (tt-cuda-stub, nvidia-cuda-runtime-cu12) whose lib dirs are not on the loader path."""
+    """Mooncake's engine links libcuda.so.1, libcudart.so.12, libcurl.so.4 and rdma-core (libibverbs/libmlx5); on a
+    driverless, RDMA-less host they come from wheels (tt-mooncake-sysdeps: libcuda/libcurl stubs + rdma-core copies;
+    nvidia-cuda-runtime-cu12: libcudart) whose lib dirs are not on the loader path."""
     dirs: list[str] = []
     try:
-        import tt_cuda_stub  # type: ignore
+        import tt_mooncake_sysdeps  # type: ignore
 
-        dirs.append(tt_cuda_stub.lib_dir())
+        dirs.append(tt_mooncake_sysdeps.lib_dir())
     except ImportError:
         pass
     try:
