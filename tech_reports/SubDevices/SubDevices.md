@@ -124,7 +124,7 @@ The following are some examples of the different python level APIs that take in 
 
 ## 2. Global Semaphores
 
-In the traditional setup, semaphores are local to a single program and are not visible to programs that run before/after it. There is no guarantee the the value of semaphore 0 of one program is at the same address or contains the last value written there from one program to another program.
+In the traditional setup, semaphores are local to a single program and are not visible to programs that run before/after it. There is no guarantee that the value of semaphore 0 of one program is at the same address or contains the last value written there from one program to another program.
 
 Global semaphores are an object similar to tensors, in that it will allocate a space for the semaphore with the device's allocator, This means that a persistent space is reserved for use until the global semaphore is destroyed. Users can specify a value from host to write to the global semaphore, or can have programs access/write to this address for communication either between concurrent programs, or for a series of programs as the memory space won't be deallocated and only the producers/consumers of the global semaphore will interact with it.
 

@@ -325,7 +325,7 @@ The results of this microbenchmark can inform Ethernet packet sizing for perform
 
 The operating environment encompasses all of the runtime components that are outside of a user kernel and that are responsible for launching and executing user kernels. Typically, this operating environment includes the fast dispatch component, which offers certain guarantees for single chip workloads.
 
-Multichip collective operations must take into account extra considerations and constraints that are inapplicable for single chip programs/operations. These concerns primarily relate to initialization of data-structures prior to program start. In a single chip (Program) the following components of a program and Tensix core are guaranteed to to be initialized, resolvable, computed, or completed, across the entire chip, prior to any worker starting their kernels:
+Multichip collective operations must take into account extra considerations and constraints that are inapplicable for single chip programs/operations. These concerns primarily relate to initialization of data-structures prior to program start. In a single chip (Program) the following components of a program and Tensix core are guaranteed to be initialized, resolvable, computed, or completed, across the entire chip, prior to any worker starting their kernels:
 
 * *[Resolved]* Input/output tensor address(es)
 * *[Initialized]* Semaphore initial values

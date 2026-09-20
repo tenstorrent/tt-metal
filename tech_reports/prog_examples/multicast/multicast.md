@@ -160,7 +160,7 @@ Now, let's have a look at the device-side kernels.
 ---
 
 ## **3. Coordinator Core Workflow in `coordinator_kernel.cpp`**
-The **coordinator kernel** is responsible for orchestrating the movement of a single **32×32 tile** from **DRAM to L1 memory** and then multicasting it to the designated **receiver cores**. It ensures synchronization using semaphores and provides logging via **DPRINT** for user verification. In this section we'll dissect the *hows* and *whys* of the the multicast flow.
+The **coordinator kernel** is responsible for orchestrating the movement of a single **32×32 tile** from **DRAM to L1 memory** and then multicasting it to the designated **receiver cores**. It ensures synchronization using semaphores and provides logging via **DPRINT** for user verification. In this section we'll dissect the *hows* and *whys* of the multicast flow.
 
 ### **3.1 Parsing Runtime Arguments**
 Upon launch, the kernel extracts **runtime arguments** passed from the host, which define:
