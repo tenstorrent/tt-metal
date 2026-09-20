@@ -8,7 +8,9 @@ From the tt-metal repository root, in both terminals for loopback:
 
 ```bash
 source python_env/bin/activate
-export PYTHONPATH="$PWD" TT_METAL_HOME="$PWD" OMP_NUM_THREADS=16
+export PYTHONPATH="$PWD"
+export TT_METAL_HOME="$PWD"
+export OMP_NUM_THREADS=16
 export \
     HF_MODEL=google/gemma-4-31B-it \
     HF_HOME=/mnt/models/huggingface \
