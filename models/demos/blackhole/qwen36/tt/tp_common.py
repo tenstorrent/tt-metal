@@ -1,9 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""TP helpers for Qwen3.5/3.6 on Blackhole (9B single-device + 27B TP=4 / TP=8).
+"""TP helpers for Qwen3.5/3.6 on Blackhole (9B single-device + 27B TP=4 / TP=8 / TP=1).
 
-Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
-mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
+Used whenever the TP code path is selected (args.use_tp_path: every multi-device mesh, and a (1,1)
+mesh for the 27B class -- "TP=1 mode"). DRAM-sharded matmul cfgs, prefill progcfgs, mesh
+shard/replicate, FP8 dequant, HF weight reorder for per-device sharding. The fused-collective
+wrappers (all_gather_*_prefill, matmul_reduce_scatter_*) are multi-device only; TP=1 callers use
+`prefill_matmul_plain` (the same matmul on the already-full-K activation, no gather).
 """
 import math
 import os
@@ -58,15 +61,52 @@ PREFILL_MAX_COLS_PORTABLE = 11
 # from attention/tp.py:241. A standalone per-op sweep CANNOT see this: in isolation the only L1
 # tenant is the op under test, so it reports a win that the full model has no room for. Any future
 # raise of this cap must be validated by test_model_tp_long_prefill, not by the sweep alone.
+# TP=1 (27B on one die): every per-device N is 4x TP=4's (MLP gate/up 17408, GDN qkvzab 16480, attn qkv
+# 14336). With the default out_block == per-core block the 2D mcast matmul's CBs at S=2048 come to
+# 2.7-3.3 MB (in0 + in1 + bf16 out + fp32 interm) against a 1.5 MB L1, so the TP=1 entry carries a CB
+# budget: `create_prefill_matmul_program_config` shrinks out_block_h (a divisor of per_core_M) until the
+# estimate fits, which keeps the subblock width and only reduces the reuse height. Entries WITHOUT the
+# key (TP=4/8) are untouched (no out_block kwargs are emitted).
 _PREFILL_TUNING = {
+    1: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4, cb_budget_bytes=1024 * 1024),
     4: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4),
     8: dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=4),
 }
+
+# Tile byte sizes for the CB estimate (32x32 tiles).
+TILE_BYTES_BF16 = 2048
+TILE_BYTES_FP32 = 4096
+TILE_BYTES_BFP8 = 1088
+TILE_BYTES_BFP4 = 576
 
 
 def prefill_tuning(num_devices):
     """Prefill matmul tuning for this TP; unknown TP falls back to the frozen TP=4 values."""
     return _PREFILL_TUNING.get(num_devices, _PREFILL_TUNING[4])
+
+
+def _prefill_2d_cb_bytes(out_block_h, per_core_N, in0_block_w, weight_tile_bytes):
+    """Static CB footprint of one core of the 2D mcast matmul (matmul_multicore_reuse_mcast_2d_program_factory):
+    in0 = out_block_h x in0_block_w tiles double-buffered (bf16), in1 = in0_block_w x per_core_N (out_block_w ==
+    per_core_N here) double-buffered in the weight dtype, out = out_block bf16, interm = out_block fp32
+    (separate CB under fp32_dest_acc_en)."""
+    in0 = 2 * out_block_h * in0_block_w * TILE_BYTES_BF16
+    in1 = 2 * in0_block_w * per_core_N * weight_tile_bytes
+    out = out_block_h * per_core_N * TILE_BYTES_BF16
+    interm = out_block_h * per_core_N * TILE_BYTES_FP32
+    return in0 + in1 + out + interm
+
+
+def _fit_out_block_h(per_core_M, per_core_N, in0_block_w, out_subblock_h, budget, weight_tile_bytes):
+    """Largest divisor of per_core_M (multiple of out_subblock_h) whose CB estimate fits `budget`; None when
+    the full per_core_M already fits (=> emit no out_block kwargs, i.e. the pre-existing config)."""
+    if _prefill_2d_cb_bytes(per_core_M, per_core_N, in0_block_w, weight_tile_bytes) <= budget:
+        return None
+    for h in range(per_core_M - 1, 0, -1):
+        if per_core_M % h == 0 and h % out_subblock_h == 0:
+            if _prefill_2d_cb_bytes(h, per_core_N, in0_block_w, weight_tile_bytes) <= budget:
+                return h
+    return out_subblock_h
 
 
 def _roundup(a, b):
@@ -212,11 +252,15 @@ def _full_grid_crs(grid):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
 
 
-def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None, tuning=None):
+def create_prefill_matmul_program_config(
+    m, k, n, grid_size=None, fused_activation=None, tuning=None, weight_tile_bytes=TILE_BYTES_BFP8
+):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
     fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg.
-    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior."""
+    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior.
+    weight_tile_bytes: in1 tile size for the TP=1 CB-budget estimate (bfp8 default; pass TILE_BYTES_BFP4
+    for the bf4 MLP gate/up weights). Ignored by tunings without `cb_budget_bytes`."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
@@ -235,6 +279,14 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     else:
         in0_block_w = min(cap, max(1, k_tiles // grid_size[0]))
 
+    # TP=1 only (tunings with cb_budget_bytes): subdivide the output block along M so the CBs fit L1.
+    _out_block = {}
+    _budget = tuning.get("cb_budget_bytes")
+    if _budget:
+        _obh = _fit_out_block_h(per_core_M, per_core_N, in0_block_w, out_subblock_h, _budget, weight_tile_bytes)
+        if _obh is not None:
+            _out_block = dict(out_block_h=_obh, out_block_w=per_core_N)
+
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
@@ -245,6 +297,7 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
         transpose_mcast=False,
         fused_activation=fused_activation,
         fuse_batch=False,
+        **_out_block,
     )
 
 
@@ -282,7 +335,9 @@ def _best_prefill_cols(n, max_cols):
     return best_cols
 
 
-def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max_cols=None, tuning=None):
+def create_prefill_mlp_matmul_program_config(
+    m, k, n, fused_activation=None, max_cols=None, tuning=None, weight_tile_bytes=TILE_BYTES_BFP8
+):
     """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
     subblock (drives prefill FPU) instead of the default full width.
 
@@ -305,7 +360,49 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
     else:
         cols = _best_prefill_cols(n, limit)
     return create_prefill_matmul_program_config(
-        m, k, n, grid_size=(cols, grid[1]), fused_activation=fused_activation, tuning=tuning
+        m,
+        k,
+        n,
+        grid_size=(cols, grid[1]),
+        fused_activation=fused_activation,
+        tuning=tuning,
+        weight_tile_bytes=weight_tile_bytes,
+    )
+
+
+def prefill_matmul_plain(
+    x,
+    weight,
+    compute_cfg,
+    args,
+    out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    fused_activation=None,
+    weight_tile_bytes=TILE_BYTES_BFP8,
+):
+    """TP=1 stand-in for the fused all-gather matmuls (all_gather_matmul_prefill / all_gather_then_matmul_prefill).
+
+    On one die the norm keeps its (no-op) all-gather, so `x` already carries the full K: the fused op reduces
+    to ONE 2D matmul of x [.,S,K] by the full [K,N] weight -- the same bf16-in0 x bfp8-weight fp32-accumulating
+    product with no cross-device partial sums (numerically the AGMM math; a different kernel/blocking, so not
+    bit-identical to the TP=4 fused op). Uses the tuned 2D prefill config with the TP=1 CB budget."""
+    S, K = x.shape[-2], x.shape[-1]
+    x4 = ttnn.reshape(x, (1, 1, S, K))
+    pc = create_prefill_mlp_matmul_program_config(
+        S,
+        K,
+        weight.shape[-1],
+        fused_activation=fused_activation,
+        max_cols=getattr(args, "decode_grid_w", 8),
+        tuning=getattr(args, "prefill_tuning", None),
+        weight_tile_bytes=weight_tile_bytes,
+    )
+    return ttnn.linear(
+        x4,
+        weight,
+        compute_kernel_config=compute_cfg,
+        program_config=pc,
+        memory_config=out_memory_config,
+        dtype=ttnn.bfloat16,
     )
 
 

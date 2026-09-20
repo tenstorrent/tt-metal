@@ -166,7 +166,9 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     # AGMM out-proj mode (QWEN36_GDN_OUT_MODE=agmm): column-sharded copy of out_proj so the out-proj
     # runs as all-gather(gated) + column-parallel matmul (fp32 accumulation inside the matmul; no
     # cross-device partial sums) instead of row-parallel matmul + reduce-scatter.
-    if os.environ.get("QWEN36_GDN_OUT_MODE", "mmrs_fp32") in ("agmm", "ag_mm"):
+    # Multi-device only: at TP=1 the column "shard" would be a byte-identical duplicate of tw["out"] (~1.5 GiB
+    # over 48 layers) and the plain out-proj (agmm_plain mode) reads tw["out"].
+    if os.environ.get("QWEN36_GDN_OUT_MODE", "mmrs_fp32") in ("agmm", "ag_mm") and args.num_devices > 1:
         tw["out_col"] = tpc.shard_w(
             sd[P + "out_proj.weight"],
             mesh,
@@ -197,6 +199,8 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
 class TPGatedDeltaNet:
     """Standalone TP GDN decode (per-device value-head recurrence + all-reduce)."""
 
+    _warned_fused_decode_nv = False  # log the Nv>32 fused-decode fallback once per process, not per layer
+
     def __init__(self, mesh, args, tw, tt_ccl):
         self.mesh = mesh
         self.args = args
@@ -225,7 +229,18 @@ class TPGatedDeltaNet:
         self._fuse_ab = self._dram_sharded
         # Fuse prefill norm-allgather + qkvzab in-proj into all_gather_minimal_matmul_async.
         # Requires the folded qkvzab weight; norm's post-AG is disabled in layer.py (GDN, prefill).
-        self._fuse_agmm = self._fuse_ab
+        # Multi-device only (it IS the gather): mirrors layer.py's `_fuse_norm_agmm` gate on the real device count.
+        self._fuse_agmm = self._fuse_ab and args.num_devices > 1
+        # TP=1 mode (TP code path on one die): Nv=48/Nk=16 per device, in-proj width 16480 -- 4x TP=4. The
+        # L1-resident prefill intermediates (qkvzab 67 MB, qkv 42 MB, per-head norm/concat 25 MB at S=2048)
+        # go to DRAM (`_pf_mc`) and the in-proj runs as a plain 2D matmul (tpc.prefill_matmul_plain).
+        self._tp1 = getattr(args, "tp1", False)
+        self._pf_mc = ttnn.DRAM_MEMORY_CONFIG if self._tp1 else ttnn.L1_MEMORY_CONFIG
+        if self._tp1:
+            # The head-major fuse-out ends in nlp_concat_heads on the [1,Nv,T,Dv] fp32 o, whose CBs are sized by
+            # Nv x Dv tiles (x2): 1.68 MB at Nv=48 > the 1.5 MB L1 (measured TT_THROW at first prefill compile).
+            # Take the fused op's token-major [1,T,Nv,Dv] output instead: per-head rms_norm + a free reshape.
+            self._gdn_fuse_out = False
         # QWEN36_GDN_PROJ_CHUNKS (default 0 = off): let the in-proj AGMM write qkv | z | ab as three
         # tensors instead of one wide tensor + three ttnn.slice ops. Read once here so it matches the
         # (env-gated) tile padding load_gdn_weights_tp applied to tw["qkvz"]; the padded-width check
@@ -242,11 +257,16 @@ class TPGatedDeltaNet:
         #   "ag_mm" same math, un-fused (all_gather_async + 2D matmul); used automatically for TP != 4.
         # Both AG modes need tw["out_col"], which load_gdn_weights_tp creates only when the env var is set at load time
         # (costs a second ~8 MB/device copy of out_proj per layer because decode/batched paths still use tw["out"]).
+        #   "agmm_plain" (TP=1 only, chosen automatically for agmm/ag_mm on one die): the same bf16 gated
+        #           activation x bfp8 out_proj fp32-accumulating matmul as ONE plain 2D matmul on tw["out"] (the
+        #           row-parallel "shard" is the full weight on one die); no gather, no out_col copy.
         _mode = os.environ.get("QWEN36_GDN_OUT_MODE", "mmrs_fp32")
         if _mode not in ("mmrs_fp32", "agmm", "ag_mm"):
             logger.warning(f"QWEN36_GDN_OUT_MODE={_mode!r} unknown; using mmrs_fp32")
             _mode = "mmrs_fp32"
-        if _mode != "mmrs_fp32" and "out_col" not in tw:
+        if args.num_devices == 1 and _mode in ("agmm", "ag_mm"):
+            _mode = "agmm_plain"
+        if _mode in ("agmm", "ag_mm") and "out_col" not in tw:
             logger.warning(
                 "QWEN36_GDN_OUT_MODE set after the weights were loaded without tw['out_col']; using mmrs_fp32"
             )
@@ -282,6 +302,18 @@ class TPGatedDeltaNet:
         # (projection -> one op -> out-projection), conv states shifted in place by the op.
         self._decode_fused = os.environ.get("QWEN36_GDN_DECODE_FUSED") in ("1", "2")
         self._decode_fused_conv = os.environ.get("QWEN36_GDN_DECODE_FUSED") == "2"
+        if self._decode_fused and self.Nv > tpc.TILE_SIZE:
+            # ttnn.experimental.kda.gdn_decode_step packs the per-head beta/g (and a|b for the fused conv) into
+            # ONE tile row: TT_FATAL "num_value_heads must fit one tile row (<= 32)" (and 2*Nv <= 32 for mode 2).
+            # TP=1 has Nv=48 -> fall back to the composite recurrent_gated_delta_rule_decode_ttnn path.
+            if not TPGatedDeltaNet._warned_fused_decode_nv:
+                TPGatedDeltaNet._warned_fused_decode_nv = True
+                logger.warning(
+                    f"QWEN36_GDN_DECODE_FUSED={os.environ.get('QWEN36_GDN_DECODE_FUSED')} needs Nv <= 32 per device "
+                    f"(got Nv={self.Nv}, TP={args.num_devices}); using the composite decode recurrence (all GDN layers)"
+                )
+            self._decode_fused = False
+            self._decode_fused_conv = False
         self._norm_w_1d = None
         # packed per-head conv history / taps for the fused-conv op ([Nv, 4, 32, 32] bf16 per device; row 2c of a tile =
         # channel chunk c of the head's [q|k|v] row, slot 3 = newest). Rebuilt from conv_states when they were rewritten.
@@ -660,6 +692,11 @@ class TPGatedDeltaNet:
                     out_memory_config=_proj_mc,
                 )
                 qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
+            elif self._tp1 and S > tpc.TILE_SIZE:
+                # TP=1 prefill: x is already full-K (the norm kept its no-op AG); one tuned 2D matmul on the full
+                # [dim, qkv|z|a|b] weight (same math as the AGMM, no gather).
+                qkvzab = tpc.prefill_matmul_plain(x, self.tw["qkvz"], self.cfg, self.args, out_memory_config=_proj_mc)
+                qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
             elif getattr(self.args, "proj_1d_decode", False) and S <= tpc.TILE_SIZE:
                 # Decode: small-grid 1D matmul on the interleaved fused weight (beats the DRAM-sharded grid).
                 qkvzab = tpc.matmul_1d_decode(
@@ -674,7 +711,9 @@ class TPGatedDeltaNet:
             qkv = ttnn.slice(qkvzab, (0, 0, 0), (1, S, qz), memory_config=out_mc)
             # z (output gate) lives across the chunk kernel (gated = out_f * silu(z)); L1 z (6MB@S=2048)
             # clashes with the scan kernel CBs -> keep DRAM in chunk-prefill; decode (small S) keeps out_mc.
-            _z_mc = ttnn.DRAM_MEMORY_CONFIG if (self._fuse_agmm and S > tpc.TILE_SIZE) else out_mc
+            # (Was gated on _fuse_agmm, which is True whenever _fuse_ab at TP>1 -- identical there; at TP=1 the
+            # [2048,6144] z is 25 MB and must not sit in L1 next to the 67 MB qkvzab.)
+            _z_mc = ttnn.DRAM_MEMORY_CONFIG if S > tpc.TILE_SIZE else out_mc
             z = ttnn.slice(qkvzab, (0, 0, qz), (1, S, az), memory_config=_z_mc)
             # a,b end mid-tile; slicing straight from qkvzab untilizes the full 4120-wide tensor.
             # Grab the enclosing tile-aligned block once (no untilize), then split a/b from it (test_gdn_slice_opt).
@@ -744,8 +783,8 @@ class TPGatedDeltaNet:
             assert self._zero_conv0 is not None, "gdn_masks needs the persistent zero conv row (reset_state first)"
             assert tw["conv_taps"] is not None, "gdn_masks needs pre-built conv taps"
 
-        # Prefill qkvzab in L1: keeps proj + q/k/v/z/a/b resident for conv+gate prep.
-        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=ttnn.L1_MEMORY_CONFIG)
+        # Prefill qkvzab in L1: keeps proj + q/k/v/z/a/b resident for conv+gate prep (DRAM at TP=1: 67 + 42 MB).
+        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=self._pf_mc)
 
         # FIR conv1d; conv_state = previous chunk's last K-1 inputs (None/zero from scratch)
         _cstate = self.conv_carry if carry else None
@@ -764,8 +803,8 @@ class TPGatedDeltaNet:
                 None,
                 self.K,
                 self.mesh,
-                # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally)
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally); DRAM at TP=1.
+                memory_config=self._pf_mc,
                 conv_state=_cstate,
                 weight_taps=tw["conv_taps"],
                 bias_dev=None,
@@ -870,8 +909,9 @@ class TPGatedDeltaNet:
                     ttnn.copy(src, self.conv_states[j + 1])
                     self._hist_packed_valid = False  # rebuilt eagerly after prefill replay (never under capture)
             ttnn.deallocate(conv_new_state)
-        # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
-        _L1 = ttnn.L1_MEMORY_CONFIG
+        # Gated RMSNorm + SiLU(z); norm/flatten in L1 (DRAM at TP=1: [1,48,2048,128] = 25 MB each), gated output in
+        # DRAM for out-proj
+        _L1 = self._pf_mc
         if self._gdn_fuse_out:
             # Fuse adapter relayout with per-head rms_norm + head-flatten.
             # TILE-native head->token relayout (transpose + fold), dropping the
@@ -887,7 +927,7 @@ class TPGatedDeltaNet:
             ttnn.deallocate(o)
             out_f = ttnn.reshape(out_n, (1, T, self.value_dim_tp), memory_config=_L1)
             ttnn.deallocate(out_n)
-        if self._gdn_out_mode in ("agmm", "ag_mm"):
+        if self._gdn_out_mode in ("agmm", "ag_mm", "agmm_plain"):
             # bf16 gated activation for the all-gather + column-parallel out-proj, produced directly by the
             # gate multiply (output dtype bf16). NOTE: a separate ttnn.typecast(fp32->bf16) here gave wrong
             # model output under the traced multi-layer path (exact standalone and in a single layer), so the
@@ -904,11 +944,14 @@ class TPGatedDeltaNet:
         ttnn.deallocate(z)
         # AGMM out-proj: all-gather the K-sharded gated activation and multiply by the column-sharded
         # out_proj -> output already hidden-sharded [1,1,T,dim/tp]; fp32 accumulation, no bf16 partial sums.
-        if self._gdn_out_mode in ("agmm", "ag_mm"):
+        if self._gdn_out_mode in ("agmm", "ag_mm", "agmm_plain"):
             # `gated` is bf16 here (see above): the all-gather+matmul kernels assume bf16 in0 (an fp32 in0
             # produced garbage) and bf16 halves the gather bytes.
             x_out = ttnn.reshape(gated, (1, 1, T, gated.shape[-1]))
-            if self._gdn_out_mode == "agmm":
+            if self._gdn_out_mode == "agmm_plain":
+                # TP=1: the full [6144, 5120] out_proj (tw["out"]) in one tuned 2D matmul, bf16 out, no gather.
+                out = tpc.prefill_matmul_plain(x_out, tw["out"], self.cfg, self.args)
+            elif self._gdn_out_mode == "agmm":
                 out = tpc.all_gather_matmul_prefill(
                     x_out, tw["out_col"], self.tt_ccl, self.cfg, self.args.ccl_topology(), role="out"
                 )

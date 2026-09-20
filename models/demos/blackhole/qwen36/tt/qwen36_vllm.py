@@ -140,8 +140,10 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         )
         # Attach the TT vision tower so prefill can splice image/video embeddings (multimodal path).
         # No-op cost for text-only requests; get_image_features / get_video_features are only invoked
-        # when a request actually carries pixel_values / pixel_values_videos.
-        model.init_vision_model()
+        # when a request actually carries pixel_values / pixel_values_videos. QWEN36_SKIP_VISION=1 skips
+        # it for text-only serving where DRAM is tight (e.g. the 27B on one die, TP=1 mode).
+        if os.environ.get("QWEN36_SKIP_VISION", "0") != "1":
+            model.init_vision_model()
         return cls([model], [args], mesh_device)
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
@@ -220,7 +222,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         """All prefill is model-owned (Generator drives decode only)."""
         model = self.model[0]
-        if model.num_devices > 1 and model.args.max_batch_size > 1:
+        if model.use_tp and model.args.max_batch_size > 1:
             # Batched text prefill into decode slots (MM is B=1). Require real visual data, not a
             # non-None empty pixel_values placeholder from vLLM on text requests.
             assert not self._has_visual(kwargs, "pixel_values") and not self._has_visual(
@@ -231,7 +233,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             )
             return self._prefill_forward_tp_batched(model, tokens, page_table, prompt_lens, kwargs.get("empty_slots"))
         vision_tokens = self._compute_vision_tokens(model, kwargs)
-        if model.num_devices > 1:
+        if model.use_tp:
             return self._prefill_forward_tp(model, tokens, page_table, prompt_lens, vision_tokens=vision_tokens)
         seq_len = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
         logger.info(f"Prefilling User 1 up to {seq_len} tokens")
@@ -332,7 +334,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # BEFORE the decode trace reads it. The plugin remaps its own buffers (and the seed RNG via
         # super().decode_forward), but GDN state is model-internal, so mirror the same reindex here.
         # slot_remap is passed through unchanged so the seed-RNG remap inside super() still runs.
-        if model.num_devices > 1 and model.args.max_batch_size > 1:
+        if model.use_tp and model.args.max_batch_size > 1:
             slot_remap = kwargs.get("slot_remap")
             if slot_remap is not None:
                 model._remap_gdn_slots(slot_remap)
@@ -411,7 +413,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # (>chunk_size) replay the traced chunk-outer path per user instead of the slower eager fallback.
         # The scratch is not freed (prefill_paged_slots rebinds it per request); the batched decode
         # buffers are restored before the decode-trace warmup captures at [B,...].
-        batched = model.num_devices > 1 and model.args.max_batch_size > 1
+        batched = model.use_tp and model.args.max_batch_size > 1
         logger.info(
             f"Starting Qwen prefill warmup: chunk-prefill trace{' (batched, B=1 scratch)' if batched else ''} "
             f"(chunk={_PREFILL_WARMUP_CHUNK}, page_table_blocks={num_blocks})..."

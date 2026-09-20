@@ -56,7 +56,11 @@ class Qwen36Model:
         self.device = mesh_device
         self.mesh_device = mesh_device  # Generator reads model.mesh_device
         self.num_devices = mesh_device.get_num_devices()
-        # CCL for multi-device all-reduce; None on single device (ops no-op).
+        # TP CODE PATH selector: every multi-device mesh, or TP=1 mode (the 27B on one die). `num_devices`
+        # stays the real device count for the collectives / LM-head vocab shard / on-device sampler gates.
+        self.use_tp = getattr(args, "use_tp_path", self.num_devices > 1)
+        # CCL for multi-device all-reduce; None on single device (tt_all_reduce/tt_all_gather return their
+        # input on a [1,1] mesh and DistributedNorm skips both gathers, so None is never dereferenced).
         if self.num_devices > 1:
             from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -134,11 +138,11 @@ class Qwen36Model:
             eps=args.norm_eps,
             **(
                 dict(is_distributed=args.is_distributed_norm, ccl_topology=args.ccl_topology(), tt_ccl=self.tt_ccl)
-                if self.num_devices > 1
+                if self.use_tp
                 else {}
             ),
         )
-        if self.num_devices > 1:
+        if self.use_tp:
             # TP: DistributedNorm all-gathers fractured hidden for LM head.
             from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
@@ -366,7 +370,7 @@ class Qwen36Model:
         if self._vis_buf is not None:
             return
         H = self.args.dim
-        if self.num_devices > 1:
+        if self.use_tp:
             shard = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.args.cluster_shape)
             rep = ttnn.ReplicateTensorToMesh(self.mesh_device)
             self._vis_buf = ttnn.from_torch(
@@ -465,7 +469,7 @@ class Qwen36Model:
         if vision_tokens is None:
             ttnn.copy_host_to_device_tensor(self._vis_zero_mask_host, self._vis_mask_buf)
             return
-        tp = self.num_devices > 1
+        tp = self.use_tp
         cs = self._vis_buf.shape[-2]  # seq dim: dim 1 (3D single) / dim 2 (4D TP)
         Hg = self.args.dim  # global hidden (the buffer's last dim is dim/TP on a mesh)
         flat = ids_host.reshape(-1)
@@ -557,7 +561,7 @@ class Qwen36Model:
         config runs the sharded multi-core norm across lm_head_core_grid instead; output_mem_config
         is forced back to DRAM so the LM-head matmul input is byte-identical (layout-only change).
         """
-        if self.num_devices > 1:
+        if self.use_tp:
             nc = dict(self.args.get_norm_config("lm_head", Mode.DECODE))
             nc["output_mem_config"] = ttnn.DRAM_MEMORY_CONFIG
             return self.norm(x, mode=Mode.DECODE, norm_config=nc)
@@ -781,7 +785,7 @@ class Qwen36Model:
         # where-predicate: [rows, 1], broadcasts over hidden in ttnn.where.
         mask_col = mask_bool.view(rows, 1)
 
-        if self.num_devices > 1:
+        if self.use_tp:
             # Shard the index along hidden the same way the embedding shards its
             # activations, so each device's [n, H/TP] index matches its local x/vision
             # shard (the hidden columns are identical, so splitting is free). The predicate
@@ -982,7 +986,7 @@ class Qwen36Model:
         for the on-device sampler, which does its own cross-device top-k + gather.
         """
         x = self.embd(token_ids_buf)
-        if self.num_devices > 1:
+        if self.use_tp:
             # TP expects [1,1,B,dim_frac]; embd yields [B,1,dim_frac].
             x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1], x.shape[-1]))
         for layer in self.layers:
@@ -1085,7 +1089,7 @@ class Qwen36Model:
         The batched (B>1) vLLM path passes capture_chunk_trace=True with the PERSISTENT B=1 prefill
         scratch bound (_bind_gdn_prefill_scratch), so the trace bakes that scratch's addresses and
         long prompts replay the traced chunk path per user (prefill_paged_slots rebinds the scratch)."""
-        if self.num_devices > 1:
+        if self.use_tp:
             return self._capture_prefill_trace_chunked_tp(
                 device,
                 page_table,
@@ -1471,7 +1475,7 @@ class Qwen36Model:
             replays; each replay DMAs a different user's row in).
           bucket: fixed bucket length (128 for ISL==128; must be a multiple of 128).
         """
-        assert self.num_devices > 1, "capture_prefill_trace_bucket is the TP (num_devices>1) path"
+        assert self.use_tp, "capture_prefill_trace_bucket is the TP code path (use_tp_path)"
         assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
         assert bucket % 128 == 0, f"bucket {bucket} must be a multiple of 128 (GDN sub-chunk)"
         block_size = get_block_size(self._paged_kv_caches)
@@ -1624,7 +1628,7 @@ class Qwen36Model:
         be routed to eager prefill_paged_peruser. Asserts actual_len == bucket and never pads.
         Call capture_prefill_trace_bucket first; release_prefill_trace_bucket before decode.
         """
-        assert self.num_devices > 1, "prefill_traced_bucket_batched is the TP (num_devices>1) path"
+        assert self.use_tp, "prefill_traced_bucket_batched is the TP code path (use_tp_path)"
         assert getattr(self, "_bucket_trace_id", None) is not None, "Call capture_prefill_trace_bucket first"
         bucket = self._bucket_size
         block_size = get_block_size(self._paged_kv_caches)
@@ -1818,7 +1822,7 @@ class Qwen36Model:
         Call allocate_kv_caches(batch_size=B) + the batched warmup first. Any prompt length is served:
         prefill_traced_chunked chunks long prompts via pre-warmed programs (no post-park compile).
         """
-        assert self.num_devices > 1, "prefill_paged_slots is the TP (num_devices>1) path"
+        assert self.use_tp, "prefill_paged_slots is the TP code path (use_tp_path)"
         N = len(token_ids_list)
         assert len(empty_slots) == N, "one slot per request"
         pt = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
@@ -1972,7 +1976,7 @@ class Qwen36Model:
             mode = int(os.environ.get("QWEN36_GDN_SLOT_DEVICE_COPY", "0") or 0)
         except ValueError:
             mode = 0
-        if mode != 2 or self.num_devices <= 1:
+        if mode != 2 or not self.use_tp:
             return
         dn_states = [layer.attention for layer in self.layers if not layer.is_full_attention]
         if not dn_states or dn_states[0].rec_state is None or dn_states[0].B <= 1:
@@ -2083,7 +2087,7 @@ class Qwen36Model:
         valid_lens:      optional list of B ints (real token counts); defaults to each T_u.
         Returns:         list of B ttnn logits [1, 1, vocab] (replicated; at valid_len-1).
         """
-        assert self.num_devices > 1, "prefill_chunked_peruser is the TP (num_devices>1) path"
+        assert self.use_tp, "prefill_chunked_peruser is the TP code path (use_tp_path)"
         assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
         # The chunked path keys its chunk math on _chunked_chunk_size (default 2048); a parked
         # bucket trace leaves it at 128, breaking num_full/tail sizing. Require it released first.
@@ -2201,7 +2205,7 @@ class Qwen36Model:
 
         First valid_len tokens real; rest padded. Attn runs full bucket; GDN masks via valid_len.
         Returns hidden [1,bucket,hidden] or [1,1,bucket,hidden] (TP)."""
-        if self.num_devices > 1:
+        if self.use_tp:
             return self._forward_prefill_chunk_masked_tp(
                 token_buf, valid_len, chunk_start, page_table, bucket, flex_sdpa=flex_sdpa, vision_tokens=vision_tokens
             )
@@ -2388,7 +2392,7 @@ class Qwen36Model:
         # Traced masked bucket (env-gated): one execute_trace + ~9 small DMAs instead of ~151 host
         # uploads and 64 layers of host dispatch. Empty dict unless QWEN36_PREFILL_BUCKET_TRACE is
         # set, so this is dead by default; any un-traced bucket falls through to the eager path.
-        _tr = self._mb_traces.get(bucket) if (self.num_devices > 1 and flex_sdpa) else None
+        _tr = self._mb_traces.get(bucket) if (self.use_tp and flex_sdpa) else None
         if _tr is not None:
             return self._replay_prefill_bucket_trace_tp(_tr, token_buf, actual_len, chunk_start, page_table)
 
@@ -2397,7 +2401,7 @@ class Qwen36Model:
         )
         ttnn.synchronize_device(self.device)
 
-        if self.num_devices > 1:
+        if self.use_tp:
             return self._masked_bucket_logits_tp(hidden, actual_len, bucket)
 
         # One-hot matmul for last row (fixed program per bucket; slice would recompile per length).
@@ -2559,7 +2563,7 @@ class Qwen36Model:
             buckets = self._mb_trace_buckets
         if not buckets:
             return
-        assert self.num_devices > 1, "the traced masked bucket is the TP (num_devices>1) path"
+        assert self.use_tp, "the traced masked bucket is the TP code path (use_tp_path)"
         assert self._paged_kv_caches, "Call allocate_kv_caches first"
         assert (
             self._chunk_full_page_table_buf is not None and self._chunk_start_idx_tensor is not None
@@ -2803,7 +2807,7 @@ class Qwen36Model:
         num_full = actual_len // chunk_size
         tail_real = actual_len - num_full * chunk_size
         assert (
-            num_full == 0 or self.num_devices > 1 or self._chunked_trace_id is not None
+            num_full == 0 or self.use_tp or self._chunked_trace_id is not None
         ), "Call capture_prefill_trace_chunked first"
 
         # Stage the per-request RoPE once for the whole prompt (M-RoPE for multimodal, 1D for text).
@@ -2842,7 +2846,7 @@ class Qwen36Model:
                 token_ids[:, :actual_len], page_table, actual_len=actual_len, chunk_start=0, vision_tokens=vision_tokens
             )
 
-        if self.num_devices > 1:
+        if self.use_tp:
             # TP long prompt: traced replay preferred; eager masked-bucket fallback if no trace.
             if self._chunked_trace_id is not None:
                 return self._prefill_traced_chunked_tp(
@@ -3130,7 +3134,7 @@ class Qwen36Model:
 
         Trace capture runs forward twice; GDN state is non-idempotent. Must re-zero before each
         real sequence. In-place buffers (_chunk_inplace_state) use _reset_dn_state_inplace."""
-        if self.num_devices > 1:
+        if self.use_tp:
             # TP: reset_state_inplace preserves decode-trace baked addresses.
             for layer in self.layers:
                 if not layer.is_full_attention:
@@ -3200,7 +3204,7 @@ class Qwen36Model:
         # QWEN_SDPA_BF8: bf8 paged KV for SDPA; halves KV memory (gated — validate PCC at long ctx).
         if os.environ.get("QWEN_SDPA_BF8", "0") == "1":
             dtype = ttnn.bfloat8_b
-        if self.num_devices > 1:
+        if self.use_tp:
             return self._allocate_kv_caches_tp(kv_cache_shape, dtype, batch_size)
 
         kv_caches = []
@@ -3339,7 +3343,7 @@ class Qwen36Model:
         valid_lens:      optional list of B ints (real token counts); defaults to each T_u.
         Returns:         list of B ttnn logits [1, 1, vocab_size] (one per user, at valid_len-1).
         """
-        assert self.num_devices > 1, "prefill_paged_peruser is the TP (num_devices>1) path"
+        assert self.use_tp, "prefill_paged_peruser is the TP code path (use_tp_path)"
         B = len(token_ids_list)
         page_table_torch = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
         assert page_table_torch.shape[0] == B, "page_table must have one row per user"
@@ -3422,7 +3426,7 @@ class Qwen36Model:
                          to the chunked path.
         Returns:         list of B ttnn logits [1, 1, vocab] (prefill_paged_peruser contract).
         """
-        assert self.num_devices > 1, "prefill_paged_grouped is the TP (num_devices>1) path"
+        assert self.use_tp, "prefill_paged_grouped is the TP code path (use_tp_path)"
         assert self._paged_kv_caches is not None, "Call allocate_kv_caches first"
         B = len(token_ids_list)
         pt_torch = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
@@ -3441,7 +3445,10 @@ class Qwen36Model:
         # bucket-independent (SCAN L1 is state-sized, not chunk-count-sized). Validated bit-exact vs
         # per-user at B=8 for bucket 128 and 256 (test_gdn_fused_batch: ceiling + large-group). Buckets
         # >256 aren't produced here (callers route T>256 to per-user), so cap them at 1 defensively.
-        gdn_max_bg = 8 if bucket <= 2 * gdn_chunk else 1
+        # TP=1 (Nv_tp=48): 110 // 48 = 2 users per group; TP=4 (Nv_tp=12): 110 // 12 = 9 -> the validated 8.
+        _grid = self.device.compute_with_storage_grid_size()
+        _bh_cap = max(1, min(8, (_grid.x * _grid.y) // self.args.gdn_nv_tp))
+        gdn_max_bg = _bh_cap if bucket <= 2 * gdn_chunk else 1
         group_size = max(1, min(group_size, gdn_max_bg))
 
         dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
@@ -3597,7 +3604,7 @@ class Qwen36Model:
         Returns:
             logits: ttnn.Tensor [B, 1, vocab_size]
         """
-        if self.num_devices > 1:
+        if self.use_tp:
             return self._prefill_paged_tp(token_ids, page_table, valid_len=valid_len, vision_tokens=vision_tokens)
 
         B, T = token_ids.shape
@@ -3730,7 +3737,7 @@ class Qwen36Model:
         # space; post-image text has t==h==w so 1D RoPE at rope_pos is correct). cur_pos_tt below
         # stays the true KV position. rope_delta is 0 for text, so this is a no-op there.
         rope_pos_vec = pos_vec + self.rope.rope_delta
-        if self.num_devices > 1:
+        if self.use_tp:
             # TP: rope_tp cos/sin [1,B,1,rope_dim] packed on host.
             rd = self.args.rope_head_dim
             inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))

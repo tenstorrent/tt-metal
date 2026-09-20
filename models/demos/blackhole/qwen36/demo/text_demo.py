@@ -33,6 +33,7 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.blackhole.qwen36.tt.model_config import tp_path_forced_for_single_device_from_hf
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
@@ -40,14 +41,17 @@ from models.tt_transformers.tt.model_config import determine_device_name
 
 _MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
+# TP=1 mode: the TP code path on ONE die (27B class auto, or QWEN36_FORCE_TP_PATH=1; see model_config).
+# It needs the TP trace region (chunk trace + per-width decode traces) but no fabric (no collectives).
+_TP1 = (not _MULTI) and tp_path_forced_for_single_device_from_hf()
+_TP_PATH = _MULTI or _TP1
 _TP_TRACE_REGION_SIZE = 1024 * 1024 * 1024
 DEVICE_PARAMS = [
     {
         "l1_small_size": 24576,
         "num_command_queues": 2,
-        **(
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": _TP_TRACE_REGION_SIZE} if _MULTI else {}
-        ),
+        **({"fabric_config": ttnn.FabricConfig.FABRIC_1D} if _MULTI else {}),
+        **({"trace_region_size": _TP_TRACE_REGION_SIZE} if _TP_PATH else {}),
     }
 ]
 
@@ -242,8 +246,11 @@ def test_demo_text(
     from transformers import AutoTokenizer
 
     device = mesh_device
-    if batch > 1 and not _MULTI:
-        pytest.skip("batched decode is the TP (multi-device) path; run with MESH_DEVICE=P150x4 or P150x8")
+    if batch > 1 and not _TP_PATH:
+        pytest.skip(
+            "batched decode is the TP code path; run with MESH_DEVICE=P150x4/P150x8, or on one die with the 27B "
+            "(TP=1 mode, QWEN36_FORCE_TP_PATH=1)"
+        )
     device.enable_program_cache()
     # Block budget → max_seq_len, KV cache, and RoPE table
     num_blocks = _blocks_for(seqlen, max_generated_tokens)
@@ -277,7 +284,7 @@ def test_demo_text(
     # Prefill runs each ~2048-token chunk through all layers, carrying GDN recurrent/
     # conv state + paged KV across chunks (so the GDN seq kernel never sees the whole
     # sequence — the long-context OOM fix), then incremental paged single-token decode.
-    if model.num_devices > 1 and batch > 1:
+    if model.use_tp and batch > 1:
         # Batched serving: B users share one paged KV + batched GDN state. The demo replicates the
         # one loaded prompt to all B users, so every row must generate identical tokens (asserted
         # below as a batched-correctness check).
@@ -294,7 +301,7 @@ def test_demo_text(
         assert len(set(rows[0])) > 1, f"degenerate generation: {rows[0]}"
         return
 
-    if model.num_devices > 1:
+    if model.use_tp:
         if repeat_batches > 1:
             results = []
             for run in range(repeat_batches):
@@ -383,6 +390,28 @@ def _profiler_flush(model):
         ttnn.ReadDeviceProfiler(model.mesh_device)
 
 
+def _log_device_memory(model, tag):
+    """Allocator state per buffer type (DRAM / L1 / TRACE), summed over banks. Sizes the serving KV pool at
+    TP=1 (free DRAM after model load + warmup = headroom for QWEN36_MAX_TOKENS_ALL_USERS). QWEN36_LOG_DRAM=0 off."""
+    if os.environ.get("QWEN36_LOG_DRAM", "1") != "1":
+        return
+    dev = model.mesh_device
+    for name in ("DRAM", "L1", "TRACE"):
+        try:
+            mv = ttnn.get_memory_view(dev, getattr(ttnn.BufferType, name))
+            nb = int(mv.num_banks)
+            tot = int(mv.total_bytes_per_bank) * nb
+            used = int(mv.total_bytes_allocated_per_bank) * nb
+            free = int(mv.total_bytes_free_per_bank) * nb
+            contig = int(mv.largest_contiguous_bytes_free_per_bank) * nb
+            logger.info(
+                f"[MEM {tag}] {name}: banks={nb} total={tot / 2**30:.2f} GiB allocated={used / 2**30:.2f} GiB "
+                f"free={free / 2**30:.2f} GiB largest_contiguous(x banks)={contig / 2**30:.2f} GiB"
+            )
+        except Exception as e:  # accounting only; never fail the run
+            logger.warning(f"[MEM {tag}] {name}: unavailable ({e})")
+
+
 def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
     """TP generation: traced chunk-outer prefill + paged decode. Returns (tokens, perf_dict)."""
     vocab = model.args.vocab_size
@@ -410,6 +439,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     model.capture_prefill_trace_chunked(model.mesh_device, page_table, chunk_size=CHUNK)
     profiler.end("compile_prefill")
     logger.info(f"[TP] prefill chunk-trace captured in {time.time() - t_cap:.1f}s")
+    _log_device_memory(model, f"after KV alloc + prefill trace (B=1, blocks={num_blocks})")
 
     _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
     _rep_pen = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
@@ -618,6 +648,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         _restore_gdn(gdn_snap)
     profiler.end("compile_decode")
+    _log_device_memory(model, "after decode trace (B=1)")
 
     pos = T
     decode_times = []
@@ -707,6 +738,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     total_blocks = B * bpu
     kv_cache_shape = [total_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=B)
+    _log_device_memory(model, f"after KV alloc (B={B}, blocks={total_blocks})")
     page_table = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])  # [B, bpu]
 
     # Prefill routes: T<=256 grouped single-pass; T>256 prefill_chunked_peruser (per-user).
@@ -891,6 +923,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
             tt_logits = tt_logits[0]
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         _restore_gdn(snap)
+    _log_device_memory(model, f"after decode trace (B={B})")
 
     # Time the FULL decode step (input update + device decode + host logit read + token select)
     # so the reported tok/s is real end-to-end throughput, not just the device compute.

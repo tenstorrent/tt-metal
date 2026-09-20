@@ -28,6 +28,9 @@ class Qwen36DecoderLayer:
         self.args = args
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1)
+        # TP CODE PATH selector (multi-device mesh, or TP=1 mode on one die); the fused-collective gates
+        # below stay on the real device count.
+        self.use_tp = getattr(args, "use_tp_path", self.num_devices > 1)
         self.is_full_attention = args.is_full_attention_layer(layer_num)
 
         prefix = f"layers.{layer_num}"
@@ -76,7 +79,7 @@ class Qwen36DecoderLayer:
             enable_all_gather=not self._fuse_ff_agmm,
         )
 
-        if self.num_devices > 1:
+        if self.use_tp:
             # Tensor-parallel modules (sharded weights from the raw substate).
             # Cache the sharded mesh weights to disk so re-runs skip the (slow,
             # single-threaded) reorder+shard of the full 27B.
@@ -138,11 +141,13 @@ class Qwen36DecoderLayer:
             eps=args.norm_eps,
             **(
                 dict(is_distributed=args.is_distributed_norm, ccl_topology=args.ccl_topology(), tt_ccl=tt_ccl)
-                if self.num_devices > 1
+                if self.use_tp
                 else {}
             ),
         )
-        if self.num_devices > 1:
+        if self.use_tp:
+            # On a (1,1) mesh (TP=1 mode) DistributedNorm degrades to the plain norm: args.is_multichip and
+            # is_distributed_norm() are both False, so neither all_gather_async runs and tt_ccl=None is never read.
             from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
             return DistributedNorm(
@@ -169,7 +174,7 @@ class Qwen36DecoderLayer:
         # gdn_masks: persistent device (mask_f32, mask_q, conv_sel) for the traced masked-bucket
         # prefill; only the TP GDN prefill branch consumes it (None => unchanged everywhere).
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
-        if self.num_devices > 1:
+        if self.use_tp:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
             # PREFILL: distributed rmsnorm outputs in L1 so the fused in-proj AGMM gathers from L1, not DRAM.
@@ -190,7 +195,7 @@ class Qwen36DecoderLayer:
             )
         attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
-        if self.num_devices > 1:
+        if self.use_tp:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
             # output is fractured along dim=3. cos/sin are in rope_tp format.
             if self.is_full_attention:

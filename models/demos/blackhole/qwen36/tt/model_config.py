@@ -42,6 +42,41 @@ for _k, _v in _QWEN36_SERVING_OPT_DEFAULTS.items():
 # l1_small_size the GDN prefill depthwise ttnn.conv1d requires.
 GDN_CONV1D_L1_SMALL_SIZE = 24576
 
+# The 27B class (hidden 5120 / 64 layers) must run the TP code path even on ONE die: the single-device
+# 9B port (Qwen36GatedAttention / Qwen36GatedDeltaNet) hangs on 27B in ttnn_gated_deltanet. The 9B
+# (hidden 4096 / 32 layers) keeps its validated single-device path.
+_TP1_AUTO_MIN_DIM = 5120
+_TP1_AUTO_MIN_LAYERS = 64
+
+
+def tp_path_forced_for_single_device(dim, n_layers):
+    """Should a (1,1) mesh take the tensor-parallel code path (TP=1 mode)?
+
+    QWEN36_FORCE_TP_PATH=1 forces it on, =0 forces it off (the single-device 9B port); unset -> ON for
+    the 27B class (dim >= 5120 or n_layers >= 64), OFF otherwise."""
+    env = os.environ.get("QWEN36_FORCE_TP_PATH", os.environ.get("QWEN36_TP1"))
+    if env is not None and env != "":
+        return env == "1"
+    return dim >= _TP1_AUTO_MIN_DIM or n_layers >= _TP1_AUTO_MIN_LAYERS
+
+
+def tp_path_forced_for_single_device_from_hf(hf_model=None):
+    """Same decision from the HF config.json of `hf_model` (default $HF_MODEL) -- for code that must know
+    the mode BEFORE the mesh/model exist (e.g. the demo's device_params). Falls back to the env-only
+    rule when the config cannot be read."""
+    import json
+
+    hf_model = hf_model or os.environ.get("HF_MODEL", "")
+    try:
+        with open(os.path.join(hf_model, "config.json")) as f:
+            cfg = json.load(f)
+        cfg = cfg.get("text_config", cfg)
+        return tp_path_forced_for_single_device(
+            int(cfg.get("hidden_size", 0)), int(cfg.get("num_hidden_layers", 0))
+        )
+    except (OSError, ValueError, TypeError):
+        return tp_path_forced_for_single_device(0, 0)
+
 
 class Qwen36ModelArgs(ModelArgs):
     """Qwen3.5-9B ModelArgs for Blackhole P150."""
@@ -122,9 +157,18 @@ class Qwen36ModelArgs(ModelArgs):
             self.weight_dtype = None
             self.act_dtype = None
 
-        # TP config (num_devices>1 only). 27B (1,4) sharded dims + DRAM matmul cfgs; see tp_common.py.
+        # TP config. `use_tp_path` selects the tensor-parallel CODE PATH (TPAttention / TPGatedDeltaNet /
+        # tp_common progcfgs, chunk-outer traced prefill, batched paged decode with per-slot GDN state).
+        # It is on for every multi-device mesh and, on a (1,1) mesh, for the 27B class or when
+        # QWEN36_FORCE_TP_PATH=1 (see tp_path_forced_for_single_device). `num_devices` keeps meaning the
+        # REAL device count: collectives, shard math and the fused-collective gates key on it, so every
+        # TP=1 fallback keys on `tp1` (= TP path on one die), never on a faked device count.
         self.num_devices = mesh_device.get_num_devices() if mesh_device is not None else 1
-        if mesh_device is not None and self.num_devices > 1:
+        self.use_tp_path = mesh_device is not None and (
+            self.num_devices > 1 or tp_path_forced_for_single_device(self.dim, self.n_layers)
+        )
+        self.tp1 = self.use_tp_path and self.num_devices == 1
+        if self.use_tp_path:
             self._init_tp_config(mesh_device)
 
     def _init_tp_config(self, mesh_device):
@@ -214,28 +258,34 @@ class Qwen36ModelArgs(ModelArgs):
         self.mlp_1d_decode = True
         # gate/up: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, 42.8us vs
         # 43.9us for the old 8x4=forced1d_32c). On WH (decode_grid_w=8) this falls back to 8x6.
+        # TP=1: N=17408 (544 tiles) on 44 cores -> per_core_N=13 (prime, 1-wide subblock); 77 cores (11x7) ->
+        # per_core_N=8 -> 4-wide subblock. Same subblock-rescue for w2 / wo / gdn_out below (44 cores -> 4/core).
+        _gu_cores = 77 if tp == 1 else 44
+        _rp_cores = 44 if tp == 1 else 33
         self.mlp_w1_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
             M,
             self.dim,
             self.hidden_dim // tp,
-            num_cores=44,
+            num_cores=_gu_cores,
             fused_activation=ttnn.UnaryOpType.SILU,
             grid_w=self.decode_grid_w,
         )
         self.mlp_w3_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.hidden_dim // tp, num_cores=44, grid_w=self.decode_grid_w
+            M, self.dim, self.hidden_dim // tp, num_cores=_gu_cores, grid_w=self.decode_grid_w
         )
         # down: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~63us, +28% vs
         # the old 8x2). On WH (decode_grid_w=8) this falls back to 8x5.
         self.mlp_w2_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.hidden_dim // tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
+            M, self.hidden_dim // tp, self.dim, num_cores=_rp_cores, grid_w=self.decode_grid_w
         )
 
         # Input-projection 1D decode (DEFAULT): same idea for attn QKV+gate and GDN QKVZAB in-projections.
         # Weights load interleaved (prefill AGMM verified bit-identical); tuned grids per test_mlp_matmul_sweep.
         self.proj_1d_decode = True
+        # TP=1: the per-device N is 4x TP=4's (14336 = 448 tiles); on the 64-core grid per_core_N=7 (prime ->
+        # 1-wide subblock). 56 cores (8x7) give per_core_N=8 -> a 4-wide subblock. Untuned otherwise.
         self.attn_qkv_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=64
+            M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=56 if tp == 1 else 64
         )
         # gdn_qkvz: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, ~59us, +22%
         # vs the old 8x5). On WH (decode_grid_w=8) this falls back to 8x6.
@@ -247,12 +297,12 @@ class Qwen36ModelArgs(ModelArgs):
         # attn_wo: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~24us, +25%
         # vs the old 8x4). On WH (decode_grid_w=8) this falls back to 8x5.
         self.attn_wo_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.attn_out_dim_tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
+            M, self.attn_out_dim_tp, self.dim, num_cores=_rp_cores, grid_w=self.decode_grid_w
         )
         # gdn_out: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~24us, +25%
         # vs the old 8x4; same 1536x5120 shape as attn_wo). On WH (decode_grid_w=8) this falls back to 8x5.
         self.gdn_out_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.gdn_value_dim_tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
+            M, self.gdn_value_dim_tp, self.dim, num_cores=_rp_cores, grid_w=self.decode_grid_w
         )
 
         # Prefill matmul factory (M = seq_len)
@@ -304,8 +354,13 @@ class Qwen36ModelArgs(ModelArgs):
             suffix = "tensor_cache_bfp8"
         else:
             suffix = "tensor_cache_bf16"
-        if self.num_devices > 1:
+        if getattr(self, "use_tp_path", self.num_devices > 1):
             suffix += "_mesh" + "x".join(str(d) for d in self.cluster_shape)
+            if self.num_devices == 1:
+                # TP code path on ONE die: its layouts (layers.N/tp/* shards, `.il` fused weights, the
+                # `<norm>_distributed` copies) must not share a dir with the single-device 9B port, which
+                # would otherwise resolve to the same `<TT_CACHE_PATH>/P150/tensor_cache_bfp8`.
+                suffix += "_tp1"
         root = getattr(self, "model_cache_path", None) or Path(self.checkpoint_dir)
         return Path(root) / suffix
 

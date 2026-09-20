@@ -45,9 +45,11 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
 def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None) -> MLPWeights:
     """Per-layer MLP state: gate_proj, down_proj, up_proj weights."""
     tp = getattr(args, "num_devices", 1) if args is not None else 1
+    use_tp = getattr(args, "use_tp_path", tp > 1) if args is not None else False
 
-    if tp > 1:
-        # TP: w1/w3 column-parallel (shard out dim), w2 row-parallel (shard in dim).
+    if use_tp:
+        # TP: w1/w3 column-parallel (shard out dim), w2 row-parallel (shard in dim). At TP=1 the "shards"
+        # are the full [in,out] weights (cache names still carry the .tp tag under the _tp1 cache dir).
         # DRAM-sharded memcfgs from args.
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
@@ -162,6 +164,10 @@ class Qwen36MLP:
         self.args = args
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1) if args is not None else 1
+        self.use_tp = getattr(args, "use_tp_path", self.num_devices > 1) if args is not None else False
+        # TP=1 mode: the [S,17408] bf16 gate/up prefill outputs are 71 MB each (4x TP=4) -> two of them do
+        # not fit interleaved L1 with the matmul CBs; they go to DRAM (the down-proj reads DRAM `hidden` anyway).
+        self._tp1 = getattr(args, "tp1", False) if args is not None else False
         # 1D-decode (default): small-grid 1D matmuls beat the ~80-core DRAM-sharded grid on the
         # bandwidth-bound skinny decode MLP matmuls (see test_mlp_matmul_sweep). Forces interleaved weights.
         self._mlp_1d_decode = args is not None and getattr(args, "mlp_1d_decode", False)
@@ -189,7 +195,7 @@ class Qwen36MLP:
         )
 
     def forward(self, x):
-        if self.num_devices > 1:
+        if self.use_tp:
             return self._forward_tp(x)
         w = self.weights
         T = x.shape[1] if len(x.shape) >= 3 else 1
@@ -279,20 +285,25 @@ class Qwen36MLP:
             _gw = getattr(args, "decode_grid_w", 8)
             # TP-selected prefill tuning; absent (single-device 9B) => frozen TP=4 behavior.
             _pt = getattr(args, "prefill_tuning", None)
+            # weight_tile_bytes: bf4 gate/up weights (in1 CB size for the TP=1 CB budget; no effect at TP>1).
             pc_gate = tpc.create_prefill_mlp_matmul_program_config(
-                seq, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU, max_cols=_gw, tuning=_pt
+                seq,
+                args.dim,
+                w.w1.shape[-1],
+                fused_activation=ttnn.UnaryOpType.SILU,
+                max_cols=_gw,
+                tuning=_pt,
+                weight_tile_bytes=tpc.TILE_BYTES_BFP4,
             )
             pc_up = tpc.create_prefill_mlp_matmul_program_config(
-                seq, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt
+                seq, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt, weight_tile_bytes=tpc.TILE_BYTES_BFP4
             )
             # L1 output (gate/up outputs; down output via mc_out below): +FPU, avoids the DRAM round-trip
-            # (test_mlp_matmul_sweep_prefill *_outL1). The [seq,N] tensors fit L1 at the prefill chunk.
-            w1_out = ttnn.linear(
-                x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-            w3_out = ttnn.linear(
-                x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
+            # (test_mlp_matmul_sweep_prefill *_outL1). The [seq,N] tensors fit L1 at the prefill chunk at
+            # TP=4/8; at TP=1 (4x wider) they go to DRAM (see _tp1).
+            _gu_mc = ttnn.DRAM_MEMORY_CONFIG if self._tp1 else ttnn.L1_MEMORY_CONFIG
+            w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=_gu_mc)
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=_gu_mc)
             _silu_fused = True
         else:
             # Interleaved weights: auto matmul program for decode and prefill.
