@@ -61,6 +61,44 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         "supports_sample_on_device": True,
     }
 
+    # ---- prefill/decode disaggregation: TTKVTransferable (PHASE2_DESIGN.md 5.1) -------------------------------- #
+    # The GDN recurrent/conv state is model-bound (not in the paged KV), so the connector must move it through the
+    # model: every hook delegates to Qwen36KVTransfer (tt/kv_transfer.py) built lazily on the first call.
+    kv_transfer_hybrid_state = True
+
+    @property
+    def kv_transfer(self):
+        hook = getattr(self, "_kv_transfer_hook", None)
+        if hook is None:
+            from models.demos.blackhole.qwen36.tt.kv_transfer import Qwen36KVTransfer
+
+            hook = self._kv_transfer_hook = Qwen36KVTransfer(self.model[0])
+        return hook
+
+    def kv_transfer_gdn_layers(self):
+        return self.kv_transfer.gdn_layers
+
+    def describe_request_state(self, num_tokens, block_ids, **kwargs):
+        return self.kv_transfer.describe_request_state(num_tokens, block_ids, **kwargs)
+
+    def warmup_kv_transfer(self, **kwargs):
+        return self.kv_transfer.warmup_kv_transfer(**kwargs)
+
+    def export_request_state(self, block_ids, num_tokens, slot, sinks):
+        return self.kv_transfer.export_request_state(block_ids, num_tokens, slot, sinks)
+
+    def import_kv_blocks(self, sources, block_ids, num_tokens, *, chunk_range=None):
+        return self.kv_transfer.import_kv_blocks(sources, block_ids, num_tokens, chunk_range=chunk_range)
+
+    def validate_gdn_parts(self, sources):
+        return self.kv_transfer.validate_gdn_parts(sources)
+
+    def install_gdn_state(self, sources, slot):
+        return self.kv_transfer.install_gdn_state(sources, slot)
+
+    def import_request_state(self, sources, block_ids, num_tokens, slot, *, chunk_range=None):
+        return self.kv_transfer.import_request_state(sources, block_ids, num_tokens, slot, chunk_range=chunk_range)
+
     def _validate_device_sampling_request(self, requested):
         if not requested:
             return
