@@ -16,7 +16,7 @@ def main():
     clang_tidy = sys.argv[1] if len(sys.argv) > 1 else "clang-tidy-20"
     repo = pathlib.Path(__file__).resolve().parents[2]
     config = repo / ".clang-tidy"
-    # Include both maintained headers and neighboring generated headers. Every
+    # Include maintained, generated, and third-party headers. Every
     # header deliberately violates the same check; only maintained ones report.
     headers = {
         "tt_metal/api/tt-metalium/probe.hpp": True,
@@ -28,6 +28,11 @@ def main():
         "tt_metal/hw/inc/internal/tt-2xx/quasar/noc/registers/noc_address_translation_table_a_reg.h": False,
         "generated/probe.pb.h": False,
         "generated/probe.pb.hpp": True,
+        ".cpmcache/simd-everywhere/revision/simde/probe.h": False,
+        "third_party/probe.hpp": False,
+        "tt_metal/third_party/umd/probe.hpp": False,
+        "tt_metal/api/third_party_helpers/probe.hpp": True,
+        "tt_metal/api/not.cpmcache/probe.hpp": True,
     }
     with tempfile.TemporaryDirectory(prefix="clang-tidy-header-filters-") as directory:
         root = pathlib.Path(directory)
@@ -76,7 +81,7 @@ def main():
         if result.returncode != 1 or reported != expected:
             raise RuntimeError(f"Unexpected header diagnostics (exit {result.returncode}):\n{output}")
 
-    print("clang-tidy accepted both filter keys and passed all 9 header diagnostic cases")
+    print(f"clang-tidy accepted both filter keys and passed all {len(headers)} header diagnostic cases")
 
 
 if __name__ == "__main__":
