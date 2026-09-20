@@ -11,10 +11,9 @@ and the failure mode when they are confused is silent: `ttMLA._cache_batch_idx` 
 global slot on a rank with `first_layer_idx > 0` is a plausible integer pointing at another user's
 rows, or past the end.
 
-`KimiK3Config.mla_kv_slot()` is the model-wide map and returns the global slot. The
-`NotImplementedError` in `adapters/kimi_k3.py` names it as the thing to use when wiring the cache
-up, which is right for a single-rank run and wrong for every other one. The test below pins that
-difference rather than leaving it to be rediscovered.
+`KimiK3Config.mla_kv_slot()` is the model-wide map and returns the global slot, which is right for
+a single-rank run and wrong for every other one; `KimiK3LayerSchedule` is the rank-local map. The
+test below pins that difference rather than leaving it to be rediscovered.
 """
 
 import pytest
