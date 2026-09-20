@@ -2,14 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The fused anti-aliased SnakeBeta kernel (`layers/audio_aa_snake.py`) against the `Activation1d` chain it
-replaces, one chip, at the H3 vocoder's per-device shapes (600 latents, stereo, T-shard 8).
-
-Staged by the kernel's compile-time STAGE: 0 copies the input through the tile gathers (the block-as-tile identity
-and the address patching across two calls), 1 runs the two resamplers without the activation, 2 is the full
-activation. Every stage must be bit-identical to its reference (`torch.equal`); both forms are timed.
-    AA_STAGES=0 pytest models/tt_dit/tests/models/minimax_h3/test_audio_aa_snake.py -s
-"""
+"""The fused anti-aliased SnakeBeta kernel (`layers/audio_aa_snake.py`) against the `Activation1d` chain it replaces
+at the H3 vocoder's per-device shapes; every kernel STAGE (0 copy, 1 taps, 2 full) must be bit-identical, both timed."""
 
 import os
 import time
@@ -37,7 +31,7 @@ MESH = [
     )
 ]
 
-# (channels, pack, rows): the tensor is (2, rows, pack * channels), i.e. band 0, 1, 4, the packed bands 5-6 and act_post.
+# (channels, pack, rows): the tensor is (2, rows, pack * channels): bands 0, 1, 4, the packed bands 5-6 and act_post.
 SHAPES = [
     pytest.param(256, 1, 1875, id="band1_c256"),
     pytest.param(512, 1, 375, id="band0_c512"),
@@ -128,9 +122,8 @@ def test_fused_matches_chain(mesh_device, channels, pack, rows, stage):
 @pytest.mark.parametrize(("channels", "pack", "rows"), MESH_SHAPES)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
 def test_fused_matches_chain_t_sharded(mesh_device, channels, pack, rows):
-    """T-sharded like the vocoder: the halo pages from the neighbours, the per-stick clamp at the two sequence ends (also
-    for packed rows, where the halo holds whole rows), the per-device flags and the idle cores, against the unpacked
-    ``Activation1d`` on the same shards. Bit-identical on every device (``torch.equal`` over the gathered sequence)."""
+    """T-sharded like the vocoder: neighbour halo pages, the per-stick clamp at both sequence ends (also for packed
+    rows), per-device flags and idle cores, against the unpacked ``Activation1d`` on the same shards; bit-identical."""
     torch.manual_seed(0)
     mesh_rows, mesh_cols = tuple(mesh_device.shape)
     pc = ParallelFactor(factor=mesh_cols, mesh_axis=1)
