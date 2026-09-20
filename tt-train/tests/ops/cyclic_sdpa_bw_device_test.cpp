@@ -3415,3 +3415,52 @@ TEST(CyclicSdpaFwTest, SixteenCores) {
     check_cyclic_forward(1, 1, 1, 1024, 64, true, 1);
     check_cyclic_forward(1, 1, 1, 2048, 64, true, 2);
 }
+
+
+// The cyclic forward alone, timed at one ring launch shape (20/10 heads, 5632
+// rows, d 64, causal, Bt 4 by default): the quick loop for kernel work.
+// TTML_CYCLIC_FW_TIME="heads:kv:N:d:Bt:causal" overrides the shape.
+TEST(CyclicSdpaFwTimingTest, DISABLED_TimeTheForward) {
+    using namespace tt::tt_metal;
+    auto* device = &ttml::autograd::ctx().get_device();
+    uint32_t heads = 20, kv_heads = 10, N = 5632, d = 64, Bt = 4, causal_u = 1;
+    if (const char* env = std::getenv("TTML_CYCLIC_FW_TIME"); env != nullptr && *env != '\0') {
+        std::sscanf(env, "%u:%u:%u:%u:%u:%u", &heads, &kv_heads, &N, &d, &Bt, &causal_u);
+    }
+    const bool causal = causal_u != 0;
+    xt::xarray<float> Q = xt::zeros<float>({1u, heads, N, d});
+    xt::xarray<float> K = xt::zeros<float>({1u, kv_heads, N, d});
+    xt::xarray<float> V = xt::zeros<float>({1u, kv_heads, N, d});
+    for (uint32_t h = 0; h < heads; ++h) {
+        xt::view(Q, 0, h, xt::all(), xt::all()) = random_bf16_matrix(N, d, 3000u + h);
+    }
+    for (uint32_t g = 0; g < kv_heads; ++g) {
+        xt::view(K, 0, g, xt::all(), xt::all()) = random_bf16_matrix(N, d, 4000u + g);
+        xt::view(V, 0, g, xt::all(), xt::all()) = random_bf16_matrix(N, d, 5000u + g);
+    }
+    const auto q = ttml::core::from_xtensor(Q, device);
+    const auto k = ttml::core::from_xtensor(K, device);
+    const auto v = ttml::core::from_xtensor(V, device);
+    const auto mask = causal ? ttml::metal::AttentionMaskType::Causal : ttml::metal::AttentionMaskType::None;
+    const auto time_it = [&](const auto& call) {
+        call();
+        std::vector<double> samples;
+        for (uint32_t r = 0; r < 5; ++r) {
+            const auto start = std::chrono::steady_clock::now();
+            call();
+            samples.push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+        }
+        std::sort(samples.begin(), samples.end());
+        return samples[samples.size() / 2];
+    };
+    const double flop = (causal ? 2.0 : 4.0) * static_cast<double>(N) * N * d * heads;
+    const double cyc_s = time_it([&]() {
+        auto [o, l] = ttml::metal::cyclic_sdpa_fw(q, k, v, Bt, mask);
+        distributed::Finish(device->mesh_command_queue());
+    });
+    const char* experiment = std::getenv("TTML_CYCLIC_FW_EXPERIMENT");
+    std::printf(
+        "  cyclic_sdpa_fw heads %u/%u N %u d %u %s Bt %u%s%s: %.2f ms, %.1f TFLOP/s\n", heads, kv_heads, N, d,
+        causal ? "causal" : "dense", Bt, experiment ? " experiment " : "", experiment ? experiment : "", cyc_s * 1e3,
+        flop / cyc_s / 1e12);
+}
