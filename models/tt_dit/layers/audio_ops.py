@@ -281,9 +281,8 @@ def prepare_conv3d_weight_state(
         state["weight"] = _prepare(w_hi)
         state["weight_lo"] = _prepare(w_5d.float() - w_hi)
     else:
-        # No residual term: hand the multiplier a weight it can represent. Measured on the packed resamplers,
-        # the FPU's own truncation of an fp32 weight lands at 60.8 dB where the same conv with the bf16-rounded
-        # weight lands at 65.1 dB (round-to-nearest beats the hardware's truncation).
+        # No residual term: round the weight to bf16 on the host; round-to-nearest loses less than the FPU's
+        # truncation of an fp32 weight.
         state["weight"] = _prepare(w_hi)
 
 
@@ -1383,8 +1382,8 @@ class ConvTranspose1dViaConv3d(Module):
             self.poly_kernel = int(probe.shape[-1])
             assert self.poly_kernel % 2 == 1, f"polyphase kernel must be odd for 'same' padding, got {self.poly_kernel}"
 
-        # Inner conv: T-sharded under the local polyphase form; otherwise UNSHARDED (forward gathers T, runs unsharded, then
-        # re-partitions).
+        # Inner conv: T-sharded under the local polyphase form; otherwise UNSHARDED (forward gathers T, runs
+        # unsharded, then re-partitions).
         self.conv = _AlignedOutConv1d(
             in_channels=in_channels,
             out_channels=(stride * out_channels) if self.polyphase else out_channels,
