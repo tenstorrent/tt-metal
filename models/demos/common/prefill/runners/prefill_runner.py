@@ -620,6 +620,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # every layer_idx and request_id is fabricated, and on the host transport the global indices
     # {3,7,11,...} leave seq 0 never sent, so nothing ever drains.
     # Dense models have one ack per layer, so acks == layers and this is a no-op for them.
+    #
+    # Derived here rather than taken from main(): this is a separate function and main()'s
+    # `layer_split` is not in its scope. The migration block below reads the layer-space pair.
+    layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS))
+    first_layer_idx, num_my_layers = layer_split[rank]
     ack_layer_ids = getattr(ADAPTER, "kv_slot_layer_ids", lambda n: None)(NUM_LAYERS)
     if ack_layer_ids is None:
         acks_per_rank = [count for _, count in layer_split]
