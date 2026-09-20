@@ -287,6 +287,24 @@ chip: a zigzag chunk of 2816 rows is `C = 11` at `Bt = 4`, and ten key
 heads make ten groups); there the grouped-head backward runs at the
 whole-grid speed-up of the plain one.
 
+### In training
+
+Through `nano_gpt` with context parallelism on the ring of eight
+(`training_shakespeare_nanollama3_cp8_char.yaml`: 20 query heads on 10 key
+heads of 64, four blocks, 45056 characters a step; the backward chosen by
+`device_config.cp_backward` or `TTML_CP_BACKWARD`), median step time:
+
+| backward | layout | step (ms) | vs the original (two-pass, contiguous) |
+|---|---|---|---|
+| two-pass | contiguous | 1875 | -- |
+| two-pass | zigzag | 1243 | -34% |
+| cyclic in-place | zigzag | 667 | -64% |
+
+The same at Llama 8B's attention shape (32 / 8 heads of 128, two blocks):
+2567 -> 1633 -> 923 ms, -64% as well. Within a layout the two backwards
+give the same loss to the printed precision. The remaining step is mostly
+the two-pass forward.
+
 ### Utilisation against the repository's two-pass backward
 
 Same problem, same 110 cores, causal, `d = 64`, both kernels timed on one

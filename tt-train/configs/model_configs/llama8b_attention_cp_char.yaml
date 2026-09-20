@@ -1,0 +1,14 @@
+# Llama 8B's attention shape -- 32 query heads on 8 key/value heads of 128
+# dims, embedding 4096 -- with two blocks, so the attention dominates and the
+# replicated weights and optimiser state fit a p150 beside a 45056-token
+# sequence (5632 rows per chip on the ring of eight). Character tokens.
+transformer_config:
+  model_type: "llama"
+  num_heads: 32
+  num_groups: 8
+  embedding_dim: 4096
+  dropout_prob: 0.0
+  num_blocks: 2
+  max_sequence_length: 45056
+  runner_type: default
+  theta: 500000.0
