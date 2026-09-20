@@ -202,6 +202,7 @@ set +e
   --host "${HOSTS}" --map-by slot --bind-to none --tag-output --allow-run-as-root \
   --output-filename "${RANKLOGS}/producer" \
   --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0 \
+  -x PATH -x LD_LIBRARY_PATH \
   bash -lc "cd '${TT_METAL_HOME}'; \
     export PYTHONPATH='${TT_METAL_HOME}'; \
     export PYTHONUNBUFFERED=1; \
