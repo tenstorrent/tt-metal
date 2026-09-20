@@ -62,7 +62,7 @@ def host_logit_sel(actual_len, bucket):
     return sel
 
 
-def fill_pt_row(page_table, chunk_start, actual_len, bucket, pad_block, block_size=DEFAULT_BLOCK_SIZE):
+def fill_pt_row(page_table, chunk_start, actual_len, bucket, pad_block, block_size=DEFAULT_BLOCK_SIZE, trust_tail=False):
     """FIXED-WIDTH KV-fill page table [1, bucket//block_size] int32 for the traced bucket body.
 
     The eager path sizes this table to the REAL blocks only (``page_table[:, blk0:blkN]`` with
@@ -71,14 +71,32 @@ def fill_pt_row(page_table, chunk_start, actual_len, bucket, pad_block, block_si
     needs one fixed shape, so the traced body always fills the whole bucket: width = bucket/block_size
     makes ``page_len == S``, which also removes the slice entirely.
 
-    Entries ``[0, nreal)`` are the request's real blocks. Trailing entries hold K/V for PAD rows,
-    which causal SDPA never reads (k <= q < actual_len) and decode later overwrites via
-    paged_update_cache; they must nevertheless point somewhere harmless:
-      * the request's OWN mapped block at that index when it is non-zero (the natural full-bucket
-        fill — no extra block needed, and the demo/tests' arange page tables always hit this), else
-      * ``pad_block``, a scratch physical block no request owns (default: the last KV block, env
-        QWEN36_PREFILL_BUCKET_PAD_BLOCK). Never 0, because block 0 is a real request's block for a
-        zero-padded page-table row.
+    Entries ``[0, nreal)`` are the request's real blocks, copied from the row. Trailing entries hold
+    K/V for PAD rows, which causal SDPA never reads (k <= q < actual_len) and decode later overwrites
+    via paged_update_cache; they must nevertheless point somewhere harmless, and the ONLY harmless
+    target is ``pad_block``: a scratch physical block no request owns (the extra last KV block the
+    vLLM wrapper allocates beyond the scheduler's pool, or QWEN36_PREFILL_BUCKET_PAD_BLOCK). Never 0,
+    because block 0 is a real request's block for a zero-padded page-table row.
+
+    The row past a request's real blocks must NOT be trusted (default trust_tail=False). Under vLLM
+    those entries are neither zero nor the request's own blocks: ``BlockTable.add_row`` resets the
+    row's block count but never clears the entries past it, so they are STALE ids left by the row's
+    previous occupant, and with prefix caching off ``free_blocks`` prepends freed blocks to the free
+    queue, so the new request's real block is very often one of those stale ids (row ``[2, 2, 0, ...]``
+    for a 1-block prompt right after a request that held ``[1, 2]``). The old rule "use the row's own
+    non-zero entry" then named block 2 twice in ONE paged_fill_cache, so the bucket's PAD rows raced
+    the real rows for the same block (multi-core write race): 63/64-token prompts gave nondeterministic,
+    wrong logits, and a stale id owned by ANOTHER live request silently corrupted that request's K/V.
+    The same row reaches every device count (the plugin hands the model vLLM's block-table row as is,
+    and TP>1 replicates it to all devices), so the safe rule is the default everywhere.
+
+    trust_tail=True (QWEN36_PREFILL_TRUST_PT_TAIL=1, rollback only) restores the old row-building rule;
+    the alias guard below still rejects a row that would name a real block twice, so the rollback can
+    fail loudly but can no longer corrupt K/V.
+
+    Guards (AssertionError): the request's real blocks are distinct, ``pad_block`` is not one of them,
+    and no pad entry aliases a real block -- i.e. no physical block other than ``pad_block`` appears
+    twice in the row handed to paged_fill_cache.
     """
     assert bucket % block_size == 0, f"bucket {bucket} must be a multiple of block_size {block_size}"
     assert chunk_start % block_size == 0, f"chunk_start {chunk_start} must be block-aligned"
@@ -93,14 +111,33 @@ def fill_pt_row(page_table, chunk_start, actual_len, bucket, pad_block, block_si
         f"page table row of {pt.shape[1]} blocks does not cover the {nreal} real block(s) at "
         f"offset {blk0} for chunk_start={chunk_start}, actual_len={actual_len}"
     )
-    row = torch.full((1, width), int(pad_block), dtype=torch.int32)
+    pad_block = int(pad_block)
+    row = torch.full((1, width), pad_block, dtype=torch.int32)
     for j in range(width):
         idx = blk0 + j
         if idx >= pt.shape[1]:
             continue  # page-table row ends before the bucket -> scratch block
         v = int(pt[0, idx])
-        if j < nreal or v != 0:
+        if j < nreal or (trust_tail and v != 0):
             row[0, j] = v
+    # Alias guard: one paged_fill_cache must never name a real block twice (multi-core write race between
+    # the real rows and the pad rows of the same block), and the scratch block must not be a real block.
+    real = row[0, :nreal].tolist()
+    tail = row[0, nreal:].tolist()
+    assert len(set(real)) == len(real), (
+        f"page-table row names a real block twice for chunk_start={chunk_start}, actual_len={actual_len}: "
+        f"real blocks {real}"
+    )
+    assert pad_block not in real, (
+        f"pad block {pad_block} is one of the request's real blocks {real} (chunk_start={chunk_start}, "
+        f"actual_len={actual_len}); the KV cache must carry one spare block the scheduler never hands out"
+    )
+    aliased = sorted(set(tail) & set(real))
+    assert not aliased, (
+        f"fill page table would write the bucket's pad rows into real block(s) {aliased} (row {row[0].tolist()}, "
+        f"real blocks {real}); the page-table row's stale tail aliases a real block -- unset "
+        f"QWEN36_PREFILL_TRUST_PT_TAIL"
+    )
     return row
 
 

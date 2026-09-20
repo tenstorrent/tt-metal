@@ -260,6 +260,17 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         """All prefill is model-owned (Generator drives decode only)."""
         model = self.model[0]
+        if os.environ.get("QWEN36_PREFILL_DEBUG", "0") == "1":
+            # p1b nondeterminism triage: what vLLM actually hands the model (page-table row incl. stale entries).
+            pt_dbg = page_table if isinstance(page_table, torch.Tensor) else ttnn.to_torch(page_table)
+            for u in range(pt_dbg.shape[0]):
+                row = pt_dbg[u]
+                nz = int((row != 0).sum())
+                logger.info(
+                    f"[PREFILL_DEBUG] user {u}: tokens{tuple(tokens.shape)} dtype={tokens.dtype} prompt_len="
+                    f"{int(prompt_lens[u]) if prompt_lens is not None else None} pt_width={row.numel()} nonzero={nz} "
+                    f"pt[:6]={row[:6].tolist()} empty_slots={kwargs.get('empty_slots')} start_pos={kwargs.get('start_pos')}"
+                )
         if model.use_tp and model.args.max_batch_size > 1:
             # Batched text prefill into decode slots (MM is B=1). Require real visual data, not a
             # non-None empty pixel_values placeholder from vLLM on text requests.
