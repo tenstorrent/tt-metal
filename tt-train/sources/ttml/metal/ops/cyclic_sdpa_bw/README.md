@@ -259,6 +259,29 @@ the original two-pass backward on its better layout, milliseconds:
 At 4096 rows per chip and above the ring step is bound by the shifts, not
 the kernel; below 1024 by dispatch.
 
+With grouped-query heads (`DISABLED_CompareGroupedHeads`; 4 chips, batch
+1, zigzag, direct shifts, median of five, ms; the two-pass backward on its
+better layout, the cyclic on its better layout and block height):
+
+| query / key heads, rows per chip, `d` | two-pass | cyclic | change | cyclic cores of 110 |
+|---|---|---|---|---|
+| 6 / 3, 4096, 64 | 18.1 | 9.8 | -46% | 48 |
+| 32 / 4, 2048, 64 | 27.1 | 16.7 | -38% | 64 |
+| 32 / 4, 4096, 64 | 82.5 | 34.0 | -59% | 64 |
+| 32 / 8, 2048, 128 | 40.6 | 16.3 | -60% | 64 |
+| 32 / 8, 4096, 128 | 131.4 | 34.3 | -74% | 64 |
+| 20 / 10, 5632, 64 | 92.0 | 19.8 | -79% | 110 |
+| 40 / 10, 5632, 64 | 171.4 | 33.1 | -81% | 110 |
+| 32 / 8, 5632, 64 | 141.9 | 31.1 | -78% | 88 |
+| 32 / 8, 5632, 128 | 237.0 | 58.4 | -75% | 88 |
+
+The core count is the cap on groups from the key-head count (see
+"Grouped-query attention"): `batch x G` groups of `C` cores. The last four
+rows are shapes whose key heads and chunk tile the grid (5632 rows per
+chip: a zigzag chunk of 2816 rows is `C = 11` at `Bt = 4`, and ten key
+heads make ten groups); there the grouped-head backward runs at the
+whole-grid speed-up of the plain one.
+
 ### Utilisation against the repository's two-pass backward
 
 Same problem, same 110 cores, causal, `d = 64`, both kernels timed on one
