@@ -237,12 +237,8 @@ DECODE_STAGE_LATENT_HW = (48, 84)  # the served 15 s chunk: a 4x7 tile grid on t
 
 
 def _stub_decoder_vae(mesh_device, stitch_exchange: str):
-    """A `MiniMaxH3Vae` whose decoder is a fixed projection of its tokens: the stitch and readback, no weights.
-
-    The projection makes a tile's pixels a function of the tile, not of the device it lands on --
-    the two exchanges place tiles on different devices, so a per-device constant (what the Tracy
-    harness's stub returns) would make them disagree for the wrong reason.
-    """
+    """A `MiniMaxH3Vae` whose decoder is a fixed projection of its tokens: the stitch and readback, no weights. The
+    projection ties a tile's pixels to the tile, not its device, since the two exchanges place tiles differently."""
     from .common import weights_subdir
     from ....models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae
     from ....parallel.manager import CCLManager
@@ -291,12 +287,8 @@ def _stub_decoder_vae(mesh_device, stitch_exchange: str):
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8_RING_L1, indirect=["mesh_device", "device_params"])
 def test_strip_stitch_matches_gather_stitch_bitwise(mesh_device):
-    """`stitch_exchange="strips"` is the gather stitch's arithmetic on fewer bytes: same bits out.
-
-    Both the float canvas and the yuv420 planar frame must agree byte for byte with the gather
-    form at the served 4x7 geometry -- every pixel meets the same fp32 mul, mul, add on the same
-    operands, and everything else is slicing, gathering and partitioning.
-    """
+    """`stitch_exchange="strips"` is the gather stitch's arithmetic on fewer bytes: the float canvas and the yuv420
+    planar frame must agree byte for byte with the gather form at the served 4x7 geometry."""
     import numpy as np
 
     vae, chunk = _stub_decoder_vae(mesh_device, "gather")
