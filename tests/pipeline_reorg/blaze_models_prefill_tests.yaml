@@ -566,20 +566,28 @@
   # embedding term and reading the trace as a plain residual makes every layer look ~0.45 PCC wrong.
   # test_golden_contract pins that reading host-only at 0.99999 with a failing control beside each
   # assertion. Needs /mnt/models for the checkpoint and trace; skips cleanly without them.
+  # Launched through mpirun like every other leg even though it needs one process and no device:
+  # this was the only bare `cmd` in the matrix, and it failed 4 runs out of 4 with
+  # "Executing the custom container implementation failed" 0 s into the step, before pytest ran.
+  # The runner's container hook drives the step through its host-execution path and does not
+  # handle the bare form. --pernode on sc1 is a single process, so the tests are unaffected.
   cmd: |
-    export LOGURU_LEVEL=INFO
-    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
-    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-    export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-    export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
-    python3 -m pytest -vvv --tb=short \
-      models/demos/deepseek_v3_d_p/tests/kimi_k3/test_golden_contract.py \
-      models/demos/deepseek_v3_d_p/tests/kimi_k3/test_layer_schedule.py \
-      models/demos/deepseek_v3_d_p/tests/kimi_k3/test_cache_contract.py \
-      models/demos/deepseek_v3_d_p/tests/kimi_k3/test_runtime_contract.py \
-      models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
-      models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
-      models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+      export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+      python3 -m pytest -vvv --tb=short \
+        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_golden_contract.py \
+        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_layer_schedule.py \
+        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_cache_contract.py \
+        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_runtime_contract.py \
+        models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
+        models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \
+        models/demos/deepseek_v3_d_p/tests/attn_res/model/test_attn_res_pipeline_split.py
+    '
   test_type: k3_contracts
   test_tags: [kimi_k3]
   test_group: module
