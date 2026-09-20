@@ -179,6 +179,8 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         kda_chronology::store(words, topology);
         chronology.push_back(1);
     }
+    // An exclusive scan passes each worker's transition to the next group. For a
+    // group-aligned split, the preceding worker therefore publishes the tail seed.
     const uint32_t reset_group = topology.reset_group(G);
     const bool aligned_reset = topology.local_split && topology.split_in_group(G) == 0;
 
@@ -215,13 +217,11 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         initial_b.push_back(affine_b_tiles);
     }
     initial_state.push_back(affine_b_tiles);
-    {
-        if (group == reset_group) {
-            if (!aligned_reset) {
-                tail_affine.push_back(affine_a_tiles + affine_b_tiles);
-            }
-            tail_entry_states.push_back(affine_b_tiles);
+    if (reset_worker) {
+        if (!aligned_reset) {
+            tail_affine.push_back(affine_a_tiles + affine_b_tiles);
         }
+        tail_entry_states.push_back(affine_b_tiles);
     }
 
     uint32_t completed_stages = 0;

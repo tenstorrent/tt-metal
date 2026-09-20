@@ -24,11 +24,20 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
 
             index = batch_head * groups_per_head + group
 
-        The scan is exclusive: the first group receives ``initial_state``, and each
-        later group receives the state produced by all preceding groups:
+        The scan is exclusive: the first group receives ``initial_state``. On an
+        unsplit rank, each later group receives the state produced by all preceding
+        groups:
 
             entry[0] = initial_state
             entry[g] = A_{g-1} @ entry[g-1] + B_{g-1}
+
+        On the rank containing both the chronological beginning and end of the
+        sequence, the tail restarts from ``tail_entry_states`` after the intervening
+        ranks. For a group-aligned split, the first tail group receives this seed
+        directly. For a split inside a group, that group's entry still belongs to
+        the head; its tail summary is applied to the tail seed to produce the next
+        group's entry. The chunk scan handles the reset inside the split group.
+        Subsequent groups use ``tail_a`` and ``tail_b`` instead of the head summaries.
 
         Args:
             a (ttnn.Tensor): Group multipliers ``[B*H*G, K, K]``. Must be a
