@@ -829,3 +829,94 @@ def test_col_major_width_concat_tiled(device):
 
     result = ttnn.to_torch(ttnn.concat([tt_a, tt_b], dim=dim, memory_config=out_mem))
     assert_equal(expected, result)
+
+
+# ---------------------------------------------------------------------------
+# Ragged width shards (#56827)
+#
+# Block sharding rounds the shard width up, so when a width is not a multiple
+# of the grid columns the last shard is part padding and the tensor's last dim
+# is stored padded out to whole shards -- width 16 over 5 columns of 4 spans
+# only 4 of them. Two separate things go wrong:
+#
+#   1. The per-input column cursor advanced by shard capacity
+#      (input_shard_w * shard_grid_w) rather than by the tensor's logical
+#      width, so every later input landed late and its tail was dropped.
+#      Note padded_shape[-1] is itself the padded width, so it is not the
+#      right quantity either -- the concat is defined on logical columns.
+#
+#   2. A prefix that is not a whole number of L1 alignment units puts the
+#      concat boundary inside a shard, and the NOC copy cannot write at an
+#      unaligned offset. That is now rejected rather than silently wrong.
+#
+# Row-major only: a tile shard cannot be ragged in width.
+# ---------------------------------------------------------------------------
+
+
+def _ragged_width_grid(grid_cols, grid_rows):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_cols - 1, grid_rows - 1))})
+
+
+def _run_width_concat_u32(device, widths, grid_cols, grid_rows, height=64):
+    """uint32 so the alignment arithmetic is legible: 4 columns per 16-byte unit."""
+    div_up = lambda a, b: -(-a // b)
+    grid = _ragged_width_grid(grid_cols, grid_rows)
+    shard_h = div_up(height, grid_rows)
+
+    def mem(w):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, (shard_h, div_up(w, grid_cols)), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    tensors = [
+        (torch.arange(height * w, dtype=torch.int64) + i * 100000).to(torch.int32).reshape(1, 1, height, w)
+        for i, w in enumerate(widths)
+    ]
+    expected = torch.cat(tensors, dim=3)
+    tt_inputs = [
+        ttnn.to_memory_config(
+            ttnn.from_torch(t, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.uint32), mem(w)
+        )
+        for t, w in zip(tensors, widths)
+    ]
+    result = ttnn.to_torch(ttnn.concat(tt_inputs, dim=3, memory_config=mem(sum(widths))))
+    assert tuple(result.shape) == tuple(expected.shape), f"wrong shape for widths={widths}"
+    assert torch.equal(
+        expected.to(torch.int64), result.to(torch.int64)
+    ), f"wrong values for widths={widths} on {grid_cols}x{grid_rows}"
+
+
+def test_ragged_width_concat_equal_widths(device):
+    """Width 16 over 5 grid columns: shard 4, capacity 20, so the data spans 4 of 5 shards."""
+    _run_width_concat_u32(device, [16] * 5, grid_cols=5, grid_rows=2)
+
+
+def test_ragged_width_concat_unequal_widths(device):
+    """Two inputs with unequal widths, the first ragged.
+
+    Two *equal* ragged widths cannot be built: the output shard width would
+    have to be aligned as well, and no width satisfies that with two inputs.
+    """
+    _run_width_concat_u32(device, [16, 40], grid_cols=5, grid_rows=2)
+
+
+def test_ragged_width_concat_three_unequal(device):
+    """Three inputs, so two cursor advances compound rather than one."""
+    _run_width_concat_u32(device, [16, 20, 40], grid_cols=5, grid_rows=2)
+
+
+def test_exact_width_concat_control(device):
+    """Control: width divides the grid columns, so capacity equals the real width."""
+    _run_width_concat_u32(device, [20, 20], grid_cols=5, grid_rows=2)
+
+
+def test_ragged_width_unaligned_prefix_rejected(device, expect_error):
+    """Width 11 puts the boundary 44 bytes in, inside a 16-byte unit.
+
+    The NOC write cannot start at an unaligned offset, so this is rejected
+    rather than silently copying the wrong bytes.
+    """
+    with expect_error(RuntimeError, "not L1-aligned"):
+        _run_width_concat_u32(device, [11, 11], grid_cols=3, grid_rows=2)
