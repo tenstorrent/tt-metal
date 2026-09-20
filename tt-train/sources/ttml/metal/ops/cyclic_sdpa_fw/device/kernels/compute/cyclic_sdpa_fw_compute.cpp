@@ -99,6 +99,12 @@ constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
 constexpr uint32_t block_size = get_compile_time_arg_val(4);
 constexpr uint32_t Bt = get_compile_time_arg_val(5);
 constexpr uint32_t score_tiles = Bt * Bt;
+// The destination file is half-synchronised: four Float32 tiles for the math
+// thread while the pack thread drains the other four. Every stage works in
+// groups that fit: two key tiles of a score column, two output tiles of a
+// query tile, two query tiles' statistics, with one register above them.
+constexpr uint32_t kGroup = (Bt > 2u) ? 2u : Bt;
+constexpr uint32_t kOutGroup = (qWt > 2u) ? 2u : qWt;
 // The exponential's bias constant: 127, nothing folded in (exp(a x) exactly).
 constexpr uint32_t exp_bias_bits = 0x42FE0000u;
 
@@ -406,45 +412,48 @@ void kernel_main() {
         cb_reserve_back(cb_sum_out, Bt);
         cb_reserve_back(cb_out_out, Bt * qWt);
 
-        // ---- 1. S^T = K Q^T, a column of the score grid at a time, packed twice.
+        // ---- 1. S^T = K Q^T, a column of the score grid two key tiles at a
+        // time (half the destination file, so the math thread's next group
+        // overlaps the pack thread's packs of this one), packed once, exactly:
+        // the reduce reads the same memory through its plain view at 19 bits,
+        // which only lowers the block maximum by 2^-11 relative -- harmless,
+        // since any m gives a consistent (P, l, lse).
         {
             DeviceZoneScopedN("SCORES");
             cb_reserve_back(cb_scores, score_tiles);
             cb_reserve_back(cb_scores_exact, score_tiles);
-            pack_reconfig_data_format(cb_scores);
+            pack_reconfig_data_format(cb_scores_exact);
             for (uint32_t a = 0; a < Bt; ++a) {
                 const uint32_t live = n_live(a);
-                tile_regs_acquire();
-                reconfig_data_format(cb_query, cb_key);
-                mm_init<kFidS>(cb_key, cb_query, /* transpose */ 1);
-                for (uint32_t b = 0; b < Bt; ++b) {
-                    if (b >= live) {
-                        break;
+                for (uint32_t b0 = 0; b0 < live; b0 += kGroup) {
+                    const uint32_t n = (live - b0 < kGroup) ? live - b0 : kGroup;
+                    tile_regs_acquire();
+                    reconfig_data_format(cb_query, cb_key);
+                    mm_init<kFidS>(cb_key, cb_query, /* transpose */ 1);
+                    for (uint32_t i = 0; i < kGroup; ++i) {
+                        if (i >= n) {
+                            break;
+                        }
+                        for (uint32_t k = 0; k < qWt; ++k) {
+                            mm_tiles<kFidS>(cb_key, cb_query, (b0 + i) * qWt + k, a * qWt + k, i);
+                        }
                     }
-                    for (uint32_t k = 0; k < qWt; ++k) {
-                        mm_tiles<kFidS>(cb_key, cb_query, b * qWt + k, a * qWt + k, b);
+                    if (diagonal && a >= b0 && a < b0 + n) {
+                        // The triangle, -inf where the key index exceeds the query index.
+                        reconfig_data_format(cb_attn_mask, cb_zero_tile);
+                        add_init(cb_attn_mask, cb_zero_tile, /* acc_to_dest */ true);
+                        add_tiles(cb_attn_mask, cb_zero_tile, kMaskTriangle, 0, a - b0);
                     }
-                }
-                if (diagonal) {
-                    // The triangle, -inf where the key index exceeds the query index.
-                    reconfig_data_format(cb_attn_mask, cb_zero_tile);
-                    add_init(cb_attn_mask, cb_zero_tile, /* acc_to_dest */ true);
-                    add_tiles(cb_attn_mask, cb_zero_tile, kMaskTriangle, 0, a);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t b = 0; b < Bt; ++b) {
-                    if (b >= live) {
-                        break;
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < kGroup; ++i) {
+                        if (i >= n) {
+                            break;
+                        }
+                        pack_tile</* out_of_order */ true>(i, cb_scores_exact, (b0 + i) * Bt + a);
                     }
-                    pack_rounding(true);
-                    pack_tile</* out_of_order */ true>(b, cb_scores, b * Bt + a);
-                    pack_rounding(false);
-#ifndef FW_EXPERIMENT_NO_EXACT_PACK
-                    pack_tile</* out_of_order */ true>(b, cb_scores_exact, b * Bt + a);
-#endif
+                    tile_regs_release();
                 }
-                tile_regs_release();
             }
             cb_push_back(cb_scores, score_tiles);
             cb_push_back(cb_scores_exact, score_tiles);
@@ -452,35 +461,49 @@ void kernel_main() {
             cb_wait_front(cb_scores_exact, score_tiles);
         }
 
-        // ---- 2. The block maximum per query tile, row layout, to scratch.
+        // ---- 2. The block maximum per query tile, row layout, to scratch;
+        // two query tiles per acquire (data and mask registers in pairs).
 #ifndef FW_EXPERIMENT_NO_STATS
         {
             DeviceZoneScopedN("MAX");
-            constexpr uint32_t kMaxReg = 0, kRowMaskReg = 1;
             cb_reserve_back(cb_block_max, Bt);
-            for (uint32_t a = 0; a < Bt; ++a) {
-                const uint32_t live = n_live(a);
+            for (uint32_t a0 = 0; a0 < Bt; a0 += 2u) {
+                const uint32_t na = (Bt - a0 < 2u) ? Bt - a0 : 2u;
                 tile_regs_acquire();
-                reconfig_data_format(cb_scores, cb_reduce_scaler);
-                reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_scores, cb_reduce_scaler, cb_block_max);
-                for (uint32_t b = 0; b < Bt; ++b) {
-                    if (b >= live) {
+                for (uint32_t jx = 0; jx < 2u; ++jx) {
+                    if (jx >= na) {
                         break;
                     }
-                    reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_scores, cb_reduce_scaler, b * Bt + a, 0, kMaxReg);
+                    const uint32_t a = a0 + jx;
+                    const uint32_t reg = 2u * jx;
+                    const uint32_t live = n_live(a);
+                    reconfig_data_format(cb_scores, cb_reduce_scaler);
+                    reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_scores, cb_reduce_scaler, cb_block_max);
+                    for (uint32_t b = 0; b < Bt; ++b) {
+                        if (b >= live) {
+                            break;
+                        }
+                        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_scores, cb_reduce_scaler, b * Bt + a, 0, reg);
+                    }
+                    reduce_uninit();
+                    // Row 0 only: the reduction leaves partial results in the
+                    // other rows (measured). mask_tile takes its mask in the
+                    // register above.
+                    reconfig_data_format_srca(cb_scores, cb_ones_row);
+                    copy_init(cb_ones_row);
+                    copy_tile(cb_ones_row, 0, reg + 1u);
+                    mask_tile_init();
+                    mask_tile(reg, reg + 1u);
                 }
-                reduce_uninit();
-                // Row 0 only: the reduction leaves partial results in the other
-                // rows (measured). mask_tile takes its mask in the register above.
-                reconfig_data_format_srca(cb_scores, cb_ones_row);
-                copy_init(cb_ones_row);
-                copy_tile(cb_ones_row, 0, kRowMaskReg);
-                mask_tile_init();
-                mask_tile(kMaxReg, kRowMaskReg);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_reconfig_data_format(cb_block_max);
-                pack_tile</* out_of_order */ true>(kMaxReg, cb_block_max, a);
+                for (uint32_t jx = 0; jx < 2u; ++jx) {
+                    if (jx >= na) {
+                        break;
+                    }
+                    pack_tile</* out_of_order */ true>(2u * jx, cb_block_max, a0 + jx);
+                }
                 tile_regs_release();
             }
             cb_push_back(cb_block_max, Bt);
@@ -537,51 +560,55 @@ void kernel_main() {
         }
 #endif
 
-        // ---- 3. P^T = exp(a (S^T - m_new)), the subtraction exact on the SFPU.
+        // ---- 3. P^T = exp(a (S^T - m_new)), the subtraction exact on the
+        // SFPU; two key tiles per acquire, m_new in the register above them.
 #ifndef FW_EXPERIMENT_NO_PROBS
         {
             DeviceZoneScopedN("PROBS");
             cb_reserve_back(cb_probs, score_tiles);
-            constexpr uint32_t kMaxReg = Bt;  // above the Bt score tiles
+            constexpr uint32_t kMaxReg = kGroup;
             for (uint32_t a = 0; a < Bt; ++a) {
                 const uint32_t live = n_live(a);
-                tile_regs_acquire();
-                reconfig_data_format_srca(cb_scores, cb_max_seed);
-                copy_init(cb_max_seed);
-                copy_tile(cb_max_seed, a, kMaxReg);
-                reconfig_data_format_srca(cb_max_seed, cb_scores_exact);
-                copy_init(cb_scores_exact);
-                for (uint32_t b = 0; b < Bt; ++b) {
-                    if (b >= live) {
-                        break;
+                for (uint32_t b0 = 0; b0 < live; b0 += kGroup) {
+                    const uint32_t n = (live - b0 < kGroup) ? live - b0 : kGroup;
+                    tile_regs_acquire();
+                    reconfig_data_format_srca(cb_scores, cb_max_seed);
+                    copy_init(cb_max_seed);
+                    copy_tile(cb_max_seed, a, kMaxReg);
+                    reconfig_data_format_srca(cb_max_seed, cb_scores_exact);
+                    copy_init(cb_scores_exact);
+                    for (uint32_t i = 0; i < kGroup; ++i) {
+                        if (i >= n) {
+                            break;
+                        }
+                        copy_tile(cb_scores_exact, (b0 + i) * Bt + a, i);
                     }
-                    copy_tile(cb_scores_exact, b * Bt + a, b);
-                }
-                sub_binary_tile_init();
-                for (uint32_t b = 0; b < Bt; ++b) {
-                    if (b >= live) {
-                        break;
+                    sub_binary_tile_init();
+                    for (uint32_t i = 0; i < kGroup; ++i) {
+                        if (i >= n) {
+                            break;
+                        }
+                        sub_binary_tile(i, kMaxReg, i);
                     }
-                    sub_binary_tile(b, kMaxReg, b);
-                }
-                for (uint32_t b = 0; b < Bt; ++b) {
-                    if (b >= live) {
-                        break;
+                    for (uint32_t i = 0; i < kGroup; ++i) {
+                        if (i >= n) {
+                            break;
+                        }
+                        exp_scaled(i);
                     }
-                    exp_scaled(b);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_reconfig_data_format(cb_probs);
-                pack_rounding(true);
-                for (uint32_t b = 0; b < Bt; ++b) {
-                    if (b >= live) {
-                        break;
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_reconfig_data_format(cb_probs);
+                    pack_rounding(true);
+                    for (uint32_t i = 0; i < kGroup; ++i) {
+                        if (i >= n) {
+                            break;
+                        }
+                        pack_tile</* out_of_order */ true>(i, cb_probs, (b0 + i) * Bt + a);
                     }
-                    pack_tile</* out_of_order */ true>(b, cb_probs, b * Bt + a);
+                    pack_rounding(false);
+                    tile_regs_release();
                 }
-                pack_rounding(false);
-                tile_regs_release();
             }
             cb_push_back(cb_probs, score_tiles);
             cb_wait_front(cb_probs, score_tiles);
@@ -636,49 +663,65 @@ void kernel_main() {
         }
 #endif
 
-        // ---- 5. O^T <- r O^T + V^T P^T, on the packet where it lies.
+        // ---- 5. O^T <- r O^T + V^T P^T, on the packet where it lies; two
+        // output tiles per acquire, r in the register above them.
         {
             DeviceZoneScopedN("UPDATE-O");
-            constexpr uint32_t kRReg = qWt;  // above the qWt output tiles of a query tile
+            constexpr uint32_t kRReg = kOutGroup;
             for (uint32_t a = 0; a < Bt; ++a) {
                 const uint32_t live = n_live(a);
-                tile_regs_acquire();
+                for (uint32_t k0 = 0; k0 < qWt; k0 += kOutGroup) {
+                    const uint32_t nk = (qWt - k0 < kOutGroup) ? qWt - k0 : kOutGroup;
+                    tile_regs_acquire();
 #ifdef FW_EXPERIMENT_NO_RESCALE_O
-                if (false) {
+                    if (false) {
 #else
-                if (!fresh) {
+                    if (!fresh) {
 #endif
-                    reconfig_data_format_srca(cb_probs, cb_rescale);
-                    copy_init(cb_rescale);
-                    copy_tile(cb_rescale, a, kRReg);
-                    reconfig_data_format_srca(cb_rescale, cb_out_seed);
-                    copy_init(cb_out_seed);
-                    for (uint32_t k = 0; k < qWt; ++k) {
-                        copy_tile(cb_out_seed, a * qWt + k, k);
+                        reconfig_data_format_srca(cb_probs, cb_rescale);
+                        copy_init(cb_rescale);
+                        copy_tile(cb_rescale, a, kRReg);
+                        reconfig_data_format_srca(cb_rescale, cb_out_seed);
+                        copy_init(cb_out_seed);
+                        for (uint32_t i = 0; i < kOutGroup; ++i) {
+                            if (i >= nk) {
+                                break;
+                            }
+                            copy_tile(cb_out_seed, a * qWt + k0 + i, i);
+                        }
+                        mul_binary_tile_init();
+                        for (uint32_t i = 0; i < kOutGroup; ++i) {
+                            if (i >= nk) {
+                                break;
+                            }
+                            mul_binary_tile(i, kRReg, i);
+                        }
                     }
-                    mul_binary_tile_init();
-                    for (uint32_t k = 0; k < qWt; ++k) {
-                        mul_binary_tile(k, kRReg, k);
-                    }
-                }
-                // V^T is the first operand (bf16, SrcB), P^T the second (Float32, SrcA).
-                reconfig_data_format(cb_probs, cb_value_t);
-                mm_init<kFidO>(cb_value_t, cb_probs, /* transpose */ 0);
-                for (uint32_t k = 0; k < qWt; ++k) {
-                    for (uint32_t b = 0; b < Bt; ++b) {
-                        if (b >= live) {
+                    // V^T is the first operand (bf16, SrcB), P^T the second (Float32, SrcA).
+                    reconfig_data_format(cb_probs, cb_value_t);
+                    mm_init<kFidO>(cb_value_t, cb_probs, /* transpose */ 0);
+                    for (uint32_t i = 0; i < kOutGroup; ++i) {
+                        if (i >= nk) {
                             break;
                         }
-                        mm_tiles<kFidO>(cb_value_t, cb_probs, k * Bt + b, b * Bt + a, k);
+                        for (uint32_t b = 0; b < Bt; ++b) {
+                            if (b >= live) {
+                                break;
+                            }
+                            mm_tiles<kFidO>(cb_value_t, cb_probs, (k0 + i) * Bt + b, b * Bt + a, i);
+                        }
                     }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_reconfig_data_format(cb_out_out);
+                    for (uint32_t i = 0; i < kOutGroup; ++i) {
+                        if (i >= nk) {
+                            break;
+                        }
+                        pack_tile</* out_of_order */ true>(i, cb_out_out, a * qWt + k0 + i);
+                    }
+                    tile_regs_release();
                 }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_reconfig_data_format(cb_out_out);
-                for (uint32_t k = 0; k < qWt; ++k) {
-                    pack_tile</* out_of_order */ true>(k, cb_out_out, a * qWt + k);
-                }
-                tile_regs_release();
             }
         }
 
@@ -696,30 +739,43 @@ void kernel_main() {
             // The sums and the accumulator packed above are read back through
             // the views of the same memory.
             unpacker_fence();
-            // O^T / l, back onto the packet (dead after this).
+            // O^T / l, back onto the packet (dead after this); two output
+            // tiles per acquire, 1/l in the register above them.
             {
-                constexpr uint32_t kInvReg = qWt;
+                constexpr uint32_t kInvReg = kOutGroup;
                 for (uint32_t a = 0; a < Bt; ++a) {
-                    tile_regs_acquire();
-                    broadcast_rows(cb_sum_plain, a, kInvReg);
-                    recip_tile_init</* legacy_compat */ false>();
-                    recip_tile</* legacy_compat */ false>(kInvReg);
-                    reconfig_data_format_srca(cb_sum_plain, cb_out_seed);
-                    copy_init(cb_out_seed);
-                    for (uint32_t k = 0; k < qWt; ++k) {
-                        copy_tile(cb_out_seed, a * qWt + k, k);
+                    for (uint32_t k0 = 0; k0 < qWt; k0 += kOutGroup) {
+                        const uint32_t nk = (qWt - k0 < kOutGroup) ? qWt - k0 : kOutGroup;
+                        tile_regs_acquire();
+                        broadcast_rows(cb_sum_plain, a, kInvReg);
+                        recip_tile_init</* legacy_compat */ false>();
+                        recip_tile</* legacy_compat */ false>(kInvReg);
+                        reconfig_data_format_srca(cb_sum_plain, cb_out_seed);
+                        copy_init(cb_out_seed);
+                        for (uint32_t i = 0; i < kOutGroup; ++i) {
+                            if (i >= nk) {
+                                break;
+                            }
+                            copy_tile(cb_out_seed, a * qWt + k0 + i, i);
+                        }
+                        mul_binary_tile_init();
+                        for (uint32_t i = 0; i < kOutGroup; ++i) {
+                            if (i >= nk) {
+                                break;
+                            }
+                            mul_binary_tile(i, kInvReg, i);
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_reconfig_data_format(cb_out_out);
+                        for (uint32_t i = 0; i < kOutGroup; ++i) {
+                            if (i >= nk) {
+                                break;
+                            }
+                            pack_tile</* out_of_order */ true>(i, cb_out_out, a * qWt + k0 + i);
+                        }
+                        tile_regs_release();
                     }
-                    mul_binary_tile_init();
-                    for (uint32_t k = 0; k < qWt; ++k) {
-                        mul_binary_tile(k, kInvReg, k);
-                    }
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_reconfig_data_format(cb_out_out);
-                    for (uint32_t k = 0; k < qWt; ++k) {
-                        pack_tile</* out_of_order */ true>(k, cb_out_out, a * qWt + k);
-                    }
-                    tile_regs_release();
                 }
             }
             unpacker_fence();

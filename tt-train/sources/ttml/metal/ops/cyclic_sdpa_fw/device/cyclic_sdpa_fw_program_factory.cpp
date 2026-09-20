@@ -146,8 +146,15 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
     make_cb(tt::CBIndex::c_27, 1, tt::DataFormat::Float16_b);         // reduce scaler: all ones
     make_cb(tt::CBIndex::c_29, 1, tt::DataFormat::Float16_b);         // ones row (the row-0 mask)
     // ---- Intermediates of one timestep.
-    make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);      // S^T, 19-bit rounded (the reduce's operand)
-    make_cb(tt::CBIndex::c_11, scoreT, tt::DataFormat::Float32);      // S^T, exact (the subtraction's source)
+    // S^T, packed once, exactly, through c_11 (unpack to dest: the SFPU
+    // subtraction's source) and read at 19 bits through c_10 by the FPU's
+    // column-max reduce: two views of one memory.
+    CreateCircularBuffer(
+        program, region,
+        CircularBufferConfig(
+            scoreT * fp32_tile, {{tt::CBIndex::c_10, tt::DataFormat::Float32}, {tt::CBIndex::c_11, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_10, fp32_tile)
+            .set_page_size(tt::CBIndex::c_11, fp32_tile));
     make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);      // P^T
     make_cb(tt::CBIndex::c_20, Bt, tt::DataFormat::Float32);          // r = exp(a (m_old - m_new)), full tile
     make_cb(tt::CBIndex::c_23, Bt, tt::DataFormat::Float32);          // colmax S^T, row layout (scratch)
@@ -234,9 +241,9 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
         program, kComputePath, region,
         ComputeConfig{
             .fp32_dest_acc_en = true,
-            // A whole column of the score grid (Bt <= 4 tiles) plus scratch
-            // lives in DST at once: the full file of eight Float32 tiles.
-            .dst_full_sync_en = true,
+            // Half-sync: every stage works in groups of at most three Float32
+            // tiles, so the math and pack threads alternate halves of the file.
+            .dst_full_sync_en = false,
             .unpack_to_dest_mode = unpack_mode,
             .compile_args = {C, qWt, vWt, scaler, block_size, Bt},
             .defines = defines});
