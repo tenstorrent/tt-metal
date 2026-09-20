@@ -12,14 +12,28 @@ def exchange_convolution_carry(
     sequence_parallel_axis: int,
     selections: ChronologicalSelections,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Return predecessor history and the replacement logical stream carry.
+
+    Both outputs are BF16 row-major DRAM tensors shaped ``[1, 3, local_channels]``.
+    Predecessor history varies by SP rank; the final carry is replicated across
+    each SP line. Channels remain sharded across TP. The native convolution
+    selects the caller's initial history at the logical sequence start.
+    """
     outgoing = selections.select_outgoing_history(projected_qkv)
-    gathered = ttnn.all_gather(
+    gathered_outgoing_history = ttnn.all_gather(
         outgoing, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    predecessor = selections.select_predecessor_history(gathered)
+    predecessor = selections.select_predecessor_history(gathered_outgoing_history)
+    # A split rank sends its head's history to its successor, but its physical
+    # tail supplies the final carry. Exchange physical tails separately so both
+    # sources remain available to the runtime selections.
     batch, rows, width = projected_qkv.shape
-    physical_end = ttnn.slice(projected_qkv, (0, rows - outgoing.shape[1], 0), (batch, rows, width))
-    finals = ttnn.all_broadcast(physical_end, cluster_axis=sequence_parallel_axis)
-    candidates = ttnn.concat(finals, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    physical_tail_history = ttnn.slice(
+        projected_qkv,
+        (0, rows - outgoing.shape[1], 0),
+        (batch, rows, width),
+    )
+    broadcast_tail_histories = ttnn.all_broadcast(physical_tail_history, cluster_axis=sequence_parallel_axis)
+    candidates = ttnn.concat(broadcast_tail_histories, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     final_carry = selections.select_final_history(candidates)
     return predecessor, final_carry
