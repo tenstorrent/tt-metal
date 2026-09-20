@@ -7,7 +7,19 @@ the ttnn.fill_cache write into a [B, Nv*4, 32, 32] view of the packed buffer and
 method TPGatedDeltaNet._sync_conv_hist_packed_device(slot) (taps=None -> row `slot` of the batched conv_states) on a
 model-free stand-in for both Bmax=32 and Bmax=1 batched buffers (at Bmax=1 a full-range ttnn.slice returns its INPUT, so
 the method must not free the live taps -- checked by reading them back); then times the per-layer chain.
-Model-free.   TT_VISIBLE_DEVICES=2,3,4,5 python <this file>"""
+Model-free.
+
+Geometry is parametric via environment variables (defaults = the TP=4 per-device geometry this test was first
+validated at):
+    HIST_NV (12)  value heads per device      HIST_NK (4)  key heads per device
+    HIST_C  (2*NK*DK + NV*DV = 2560)          per-device qkv width (override only if the model pads it)
+    HIST_DK (128) HIST_DV (128) HIST_K (4) HIST_B (32) HIST_LAYERS (48)
+    HIST_MESH ("1x4")  mesh shape opened by the test (rows x cols); the taps are sharded over all its devices.
+  TP=4 (chips 2-5):  TT_VISIBLE_DEVICES=2,3,4,5 python <this file>
+  TP=8 (1x8 mesh, the P150x8 serving geometry Nv=6, Nk=2, C=1280):
+                     HIST_NV=6 HIST_NK=2 HIST_C=1280 HIST_MESH=1x8 python <this file>
+  (Bmax=1 stand-in:  HIST_B=1 ... -- section 3a needs B >= 2 and is skipped at B=1.)"""
+import os
 import time
 import types
 
@@ -23,10 +35,27 @@ from models.demos.blackhole.qwen36.tt.gdn.tp import (
     release_hist_pack_consts,
 )
 
-# Qwen3.8-27B GDN at TP=4: 48 value heads / 16 key heads over 4 devices, 128-dim heads, 4 taps, 2560 channels per device.
-NV, NK, DK, DV, K, B = 12, 4, 128, 128, 4, 32
-C = 2 * NK * DK + NV * DV
-N_LAYERS = 48
+
+# Qwen3.8-27B GDN: 48 value heads / 16 key heads, 128-dim heads, 4 taps. Per device: TP=4 -> Nv=12, Nk=4, C=2560
+# (the defaults); TP=8 -> Nv=6, Nk=2, C=1280 (HIST_NV=6 HIST_NK=2 HIST_C=1280 HIST_MESH=1x8).
+def _env_int(name, default):
+    raw = os.environ.get(name)
+    return int(raw) if raw not in (None, "") else int(default)
+
+
+NV = _env_int("HIST_NV", 12)
+NK = _env_int("HIST_NK", 4)
+DK = _env_int("HIST_DK", 128)
+DV = _env_int("HIST_DV", 128)
+K = _env_int("HIST_K", 4)
+B = _env_int("HIST_B", 32)
+C = _env_int("HIST_C", 2 * NK * DK + NV * DV)
+N_LAYERS = _env_int("HIST_LAYERS", 48)
+_mesh_rows, _mesh_cols = (int(v) for v in os.environ.get("HIST_MESH", "1x4").lower().split("x"))
+MESH_SHAPE = (_mesh_rows, _mesh_cols)
+assert NV % NK == 0, f"HIST_NV={NV} must be a multiple of HIST_NK={NK}"
+assert C >= 2 * NK * DK + NV * DV and C % 32 == 0, f"HIST_C={C} must be >= 2*NK*DK+NV*DV and tile aligned"
+assert B >= 1, "HIST_B must be >= 1"
 
 
 def shard(mesh, t):
@@ -55,9 +84,13 @@ def host_pack(taps_host, parity):
 
 
 def main():
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), l1_small_size=24576)
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(*MESH_SHAPE), l1_small_size=24576)
     mesh.enable_program_cache()
     n_dev = mesh.get_num_devices()
+    logger.info(
+        f"geometry: mesh={MESH_SHAPE[0]}x{MESH_SHAPE[1]} ({n_dev} devices) Nv={NV} Nk={NK} Dk={DK} Dv={DV} K={K} "
+        f"C={C} B={B} layers={N_LAYERS}"
+    )
     torch.manual_seed(0)
     failures = 0
     t0 = time.perf_counter()
@@ -67,8 +100,9 @@ def main():
     # --- 1. scratch-style taps: K tensors [1, 1, C] per device (the B=1 prefill scratch conv_states) ---
     taps_host = torch.randn(n_dev, K, C) * 3.0
     taps_host[0, 0, :64] = 0.0  # zeros, negatives, large magnitudes, tiny values
-    taps_host[1, 2, 100:140] = -1e-3 * torch.arange(40)
-    taps_host[2, 3, 2000:2100] = 1e4 * torch.randn(100)
+    taps_host[1 % n_dev, 2 % K, 100:140] = -1e-3 * torch.arange(40)
+    _hi = min(2100, C)
+    taps_host[2 % n_dev, (K - 1), _hi - 100 : _hi] = 1e4 * torch.randn(100)
     taps_host = taps_host.to(torch.bfloat16)
     taps_dev = [shard(mesh, taps_host[:, j].reshape(n_dev, 1, C)) for j in range(K)]
     for parity in (0, 1):
@@ -91,7 +125,9 @@ def main():
     convs = [shard(mesh, (conv_host * (1.0 + 0.25 * j)).to(torch.bfloat16).reshape(n_dev, B, C)) for j in range(K)]
     conv_rows = [read(mesh, c).view(n_dev, B, C) for c in convs]  # exact per-device rows as the device holds them
     expect = hist_host.view(n_dev, B, NV, 4, 32, 32).clone()
-    for slot, fused in ((0, True), (1, True), (5, False), (30, False), (31, True), (2, False)):
+    _slot_cases = [(0, True), (1, True), (5, False), (B - 2, False), (B - 1, True), (2, False)]
+    _slot_cases = [(min(max(sl, 0), B - 1), fu) for sl, fu in _slot_cases]
+    for slot, fused in _slot_cases:
         taps = [ttnn.slice(convs[j], (0, slot, 0), (1, slot + 1, C)) for j in range(K)]  # [1, 1, C]
         packed = pack_hist_device(consts, taps, slot & 1, fused=fused)
         for t in taps:
@@ -128,9 +164,10 @@ def main():
             setattr(o, name, types.MethodType(getattr(TPGatedDeltaNet, name), o))
         return o
 
-    # 3a. Bmax = 32: the sliced rows are distinct buffers; the method frees them and leaves conv_states intact.
+    # 3a. Bmax >= 2: the sliced rows are distinct buffers; the method frees them and leaves conv_states intact.
+    # (At HIST_B=1 the batched buffers ARE the B=1 case of 3b; skip.)
     layer = stand_in(convs, hist)
-    for slot in (3, 31, 0):
+    for slot in (min(3, B - 1), B - 1, 0) if B >= 2 else ():
         layer._sync_conv_hist_packed_device(slot)
         rows_host = torch.stack([conv_rows[j][:, slot] for j in range(K)], dim=1)
         expect[:, slot] = host_pack(rows_host, slot & 1)
