@@ -153,7 +153,8 @@ class BundleConfig:
             prefill_max_num_seqs=_env_int(env, "QWEN36_PD_PREFILL_MAX_NUM_SEQS", 8),
             decode_max_num_seqs=_env_int(env, "QWEN36_PD_DECODE_MAX_NUM_SEQS", 32),
             max_model_len=_env_int(env, "QWEN36_PD_MAX_MODEL_LEN", 262144),
-            metal_cache=Path(env.get("TT_METAL_CACHE") or "/cache"),
+            # tt-model exports TT_METAL_CACHE=/cache; outside a container fall back to tt-metal's own default
+            metal_cache=Path(env.get("TT_METAL_CACHE") or Path.home() / ".cache" / "tt-metal-cache"),
             offline=env.get("HF_HUB_OFFLINE", "1") not in ("0", "false", "False"),
             log_seconds=_env_int(env, "QWEN36_PD_LOG_SECONDS", 30),
             serial_cold_boot=env.get("QWEN36_PD_SERIAL_COLD_BOOT", "1") not in ("0", "false", "False"),
