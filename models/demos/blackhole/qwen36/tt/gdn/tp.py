@@ -1178,14 +1178,51 @@ class TPGatedDeltaNet:
             # would hand the fused decode conv a misaligned history for the next K-1 steps. Repack those
             # rows from the (already gathered) conv_states.
             flipped = [i for i in range(self.B) if i != idx[i] and ((i ^ idx[i]) & 1)]
-            if len(flipped) > 8:
-                self._hist_packed_valid = False
-                self._ensure_conv_hist_packed()
-            else:
-                for i in flipped:
-                    self._sync_conv_hist_packed(slot=i)
+            if flipped:
+                self._flip_hist_parity(flipped)
         else:
             self._sync_conv_hist_packed()
+
+    def _flip_hist_parity(self, flipped):
+        """Move the packed-history rows of `flipped` slots to the other parity ON DEVICE: within every 32x32 tile
+        of those slots, tile rows 2c and 2c+1 swap (the history of channel chunk c sits at row 2c + parity, the
+        other parity's row of that chunk is zero). One HiFi4 / fp32-accumulate matmul of a per-slot 0/1
+        permutation matrix (swap for flipped slots, identity otherwise) over the whole [B, Nv*4, 32, 32] tensor
+        is exact for bf16 and takes ~1 ms; the host repack it replaces (`_pack_head_tiles` for every slot of
+        every layer) took ~20 s per remap at 32 users, stalling decode for tens of seconds under P/D churn."""
+        key = tuple(flipped)
+        cache = self.__dict__.setdefault("_hist_flip_perm_cache", {})
+        perm = cache.get(key)
+        if perm is None:
+            eye = torch.eye(32, dtype=torch.bfloat16)
+            swap = torch.zeros(32, 32, dtype=torch.bfloat16)
+            for c in range(16):
+                swap[2 * c, 2 * c + 1] = 1.0
+                swap[2 * c + 1, 2 * c] = 1.0
+            P = eye.repeat(self.B, 1, 1, 1)
+            for b in flipped:
+                P[b, 0] = swap
+            perm = ttnn.from_torch(
+                P.expand(self.B, self.Nv * 4, 32, 32).contiguous(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+            if len(cache) >= 64:
+                ttnn.deallocate(cache.pop(next(iter(cache))))
+            cache[key] = perm
+        exact = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+        )
+        h4 = ttnn.reshape(self.conv_hist_packed, (self.B, self.Nv * 4, 32, 32))
+        out = ttnn.matmul(perm, h4, compute_kernel_config=exact)
+        out5 = ttnn.reshape(out, (self.B, self.Nv, 4, 32, 32))
+        ttnn.copy(out5, self.conv_hist_packed)  # in place: the decode trace bakes this buffer's address
+        ttnn.deallocate(out)  # h4 / out5 are reshape VIEWS sharing their source buffers: never deallocate them
+        if _HIST_DEBUG:
+            logger.info(f"[hist] flipped parity of slots {flipped} on device")
 
     def _gather_indices(self, buf, idx, dim):
         """Rebuild `buf` so slice i along `dim` becomes old slice idx[i], then copy back in place.
