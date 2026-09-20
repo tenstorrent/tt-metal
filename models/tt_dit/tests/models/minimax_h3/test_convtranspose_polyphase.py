@@ -2,12 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""`ConvTranspose1dViaConv3d` in its polyphase form against the zero-stuffed form and torch, at H3 upsampler shapes.
-
-The polyphase conv sees the unstuffed rows with s*out outputs and 3 taps; the zero-stuffed form sees s*T rows with k
-taps. Same fp32 weights (the packed form is read off the transposed conv's impulse responses), so both must sit at
-the same distance from a float64 reference, including the first and last k output samples.
-"""
+"""`ConvTranspose1dViaConv3d` in its polyphase form against the zero-stuffed form and torch at H3 upsampler shapes: same
+fp32 weights, so both must sit at the same distance from a float64 reference, including the first/last k samples."""
 
 import copy
 import time
