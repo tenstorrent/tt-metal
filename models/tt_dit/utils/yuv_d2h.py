@@ -48,9 +48,8 @@ _FALLBACK_WARNED = False
 
 
 def _warn_once_about_the_fallback() -> None:
-    """The AVX2 concat is roughly 1.7x the torch scatter at the served chunk, but nothing in the
-    build compiles it -- `models/tt_dit/utils/cpp/build.sh` has to be run by hand -- so a serving
-    process can lose that quietly. Say it once per process rather than per frame."""
+    """The AVX2 concat is only built by hand (`models/tt_dit/utils/cpp/build.sh`), so a serving process can lose it
+    quietly; say so once per process rather than per frame."""
     global _FALLBACK_WARNED
     if _FALLBACK_WARNED:
         return
@@ -230,11 +229,7 @@ def _yuv_planar_d2h(
 
 
         # --- C++/AVX2 fast path --------------------------------------------- Drop-in replacement for the torch_threaded
-        # `planar_concat_cpp` requires C-contiguous shards and makes them so itself, one at a time
-        # on this thread: hand it trimmed views of padded tensors and the 43 MB chunk takes 25.9 ms
-        # against the torch scatter's 6.7. Row-major uint8 carries no padding at these shapes, so
-        # the guard should never fire; it is here so that if that changes the readback loses
-        # nothing rather than running 4x slower.
+        # `planar_concat_cpp` copies non-contiguous shards one by one, slower than the torch scatter: hence the guard.
         use_cpp = (
             HAS_CPP_PLANAR_CONCAT
             and len(mesh_coords) == TP_eff * SP_eff
@@ -498,8 +493,7 @@ def fast_device_to_host_yuv(
         print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
 
     # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
-    # Wide rows: the planes come out as (1, h, w*T) 4.7 KB pages instead of 28-byte (1, h, w, T) sticks, which read 2.7x
-    # faster over the NoC; `_as_hwt` views the host shards back.
+    # Wide rows: (1, h, w*T) pages instead of 28-byte (1, h, w, T) sticks read back faster; `_as_hwt` views them back.
     tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, wide_rows=True)
     if debug:
         print(f"  [yuv-d2h] yuv outputs per-shard:")
