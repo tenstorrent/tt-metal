@@ -23,29 +23,26 @@ from models.demos.gemma4_d_p.tt.model import _cp_chunk_major_row_order
 from models.demos.gemma4_d_p.tt.prefill_metadata import chunk_positions
 
 
-def prefill_chunk(model, token_ids, actual_start, actual_end, pad_token_id=0):
-    """Pack and prefill a request; return synchronized forward latency in milliseconds."""
+def prefill_chunk(model, token_ids, actual_start, actual_end, *, device_tokens, trace_id, pad_token_id=0):
+    """Stage a block-cyclic request; return synchronized trace replay time in milliseconds."""
     mesh_config = model.mesh_config
     positions = chunk_positions(actual_start, model.prefill_chunk_size, mesh_config.cp_degree).flatten()
     valid = positions < actual_end
     tokens = torch.full((1, model.prefill_chunk_size), pad_token_id, dtype=torch.int32)
     tokens[0, valid] = torch.tensor(token_ids, dtype=torch.int32)[positions[valid]]
-    device_tokens = ttnn.from_torch(
+    host_tokens = ttnn.from_torch(
         tokens,
-        device=mesh_config.device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=mesh_config.shard_mapper(mesh_dims=(1, None)),
     )
+    ttnn.copy_host_to_device_tensor(host_tokens, device_tokens)
+    model.prefill_metadata.update(slot_idx=0, actual_start=actual_start, actual_end=actual_end)
     ttnn.synchronize_device(mesh_config.device)
     start = time.perf_counter()
-    hidden_states = model.transform_and_embed_prefill_inputs_device(device_tokens)
-    output = model(hidden_states, actual_start=actual_start, actual_end=actual_end)
+    ttnn.execute_trace(mesh_config.device, trace_id, cq_id=0, blocking=False)
     ttnn.synchronize_device(mesh_config.device)
-    elapsed_ms = (time.perf_counter() - start) * 1000
-    output.deallocate(True)
-    device_tokens.deallocate(True)
-    return elapsed_ms
+    return (time.perf_counter() - start) * 1000
 
 
 @pytest.mark.timeout(900)
@@ -63,20 +60,56 @@ def test_block_cyclic_prefill_256k():
     router_config = ttnn.FabricRouterConfig()
     router_config.max_packet_payload_size_bytes = 8192
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D, router_config=router_config)
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), l1_small_size=16384)
+    mesh_device = ttnn.open_mesh_device(
+        ttnn.MeshShape(8, 4),
+        l1_small_size=16384,
+        trace_region_size=int(os.getenv("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000)),
+    )
+    trace_id = None
     try:
         mesh_config = MeshConfig(mesh_device)
         _, model, caches, _ = create_tt_model(
             mesh_config, prefill_chunk_size=chunk_size, max_seq_len=context_len, model_path=model_path
         )
+        device_tokens = ttnn.from_torch(
+            torch.tensor(token_ids[:chunk_size], dtype=torch.int32).unsqueeze(0),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_config.shard_mapper(mesh_dims=(1, None)),
+        )
+        model._prefill_metadata_external = True
+        ttnn.synchronize_device(mesh_device)
+
+        start = time.perf_counter()
+        output = model(model.transform_and_embed_prefill_inputs_device(device_tokens))
+        ttnn.synchronize_device(mesh_device)
+        output.deallocate(True)
+        logger.info("Warmup {:.3f} ms", (time.perf_counter() - start) * 1000)
+
+        start = time.perf_counter()
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        output = model(model.transform_and_embed_prefill_inputs_device(device_tokens))
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Trace capture {:.3f} ms", (time.perf_counter() - start) * 1000)
+
         rng = random.Random(42)
         actual_end = 0
         while actual_end < context_len:
             # Rewind up to 2K tokens, then extend the populated prefix.
             actual_start = max(0, actual_end - rng.randint(0, 2048)) // 32 * 32
             actual_end = min(context_len, actual_start + rng.randint(chunk_size // 2, chunk_size))
-            elapsed_ms = prefill_chunk(model, token_ids, actual_start, actual_end, tokenizer.pad_token_id)
-            logger.info("Prefill [{}, {}): synchronized forward {:.3f} ms", actual_start, actual_end, elapsed_ms)
+            elapsed_ms = prefill_chunk(
+                model,
+                token_ids,
+                actual_start,
+                actual_end,
+                device_tokens=device_tokens,
+                trace_id=trace_id,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+            logger.info("Prefill [{}, {}): device={:.3f} ms (trace replay)", actual_start, actual_end, elapsed_ms)
 
         # Restore absolute token order in the final-layer KV cache.
         row_order = _cp_chunk_major_row_order(context_len, mesh_config.cp_degree, chunk_size).argsort()
@@ -90,5 +123,7 @@ def test_block_cyclic_prefill_256k():
         logger.info("Final-layer KV cache vs GPU: PCC {:.6f}", pcc)
         assert passed, f"Final-layer KV cache PCC {pcc:.6f} < 0.98"
     finally:
+        if trace_id is not None:
+            ttnn.release_trace(mesh_device, trace_id)
         ttnn.close_mesh_device(mesh_device)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
