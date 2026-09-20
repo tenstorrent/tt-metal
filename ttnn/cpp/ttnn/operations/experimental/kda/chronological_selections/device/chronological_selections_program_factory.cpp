@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "chronological_selections_device_operation.hpp"
+#include "kernels/chronology.hpp"
 #include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -29,7 +30,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ChronologicalSelectionsFactory::cr
     ProgramSpec spec{
         .name = "kda_chronological_selections",
         .kernels = {std::move(reader)},
-        .scratchpads = {{.unique_id = scratch, .size_per_node = 32}},
+        .scratchpads =
+            {{.unique_id = scratch, .size_per_node = kda_chronology::selection::record_width * sizeof(uint32_t)}},
         .tensor_parameters =
             {{.unique_id = sn, .spec = actual_start.tensor_spec()}, {.unique_id = on, .spec = out.tensor_spec()}},
         .work_units =
