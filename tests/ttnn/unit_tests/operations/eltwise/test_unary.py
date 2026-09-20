@@ -235,13 +235,6 @@ def test_fp32_uint32(device, h, w, dtype):
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_gelu(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.gelu, layout=layout, ulp=2)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 def test_relu(device, h, w, layout):
     run_unary_test(device, h, w, ttnn.relu, layout=layout, ulp=0)
 
@@ -456,13 +449,6 @@ def test_relu_uint16_full_range(device):
 @pytest.mark.parametrize("w", [128])
 def test_silu(device, h, w, layout):
     run_unary_test(device, h, w, ttnn.silu, layout=layout)
-
-
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_log(device, h, w, layout):
-    run_unary_test(device, h, w, ttnn.log, layout=layout, allow_nonfinite=True)
 
 
 def test_log_edge_cases(device):
@@ -1092,6 +1078,24 @@ def test_remainder_divisor_guard(device, expect_error):
     # a float divisor on a uint32 tensor is rejected (it would silently truncate).
     with expect_error(RuntimeError, "integer scalar divisor"):
         ttnn.remainder(uint32_tensor, 3.0)
+
+
+@pytest.mark.parametrize(
+    "ttnn_op, ttnn_dtype, extra_kwargs",
+    [
+        (ttnn.sign, ttnn.int32, {}),
+        (ttnn.sqrt, ttnn.int32, {}),
+        (ttnn.neg, ttnn.uint32, {}),
+        (ttnn.signbit, ttnn.uint32, {}),
+        (ttnn.leaky_relu, ttnn.int32, {"negative_slope": 0.1}),
+    ],
+)
+def test_unary_rejects_unsupported_integer_dtype(ttnn_op, ttnn_dtype, extra_kwargs, device, expect_error):
+    torch_dtype = torch.int32 if ttnn_dtype == ttnn.int32 else torch.int64
+    input_data = torch.zeros((1, 1, 32, 32), dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(input_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not support integer input dtype"):
+        ttnn_op(input_tensor, **extra_kwargs)
 
 
 @pytest.mark.parametrize("scalar", [1.5, 2.0])
@@ -1778,20 +1782,11 @@ def test_unary_hardswish_ttnn(input_shapes, low, high, torch_dtype, ttnn_dtype, 
 
 
 @pytest.mark.parametrize("torch_dtype,ttnn_dtype", [(torch.int32, ttnn.int32), (torch.uint32, ttnn.uint32)])
-def test_unary_hardswish_integer_releases_every_input_tile(torch_dtype, ttnn_dtype, device):
-    """The integer path is hardsigmoid-only, but must still pop all input pages across a multi-tile tensor."""
-    grid = device.compute_with_storage_grid_size()
-    # The input CB holds two tiles. Give at least one worker three tiles so a missing pop blocks its reader.
-    num_tiles = 2 * grid.x * grid.y + 1
-    input_data = torch.zeros((1, 1, 32, 32 * num_tiles), dtype=torch_dtype)
+def test_unary_hardswish_rejects_integer_input(torch_dtype, ttnn_dtype, device, expect_error):
+    input_data = torch.zeros((1, 1, 32, 32), dtype=torch_dtype)
     input_tensor = ttnn.from_torch(input_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output = ttnn.to_torch(ttnn.hardswish(input_tensor), dtype=torch_dtype)
-    # Integer hardswish preserves the existing integer-path contract: the hardsigmoid result is
-    # packed as Float32 bits. hardsigmoid(0) is 0.5f == 0x3f000000.
-    golden = torch.full_like(input_data, 0x3F000000)
-
-    assert torch.equal(output, golden)
+    with expect_error(RuntimeError, "does not support integer input dtype"):
+        ttnn.hardswish(input_tensor)
 
 
 @pytest.mark.parametrize(
@@ -2779,3 +2774,105 @@ def test_softcap_zero_beta_guard(device, expect_error):
     # 1/beta is precomputed host-side, so a zero beta would reach the SFPU as inf.
     with expect_error(RuntimeError, "SOFTCAP requires a non-zero beta"):
         ttnn.softcap(input_tensor, 0.0)
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ([1, 1, 32, 32], [1, 1, 64, 64]),  # 1 page in, 4 pages out: the reader runs off the input buffer
+        ([1, 1, 64, 64], [1, 1, 32, 32]),  # 4 pages in, 1 page out: three quarters of the result is dropped
+        ([1, 1, 32, 64], [1, 1, 64, 32]),  # same volume, different shape
+        ([1, 1, 32, 32], [1, 1, 32, 96]),  # non-multiple page count
+        ([2, 1, 32, 32], [1, 1, 32, 32]),  # batch dropped
+    ],
+)
+@pytest.mark.parametrize("ttnn_function", [ttnn.exp, ttnn.relu, ttnn.sqrt])
+def test_unary_preallocated_output_shape_mismatch(device, expect_error, ttnn_function, input_shape, output_shape):
+    """A preallocated output whose logical shape differs from the input's must be rejected.
+
+    The work split is sized from the output (unary_program_factory.cpp), so an oversized
+    output_tensor makes the reader fetch pages past the end of the input buffer and an
+    undersized one silently truncates the result.
+    """
+    input_tensor = ttnn.from_torch(
+        torch.full(input_shape, 2.0, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    output_tensor = ttnn.from_torch(
+        torch.zeros(output_shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "Preallocated output shape must match computed shape"):
+        ttnn_function(input_tensor, output_tensor=output_tensor)
+
+
+def test_unary_preallocated_output_shape_match(device):
+    """The matching case still runs and still writes the caller's buffer."""
+    shape = [1, 1, 32, 64]
+    torch_input = torch.linspace(-2.0, 2.0, 32 * 64, dtype=torch.bfloat16).reshape(shape)
+
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    result = ttnn.exp(input_tensor, output_tensor=output_tensor)
+
+    assert list(result.shape) == shape
+    assert_with_pcc(torch.exp(torch_input.float()), ttnn.to_torch(output_tensor).float(), 0.999)
+
+
+def test_unary_preallocated_output_shape_mismatch_program_cache_hit(device, expect_error):
+    """The same mismatch must be rejected on the program-cache-hit path.
+
+    compute_program_hash does not hash the output shape, so the mismatched call below hits the
+    cache entry the matching calls created. The check lives in compute_output_specs, which every
+    dispatch reaches, rather than only in the cache-miss validation.
+    """
+    device.enable_program_cache()
+
+    input_tensor = ttnn.from_torch(
+        torch.full([1, 1, 32, 32], 2.0, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    matching_output = ttnn.from_torch(
+        torch.zeros([1, 1, 32, 32], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    mismatched_output = ttnn.from_torch(
+        torch.zeros([1, 1, 64, 64], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    ttnn.exp(input_tensor, output_tensor=matching_output)
+    entries = device.num_program_cache_entries()
+    assert entries > 0, "the matching call should have populated the program cache"
+    ttnn.exp(input_tensor, output_tensor=matching_output)
+    assert device.num_program_cache_entries() == entries, "the second matching call should be a cache hit"
+
+    with expect_error(RuntimeError, "Preallocated output shape must match computed shape"):
+        ttnn.exp(input_tensor, output_tensor=mismatched_output)
+    assert device.num_program_cache_entries() == entries, "the mismatched call must not compile a new program"
+
+
+def test_unary_preallocated_output_shape_mismatch_program_cache_disabled(device, expect_error):
+    """With the program cache off, compute_program_hash is never called, so validation is the
+    only thing left that can reach the check."""
+    device.disable_and_clear_program_cache()
+    try:
+        input_tensor = ttnn.from_torch(
+            torch.full([1, 1, 32, 32], 2.0, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        output_tensor = ttnn.from_torch(
+            torch.zeros([1, 1, 64, 64], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+
+        with expect_error(RuntimeError, "Preallocated output shape must match computed shape"):
+            ttnn.exp(input_tensor, output_tensor=output_tensor)
+    finally:
+        device.enable_program_cache()

@@ -576,7 +576,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Tilize CBs
     //-------------------------------------------------------------------------
 
-    // CB for passing total_chunks from writer to compute
+    // CB for passing total_chunks from the tilize reader to the tilize compute kernel
     uint32_t total_chunks_cb_id = tt::CBIndex::c_3;
     // full indices buffer
     uint32_t indices_tensor_cb_id = tt::CBIndex::c_4;
@@ -731,7 +731,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_num_cores - 1,  // one entry per non-drain core
         tt::DataFormat::UInt32);
 
-    // CB for passing total_chunks from writer to compute kernel
+    // CB for passing total_chunks from the tilize reader to the tilize compute kernel
     // Single page holding one uint32_t value. Page size floored at l1_alignment /
     // CIRCULAR_BUFFER_COMPUTE_WORD_SIZE so the unpack LLK fifo_* fields (16 B words) are non-zero
     // when tilize_compute pops this CB.

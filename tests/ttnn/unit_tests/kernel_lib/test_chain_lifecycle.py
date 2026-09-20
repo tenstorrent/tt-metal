@@ -65,6 +65,7 @@ OUT_LIFECYCLES = {
     2: "ReserveAllPushPerTile",
     3: "CallerManaged",
     4: "ReserveNonePushEnd",
+    5: "PerOuter",
 }
 
 

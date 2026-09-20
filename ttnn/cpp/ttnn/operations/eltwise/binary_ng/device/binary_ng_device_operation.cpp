@@ -97,6 +97,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case MINIMUM:
         case XLOGY:
         case ATAN2:
+        case NEXTAFTER:
         case POWER:
         case WHERE_TST:
         case WHERE_TTS:
@@ -727,6 +728,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         resolved_sub_core_grids,
         sub_device_id,
         subtile_broadcast_type,
+        /*scalar_is_lhs=*/false,
         is_sfpu_op,
         is_quant_op,
         is_where_op,
@@ -771,7 +773,8 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     std::optional<ttnn::operations::unary::ScalarVariant> /*scalar_value*/,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool scalar_is_lhs) {
     using OperationType = ttnn::operations::binary_ng::BinaryNgDeviceOperation;
 
     // Validate storage type
@@ -824,6 +827,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         resolved_sub_core_grids,
         sub_device_id,
         ttnn::operations::binary_ng::SubtileBroadcastType::NONE,
+        scalar_is_lhs,
         is_sfpu_op,
         is_quant_op,
         false,

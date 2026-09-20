@@ -81,6 +81,7 @@ struct OpConfig {
         MINIMUM,
         XLOGY,
         ATAN2,
+        NEXTAFTER,
         LT,
         GT,
         GE,

@@ -22,10 +22,18 @@ namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_ind
 // for every global position it will carry). The op then derives the chunk's start row in that
 // shard the same way the per-chip kv-cache writer derives its `update_idxt`, so the boundary chip's
 // older-then-wrap token layout is read with a single contiguous offset.
+// Optional seq_subshard_axis subdivides input query rows along the other mesh axis. Cos/sin remain
+// replicated there. The caller must supply input equivalent to an exact mesh_partition of the full
+// SP slab along dim=-2 and seq_subshard_axis, and cos/sin built for
+// chunk_local = input sequence length * subshard axis size. These layout preconditions cannot be
+// validated by the op; replicated or differently partitioned input, or mismatched cache slab geometry,
+// produces incorrect per-rank rotation offsets without an error. The reader derives the original
+// rotated SP offset before adding this rank's query window within the slab.
 //
 // `kv_actual_global` (tokens, tile-aligned) stays out of the program hash, so successive chunks reuse
 // one cached program. Returns a new tensor with the same spec as `input`. Two call forms (identical
-// results):
+// results). Optional rotary_dim/rotary_offset select a tile-aligned channel region;
+// cos/sin width must equal rotary_dim. Channels outside that region are copied unchanged:
 
 // (1) Scalar form: `kv_actual_global` is a host scalar held in a common runtime arg, patched on cache
 //     hits.
@@ -37,7 +45,10 @@ ttnn::Tensor rotary_embedding_indexed(
     uint32_t kv_actual_global,
     uint32_t cluster_axis,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<uint32_t>& seq_subshard_axis = std::nullopt,
+    const std::optional<uint32_t>& rotary_dim = std::nullopt,
+    uint32_t rotary_offset = 0);
 
 // (2) Tensor form (traceable): `kv_actual_global` is its OWN 1-element uint32 DRAM tensor that the reader
 //     reads on-device (element [0]). Off the host dispatch path, so one captured program replays across
@@ -50,7 +61,10 @@ ttnn::Tensor rotary_embedding_indexed(
     const ttnn::Tensor& kv_actual_global,
     uint32_t cluster_axis,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<uint32_t>& seq_subshard_axis = std::nullopt,
+    const std::optional<uint32_t>& rotary_dim = std::nullopt,
+    uint32_t rotary_offset = 0);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed
 

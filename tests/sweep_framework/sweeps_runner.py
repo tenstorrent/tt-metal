@@ -747,6 +747,19 @@ def _is_device_hang_message(message) -> bool:
 _DEVICE_FATAL_SIGNATURES = (
     "unexpected run_mailbox value",
     "read unexpected run_mailbox",
+    # The PCIe link to a board is returning all-ones, i.e. the board has fallen off the bus.
+    # UMD raises it as PcieHangError from device/tt_device/tt_device_error.cpp:
+    #   Read 0xffffffff over PCIe ID 13: the board should be reset.
+    # Same class as the run_mailbox wedge and just as sticky -- a board that stops answering
+    # over PCIe does not come back within the job, and every subsequent vector fails on it
+    # identically. Seen on scheduled lead-models run 35046397921 job mesh8x4_col_2d, where all
+    # 23 of the job's failing vectors carried this one message and were booked as test
+    # failures; three sibling Galaxy lanes in the same run independently reported a failed
+    # tt-smi reset of device 16 and a device canary of 2+2 != 4 returning 0.0 across all
+    # 32768 elements, so the board really was gone rather than the op being wrong.
+    # Matched on the invariant tail: both the value read and the PCIe ID are format
+    # substitutions in the UMD message and vary between boards and faults.
+    "the board should be reset",
 )
 
 
@@ -947,6 +960,26 @@ def _set_crash_hang_defaults(result):
     result["num_cores"] = None
     result["peak_l1_memory_aggregate"] = None
     result["peak_l1_memory_device"] = None
+
+
+def _stamp_result_footer(result, original_vector_data):
+    """Stamp the fields every exported result must carry, whatever path produced it.
+
+    end_time_ts is not optional downstream: result_destination maps it to OpTest.test_end_ts,
+    whose pydantic model rejects None, so a result that reaches export without it takes the
+    whole export down with a ValidationError (#54543).
+
+    Most results get these from the footer at the end of the execute_suite loop body, but the
+    paths that abort the suite `break` before reaching it, and the marking helpers in
+    _populate_result_from_response (canary failure, profiler readback failure, infra
+    classification) deliberately set only status/exception. Rather than have each of those
+    remember the footer, they all call this.
+    """
+    result["original_vector_data"] = original_vector_data
+    result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+    result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+    result["host"] = get_hostname()
+    result["user"] = get_username()
 
 
 def _mark_infra_abort(result, reason: str):
@@ -1322,6 +1355,10 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
                 if abort_suite:
                     if infra_abort or config.skip_on_timeout:
+                        # This branch breaks out before the footer at the end of the loop body,
+                        # so stamp it here: the vector that caused the abort is exported like
+                        # any other result and must carry end_time_ts (#54543).
+                        _stamp_result_footer(result, original_vector_data)
                         results.append(result)
                         suite_pbar.update()
                         skip_reason = (
@@ -1357,14 +1394,9 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                 logger.error(f"Device reset failed unrecoverably: {e}. Aborting remaining tests in suite.")
                 result["status"] = TestStatus.FAIL_CRASH_HANG
                 result["exception"] = str(e)
-                # This path breaks before the common footer that stamps this; set it here
-                # so the abort record carries original_vector_data like every other result.
-                result["original_vector_data"] = original_vector_data
                 result["e2e_perf"] = None
-                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
-                result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-                result["host"] = get_hostname()
-                result["user"] = get_username()
+                # This path also breaks before the common footer.
+                _stamp_result_footer(result, original_vector_data)
                 results.append(result)
                 suite_pbar.update()
                 for j in range(i + 1, len(test_vectors)):
@@ -1392,12 +1424,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
             finally:
                 ttnn.operation_tracer.set_sweep_source_hash(None)
 
-        # Add the original test vector data to the result
-        result["original_vector_data"] = original_vector_data
-        result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
-        result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
-        result["host"] = get_hostname()
-        result["user"] = get_username()
+        _stamp_result_footer(result, original_vector_data)
 
         suite_pbar.update()
         results.append(result)

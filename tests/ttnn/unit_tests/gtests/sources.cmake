@@ -3,6 +3,7 @@
 
 set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_reflect.cpp
+    sdpa/test_sliding_window_work_plan.cpp
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
     test_async_runtime.cpp
@@ -13,6 +14,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
 
 set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_add.cpp
+    test_scalar_lhs_binary.cpp
     test_add_int.cpp
     test_broadcast_to.cpp
     test_convert_to_hwc_gather.cpp

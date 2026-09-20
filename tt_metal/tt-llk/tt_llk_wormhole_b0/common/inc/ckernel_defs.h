@@ -342,11 +342,16 @@ enum class BinaryOp : std::uint8_t
     REMAINDER_INT32  = 40,
     REMAINDER_UINT32 = 41,
     FMOD_INT32       = 42,
+    // nextafter steps the bit pattern, so the step is one ULP of the destination format rather
+    // than a fixed epsilon. bfloat16 carries its mantissa in the top 16 bits of the fp32 dest
+    // register, so it needs its own variant.
+    NEXTAFTER      = 43,
+    NEXTAFTER_BF16 = 44,
     // LOGADDEXP and LOGADDEXP2 are the exception to the 1:1 mapping above: neither has
     // an SfpuType counterpart, so their inits pass a placeholder instead -- `add1` in the
     // tt-llk test helpers (sfpu_operations.h), `unused` in the tt-metal Compute API.
-    LOGADDEXP        = 43,
-    LOGADDEXP2       = 44,
+    LOGADDEXP  = 45,
+    LOGADDEXP2 = 46,
 };
 
 enum class PackMode : std::uint8_t
