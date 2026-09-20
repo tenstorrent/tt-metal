@@ -25,6 +25,7 @@
 #include "metal/ops/ring_sdpa_bw/ring_sdpa_bw.hpp"
 #include "metal/ops/ring_sdpa_fw/ring_sdpa_fw.hpp"
 #include "metal/ops/ring_ttnn_sdpa_fw/ring_ttnn_sdpa_fw.hpp"
+#include "metal/ops/ring_softmax_merge/ring_softmax_merge.hpp"
 #include "metal/ops/cyclic_sdpa_bw/device/cyclic_sdpa_bw_program_factory.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
@@ -143,6 +144,9 @@ namespace {
 // Pads a (B, H, S, 1) FP32 logsumexp tensor into the (B, H, S, 32) intermediates layout
 // the SDPA kernels expect: lse in column 0, the remaining 31 columns are ignored padding.
 ttnn::Tensor pad_lse_to_intermediates_layout(const ttnn::Tensor& lse) {
+    if (lse.logical_shape()[3] == 32U) {
+        return lse;  // already in the intermediates layout
+    }
     const ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding = {
         {0, 0},  // batch
         {0, 0},  // heads
@@ -166,30 +170,6 @@ ttnn::Tensor cat_rows(const ttnn::Tensor& a, const ttnn::Tensor& b) {
     return ttnn::concat(std::vector<ttnn::Tensor>{a, b}, /*dim=*/2);
 }
 
-// Fold one step's partial attention (output, intermediates with the lse in
-// column 0) into a running FP32 output and lse by the online softmax. A
-// partial whose lse is -inf (a chip that ran nothing) leaves both unchanged.
-void combine_partial(
-    ttnn::Tensor& out_acc,
-    ttnn::Tensor& lse_acc,
-    const ttnn::Tensor& out_step,
-    const ttnn::Tensor& inter_step,
-    uint32_t batch,
-    uint32_t heads,
-    uint32_t rows) {
-    const ttsl::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
-    const ttsl::SmallVector<uint32_t> lse_start = {0, 0, 0, 0};
-    const ttsl::SmallVector<uint32_t> lse_end = {batch, heads, rows, 1};
-    const ttnn::Tensor lse_chunk = ttnn::slice(inter_step, lse_start, lse_end, slice_step);
-    const ttnn::Tensor m = ttnn::maximum(lse_acc, lse_chunk);
-    const ttnn::Tensor new_lse = ttnn::add(
-        m, ttnn::log(ttnn::add(ttnn::exp(ttnn::subtract(lse_acc, m)), ttnn::exp(ttnn::subtract(lse_chunk, m)))));
-    const ttnn::Tensor old_weight = ttnn::exp(ttnn::subtract(lse_acc, new_lse));
-    const ttnn::Tensor new_weight = ttnn::exp(ttnn::subtract(lse_chunk, new_lse));
-    const ttnn::Tensor step_fp32 = ttnn::typecast(out_step, ttnn::DataType::FLOAT32);
-    out_acc = ttnn::add(ttnn::multiply(out_acc, old_weight), ttnn::multiply(step_fp32, new_weight));
-    lse_acc = new_lse;
-}
 
 // The zigzag ring. Every local tensor is [chunk r | chunk 2d - 1 - r], n rows
 // each. A step meets the visiting chip's two chunks, and of the four chunk
@@ -241,7 +221,7 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
     const auto neg_inf_n = [&]() {
         return device_full(
             mesh_device,
-            ttsl::SmallVector<uint32_t>{batch_num, heads, n, 1U},
+            ttsl::SmallVector<uint32_t>{batch_num, heads, n, 32U},
             -std::numeric_limits<float>::infinity(),
             ttnn::DataType::FLOAT32);
     };
@@ -256,7 +236,6 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
         ttnn::Layout::TILE,
         mesh_device,
         ttnn::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, ttnn::BufferType::DRAM));
-    const ttnn::Tensor no_contrib = pad_lse_to_intermediates_layout(neg_inf_n());
     // The forward's phases, under the same TTML_RING_PROFILE switch as the backward's.
     RingBackwardProfile fw_profile(mesh_device);
     fw_profile.mark("forward: setup");
@@ -269,10 +248,6 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
                              ttnn::Tensor& out_acc,
                              ttnn::Tensor& lse_acc,
                              uint32_t step) {
-        // Chips the launch does not select run nothing and must contribute
-        // nothing: an lse of -inf does that.
-        ttnn::copy(no_contrib, step_inter);
-        fw_profile.mark("forward: no-contribution fill");
         if (forward_kind == RingForwardKind::Ttnn) {
             ttml::metal::ring_ttnn_sdpa_fw(
                 q, k, v, ring_size, cp_axis, step, mask, Direction::Backward, /* zigzag */ true, who,
@@ -282,8 +257,13 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
                 q, k, v, ring_size, cp_axis, step, who, mask, Direction::Backward, step_out, step_inter);
         }
         fw_profile.mark(mask == AttentionMaskType::Causal ? "forward: kernel, causal pair" : "forward: kernel, dense pair");
-        combine_partial(out_acc, lse_acc, step_out, step_inter, batch_num, heads, n);
-        fw_profile.mark("forward: combine");
+        // The online-softmax merge into the running (O, lse), in place, in one
+        // launch, on the chips that ran the partial -- the others contribute
+        // nothing by running nothing.
+        ttml::metal::ring_softmax_merge(
+            out_acc, lse_acc, step_out, step_inter, ring_size, cp_axis, step, Direction::Backward, /* zigzag */ true,
+            who, mask);
+        fw_profile.mark("forward: merge");
     };
 
     for (uint32_t step = 0; step < ring_size; ++step) {

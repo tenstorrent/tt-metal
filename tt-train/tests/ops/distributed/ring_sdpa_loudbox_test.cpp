@@ -817,6 +817,8 @@ void run_ring_attention(
                 std::cout << "  " << name << " tiles with an element over 10% of scale: " << tiles_over << where.str()
                           << "\n";
             }
+            std::cout << "  " << name << ": rms " << rms << " = " << 100.0F * rms / scale << "% of scale " << scale
+                      << "\n";
             EXPECT_LE(rms, 0.02F * scale) << name << ": rms " << rms << " on scale " << scale << "; " << report(want, got);
             EXPECT_LE(xt::amax(xt::abs(got - want))(), 0.25F * scale) << name << ": " << report(want, got);
         };
