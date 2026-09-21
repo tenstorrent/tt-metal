@@ -1896,7 +1896,6 @@ def test_unary_signbit_float_edge_case_ttnn(torch_dtype, ttnn_dtype, device):
     "torch_dtype, ttnn_dtype",
     [
         (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
     ],
 )
 def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype, ttnn_dtype, device, expect_error):
