@@ -744,7 +744,9 @@ if run_group "bh-ring-stress"; then
 # so a stuck solve is caught/reported here rather than cancelled mid-shard by GitHub Actions.
 # The 96+ stage rings get the longer SC24-style budget (their solves are much bigger).
 RING_STRESS_TIMEOUT=300
-LONG_RING_STRESS_TIMEOUT=600
+# The 144-stage SC36 exact-fit ring is a genuinely hard SAT solve (~1.48M conflicts, ~6 min local -O3);
+# the cpu_medium CI runner is ~2-4x slower per core, so budget ~30 min for it. (112 on SC28 is easier.)
+LONG_RING_STRESS_TIMEOUT=1800
 # The LONG exact-fit rings (112 on SC28, 144 on SC36) are re-enabled now that kissat is the default SAT
 # engine (#51629 context): these were disabled under CaDiCaL, where the general-SAT host-minimization solve
 # did not finish in a CI budget (112-stage still running after ~5.5 min locally; 128-stage still solving
