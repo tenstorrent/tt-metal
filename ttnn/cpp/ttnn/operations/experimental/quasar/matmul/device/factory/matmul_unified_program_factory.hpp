@@ -46,14 +46,14 @@ struct UnifiedMatmulPlan {
     uint32_t subblock_N_tiles = 0;
 
     // C slice assignment. The C slices of one batch are walked row-major (across N, then down M) and the
-    // walk is split into contiguous runs, one per active core; core i starts at
-    // (first_C_slice_M_tile[i], first_C_slice_N_tile[i]) and produces num_C_slices[i] C slices, for every
-    // batch.
+    // walk is split into contiguous runs, one per active core; core i's first C slice has origin
+    // (C_slice_first_M_tile[i], C_slice_first_N_tile[i]) in tiles and it produces num_C_slices[i] C slices,
+    // for every batch. The kernels step that origin themselves.
     uint32_t C_slices_per_batch = 0;
     bool row_major_cores = true;
     std::vector<tt::tt_metal::CoreCoord> cores;
-    std::vector<uint32_t> first_C_slice_M_tile;
-    std::vector<uint32_t> first_C_slice_N_tile;
+    std::vector<uint32_t> C_slice_first_M_tile;
+    std::vector<uint32_t> C_slice_first_N_tile;
     std::vector<uint32_t> num_C_slices;
     uint32_t max_C_slices_per_core = 0;
 

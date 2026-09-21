@@ -7,8 +7,8 @@
 // GEMM view, all sizes in 32x32 tiles: C[M x N], batch_size times. A C slice is the C_slice_M_tiles x
 // C_slice_N_tiles tiles of C at origin (C_slice_first_M_tile, C_slice_first_N_tile). This cluster owns num_C_slices
 // consecutive C slices of the row-major walk over C (across N, then down M) starting at
-// (first_C_slice_M_tile, first_C_slice_N_tile), and writes them for every batch, exactly as the reader
-// walks them.
+// (C_slice_first_M_tile, C_slice_first_N_tile) as passed by the host, and writes them for every batch, exactly as the
+// reader walks them.
 //
 // The compute kernel packs a C slice one subblock (subblock_M_tiles x subblock_N_tiles tiles, what DST holds)
 // at a time, subblocks in row-major order over the C slice and tiles in row-major order within a subblock.
@@ -25,8 +25,6 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t first_C_slice_M_tile = get_arg(args::first_C_slice_M_tile);
-    const uint32_t first_C_slice_N_tile = get_arg(args::first_C_slice_N_tile);
     const uint32_t num_C_slices = get_arg(args::num_C_slices);
 
     constexpr uint32_t batch_size = get_arg(args::batch_size);
@@ -56,8 +54,10 @@ void kernel_main() {
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
         const uint32_t C_batch_first_tile = batch * C_batch_stride_tiles;
 
-        uint32_t C_slice_first_M_tile = first_C_slice_M_tile;  // origin of the current C slice, in tiles
-        uint32_t C_slice_first_N_tile = first_C_slice_N_tile;
+        // Origin of the C slice being produced, in tiles. The host passes the origin of this cluster's first
+        // C slice; the loop steps it across N, then down M, so every batch starts over from the argument.
+        uint32_t C_slice_first_M_tile = get_arg(args::C_slice_first_M_tile);
+        uint32_t C_slice_first_N_tile = get_arg(args::C_slice_first_N_tile);
         for (uint32_t MN_chunk = 0; MN_chunk < num_C_slices; ++MN_chunk) {
             // Same subblock walk as the compute kernel: (m_tile, n_tile) is the subblock's first tile within
             // the C slice.
