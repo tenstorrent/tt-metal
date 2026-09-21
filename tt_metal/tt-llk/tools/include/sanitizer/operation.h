@@ -52,6 +52,7 @@ struct Operand<Exu::Unpack>
     {
     };
 
+    // Support checking DestWidth32: https://github.com/tenstorrent/tt-metal/issues/56228
     struct DestWidth32 : Field<bool>
     {
     };
@@ -144,6 +145,7 @@ struct Operand<Exu::Pack>
     {
     };
 
+    // Support checking DestWidth32: https://github.com/tenstorrent/tt-metal/issues/56228
     struct DestWidth32 : Field<std::uint32_t>
     {
     };
@@ -198,6 +200,30 @@ struct OperationUnpackUnary : Operation<Exu::Unpack, Hoistable::Yes>
         AccumulateToDest,
         BinaryReuseDest,
         UnpackToDest>;
+};
+
+// -----------------------------------------
+// OPERATION - UNPACK BINARY (AKA UNPACK_AB)
+// -----------------------------------------
+
+struct OperationUnpackBinary : Operation<Exu::Unpack, Hoistable::Yes>
+{
+    template <typename T>
+    using Field = StateField<OperationUnpackBinary, T>;
+
+    struct BroadcastType : Field<std::uint32_t>
+    {
+    };
+
+    struct Transpose : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationUnpackBinary,
+        /* Fields */
+        BroadcastType,
+        Transpose>;
 };
 
 // ------------------------------------------------
@@ -278,6 +304,25 @@ struct OperationUnpackTilize : Operation<Exu::Unpack, Hoistable::No>
         NarrowTile>;
 };
 
+// ---------------------------------
+// OPERATION - UNPACK FAST TILIZE WH
+// ---------------------------------
+
+struct OperationUnpackFastTilizeWh : Operation<Exu::Unpack, Hoistable::No>
+{
+    template <typename T>
+    using Field = StateField<OperationUnpackFastTilizeWh, T>;
+
+    struct FullDim : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationUnpackFastTilizeWh,
+        /* Fields */
+        FullDim>;
+};
+
 // -------------------------
 // OPERATION - FPU MATMUL
 // -------------------------
@@ -312,6 +357,108 @@ struct OperationFpuMatmul : Operation<Exu::Fpu, Hoistable::Yes>
         RtDim>;
 };
 
+// ---------------------------------
+// OPERATION - FPU ELTWISE BINARY
+// ---------------------------------
+
+struct OperationFpuEltwiseBinary : Operation<Exu::Fpu, Hoistable::Yes>
+{
+    template <typename T>
+    using Field = StateField<OperationFpuEltwiseBinary, T>;
+
+    struct EltwiseBinaryType : Field<std::uint32_t>
+    {
+    };
+
+    struct BroadcastType : Field<std::uint32_t>
+    {
+    };
+
+    struct MathFidelity : Field<std::uint32_t>
+    {
+    };
+
+    struct ReuseDest : Field<std::uint32_t>
+    {
+    };
+
+    struct AccToDest : Field<std::uint32_t>
+    {
+    };
+
+    struct FaceHeight : Field<std::uint32_t>
+    {
+    };
+
+    struct NumFaces : Field<std::uint32_t>
+    {
+    };
+
+    struct NumFacesCDim : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationFpuEltwiseBinary,
+        /* Fields */
+        EltwiseBinaryType,
+        BroadcastType,
+        MathFidelity,
+        ReuseDest,
+        AccToDest,
+        FaceHeight,
+        NumFaces,
+        NumFacesCDim>;
+};
+
+// ----------------------------------------
+// OPERATION - FPU ELTWISE UNARY DATACOPY
+// ----------------------------------------
+
+struct OperationFpuEltwiseUnaryDatacopy : Operation<Exu::Fpu, Hoistable::Yes>
+{
+    template <typename T>
+    using Field = StateField<OperationFpuEltwiseUnaryDatacopy, T>;
+
+    struct DataCopyType : Field<std::uint32_t>
+    {
+    };
+
+    struct BroadcastType : Field<std::uint32_t>
+    {
+    };
+
+    struct NumFaces : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationFpuEltwiseUnaryDatacopy,
+        /* Fields */
+        DataCopyType,
+        BroadcastType,
+        NumFaces>;
+};
+
+// ---------------------------------
+// OPERATION - FPU FAST TILIZE WH
+// ---------------------------------
+
+struct OperationFpuFastTilizeWh : Operation<Exu::Fpu, Hoistable::No>
+{
+    template <typename T>
+    using Field = StateField<OperationFpuFastTilizeWh, T>;
+
+    struct AddrMod : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationFpuFastTilizeWh,
+        /* Fields */
+        AddrMod>;
+};
+
 // ------------------
 // OPERATION - PACK
 // ------------------
@@ -329,20 +476,68 @@ struct OperationPack : Operation<Exu::Pack, Hoistable::Yes>
     using Struct = StateStruct<OperationPack, NumTiles>;
 };
 
-using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackMatmul, OperationUnpackTilize>;
+// ---------------------------
+// OPERATION - PACK UNTILIZE
+// ---------------------------
 
-using FpuOperations = OperationList<OperationFpuMatmul
-                                    // sstanisic todo: add FPU ELTWISE BINARY ADD operation state
-                                    // sstanisic todo: add FPU ELTWISE BINARY SUB operation state
-                                    // sstanisic todo: add FPU ELTWISE BINARY MUL operation state
-                                    // sstanisic todo: add FPU ELTWISE BINARY ADD DEST REUSE operation state
-                                    // sstanisic todo: add FPU ELTWISE BINARY SUB DEST REUSE operation state
-                                    // sstanisic todo: add FPU ELTWISE BINARY MUL DEST REUSE operation state
-                                    >;
+struct OperationPackUntilize : Operation<Exu::Pack, Hoistable::No>
+{
+    template <typename T>
+    using Field = StateField<OperationPackUntilize, T>;
+
+    struct BlockCtDim : Field<std::uint32_t>
+    {
+    };
+
+    struct FullCtDim : Field<std::uint32_t>
+    {
+    };
+
+    struct Diagonal : Field<bool>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationPackUntilize,
+        /* Fields */
+        BlockCtDim,
+        FullCtDim,
+        Diagonal>;
+};
+
+// ---------------------------------
+// OPERATION - PACK FAST TILIZE WH
+// ---------------------------------
+
+struct OperationPackFastTilizeWh : Operation<Exu::Pack, Hoistable::No>
+{
+    template <typename T>
+    using Field = StateField<OperationPackFastTilizeWh, T>;
+
+    struct AddrMod : Field<std::uint32_t>
+    {
+    };
+
+    // Derived from the input CB's pack_src_format at init and not recomputed by the block, so it is
+    // seated once and left standing.
+    struct Use32BitDest : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationPackFastTilizeWh,
+        /* Fields */
+        AddrMod,
+        Use32BitDest>;
+};
+
+using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackBinary, OperationUnpackMatmul, OperationUnpackTilize, OperationUnpackFastTilizeWh>;
+
+using FpuOperations = OperationList<OperationFpuMatmul, OperationFpuEltwiseUnaryDatacopy, OperationFpuEltwiseBinary, OperationFpuFastTilizeWh>;
 
 using SfpuOperations = OperationList<>;
 
-using PackOperations = OperationList<OperationPack>;
+using PackOperations = OperationList<OperationPack, OperationPackUntilize, OperationPackFastTilizeWh>;
 
 template <>
 struct ExuOperations<Exu::Unpack>

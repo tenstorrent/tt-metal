@@ -200,3 +200,20 @@ def test_collect_accuracy_and_determinism_reports_any_output_mismatch(fake_devic
     _, _, marker = collect_accuracy_and_determinism_results(object(), lambda: next(runs), count=2)
 
     assert marker.item() == 1
+
+
+def test_rmse_gating_is_opt_in(expect_error) -> None:
+    expected = torch.arange(1024, dtype=torch.float32)
+    actual = expected * 2
+    assert_accurate(expected, actual)
+    with expect_error(AssertionError, "relative RMSE"):
+        assert_accurate(expected, actual, rmse_threshold=0.05)
+
+
+def test_offset_peak_gate_detects_local_carry_fault(expect_error) -> None:
+    expected = torch.linspace(-1, 1, 1280 * 32).reshape(1280, 32)
+    actual = expected.clone()
+    actual[640, :] += 0.2
+    assert_accurate(expected, actual, pcc_threshold=0.999, rmse_threshold=0.05)
+    with expect_error(AssertionError, "relative L-inf"):
+        assert_accurate(expected, actual, pcc_threshold=0.999, rmse_threshold=0.05, linf_threshold=0.25)

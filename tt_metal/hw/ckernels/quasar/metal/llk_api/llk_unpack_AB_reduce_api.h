@@ -97,6 +97,15 @@ inline void llk_unpack_AB_reduce(
     const std::uint32_t tile_index_b) {
     LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
     LLK_TDMA_GUARD_NOTE_TDMA(operandB);
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp0,
+        operandA,
+        "unpack_AB_reduce operandA DFB differs from the one llk_unpack_AB_reduce_init programmed");
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp1,
+        operandB,
+        "unpack_AB_reduce operandB DFB differs from the one llk_unpack_AB_reduce_init programmed");
+
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);

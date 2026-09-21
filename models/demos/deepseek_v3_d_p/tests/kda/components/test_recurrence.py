@@ -17,11 +17,13 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     reconstruct_state_at_sp_rank,
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
+from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
     collect_accuracy_and_determinism_results,
+    make_actual_start,
 )
 
 pytestmark = run_for_blackhole()
@@ -55,9 +57,17 @@ def _run_recurrence(
             summary_group_chunks=summary_group_chunks,
             local_scan_strategy=local_scan_strategy,
         ),
-        sequence_parallel_axis=None,
+        sequence_parallel_axis=0,
+        local_rows=beta.shape[1],
+        heads=beta.shape[2],
+        key_dim=q.shape[2] // beta.shape[2],
+        value_dim=v.shape[2] // beta.shape[2],
+        batch=beta.shape[0],
     )
-    return executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state)
+    actual_start = make_actual_start(device, 0)
+    result = executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state, actual_start=actual_start)
+    ttnn.deallocate(actual_start)
+    return result.final_state, result.output
 
 
 @pytest.mark.parametrize(
@@ -66,9 +76,9 @@ def _run_recurrence(
         pytest.param(32, 2, 32, 32, 8, "direct", id="direct-minimal"),
         pytest.param(64, 2, 32, 128, 8, "direct", id="direct-nonsquare-state"),
         pytest.param(256, 2, 32, 32, 2, "grouped", id="grouped-minimal"),
-        pytest.param(2816, 12, 128, 128, 21, "grouped", id="grouped-divisor-fallback"),
+        pytest.param(2816, 12, 128, 128, 11, "grouped", id="grouped-non-power-of-two"),
         pytest.param(5120, 1, 128, 128, 8, "grouped", id="grouped-production-length"),
-        pytest.param(5152, 2, 32, 32, 8, "grouped", id="grouped-tail-chunk"),
+        pytest.param(5152, 2, 32, 32, 7, "grouped", id="grouped-tail-chunk"),
         pytest.param(5152, 12, 128, 128, 20, "direct", id="direct-long-sequence"),
     ],
 )
@@ -250,6 +260,8 @@ def _distributed_recurrence_case(
     torch.Tensor,
     torch.Tensor,
     int,
+    ChronologicalSelections,
+    ttnn.Tensor,
 ]:
     sp_axis = 1 - tensor_parallel_axis
     sequence, heads, dim = 128, 8, 32
@@ -278,20 +290,47 @@ def _distributed_recurrence_case(
     )
     executor = recurrence.KDARecurrence(
         mesh_device,
-        KDARecurrenceProgramConfig(summary_group_chunks=8),
+        KDARecurrenceProgramConfig(summary_group_chunks=sequence // tuple(mesh_device.shape)[sp_axis] // 32),
         sequence_parallel_axis=sp_axis,
+        local_rows=sequence // tuple(mesh_device.shape)[sp_axis],
+        heads=heads // tuple(mesh_device.shape)[tensor_parallel_axis],
+        key_dim=dim,
+        value_dim=dim,
     )
-    return executor, inputs, expected_output.to(torch.bfloat16), expected_state, sp_axis
+    sp_size = tuple(mesh_device.shape)[sp_axis]
+    actual_start = make_actual_start(mesh_device)
+    selections = ChronologicalSelections(
+        ttnn.experimental.kda.chronological_selections(
+            actual_start,
+            sp_axis,
+            sequence // sp_size,
+            heads // tuple(mesh_device.shape)[tensor_parallel_axis],
+            dim,
+            dim,
+        ),
+    )
+    return executor, inputs, expected_output.to(torch.bfloat16), expected_state, sp_axis, selections, actual_start
 
 
 def _run_distributed_recurrence(
     executor: recurrence.KDARecurrence,
     inputs: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor],
+    selections: ChronologicalSelections,
+    actual_start: ttnn.Tensor,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     q, k, v, gate, beta, initial_state = inputs
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        new_state, output = executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state)
-    return output, new_state
+        result = executor(
+            q=q,
+            k=k,
+            v=v,
+            gate=gate,
+            beta=beta,
+            initial_state=initial_state,
+            selections=selections,
+            actual_start=actual_start,
+        )
+    return result.output, result.final_state
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
@@ -305,16 +344,16 @@ def test_distributed_recurrence_matches_serial_and_is_deterministic(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
-    executor, inputs, expected_output, expected_state, sp_axis = _distributed_recurrence_case(
+    executor, inputs, expected_output, expected_state, sp_axis, selections, actual_start = _distributed_recurrence_case(
         mesh_device, tensor_parallel_axis
     )
 
     (output_tt, state_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(
-        lambda: _run_distributed_recurrence(executor, inputs)
+        lambda: _run_distributed_recurrence(executor, inputs, selections, actual_start)
     )
     ttnn.synchronize_device(mesh_device)
     cache_entries = mesh_device.num_program_cache_entries()
-    repeated_output, repeated_state = _run_distributed_recurrence(executor, inputs)
+    repeated_output, repeated_state = _run_distributed_recurrence(executor, inputs, selections, actual_start)
     ttnn.synchronize_device(mesh_device)
     assert mesh_device.num_program_cache_entries() == cache_entries
     ttnn.deallocate(repeated_output)
@@ -341,11 +380,13 @@ def test_distributed_recurrence_trace_replay_matches_eager(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
-    executor, inputs, _, _, sp_axis = _distributed_recurrence_case(mesh_device, tensor_parallel_axis)
-    eager_output_tt, eager_state_tt = _run_distributed_recurrence(executor, inputs)
+    executor, inputs, _, _, sp_axis, selections, actual_start = _distributed_recurrence_case(
+        mesh_device, tensor_parallel_axis
+    )
+    eager_output_tt, eager_state_tt = _run_distributed_recurrence(executor, inputs, selections, actual_start)
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    traced_output_tt, traced_state_tt = _run_distributed_recurrence(executor, inputs)
+    traced_output_tt, traced_state_tt = _run_distributed_recurrence(executor, inputs, selections, actual_start)
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     for _ in range(3):
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
@@ -359,3 +400,73 @@ def test_distributed_recurrence_trace_replay_matches_eager(
 
     assert_bit_identical(eager_output, traced_output, name=f"tp_axis={tensor_parallel_axis} traced output")
     assert_bit_identical(eager_state, traced_state, name=f"tp_axis={tensor_parallel_axis} traced state")
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("order", [(0, 1), (1, 0)])
+def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
+    mesh_device: ttnn.MeshDevice, order: tuple[int, ...]
+) -> None:
+    a = torch.eye(32).repeat(2, 4, 1, 1)
+    a[0, :, 0, 1] = 0.5
+    a[1, :, 1, 0] = 0.25
+    b = torch.stack([torch.full((4, 32, 32), 0.125 * (rank + 1)) for rank in range(2)])
+    initial = torch.stack([torch.eye(32) * (tp + 1) for tp in range(4)]).unsqueeze(0)
+    assert not torch.equal(a[0] @ a[1], a[1] @ a[0])
+
+    def to_mesh(host: torch.Tensor, dims: tuple[int | None, int | None]) -> ttnn.Tensor:
+        tensor = ttnn.from_torch(
+            host,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=(2, 4)),
+        )
+        return ttnn.reshape(tensor, (1, 32, 32))
+
+    entry, final = recurrence._distributed_prefix(
+        recurrence._AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1))),
+        to_mesh(initial, (None, 1)),
+        sequence_parallel_axis=0,
+        selections=ChronologicalSelections(
+            ttnn.experimental.kda.chronological_selections(
+                make_actual_start(mesh_device, order[0] * 32), 0, 32, 1, 32, 32
+            ),
+        ),
+        compute_config=ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+        ),
+    )
+    carry = initial[0]
+    entries = {}
+    for rank in order:
+        entries[rank] = carry
+        carry = a[rank] @ carry + b[rank]
+    for index, (local_entry, local_final) in enumerate(
+        zip(ttnn.get_device_tensors(entry), ttnn.get_device_tensors(final), strict=True)
+    ):
+        rank, tp = divmod(index, 4)
+        assert_accurate(entries[rank][tp].unsqueeze(0), ttnn.to_torch(local_entry), name=f"entry rank={rank} tp={tp}")
+        assert_accurate(carry[tp].unsqueeze(0), ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}")
+
+
+@pytest.mark.use_module_device
+@pytest.mark.parametrize("case", ["nondivisible", "capacity"])
+def test_explicit_grouping_rejects_infeasible_geometry(device, case, expect_error):
+    grid = device.compute_with_storage_grid_size()
+    heads = grid.x * grid.y + 1 if case == "capacity" else 1
+    with expect_error(ValueError, "summary owners" if case == "capacity" else "must divide"):
+        recurrence.KDARecurrence(
+            device,
+            KDARecurrenceProgramConfig(
+                local_scan_strategy="grouped", summary_group_chunks=1 if case == "capacity" else 8
+            ),
+            sequence_parallel_axis=0,
+            local_rows=640,
+            heads=heads,
+            key_dim=32,
+            value_dim=32,
+        )

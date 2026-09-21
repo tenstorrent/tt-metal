@@ -10,7 +10,7 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/types.hpp"  // exposes ttnn::MemoryConfig alias used in member/signature declarations
+#include "ttnn/types.hpp"              // exposes ttnn::MemoryConfig alias used in member/signature declarations
 #include "ttnn/distributed/types.hpp"  // exposes ttnn::MeshCoordinate used in override_runtime_arguments()
 
 #include <tt-metalium/program.hpp>
@@ -26,6 +26,7 @@ struct NlpCreateHeadsDeviceOperation {
         bool transpose_k_heads;
         bool kv_tied;
         MemoryConfig output_mem_config;
+        std::optional<uint32_t> q_head_split;  // Q-only: output 0/1 hold the two channel regions.
     };
 
     struct tensor_args_t {
@@ -98,5 +99,6 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     bool transpose_k_heads,
     bool kv_tied = false,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt);
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt,
+    std::optional<uint32_t> q_head_split = std::nullopt);
 }  // namespace ttnn::prim

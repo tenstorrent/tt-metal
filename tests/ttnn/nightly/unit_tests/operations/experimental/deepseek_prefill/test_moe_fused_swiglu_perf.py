@@ -49,42 +49,94 @@ _CEILING_ONLY = 1.0
 _LOW_ISL_MARGIN = 0.08
 _KNEE_TOKENS = 512
 
-# Keyed kimi_k26 until the name was found to match no entry in SINGLE_EXPERT_MODELS; the shape is
-# unchanged (7168 x 2048 on both configs), so these numbers carried over as measured.
-# Device duration in ns per (model, active), x_rm layout, 11x8 grid: median of 3 dispatches on a
-# BH p150b (2026-08-28). Recalibrate on the perf runner (DDR-speed dependent): each case logs an
-# "RT-CAL" line in this dict's format, so one run regenerates the table.
+# Device duration in ns per (model, active), x_rm layout: ONE sweep on a BH p150b (2026-09-15),
+# each case a median of _ITERS dispatches. Recalibrate on the perf runner (DDR-speed dependent):
+# each case logs an "RT-CAL" line in this dict's format, so one run regenerates the table.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 2_815,
-    ("kimi_k2_7", 128): 94_981,
-    ("kimi_k2_7", 256): 117_485,
-    ("kimi_k2_7", 512): 199_692,
-    ("kimi_k2_7", 1024): 344_132,
-    ("kimi_k2_7", 2048): 641_895,
-    ("kimi_k2_7", 4096): 1_227_771,
-    ("kimi_k2_7", 5120): 1_522_123,
-    ("glm_51", 0): 2_742,
-    ("glm_51", 128): 85_149,
-    ("glm_51", 256): 107_656,
-    ("glm_51", 512): 182_002,
-    ("glm_51", 1024): 318_281,
-    ("glm_51", 2048): 593_197,
-    ("glm_51", 4096): 1_144_483,
-    ("glm_51", 5120): 1_420_707,
+    ("kimi_k2_7", 0): 2_814,
+    ("kimi_k2_7", 128): 94_720,
+    ("kimi_k2_7", 256): 116_365,
+    ("kimi_k2_7", 512): 197_452,
+    ("kimi_k2_7", 768): 271_558,
+    ("kimi_k2_7", 1024): 344_344,
+    ("kimi_k2_7", 2048): 637_420,
+    ("kimi_k2_7", 4096): 1_229_421,
+    ("kimi_k2_7", 5120): 1_522_083,
+    ("glm_51", 0): 2_781,
+    ("glm_51", 128): 86_753,
+    ("glm_51", 256): 106_704,
+    ("glm_51", 512): 181_892,
+    ("glm_51", 768): 249_186,
+    ("glm_51", 1024): 318_833,
+    ("glm_51", 2048): 595_414,
+    ("glm_51", 4096): 1_146_764,
+    ("glm_51", 5120): 1_420_823,
+}
+
+# Same measurement and key as _EXPECTED_NS, with the weights DRAM ND-sharded: a core fetches its
+# whole K-row weight slice in ONE NoC request instead of one per tile. Its own table because the gain
+# lands where this op is weight-read bound -- 1.13-1.17x at 128, 1.10-1.12x at 256, and still 1.003-1.009x at 5120 -- so the interleaved
+# bands reject the low-ISL cases outright.
+#
+# ONE sweep on a BH p150b (2026-09-15), each case a median of _ITERS dispatches. The interleaved
+# table above is the midpoint of THREE sweeps; these carry no cross-sweep spread, so the low-ISL
+# entries are the thin ones -- which is what _LOW_ISL_MARGIN is there to absorb.
+_NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
+    ("kimi_k2_7", 0): 2_804,
+    ("kimi_k2_7", 128): 83_568,
+    ("kimi_k2_7", 256): 105_725,
+    ("kimi_k2_7", 512): 187_207,
+    ("kimi_k2_7", 768): 266_642,
+    ("kimi_k2_7", 1024): 336_756,
+    ("kimi_k2_7", 2048): 633_483,
+    ("kimi_k2_7", 4096): 1_223_453,
+    ("kimi_k2_7", 5120): 1_517_023,
+    ("glm_51", 0): 2_788,
+    ("glm_51", 128): 74_208,
+    ("glm_51", 256): 95_352,
+    ("glm_51", 512): 168_893,
+    ("glm_51", 768): 237_493,
+    ("glm_51", 1024): 309_367,
+    ("glm_51", 2048): 584_487,
+    ("glm_51", 4096): 1_133_505,
+    ("glm_51", 5120): 1_407_487,
 }
 
 # Kimi K3 runs SiTU-GLU at the post-projection dims, so its K axis is ROUTED_EXPERT_HIDDEN_SIZE and
 # it cannot be driven from SINGLE_EXPERT_MODELS (which reads config.EMB_SIZE). Same measurement.
 _K3_SITU_EXPECTED_NS: dict[int, int] = {
-    0: 2_751,
-    128: 85_021,
-    256: 124_976,
-    512: 219_777,
-    1024: 398_779,
-    2048: 752_027,
-    4096: 1_466_435,
-    5120: 1_820_459,
+    0: 2_779,
+    128: 86_120,
+    256: 120_776,
+    512: 219_165,
+    768: 310_283,
+    1024: 399_470,
+    2048: 755_772,
+    4096: 1_467_782,
+    5120: 1_826_516,
 }
+
+# Kimi K3 SiTU-GLU counterpart of _NDSHARD_EXPECTED_NS: 1.08x at 128 and 256, 1.07x at 512.
+_K3_SITU_NDSHARD_EXPECTED_NS: dict[int, int] = {
+    0: 2_844,
+    128: 79_762,
+    256: 111_407,
+    512: 204_457,
+    768: 293_391,
+    1024: 382_922,
+    2048: 738_619,
+    4096: 1_454_733,
+    5120: 1_810_441,
+}
+
+
+def _baseline_or_skip(table, key, label: str):
+    """The case's baseline, or a skip when its table has no entry. Borrowing the other placement's
+    number is not an option -- the two tables exist because the placements measure differently."""
+    expected_ns = table.get(key)
+    if expected_ns is None:
+        pytest.skip(f"no baseline for {label}; add {key} to its table -- see the comment there")
+    return expected_ns
 
 
 def _margin_for(active: int) -> float:
@@ -92,8 +144,10 @@ def _margin_for(active: int) -> float:
 
 
 def _perf_params():
-    """Baseline and margin per (model, active) over the exhaustive ISL sweep, dims from
-    SINGLE_EXPERT_MODELS. No extended_model mark: the markers below already scope where these run."""
+    """Dims and margin per (model, active) over the exhaustive ISL sweep, dims from
+    SINGLE_EXPERT_MODELS. The baseline is not carried here -- it is keyed on the weight placement
+    too, so the test body picks the table. No extended_model mark: the markers below already scope
+    where these run."""
     params = []
     for name, config, _extended in SINGLE_EXPERT_MODELS:
         if name not in _ISL_EXHAUSTIVE_MODELS:
@@ -105,7 +159,6 @@ def _perf_params():
                     active,
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
-                    _EXPECTED_NS[(name, active)],
                     _margin_for(active),
                     # "-perf" keeps ids collision-free under -k: "512-perf" is not in "5120-perf".
                     id=f"{name}-isl-{active}-perf",
@@ -114,7 +167,8 @@ def _perf_params():
     return params
 
 
-@pytest.mark.parametrize("model_name, active_tokens, emb_dim, hidden_dim, expected_ns, margin", _perf_params())
+@pytest.mark.parametrize("model_name, active_tokens, emb_dim, hidden_dim, margin", _perf_params())
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.requires_host_iommu
 @pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
 @pytest.mark.skipif(not is_p150(), reason="perf baselines are P150-specific; skip on any other board")
@@ -126,10 +180,15 @@ def test_moe_fused_swiglu_perf(
     active_tokens: int,
     emb_dim: int,
     hidden_dim: int,
-    expected_ns: int,
     margin: float,
+    weights_dram_sharded: bool,
 ):
     require_realtime_profiler("moe_fused_swiglu perf checks")
+
+    table = _NDSHARD_EXPECTED_NS if weights_dram_sharded else _EXPECTED_NS
+    placement = "w_ndshard" if weights_dram_sharded else "w_interleaved"
+    label = f'{placement} ("{model_name}", {active_tokens})'
+    expected_ns = _baseline_or_skip(table, (model_name, active_tokens), label)
 
     # run_moe_fused_swiglu also PCC-checks, so a case that gets fast by computing the wrong thing
     # fails on correctness rather than passing the band.
@@ -142,31 +201,35 @@ def test_moe_fused_swiglu_perf(
             hidden_dim,
             active_tokens=active_tokens,
             x_row_major=True,  # x_rm: the Blackhole fused-tilize production fast path
+            weights_dram_sharded=weights_dram_sharded,
         ),
         _OP_KERNEL_DIR,
         expected_ns=expected_ns,
         margin=margin,
-        label=f'("{model_name}", {active_tokens})',
+        label=label,
         iters=_ITERS,
         verbose=_VERBOSE,
     )
 
 
 @pytest.mark.parametrize(
-    "active_tokens, expected_ns, margin",
-    [
-        pytest.param(active, _K3_SITU_EXPECTED_NS[active], _margin_for(active), id=f"k3-isl-{active}-perf")
-        for active in _ISL_EXHAUSTIVE_SWEEP
-    ],
+    "active_tokens, margin",
+    [pytest.param(active, _margin_for(active), id=f"k3-isl-{active}-perf") for active in _ISL_EXHAUSTIVE_SWEEP],
 )
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.requires_host_iommu
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU is Blackhole-only")
 @pytest.mark.skipif(not is_p150(), reason="perf baselines are P150-specific; skip on any other board")
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_moe_fused_swiglu_k3_perf(device, active_tokens: int, expected_ns: int, margin: float):
+def test_moe_fused_swiglu_k3_perf(device, active_tokens: int, margin: float, weights_dram_sharded: bool):
     """Kimi K3 (SiTU-GLU) device duration over the same ISL sweep as above."""
     require_realtime_profiler("moe_fused_swiglu perf checks")
+
+    table = _K3_SITU_NDSHARD_EXPECTED_NS if weights_dram_sharded else _K3_SITU_EXPECTED_NS
+    placement = "w_ndshard" if weights_dram_sharded else "w_interleaved"
+    label = f'{placement} ("kimi_k3", {active_tokens})'
+    expected_ns = _baseline_or_skip(table, active_tokens, label)
 
     assert_op_duration_merged(
         device,
@@ -178,11 +241,12 @@ def test_moe_fused_swiglu_k3_perf(device, active_tokens: int, expected_ns: int, 
             active_tokens=active_tokens,
             x_row_major=True,
             activation=ttnn.RoutedExpertActivation.SituGlu,
+            weights_dram_sharded=weights_dram_sharded,
         ),
         _OP_KERNEL_DIR,
         expected_ns=expected_ns,
         margin=margin,
-        label=f'("kimi_k3", {active_tokens})',
+        label=label,
         iters=_ITERS,
         verbose=_VERBOSE,
     )

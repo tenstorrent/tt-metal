@@ -27,25 +27,6 @@ constexpr const char* kWriterSource =
 constexpr const char* kComputeSource =
     "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
-// The typecast LLK is selected by input/output data format through these two defines.
-KernelSpec::CompilerOptions::Defines make_typecast_defines(
-    tt::tt_metal::DataType input_dtype, tt::tt_metal::DataType output_dtype) {
-    KernelSpec::CompilerOptions::Defines defines;
-    defines.emplace(
-        "TYPECAST_LLK_INIT",
-        fmt::format(
-            "typecast_tile_init<{0}u, {1}u>",
-            static_cast<uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(input_dtype)),
-            static_cast<uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(output_dtype))));
-    defines.emplace(
-        "TYPECAST_LLK",
-        fmt::format(
-            "typecast_tile<{0}u, {1}u>",
-            static_cast<uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(input_dtype)),
-            static_cast<uint32_t>(tt::tt_metal::datatype_to_dataformat_converter(output_dtype))));
-    return defines;
-}
-
 // Legacy set unpack_to_dest_mode[in_cb] = UnpackToDestFp32 when preserve_fp32_precision (a no-op in
 // the JIT unless the format is Float32), leaving every other CB at Default. The named equivalent is
 // an UnpackToDest entry for the input DFB. Metal 2.0 additionally *requires* an explicit entry for a
@@ -86,13 +67,11 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     using namespace tt::tt_metal;
 
     const Tensor& input = tensor_args.input;
-    const DataType& input_dtype = args.input_dtype;
-    const DataType& output_dtype = args.output_dtype;
     const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
 
-    const tt::DataFormat cb_data_format_input = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat cb_data_format_input = cb_dataformat_for(input.dtype());
     const uint32_t single_tile_size_input = tt::tile_size(cb_data_format_input);
-    const tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const tt::DataFormat cb_data_format_output = cb_dataformat_for(output.dtype());
     const uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     const auto* device = input.device();
@@ -159,12 +138,11 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
 
-    const auto typecast_defines = make_typecast_defines(input_dtype, output_dtype);
     const auto make_compute = [&](const KernelSpecName& id, uint32_t per_core_block_cnt) {
         return KernelSpec{
             .unique_id = id,
             .source = kComputeSource,
-            .compiler_options = {.defines = typecast_defines, .opt_level = KernelBuildOptLevel::O3},
+            .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
             .dfb_bindings =
                 {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
                  DFBBinding{
@@ -172,7 +150,9 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
             .compile_time_args =
                 {{"per_core_block_cnt", per_core_block_cnt},
                  // per_core_block_dim is always 1 (works for both tiled and row-major)
-                 {"per_core_block_dim", 1u}},
+                 {"per_core_block_dim", 1u},
+                 {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
+                 {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
             .hw_config =
                 ComputeHardwareConfig{make_compute_config(args, make_unpack_modes(args, IN_DFB, cb_data_format_input))},
         };
@@ -243,15 +223,13 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
     using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input;
-    const auto& input_dtype = args.input_dtype;
-    const auto& output_dtype = args.output_dtype;
     const auto& sub_core_grids = args.sub_core_grids;
 
     TT_FATAL(sub_core_grids.has_value(), "sub_core_grids cannot be null");
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    tt::DataFormat cb_data_format = cb_dataformat_for(input.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat cb_data_format_output = cb_dataformat_for(output.dtype());
     uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     const auto* device = input.device();
@@ -327,13 +305,15 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
     const KernelSpec compute{
         .unique_id = COMPUTE,
         .source = kComputeSource,
-        .compiler_options =
-            {.defines = make_typecast_defines(input_dtype, output_dtype), .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {DFBBinding{.dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::CONSUMER},
              DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .compile_time_args =
-            {{"per_core_block_cnt", static_cast<uint32_t>(ntiles_per_core)}, {"per_core_block_dim", 1u}},
+            {{"per_core_block_cnt", static_cast<uint32_t>(ntiles_per_core)},
+             {"per_core_block_dim", 1u},
+             {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
+             {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
         .hw_config = ComputeHardwareConfig{make_compute_config(args, make_unpack_modes(args, IN_DFB, cb_data_format))},
     };
 
