@@ -17,7 +17,14 @@ from models.autoports.qwen_qwen3_8_27b.tt.precision import decoder_policy
 VARIANTS = {
     "baseline": {},
     "compact_head": dict(prefill_compact_head=True),
+    "batched_head": dict(prefill_batched_head=True),
+    "skip_intermediate_head": dict(skip_intermediate_prefill_head=True),
     "sharded_norm": dict(prefill_sharded_residual=True),
+    "sharded_norm_rect": dict(prefill_sharded_residual=True, prefill_norm_rectangular=True),
+    "sharded_norm_fp32": dict(prefill_sharded_residual=True, prefill_norm_stats_dtype="float32"),
+    "sharded_norm_rect_fp32": dict(
+        prefill_sharded_residual=True, prefill_norm_rectangular=True, prefill_norm_stats_dtype="float32"
+    ),
     "sharded_replicated_norm": dict(prefill_sharded_residual=True, prefill_replicated_norm=True),
     "mmrs": dict(output_scheme="mmrs", fused_n=8, fused_grid=[10, 8], flatten_prefill_batch=True),
     "mmrswide": dict(output_scheme="mmrs", fused_n=8, fused_grid=[11, 8], flatten_prefill_batch=True),
@@ -91,6 +98,8 @@ def main():
         for name in args.variants.split(","):
             gen.model.prefill_sharded_residual = VARIANTS[name].get("prefill_sharded_residual", False)
             gen.model.prefill_compact_head = VARIANTS[name].get("prefill_compact_head", False)
+            gen.model.prefill_batched_head = VARIANTS[name].get("prefill_batched_head", False)
+            gen.skip_intermediate_prefill_head = VARIANTS[name].get("skip_intermediate_prefill_head", False)
             for layer, baseline in zip(gen.model.layers, policies):
                 layer.policy = {**baseline, **VARIANTS[name]}
             for repeat in range(3):

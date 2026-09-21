@@ -59,6 +59,19 @@ class ShardedPrefillScopeTests(unittest.TestCase):
         self.assertEqual([x[0, 0, 0].item() for x in outputs], [13, 23])
         self.assertEqual(state.conv.flatten().tolist(), [0, 11, 12, 3])
         self.assertEqual(state.recurrent.flatten().tolist(), [0, 21, 22, 3])
+        # Intermediate chunks must still update state but never execute the head.
+        model.logits = lambda *a, **kw: self.fail("Intermediate chunk computed unused logits")
+        result = MethodType(methods["prefill_batch"], model)(
+            tokens,
+            cache=SimpleNamespace(batch_size=4, capacity=64, layers=[state]),
+            page_table=table,
+            length=2,
+            start_pos=32,
+            slots=[1, 2],
+            return_logits=False,
+        )
+        self.assertEqual(result, [])
+        self.assertEqual(state.conv.flatten().tolist(), [0, 21, 22, 3])
 
     def test_decode_contract_restored_on_success_and_failure(self):
         for fail in (False, True):

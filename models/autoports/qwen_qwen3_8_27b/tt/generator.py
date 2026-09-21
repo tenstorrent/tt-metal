@@ -29,6 +29,7 @@ class QwenGenerator(Generator):
         self.tokenizer = AutoTokenizer.from_pretrained(model.snapshot, local_files_only=True)
         self.host_sampling = host_sampling
         self.batched_prefill = os.getenv("QWEN_BATCHED_PREFILL", "0") == "1"
+        self.skip_intermediate_prefill_head = os.getenv("QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD", "0") == "1"
         if os.getenv("QWEN_BATCHED_PREFILL_SDPA", "0") == "1":
             for layer in model.layers:
                 layer.policy["batched_prefill_sdpa"] = True
@@ -409,7 +410,17 @@ class QwenGenerator(Generator):
                     tokens[:, offset : offset + count].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
                 )
                 results = self.model.prefill_batch(
-                    ids, cache=kv_cache, page_table=table, length=count, start_pos=start + offset, slots=slots
+                    ids,
+                    cache=kv_cache,
+                    page_table=table,
+                    length=count,
+                    start_pos=start + offset,
+                    slots=slots,
+                    **(
+                        {"return_logits": False}
+                        if getattr(self, "skip_intermediate_prefill_head", False) and offset + count < length
+                        else {}
+                    ),
                 )
             self.prefill_signatures.update(signatures)
             self.counters["batched_prefill_calls"] += 1

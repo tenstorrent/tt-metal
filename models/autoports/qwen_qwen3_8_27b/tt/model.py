@@ -78,6 +78,7 @@ class QwenModel:
         if prefill_layout not in ("replicated", "sharded", "sharded_replicated_norm"):
             raise ValueError("Unknown QWEN_PREFILL_RESIDUAL_LAYOUT")
         self.prefill_sharded_residual = prefill_layout != "replicated"
+        self.prefill_batched_head = os.getenv("QWEN_PREFILL_BATCHED_HEAD", "0") == "1"
         prefill_policy = (
             {"prefill_sharded_residual": True, "prefill_replicated_norm": prefill_layout == "sharded_replicated_norm"}
             if self.prefill_sharded_residual
@@ -302,7 +303,7 @@ class QwenModel:
             x = x[:, length - 1 : length, :]
         return self.logits(x, decode=not all_logits)
 
-    def prefill_batch(self, tokens, *, cache, page_table, length, start_pos, slots, positions=None):
+    def prefill_batch(self, tokens, *, cache, page_table, length, start_pos, slots, positions=None, return_logits=True):
         """Experimental equal-length, page-aligned prefill over consecutive slots."""
         batch = len(slots)
         if batch < 2 or slots != list(range(slots[0], slots[0] + batch)):
@@ -343,13 +344,19 @@ class QwenModel:
                     if end < cache.batch_size:
                         pieces.append(before[end:])
                     ttnn.copy(ttnn.concat(pieces, dim=0), before)
-        # Preserve the proven B1 head and independently owned public outputs.
-        if sharded or getattr(self, "prefill_compact_head", False):
+        if not return_logits:
+            return []
+        # Public logits retain independent ownership, even with a shared head call.
+        batched_head = getattr(self, "prefill_batched_head", False)
+        if sharded or batched_head or getattr(self, "prefill_compact_head", False):
             x = x[:, length - 1 : length, :]
             length = 1
         if sharded:
             x = self.layers[-1]._gather(ttnn.reshape(x, [1, batch, 1, self.config.hidden_size // 4]))
             x = ttnn.reshape(x, [batch, 1, self.config.hidden_size])
+        if batched_head:
+            logits = self.logits(x, decode=True)
+            return [ttnn.clone(logits[:, :, row : row + 1, :]) for row in range(batch)]
         return [self.logits(x[row : row + 1, length - 1 : length, :], decode=True) for row in range(batch)]
 
     def decode(self, tokens, positions, *, cache, page_table, rope_indices=None, active_slots=None):

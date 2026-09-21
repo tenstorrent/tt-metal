@@ -700,7 +700,13 @@ class MultichipDecoder(OptimizedDecoder):
                 num_preferred_links=self.policy["num_links"],
             )
         else:
-            stats = ttnn.rms_norm_pre_all_gather(x, compute_kernel_config=self.ckc, dtype=ttnn.bfloat16)
+            grid_options = {"use_2d_core_grid": True} if self.policy.get("prefill_norm_rectangular", False) else {}
+            stats = ttnn.rms_norm_pre_all_gather(
+                x,
+                compute_kernel_config=self.ckc,
+                dtype=getattr(ttnn, self.policy.get("prefill_norm_stats_dtype", "bfloat16")),
+                **grid_options,
+            )
             stats = self._gather(stats)
             normalized = ttnn.rms_norm_post_all_gather(
                 x,
@@ -709,6 +715,7 @@ class MultichipDecoder(OptimizedDecoder):
                 weight=self.weights[name + ".weight"],
                 compute_kernel_config=self.ckc,
                 memory_config=memory,
+                **grid_options,
             )
         ccl_dtype = getattr(ttnn, self.policy["ccl_dtype"])
         if self.policy.get("fused_input", False) and shape[1] == 1:

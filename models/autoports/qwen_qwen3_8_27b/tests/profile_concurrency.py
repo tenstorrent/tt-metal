@@ -31,6 +31,9 @@ def main():
     parser.add_argument("--compare-sharded-prefill", action="store_true", help="Prefill-only sharded residual")
     parser.add_argument("--replicated-prefill-norm", action="store_true", help="Gather residual before unchanged norm")
     parser.add_argument(
+        "--prefill-head-optimizations", action="store_true", help="Combine batched final head and skip unused heads"
+    )
+    parser.add_argument(
         "--compare-sdpa", action="store_true", help="Compare per-user and batched SDPA with grouped prefill"
     )
     parser.add_argument("--output", type=Path, required=True)
@@ -52,6 +55,8 @@ def main():
         parser.error("The experimental one-step model path is restricted to batch 16")
     if args.replicated_prefill_norm and not args.compare_sharded_prefill:
         parser.error("--replicated-prefill-norm requires --compare-sharded-prefill")
+    if args.prefill_head_optimizations and not args.compare_sharded_prefill:
+        parser.error("--prefill-head-optimizations requires --compare-sharded-prefill")
     if args.steps < 2:
         parser.error("At least two decode steps are needed to separate first-use and steady execution")
     lengths = list(map(int, args.lengths.split(",")))
@@ -115,6 +120,8 @@ def main():
                     generator.prefill_signatures.clear()
                     generator.batched_prefill = True
                     generator.model.prefill_sharded_residual = trial >= 2
+                    generator.model.prefill_batched_head = args.prefill_head_optimizations and trial >= 2
+                    generator.skip_intermediate_prefill_head = args.prefill_head_optimizations and trial >= 2
                 if args.compare_single_step and repeat == 0:
                     generator._release_traces()
                     generator.batched_prefill = True
@@ -169,6 +176,7 @@ def main():
                     fused_prefill_mlp=args.compare_fused_mlp and trial >= 2,
                     sharded_prefill=args.compare_sharded_prefill and trial >= 2,
                     replicated_prefill_norm=args.replicated_prefill_norm,
+                    prefill_head_optimizations=args.prefill_head_optimizations and trial >= 2,
                     single_step_recurrence=args.compare_single_step and trial >= 2,
                     batched_sdpa=generator.model.layers[0].policy.get("batched_prefill_sdpa", False),
                     length=length,

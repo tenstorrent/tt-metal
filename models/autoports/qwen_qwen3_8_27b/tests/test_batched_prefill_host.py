@@ -58,6 +58,12 @@ class BatchedPrefillDispatchTests(unittest.TestCase):
         self.assertEqual([c[2]["length"] for c in self.calls], [4096, 32])
         self.assertEqual([c[2]["start_pos"] for c in self.calls], [32, 4128])
 
+    def test_skip_only_intermediate_chunk_logits(self):
+        self.gen.skip_intermediate_prefill_head = True
+        self.run_prefill([4128, 4128], [0, 1], [32, 32])
+        self.assertEqual([c[2].get("return_logits", True) for c in self.calls], [False, True])
+        self.assertEqual([c[2]["start_pos"] for c in self.calls], [32, 4128])
+
     def test_ragged_reordered_unaligned_and_single_fall_back(self):
         for lengths, slots, starts in [
             ([64, 128], [0, 1], [0, 0]),
