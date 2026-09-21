@@ -12,6 +12,7 @@ import math
 import os
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -515,6 +516,7 @@ def _agmm_pre_barrier(x4, tt_ccl, topology, cluster_axis):
     key = (id(tt_ccl), tt_ccl.mesh_device.id(), cluster_axis)  # per CCL manager AND mesh device (tests reopen devices)
     t = _AGMM_BARRIER_TENSORS.get(key)
     if t is None:
+        logger.info(f"[AGMM] Python entry barrier (QWEN36_AGMM_BARRIER=1) active: topology={topology} axis={cluster_axis}")
         t = ttnn.from_torch(
             torch.zeros((1, 1, TILE_SIZE, TILE_SIZE), dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
@@ -701,6 +703,18 @@ def all_gather_then_matmul_prefill(x, weight, tt_ccl, compute_cfg, topology, clu
     grid with the column-sharded weight. fp32 accumulation inside the matmul; output [1,1,S,N_local]."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
+    # Cross-device ENTRY BARRIER (default on; QWEN36_AGMM_OUT_AG_BARRIER=0 restores the old un-barriered call).
+    # This was the ONLY prefill collective without one: every other CCL in the layer stack (fused AGMMs via the
+    # Python pre-barrier / in-kernel barrier, matmul_reduce_scatter, tt_all_reduce's reduce_scatter, the norm and
+    # lm_head all-gathers) carries a barrier_semaphore. The gather output here is allocated per call, so without the
+    # barrier a device that runs ahead pushes its shard into the peer's output address while the peer is still
+    # executing the preceding ops (silu*mul / rms_norm of this same out-proj), whose freshly-freed tensors that address
+    # reuses -- the trace replays ops back-to-back, so the write lands mid-op. Root cause of the TP=2 (this path runs
+    # for every TP != 4) run-to-run nondeterministic prefill logits: profiles/pd/p1e_* -- QWEN36_AGMM_BARRIER=0/1/2 and
+    # QWEN36_AGMM_PERSISTENT=1 left T>=2048 8/8 distinct, this barrier alone gives 1/8 at unchanged TTFT.
+    _bar = {}
+    if os.environ.get("QWEN36_AGMM_OUT_AG_BARRIER", "1") != "0":
+        _bar = {"barrier_semaphore": tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis)}
     xg = ttnn.experimental.all_gather_async(
         x4,
         dim=3,
@@ -709,6 +723,7 @@ def all_gather_then_matmul_prefill(x, weight, tt_ccl, compute_cfg, topology, clu
         topology=topology,
         cluster_axis=cluster_axis,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        **_bar,
     )
     pc = create_prefill_mlp_matmul_program_config(S, xg.shape[-1], weight.shape[-1], max_cols=max_cols)
     out = ttnn.linear(
