@@ -181,7 +181,9 @@
     tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_optional_output_argument
     tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_small_matmul_pcc
     tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_sharded_matmul
-    tests/ttnn/unit_tests/operations/matmul/test_matmul_program_cache.py
+    tests/ttnn/unit_tests/operations/matmul/test_matmul_program_cache.py::test_matmul_cache_reuse_same_config
+    tests/ttnn/unit_tests/operations/matmul/test_matmul_program_cache.py::test_matmul_cache_miss_different_shape
+    tests/ttnn/unit_tests/operations/matmul/test_matmul_program_cache.py::test_matmul_cache_miss_different_dtype
     tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_core_grid
     tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_bloom_ff2_linear
     tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_fp32_dest_acc_and_bias
