@@ -2810,8 +2810,9 @@ then regenerate from scratch"; the op itself is not shipped.*
 ### D. Verifier / precision gate
 * (L) Probe what SUPPORTED refuses; handle empty TARGET−SUPPORTED; no-regression vs the SEED — 4e TODO-1.
 * (–) `TARGET` says what we test, `SUPPORTED` says what works — a gate, not a doc line — 4l.7 (510bc66's lesson).
-* (–) PCC / L2 / max-error cannot rank two ops for a consumer; the e2e model with the op's REAL values is the
+* (~) PCC / L2 / max-error cannot rank two ops for a consumer; the e2e model with the op's REAL values is the
   gate (record-and-replay hook pattern); synthetic perturbations under-reproduce — 4m.4(1,2), 4m.7 §3, 4m.8.
+  **DEFERRED 2026-09-21 — see 4o.** Which consumer follows which op is op-specific; kept as a recorded idea.
 * (–) Perf claims report count slower / count faster / worst case, never a total or mean — 4j.11.
 * (–) Re-run a failing case alone before blaming the op — 4j.12. Charts must show what they could not plot — 4j.13.
 * (–) Calibrate the harness against itself before attributing a per-case delta — 4k.15.
@@ -2830,8 +2831,9 @@ then regenerate from scratch"; the op itself is not shipped.*
   4l.1, 4l.2. Parity before perf — 4l.3. Three buckets with ratified refusals — 4l.4.
 * (–) Emit the seam (5 load-bearing details) — 4k.5, 4l.6.
 * (–) Run the op's sharded cases under `--dev` once per generation — 4k.12.
-* (–) Model e2e entries are a REQUIRED gate for an op replacing a production symbol; how to find them — 4k.8,
-  4m.4(1). Say which entries are pointless, in writing — 4k.8.
+* (–) Model e2e entries are a REQUIRED LATE STEP for an op replacing a production symbol, NOT an automatic
+  pass/fail gate — a failure admits several valid responses and a human picks. Revised 2026-09-21, see 4o.
+  How to find them — 4k.8, 4m.4(1). Say which entries are pointless, in writing — 4k.8.
 * (–) Report the harness revision and its distance from the submodule tip — 4k.0.
 * (–) 4e TODO-2 (effort split), -5 (ingest last refinement), -8 (outside witness runs last), -10/-11/-12 (blind
   pass gating, suite numbers, self-reflection gating), -13 (`PYTHON_ENV_DIR`).
@@ -2853,3 +2855,38 @@ then regenerate from scratch"; the op itself is not shipped.*
 * Every injection needs a zero-magnitude control; sub-ulp bf16 injections are no-ops — 4m.4(5), 4m.8.
 * A bound falsifies a contradicting ablation (memory: bound-falsifies-ablation).
 * Do not describe hardware arithmetic from memory; ISA + simulator + a witness probe — 4m.7 §2, 4m.9.
+
+## 4o. Scope decision — generic before seeded (2026-09-21)
+
+The first round of framework work is **generic only**: improvements that make a from-scratch op
+generation more robust, whether or not the op has a counterpart to be compared against. Everything
+whose value depends on having a reference implementation to reach parity with is deferred to a later
+round, and several of them dissolve once the port-into-a-tree-that-has-the-reference procedure exists.
+
+**In scope for round one** (survey: `generic_improvements_survey.md`, 38 items ranked):
+the end-of-kernel writes-acked check and the agent-side exit-fence rule; a planner rule against a
+16-bit running sum, plus the reference document that currently green-lights it; column-major shard
+orientation, spare-core grids, L1-resident placement and cross-format pad-poison as named loose-case
+groups; enforcing the fp32-with-16-bit-accumulator convention that three op prompts still contradict;
+and a rework of the perf-case framework.
+
+**Deferred, with the reason:**
+* Tolerances at least as tight as the counterpart's — meaningless without a counterpart, and the
+  golden PCC targets are arbitrary until there is one to calibrate against.
+* The suite must not invent a class the op lacks — auto-solved by porting into a tree that already
+  has the reference type.
+* Few-hot input families judged against a signed per-row statistic — real, but it is a precision
+  *gate*, and the gate's threshold is exactly what we cannot set without a reference.
+* Consumer-differential testing (4m.4(2)) — op-specific by construction; recorded, not built.
+
+**Two revisions to 4n:**
+1. Model e2e is a **required late step, not a gate.** It must run and its result must be read, but a
+   failure has several valid responses (fix the op, change a design knob, accept and document) and a
+   human chooses. Making it an automatic pass/fail would force the choice.
+2. Consumer-differential is **deferred**, as above.
+
+**Method note.** Every field of a shard or tuning object is caller-settable and therefore needs
+coverage, but NOT as a cartesian axis — that multiplies the whole grid. The mechanism is the existing
+labelled loose case (`group` on a `LOOSE_CASES` entry, marked by `golden_harness._group_marks`,
+bucketed on the dashboard). What `/golden-tests` lacks is a prescribed list of groups every op must
+carry. That is a change to one document, not to the grid.
