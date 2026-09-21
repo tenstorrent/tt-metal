@@ -18,7 +18,7 @@
   model: galaxy-transfer-corruption
   skus:
     wh_galaxy_perf:
-      timeout: 15
+      timeout: 60
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
