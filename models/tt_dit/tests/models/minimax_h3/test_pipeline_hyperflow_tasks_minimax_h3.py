@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from pathlib import Path
 
 import pytest
@@ -203,6 +204,8 @@ def _run_point(mesh_device, task: str, duration_s: int) -> None:
     # The sidecar carries what a table needs, so tabulating a sweep never reparses a log.
     record = {
         "task": task,
+        # Two nodes can sweep into one artifact directory; without this a mixed table reads as single-source.
+        "node": socket.gethostname(),
         "duration_s": duration_s,
         "width": width,
         "height": height,
