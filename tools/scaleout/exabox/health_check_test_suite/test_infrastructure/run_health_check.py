@@ -344,10 +344,17 @@ def main() -> int:
     )
     print(version_header, flush=True)
 
+    # Resolved before the telemetry call so the raw dump lands under the same
+    # logs/ the diag suite writes to, which is what collect_run_artifacts walks.
+    results_dir = Path(args.results_dir or (Path(log_dir) / f"{node}-{slurm_job_id}-results"))
+
     # Collect Prometheus metrics from local telemetry endpoint. The port defaults
     # per deployment and --telemetry-port overrides it (see
     # telemetry_port_for_launch_mode).
-    prom_metrics = collect_prometheus_metrics(port=telemetry_port_for_launch_mode(launch_mode, args.telemetry_port))
+    prom_metrics = collect_prometheus_metrics(
+        port=telemetry_port_for_launch_mode(launch_mode, args.telemetry_port),
+        dump_path=results_dir / "logs" / f"telemetry_{node}.prom",
+    )
     prom_output = ""
     if prom_metrics:
         prom_output = format_prometheus_metrics(prom_metrics)
@@ -361,7 +368,6 @@ def main() -> int:
 
     # Run the diag suite as a subprocess. It writes its JSON report + per-test
     # logs straight into results_dir on the host filesystem.
-    results_dir = Path(args.results_dir or (Path(log_dir) / f"{node}-{slurm_job_id}-results"))
     exit_code, test_output, artifacts_dir = run_diag_subprocess(
         tier=args.tier,
         timeout_seconds=timeout_seconds,
