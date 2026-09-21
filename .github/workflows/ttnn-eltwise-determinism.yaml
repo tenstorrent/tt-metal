@@ -34,6 +34,19 @@ on:
           - N300
           - P150b
         default: N150
+  # Gate the PRs that can actually break this: the check itself, the runner it goes through, and
+  # the eltwise op and SFPU sources it covers. Deliberately not every PR -- a run is a build plus
+  # 192 vectors on a device, which is not worth spending on a diff that cannot affect the result.
+  pull_request:
+    branches:
+      - "main"
+    paths:
+      - "tests/sweep_framework/sweeps/eltwise/**"
+      - "tests/sweep_framework/sweeps_runner.py"
+      - "tests/sweep_framework/sweep_utils/**"
+      - ".github/workflows/ttnn-eltwise-determinism.yaml"
+      - "ttnn/cpp/ttnn/operations/eltwise/**"
+      - "tt_metal/hw/ckernels/**/llk_sfpu/**"
   schedule:
     # 05:00 UTC daily. ttnn-run-sweeps already occupies 02:00 and 03:00.
     - cron: "0 5 * * *"
