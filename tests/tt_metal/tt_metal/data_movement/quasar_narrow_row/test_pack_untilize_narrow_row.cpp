@@ -74,6 +74,18 @@ constexpr std::uint32_t ENGINE_IDMA_SCATTER = 0;
 constexpr std::uint32_t ENGINE_IDMA_PER_ROW = 1;
 constexpr std::uint32_t ENGINE_NOC_PER_ROW = 2;
 
+// All 8 iDMA backend VCs. Each carries 16 B/cycle, so this is the 128 B/cycle ceiling.
+constexpr std::uint32_t CHANNELS_ALL = 8;
+// Sub-splitting a row below this is never worth the extra issue cost, so the split arm of
+// ChannelSweep skips shapes whose pieces would land under it.
+constexpr std::uint32_t MIN_SPLIT_PACKET_BYTES = 64;
+
+// The reference workload: a 32 x 252 Float16_b matrix. 252 datums needs 8 tiles to cover
+// (7 x 32 = 224, + 28), so ct_dim 8 -- right at the half-sync 16-bit DEST limit for
+// pack_untilize -- with 28 datums kept from the last tile. The padded row is 256 datums
+// (512 B), the dense row 252 (504 B), so every row drops 4 datums and row r shifts back 4r.
+constexpr std::uint32_t LAST_W_252 = 28;
+
 const char* engine_name(std::uint32_t e) {
     switch (e) {
         case ENGINE_IDMA_SCATTER: return "iDMA scatter-list";
@@ -171,7 +183,11 @@ struct RunConfig {
     std::uint32_t last_tile_w = 32;  // datums kept from the LAST tile; matrix_w derives from it
     std::uint32_t engine_mode = ENGINE_IDMA_SCATTER;
     std::uint32_t num_channels = 1;
-    std::uint32_t max_packet_bytes = 0;  // 0 => one packet per row
+    // 0 => the default policy: one packet per row (max_packet_bytes = out_row_bytes). That is
+    // the RIGHT default even when fanning out, because both iDMA engines already emit one
+    // packet per row, so 32 rows always give the round-robin more packets than it has
+    // channels. Set this only to deliberately sub-split a row -- see ChannelSweep.
+    std::uint32_t max_packet_bytes = 0;
 };
 
 // Builds and runs the two-stage program, then checks the dense output datum for datum.
@@ -494,48 +510,100 @@ TEST_F(QuasarNarrowRowUntilize, SubFaceWidths) {
         join(bad_widths));
 }
 
-// The engine A/B, same shapes, same output, three ways of moving it. The numbers come out of
-// the profiler (report_narrow_row_from_csv.py); this body only proves all three are correct,
-// which is what makes the timing comparison fair.
+// THE DECISIVE TEST: is the iDMA compaction actually better than the workaround it replaces?
+//
+// Three shapes chosen around the measured knee. The first run of this test found the
+// compaction is DESCRIPTOR-bound and flat at ~8.3 cyc/row up to ~80 B/row, then costs roughly
+// one cycle per 16-20 B (one iDMA VC). So the engines have to be compared on both sides of
+// that, because below it they are all paying for issue and above it they are paying for bytes:
+//
+//   A  ct_dim 1, w 16   ->   32 B/row   well below the knee, pure descriptor cost
+//   B  ct_dim 4, w 16   ->  224 B/row   above the knee
+//   C  ct_dim 8, w 28   ->  504 B/row   == the 32x252 matrix, ~6x past the knee
+//
+// All three engines at one channel, plus the two iDMA engines at eight channels on the shapes
+// where bytes dominate -- comparing a knowingly bandwidth-starved iDMA against the NOC would
+// understate it. The NOC path has no equivalent knob, so its single row is the whole story.
+//
+// This body only proves every engine produces the same correct output; the cycles come from
+// report_narrow_row_from_csv.py, whose "vs workaround" table groups these by shape.
 TEST_F(QuasarNarrowRowUntilize, EngineComparison) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
-    for (std::uint32_t engine : {ENGINE_IDMA_SCATTER, ENGINE_IDMA_PER_ROW, ENGINE_NOC_PER_ROW}) {
-        for (std::uint32_t ct_dim : {1u, 4u, 8u}) {
-            EXPECT_TRUE(
-                run_narrow_row(devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = 16, .engine_mode = engine}))
-                << "engine=" << engine_name(engine) << " ct_dim=" << ct_dim;
+    struct Shape {
+        std::uint32_t ct_dim;
+        std::uint32_t last_tile_w;
+        bool fan_out;  // only worth it where the row is long enough to be data-bound
+    };
+    for (const Shape& s : {Shape{1, 16, false}, Shape{4, 16, true}, Shape{8, LAST_W_252, true}}) {
+        for (std::uint32_t engine : {ENGINE_IDMA_SCATTER, ENGINE_IDMA_PER_ROW, ENGINE_NOC_PER_ROW}) {
+            EXPECT_TRUE(run_narrow_row(
+                devices_[0], buffers, {.ct_dim = s.ct_dim, .last_tile_w = s.last_tile_w, .engine_mode = engine}))
+                << "engine=" << engine_name(engine) << " ct_dim=" << s.ct_dim;
+            // Fan-out is an iDMA-only knob, and only pays past the knee.
+            if (s.fan_out && engine != ENGINE_NOC_PER_ROW) {
+                EXPECT_TRUE(run_narrow_row(
+                    devices_[0],
+                    buffers,
+                    {.ct_dim = s.ct_dim,
+                     .last_tile_w = s.last_tile_w,
+                     .engine_mode = engine,
+                     .num_channels = CHANNELS_ALL}))
+                    << "engine=" << engine_name(engine) << " ct_dim=" << s.ct_dim << " ch=" << CHANNELS_ALL;
+            }
         }
     }
 }
 
-// Fan-out. One packet per row pins a row to one backend engine, so splitting rows into
-// num_channels packets is the only way the VC round-robin has anything to distribute. Expected
-// to buy nothing at small ct_dim (the gather is issue/descriptor-bound there, and every iDMA
-// measurement on this path so far has been flat in channel count) and to start paying only
-// once a row is long enough to be data-bound -- ct_dim 8 is 2048 B/row at full width.
+// Does sub-splitting a row into packets help fan-out, or just cost issue?
+//
+// Fan-out round-robins PACKETS, so it needs at least num_channels of them to distribute. The
+// first version of this test assumed that meant splitting each row into `channels` packets --
+// which is right when the whole transfer is ONE packet, and wrong here. Both iDMA engines
+// already emit one packet per ROW (the scatter list because each entry is its own transfer,
+// the per-row loop because each row is its own transaction), so with 32 rows and at most 8
+// channels there are always enough packets and the default `max_packet_bytes = out_row_bytes`
+// leaves them at their natural size.
+//
+// Sub-splitting on top of that multiplies the packet count by `channels` while the bytes stay
+// the same, and every packet still costs ~4-6 cycles to issue. Prediction: natural >= split
+// everywhere, and materially better on the long shape. This test measures that instead of
+// assuming it -- the old policy would have turned 504 B rows into 64 B packets, 256 of them.
 TEST_F(QuasarNarrowRowUntilize, ChannelSweep) {
     using namespace unit_tests::dm::quasar_narrow_row;
     if (should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
     auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
-    for (std::uint32_t ct_dim : {1u, 8u}) {
-        const std::uint32_t row_bytes = ((ct_dim - 1) * TILE_W + 16) * DATUM_BYTES;
-        for (std::uint32_t channels : {1u, 8u}) {
-            // Split each row into `channels` packets so the round-robin is not inert. Below
-            // ~64 B a split costs more issue than it saves, so floor at 64 -- and never ask
-            // for a packet bigger than the row, which would just be no split at all.
-            const std::uint32_t packet =
-                channels == 1 ? row_bytes : std::min(row_bytes, std::max(64u, row_bytes / channels));
+    // Below the knee and well past it, so the answer is not read off a single size.
+    for (auto [ct_dim, last_tile_w] :
+         {std::pair<std::uint32_t, std::uint32_t>{1, 16}, std::pair<std::uint32_t, std::uint32_t>{8, LAST_W_252}}) {
+        const std::uint32_t row_bytes = ((ct_dim - 1) * TILE_W + last_tile_w) * DATUM_BYTES;
+
+        // Reference: one channel, natural packets.
+        EXPECT_TRUE(run_narrow_row(devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = last_tile_w}))
+            << "ct_dim=" << ct_dim << " ch=1";
+
+        // Fan-out over the natural one-packet-per-row granularity. Expected best.
+        EXPECT_TRUE(run_narrow_row(
+            devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = last_tile_w, .num_channels = CHANNELS_ALL}))
+            << "ct_dim=" << ct_dim << " ch=" << CHANNELS_ALL << " natural packets";
+
+        // Fan-out with each row sub-split into CHANNELS_ALL packets -- the old policy. Skipped
+        // when the row is too short to split into pieces worth issuing.
+        const std::uint32_t split = row_bytes / CHANNELS_ALL;
+        if (split >= MIN_SPLIT_PACKET_BYTES) {
             EXPECT_TRUE(run_narrow_row(
                 devices_[0],
                 buffers,
-                {.ct_dim = ct_dim, .last_tile_w = 16, .num_channels = channels, .max_packet_bytes = packet}))
-                << "ct_dim=" << ct_dim << " channels=" << channels;
+                {.ct_dim = ct_dim,
+                 .last_tile_w = last_tile_w,
+                 .num_channels = CHANNELS_ALL,
+                 .max_packet_bytes = split}))
+                << "ct_dim=" << ct_dim << " ch=" << CHANNELS_ALL << " split packets of " << split << " B";
         }
     }
 }

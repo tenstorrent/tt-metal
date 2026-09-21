@@ -41,7 +41,14 @@ COL_DATA = 6
 COL_ZONE = 10
 COL_TYPE = 11
 
-ENGINE_NAMES = {0: "iDMA scatter-list", 1: "iDMA per-row", 2: "NOC per-row"}
+ENGINE_IDMA_SCATTER = 0
+ENGINE_IDMA_PER_ROW = 1
+ENGINE_NOC_PER_ROW = 2
+ENGINE_NAMES = {
+    ENGINE_IDMA_SCATTER: "iDMA scatter-list",
+    ENGINE_IDMA_PER_ROW: "iDMA per-row",
+    ENGINE_NOC_PER_ROW: "NOC per-row",
+}
 
 # tt-llk reference points, single 32x32 Float16 tile, loop_factor=32, DestSync.Half.
 # Normal whole-tile HW pack-untilize, and RV_PACR narrow-row by kept width.
@@ -101,6 +108,48 @@ def reconstruct(csv_path):
     return stage1, stage2
 
 
+def report_vs_workaround(stage2):
+    """Group the compaction runs by shape and put every engine next to the NOC baseline.
+
+    This is the question the test exists to answer: the NOC per-row read IS the current
+    workaround, so a shape is only worth adopting iDMA for if some iDMA row beats engine 2's
+    row for that same shape. Grouping by (rows, B/row) is what makes them comparable -- the
+    cost is strongly size-dependent (descriptor-bound and flat below ~80 B/row, then roughly
+    one cycle per 16-20 B), so comparing engines across different shapes means nothing.
+    """
+    groups = {}
+    for run in stage2:
+        key = (run.get("rows"), run.get("row_bytes"))
+        # A repeat of the same configuration is a run-to-run stability check; keep both and
+        # average, rather than letting the later one silently win.
+        cfg = (run.get("engine"), run.get("channels"), run.get("packet"))
+        per_pass = run["dur"] / run["iters"] if run.get("iters") else float("nan")
+        groups.setdefault(key, {}).setdefault(cfg, []).append(per_pass)
+
+    print("=== vs the current workaround (NOC per-row), grouped by shape ===")
+    for (rows, row_bytes), cfgs in sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+        noc_vals = [v for (e, _c, _p), vals in cfgs.items() if e == ENGINE_NOC_PER_ROW for v in vals]
+        baseline = sum(noc_vals) / len(noc_vals) if noc_vals else None
+        total_bytes = (rows or 0) * (row_bytes or 0)
+        print(f"  {rows} rows x {row_bytes} B = {total_bytes} B")
+        if baseline is None:
+            print("    no NOC baseline in this CSV -- run *EngineComparison* for this shape")
+        for (engine, channels, packet), vals in sorted(cfgs.items()):
+            avg = sum(vals) / len(vals)
+            split = "" if packet in (None, row_bytes) else f", split {packet} B"
+            tag = f"{ENGINE_NAMES.get(engine, '?')} ch={channels}{split}"
+            rel = ""
+            if baseline is not None and avg > 0:
+                rel = (
+                    "   <- baseline"
+                    if engine == ENGINE_NOC_PER_ROW
+                    else f"   {baseline / avg:.2f}x vs NOC" + ("" if baseline > avg else "  (SLOWER)")
+                )
+            n = f" (n={len(vals)})" if len(vals) > 1 else ""
+            print(f"    {tag:<44} {avg:>8.1f} cyc/pass {avg / rows:>7.2f} cyc/row{n}{rel}")
+    return
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", default="generated/profiler/.logs/profile_log_device.csv")
@@ -142,6 +191,9 @@ def main():
             f"{run.get('packet', 0):>7} {run.get('channels', 0):>3} {run['iters']:>6} "
             f"{per_pass:>9.1f} {per_row:>8.2f} {bpc:>7.2f}"
         )
+
+    print()
+    report_vs_workaround(stage2)
 
     # Pair by index: each program run emits exactly one zone of each kind, and programs run
     # sequentially, so the Nth of each belongs to the same run. If the counts differ, the
