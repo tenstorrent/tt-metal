@@ -73,3 +73,34 @@ ref2va -- at `padded_len` 89856 the SDPA circular buffers on 11x10 reach 1647616
 (`get_matmul_core_grid` has always clamped them), so the difference is confined to SDPA and the
 VSA stages, worth roughly 8 % more cores. Treat cross-row comparisons spanning that boundary as
 approximate until the early points are re-measured.
+
+### ref2va does not run on this build
+
+All three `ref2va` cells are unmeasured because the mode fails at program compile, before any
+device work:
+
+```
+Statically allocated circular buffers on core range [0-0 - 10-9]
+grow to 1647616 B which is beyond max L1 size of 1572864 B
+  references.py:257  encode_references
+  vae_minimax_h3.py:847  encode
+  conv_minimax_h3.py:359  forward
+```
+
+It is the video VAE's taps=3 encoder conv3d, which only `ref2va` reaches, 4.75 % over L1.
+
+This is **not specific to the HyperFlow sweep**. The pre-existing, calibrated
+`test_pipeline_ref2va_minimax_h3.py::test_ref2va_end_to_end` -- no adapter, no two-time schedule --
+fails with the byte-identical size on the same build. That gate carries measured `padded_len` and
+per-stage timings in its own comments, so `ref2va` ran on an earlier build: this is a regression,
+not a mode that never worked.
+
+Ruled out by experiment, not inference:
+
+* **Core grid.** The blocking is grid-independent -- forcing 12x10 instead of 11x10 produced the
+  same 1647616 B to the byte.
+* **The rail-cap commit.** The same failure occurs with it reverted.
+* **A missing blocking entry.** The exact `_BLOCKINGS` lookup hits; neither fallback warning fires.
+
+The remaining suspects are the conv3d blocking chosen for this shape and the op's own L1
+accounting, which needs a bisect against the build that produced the gate's recorded numbers.
