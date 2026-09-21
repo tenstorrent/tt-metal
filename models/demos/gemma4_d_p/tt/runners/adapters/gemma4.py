@@ -19,13 +19,13 @@ class Gemma4ServiceConfig:
 
 def validate_params(params):
     expected = {
-        "mesh_shape": (8, 4),
-        "num_layers": 60,
+        "mesh_shape": Gemma4ServiceConfig.MESH_SHAPE,
+        "num_layers": Gemma4ServiceConfig.NUM_LAYERS,
         "first_layer_idx": 0,
         "is_first_rank": True,
         "is_last_rank": True,
-        "max_seq_len": 262144,
-        "chunk_size": 8192,
+        "max_seq_len": Gemma4ServiceConfig.MAX_SEQ_LEN,
+        "chunk_size": Gemma4ServiceConfig.CHUNK_SIZE,
         "sp_axis": 0,
         "tp_axis": 1,
         "use_trace": True,
