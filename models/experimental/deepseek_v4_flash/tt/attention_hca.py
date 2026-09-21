@@ -80,6 +80,7 @@ class DeepSeekV4HCACompressor:
         use_prefetcher: bool = False,
         num_prefetch_pages: Optional[int] = None,
         prefetch_buffers: Optional[dict] = None,
+        tp_size: int = 1,
     ):
         """Build the compressor's projections, norm and position bias from ``weights``.
 
