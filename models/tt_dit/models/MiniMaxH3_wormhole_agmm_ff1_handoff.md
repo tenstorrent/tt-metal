@@ -1,4 +1,4 @@
-# MiniMax-H3 on Wormhole Galaxy: taking the ff1 AGMM to roofline — handoff (2026-09-18, updated 2026-09-19)
+# MiniMax-H3 on Wormhole Galaxy: taking the ff1 AGMM to roofline — handoff (2026-09-18, updated 2026-09-21)
 
 Branch `jameslee/exp_ring_sdpa_wh`. Written for whoever picks up the AGMM work next; everything below was
 measured on this 4x8 Wormhole Galaxy (UF-EV-B12-GWH02) on 2026-09-18/19. **Status 2026-09-19:** lever §4.1 A
@@ -22,7 +22,7 @@ file adds the SwiGLU findings made after it, the exact recipes for each lever, a
 | kernels | `ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/` — `all_gather_minimal_matmul_async_program_factory.cpp`, `kernels/compute.cpp`, `kernels/dm_in0_sender.cpp`, `kernels/dm_in1_sender_out.cpp`, `kernels/matmul_dataflow_common.hpp` |
 | roofline | compute **8.03 ms** (2·M·K·N = 1.053 TFLOP at 64 cores x 2048 FLOP/cycle x 1.0 GHz = 131.1 TFLOP/s), DRAM 0.78 ms (224 MB at 288 GB/s), fabric 1.10 ms (13.8 MB per link at 12.5 GB/s) |
 | measured | **15.7 ms** (15,632-15,925 us across the day's runs; 15,709.9 us in the perf doc) = 51% of HiFi2 peak; 50 calls per forward = 0.79 s of the 12.4 s forward |
-| roofline script | `models/tt_dit/tests/models/minimax_h3/tools/agmm_roofline.py` (`--dump`, `--figs all`, `--selftest`) |
+| roofline script | `models/tt_dit/tests/models/minimax_h3/tools/transformer_roofline.py` (`--dump`, `--figs all`, `--selftest`; `--ops agmm` is the default, `--ops all` adds ff2). Renamed from `agmm_roofline.py` on 2026-09-21; the op table lives in `minimax_h3_ops.py` |
 
 `fp32_dest_acc_en` does **not** move the roofline: math fidelity fixes the FPU rate; the flag only sets the
 DST accumulator format (halving DST to 4 tiles) and the pack format. LoFi halves the bar and is a quality
@@ -101,7 +101,7 @@ bf16 anyway, so bf16-grade silu loses nothing measurable.
 |---|---|---|
 | 1 | K_block 14 / 21 (never in the original sweep: its L1 pre-filter over-counts this op's CBs) | slower: (8,14,8) 16,227 us, (8,14,6) 16,281, (6,14,10) 16,898, (8,21,4) 18,131 vs 15,725; (8,14,10), (8,21,6) OOM at warm-up |
 | 2 | fp32 dest off, mesh (`MM_SWEEP_FP32_DEST_ACC=0`) | (8,7,10) 2x2 15,162 (-3.6%); best (8,7,16) 2x4 **14,475 (-8.0%)**; (12,7,8) 4x2 14,677; (8,7,14) 2x2 14,756 |
-| 3 | single device, same per-device shape (`agmm_ff1_single_device_bench.py`) | `minimal_matmul`+SwiGLU 16.56 ms ≈ the mesh AGMM: the ring gather is hidden. Plain 14.52 → SwiGLU costs 2.0 ms. fp32 off (12,7,8) 4x2 plain 12.67 ms (63%). `ttnn.matmul` auto-config 8x8: 23.4 ms fp32 on, 15.2 off (no better) |
+| 3 | single device, same per-device shape (`transformer_op_single_device_bench.py --op ff1`, then `agmm_ff1_single_device_bench.py`) | `minimal_matmul`+SwiGLU 16.56 ms ≈ the mesh AGMM: the ring gather is hidden. Plain 14.52 → SwiGLU costs 2.0 ms. fp32 off (12,7,8) 4x2 plain 12.67 ms (63%). `ttnn.matmul` auto-config 8x8: 23.4 ms fp32 on, 15.2 off (no better) |
 | 4 | fidelity scaling, single device | plain (8,7,10) fp32: LoFi 13.17 / HiFi2 14.48 / HiFi4 20.72 ms → ~12-13 ms non-math floor at this blocking; (12,7,8) fp32-off LoFi 10.73 |
 | 5 | per-iteration zones | operand wait 1 us/iter, `matmul_blocks` 27.3 us/iter vs 17.9 math |
 | 6 | per-block zones | K loop 12.9 ms, SwiGLU 2.8 ms, waits 0 |
@@ -111,7 +111,7 @@ bf16 anyway, so bf16-grade silu loses nothing measurable.
 | 11 | blocking sweep with the bench, HiFi2 host ms: (8,7,10) 2x2 **16.06**; (8,7,10) **4x1 18.28** (same 4 DST tiles, 5 unpacks per K step instead of 4); (4,7,10) 23.68; (4,14,10) 23.37 (doubling K_block = halving fp32 L1-acc pack passes: -1.3%); plain (8,7,10) 14.30; plain LoFi 12.65 | non-math time scales with tile-MACs and with the unpack count, not with iterations or pack passes → issue-bound pipeline, see §2 |
 | 12 | per-thread sampled zones (`agmm_compute_zones.py apply sampled`) | table in §2: ACQ 21 / MAC 1321 / UNPACK 1357 / PWAIT 26 / PACK 1236 cycles per subblock |
 | 13 | block zones after §4.1 A (`apply block`) | KLOOP **13,034** us, SWIGLU **2,191** us per core (was 12,934 / 2,809): the silu change removed 618 us on the mesh; 2,608 cycles per gate/up pair remain |
-| 9 | `silu_tile<false>` on the mesh with ping-pong semaphores (`agmm_ff1_mesh_bench.py`, 10 back-to-back calls) and through the fixed harness | **runs.** Host 16.58 → 16.08 ms per call; device kernel (harness, Tracy) **15,852 → 15,289 us (-563 us, -3.6%)**; PCC 0.9999838 → 0.9999834, rel-RMSE 0.00806 → 0.00828 (bar 0.9995 / 0.02); `test_linear_swiglu` 4/4 at 0.99998. **Landed** in both `compute.cpp` |
+| 9 | `silu_tile<false>` on the mesh with ping-pong semaphores (`transformer_op_mesh_bench.py --op ff1`, then `agmm_ff1_mesh_bench.py`, 10 back-to-back calls) and through the fixed harness | **runs.** Host 16.58 → 16.08 ms per call; device kernel (harness, Tracy) **15,852 → 15,289 us (-563 us, -3.6%)**; PCC 0.9999838 → 0.9999834, rel-RMSE 0.00806 → 0.00828 (bar 0.9995 / 0.02); `test_linear_swiglu` 4/4 at 0.99998. **Landed** in both `compute.cpp` |
 
 Numerics baseline (perf doc, ff1 real ring op at M=13664): pcc 0.9999843, rel-RMSE 0.00837; bar pcc > 0.9995,
 rel-RMSE < 0.02. Single-device SwiGLU vs fp32 torch: fp32 dest 0.99993 / 0.0087, fp32 dest off 0.99985 / 0.0169.
@@ -218,17 +218,19 @@ the per-tile issue cost of the 2x2 fp32 subblock on all three TRISCs, and the 2.
 accurate-enough sigmoid.
 
 Per forward (50 blocks) each ms per call is 50 ms; 15.7 → 10 ms is ~0.29 s of the 12.4 s forward, 2.3%.
-The same three levers apply to to_qkv (10.4 ms, 58%) and to_out (4.3 ms, 46%), which share the kernel
-without SwiGLU; §4.2 and §4.3 carry over unchanged.
+to_qkv and to_out share the kernel without SwiGLU; measured 2026-09-21 (§7): §4.3 carries over to to_qkv (fp32
+dest off + 4x2: -8.7% on the mesh), but to_out is co-limited by operand delivery, which §4.2 had ruled out for ff1.
 
 ## 6. Tooling and recipes
 
-**Mesh reproducer, 15 s per run (use this first).** `models/tt_dit/tests/models/minimax_h3/tools/agmm_ff1_mesh_bench.py`
-runs the ff1 AGMM on one TP ring (the harness's 4x1 cluster submesh) exactly as the model does: fused SwiGLU,
-`bias=None`, HiFi2, fp32 dest, (8,7,10) 2x2, `math_approx_mode=True`, **two semaphore pairs and two gathered-in0
-buffers alternated per call** like `CCLManager`. Prints host ms per call over N back-to-back calls and PCC /
-rel-RMSE against fp32 torch on the first 2048 rows of every device. `--blocks`, `--fp32-dest 0`, `--no-swiglu`,
-`--sync-each`, `--no-pingpong` (reproduces the exp 8 hang). Wrap in `timeout 600`; a hang never prints "ms per call".
+**Mesh reproducer, 15 s per run (use this first).** `models/tt_dit/tests/models/minimax_h3/tools/transformer_op_mesh_bench.py --op ff1`
+(2026-09-21: the generic successor of `agmm_ff1_mesh_bench.py`; `--op to_qkv|to_out|ff2` runs the block's other
+matmuls with their own fusion, shape and blocking from `minimax_h3_ops.py`) runs the op on one TP ring (the harness's
+4x1 cluster submesh) exactly as the model does: fused SwiGLU, `bias=None`, HiFi2, fp32 dest, (8,7,10) 2x2,
+`math_approx_mode=True`, **two semaphore pairs and two gathered-in0 buffers alternated per call** like `CCLManager`.
+Prints host ms per call over N back-to-back calls and PCC / rel-RMSE against fp32 torch on the first 2048 rows of
+every device. `--blocks`, `--fp32-dest 0`, `--no-fusion` (was `--no-swiglu`), `--sync-each`, `--no-pingpong`
+(reproduces the exp 8 hang). Wrap in `timeout 600`; a hang never prints "ms per call".
 
 Two things that cost hours before they were found: (1) `ttnn.from_torch` of an **fp32** torch tensor of
 13664x5376 to bf16 tiles takes ~160 s on the host (0.1 s from a bf16 torch tensor) — the first draft of this
@@ -253,7 +255,9 @@ kernel changes. Note the harness passes a **bias** for `ff1_swiglu` (the model d
 
 **Device zones.** `models/tt_dit/tests/models/minimax_h3/tools/agmm_compute_zones.py apply block|sampled` edits the
 AGMM `compute.cpp` in place (exact-match, asserts if the kernel moved on), `revert` restores it, `parse <csv>` prints
-per-thread mean cycles and per-core sums. By hand: include `"tools/profiler/kernel_profiler.hpp"` in `compute.cpp`
+per-thread mean cycles and per-core sums. `block` zones the K loop and whichever epilogue the op compiles (`SWIGLU`
+for ff1, `EPILOGUE_ADDCMUL` for to_out, `EPILOGUE_COPY` / `EPILOGUE_BIAS` for to_qkv without / with a bias -- the
+harness always passes one); `help` prints each AGMM's sweep `-k` id. By hand: include `"tools/profiler/kernel_profiler.hpp"` in `compute.cpp`
 and wrap regions in `{ DeviceZoneScopedN("NAME"); ... }`; the sweep harness already runs under `tracy -p`, so zones land in
 `generated/profiler/mm_sweep_wh_4x8_ring_13664_5376_7168_8x8_agmm_ff1_swiglu/reports/<ts>/profile_log_device.csv`.
 The per-core buffer holds ~120 zone events per RISC, so use per-output-block zones (21 blocks x 3 zones) for
@@ -262,8 +266,11 @@ the full op and per-iteration zones only to sample the first ~60 iterations. Par
 `run host ID` per `PCIe slot`, pair `ZONE_START`/`ZONE_END` by `zone name` per core, sum. Zone overhead was
 not measurable (15.74 vs 15.72 ms). The zones are not in the tree.
 
-**Single device, fast loop.** `agmm_ff1_single_device_bench.py` (25 s per case; `--fidelity LoFi,HiFi2` for
-the delivery-floor test; `--cases` for blockings and fp32 on/off). PCC for SwiGLU kernel changes:
+**Single device, fast loop.** `transformer_op_single_device_bench.py --op ff1` (was `agmm_ff1_single_device_bench.py`;
+25 s per case; `--fidelity LoFi,HiFi2` for the delivery-floor test; `--cases` for blockings and fp32 on/off;
+`--op to_qkv|to_out|ff2` for the other matmuls through `minimal_matmul_split` / `dit_minimal_matmul_addcmul_fused` /
+`minimal_matmul`). Host tensors are bf16 since 2026-09-21, so its PCC reads ~0.99992 where the fp32-input version read
+0.99993; the ms are unchanged. PCC for SwiGLU kernel changes:
 `pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_minimal_matmul.py::test_linear_swiglu`
 (4 variants, 5 s).
 
@@ -283,3 +290,24 @@ One reset today came back with a degraded topology and needed a second reset plu
 double-buffered full width plus a bias CB; the AGMM factory single-buffers it, halves it for SwiGLU and
 allocates bias only with `use_bias`. Combos near the budget (K_block >= 14 at M_block 8) are filtered although
 they build; they measured slower anyway (exp 1).
+
+## 7. to_qkv and to_out (2026-09-21)
+
+Measured with the generic tools (`transformer_op_mesh_bench.py --op ...`, `transformer_op_single_device_bench.py`,
+`agmm_compute_zones.py apply block|opwait|sampled`, op registry `minimax_h3_ops.py`); full tables in the perf doc
+section *to_qkv / to_out AGMM: attribution* and rows 17-18.
+
+- **to_qkv** (10.3 ms, 58%) is ff1 without the SwiGLU: K loop 98% of the kernel at the same 47 cycles per tile-MAC,
+  operand waits 3%, the `chunks=3` writer 0.08 ms, the copy epilogue 0.17 ms. **fp32 dest off with (8,7,12) 4x2:
+  11.30 -> 10.32 ms on the mesh (-8.7%)**, rel-RMSE 0.0044 -> 0.0107 -- the same precision decision as §4.3's first
+  bullet; take it for ff1 and to_qkv together.
+- **to_out** is **5.3 ms** as the model runs it (fused addcmul, approx on), not the 4.33 ms the sweep recorded with the
+  `plain` use case. 0.7 ms is the two-pass addcmul epilogue (`add_bias_and_addcmul_block`; a one-DST-pass version is
+  ~-0.35 ms), and **~1.1 ms is the unpack thread waiting on the in0/in1 relay** (`OPWAIT` 5.75 us of every 23 us
+  iteration): with 6 N tiles per core the op needs ~12.8 GB/s per core of operands at the pipeline's pace and the
+  store-and-forward relay delivers ~10. The relay prefetch patch does not help (latency, not bandwidth), and every
+  compute-side lever that works single-device (fp32 off 4x2: 3.88 -> 3.66 ms; M_block 16) is absorbed by the waits on
+  the mesh (5.23 / 5.22 vs 5.24). fp32 dest off alone: -3.5%. The lever of size is a higher-bandwidth in0 path (multicast).
+- Tool caveats: the harness always passes a bias, so its to_qkv zone is `EPILOGUE_BIAS` (the model runs `copy_block`,
+  which the mesh bench does); `(16,8,6)` and `(8,14,12) 2x4` overflow L1 (`program.cpp:2097`) -- the bench prints a
+  traceback and the next run is unaffected.
