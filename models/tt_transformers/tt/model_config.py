@@ -1357,11 +1357,17 @@ class ModelArgs:
             elif self.is_galaxy:
                 return ttnn.L1_MEMORY_CONFIG
             else:
-                residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
+                # Collective-pair fold: tt_all_reduce now completes the
+                # all-reduce, so the residual stream is carried FULL WIDTH
+                # (self.dim) between layers instead of fractured over
+                # num_devices. The config must be sized for the width the
+                # tensors actually have, otherwise every to_memory_config that
+                # moves the stream into it fails the shard-grid check.
+                residual_grid = self.dram_shard_core_grid_for_k(self.dim)
                 return ttnn.create_sharded_memory_config(
                     (
                         self.tile_padded_batch_rows,
-                        self.dim // residual_grid.num_cores // self.num_devices,
+                        self.dim // residual_grid.num_cores,
                     ),
                     residual_grid,
                     ttnn.ShardStrategy.WIDTH,

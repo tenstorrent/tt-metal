@@ -453,7 +453,12 @@ class MLP(LightweightModule):
             w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
         )
 
-        if mode == Mode.DECODE:
+        # tt_all_reduce returns the full-width replicated tensor after the fold;
+        # the decoder lands it in the (now full-width) residual config itself.
+        # When the fold's preconditions were not met the tensor is still
+        # fractured, and the old reshard to the fractured MLP-output config is
+        # exactly what the decoder's add then expects.
+        if mode == Mode.DECODE and w2_out_reduced.shape[-1] != self.args.dim:
             w2_out_reduced = ttnn.to_memory_config(
                 w2_out_reduced,
                 self.args.get_mlp_output_mem_config(mode, self.prefetcher),

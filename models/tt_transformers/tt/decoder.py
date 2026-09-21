@@ -310,9 +310,30 @@ class TransformerBlock(LightweightModule):
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = self.args.get_residual_mem_config(mode, self.prefetcher)
 
-        assert (
-            x.memory_config() == skip_mem_cfg
-        ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+        # Collective-pair fold: the residual stream is carried FULL WIDTH between
+        # layers now, and skip_mem_cfg is sized for that width. The stream still
+        # enters the first layer fractured from the embedding, so gather it once
+        # here instead of once per norm; from then on x already matches.
+        if self.num_devices > 1 and x.shape[-1] != self.args.dim:
+            x = ttnn.experimental.all_gather_async(
+                ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG),
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=self.tt_ccl.get_num_links(1),
+                topology=self.args.ccl_topology(),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=1,
+                num_workers_per_link=1,
+                num_buffers_per_channel=2,
+            )
+            x = ttnn.to_memory_config(x, skip_mem_cfg)
+            residual = x
+        else:
+            assert (
+                x.memory_config() == skip_mem_cfg
+            ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
         # Choose the correct rotation matrices based on the mode
         rot_mats = (
@@ -345,11 +366,50 @@ class TransformerBlock(LightweightModule):
         if mode == Mode.PREFILL and batch_size > 1:
             residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
         # TODO: create correct memory config in RopeSetup (issue is in ttnn.add op because of different shape in memory config for residual and rot_mats)
-        attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
+        # Collective-pair fold: attn_out comes back FULL WIDTH from the folded
+        # all-reduce. The residual stream must be carried at the same width for
+        # the add below; on the very first token step the batched-prefill reshape
+        # above (or any caller-supplied fractured tensor) can leave it narrow, so
+        # gather it once here rather than once per norm.
+        if self.num_devices > 1 and attn_out.shape[-1] > residual.shape[-1]:
+            # attn_out came back FULL WIDTH from the folded all-reduce but the
+            # residual is still fractured: gather it once here so both operands
+            # of the add have the same width.
+            residual = ttnn.experimental.all_gather_async(
+                ttnn.to_memory_config(residual, ttnn.L1_MEMORY_CONFIG),
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=self.tt_ccl.get_num_links(1),
+                topology=self.args.ccl_topology(),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=1,
+                num_workers_per_link=1,
+                num_buffers_per_channel=2,
+            )
+        elif self.num_devices > 1 and attn_out.shape[-1] < residual.shape[-1]:
+            # The all-reduce fell back to the reduce-scatter path, so attn_out is
+            # fractured while the stream is full width: narrow the residual back.
+            residual = ttnn.mesh_partition(
+                ttnn.to_memory_config(residual, ttnn.L1_MEMORY_CONFIG),
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                dim=3,
+                cluster_axis=1,
+            )
+        # Both operands now have the same width; land them in one config. Only
+        # skip_mem_cfg (sized for the full width) is safe when they are full
+        # width, otherwise fall back to an interleaved L1 config both can hold.
+        if attn_out.shape[-1] == self.args.dim:
+            add_mem_cfg = skip_mem_cfg
+        else:
+            add_mem_cfg = ttnn.L1_MEMORY_CONFIG if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
+        attn_out = ttnn.to_memory_config(attn_out, add_mem_cfg)
+        residual = ttnn.to_memory_config(residual, add_mem_cfg)
 
         if self.pre_ff_norm is None:
             hidden_states = ttnn.add(
-                residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
+                residual, attn_out, memory_config=add_mem_cfg, dtype=ttnn.bfloat16 if TG else None
             )
             residual = hidden_states
             if mode == "prefill":
@@ -400,10 +460,38 @@ class TransformerBlock(LightweightModule):
                     cluster_axis=1,
                 )
 
+        # Second half of the fold: hidden_states comes back from the MLP's
+        # all-reduce full width when the fold took, fractured when it fell back.
+        # Land both operands in one config, chosen from the width they have.
+        if self.num_devices > 1 and hidden_states.shape[-1] != residual.shape[-1]:
+            if hidden_states.shape[-1] == self.args.dim:
+                residual = ttnn.experimental.all_gather_async(
+                    ttnn.to_memory_config(residual, ttnn.L1_MEMORY_CONFIG),
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=self.tt_ccl.get_num_links(1),
+                    topology=self.args.ccl_topology(),
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=1,
+                    num_workers_per_link=1,
+                    num_buffers_per_channel=2,
+                )
+            else:
+                hidden_states = ttnn.mesh_partition(
+                    ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG),
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    dim=3,
+                    cluster_axis=1,
+                )
+        out_mem_cfg = skip_mem_cfg if hidden_states.shape[-1] == self.args.dim else hidden_states.memory_config()
+        residual = ttnn.to_memory_config(residual, out_mem_cfg)
+        hidden_states = ttnn.to_memory_config(hidden_states, out_mem_cfg)
         out = ttnn.add(
             residual,
             hidden_states,
-            memory_config=skip_mem_cfg,
+            memory_config=out_mem_cfg,
             dtype=self.args.ccl_dtype
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,

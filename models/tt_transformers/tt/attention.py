@@ -1020,11 +1020,10 @@ class Attention(LightweightModule):
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
 
-            if not self.TG:
-                dense_out_reduced = ttnn.to_memory_config(
-                    dense_out_reduced, self.args.get_attn_dense_output_mem_config(Mode.DECODE, None)
-                )
-
+            # tt_all_reduce returns the full-width replicated tensor (the gather
+            # DistributedNorm used to issue is folded into it); the decoder lands
+            # it in the (now full-width) residual config itself, so no reshard to
+            # a fractured dense-output config happens here.
             return dense_out_reduced
 
     def forward_prefill(

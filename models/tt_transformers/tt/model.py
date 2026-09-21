@@ -984,7 +984,11 @@ class Transformer(LightweightModule):
                 decoder_id=i, tensor=TensorGroup.ACTIVATION
             )
 
-            if mode == Mode.DECODE and not self.args.is_galaxy:
+            if mode == Mode.DECODE and not self.args.is_galaxy and x.shape[-1] == self.args.dim:
+                # After the collective-pair fold the residual config is sized for
+                # the full width; only land the stream in it once it is full
+                # width (the first layer receives it fractured from the
+                # embedding, and the decoder widens it there).
                 x = ttnn.to_memory_config(
                     x,
                     self.args.get_residual_mem_config(mode, self.prefetcher),

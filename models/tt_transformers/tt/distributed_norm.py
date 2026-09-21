@@ -132,8 +132,15 @@ class DistributedNorm(LightweightModule):
 
         input_mem_cfg = sharded_output_config if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
 
+        # Collective-pair fold: when tt_all_reduce completed the all-reduce the
+        # input already arrives full width and replicated, so this gather is the
+        # launch the fold removes -- gathering again would be wrong. Detect the
+        # width rather than assume it, so any path that still arrives fractured
+        # keeps exactly today's behaviour (the second pair's gather included).
+        if self.args.is_multichip and not self.args.is_distributed_norm(mode) and x.shape[-1] == self.args.dim:
+            x = ttnn.to_memory_config(x, input_mem_cfg)
         # Distributed norm already performs a gather
-        if self.args.is_multichip and not self.args.is_distributed_norm(mode):
+        elif self.args.is_multichip and not self.args.is_distributed_norm(mode):
             x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,

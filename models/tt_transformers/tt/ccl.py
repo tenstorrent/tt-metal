@@ -172,6 +172,95 @@ def tt_all_reduce(
             input_tensor = ttnn.sharded_to_interleaved(input_tensor_sharded, ttnn.L1_MEMORY_CONFIG)
             input_tensor_sharded.deallocate(True)
 
+        # Collective-pair fold (R7 + the gather DistributedNorm issues next):
+        # reduce_scatter + all_gather is one all-reduce. Complete the all-reduce
+        # here with the single-program form of all_reduce_async -- the form whose
+        # arguments are its own (buffer_tensor + one semaphore), not the composite
+        # form that re-issues a reduce_scatter and an all_gather inside itself --
+        # and hand back the FULL WIDTH replicated tensor. DistributedNorm then
+        # skips its gather because the input already arrives full width.
+        #
+        # The single program requires a WIDTH_SHARDED L1 input, a WIDTH_SHARDED
+        # output, and a WIDTH_SHARDED L1 buffer whose per-core shard can hold
+        # ring_size copies of the output shard (all_reduce_async_device_operation
+        # .cpp:45-72). Build that buffer lazily once per (grid, shard) and cache it
+        # on tt_ccl. Applies to both prefill and decode (no mode flag in scope);
+        # if any precondition is not met we fall back to today's reduce-scatter.
+        ar_cluster_axis = 0 if mesh_shape[0] > 1 else 1
+        in_mem_cfg = input_tensor.memory_config()
+        ar_out_mem_cfg = memory_config if memory_config is not None else in_mem_cfg
+        can_all_reduce = (
+            in_mem_cfg.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            and in_mem_cfg.buffer_type == ttnn.BufferType.L1
+            and ar_out_mem_cfg.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+            and ar_out_mem_cfg.buffer_type == ttnn.BufferType.L1
+            and mesh_shape[ar_cluster_axis] % 2 == 0
+        )
+        if can_all_reduce:
+            ring_size = mesh_shape[ar_cluster_axis]
+            # The buffer is the reduction CB: it must hold ring_size copies of
+            # the OUTPUT shard per core (device_operation.cpp:63-72 checks only
+            # shard volumes), and its grid must contain the output grid
+            # (:59-61). Two things broke the previous two builds:
+            #  * the logical width must be exactly shard_w * num_cores, so the
+            #    number of width shards equals the number of cores
+            #    (tensor_spec.cpp:56-60). Width shard_w*ring_size*num_cores over
+            #    num_cores cores asks for ring_size*num_cores shards -> the
+            #    "128 shards must not exceed 32 cores" FATAL.
+            #  * ar_out_mem_cfg here is L1_WIDTH_SHARDED_MEMORY_CONFIG, whose
+            #    shard_spec is None, so out_spec.shape crashed. Derive the
+            #    output shard geometry from the INPUT tensor instead: the output
+            #    of an all-reduce has exactly the input's shape and grid.
+            # The output of this all-reduce has the INPUT's logical shape (full
+            # width, replicated), so reuse the input's grid and shard shape for
+            # the output: num_width_shards == num_cores, which is what
+            # tensor_spec.cpp:56-60 requires.
+            in_spec = in_mem_cfg.shard_spec if in_mem_cfg.shard_spec is not None else input_tensor.shard_spec()
+            out_grid = in_spec.grid
+            out_shard = [in_spec.shape[0], in_spec.shape[1]]
+            num_buf_cores = out_grid.num_cores()
+            ar_out_mem_cfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(out_grid, out_shard, ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            # Reduction CB: per-core shard must hold ring_size copies of the
+            # output shard (device_operation.cpp:63-72), while the buffer's own
+            # logical width stays shard_w * num_cores so it has exactly one
+            # shard per core.
+            buf_shape = [out_shard[0], out_shard[1] * ring_size]
+            buf_key = (str(out_grid), buf_shape[0], buf_shape[1], str(input_tensor.dtype))
+            if not hasattr(tt_ccl, "_ar_buffers"):
+                tt_ccl._ar_buffers = {}
+            buffer_tensor = tt_ccl._ar_buffers.get(buf_key)
+            if buffer_tensor is None:
+                buf_mem_cfg = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(out_grid, buf_shape, ttnn.ShardOrientation.ROW_MAJOR),
+                )
+                buffer_tensor = ttnn.zeros(
+                    (1, 1, buf_shape[0], buf_shape[1] * num_buf_cores),
+                    dtype=input_tensor.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    memory_config=buf_mem_cfg,
+                )
+                tt_ccl._ar_buffers[buf_key] = buffer_tensor
+            reduced = ttnn.experimental.all_reduce_async(
+                input_tensor,
+                buffer_tensor,
+                cluster_axis=ar_cluster_axis,
+                mesh_device=mesh_device,
+                multi_device_global_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                memory_config=ar_out_mem_cfg,
+                topology=topology,
+                num_links=num_reduce_scatter_links,
+                subdevice_id=subdevice_id,
+            )
+            input_tensor.deallocate(True)
+            return reduced
+
         reduced = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor,
             persistent_output_buffers=None,
