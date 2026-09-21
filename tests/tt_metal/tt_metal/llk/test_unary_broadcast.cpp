@@ -53,10 +53,6 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
-class IDevice;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using std::map;
 using namespace tt;
@@ -77,6 +73,7 @@ struct UnaryBroadcastConfig {
     BroadcastDim broadcast_dim;
     tt::DataFormat in_t;
     tt::DataFormat out_t;
+    bool fp32_dest_acc_en = false;
 };
 
 // Assume 1Xn tiles.
@@ -291,8 +288,9 @@ void run_single_core_unary_broadcast_quasar(
     const experimental::NodeCoord node{0, 0};
 
     constexpr std::uint32_t num_tiles = 32;
-    constexpr std::uint32_t num_blocks = 4;
-    constexpr std::uint32_t block_size = num_tiles / num_blocks;
+    // SyncHalf dest holds 8 tiles (16-bit) or 4 tiles (32-bit dest_acc).
+    const std::uint32_t block_size = test_config.fp32_dest_acc_en ? 4u : 8u;
+    const std::uint32_t num_blocks = num_tiles / block_size;
     const tt::DataFormat in_t = test_config.in_t;
     const tt::DataFormat out_t = test_config.out_t;
     const std::uint32_t in_tile_size = tile_size(in_t);
@@ -378,7 +376,10 @@ void run_single_core_unary_broadcast_quasar(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"per_core_block_cnt", num_blocks}, {"per_core_block_dim", block_size}},
-        .hw_config = experimental::ComputeGen2Config{},
+        .hw_config =
+            experimental::ComputeGen2Config{
+                .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+            },
     };
 
     experimental::WorkUnitSpec wu{
@@ -425,7 +426,7 @@ void run_single_core_unary_broadcast_quasar(
         in_t, out_t, num_tiles, test_config.broadcast_dim, packed_tilized_input, golden_packed_tilized_output);
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), packed_tilized_input);
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<uint32_t> dest_buffer_data;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), dest_buffer_data);
@@ -594,27 +595,26 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfb) 
         tt::DataFormat out_t;
     } k_formats[] = {
         {tt::DataFormat::Float16_b, tt::DataFormat::Float16_b},
-        {tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b},
     };
     for (BroadcastDim bcast_dim : k_quasar_dims) {
         for (const auto& fmt : k_formats) {
-            // TODO (#38092): Remove when we can run back to back tests on Quasar
-            if (bcast_dim != BroadcastDim::SCALAR || fmt.in_t != tt::DataFormat::Float16_b) {
-                continue;
-            }
-            UnaryBroadcastConfig test_config = {
-                .broadcast_dim = bcast_dim,
-                .in_t = fmt.in_t,
-                .out_t = fmt.out_t,
-            };
+            for (bool fp32_dest_acc_en : {false, true}) {
+                UnaryBroadcastConfig test_config = {
+                    .broadcast_dim = bcast_dim,
+                    .in_t = fmt.in_t,
+                    .out_t = fmt.out_t,
+                    .fp32_dest_acc_en = fp32_dest_acc_en,
+                };
 
-            log_info(
-                tt::LogTest,
-                "Testing UNARY BROADCAST bcast={} in_t={} out_t={}",
-                broadcast_dim_to_type.at(test_config.broadcast_dim),
-                test_config.in_t,
-                test_config.out_t);
-            run_single_core_unary_broadcast(this->device(), test_config);
+                log_info(
+                    tt::LogTest,
+                    "Testing UNARY BROADCAST bcast={} in_t={} out_t={} fp32_dest_acc_en={}",
+                    broadcast_dim_to_type.at(test_config.broadcast_dim),
+                    test_config.in_t,
+                    test_config.out_t,
+                    test_config.fp32_dest_acc_en);
+                run_single_core_unary_broadcast(this->device(), test_config);
+            }
         }
     }
 }
@@ -637,7 +637,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixUnaryBcastRowIdFreeGolden) {
     auto golden = ::unit_tests::compute::gold_standard_tilize(bcast_packed, config);
 
     auto result = unit_tests::llk::single_core::run_unary(
-        *this->devices_.at(0),
+        this->device(),
         tt::DataFormat::Float16_b,
         tt::DataFormat::Float16_b,
         device_input,

@@ -595,10 +595,8 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
         return false;
     }
 
-    // lhs and rhs must share a data format. The compute kernel switches the unpacker between the two
-    // operands without a per-operand data-format reconfig (on Quasar copy_tile_to_dst_init_short_with_dt
-    // is a no-op, so the WH/BH format reconfig it performs is absent), so a differing rhs format would be
-    // unpacked using the lhs format. Mixed-dtype lhs/rhs therefore falls to the descriptor path.
+    // Not an unpacker limitation: the compute kernel switches between the two operands with
+    // reconfig_data_format_srca + copy_init on every arch (Quasar included).
     if (a.dtype() != b.dtype()) {
         return false;
     }

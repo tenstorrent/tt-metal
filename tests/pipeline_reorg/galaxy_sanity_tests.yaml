@@ -46,4 +46,5 @@
       timeout: 20
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
+  budget_type: sanity
   arch: wormhole_b0

@@ -25,12 +25,19 @@ inline void calculate_heaviside(uint value) {
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
 
-        v_if(v < 0.0f) { v = 0.0f; }
-        v_elseif(v > 0.0f) { v = 1.0f; }
-        v_else { v = s; }
+        // copysgn(0.5, v) + 0.5 is 1.0 for a clear sign bit and 0.0 for a set one, which
+        // reproduces the v<0 and v>0 arms in two unpredicated slots. Only exact zero is
+        // left to branch on, so the three-way chain's SFPPUSHC/SFPPOPC pair disappears.
+        //
+        // NaN is unchanged by this. Both forms dispatch on the sign bit, so +NaN yields 1.0
+        // and -NaN yields 0.0 either way; measured on Blackhole p150b with the old chain and
+        // with this form. (torch returns NaN here instead; neither form does.)
+        vFloat r = sfpi::copysgn(vFloat(0.5f), v) + 0.5f;
+        // SFPSETCC is unspecified for -0.0 (VectorUnit.md), so a bare v == 0.0f can miss it.
+        v_if(sfpi::abs(v) == 0.0f) { r = s; }
         v_endif;
 
-        dst_reg[0] = v;
+        dst_reg[0] = r;
 
         dst_reg++;
     }

@@ -1,0 +1,120 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Construct the standalone Gemma4 Galaxy prefill model."""
+
+import os
+
+from loguru import logger
+
+import ttnn
+from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
+from models.demos.gemma4_d_p.tt.ccl import CCLManager
+from models.demos.gemma4_d_p.tt.model import Gemma4Model
+from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs, resolve_cache_dir_from_tt_cache_path
+from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
+
+# Host weights required for embedding construction and learned layer scalars.
+_GEMMA4_HOST_WEIGHT_SUFFIXES = (
+    "embed_tokens.weight",
+    ".layer_scalar",
+)
+
+
+def _gemma4_is_host_weight(key):
+    return any(key.endswith(s) for s in _GEMMA4_HOST_WEIGHT_SUFFIXES)
+
+
+def create_tt_model(
+    mesh_config,
+    prefill_chunk_size,
+    max_batch_size=1,
+    max_seq_len=8192,
+    dtype=ttnn.bfloat16,
+    state_dict=None,
+    num_layers=None,
+    hf_model_id=None,
+    ring_kv_caches=None,
+    force_rebuild=False,
+    tt_cache_path=None,
+):
+    """
+    Create Gemma4 model with all weights loaded to device.
+
+    Returns:
+        (model_args, model, tt_kv_cache, state_dict)
+    """
+    mesh_device = mesh_config.device
+    SLIDING_WINDOW_SIZE = 1024
+    if max_seq_len <= 0 or prefill_chunk_size <= 0:
+        raise ValueError("sequence and chunk lengths must be positive")
+    if prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE) or max_seq_len % prefill_chunk_size:
+        raise ValueError("prefill chunks must divide max_seq_len and contain whole CP-local tiles")
+    if prefill_chunk_size < SLIDING_WINDOW_SIZE * mesh_config.cp_degree:
+        raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
+
+    hf_model_id = hf_model_id or os.getenv("HF_MODEL")
+    tt_cache_path = tt_cache_path or os.getenv("TT_CACHE_PATH")
+    cache_dir = resolve_cache_dir_from_tt_cache_path(tt_cache_path, dtype=dtype, mesh_shape=tuple(mesh_device.shape))
+
+    hf_config = Gemma4ModelArgs.load_hf_config(hf_model_id)
+    model_args = Gemma4ModelArgs.from_hf_config(hf_config)
+    # Store the real HF text config for RoPE creation (Gemma4TextRotaryEmbedding needs it)
+    hf_text_config = getattr(hf_config, "text_config", hf_config)
+    model_args._hf_text_config = hf_text_config
+
+    if num_layers is not None:
+        model_args.num_hidden_layers = num_layers
+
+    ccl_manager = CCLManager(mesh_config)
+
+    # Reuse cached device weights; load embeddings and layer scalars from the host weight cache.
+    _precision_for_variant = Gemma4Precision.load(hf_model_id)
+    cache_identity = dict(
+        model_name=os.path.basename(str(hf_model_id).rstrip("/")) or "gemma4",
+        n_layers=model_args.num_hidden_layers,
+        mesh_shape=tuple(mesh_device.shape),
+        build_variant={
+            "prefill_cache_layout": 1,
+            "global_projection": "qk",
+            "precision": {k: str(v) for k, v in sorted(_precision_for_variant._overrides.items())},
+        },
+    )
+    loaded_real_weights = False
+    if state_dict is None:
+        if not force_rebuild and num_layers is None and weight_cache_is_complete(cache_dir, **cache_identity):
+            logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
+            state_dict = build_cached_state_dict(
+                cache_dir, args=model_args, build_variant=cache_identity["build_variant"]
+            )
+        else:
+            state_dict = Gemma4ModelArgs.load_state_dict(hf_model_id, dummy_weights=False)
+            loaded_real_weights = bool(state_dict)
+
+    tensor_cache_path = str(cache_dir)
+
+    # Per-module dtype overrides from precision_overrides.json, resolved once
+    # above so the cache identity and the model share one value.
+    precision = _precision_for_variant
+
+    model = Gemma4Model(
+        mesh_config=mesh_config,
+        hf_config=model_args,
+        state_dict=state_dict,
+        ccl_manager=ccl_manager,
+        prefill_chunk_size=prefill_chunk_size,
+        precision=precision,
+        dtype=dtype,
+        tensor_cache_path=tensor_cache_path,
+        max_seq_len=max_seq_len,
+        max_local_batch_size=max_batch_size,
+        num_layers=num_layers,
+        ring_kv_caches=ring_kv_caches,
+    )
+
+    # After a full cold build, record completion (+ capture host-consumed weights to the sidecar)
+    # so future runs can skip the HF load.
+    if loaded_real_weights and num_layers is None:
+        mark_weight_cache_complete(cache_dir, state_dict, is_host_weight=_gemma4_is_host_weight, **cache_identity)
+
+    return model_args, model, model.tt_kv_cache, state_dict

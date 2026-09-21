@@ -79,7 +79,9 @@ def test_neg_mixed_dtype(device, isolate_program_cache):
         golden_fn = ttnn.get_golden_function(ttnn_op)
         golden = golden_fn(ttnn.to_torch(input_tensor)).to(TORCH_DTYPE[out_dt])
         assert output_tensor.dtype == out_dt
-        assert_with_ulp(golden, output_tensor, ULP_THRESHOLD[(in_dt, out_dt)])
+        assert_with_ulp(
+            expected_result=golden, actual_result=output_tensor, ulp_threshold=ULP_THRESHOLD[(in_dt, out_dt)]
+        )
 
     entries_after_first_pass = device.num_program_cache_entries()
     # second pass over the same (in, out) pairs must be program-cache hits

@@ -24,6 +24,8 @@ void bind_gather_operation(nb::module_& mod) {
         For all dimensions except the specified one (`dim`), the size of the index tensor must not exceed the size of the input tensor.
         The output tensor will have the same shape as the index tensor. Note that the input and index tensors do not broadcast against each other.
 
+        Index values must lie in the range [0, input.shape[dim]). The value produced at any output position whose index falls outside that range is unspecified.
+
         Args:
             input (ttnn.Tensor): The source tensor from which values are gathered.
             dim (int): The dimension along which values are gathered.

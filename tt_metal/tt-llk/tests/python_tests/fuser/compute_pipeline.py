@@ -224,7 +224,7 @@ class ComputePipeline:
         uninit_code = ""
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             uninit_code += unpack_ops[0].unpack_uninit(operation, config, None)
-        code += self._zone(config, "INIT", uninit_code)
+        code += self._zone(config, "UNINIT", uninit_code)
 
         return code
 
@@ -278,7 +278,7 @@ class ComputePipeline:
         uninit_code = ""
         if hoist and not fpu_ops[0].fpu.per_block_init:
             uninit_code += fpu_ops[0].fpu_uninit(operation, config, None)
-        code += self._zone(config, "INIT", uninit_code)
+        code += self._zone(config, "UNINIT", uninit_code)
 
         return code
 
@@ -347,7 +347,7 @@ class ComputePipeline:
         if hoist and not pack_only[0].packer.per_block_init:
             uninit_code += pack_only[0].uninit(operation, config)
         uninit_code += pack_common.pack_reduce_mask_clear(operation)
-        code += self._zone(config, "INIT", uninit_code)
+        code += self._zone(config, "UNINIT", uninit_code)
 
         return code
 

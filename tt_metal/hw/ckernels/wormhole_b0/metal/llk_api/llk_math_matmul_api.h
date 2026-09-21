@@ -29,7 +29,18 @@ inline void llk_math_matmul_init(
     const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
 
     // In0/operandA -> srcB, In1/operandB -> srcA
-    llk::san::math_operand_check(unpack_dst_format[in1_id], unpack_dst_format[in0_id]);
+    SAN_HOOK(init<OperationFpuMatmul>(
+        StateVal<OperationFpuMatmul::MathFidelity>(to_underlying(math_fidelity)),
+        StateVal<OperationFpuMatmul::ThrottleLevel>(THROTTLE_LEVEL),
+        StateVal<OperationFpuMatmul::CtDim>(ct_dim),
+        StateVal<OperationFpuMatmul::RtDim>(rt_dim),
+        StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[in1_id]),
+        StateDiscard<std::uint32_t>(transpose),
+        StateDiscard<std::uint32_t>(in0_tile_r_dim),
+        StateDiscard<std::uint32_t>(in0_tile_c_dim),
+        StateDiscard<std::uint32_t>(in1_tile_r_dim),
+        StateDiscard<std::uint32_t>(in1_tile_c_dim),
+        StateDiscard<bool>(partial_face)));
 
     _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL>(
         in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
@@ -52,6 +63,13 @@ inline void llk_math_matmul(const uint dst_index, const std::uint32_t ct_dim = 1
     //     dst_index,
     //     ct_dim,
     //     rt_dim);
+
+    SAN_HOOK(execute<OperationFpuMatmul>(
+        StateVal<OperationFpuMatmul::MathFidelity>(to_underlying(math_fidelity)),
+        StateVal<OperationFpuMatmul::ThrottleLevel>(THROTTLE_LEVEL),
+        StateVal<OperationFpuMatmul::CtDim>(ct_dim),
+        StateVal<OperationFpuMatmul::RtDim>(rt_dim),
+        StateDiscard<uint>(dst_index)));
 
     _llk_math_matmul_<math_fidelity, THROTTLE_LEVEL>(dst_index, ct_dim, rt_dim);
 }
