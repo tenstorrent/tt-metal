@@ -36,8 +36,7 @@ union PerfCounter {
 };
 static_assert(sizeof(PerfCounter) == sizeof(std::uint64_t) * 2, "PerfCounter must be 128-bit");
 
-// Perf counter start/stop runs on TRISC1 (wraps the compute kernel).
-// Counter readout and DRAM push runs on BRISC (has NOC access for DRAM writes).
+// TRISC1 starts the counters with the compute kernel; BRISC stops and reads them once every TRISC is done.
 #if defined(PROFILE_PERF_COUNTERS) && (COMPILE_FOR_TRISC == 1 || defined(COMPILE_FOR_BRISC))
 
 #include <array>
@@ -65,8 +64,7 @@ namespace kernel_profiler {
 #define PROFILE_PERF_COUNTERS_L1_4 (1 << 8)
 #define PROFILE_PERF_COUNTERS_L1_5 (1 << 9)
 
-// Counter groups and their corresponding enable bitmask bits. Shared; used on both
-// TRISC1 (start/stop loop) and BRISC (read loop).
+// Counter groups and their enable bits, shared by the TRISC1 start and the BRISC read.
 constexpr std::pair<PerfCounterGroup, std::uint32_t> counter_group_flags[] = {
     {PerfCounterGroup::FPU, PROFILE_PERF_COUNTERS_FPU},
     {PerfCounterGroup::PACK, PROFILE_PERF_COUNTERS_PACK},
@@ -81,8 +79,7 @@ constexpr std::pair<PerfCounterGroup, std::uint32_t> counter_group_flags[] = {
 };
 constexpr std::uint32_t NUM_COUNTER_GROUPS = sizeof(counter_group_flags) / sizeof(counter_group_flags[0]);
 
-// Indexed by PerfCounterGroup; keep the enum order. The six L1 groups are the one L1 bank at different
-// mux positions.
+// Indexed by PerfCounterGroup, in enum order. The six L1 groups are the one L1 bank at different mux positions.
 constexpr llk::perf::Bank bank_for_group[10] = {
     llk::perf::Bank::FPU,            // FPU
     llk::perf::Bank::TDMA_PACK,      // PACK
@@ -120,9 +117,7 @@ constexpr std::array<const llk::perf::BankRegs*, 10> regs_for_group = [] {
 
 #if COMPILE_FOR_TRISC == 1
 // --- TRISC1-only: start the counters when the compute kernel starts --------
-// The stop lives on BRISC, after every TRISC has finished. TRISC1 only knows when its own kernel ends,
-// and the math thread exits early on unpack or pack only kernels (fast tilize, untilize, transpose,
-// typecast, one tile eltwise), which left those ops with a few hundred cycle window and all zero counts.
+// The stop is on BRISC after every TRISC is done: the math thread exits early on unpack or pack only kernels.
 
 __attribute__((noinline)) void start_single_group(PerfCounterGroup counter_group) {
     if (bank_for_group[counter_group] == llk::perf::Bank::L1) {
@@ -167,18 +162,16 @@ constexpr std::array<llk::perf::Table, 10> table_for_group = [] {
     return tables;
 }();
 
-// The mode readback poll is unbounded here (PollLimit 0): BRISC firmware is within a few bytes of its
-// size limit, and the poll never fails on hardware.
 __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group) {
     const llk::perf::BankRegs& regs = *regs_for_group[counter_group];
-    // Freeze the group now that all three TRISCs are done, so the window spans the whole compute kernel.
-    // The next start on TRISC1 zeroes the counts, so no clear is needed after the read.
+    // Stop now that all three TRISCs are done, so the window spans the whole compute kernel. No clear after the
+    // read: the next start on TRISC1 zeroes the counts.
     llk::perf::stop(regs);
+    // PollLimit 0, unbounded readback poll: BRISC firmware is within bytes of its size limit and the poll never fails.
     llk::perf::read_table<0>(
         regs, table_for_group[counter_group], [](PerfCounterType type, std::uint32_t ref_cnt, std::uint32_t value) {
             PerfCounter counter(value, ref_cnt, type);
-            // A TS_DATA_16B record is three marker slots (marker, data, trailer); asking for two let a record be
-            // dropped when exactly two slots were left.
+            // A TS_DATA_16B record takes three marker slots; reserving two dropped a record when exactly two were left.
             kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
                 kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 3);
             kernel_profiler::timeStampedData<
@@ -188,9 +181,8 @@ __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group)
         });
 }
 
-// One L1 group per pass at most; its mux position is routed here so passes without L1 carry no mux code.
-// Only a launch with a compute kernel starts the counters (TRISC1), so a data movement only op is skipped
-// instead of reporting the values latched by the previous op.
+// At most one L1 group per pass; its mux write sits under the #if so passes without L1 carry no mux code.
+// Counters start only on TRISC1, so a launch without a compute kernel would report values latched by the previous op.
 void read_perf_counters(std::uint32_t enables) {
     if (kernel_profiler::get_profiler_zone_invalid() ||
         !(enables &

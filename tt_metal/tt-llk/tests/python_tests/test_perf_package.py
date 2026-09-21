@@ -3,10 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Hardware-free checks of the shared tt_llk_perf package (tools/python).
-
-Imports nothing from helpers, so it runs without ttexalens or a device: the
-header parsers must read both arch tables and the enum, and the metric engine
-must accept a synthetic CounterView.
+Imports nothing from helpers, so it runs without ttexalens or a device.
 """
 
 import pytest

@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Every perf counter metric, shared by the Tracy tool and the LLK harness.
-
-Consumers adapt their data to CounterView; absent counters read None, never 0.
-Keys end in _pct (bounded) or _ratio (unbounded)."""
+"""Every perf counter metric, shared by the Tracy tool and the LLK harness, over the CounterView protocol.
+Absent counters read None, never 0; keys end in _pct (bounded) or _ratio (unbounded).
+"""
 
 from typing import Protocol
 
@@ -17,23 +16,21 @@ class CounterView(Protocol):
         ...
 
     def cycles(self, bank: str, counter_name: "str | None" = None) -> float:
-        """Reference-cycle count for a bank, or for one counter when the data keeps a reference per counter
-        (0.0 if absent). Tracy merges the L1 rows of independently replayed multipass passes, so two L1 ports
-        can carry counts measured over different windows.
+        """Reference cycles for a bank, or for one counter when the data keeps one per counter (0.0 if absent).
+        Tracy merges L1 rows of separately replayed multipass passes, so two L1 ports can span different windows.
         """
         ...
 
     def has(self, counter_name: str) -> bool:
-        """Whether a counter is present in the data."""
+        """True when the counter was captured; metrics gate on this so a missing input reads None, not 0."""
         ...
 
     def is_blackhole(self) -> bool:
-        """Blackhole's L1_0 port 1 is an unpacker; Wormhole's carries pack1 traffic."""
+        """Blackhole L1_0 port 1 is an unpacker; on Wormhole it carries pack1 traffic."""
         ...
 
 
 def safe_div(numerator: float, denominator: float) -> "float | None":
-    """Safe division returning None if denominator is 0."""
     return (numerator / denominator) if denominator > 0 else None
 
 
@@ -42,11 +39,8 @@ def pct(value: "float | None") -> "float | None":
 
 
 def bounded(value: "float | None") -> "float | None":
-    """Clamp a fraction to [0, 1]. The L1 grant counter is the bank arbiter accept in the same cycle (RTL: request
-    is `o_l1_rden | o_l1_wren`, grant is `i_l1_reqif_ready`, granted only to a requesting client), so grants never
-    exceed requests and the selector sweeps saw no such port on Blackhole or Wormhole; the clamp is a guard against
-    counters captured in different passes. The scoreboard stall needs the same clamp for a different reason: its
-    two counters start in separate groups.
+    """Clamp to [0, 1]. An L1 grant is the arbiter accept of a requesting client in the same cycle, so grants never
+    exceed requests; the clamp only guards ratios whose two counters were captured in different passes or groups.
     """
     return None if value is None else min(1.0, max(0.0, value))
 
@@ -72,10 +66,8 @@ def first_present(v: "CounterView", names) -> "str | None":
 
 
 def mean_port_util(v: "CounterView", bank: str, names) -> "float | None":
-    """Mean busy fraction over the ports of one client group that are present in the data.
-
-    Every port divides by its own reference count, so a group that spans L1 mux positions stays correct when the
-    positions were captured in separate multipass passes. Ports whose pass reported no reference are left out.
+    """Mean busy fraction over the ports of one client group present in the data, each port over its own reference,
+    so a group spanning L1 mux positions captured in separate passes stays correct. Ports with no reference are skipped.
     """
     fractions = [
         f
@@ -247,14 +239,13 @@ def compute_metrics(v: CounterView) -> dict:
     math_wait_srca = _instrn_rate("WAITING_FOR_SRCA_VALID")
     math_wait_srcb = _instrn_rate("WAITING_FOR_SRCB_VALID")
 
-    # ── Per-engine packer (TDMA_PACK; WH exposes 4 engines, BH a single packer → others N/A) ──
     pb = [
         v.count("TDMA_PACK", "PACKER_BUSY_0"),
         v.count("TDMA_PACK", "PACKER_BUSY_1"),
         v.count("TDMA_PACK", "PACKER_BUSY_2"),
         v.count(
             "TDMA_PACK", "PACKER_BUSY"
-        ),  # engine 3 (see the arch table naming note)
+        ),  # engine 3 on Wormhole, the only packer on Blackhole
     ]
     # Engines 0-2 are Wormhole-only signals, so gate on has(); PACKER_BUSY is the whole packer on both arches.
     packer0_util = safe_div(pb[0], pack_cycles) if v.has("PACKER_BUSY_0") else None
@@ -401,7 +392,7 @@ def compute_metrics(v: CounterView) -> dict:
         safe_div(v.count("L1", "L1_0_PORT1_GRANT"), packer_busy)
         if v.has("L1_0_PORT1_GRANT") and v.has("PACKER_BUSY") and not v.is_blackhole()
         else None
-    )  # Wormhole only: Blackhole port 1 carries no packer
+    )
     # Back-pressure = 1 - ready/requested; ready can outlast the requests on an idle port, hence bounded().
     l1_unpacker_backpressure = (
         bounded(
@@ -486,7 +477,6 @@ def compute_metrics(v: CounterView) -> dict:
     ]
     _c_bps = [b for b in _c_bps if b is not None]
     l1_contention_index = (sum(_c_bps) / len(_c_bps)) if _c_bps else None
-    # NoC-vs-compute balance: NoC ring0 traffic vs FPU work.
     _noc_total = _noc_out + _noc_in
     noc_vs_compute_balance = (
         safe_div(_noc_total, fpu_instruction + _noc_total)
@@ -570,24 +560,19 @@ def compute_metrics(v: CounterView) -> dict:
     )
 
     return {
-        # Compute utilization
         "fpu_utilization_pct": pct(fpu_utilization),
         "compute_utilization_pct": pct(compute_utilization),
-        # Thread stall rates
         "unpack_thread_stall_pct": pct(unpack_thread_stall),
         "math_thread_stall_pct": pct(math_thread_stall),
         "pack_thread_stall_pct": pct(pack_thread_stall),
-        # Semaphore waits
         "math_sem_wait_pct": pct(math_sem_wait),
         "pack_sem_wait_pct": pct(pack_sem_wait),
         # Unpacker-to-math flow (ratios: source writes per unpacker busy cycle)
         "unpack_to_math_flow0_ratio": flow0,
         "unpack_to_math_flow1_ratio": flow1,
         "unpack_to_math_flow_ratio": flow_avg,
-        # Packer metrics
         "pack_utilization_pct": pct(pack_utilization),
         "pack_dest_eff_pct": pct(pack_dest_eff),
-        # Math pipeline stalls
         "data_hazard_stall_pct": pct(data_hazard_stall),
         "math_scoreboard_stall_pct": pct(math_scoreboard_stall),
         "math_pipeline_util_pct": pct(math_pipeline_util),
@@ -602,31 +587,25 @@ def compute_metrics(v: CounterView) -> dict:
         "l1_unpacker0_ext_util_pct": pct(unpacker0_ext_l1_util),
         "l1_ext_pack_util_pct": pct(ext_pack_l1_util),
         "l1_tdma_bundle_util_pct": pct(tdma_bundle_l1_util),
-        # Per-thread instruction throughput
         "thread0_ipc_pct": pct(thread0_ipc),
         "thread1_ipc_pct": pct(thread1_ipc),
         "thread2_ipc_pct": pct(thread2_ipc),
-        # Cross-thread dependency stalls
         "math_wait_unpack_pct": pct(math_wait_unpack),
         "math_wait_sfpu_pct": pct(math_wait_sfpu),
         "pack_wait_math_pct": pct(pack_wait_math),
         "unpack_wait_pack_pct": pct(unpack_wait_pack),
         "math_wait_srca_pct": pct(math_wait_srca),
         "math_wait_srcb_pct": pct(math_wait_srcb),
-        # Per-engine packer
         "packer0_util_pct": pct(packer0_util),
         "packer1_util_pct": pct(packer1_util),
         "packer2_util_pct": pct(packer2_util),
         "packer_load_imbalance_pct": pct(packer_imbalance),
         "pack_dest_grant_eff_pct": pct(pack_dest_grant_eff),
-        # Source-register write completion efficiency
         "srca_write_eff_pct": pct(srca_write_eff),
         "srcb_write_eff_pct": pct(srcb_write_eff),
-        # Compute
         "sfpu_utilization_pct": pct(sfpu_util),
         "fpu_exec_eff_ratio": fpu_exec_eff,
         "math_to_pack_handoff_ratio": math_to_pack_handoff,
-        # Extra INSTRN waits
         "srca_clear_wait_pct": pct(srca_clear_wait),
         "srcb_clear_wait_pct": pct(srcb_clear_wait),
         "math_idle_wait_t1_pct": pct(math_idle_wait_t1),
@@ -639,7 +618,6 @@ def compute_metrics(v: CounterView) -> dict:
         "cfg_idle_wait_t0_pct": pct(cfg_idle_wait_t0),
         "thcon_idle_wait_t0_pct": pct(thcon_idle_wait_t0),
         "move_idle_wait_t0_pct": pct(move_idle_wait_t0),
-        # Per-type instruction availability
         "cfg_instrn_avail_t0_pct": pct(cfg_instrn_avail_t0),
         "sync_instrn_avail_t0_pct": pct(sync_instrn_avail_t0),
         "thcon_instrn_avail_t0_pct": pct(thcon_instrn_avail_t0),
@@ -650,7 +628,6 @@ def compute_metrics(v: CounterView) -> dict:
         # Write-blocked rates (the other blocking mode of each source; the first is 1 - its efficiency)
         "srca_write_ovr_blocked_pct": pct(srca_write_ovr_blocked),
         "srcb_write_port_blocked_pct": pct(srcb_write_port_blocked),
-        # L1 per-port + grant efficiency
         "l1_port2_util_pct": pct(l1_port2_util),
         "l1_port1_util_pct": pct(l1_port1_util),
         "l1_packer_port8_util_pct": pct(l1_packer_port8_util),
@@ -658,7 +635,6 @@ def compute_metrics(v: CounterView) -> dict:
         "packer_l1_eff_ratio": packer_l1_eff,
         "l1_unpacker_backpressure_pct": pct(l1_unpacker_backpressure),
         "l1_port1_backpressure_pct": pct(l1_port1_backpressure),
-        # NoC ring back-pressure
         "noc_ring0_out_backpressure_pct": pct(noc_ring0_out_bp),
         "noc_ring0_in_backpressure_pct": pct(noc_ring0_in_bp),
         "noc_ring1_out_backpressure_pct": pct(noc_ring1_out_bp),
@@ -667,19 +643,16 @@ def compute_metrics(v: CounterView) -> dict:
         "noc_ring0_in_util_pct": pct(noc_ring0_in_util),
         "noc_ring1_out_util_pct": pct(noc_ring1_out_util),
         "noc_ring1_in_util_pct": pct(noc_ring1_in_util),
-        # L1 composites
         "l1_total_bw_pct": pct(l1_total_bw),
         "l1_read_write_ratio_pct": pct(l1_read_write_ratio),
         "noc_ring0_asymmetry_pct": pct(noc_ring0_asymmetry),
         "tdma_vs_noc_l1_share_pct": pct(tdma_vs_noc_l1_share),
         "l1_contention_index_pct": pct(l1_contention_index),
         "noc_vs_compute_balance_pct": pct(noc_vs_compute_balance),
-        # Stall overlap + compute-to-unpack
         "stall_overlap_t0_ratio": stall_overlap_t0,
         "stall_overlap_t1_ratio": stall_overlap_t1,
         "stall_overlap_t2_ratio": stall_overlap_t2,
         "compute_to_unpack_ratio": compute_to_unpack,
-        # Additional derivable metrics
         "noc_ring1_grant_eff_pct": pct(noc_ring1_grant_eff),
         "any_thread_stall_pct": pct(any_thread_stall),
         "l1_unpacker1_ext_backpressure_pct": pct(l1_unpacker1_ext_backpressure),
@@ -692,8 +665,7 @@ def compute_metrics(v: CounterView) -> dict:
     }
 
 
-# Human display name per metric key (the Tracy tool's historical names where they existed, so its CSV
-# columns / summary stay stable). Consumers that print or write CSVs map keys through this.
+# Display name per metric key; historical Tracy names are kept where they existed so its CSV columns stay stable.
 METRIC_LABELS = {
     "fpu_utilization_pct": "FPU Util",
     "compute_utilization_pct": "MATH Util",
@@ -796,6 +768,6 @@ METRIC_LABELS = {
 }
 
 
-# The two display families of the module docstring, for consumers that key by metric key or by label.
+# Unbounded metrics by key and by label, for consumers that format the two families differently.
 RATIO_KEYS = {k for k in METRIC_LABELS if k.endswith("_ratio")}
 RATIO_LABELS = {METRIC_LABELS[k] for k in RATIO_KEYS}

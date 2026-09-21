@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Parsers for the perf counter headers in tools/include/perf_counters.
-
-The C++ headers are the single source: the PerfCounterType enum gives the
-ordinal -> name table the firmware tags records with, and <arch>.h gives the
-(bank, select) -> name tables the LLK harness decodes its config words with.
+"""Parsers for the perf counter headers in tools/include/perf_counters, the single source of counter names.
+types.h gives the ordinal -> name table the firmware tags records with; <arch>.h gives (bank, select) -> name.
 """
 
 import importlib.util
@@ -137,7 +134,7 @@ def counter_type_names(include_dir=None) -> Dict[int, str]:
 
 
 def parse_tables(text: str) -> Dict[str, List[CounterEntry]]:
-    """Bank -> entries for one <arch>.h. Empty arrays (Wormhole's L1 banks 2-5) are skipped."""
+    """Bank -> entries for one <arch>.h; empty arrays (Wormhole L1 banks 2-5) are skipped."""
     banks: Dict[str, List[CounterEntry]] = {bank: [] for bank in BANK_KEYS}
     text = _strip_comments(text)
     decls = list(re.finditer(r"\b(\w+_counters)\s*=", text))
@@ -160,7 +157,7 @@ def parse_tables(text: str) -> Dict[str, List[CounterEntry]]:
 
 
 def normalize_arch(arch) -> str:
-    """Lower-case arch name; accepts enums whose str() is the name (the harness ChipArchitecture)."""
+    """Lower-case arch name; accepts an enum through its .value (the harness ChipArchitecture)."""
     return str(getattr(arch, "value", arch)).lower()
 
 

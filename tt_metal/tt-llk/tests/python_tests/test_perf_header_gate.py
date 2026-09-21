@@ -309,8 +309,9 @@ def test_run_type_names_match_source():
 
 
 def test_metric_bases_match_source():
-    """The catalog's metric bases must equal the keys the shared engine computes. Read via ast, not a text
-    scan, so an unrelated string literal can neither trip nor evade the gate."""
+    """The catalog metric bases must equal the dict keys the shared engine emits; read via ast, not a text scan,
+    so an unrelated string literal can neither trip nor evade the gate.
+    """
     tree = ast.parse(Path(engine.__file__).read_text())
     live = {
         key.value
