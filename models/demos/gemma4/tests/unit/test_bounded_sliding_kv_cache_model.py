@@ -105,7 +105,10 @@ def test_build_hybrid_page_tables_shapes_and_padding():
                 assert torch.equal(pt[u], expected)
 
 
-def test_build_hybrid_page_tables_rejects_non_multiple_sliding_window(expect_error):
+def test_build_hybrid_page_tables_rejects_non_multiple_sliding_window(expect_error, monkeypatch):
+    # 100 is neither a power of two nor a multiple of 32; use 16 (power of two,
+    # so it clears bounded_ring_modulo's ring check) to isolate this check.
+    monkeypatch.delenv("GEMMA4_SPEC_RING_HEADROOM_BLOCKS", raising=False)
     with expect_error(ValueError, "must be a multiple of block_size"):
         build_hybrid_page_tables(
             num_layers=1,
@@ -113,7 +116,7 @@ def test_build_hybrid_page_tables_rejects_non_multiple_sliding_window(expect_err
             num_users=1,
             block_size=32,
             max_seq_len=256,
-            sliding_window=100,  # not a multiple of 32
+            sliding_window=16,  # not a multiple of 32
         )
 
 
