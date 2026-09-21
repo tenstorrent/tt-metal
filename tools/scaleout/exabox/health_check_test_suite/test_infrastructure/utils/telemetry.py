@@ -80,6 +80,18 @@ _VALUE_METRICS = frozenset(
     }
 )
 
+# Firmware reports a counter it cannot read as all ones in the field's width.
+# Only the 32- and 64-bit widths are listed: 255 and 65535 are values a busy
+# link genuinely reaches. float64 rounds the 64-bit marker up to 2**64.
+_UNREADABLE_VALUES = frozenset({0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF, float(0xFFFFFFFFFFFFFFFF)})
+
+
+def _split_unreadable(samples: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Partition samples into ones the chip could report and ones it could not."""
+    readable = [s for s in samples if s["value"] not in _UNREADABLE_VALUES]
+    unreadable = [s for s in samples if s["value"] in _UNREADABLE_VALUES]
+    return readable, unreadable
+
 
 def collect_prometheus_metrics(port: int = SLURM_TELEMETRY_PORT) -> dict[str, list[dict]] | None:
     """Collect telemetry metrics from the local Prometheus endpoint.
@@ -139,8 +151,13 @@ def format_prometheus_metrics(metrics: dict[str, list[dict]]) -> str:
                     lines.append(f"    DOWN: {_sample_ident(s['labels'])}")
 
         elif name in _COUNTER_METRICS:
-            nonzero = [s for s in samples if s["value"] > 0]
-            lines.append(f"    non-zero={len(nonzero)}/{len(samples)}")
+            readable, unreadable = _split_unreadable(samples)
+            if unreadable:
+                lines.append(f"    unreadable={len(unreadable)} (excluded from total)")
+                for s in unreadable:
+                    lines.append(f"    UNREADABLE: {_sample_ident(s['labels'])}")
+            nonzero = [s for s in readable if s["value"] > 0]
+            lines.append(f"    non-zero={len(nonzero)}/{len(readable)}")
             if nonzero:
                 total = sum(s["value"] for s in nonzero)
                 max_val = max(s["value"] for s in nonzero)
@@ -179,21 +196,38 @@ def aggregate_telemetry_for_csv(metrics: dict[str, list[dict]] | None) -> dict:
     nothing was collected so the run row records ``telemetry_available=0`` rather
     than silently claiming a value. A metric that wasn't collected stays *None*
     so its column is blank instead of a fabricated 0.
+
+    Samples a chip could not report are dropped (see ``_UNREADABLE_VALUES``), so
+    a total covers the links that answered and ``unreadable_samples`` counts the
+    rest.
     """
     if not metrics:
         return {"available": False}
 
+    unreadable: list[dict] = []
+
     def _values(name: str) -> list[float]:
-        return [s["value"] for s in metrics.get(name, [])]
+        readable, dropped = _split_unreadable(metrics.get(name, []))
+        unreadable.extend(dropped)
+        return [s["value"] for s in readable]
 
     aiclk = _values("tt_ai_clock_mhz")
     retrain = _values("tt_ethernet_retrain_count")
     crc = _values("tt_ethernet_crc_error_count")
     uncorr = _values("tt_ethernet_uncorrected_codeword_count")
+
+    if unreadable:
+        log.warning(
+            "%d telemetry sample(s) reported as unavailable and left out of the totals: %s",
+            len(unreadable),
+            ", ".join(sorted({_sample_ident(s["labels"]) for s in unreadable})),
+        )
+
     return {
         "available": True,
         "min_aiclk_mhz": min(aiclk) if aiclk else None,
         "eth_retrain_total": int(sum(retrain)) if retrain else None,
         "eth_crc_total": int(sum(crc)) if crc else None,
         "eth_uncorr_cw_total": int(sum(uncorr)) if uncorr else None,
+        "unreadable_samples": len(unreadable),
     }
