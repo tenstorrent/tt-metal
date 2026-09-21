@@ -74,12 +74,10 @@ void kernel_main() {
         B_slice.push_back(K_tiles * C_slice_N_tiles);
     }
 
+    // One ring slot per tile: a slice is stored row-major in tiles, slot (row, column) at
+    // (row * columns + column) * tile bytes, which is how the compute kernel indexes it.
     const uint32_t A_tile_bytes = get_tile_size(dfb::A_slice);
     const uint32_t B_tile_bytes = get_tile_size(dfb::B_slice);
-    // A ring slot is one tile at the DRAM-aligned stride the factory sized the ring with (== tile bytes
-    // for every 32x32 format).
-    const uint32_t A_slot_bytes = A_slice.get_entry_size();
-    const uint32_t B_slot_bytes = B_slice.get_entry_size();
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
         const uint32_t A_batch_first_tile = batch * A_batch_stride_tiles;
@@ -100,38 +98,38 @@ void kernel_main() {
                 const uint32_t K_chunk_first_K_tile = K_chunk * K_chunk_tiles;
 
                 if constexpr (!A_borrowed) {
-                    // A slice: rows C_slice_first_M_tile.., columns K_chunk_first_K_tile.. (invalid rows trail, so
-                    // they are simply not written).
+                    // A slice: rows C_slice_first_M_tile.., columns K_chunk_first_K_tile.., slot (m_tile, k_tile).
+                    // Clipped rows trail, so they are simply not written.
                     A_slice.reserve_back(A_slice_tiles);
-                    uint32_t A_slot_offset = 0;
                     for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
-                        uint32_t A_tile_index =
+                        const uint32_t A_row_first_tile =
                             A_batch_first_tile + (C_slice_first_M_tile + m_tile) * K_tiles + K_chunk_first_K_tile;
-                        for (uint32_t k_tile = 0; k_tile < K_chunk_tiles;
-                             ++k_tile, ++A_tile_index, A_slot_offset += A_slot_bytes) {
+                        const uint32_t A_row_offset_bytes = m_tile * K_chunk_tiles * A_tile_bytes;
+                        for (uint32_t k_tile = 0; k_tile < K_chunk_tiles; ++k_tile) {
                             noc.async_read(
-                                A, A_slice, A_tile_bytes, {.page_id = A_tile_index}, {.offset_bytes = A_slot_offset});
+                                A,
+                                A_slice,
+                                A_tile_bytes,
+                                {.page_id = A_row_first_tile + k_tile},
+                                {.offset_bytes = A_row_offset_bytes + k_tile * A_tile_bytes});
                         }
                     }
                 }
                 if constexpr (!B_borrowed) {
-                    // B slice: rows K_chunk_first_K_tile.., columns C_slice_first_N_tile.. (invalid columns keep their
-                    // slot).
+                    // B slice: rows K_chunk_first_K_tile.., columns C_slice_first_N_tile.., slot (k_tile, n_tile).
+                    // Clipped columns keep their slot (they only ever feed clipped outputs).
                     B_slice.reserve_back(B_slice_tiles);
-                    uint32_t B_slot_offset = 0;
                     for (uint32_t k_tile = 0; k_tile < K_chunk_tiles; ++k_tile) {
-                        uint32_t B_tile_index =
+                        const uint32_t B_row_first_tile =
                             B_batch_first_tile + (K_chunk_first_K_tile + k_tile) * N_tiles + C_slice_first_N_tile;
-                        for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles;
-                             ++n_tile, ++B_tile_index, B_slot_offset += B_slot_bytes) {
-                            if (n_tile < valid_N_tiles) {
-                                noc.async_read(
-                                    B,
-                                    B_slice,
-                                    B_tile_bytes,
-                                    {.page_id = B_tile_index},
-                                    {.offset_bytes = B_slot_offset});
-                            }
+                        const uint32_t B_row_offset_bytes = k_tile * C_slice_N_tiles * B_tile_bytes;
+                        for (uint32_t n_tile = 0; n_tile < valid_N_tiles; ++n_tile) {
+                            noc.async_read(
+                                B,
+                                B_slice,
+                                B_tile_bytes,
+                                {.page_id = B_row_first_tile + n_tile},
+                                {.offset_bytes = B_row_offset_bytes + n_tile * B_tile_bytes});
                         }
                     }
                 }
@@ -143,10 +141,10 @@ void kernel_main() {
                         if (K_chunk == num_K_chunks - 1) {
                             constexpr DataFormat A_format = get_dataformat(dfb::A_slice);
                             const uint32_t last_K_tile_of_row_0 =
-                                A_slice.get_write_ptr() + (K_chunk_tiles - 1) * A_slot_bytes;
+                                A_slice.get_write_ptr() + (K_chunk_tiles - 1) * A_tile_bytes;
                             for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
                                 pad_last_ktile<A_format, A_last_K_tile_valid_columns>(
-                                    last_K_tile_of_row_0 + m_tile * K_chunk_tiles * A_slot_bytes);
+                                    last_K_tile_of_row_0 + m_tile * K_chunk_tiles * A_tile_bytes);
                             }
                         }
                     }
