@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <limits>
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
@@ -116,11 +117,8 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
     const uint32_t bf16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t transposed_tile_size = std::max(value_tile_size, bf16_tile_size);
 
-    // Search all power-of-2 split sizes and keep the one with the best modeled makespan.
-    // The first-valid (= smallest split, most cores) choice maximizes the SERIAL final
-    // stage: the single final core does O(num_cores * k) gather-merge work while every
-    // local core does O(split_size) sort work. Model both sides and minimize
-    //   T ~ kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final
+    // Search all power-of-2 split sizes and keep the one with the best modeled makespan:
+    //   T ~ kLocalCostFactor * Wt_local + kTreeRoundCostFactor * log2(num_cores) + kFinalCostFactor * Kt
     // Constants fitted on p150a silicon (4 configs across 8192/32768-wide k=64 cells,
     // <0.5% residual): a local tile costs ~3.5x a final tile — locals run full
     // 64-element sorts per tile while the final core runs merge/rebuild pair-ops.
@@ -129,7 +127,12 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
     // there, and the start-split clamp above only binds at the eligibility floor
     // (a zero split needs lp2(max_cores) > width-in-tiles; Wormhole grids top out
     // at lp2(max_cores) = 32, so W=1024's 32 tiles never truncate to zero there).
+    // With the tree merge the final stage is log2(num_cores) merge steps on the local cores plus a
+    // pass through of Kt tiles, not a serial merge of num_cores * Kt tiles. Refit on p100a at
+    // 32 x 16384, k 32: 356 / 190 / 108 us at 8 / 16 / 32 local cores gives 5.25 us per local tile and
+    // about 2 us per round, so a round costs about 0.4 local tiles.
     constexpr uint32_t kLocalCostFactor = 7;
+    constexpr uint32_t kTreeRoundCostFactor = 3;
     constexpr uint32_t kFinalCostFactor = 2;
     std::optional<TopKCoreConfig> best_config = std::nullopt;
     uint32_t best_score = std::numeric_limits<uint32_t>::max();
@@ -151,8 +154,9 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
                                      2 * index_tile_size;                                   // c_9 local-index out
         const uint32_t final_core_cost =  // + c_8 value, c_6/c_7 workspace
             shared_cost + 2 * value_tile_size + Wt_final * (transposed_tile_size + index_tile_size);
-        const uint32_t local_core_cost =  // + c_2/c_3 transposed, c_8 value
-            shared_cost + Wt_local * (transposed_tile_size + index_tile_size) + 2 * transposed_tile_size;
+        const uint32_t local_core_cost =  // + c_2/c_3 transposed, c_8 value, c_10..c_13 tree-merge landing/workspace
+            shared_cost + Wt_local * (transposed_tile_size + index_tile_size) + 2 * transposed_tile_size +
+            4 * Kt * (transposed_tile_size + index_tile_size);
         const uint32_t per_core_cost = std::max(final_core_cost, local_core_cost);
 
         // Quick check: skip this configuration if it needs more cores than available
@@ -183,12 +187,14 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
         }
 
         // Comprehensive validation: check all requirements for a valid configuration.
-        const bool valid = num_cores <= max_cores &&      // Core count feasible
-                           per_core_cost < l1_size &&     // Memory fits
-                           num_cores > 1 &&               // Multi-core beneficial
-                           split_size >= min_dim &&       // Hardware minimum met
-                           contiguous_cores_available &&  // Can arrange cores
-                           rem == 0;                      // Perfect division (no remainder)
+        const bool valid =
+            num_cores <= max_cores &&      // Core count feasible
+            per_core_cost < l1_size &&     // Memory fits
+            num_cores > 1 &&               // Multi-core beneficial
+            split_size >= min_dim &&       // Hardware minimum met
+            split_size > k &&              // A local core has to reduce, a split no wider than k only moves the merge
+            contiguous_cores_available &&  // Can arrange cores
+            rem == 0;                      // Perfect division (no remainder)
         if (!valid) {
             continue;
         }
@@ -213,7 +219,8 @@ std::optional<TopKCoreConfig> find_topk_core_config_impl(
         }
 
         // Only keep a config if it also beats the best modeled makespan so far.
-        const uint32_t score = kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final;
+        const uint32_t tree_rounds = std::bit_width(num_cores) - 1;
+        const uint32_t score = kLocalCostFactor * Wt_local + kTreeRoundCostFactor * tree_rounds + kFinalCostFactor * Kt;
         if (score < best_score) {
             best_score = score;
             best_config = config;
