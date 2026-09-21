@@ -147,10 +147,18 @@ class Qwen36Router:
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                # The template is resident for the model's lifetime and one is cached PER decode
+                # width (the bucket warmup compiles 1/2/4/8/16/32) PER MoE layer, so keeping it in
+                # L1 permanently reserved enough L1 to push the GDN decode CBs over the edge at
+                # B=32 on a 64-core WH grid. It is only a shape/dtype template -- nothing reads it
+                # -- so it lives in DRAM; the zeros_like BELOW still returns the L1 tensor the
+                # scatter and the sparse_matmul path want.
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             self._scatter_base[seq_len] = base
-        dense_routing = ttnn.scatter(ttnn.zeros_like(base), dim=-1, index=indices, src=weights)
+        dense_routing = ttnn.scatter(
+            ttnn.zeros_like(base, memory_config=ttnn.L1_MEMORY_CONFIG), dim=-1, index=indices, src=weights
+        )
         weights.deallocate(True)
         indices.deallocate(True)
         return dense_routing
