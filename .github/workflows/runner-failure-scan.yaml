@@ -123,7 +123,6 @@ jobs:
 
       - name: Post scan health alert
         if: always() && hashFiles('out/runner_failure_report.json') != ''
-        continue-on-error: true
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           DEFAULT_SLACK_CHANNEL: ${{ secrets.RUNNER_FAILURE_SCAN_CHANNEL }}
@@ -196,7 +195,7 @@ jobs:
 
   runner-report:
     needs: scan
-    if: ${{ needs.scan.outputs.runner_matrix != '' && needs.scan.outputs.runner_matrix != '[]' }}
+    if: ${{ always() && needs.scan.outputs.runner_matrix != '' && needs.scan.outputs.runner_matrix != '[]' }}
     permissions:
       actions: read
       contents: read

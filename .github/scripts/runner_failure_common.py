@@ -545,7 +545,8 @@ def extract_fabric_missing_links(log_text: str) -> str:
 
 
 def matching_signature_labels(log_text: str) -> list[str]:
-    return [signature.label for signature in ERROR_SIGNATURES if signature_found(log_text, signature)]
+    plain_log_text = strip_terminal_sequences(log_text)
+    return [signature.label for signature in ERROR_SIGNATURES if signature_found(plain_log_text, signature)]
 
 
 def setup_runner_step_failed(job: RecentJob) -> bool:

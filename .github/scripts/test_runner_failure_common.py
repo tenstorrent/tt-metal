@@ -55,7 +55,7 @@ def test_setup_runner_failure_signature_ignores_successful_step() -> None:
 def test_eth_heartbeat_timeout_signature() -> None:
     log_text = (
         "RuntimeError: TT standard-DP device discovery failed: RuntimeError: "
-        "Timed out waiting for ETH heartbeat on device ASIC ID: 87033183734870352, "
+        "Timed out waiting for \x1b[36;1mETH heartbeat\x1b[0m on device ASIC ID: 87033183734870352, "
         "ETH core e9-0 (NOC0) to advance. Stuck at 0xabcdae0a"
     )
 
