@@ -86,7 +86,10 @@ def test_standard_sdpa_exp_modes(device, k_chunks, scale, record_property):
                     failures.append(measured[-1])
         for original, tensor in zip(host_inputs, owned):
             assert torch.equal(original, ttnn.to_torch(tensor)), "SDPA changed an input tensor"
-        record_property("false_true_mismatched_elements", int((saved[False] != saved[True]).sum()))
+        mismatched_elements = int((saved[False] != saved[True]).sum())
+        record_property("false_true_mismatched_elements", mismatched_elements)
+        # This fixture distinguishes modes; always selecting accurate exp must fail too.
+        assert mismatched_elements > 0, "exp_approx_mode=False and True returned identical outputs"
     finally:
         record_property("standard_sdpa_exp_metrics", json.dumps(measured, allow_nan=False))
         if output is not None:
