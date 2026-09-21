@@ -46,6 +46,7 @@ void kernel_main() {
     constexpr uint32_t num_K_chunks = get_arg(args::num_K_chunks);
     // Valid element columns in A's last K tile; 0 when K is a multiple of the tile dim.
     constexpr uint32_t A_last_K_tile_valid_columns = get_arg(args::A_last_K_tile_valid_columns);
+    constexpr DataFormat A_format = get_dataformat(dfb::A_slice);
     // Borrowed operands are resident L1 shards bound as the rings; nothing is read for them.
     constexpr bool A_borrowed = get_arg(args::A_borrowed) != 0;
     constexpr bool B_borrowed = get_arg(args::B_borrowed) != 0;
@@ -113,19 +114,13 @@ void kernel_main() {
                                 {.page_id = A_row_first_tile + k_tile},
                                 {.offset_bytes = A_row_offset_bytes + k_tile * A_tile_bytes});
                         }
-                    }
-                    if constexpr (A_last_K_tile_valid_columns > 0) {
-                        // K is not a tile multiple: zero the padding columns of the last K tile in every valid
-                        // row before the compute sees them. The zeroing has to follow the reads it patches, so
-                        // this K chunk pays one extra barrier.
-                        if (K_chunk == num_K_chunks - 1) {
-                            noc.async_read_barrier();
-                            constexpr DataFormat A_format = get_dataformat(dfb::A_slice);
-                            const uint32_t last_K_tile_of_row_0 =
-                                A_slice.get_write_ptr() + (K_chunk_tiles - 1) * A_tile_bytes;
-                            for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
+                        if constexpr (A_last_K_tile_valid_columns > 0) {
+                            // K is not a tile multiple, and this row's last tile is A's last K tile: once it has
+                            // landed, zero its padding columns so they add nothing to C.
+                            if (K_chunk == num_K_chunks - 1) {
+                                noc.async_read_barrier();
                                 pad_last_ktile<A_format, A_last_K_tile_valid_columns>(
-                                    last_K_tile_of_row_0 + m_tile * K_chunk_tiles * A_tile_bytes);
+                                    A_slice.get_write_ptr() + A_row_offset_bytes + (K_chunk_tiles - 1) * A_tile_bytes);
                             }
                         }
                     }
