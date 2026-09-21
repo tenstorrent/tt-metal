@@ -109,8 +109,14 @@ inline Tensor transpose_(
             output_mem_constructed = output_mem_config.value();
         } else if (a.is_sharded()) {
             // Non-native sharded input → mirror input's memory_layout (no shard_spec, device op
-            // synthesizes via adjust_shard_spec_to_shape / generate_transpose_shard_spec)
-            output_mem_constructed = MemoryConfig(a.memory_config().memory_layout(), a.memory_config().buffer_type());
+            // synthesizes via adjust_shard_spec_to_shape / generate_transpose_shard_spec). Preserve
+            // ND-sharding provenance (nd_shard_spec / created_with_nd_shard_spec) for ND-created
+            // inputs instead of dropping it via the legacy (memory_layout, buffer_type) constructor.
+            const auto& input_memory_config = a.memory_config();
+            output_mem_constructed =
+                input_memory_config.created_with_nd_shard_spec()
+                    ? MemoryConfig(input_memory_config.buffer_type(), input_memory_config.nd_shard_spec())
+                    : MemoryConfig(input_memory_config.memory_layout(), input_memory_config.buffer_type());
         } else {
             output_mem_constructed = a.memory_config();
         }
