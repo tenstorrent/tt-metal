@@ -12,14 +12,16 @@
 //   GDN_MCAST_RECEIVER — a sibling v-block core. Reads only its private V-sliced tensors (v_beta,
 //                        s0) from DRAM; the shared block arrives over the NoC. Handshake:
 //                        reserve CB space -> ready.up(sender) -> wait(valid) -> push.
-//   GDN_FUSED_RECEIVER — chunk_gdn_fused consumer: zero DRAM intermediates. Reads only s0; ALL
-//                        seven per-chunk tensors — v_beta included (Option U for F1: the paired
-//                        producer core computes and sends it, keeping the compute kernels
-//                        byte-identical; Option R scan-side recompute is deferred to F2) — arrive
-//                        over the NoC from the producer's writer via the same handshake as
-//                        GDN_MCAST_RECEIVER. NV=1: this core holds the head's full V width.
-//                        F3a generalizes to NP >= 1 producers per head (round-robin over chunks);
-//                        the ready credit rotates to the owner of each chunk — see kernel_main.
+//   GDN_FUSED_RECEIVER — chunk_gdn_fused consumer: zero DRAM intermediates. Reads only its V-slice
+//                        of s0; ALL seven per-chunk tensors — v_beta included (Option U: the
+//                        producer computes and sends it, keeping the compute kernels byte-identical)
+//                        — arrive over the NoC from the producers' writers. This core is receiver
+//                        (h, vb) of NV per head: it carries V columns [vb*Vt, +Vt) (Vt = the slice
+//                        width, CT arg 2). Handshake per chunk: reserve the 7 CBs -> reset VALID ->
+//                        atomically increment credit[h] on the producer that owns the chunk
+//                        (c % NP of this head) -> wait VALID -> push. The producer sends only once
+//                        all NV receivers have credited. A one-time init barrier (SEM_INIT) orders
+//                        the producers' zeroing of their credit words before any credit.
 // The handshake follows the production matmul in0 mcast idiom (reader_bmm_tile_layout_in0_
 // sender_padding.cpp / _receiver.cpp): ready counts receivers that RESERVED space (so the sender
 // can never overwrite unconsumed data), the data mcasts and the valid-flag mcast share one NOC /
@@ -87,6 +89,14 @@ void kernel_main() {
     // SEM_VALID: sender -> receivers: "this chunk's shared data is in your CBs"
     constexpr uint32_t SEM_READY = get_compile_time_arg_val(s0_a.next_compile_time_args_offset());
     constexpr uint32_t SEM_VALID = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 1);
+#if defined(GDN_FUSED_RECEIVER)
+    // Fused-receiver extras (trailing CT args after the semaphore ids): the init-barrier semaphore,
+    // and the union-declared CB + byte offset holding the producers' per-head credit words.
+    constexpr uint32_t SEM_INIT = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 2);
+    constexpr uint32_t CB_CREDIT = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 3);
+    constexpr uint32_t CREDIT_OFF = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 4);
+    (void)SEM_READY;  // superseded by the credit words on this variant
+#endif
 #endif
 
     // This core handles head h, V-block vb (columns [vb*Vt, vb*Vt+Vt) of the full V dimension).
@@ -95,12 +105,14 @@ void kernel_main() {
     const uint32_t NC = get_arg_val<uint32_t>(2);
 #if defined(GDN_FUSED_RECEIVER)
     const uint32_t s0_addr = get_arg_val<uint32_t>(3);
-    // F3a: NP producers share this head's prep work round-robin (producer p owns chunks
-    // c = p, p+NP, ...). Their virtual worker coords follow as NP (x, y) pairs from arg 5; the
-    // per-chunk ready credit below rotates to producer (c % NP) — that rotation IS the in-order
-    // delivery mechanism (P1): a producer may only mcast chunk c once this receiver has reserved
-    // chunk c's slots, so at most one hand-off is in flight and VALIDs cannot interleave.
+    // NP producers share this head's prep work round-robin (producer p owns chunks c = p, p+NP,
+    // ...); the per-chunk credit goes to producer (c % NP) — that rotation IS the in-order delivery
+    // mechanism: a producer sends chunk c only once every receiver of the head has reserved chunk
+    // c's slots, so at most one hand-off per receiver is in flight and VALIDs cannot interleave.
+    // N_INIT = init-barrier increments to expect before the first credit (NP in the per-head form).
+    // The producers' virtual worker coords follow as NP (x, y) pairs from arg 6.
     const uint32_t NP = get_arg_val<uint32_t>(4);
+    const uint32_t N_INIT = get_arg_val<uint32_t>(5);
 #elif defined(GDN_MCAST_RECEIVER)
     const uint32_t vb_addr = get_arg_val<uint32_t>(3);
     const uint32_t s0_addr = get_arg_val<uint32_t>(4);
@@ -300,15 +312,27 @@ void kernel_main() {
     noc.async_atomic_barrier();
 
 #elif defined(GDN_FUSED_RECEIVER)
-    Semaphore<> ready(SEM_READY);
     Semaphore<> valid(SEM_VALID);
+    Semaphore<> init(SEM_INIT);
 
-    constexpr uint32_t cv = Ct * Vt;  // v_beta arrives whole: Vt == Vt_full on fused receivers
+    // v_beta arrives as THIS receiver's V-slice: Vt here is the slice width (Vtl), so cv = Ct*Vtl
+    // tiles per chunk. The CB itself is the producer-sized ring (cv_full*nbuf tiles, union
+    // declaration); the producer derives the matching slot from the global chunk index.
+    constexpr uint32_t cv = Ct * Vt;
+
+    // The producers' per-head credit words sit in the last tile of the union-declared u/mask CB —
+    // the same L1 address on every core of the program — so this receiver can name head h's word
+    // on any producer without being told an address.
+    const uint32_t credit_word = CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF + 4 * h;
+
+    // Init barrier: dispatch re-initializes only Semaphore objects per launch, so the producers
+    // zero their credit words themselves and then bump `init` here; crediting earlier could land
+    // an increment on a word about to be zeroed (a hang at credit[h] == NV).
+    init.wait(N_INIT);
 
     for (uint32_t c = 0; c < NC; c++) {
-        // Reserve this chunk's space in ALL SEVEN hand-off CBs FIRST — the ready inc is the
-        // producer's proof that every slot is writable (compute has popped the previous chunk).
-        // v_beta included: it is a hand-off CB here (Option U), not a DRAM read.
+        // Reserve this chunk's space in ALL SEVEN hand-off CBs FIRST — the credit is the producer's
+        // proof that every slot is writable (compute has popped the previous chunk).
         CircularBuffer(cb_vbeta).reserve_back(cv);
         CircularBuffer(cb_kd).reserve_back(ck);
         CircularBuffer(cb_qdecay).reserve_back(ck);
@@ -317,13 +341,17 @@ void kernel_main() {
         CircularBuffer(cb_dl).reserve_back(1);
         CircularBuffer(cb_Tinv).reserve_back(cc);
 
-        // Reset our valid flag BEFORE signalling ready: a fast producer may mcast VALID
-        // immediately after the inc, and a late reset would overwrite it (lost wakeup -> deadlock).
+        // Reset our valid flag BEFORE crediting: a fast producer may mcast VALID immediately after
+        // the credit lands, and a late reset would overwrite it (lost wakeup -> deadlock).
         valid.set(INVALID);
-        // Credit the producer that owns chunk c (rotating target, P1). The coords live in the
-        // runtime-arg array at 5 + 2*(c % NP); reading them per chunk is two L1 loads.
+        // Credit the owner of chunk c by incrementing ITS copy of credit[h].
+        // INVARIANT (design D6): at most one outstanding credit per receiver, always for the next
+        // chunk, and issued only after VALID for the previous chunk was observed — the per-head
+        // credit words are race-free only under this ordering. Do not credit ahead.
         const uint32_t pi = c % NP;
-        ready.up(noc, get_arg_val<uint32_t>(5 + 2 * pi), get_arg_val<uint32_t>(6 + 2 * pi), 1);
+        const uint64_t dst = get_noc_addr(
+            get_arg_val<uint32_t>(6 + 2 * pi), get_arg_val<uint32_t>(7 + 2 * pi), credit_word, noc.get_noc_id());
+        noc_semaphore_inc(dst, 1, noc.get_noc_id());
         valid.wait(VALID);
 
         // The chunk's seven blocks are in our CBs; make them visible to compute.
@@ -337,7 +365,7 @@ void kernel_main() {
     }
 
     valid.set(INVALID);  // local store: restore the initial value (the last wait left it VALID)
-    // Drain the ready atomics: no non-posted inc may be in flight at kernel exit.
+    // Drain the credit atomics: no non-posted inc may be in flight at kernel exit.
     noc.async_atomic_barrier();
 
 #else

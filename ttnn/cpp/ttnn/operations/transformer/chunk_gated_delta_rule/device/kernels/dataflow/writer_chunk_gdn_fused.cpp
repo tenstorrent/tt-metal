@@ -2,29 +2,33 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Fused-program (chunk_gdn_fused) PRODUCER writer: replaces the prep writer's DRAM drain with a
-// direct NoC hand-off. Per chunk it waits for the seven compute-pushed intermediates
-//   v_beta [C,V], t_inv [C,C], kd [C,K], intra [C,C], q_decay [C,K], k_dec_t [K,C], dl [1 tile]
-// and writes them into the paired RECEIVER (scan) core's CBs under the shipped ready/valid
-// handshake of reader_chunk_gdn_scan.cpp — the receiver (GDN_FUSED_RECEIVER) cannot tell this
-// computing sender from the phased DRAM-reading one. v_beta ships whole (Option U for F1: the
-// producer computes and sends it, keeping both compute kernels byte-identical to the phased
-// path; Option R — scan-side recompute from v and beta — is deferred to F2).
+// direct NoC hand-off into the NV RECEIVER cores of ONE head (per-head producer form; the pooled
+// form generalizes the item walk and the owner function, not this protocol). Per item (chunk c):
+//   1. wait for the seven compute-pushed intermediates
+//        v_beta [C,V], t_inv [C,C], kd [C,K], intra [C,C], q_decay [C,K], k_dec_t [K,C], dl [1 tile]
+//   2. wait credit[h] == NV      — every receiver of head h has reserved chunk c's slots
+//      credit[h] <- 0
+//   3. v_beta: NV V-slice writes (1x1-rectangle multicasts, unlinked), slice v -> receiver v's ring slot
+//   4. the six V-independent tensors: LINKED multicasts to the head's 1xNV row rectangle (num_dests NV)
+//   5. noc.async_write_barrier()  — waits for ACKS. A flush only proves departure, and the unicast
+//      slices are not part of the linked chain, so only the barrier orders every byte before VALID.
+//   6. VALID multicast to the rectangle (unlinked: ends the chain)
+//   7. pop the seven CBs (the writes have completed, so compute may reuse the slots)
 //
-// Addressing (F3a): the seven hand-off CBs are declared on the UNION of producer+receiver cores
-// (identical base addresses both sides), so this core's CB base == the receiver's CB base. The
-// receiver reserves/pushes every CB exactly once per GLOBAL chunk c, so its reserved slot for
-// chunk c is base + (c % NBUF)*slot_bytes — and that is where each mcast must land. At NP=1 that
-// equals this core's read_ptr (the F2 lockstep lemma), but at NP>1 producer p only pushes/pops
-// its OWNED chunks c = p, p+NP, ..., so its local slot index (owned-chunk count % NBUF) diverges
-// from the receiver's (c % NBUF): sourcing stays read_ptr (correct local data), the DESTINATION
-// is computed explicitly from the global c. The destination is a 1x1 rectangle (one receiver),
-// which is orientation-neutral: start == end, so this writer's NOC (whichever the WriterConfig
-// assigns) needs no coordinate swap.
+// Addressing: the seven hand-off CBs are declared on the UNION of producer and receiver cores, so this
+// core's CB base == every receiver's CB base. Six shared CBs: the receiver reserves/pushes n tiles per
+// chunk, so its slot for chunk c is base + (c % NBUF)*n*tile. v_beta: the CB is producer-sized
+// (cv*NBUF tiles) but a receiver reserves only Ct*Vtl per chunk, so its ring has NV*NBUF slots and its
+// slot for chunk c is base + ((c*Ct*Vtl) mod (cv*NBUF))*tile; row r of receiver v's slice is source
+// tiles [r*Vt + v*Vtl, +Vtl) of this core's front slot.
 //
-// Ordering at NP>1 (P1): the receiver drives in-order delivery by crediting SEM_READY on
-// producer (c % NP) only when chunk c's slots are reserved — each producer's ready.wait(1)
-// therefore fires exactly for its own next owned chunk, and at most one hand-off is in flight
-// per receiver at any time (VALID mcasts cannot interleave across producers).
+// Credit words: BH words at CB_CREDIT's base + CREDIT_OFF — the last tile of the
+// union-declared u/mask CB, hence the same L1 address on every core. Dispatch re-initializes only
+// Semaphore objects per launch, so this kernel zeroes the words itself and then bumps the SEM_INIT
+// semaphore on each of its receivers; a receiver credits nothing before all its producers have done so.
+//
+// Multicast rectangle: given by the host already ORDERED for this kernel's NoC (NOC_1 wants
+// bottom-right -> top-left; coordinates themselves are virtual and never flipped on Blackhole).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -42,42 +46,58 @@ constexpr uint32_t cb_kdec_t = 24, cb_dl = 22;
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
     constexpr uint32_t Kt = get_compile_time_arg_val(1);
-    constexpr uint32_t Vt = get_compile_time_arg_val(2);
-    // Handshake semaphore ids straight from the factory's SemaphoreDescriptors (no accessor
-    // chain on this kernel — nothing touches DRAM).
-    // SEM_READY: receiver -> producer: "my CB space for this chunk is reserved"
-    // SEM_VALID: producer -> receiver: "this chunk's seven blocks are in your CBs"
-    constexpr uint32_t SEM_READY = get_compile_time_arg_val(3);
-    constexpr uint32_t SEM_VALID = get_compile_time_arg_val(4);
-    // Hand-off CB depth (slots per CB) — the factory passes the same value it sizes the CBs with,
-    // so the explicit slot arithmetic below can never drift from the allocation.
-    constexpr uint32_t NBUF = get_compile_time_arg_val(5);
+    constexpr uint32_t Vt = get_compile_time_arg_val(2);          // FULL V in tiles: this core's v_beta width
+    constexpr uint32_t SEM_VALID = get_compile_time_arg_val(3);   // producer -> receivers: "chunk c landed"
+    constexpr uint32_t SEM_INIT = get_compile_time_arg_val(4);    // producer -> receivers: "credit words zeroed"
+    constexpr uint32_t NBUF = get_compile_time_arg_val(5);        // hand-off CB depth (slots), from the factory
+    constexpr uint32_t NV = get_compile_time_arg_val(6);          // receivers per head
+    constexpr uint32_t Vtl = get_compile_time_arg_val(7);         // per-receiver V-slice width (tiles)
+    constexpr uint32_t CB_CREDIT = get_compile_time_arg_val(8);   // union-declared CB holding the credit words
+    constexpr uint32_t CREDIT_OFF = get_compile_time_arg_val(9);  // byte offset of credit[0] in that CB
+    static_assert(Vtl * NV == Vt, "NV receivers must tile the full V width");
 
-    const uint32_t NC = get_arg_val<uint32_t>(0);     // GLOBAL chunk count of this head
-    const uint32_t NP = get_arg_val<uint32_t>(1);     // producers for this head
-    const uint32_t p = get_arg_val<uint32_t>(2);      // this producer's index: owns c = p, p+NP, ...
-    const uint32_t rcv_x = get_arg_val<uint32_t>(3);  // virtual worker coords of the receiver
-    const uint32_t rcv_y = get_arg_val<uint32_t>(4);
+    const uint32_t NC = get_arg_val<uint32_t>(0);   // GLOBAL chunk count of this head
+    const uint32_t NP = get_arg_val<uint32_t>(1);   // producers for this head
+    const uint32_t p = get_arg_val<uint32_t>(2);    // this producer's index within the head: owns c = p, p+NP, ...
+    const uint32_t h = get_arg_val<uint32_t>(3);    // head index (selects the credit word)
+    const uint32_t BH = get_arg_val<uint32_t>(4);   // number of credit words to zero
+    const uint32_t mx0 = get_arg_val<uint32_t>(5);  // multicast rectangle, ordered for this kernel's NoC
+    const uint32_t my0 = get_arg_val<uint32_t>(6);
+    const uint32_t mx1 = get_arg_val<uint32_t>(7);
+    const uint32_t my1 = get_arg_val<uint32_t>(8);
+    // Receiver v's virtual worker coords: args 9 + 2v, 10 + 2v (v_beta slice targets, init barrier).
+    auto rcv_x = [](uint32_t v) { return get_arg_val<uint32_t>(9 + 2 * v); };
+    auto rcv_y = [](uint32_t v) { return get_arg_val<uint32_t>(10 + 2 * v); };
 
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t cv = Ct * Vt;
     constexpr uint32_t kc = Kt * Ct;
+    constexpr uint32_t cvl = Ct * Vtl;       // a receiver's v_beta tiles per chunk
+    constexpr uint32_t VB_RING = cv * NBUF;  // a receiver's v_beta ring, in tiles
 
     const uint32_t tb = get_tile_size(cb_vbeta);  // all hand-off CBs are fp32 -> same tile size
 
     Noc noc;
-    Semaphore<> ready(SEM_READY);
     Semaphore<> valid(SEM_VALID);
+    Semaphore<> init(SEM_INIT);
     // set_multicast sources its 4-byte value from this core's LOCAL copy of `valid` — read
     // asynchronously, when the NIU processes the command. Preset it to VALID once; any later
-    // write to this word must be preceded by a flush/barrier (see the teardown, where the
-    // barrier deliberately comes BEFORE the reset).
+    // write to this word must be preceded by a barrier (see the teardown).
     valid.set(VALID);
 
+    // Credit words: zero them, then tell every receiver of this head (init barrier).
+    volatile tt_l1_ptr uint32_t* credit =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF);
+    for (uint32_t i = 0; i < BH; i++) {
+        noc_semaphore_set(credit + i, 0);
+    }
+    for (uint32_t v = 0; v < NV; v++) {
+        init.up(noc, rcv_x(v), rcv_y(v), 1);
+    }
+
     // Hand-off CB base addresses, captured BEFORE any pop (read_ptr starts at the CB base, and
-    // the union declaration makes each base identical on the receiver). The explicit destination
-    // for global chunk c is base + (c % NBUF)*slot_bytes — the slot the receiver reserved.
+    // the union declaration makes each base identical on every receiver).
     const uint32_t base_vbeta = CircularBuffer(cb_vbeta).get_read_ptr();
     const uint32_t base_Tinv = CircularBuffer(cb_Tinv).get_read_ptr();
     const uint32_t base_kd = CircularBuffer(cb_kd).get_read_ptr();
@@ -86,24 +106,37 @@ void kernel_main() {
     const uint32_t base_kdec_t = CircularBuffer(cb_kdec_t).get_read_ptr();
     const uint32_t base_dl = CircularBuffer(cb_dl).get_read_ptr();
 
-    // One linked 1x1-rect mcast per hand-off CB, sourced from the CB's front slot (this core's
-    // local data for the chunk) into the receiver's explicitly computed slot. linked=true chains
-    // the data mcasts with the valid-flag mcast on one static VC (data-before-flag ordering).
     MulticastEndpoint mcast_dst;
-    auto send = [&](uint32_t cb_id, uint32_t n, uint32_t dst_addr) {
+    // One LINKED multicast of a shared CB's front slot into the head's rectangle.
+    auto send_shared = [&](uint32_t cb_id, uint32_t n, uint32_t dst_addr) {
         const uint32_t addr = CircularBuffer(cb_id).get_read_ptr();
         noc.async_write_multicast(
             CoreLocalMem<uint32_t>(addr),
             mcast_dst,
             n * tb,
+            NV,
+            {},
+            {.noc_x_start = mx0, .noc_y_start = my0, .noc_x_end = mx1, .noc_y_end = my1, .addr = dst_addr},
+            /*linked=*/true);
+    };
+    // One UNLINKED write of `n` tiles to a single receiver (1x1 rectangle: orientation-neutral).
+    auto send_slice = [&](uint32_t src_addr, uint32_t v, uint32_t n, uint32_t dst_addr) {
+        noc.async_write_multicast(
+            CoreLocalMem<uint32_t>(src_addr),
+            mcast_dst,
+            n * tb,
             1,
             {},
-            {.noc_x_start = rcv_x, .noc_y_start = rcv_y, .noc_x_end = rcv_x, .noc_y_end = rcv_y, .addr = dst_addr},
-            /*linked=*/true);
+            {.noc_x_start = rcv_x(v),
+             .noc_y_start = rcv_y(v),
+             .noc_x_end = rcv_x(v),
+             .noc_y_end = rcv_y(v),
+             .addr = dst_addr},
+            /*linked=*/false);
     };
 
     for (uint32_t c = p; c < NC; c += NP) {
-        const uint32_t slot = c % NBUF;  // the receiver's reserved slot for GLOBAL chunk c
+        const uint32_t slot = c % NBUF;  // the receivers' reserved slot for GLOBAL chunk c (shared CBs)
         // Wait for the chunk's outputs in the phased prep writer's drain order (roughly
         // compute's push order), so producer-side backpressure matches that writer exactly.
         CircularBuffer(cb_vbeta).wait_front(cv);
@@ -114,27 +147,32 @@ void kernel_main() {
         CircularBuffer(cb_kdec_t).wait_front(kc);
         CircularBuffer(cb_dl).wait_front(1);
 
-        // The receiver has reserved chunk c's CB space (its slots are writable) and credited
-        // THIS producer (it targets producer c % NP == p — that's how we own this credit).
-        ready.wait(1);
-        ready.set(0);
+        // All NV receivers of head h have reserved chunk c's slots. Exactly NV — an over-credit
+        // would be a protocol bug and shows up as a hang here rather than as corrupt output.
+        noc_semaphore_wait(credit + h, NV);
+        noc_semaphore_set(credit + h, 0);
 
-        send(cb_vbeta, cv, base_vbeta + slot * cv * tb);
-        send(cb_Tinv, cc, base_Tinv + slot * cc * tb);
-        send(cb_kd, ck, base_kd + slot * ck * tb);
-        send(cb_intra, cc, base_intra + slot * cc * tb);
-        send(cb_qdecay, ck, base_qdecay + slot * ck * tb);
-        send(cb_kdec_t, kc, base_kdec_t + slot * kc * tb);
-        send(cb_dl, 1, base_dl + slot * 1 * tb);
-        // Flush on EVERY arch, for two reasons. Blackhole: NoC latency exceeds L1<->RISCV
-        // latency, so without it the receiver could see VALID with data still in flight. All
-        // arches: the flush proves every data mcast has read its L1 source slot; only then may
-        // the pops below let compute reuse the slots for this producer's NEXT owned chunk (the
-        // flag mcast runs on a different cmd buf and provides no such ordering).
-        noc.async_writes_flushed();
-        valid.set_multicast(noc, rcv_x, rcv_y, rcv_x, rcv_y, 1);  // unlinked: ends the chain
+        // v_beta slices: row r of receiver v's slice <- this slot's tiles [r*Vt + v*Vtl, +Vtl).
+        const uint32_t vb_src = CircularBuffer(cb_vbeta).get_read_ptr();
+        const uint32_t vb_dst = base_vbeta + ((c * cvl) % VB_RING) * tb;
+        for (uint32_t v = 0; v < NV; v++) {
+            for (uint32_t r = 0; r < Ct; r++) {
+                send_slice(vb_src + (r * Vt + v * Vtl) * tb, v, Vtl, vb_dst + r * Vtl * tb);
+            }
+        }
+        // The six shared tensors, linked, into the rectangle.
+        send_shared(cb_Tinv, cc, base_Tinv + slot * cc * tb);
+        send_shared(cb_kd, ck, base_kd + slot * ck * tb);
+        send_shared(cb_intra, cc, base_intra + slot * cc * tb);
+        send_shared(cb_qdecay, ck, base_qdecay + slot * ck * tb);
+        send_shared(cb_kdec_t, kc, base_kdec_t + slot * kc * tb);
+        send_shared(cb_dl, 1, base_dl + slot * 1 * tb);
+        // Every write above must have LANDED before the flag: the slices are unlinked unicasts and
+        // could otherwise overtake the flag. The barrier waits for acks (a flush would not).
+        noc.async_write_barrier();
+        valid.set_multicast(noc, mx0, my0, mx1, my1, NV);  // unlinked: ends the chain
 
-        // Free the slots for compute's next chunk only now (the mcasts sourced them).
+        // Free the slots for compute's next chunk only now (the writes have completed).
         CircularBuffer(cb_vbeta).pop_front(cv);
         CircularBuffer(cb_Tinv).pop_front(cc);
         CircularBuffer(cb_kd).pop_front(ck);
@@ -146,8 +184,12 @@ void kernel_main() {
 
     // Barrier BEFORE resetting the local valid word: set_multicast reads its payload from that
     // word asynchronously, so resetting first could multicast INVALID for the final chunk and
-    // deadlock the receiver at valid.wait(VALID). Only after all nonposted writes are acked is
+    // deadlock the receivers at valid.wait(VALID). Only after all nonposted writes are acked is
     // the local reset safe (payload-source rule).
     noc.async_write_barrier();
+    // Drain the init.up() atomics: non-posted increments, counted apart from writes, and no NoC
+    // transaction may be outstanding at kernel exit. Their acks return on this NoC while the credits
+    // that prove the increments landed arrive on the other, so only the barrier makes it a guarantee.
+    noc.async_atomic_barrier();
     valid.set(INVALID);  // restore the semaphore's initial value
 }

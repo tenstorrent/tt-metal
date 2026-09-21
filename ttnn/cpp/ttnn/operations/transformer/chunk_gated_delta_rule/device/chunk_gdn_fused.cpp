@@ -62,15 +62,32 @@ void ChunkGdnFusedOperation::validate_on_program_cache_miss(
     TT_FATAL(attrs.chunk_size % TILE_HEIGHT == 0, "chunk_size must be a multiple of 32");
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
-    // NP producers + one receiver core per head (NV=1). NP=1 unless QWEN_GDN_NP opted in.
+    // Geometry: NP producers + NV receivers per head. Receivers of a head form a 1xNV row rectangle
+    // (the multicast target), so the grid must hold BH such rectangles: BH <= (grid.x / NV) * grid.y.
+    // Producers have no placement constraint. NP=1 / NV=1 unless QWEN_GDN_NP / QWEN_GDN_NV opted in.
     TT_FATAL(attrs.np >= 1, "chunk_gdn_fused: np must be >= 1 (got {})", attrs.np);
+    TT_FATAL(attrs.nv >= 1, "chunk_gdn_fused: nv must be >= 1 (got {})", attrs.nv);
+    const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
+    TT_FATAL(Vt % attrs.nv == 0, "chunk_gdn_fused: nv ({}) must divide Vt ({})", attrs.nv, Vt);
     const auto grid = in.q.device()->compute_with_storage_grid_size();
+    TT_FATAL(attrs.nv <= grid.x, "chunk_gdn_fused: nv ({}) exceeds the grid width {}", attrs.nv, grid.x);
+    const uint32_t hpr = grid.x / attrs.nv;
     TT_FATAL(
-        attrs.BH * (1 + attrs.np) <= grid.x * grid.y,
-        "chunk_gdn_fused needs BH*(1+NP) = {}*{} = {} cores, grid has {}x{}={}",
+        attrs.BH <= hpr * grid.y,
+        "chunk_gdn_fused: BH={} heads need 1x{} receiver rectangles; the {}x{} grid holds only {} ({} per row)",
         attrs.BH,
-        1 + attrs.np,
-        attrs.BH * (1 + attrs.np),
+        attrs.nv,
+        grid.x,
+        grid.y,
+        hpr * grid.y,
+        hpr);
+    TT_FATAL(
+        attrs.BH * (attrs.nv + attrs.np) <= grid.x * grid.y,
+        "chunk_gdn_fused needs BH*(NV+NP) = {}*({}+{}) = {} cores, grid has {}x{}={}",
+        attrs.BH,
+        attrs.nv,
+        attrs.np,
+        attrs.BH * (attrs.nv + attrs.np),
         grid.x,
         grid.y,
         grid.x * grid.y);
@@ -137,6 +154,13 @@ std::vector<Tensor> chunk_gdn_fused(
         TT_FATAL(v_np >= 1, "QWEN_GDN_NP must be a positive integer (got '{}')", e);
         np = std::min<uint32_t>(static_cast<uint32_t>(v_np), num_chunks);
     }
+    // Receivers per head: read HERE (hashed) for the same reason as np. Must divide Vt (validated).
+    uint32_t nv = 1;
+    if (const char* e = std::getenv("QWEN_GDN_NV")) {
+        const int v_nv = std::atoi(e);
+        TT_FATAL(v_nv >= 1, "QWEN_GDN_NV must be a positive integer (got '{}')", e);
+        nv = static_cast<uint32_t>(v_nv);
+    }
     auto attrs = ChunkGdnFusedOperation::operation_attributes_t{
         .BH = BH,
         .num_chunks = num_chunks,
@@ -150,6 +174,7 @@ std::vector<Tensor> chunk_gdn_fused(
         .qk_norm = qk_norm,
         .scale = scale,
         .np = np,
+        .nv = nv,
         .has_initial_state = initial_state.has_value(),
         .output_final_state = output_final_state,
         .output_mem_config = output_mem_config,
