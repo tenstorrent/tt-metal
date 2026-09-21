@@ -1,4 +1,8 @@
-"""DeepSeek V4 Flash ttnn model — re-exports from submodules."""
+"""DeepSeek V4 Flash ttnn model — re-exports from submodules.
+
+The implementations live in the sibling modules (``model.py``, ``attention.py``, ``moe.py``,
+``layers.py``, ...); this module is the stable import surface over them, mirroring ``__all__``.
+"""
 
 from .attention import (
     DeepSeekV4Attention,

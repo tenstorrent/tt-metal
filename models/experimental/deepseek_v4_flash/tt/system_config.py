@@ -5,7 +5,7 @@
 """Per-system tuning profiles: one file of deployment knobs, loaded by machine.
 
 The model runs on machines that want different values for the same knob -- an
-8-chip P150 host and a 32-chip Galaxy differ in pipeline depth, KV budget and
+8-chip P150 host and a 32-chip Galaxy differ in layer placement, KV budget and
 how far the weight prefetcher should run ahead. Named profiles in
 ``configs/system_configs.yaml`` hold those values; this module loads one.
 
@@ -85,7 +85,8 @@ class DeviceSettings:
 
         Only non-default entries are emitted: a zero ``trace_region_size`` or
         ``worker_l1_size`` means "leave the ttnn default alone", which is not the
-        same as passing 0.
+        same as passing 0. ``mesh_shape`` (``[rows, cols]``) is *not* one of them --
+        the caller turns it into a ``ttnn.MeshShape`` of its own.
         """
         params: dict = {
             "fabric_config": self.ttnn_fabric_config,
@@ -118,12 +119,13 @@ class PipelineSettings:
     d2h_fifo_bytes: int = 4032
 
     def resolve_num_devices(self, mesh_devices: int) -> int:
-        """How many of the open mesh's devices the layer stack should span.
+        """How many of the open mesh's devices the layer stack should span: ``max_devices``
+        capped at ``mesh_devices``, or the whole mesh when ``max_devices <= 0``.
 
-        ``0`` spans all of them. Capping matters once the weights are L1-resident:
-        the packed placement holds at most two layers per chip, so spreading the
-        stack over more chips than it needs buys nothing and costs one socket hop
-        per extra chip -- pure added latency on the critical path.
+        Capping is a latency lever, not a capacity one: spreading the stack over more chips
+        than it needs buys nothing and costs one socket hop per extra chip, which is pure
+        added latency on the critical path (PGS=1 over a P150 is ~5 contiguous layers per chip
+        and 7 socket hops per token).
         """
         if self.max_devices <= 0:
             return mesh_devices
@@ -139,7 +141,12 @@ class PipelineSettings:
 
 @dataclass(frozen=True)
 class PrefetcherSettings:
-    """DRISC weight prefetcher and its shared global circular buffer."""
+    """DRISC weight prefetcher and its shared global circular buffer.
+
+    ``num_prefetch_pages`` is the shared ring's depth in pages (each ~18 KB of L1 per receiver
+    core at bf4) -- i.e. how far the senders may run ahead -- and ``num_prefetch_slabs`` the
+    depth of a private, single-weight ring (see :mod:`.decode_prefetch`).
+    """
 
     num_prefetch_pages: int = 16
     num_prefetch_slabs: int = 2
@@ -169,8 +176,8 @@ class AttentionSettings:
     def sdpa_program_config(self, device) -> Any:
         """The ``SDPAProgramConfig`` for ``device``, at this profile's settings.
 
-        The compute grid is read off the device rather than configured: it is a
-        property of the chip, and the L1 lever here is
+        The compute grid is read off the device rather than configured -- the ``[x, y]``
+        compute-with-storage grid is a property of the chip -- and the L1 lever here is
         ``max_cores_per_head_batch`` (see the profile file).
         """
         return ttnn.SDPAProgramConfig(
@@ -184,7 +191,7 @@ class AttentionSettings:
 
 @dataclass(frozen=True)
 class DecodeSettings:
-    """Precision, paging and how many users a step serves."""
+    """On-device precision, the context/session budget and how many users a step serves."""
 
     weight_dtype: str = "bfloat4_b"
     num_users: int = 2
@@ -297,6 +304,8 @@ def _suggest(name: str, valid) -> str:
 
 
 def _reject_unknown(where: str, keys, dataclass_type: type) -> None:
+    """Raise ``ValueError`` for every key in ``keys`` that is not a field of ``dataclass_type``,
+    naming the closest valid field as a suggestion (``where`` is the section being parsed)."""
     valid = {f.name for f in fields(dataclass_type)}
     for key in keys:
         if key not in valid:
@@ -359,6 +368,12 @@ def _build_section(section_name: str, raw: dict, base: Any) -> Any:
 
 
 def _load_raw(path: Path) -> dict:
+    """Parse the profile file at ``path`` and return the whole YAML document.
+
+    ``FileNotFoundError`` when it is missing, ``ValueError`` when it is not a mapping with a
+    non-empty ``profiles`` mapping -- a malformed file fails here rather than later, mid
+    resolution.
+    """
     import yaml
 
     if not path.is_file():
@@ -412,10 +427,13 @@ def _resolve_chain(name: str, profiles: dict, _seen: Optional[tuple] = None) -> 
 # env var is the exception.
 # --------------------------------------------------------------------------- #
 def _env_bool(raw: str) -> bool:
+    """An env var's truthiness: ``False`` for the spellings in ``_FALSEY`` (``0``, ``false`` /
+    ``False``, ``no``, ``off``, the empty string), ``True`` for anything else."""
     return raw not in _FALSEY
 
 
 def _env_mesh_shape(raw: str) -> list[int]:
+    """``DEEPSEEK_V4_MESH_SHAPE`` as ``[rows, cols]``: ``"1x8"`` or ``"8,4"``."""
     parts = raw.replace(",", "x").split("x")
     if len(parts) != 2:
         raise ValueError(f"{'DEEPSEEK_V4_MESH_SHAPE'} must look like '1x8' or '8,4', got {raw!r}")
