@@ -7,8 +7,8 @@
 // GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N], batch_size times. A C slice is the
 // C_slice_M_tiles x C_slice_N_tiles tiles of C at origin (C_slice_first_M_tile, C_slice_first_N_tile). This cluster
 // owns num_C_slices consecutive C slices of the row-major walk over C (across N, then down M) starting at
-// (first_C_slice_M_tile, first_C_slice_N_tile), and produces them for every batch. For each batch, C slice
-// and K chunk the reader pushes
+// (C_slice_first_M_tile, C_slice_first_N_tile) as passed by the host, and produces them for every batch. For each
+// batch, C slice and K chunk the reader pushes
 //   - one A slice: the C slice's rows of A, K_chunk_tiles wide    -> [C_slice_M_tiles][K_chunk_tiles]
 //   - one B slice: the C slice's columns of B, K_chunk_tiles tall -> [K_chunk_tiles][C_slice_N_tiles]
 // both row-major in tiles, which is the layout the compute kernel indexes. Loop order (batch, MN chunk,
@@ -32,9 +32,8 @@
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
-    // Per-core runtime args: where this cluster's run of C slices starts and how long it is.
-    const uint32_t first_C_slice_M_tile = get_arg(args::first_C_slice_M_tile);
-    const uint32_t first_C_slice_N_tile = get_arg(args::first_C_slice_N_tile);
+    // Per-core runtime args: how many C slices this cluster produces per batch; the origin of its first
+    // C slice is read at the top of every batch below.
     const uint32_t num_C_slices = get_arg(args::num_C_slices);
 
     constexpr uint32_t batch_size = get_arg(args::batch_size);
@@ -86,8 +85,10 @@ void kernel_main() {
         const uint32_t A_batch_first_tile = batch * A_batch_stride_tiles;
         const uint32_t B_batch_first_tile = batch * B_batch_stride_tiles;
 
-        uint32_t C_slice_first_M_tile = first_C_slice_M_tile;  // origin of the current C slice, in tiles
-        uint32_t C_slice_first_N_tile = first_C_slice_N_tile;
+        // Origin of the C slice being produced, in tiles. The host passes the origin of this cluster's first
+        // C slice; the loop steps it across N, then down M, so every batch starts over from the argument.
+        uint32_t C_slice_first_M_tile = get_arg(args::C_slice_first_M_tile);
+        uint32_t C_slice_first_N_tile = get_arg(args::C_slice_first_N_tile);
         for (uint32_t MN_chunk = 0; MN_chunk < num_C_slices; ++MN_chunk) {
             // Rows / columns of this C slice that lie inside the matrices (edge C slices are clipped).
             const uint32_t valid_M_tiles =

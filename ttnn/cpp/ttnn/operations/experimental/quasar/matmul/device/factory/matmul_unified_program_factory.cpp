@@ -255,20 +255,20 @@ UnifiedMatmulPlan plan_unified_matmul(
     plan.row_major_cores = config.row_major_cores;
     const std::vector<CoreCoord> all_cores = corerange_to_cores(config.cores, std::nullopt, config.row_major_cores);
     // Each active core takes a contiguous run of the walk, the first (C_slices_per_batch % num_active) cores
-    // one C slice longer. A core's start is expressed in tile coordinates so the kernels only ever step by
+    // one C slice longer. A core's start is expressed in tile coordinates so the kernels only ever step it by
     // C_slice_M_tiles / C_slice_N_tiles.
     const uint32_t num_active = std::min<uint32_t>(all_cores.size(), plan.C_slices_per_batch);
     plan.cores.assign(all_cores.begin(), all_cores.begin() + num_active);
     const uint32_t C_slices_per_core_floor = plan.C_slices_per_batch / num_active;
     const uint32_t cores_with_extra_C_slice = plan.C_slices_per_batch % num_active;
-    plan.first_C_slice_M_tile.resize(num_active);
-    plan.first_C_slice_N_tile.resize(num_active);
+    plan.C_slice_first_M_tile.resize(num_active);
+    plan.C_slice_first_N_tile.resize(num_active);
     plan.num_C_slices.resize(num_active);
     uint32_t next_C_slice = 0;  // position in the walk of the next unassigned C slice
     for (uint32_t core = 0; core < num_active; ++core) {
         plan.num_C_slices[core] = C_slices_per_core_floor + (core < cores_with_extra_C_slice ? 1 : 0);
-        plan.first_C_slice_M_tile[core] = (next_C_slice / C_slices_across_N) * plan.C_slice_M_tiles;
-        plan.first_C_slice_N_tile[core] = (next_C_slice % C_slices_across_N) * plan.C_slice_N_tiles;
+        plan.C_slice_first_M_tile[core] = (next_C_slice / C_slices_across_N) * plan.C_slice_M_tiles;
+        plan.C_slice_first_N_tile[core] = (next_C_slice % C_slices_across_N) * plan.C_slice_N_tiles;
         next_C_slice += plan.num_C_slices[core];
     }
     plan.max_C_slices_per_core = plan.num_C_slices.front();
@@ -589,7 +589,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"A_borrowed", plan.borrow_A ? 1u : 0u},
                 {"B_borrowed", plan.borrow_B ? 1u : 0u},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"first_C_slice_M_tile", "first_C_slice_N_tile", "num_C_slices"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"C_slice_first_M_tile", "C_slice_first_N_tile", "num_C_slices"}},
         .hw_config =
             ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -612,7 +612,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"subblock_N_tiles", plan.subblock_N_tiles},
                 {"C_borrowed", plan.borrow_C ? 1u : 0u},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"first_C_slice_M_tile", "first_C_slice_N_tile", "num_C_slices"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"C_slice_first_M_tile", "C_slice_first_N_tile", "num_C_slices"}},
         .hw_config =
             ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
@@ -692,8 +692,8 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
     ProgramRunArgs::KernelRunArgs writer_run_args{.kernel = WRITER_KERNEL};
     for (uint32_t core = 0; core < plan.cores.size(); ++core) {
         const std::initializer_list<std::pair<std::string, uint32_t>> run_start = {
-            {"first_C_slice_M_tile", plan.first_C_slice_M_tile[core]},
-            {"first_C_slice_N_tile", plan.first_C_slice_N_tile[core]},
+            {"C_slice_first_M_tile", plan.C_slice_first_M_tile[core]},
+            {"C_slice_first_N_tile", plan.C_slice_first_N_tile[core]},
             {"num_C_slices", plan.num_C_slices[core]}};
         AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, plan.cores[core], run_start);
         AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, plan.cores[core], run_start);
