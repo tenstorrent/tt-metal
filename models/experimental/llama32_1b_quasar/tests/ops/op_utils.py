@@ -105,9 +105,11 @@ def to_tt(
     else:
         mapper = None
 
-    # Quasar sim rejects WH DataMovementKernel tilize on upload; host-tilize then .to(device).
+    # Quasar sim rejects WH DataMovementKernel tilize on upload; host-tilize (distributed per `mapper`)
+    # then .to(device). Passing mesh_mapper here preserves the requested replication/sharding — omitting
+    # it uploaded a single per-device tensor, wrong for multi-device (replicated/sharded) callers.
     if ttnn.get_arch_name() == "quasar":
-        tt_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout)
+        tt_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, mesh_mapper=mapper)
         return tt_tensor.to(mesh_device, memory_config)
 
     return ttnn.from_torch(
