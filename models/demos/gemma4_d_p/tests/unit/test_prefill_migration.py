@@ -17,7 +17,7 @@ from models.demos.gemma4_d_p.tt.runners.kv_caches import Gemma4KvCaches
 from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import build_kv_chunk_address_table
 from models.demos.gemma4_d_p.tt.runners.kv_validation import (
     PREPARED_GPU_TRACE_LAYOUT,
-    cache_pcc,
+    cache_metrics,
     load_gpu_cache_heads,
     read_cache_head,
     read_slot_kv_and_check_pcc,
@@ -181,7 +181,7 @@ def test_pcc_rejects_nonfinite_values(expect_error, nonfinite, operand):
     if operand in ("actual", "both"):
         actual[-1, -1] = nonfinite
     with expect_error(ValueError, "finite"):
-        cache_pcc(expected, actual)
+        cache_metrics(expected, actual)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
@@ -191,16 +191,16 @@ def test_pcc_matches_reference_across_blocks(dtype):
     expected = values.to(dtype)[:, 128:]
     actual = (values * 0.75 + offsets).to(dtype)[:, 128:]
     reference = torch.corrcoef(torch.stack((expected, actual)).float().reshape(2, -1))[0, 1]
-    assert cache_pcc(expected, actual) == pytest.approx(float(reference), rel=0, abs=1e-4)
+    assert cache_metrics(expected, actual).pcc == pytest.approx(float(reference), rel=0, abs=1e-4)
 
 
 def test_pcc_constant_and_identical_inputs():
     values = torch.ones(4097, 256)
-    assert cache_pcc(values, values) == 1.0
-    assert cache_pcc(values, values * 2) == 0.0
+    assert cache_metrics(values, values).pcc == 1.0
+    assert cache_metrics(values, values * 2).pcc == 0.0
     varying = torch.arange(4097).reshape(-1, 1).float()
-    assert cache_pcc(varying, -varying) == pytest.approx(-1.0)
-    assert cache_pcc(varying, torch.ones_like(varying)) == 0.0
+    assert cache_metrics(varying, -varying).pcc == pytest.approx(-1.0)
+    assert cache_metrics(varying, torch.ones_like(varying)).pcc == 0.0
 
 
 def test_gpu_trace_requires_complete_contiguous_rows(tmp_path, expect_error):
