@@ -33,8 +33,8 @@ void kernel_main() {
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr auto input_args = TensorAccessorArgs<1>();
-    constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr auto gamma_args = TensorAccessorArgs<decltype(input_args)::next_compile_time_args_offset()>();
+    constexpr auto beta_args = TensorAccessorArgs<decltype(gamma_args)::next_compile_time_args_offset()>();
 
     const auto input_addrg = TensorAccessor(input_args, input_addr);
 

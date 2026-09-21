@@ -10,13 +10,13 @@ the same hangs?"
 Background (see the quasar ops tests): the quasar fork hangs on WH in two places --
   1. the SPLIT path's Program A (conv_tilize_only) regular datacopy tilize_block MATH<->PACK DEST-sync
      deadlock (test_conv2d_split_program*, e2e_pure/_shapes/gap_wide_n), and
-  2. the FUSED conv_bmm_tilize_metal2 fast_tilize pack-flush race (test_conv2d_correctness_bisect[relu_now_sfpu],
+  2. the FUSED conv_bmm_tilize_metal2 fast_tilize pack-flush race (test_conv2d_correctness_bisect[relu],
      test_conv2d.py[stem_7x7], layer conv2 fused).
 Mainline conv2d has NO split / conv_tilize_only / drain_out, so (1) cannot be reproduced here -- but mainline
 conv_bmm_tilize.cpp uses the IDENTICAL compute_kernel_lib::tilize + fast_tilize as the quasar fork, so (2) is a
 SHARED WH LLK path. The race-guard (kRaceGuardSpin) exists only in the quasar fork; mainline has none. This
 control runs the fused mainline path on the same shapes to see whether it hangs too (=> broad WH LLK bug) or
-passes (=> the fork's Metal-2.0 cadence / forced SFPU-relu is what exposes the latent race).
+passes (=> the fork's Metal-2.0 cadence is what exposes the latent race).
 
 READING IT:
   * A config here HANGS on WH  -> the fast_tilize race bites mainline too; it's a general WH LLK bug.
@@ -141,8 +141,8 @@ _CASES = [
         act_block_h_override=128,
         with_bias_relu=True,
     ),
-    # 3x3 + bias + relu (packer_l1_acc) -> the correctness_bisect[relu_now_sfpu] config (mainline WH uses
-    # packer-relu here; the quasar test forces SFPU-relu, which is the fork-specific perturbant).
+    # 3x3 + bias + relu (packer_l1_acc) -> the correctness_bisect[relu] config (RELU goes through
+    # the packer clamp path on both mainline WH and Quasar).
     dict(
         in_channels=64,
         out_channels=64,

@@ -136,7 +136,7 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": 141_175_333,
     },
     "vae_encode_512x512": {
-        "wormhole": 81_841_969,
+        "wormhole": 82_885_000,  # mean of 10 scheduled wh_n150 runs 2026-09-05..09-14 (82.69M..83.09M, sigma 0.16%)
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {

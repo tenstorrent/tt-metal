@@ -185,7 +185,7 @@ def test_div_no_nan_fp32(device):
 
     output = ttnn.div_no_nan(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
-    assert_with_ulp(output, torch_output, ulp_threshold=1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=torch_output, actual_result=output, ulp_threshold=1, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -206,7 +206,7 @@ def test_binary_fmod_bf16(
     output = ttnn.fmod(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
 
-    assert_with_ulp(torch_output_tensor, output, 1)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=1)
 
 
 # This test was added for #17361
@@ -329,7 +329,7 @@ def test_div_by_zero(device, val_a, val_b, dtype, approx):
     if approx and dtype == "bfloat16":
         pytest.skip("Skipping test for fast approximate mode")
 
-    assert_with_ulp(z_torch, tt_out, 0, allow_nonfinite=True)
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=0, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize("val_a, val_b", [(0.5, 0.0), (-0.5, 0.0), (0.0, 0.0)])
@@ -356,7 +356,7 @@ def test_divide_inplace_by_zero(device, val_a, val_b, dtype, approx):
     if approx and dtype == "bfloat16":
         pytest.skip("Skipping test for fast approximate mode")
 
-    assert_with_ulp(z_torch, tt_out_inplace, 0, allow_nonfinite=True)
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out_inplace, ulp_threshold=0, allow_nonfinite=True)
 
 
 @pytest.mark.parametrize(
@@ -457,7 +457,7 @@ def test_optional_output_tensor_remainder(device):
     )
     optional_output_tensor = ttnn.to_torch(optional_output_tensor)
 
-    assert_with_ulp(optional_output_tensor, torch_golden, ulp_threshold=0)
+    assert_with_ulp(expected_result=torch_golden, actual_result=optional_output_tensor, ulp_threshold=0)
 
 
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.float32])
@@ -659,7 +659,7 @@ def test_div_int32_float_scalar_promotion(device, rounding_mode, scalar, layout,
     assert result.layout == layout
     # Match floating division's accuracy contract; rounded small results must be exact.
     actual = ttnn.to_torch(result)
-    assert_with_ulp(actual, expected, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1.0)
     if rounding_mode is not None:
         assert torch.equal(actual[2:9], expected[2:9])
 
@@ -740,7 +740,7 @@ def test_div_int32_float_scalar_promotion_sharded(
     assert result.layout == layout
     assert result.memory_config() == output_memory_config
     expected = torch.div(torch_input.float(), 2.5, rounding_mode=rounding_mode)
-    assert_with_ulp(ttnn.to_torch(result), expected, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=expected, actual_result=ttnn.to_torch(result), ulp_threshold=1.0)
 
 
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
@@ -767,7 +767,7 @@ def test_div_int32_float_scalar_promotion_fast_mode(device, rounding_mode):
     result = ttnn.div(input_tensor, 2.5, rounding_mode=rounding_mode, fast_and_approximate_mode=True)
     assert result.dtype == ttnn.float32
     expected = torch.div(torch_input.float(), 2.5, rounding_mode=rounding_mode)
-    assert_with_ulp(ttnn.to_torch(result), expected, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=expected, actual_result=ttnn.to_torch(result), ulp_threshold=1.0)
 
 
 def test_div_int32_float_scalar_promotion_output_guards(device, expect_error):
@@ -825,3 +825,41 @@ def test_div_no_nan_scalar_honours_memory_config(device, shape, value, requested
     assert (
         output.memory_config() == expected_memcfg
     ), f"divisor {value}, requested {requested_memcfg}: expected {expected_memcfg} but landed in {output.memory_config()}"
+
+
+# The unary-scalar fmod kernel truncates |x| * (1/s) to get the quotient. When 1/s rounds up,
+# that product can land on (or just past) an integer, so the truncated quotient comes out one
+# too high and |x| - quotient * s goes negative; the sign is then overwritten by copysgn and a
+# remainder that should be just under s is reported as ~0 instead. The guard that was meant to
+# catch this compared the truncated value against the same rounded product it was derived from,
+# which cannot be greater, so it never fired.
+#
+# The trigger is inputs one ULP below an exact multiple of the divisor. They are sparse, so a
+# PCC or allclose comparison over a whole tile of random values does not see them; the existing
+# scalar sweeps also draw from [-100, 100], where the quotient is too small to hit the rounding.
+#
+# Partially addresses #51441.
+@pytest.mark.parametrize("scalar", [3.0, 7.0, 1.5, -3.0])
+def test_fmod_scalar_just_below_exact_multiple_fp32(scalar, device):
+    n = torch.arange(1, 4097, dtype=torch.float64)
+    exact_multiples = (n * scalar).to(torch.float32)
+    torch_input_tensor = torch.nextafter(exact_multiples, torch.zeros_like(exact_multiples))
+
+    golden_function = ttnn.get_golden_function(ttnn.fmod)
+    torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.to_torch(ttnn.fmod(input_tensor, scalar))
+
+    # fmod is exact in binary floating point: every result is representable in the input format,
+    # so the correct output is the golden value itself, not an approximation of it.
+    assert torch.allclose(output_tensor, torch_output_tensor, atol=1e-3, rtol=0)
+    # The defining contract, stated separately: the magnitude of the result is below the modulus.
+    assert torch.all(output_tensor.abs() < abs(scalar))

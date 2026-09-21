@@ -47,7 +47,6 @@
 #elif defined(NOC_API_V1)
 #include "noc_nonblocking_api_v1.h"
 #else
-#define NOC_API_V2
 #include "noc_nonblocking_api_v2.h"
 #endif
 

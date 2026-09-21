@@ -51,6 +51,8 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_ETH_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] =
         eth_l1_mem::address_map::ERISC_L1_KERNEL_CONFIG_BASE;
+    // UNRESERVED and KERNEL_CONFIG are independent, non-adjacent regions on WH active-eth.
+    // No overlap invariant to check here.
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
         is_base_routing_fw_enabled ? eth_l1_mem::address_map::ROUTING_ENABLED_ERISC_L1_UNRESERVED_BASE
                                    : eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;

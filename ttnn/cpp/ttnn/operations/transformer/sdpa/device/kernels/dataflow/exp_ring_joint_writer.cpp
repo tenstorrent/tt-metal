@@ -9,7 +9,11 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
+#include "metadata_scalar_read.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "exp_fused_op_indexer.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 #ifdef USE_MUX
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
@@ -75,8 +79,8 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
     constexpr uint32_t local_padded_N = get_compile_time_arg_val(5);
     constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(6);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(7);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(8);
+    constexpr uint32_t logical_n_ct = get_compile_time_arg_val(7);
+    constexpr uint32_t logical_nt_ct = get_compile_time_arg_val(8);
     constexpr uint32_t Lt = get_compile_time_arg_val(9);
     constexpr uint32_t L = get_compile_time_arg_val(10);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(11);
@@ -90,8 +94,13 @@ void kernel_main() {
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(19);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(20);
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
+    // Trace-safe logical_n: when set, logical_n_ct above is only the worst-case placeholder.
+    constexpr bool has_logical_n_tensor = get_compile_time_arg_val(23) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<23>();
+    // Sits ahead of the output accessors so the offsets below (and the MUX/AG block chaining off
+    // stats_args_skip) keep deriving normally in both modes.
+    constexpr auto logical_n_args = TensorAccessorArgs<24>();
+    constexpr auto out_args = TensorAccessorArgs<logical_n_args.next_compile_time_args_offset()>();
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     // stats_args follows joint_out_args but is unused by the writer (stats are only
     // needed for multi-Q accumulator save/restore which this kernel doesn't support).
@@ -297,18 +306,44 @@ void kernel_main() {
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
+    // Read the live length ONCE, before the ring loop. This kernel is a protocol participant, not just a
+    // mask producer: the MUX forwarding loop below skips chunks on the same predicate as the reader and
+    // sends one per-link atomic_inc per forwarded chunk, which is exactly what the reader's injector gate
+    // counts. Reader and writer must therefore derive identical values from the same tensor.
+    uint32_t logical_n = logical_n_ct;
+    uint32_t logical_nt = logical_nt_ct;
+    [[maybe_unused]] uint32_t global_n_partial_col_live = global_n_partial_col;
+    if constexpr (has_logical_n_tensor) {
+        // Borrow cb_mask_in's L1 as read scratch: this runs before the mask tiles are generated into it.
+        logical_n = trace_metadata::read_metadata_scalar_u32(
+            noc, logical_n_args, get_common_arg_val<uint32_t>(0), CircularBuffer(cb_mask_in).get_write_ptr());
+        ASSERT(logical_n >= 1);
+        logical_nt = ring_joint::tiles_for(logical_n);
+        global_n_partial_col_live = ring_joint::tile_partial_col(logical_n);
+    }
+
     // Lightweight mask: generate all mask tiles once into single CB before the ring loop.
     // Only needed when any K/joint dimension has padding that doesn't fill a chunk.
     constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
-    constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool global_n_has_padding =
+        has_logical_n_tensor || (logical_n_ct % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0);
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
+    // partial_tile_present keeps tile presence in lock-step with the factory's CB sizing and compute's tile
+    // indices. A present tile needs a non-zero template column (fall back to 1) so
+    // generate_lightweight_mask_tiles allocates the slot; the stamped live column may still be 0, which
+    // compute ignores.
+    constexpr uint32_t global_n_partial_col_layout =
+        ring_joint::partial_tile_present(global_n_partial_col, has_logical_n_tensor)
+            ? (global_n_partial_col > 0 ? global_n_partial_col : 1u)
+            : 0u;
     if constexpr (needs_lightweight_mask) {
-        generate_lightweight_mask_tiles<global_n_partial_col, joint_l_partial_col, cb_mask_in>(noc);
+        generate_lightweight_mask_tiles<global_n_partial_col_layout, joint_l_partial_col, cb_mask_in>(
+            noc, global_n_partial_col_live, joint_l_partial_col);
     }
 
     const uint32_t last_active_ring_iter =
-        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
+        find_last_active_ring_iter(fused_op_indexer.seq, local_padded_Nt, logical_nt, L);
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
@@ -317,8 +352,7 @@ void kernel_main() {
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
         const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile < logical_nt;
         const bool ring_iter_does_work = ring_iter_processes_KV_chunks || (do_joint_kv && L != 0);
         if (!ring_iter_does_work) {
             continue;
@@ -368,9 +402,12 @@ void kernel_main() {
 
                         const uint32_t bh_offset = (nb * NH + nq) * ag_output_Wt * ag_output_Ht;
 
-                        // Wait for reader to fill K, forward this writer's row slice over fabric
+                        // Wait for reader to fill K, forward this writer's row slice over fabric.
+                        // Positional gate, not last-active: a shard must complete all ring_size-1 hops even
+                        // when this device's last ACTIVE iteration is earlier (trailing pad shards);
+                        // gating on last-active starves downstream.
                         cb_k_w.wait_front(k_chunk_tiles);
-                        if (!dedup_skip_forward && !is_last_ring_iter) {
+                        if (!dedup_skip_forward && ring_iter != ring_size - 1) {
                             if (!kv_chunk_is_joint) {
                                 const uint32_t base_k_read_ptr = cb_k_w.get_read_ptr();
                                 for (uint32_t col = 0; col < DHt; ++col) {
@@ -446,7 +483,7 @@ void kernel_main() {
 
                         // Wait for reader to fill V, forward this writer's row slice over fabric
                         cb_v_w.wait_front(v_chunk_tiles);
-                        if (!dedup_skip_forward && !is_last_ring_iter) {
+                        if (!dedup_skip_forward && ring_iter != ring_size - 1) {
                             if (!kv_chunk_is_joint) {
                                 const uint32_t base_v_read_ptr = cb_v_w.get_read_ptr();
                                 for (uint32_t row = my_row_start; row < my_row_end; ++row) {
@@ -518,7 +555,10 @@ void kernel_main() {
                         unicast_since_flush = 0;
                         cb_v_w.pop_front(v_chunk_tiles);
 
-                        if (!dedup_skip_forward && !is_last_ring_iter) {
+                        // Joint KV is replicated and read locally, never forwarded over fabric, so it
+                        // must not bump the per-link forward semaphore the receiver counts only for
+                        // non-joint chunks.
+                        if (!dedup_skip_forward && ring_iter != ring_size - 1 && !kv_chunk_is_joint) {
                             fabric_unicast_noc_unicast_atomic_inc_with_state(&mux_conn, pkt_hdr_sem_inc);
                             noc.async_writes_flushed();
                         }

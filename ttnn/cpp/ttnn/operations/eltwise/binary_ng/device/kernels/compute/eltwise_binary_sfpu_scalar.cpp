@@ -20,6 +20,7 @@
 #include "api/compute/quantization.h"
 #include "api/compute/xlogy.h"
 #include "api/compute/atan2.h"
+#include "api/compute/nextafter.h"
 #include "api/compute/binary_comp.h"
 #include "api/compute/isclose.h"
 #include "eltwise_utils_common.hpp"
@@ -58,8 +59,12 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
 #if HAS_ACTIVATIONS(POST)
         BINARY_SFPU_INIT;
 #endif
-#if ISCLOSE_OP
+#ifdef ISCLOSE_OP
         BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+#elif SCALAR_IS_LHS
+        // Both operands are already loaded in DST, so the swap is purely a matter of
+        // which slot the LLK reads as the left operand -- the scalar tile at i*2+1.
+        BINARY_SFPU_OP(i * 2 + 1, i * 2, i * 2);
 #else
         BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
 #endif
