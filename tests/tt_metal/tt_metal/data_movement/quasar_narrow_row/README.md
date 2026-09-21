@@ -142,8 +142,37 @@ path, not `1`). The 1x3 emu has no fast-dispatch cores, hence slow dispatch.
 | `WidthSweep` | `last_tile_w` 8 / 16 / 24 / 32 — the widths RV_PACR supports, so the two paths compare on equal ground. 32 is the degenerate whole-tile case (`matrix_w == pad_w`, the gather becomes a straight copy), a good null check on the address math. |
 | `TileRowSweep` | `ct_dim` 1 / 2 / 4 / 8 x `last_tile_w` 8 / 16 / 32. The shape a real matrix has, and where rows grow long enough for the payload to start dominating the per-entry cost. `ct_dim` 8 is the half-sync 16-bit DEST limit for `pack_untilize`. |
 | `SubFaceWidths` | `last_tile_w` 1 / 2 / 3 / 4 / 12 / 20 — below the RV_PACR floor, and the odd ones make `out_row_bytes` odd, probing byte- rather than word-granular placement. |
-| `EngineComparison` | all three engines over `ct_dim` 1 / 4 / 8, same output. |
-| `ChannelSweep` | 1 vs 8 iDMA channels, with rows split into `channels` packets so the VC round-robin is not inert. |
+| `EngineComparison` | **the decisive one.** All three engines over three shapes chosen around the measured knee — 32, 224 and 504 B/row, the last being the 32x252 matrix — plus the two iDMA engines at 8 channels where bytes dominate. |
+| `ChannelSweep` | whether sub-splitting a row into packets helps fan-out or just costs issue, below the knee and well past it. |
+
+## Measured so far (emu-quasar-1x3)
+
+First run, 2026-09-21, `SingleTileHalfWidth` + `WidthSweep` + `SubFaceWidths`, scatter-list on
+one channel:
+
+- **The compaction is descriptor-bound and flat at ~8.3 cyc/row up to ~80 B/row**, then costs
+  roughly one cycle per 16-20 B — i.e. one iDMA VC becomes the limit. Measured cyc/row: 8.38
+  at 16 B, 8.33 at 64 B, 8.52 at 72 B, 9.34 at 88 B, 10.20 at 104 B.
+- That reproduces the independently measured scatter-list cost model **78 cyc/transaction +
+  5.8 cyc/entry** almost exactly: it predicts `78 + 32*5.8 = 263.6` and the flat region
+  measured 263.5-269 on a completely different harness.
+- **Byte-granular placement is free.** 66 and 70 B rows (odd datum widths, destinations at
+  2 mod 4) cost 8.70 and 8.55 cyc/row against 8.56 and 8.52 for the adjacent even widths —
+  1-2%, and not even monotonic.
+- **Stage 1 single-shot is pipeline fill, not pack throughput.** ct_dim 1 cost 225-237 cycles
+  and ct_dim 2 cost 213 — two tiles took *less* wall time than one, so the marginal per-tile
+  cost is buried under a ~215-cycle fixed latency. Do not read the stage-1 `cyc/tile` column
+  as a pack rate, and do not read a falling end-to-end `cyc/tile` at higher `ct_dim` as
+  efficiency; it is that constant divided by more tiles.
+- End to end against RV_PACR at `ct_dim` 1: 2.9-4.8x faster, and that *understates* it,
+  because stage 1 is carrying the fixed cost above while the RV_PACR reference is
+  steady-state.
+
+Consequence for fan-out, and why `ChannelSweep` changed: both iDMA engines already emit one
+packet per row, so 32 rows always give the round-robin more packets than it has channels.
+Sub-splitting on top of that (the original policy, which would have turned 504 B rows into
+256 packets of 64 B) multiplies the packet count while the bytes stay the same. The default
+`max_packet_bytes = out_row_bytes` is the right one even when fanning out.
 
 ## Reading the numbers
 
