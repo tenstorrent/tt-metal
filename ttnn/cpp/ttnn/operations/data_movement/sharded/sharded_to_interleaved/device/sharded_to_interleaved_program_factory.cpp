@@ -142,7 +142,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                 .endpoint_type = DFBEndpointType::PRODUCER,
             }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Writer kernel (writes interleaved output to DRAM). Both layout variants present the same binding
@@ -159,7 +159,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                 .endpoint_type = DFBEndpointType::CONSUMER,
             }},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
-        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
     if (is_tile) {
         writer.source =

@@ -121,7 +121,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_rows", "num_tiles_per_block", "block_width_size", "num_full_blocks_in_row", "start_page_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     KernelSpec writer{
@@ -139,7 +140,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
             .accessor_name = "dst",
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     auto make_compute = [&](const KernelSpecName& id, uint32_t nblocks_per_core_arg) {

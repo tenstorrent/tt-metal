@@ -90,7 +90,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
             .endpoint_type = DFBEndpointType::PRODUCER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Writer: interleaved scatter (TensorAccessor) or sharded in-place (handshake only).
@@ -111,7 +112,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
                 .accessor_name = "dst",
             }},
             .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config =
+                ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
         };
     } else {
         writer = KernelSpec{
@@ -125,7 +127,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
                 .endpoint_type = DFBEndpointType::CONSUMER,
             }},
             .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config =
+                ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
         };
     }
 
