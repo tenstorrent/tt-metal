@@ -1,45 +1,46 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# COLLECTION PROBE -- no device work.
 #
-# SPDX-License-Identifier: Apache-2.0
-# Blackhole LLK perf runner, shared by the 5 bh matrix groups in
-# tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
-#
-# pytest-split sharding: compile this shard's items (producer), then measure
-# them (consumer) -- one invocation each over the whole perf suite.
-#
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_blackhole.sh <group> <n_groups>
+# Prints, for every perf module, its item count and three sample ids, so the
+# predecessor experiment can be written with -k expressions known to select
+# something. The first attempt died at the third module: piping pytest into
+# `head` closes the pipe, and `set -o pipefail` turned that SIGPIPE into a
+# failure. Collection now goes to a file and the file is read twice.
 set -euo pipefail
-
-GROUP="${1:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
-N_GROUPS="${2:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
-SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
-export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
-
-case "$SPEED_OF_LIGHT" in
-  true)
-    SPEED_OF_LIGHT_ARGS=(--speed-of-light)
-    ;;
-  false)
-    SPEED_OF_LIGHT_ARGS=()
-    ;;
-  *)
-    echo "SPEED_OF_LIGHT must be 'true' or 'false', got '$SPEED_OF_LIGHT'" >&2
-    exit 2
-    ;;
-esac
+GROUP="${1:?}"
+N_GROUPS="${2:?}"
+if [ "$GROUP" != "1" ]; then
+  echo "probe: only group 1 collects; this group exits."
+  exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/python_tests"
 mkdir -p perf_data
 
-PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+collect() {
+  # $1 = label, rest = pytest selection. Never fails the script: an empty
+  # selection is a result, not an error.
+  local label="$1"; shift
+  local out=/tmp/collect.txt
+  set +e
+  pytest -q --collect-only -m "perf and not accuracy" "$@" >"$out" 2>&1
+  local rc=$?
+  set -e
+  echo "===== $label  (rc=$rc)"
+  tail -2 "$out"
+  echo "----- samples"
+  head -3 "$out"
+}
 
-pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-blackhole-${GROUP}-compile.xml" .
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-blackhole-${GROUP}-run.xml" .
-junitparser merge pytest-report-blackhole-${GROUP}-compile.xml pytest-report-blackhole-${GROUP}-run.xml pytest-report-blackhole-${GROUP}.xml
+collect "TOTAL" .
+
+for f in perf_*.py; do
+  collect "MODULE $f" "$f"
+done
+
+echo "===== matmul narrow candidates ====="
+for k in "matmul_config0" "LoFi" "throttle:0" "num_blocks:1"; do
+  collect "matmul -k '$k'" -k "$k" perf_math_matmul.py
+done
+echo "===== probe done ====="
