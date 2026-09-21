@@ -2597,31 +2597,19 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             // Look up bank_id based on core.y and which column group core.x belongs to
             if (core.x <= first_col_max_x) {
                 auto it = worker_y_to_dram_bank_first_col.find(core.y);
-                if (it == worker_y_to_dram_bank_first_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in first-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_first_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_first_col.end(),
+                    "Worker core ({}, {}) NOT FOUND in first-col map",
+                    core.x,
+                    core.y);
                 bank_id = it->second;
             } else {
                 auto it = worker_y_to_dram_bank_second_col.find(core.y);
-                if (it == worker_y_to_dram_bank_second_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in second-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_second_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_second_col.end(),
+                    "Worker core ({}, {}) NOT FOUND in second-col map",
+                    core.x,
+                    core.y);
                 bank_id = it->second;
             }
 

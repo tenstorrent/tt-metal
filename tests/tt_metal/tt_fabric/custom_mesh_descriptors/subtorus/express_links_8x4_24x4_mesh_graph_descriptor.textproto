@@ -1,5 +1,7 @@
 # One single-Galaxy 8x4 mesh and one three-Galaxy 24x4 mesh.
 # Both LINE,RING meshes enable dim-0 ex4 and ex8 express-link patterns.
+# 24x4 requires a 3-host PGD MESH grouping (4x24_Mesh); without it the mapper
+# commits the 4-host 4x32_Mesh (128 ASICs) and the 8x4 has nowhere to land.
 
 mesh_descriptors {
   name: "M_8x4"

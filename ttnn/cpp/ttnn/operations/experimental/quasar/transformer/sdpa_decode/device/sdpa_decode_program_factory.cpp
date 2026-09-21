@@ -218,6 +218,12 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     // ========== Compute Kernel Config ==========
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    // Quasar cannot do 32-bit DEST block reduce_max (static_assert in
+    // llk_math_reduce_runtime_custom.h); force bf16 DEST there. NOTE: this overrides the caller's
+    // fp32_dest_acc_en request on Quasar and may affect numerical accuracy (PCC).
+    if (device->arch() == tt::ARCH::QUASAR) {
+        fp32_dest_acc_en = false;
+    }
     const bool exp_approx_mode = program_config.has_value() && program_config->exp_approx_mode.has_value()
                                      ? program_config->exp_approx_mode.value()
                                      : true;
@@ -463,7 +469,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const uint32_t scalar_tile_size = scalar_tile.get_tile_size(scalar_df);
     const uint32_t im_tile_size = im_tile.get_tile_size(im_df);
     const uint32_t stats_tile_size = stats_tile.get_tile_size(stats_df);
-    const uint32_t col_identity_tile_size = full_tile.get_tile_size(scalar_df);
 
     // ========== Debug Logging ==========
     log_debug(tt::LogOp, "Dimensions: B={}, PNH={}, S={}, DH={}, vDH={}, Bkv={}", B, PNH, S, DH, vDH, Bkv);
@@ -558,7 +563,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const DFBSpecName DFB_WRITER_CUR_POS{"writer_cur_pos"};
     const DFBSpecName DFB_PAGE_TABLE{"page_table"};
     const DFBSpecName DFB_Q_RM{"q_rm"};
-    const DFBSpecName DFB_COL_IDENTITY{"col_identity"};
+    const DFBSpecName DFB_OUT_WORKER{"out_worker"};
     const DFBSpecName DFB_ZERO_IN{"zero_in"};
     const DFBSpecName DFB_SLIDING_MASK{"sliding_window_mask_in"};
     const DFBSpecName DFB_BLOCK_PAD_MASK{"block_pad_mask"};
@@ -566,25 +571,31 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     const DFBSpecName DFB_OUT_O{"out_o"};
     const DFBSpecName DFB_OUT_M{"out_m"};
     const DFBSpecName DFB_OUT_L{"out_l"};
-    const DFBSpecName DFB_INTERMED_OUT{"intermed_out"};
     const DFBSpecName DFB_OUT{"out"};
+    const ScratchpadSpecName INTERMED_OUT_SCRATCH{"intermed_out"};
     const DFBSpecName DFB_QK_IM{"qk_im"};
     const DFBSpecName DFB_OUT_IM{"out_im"};
     const DFBSpecName DFB_OUT_ACC_IM{"out_accumulate_im"};
+    // Max ping-pong: two separate DFBs (each depth statistics_tiles). Kept split (not merged into one
+    // 2-deep DFB) because the merged cur-offset read desyncs multi-chunk (no ring wrap in tile
+    // addressing) and reduce_c's prev==out eltwise-max would self-alias. The 8-DFB Quasar budget is met
+    // by merging SUM instead (below), which has no such hazard.
     const DFBSpecName DFB_MAX_1{"max_1"};
     const DFBSpecName DFB_MAX_2{"max_2"};
-    const DFBSpecName DFB_SUM_1{"sum_1"};
-    const DFBSpecName DFB_SUM_2{"sum_2"};
+    // Single merged sum buffer (depth 2*statistics_tiles): the online-softmax ping-pong keeps the
+    // "prev" sum block at the ring front [0, statistics_tiles) and appends the "cur" sum block behind
+    // it [statistics_tiles, 2*statistics_tiles). Merging sum_1/sum_2 into one DFB frees another
+    // intra-Tensix tile-counter slot (Quasar cap is 8). Direct analog of the max merge above.
+    const DFBSpecName DFB_SUM{"sum"};
     const DFBSpecName DFB_EXP_MAX_DIFF{"exp_max_diff"};
-    const DFBSpecName DFB_PREV_SUM_2{"prev_sum_2"};
-    const DFBSpecName DFB_EXP_MAX_DIFF_2{"exp_max_diff_2"};
-    const DFBSpecName DFB_OUT_ACC_IM_2{"out_accumulate_im_2"};
 
     // ---- DFB specs + per-kernel endpoint bindings ----
     Group<DataflowBufferSpec> dfbs;
     Group<DFBBinding> reader_dfb;
     Group<DFBBinding> writer_dfb;
     Group<DFBBinding> compute_dfb;
+    Group<ScratchpadSpec> scratchpads;
+    Group<ScratchpadBinding> writer_scratch;
 
     auto add_dfb = [&](const DFBSpecName& name,
                        uint32_t entry_size,
@@ -722,14 +733,6 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(reader_dfb, DFB_PAGE_TABLE, "page_table", DFBEndpointType::CONSUMER);
     }
 
-    // col_identity — writer produces; no consumer in sdpa_decode's compute (dead-but-kept).
-    // (It is consumed by sdpa *prefill*'s matmul_reduce, so this reads as carried-over dead code from a
-    // matmul-based reduce path. Removing it is an ops-team cleanup, not a port drop, so it is preserved
-    // here as a single-toucher self-loop with zero functional effect.)
-    add_dfb(DFB_COL_IDENTITY, col_identity_tile_size, scale_tiles, scalar_df, &full_tile);
-    bind(writer_dfb, DFB_COL_IDENTITY, "col_identity", DFBEndpointType::PRODUCER);
-    bind(writer_dfb, DFB_COL_IDENTITY, "col_identity", DFBEndpointType::CONSUMER);
-
     // zero_in — writer produces, compute consumes.
     add_dfb(DFB_ZERO_IN, scalar_tile_size, scale_tiles, scalar_df, &scalar_tile);
     bind(writer_dfb, DFB_ZERO_IN, "zero_in", DFBEndpointType::PRODUCER);
@@ -749,12 +752,14 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(compute_dfb, DFB_BLOCK_PAD_MASK, "block_pad_mask", DFBEndpointType::CONSUMER);
     }
 
-    // out_o/out_worker — tree-reduction multi-binding (writer P+C, compute P+C).
-    add_dfb(DFB_OUT_O, stats_tile_size, out_tiles, stats_df, &stats_tile, std::nullopt, /*multi=*/true);
+    // out_o — writer receives child O; compute consumes for tree reduction (Gen2: no multi-binding).
+    add_dfb(DFB_OUT_O, stats_tile_size, out_tiles, stats_df, &stats_tile);
     bind(writer_dfb, DFB_OUT_O, "out_o", DFBEndpointType::PRODUCER);
-    bind(writer_dfb, DFB_OUT_O, "out_worker", DFBEndpointType::CONSUMER);
-    bind(compute_dfb, DFB_OUT_O, "out_o", DFBEndpointType::PRODUCER);
     bind(compute_dfb, DFB_OUT_O, "out_o", DFBEndpointType::CONSUMER);
+    // out_worker — compute produces local O for parent send; writer consumes.
+    add_dfb(DFB_OUT_WORKER, stats_tile_size, out_tiles, stats_df, &stats_tile);
+    bind(compute_dfb, DFB_OUT_WORKER, "out_worker", DFBEndpointType::PRODUCER);
+    bind(writer_dfb, DFB_OUT_WORKER, "out_worker", DFBEndpointType::CONSUMER);
 
     // out_m / out_l — compute produces, writer consumes.
     add_dfb(DFB_OUT_M, stats_tile_size, statistics_tiles, stats_df, &stats_tile);
@@ -764,11 +769,13 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     bind(compute_dfb, DFB_OUT_L, "out_l", DFBEndpointType::PRODUCER);
     bind(writer_dfb, DFB_OUT_L, "out_l", DFBEndpointType::CONSUMER);
 
-    // intermed_out — writer raw cross-core read/write (self-loop) (conditional).
+    // intermed_out — per-core NOC staging for tree reduction (Gen2: scratchpad, not DM self-loop DFB).
     if (intermed_output_tiles > 0) {
-        add_dfb(DFB_INTERMED_OUT, stats_tile_size, intermed_output_tiles, stats_df, &stats_tile);
-        bind(writer_dfb, DFB_INTERMED_OUT, "intermed_out", DFBEndpointType::PRODUCER);
-        bind(writer_dfb, DFB_INTERMED_OUT, "intermed_out", DFBEndpointType::CONSUMER);
+        const uint32_t intermed_scratch_bytes = intermed_output_tiles * stats_tile_size;
+        scratchpads.push_back(
+            ScratchpadSpec{.unique_id = INTERMED_OUT_SCRATCH, .size_per_node = intermed_scratch_bytes});
+        writer_scratch.push_back(
+            ScratchpadBinding{.scratchpad_spec_name = INTERMED_OUT_SCRATCH, .accessor_name = "intermed_out"});
     }
 
     // out — compute produces, writer consumes (final output shard).
@@ -793,19 +800,27 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         bind(compute_dfb, name, accessor, DFBEndpointType::PRODUCER);
         bind(compute_dfb, name, std::move(accessor), DFBEndpointType::CONSUMER);
     };
-    add_compute_intermediate(DFB_QK_IM, "qk_im", im_tile_size, qk_tiles, im_df, &im_tile);
+    // Quasar tree correction holds the child sum and its factor in adjacent QK ring blocks.
+    const auto qk_intermediate_tiles =
+        device->arch() == tt::ARCH::QUASAR ? std::max(qk_tiles, 2 * statistics_tiles) : qk_tiles;
+    add_compute_intermediate(DFB_QK_IM, "qk_im", im_tile_size, qk_intermediate_tiles, im_df, &im_tile);
     add_compute_intermediate(DFB_OUT_IM, "out_im", im_tile_size, out_tiles, im_df, &im_tile);
     add_compute_intermediate(DFB_OUT_ACC_IM, "out_accumulate_im", im_tile_size, out_tiles, im_df, &im_tile);
+    // Max ping-pong: two separate depth-statistics_tiles buffers (cur/prev), swapped by move_block.
     add_compute_intermediate(DFB_MAX_1, "max_1", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
     add_compute_intermediate(DFB_MAX_2, "max_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
-    add_compute_intermediate(DFB_SUM_1, "sum_1", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
-    add_compute_intermediate(DFB_SUM_2, "sum_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
+    // Merged sum buffer: depth 2*statistics_tiles holds the prev block (front) + cur block (behind).
+    add_compute_intermediate(DFB_SUM, "sum", stats_tile_size, 2 * statistics_tiles, stats_df, &stats_tile);
     add_compute_intermediate(
         DFB_EXP_MAX_DIFF, "exp_max_diff", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
-    add_compute_intermediate(DFB_PREV_SUM_2, "prev_sum_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
-    add_compute_intermediate(
-        DFB_EXP_MAX_DIFF_2, "exp_max_diff_2", stats_tile_size, statistics_tiles, stats_df, &stats_tile);
-    add_compute_intermediate(DFB_OUT_ACC_IM_2, "out_accumulate_im_2", im_tile_size, out_tiles, im_df, &im_tile);
+    // Tile-counter budget (Quasar cap 8). The 7 compute self-loop DFBs are: qk_im, out_im,
+    // out_accumulate_im, max_1, max_2, sum, exp_max_diff. Two levers keep the count under 8:
+    //   (1) the 3 tree-reduction temps are NOT allocated: the compute kernel reuses qk_im for
+    //       prev_sum_2 followed by exp_max_diff_2, and out_im for out_accumulate_im_2. Both buffers
+    //       are compute-local and no longer needed by the flash loop (would be 10 -> 7); and
+    //   (2) SUM is merged into one depth-2*statistics_tiles DFB (its fma re-bases the ring each chunk).
+    //       MAX is kept split (max_1/max_2) — merging it desyncs multi-chunk and hits the reduce_c
+    //       prev==out hazard. See the kernel. (QK^T uses the native matmul SrcA transpose, so no kt DFB.)
 
     // ---- Tensor parameters + bindings ----
     Group<TensorParameter> tensor_params;
@@ -1078,6 +1093,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         .compiler_options = {.defines = std::move(writer_defines)},
         .dfb_bindings = std::move(writer_dfb),
         .semaphore_bindings = std::move(writer_sems),
+        .scratchpad_bindings = std::move(writer_scratch),
         .tensor_bindings = std::move(writer_tensors),
         .compile_time_args = std::move(writer_cta),
         .runtime_arg_schema =
@@ -1110,7 +1126,11 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(kernel_path + "compute/sdpa_flash_decode.cpp"),
-        .compiler_options = {.defines = std::move(compute_defines), .opt_level = KernelBuildOptLevel::O3},
+        // Quasar's trisc code region is smaller; O3 overflows it (trisc0 ~0x6924 > 0x6000). Optimize
+        // for size on Quasar to fit; keep O3 on WH/BH.
+        .compiler_options =
+            {.defines = std::move(compute_defines),
+             .opt_level = (device->arch() == tt::ARCH::QUASAR) ? KernelBuildOptLevel::Os : KernelBuildOptLevel::O3},
         .dfb_bindings = std::move(compute_dfb),
         .compile_time_args = std::move(compute_cta),
         .runtime_arg_schema =
@@ -1413,6 +1433,7 @@ ttnn::device_operation::ProgramArtifacts SdpaDecodeDeviceOperation::SdpaDecodePr
         .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dfbs),
         .semaphores = std::move(semaphores),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters = std::move(tensor_params),
         .work_units = {WorkUnitSpec{
             .name = "main",

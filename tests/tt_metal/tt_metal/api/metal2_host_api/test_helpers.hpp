@@ -201,18 +201,57 @@ inline void BindTensorParameterToKernel(
 // Defaults give a simple legal layout: BFLOAT16 tile-layout tensor of `logical_shape`,
 // sharded across the first `num_cores` cores of the worker grid with shard shape
 // `shard_shape`. Caller is responsible for choosing a shape that fits the grid.
+//
+// Pass Layout::ROW_MAJOR to build a row-major sharded parameter. Note the two layouts pad
+// differently: a tile tensor's physical shape is rounded up in both dims, while a row-major
+// sharded tensor aligns on width only (create_default_alignment_rm), so its height is never
+// padded up to the shard height and the tensor may legally be smaller than one of its shards.
 inline TensorParameter MakeShardedTensorParameter(
     std::string name,
     const tt::tt_metal::Shape& logical_shape,
     const std::array<uint32_t, 2>& shard_shape,
-    uint32_t num_cores) {
+    uint32_t num_cores,
+    tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE) {
     auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
     tt::tt_metal::ShardSpec shard_spec{
         shard_grid, {shard_shape[0], shard_shape[1]}, tt::tt_metal::ShardOrientation::ROW_MAJOR};
     tt::tt_metal::MemoryConfig memory_config{
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
-    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE);
+    auto page_config = tt::tt_metal::PageConfig(layout);
     auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, page_config, memory_config);
+    return TensorParameter{
+        .unique_id = TensorParamName{std::move(name)},
+        .spec = tt::tt_metal::TensorSpec(logical_shape, std::move(tensor_layout)),
+    };
+}
+
+// ND-sharded counterpart of MakeShardedTensorParameter, built from an NdShardSpec rather than a 2D
+// ShardSpec. This is the layout that routes compute_consumed_memory_bytes_per_bank through its
+// buffer_distribution_spec branch (max_num_dev_pages_per_core) instead of the shard_spec one.
+//
+// The default strategy is CONTIGUOUS_1D because that is what keeps the tensor ND-sharding-only.
+// TensorSpec::populate_sharding_specs back-fills an equivalent legacy 2D shard_spec whenever the ND
+// spec can be flattened, and a populated shard_spec sends the size computation down the 2D branch
+// instead. CONTIGUOUS_1D packs adjacent shards onto one bank, which no legacy WIDTH/HEIGHT/
+// BLOCK_SHARDED layout expresses, so populate_legacy_shard_spec_from_nd declines to fabricate one.
+inline TensorParameter MakeNdShardedTensorParameter(
+    std::string name,
+    const tt::tt_metal::Shape& logical_shape,
+    const tt::tt_metal::Shape& shard_shape,
+    uint32_t num_cores,
+    tt::tt_metal::Layout layout = tt::tt_metal::Layout::ROW_MAJOR,
+    tt::tt_metal::ShardDistributionStrategy shard_distribution_strategy =
+        tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D) {
+    auto shard_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, CoreCoord{num_cores, 1}, /*row_wise=*/true);
+    tt::tt_metal::NdShardSpec nd_shard_spec{
+        .shard_shape = shard_shape,
+        .grid = shard_grid,
+        .orientation = tt::tt_metal::ShardOrientation::ROW_MAJOR,
+        .shard_distribution_strategy = shard_distribution_strategy,
+    };
+    tt::tt_metal::MemoryConfig memory_config{tt::tt_metal::BufferType::L1, nd_shard_spec};
+    auto tensor_layout =
+        tt::tt_metal::TensorLayout(tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(layout), memory_config);
     return TensorParameter{
         .unique_id = TensorParamName{std::move(name)},
         .spec = tt::tt_metal::TensorSpec(logical_shape, std::move(tensor_layout)),

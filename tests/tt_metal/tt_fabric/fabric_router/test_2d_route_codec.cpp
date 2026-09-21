@@ -207,6 +207,31 @@ TEST(Routing2DCodec, EastWestFacingRoutersReadTheXMapOnly) {
         Codec::decode_action<eth_chan_directions::WEST>(route_buffer.data(), kLocalY, kLocalX, kY), Codec::ACTION_EAST);
 }
 
+// An intermesh landing rebuilds the map and restarts the Y leg, so the E/W shortcut above would
+// drop the owed N/S hop and strand every destination off the landing row.
+TEST(Routing2DCodec, IntermeshLandingDecodesYFirstOnEveryFacing) {
+    constexpr uint32_t kY = 4, kX = 4;
+    std::array<std::uint8_t, kY + kX> route_buffer = {};
+    constexpr uint32_t kLocalY = 2, kLocalX = 1;
+
+    // A freshly landed map owing a N/S hop, X row already holding the post-turn action.
+    route_buffer[kLocalY] = Codec::ACTION_NORTH;
+    route_buffer[kY + kLocalX] = Codec::ACTION_EAST;
+
+    EXPECT_EQ(Codec::decode_action_y_first(route_buffer.data(), kLocalY, kLocalX, kY), Codec::ACTION_NORTH);
+
+    // The facing-keyed decode disagrees precisely on E/W, which is what the landing must avoid.
+    EXPECT_EQ(
+        Codec::decode_action<eth_chan_directions::NORTH>(route_buffer.data(), kLocalY, kLocalX, kY),
+        Codec::ACTION_NORTH);
+    EXPECT_EQ(
+        Codec::decode_action<eth_chan_directions::EAST>(route_buffer.data(), kLocalY, kLocalX, kY), Codec::ACTION_EAST);
+
+    // Y leg spent: Y-first agrees with every facing again.
+    route_buffer[kLocalY] = 0;
+    EXPECT_EQ(Codec::decode_action_y_first(route_buffer.data(), kLocalY, kLocalX, kY), Codec::ACTION_EAST);
+}
+
 TEST(Routing2DCodec, NorthSouthFacingRoutersPreferYThenFallThroughToX) {
     constexpr uint32_t kY = 4, kX = 4;
     constexpr uint32_t kLocalY = 2, kLocalX = 1;

@@ -4,36 +4,32 @@
 
 from __future__ import annotations
 
-import hashlib
-import inspect
 import json
 import os
 import statistics
 import time
 from collections.abc import Callable
-from dataclasses import asdict
 from functools import partial
 from pathlib import Path
-from typing import Any
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
+from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import KIMI_K3_FIRST_KDA_LAYER
+from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
     check_kimi_k3_accuracy,
+    deallocate_state,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
     make_synthetic_kimi_k3_test_case,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 pytestmark = [
     run_for_blackhole(),
@@ -45,7 +41,6 @@ _SEQUENCE = 5120
 _REPETITIONS = 10
 _TIMING_SAMPLES = 5
 _PCC_THRESHOLD = 0.9995
-_CPU_REFERENCE_CACHE_VERSION = 4
 _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
 # LoudBox calibration at 350413d7a98e (2026-08-31): median across five independent
@@ -60,93 +55,6 @@ _PERF_REFERENCE_MS = {
 _GALAXY_PERF_REFERENCE_MS = 3.963
 
 
-def _tensor_sha256(tensor: torch.Tensor) -> str:
-    storage = tensor.detach().cpu().contiguous().view(torch.uint8).numpy()
-    return hashlib.sha256(memoryview(storage)).hexdigest()
-
-
-def _cpu_reference_cache_path(case: KimiK3TestCase) -> Path:
-    reference_dir = Path(inspect.getfile(kda_forward_reference)).parent
-    fingerprint = hashlib.sha256()
-    fingerprint.update(f"v{_CPU_REFERENCE_CACHE_VERSION}".encode())
-    fingerprint.update(str(KIMI_K3_FIRST_KDA_LAYER).encode())
-    fingerprint.update(str(case.hidden.shape[1]).encode())
-    fingerprint.update(case.weights_identity.encode())
-    fingerprint.update(json.dumps(asdict(case.config), sort_keys=True).encode())
-    fingerprint.update(_tensor_sha256(case.hidden).encode())
-    for source_path in sorted(reference_dir.glob("*.py")):
-        fingerprint.update(source_path.name.encode())
-        fingerprint.update(source_path.read_bytes())
-    return (
-        Path(ttnn.CONFIG.model_cache_path)
-        / "kimi_k3"
-        / case.weights_identity
-        / "cpu_reference"
-        / f"layer_{KIMI_K3_FIRST_KDA_LAYER}_t{case.hidden.shape[1]}_{fingerprint.hexdigest()[:20]}.pt"
-    )
-
-
-def _reference_tensors(output: torch.Tensor, state: KDAReferenceState) -> dict[str, torch.Tensor]:
-    return {
-        "output": output.detach().clone(),
-        "recurrent": state.recurrent.detach().clone(),
-        "q_convolution": state.q_convolution.detach().clone(),
-        "k_convolution": state.k_convolution.detach().clone(),
-        "v_convolution": state.v_convolution.detach().clone(),
-    }
-
-
-def _validate_cached_reference(case: KimiK3TestCase, payload: dict[str, Any]) -> tuple[torch.Tensor, KDAReferenceState]:
-    tensors = {name: payload[name] for name in payload["digests"]}
-    expected_shapes = {
-        "output": (1, case.hidden.shape[1], case.config.hidden_size),
-        "recurrent": (1, case.config.num_heads, case.config.head_k_dim, case.config.head_v_dim),
-        "q_convolution": (1, case.config.conv_kernel_size - 1, case.config.q_dim),
-        "k_convolution": (1, case.config.conv_kernel_size - 1, case.config.k_dim),
-        "v_convolution": (1, case.config.conv_kernel_size - 1, case.config.v_dim),
-    }
-    assert set(tensors) == set(expected_shapes), f"unexpected CPU-reference cache tensors: {set(tensors)}"
-    for name, tensor in tensors.items():
-        assert isinstance(tensor, torch.Tensor), f"cached {name} is not a tensor"
-        assert (
-            tuple(tensor.shape) == expected_shapes[name]
-        ), f"cached {name} shape {tuple(tensor.shape)} != {expected_shapes[name]}"
-        assert _tensor_sha256(tensor) == payload["digests"][name], f"cached {name} checksum mismatch"
-    return tensors["output"], KDAReferenceState(
-        recurrent=tensors["recurrent"],
-        q_convolution=tensors["q_convolution"],
-        k_convolution=tensors["k_convolution"],
-        v_convolution=tensors["v_convolution"],
-    )
-
-
-def _load_or_compute_cpu_reference(case: KimiK3TestCase) -> tuple[torch.Tensor, KDAReferenceState, float]:
-    cache_path = _cpu_reference_cache_path(case)
-    start = time.perf_counter()
-    if cache_path.exists():
-        payload = torch.load(cache_path, map_location="cpu", weights_only=True)
-        output, state = _validate_cached_reference(case, payload)
-        elapsed = time.perf_counter() - start
-        logger.info(f"KDA T=5120 CPU reference cache hit: {cache_path}")
-        logger.info(f"KDA T=5120 CPU reference load completed in {elapsed:.3f} seconds")
-        return output, state, elapsed
-
-    output, state = kda_forward_reference(case.hidden, case.state_dict, case.config)
-    tensors = _reference_tensors(output, state)
-    payload = {**tensors, "digests": {name: _tensor_sha256(tensor) for name, tensor in tensors.items()}}
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = cache_path.with_suffix(f".{os.getpid()}.tmp")
-    try:
-        torch.save(payload, temporary_path)
-        temporary_path.replace(cache_path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-    elapsed = time.perf_counter() - start
-    logger.info(f"KDA T=5120 CPU reference cache miss: {cache_path}")
-    logger.info(f"KDA T=5120 CPU reference computation completed in {elapsed:.3f} seconds")
-    return output, state, elapsed
-
-
 @pytest.fixture(scope="session")
 def kimi_k3_production_reference(
     kimi_k3_checkpoint_dir: Path,
@@ -158,7 +66,7 @@ def kimi_k3_production_reference(
         nonlocal cached_reference
         if cached_reference is None:
             case = make_kimi_k3_test_case(kimi_k3_checkpoint_dir, sequence=_SEQUENCE)
-            golden_output, golden_state, elapsed = _load_or_compute_cpu_reference(case)
+            golden_output, golden_state, elapsed = load_or_compute_cpu_reference(case)
             cached_reference = case, golden_output, golden_state, elapsed
         return cached_reference
 
@@ -173,48 +81,6 @@ def _perf_reference_ms(layout: str) -> float:
 
 def _allocate_state(layer: ttKDA) -> KdaState:
     return layer.allocate_state(batch_size=1)
-
-
-def _deallocate_state(state: KdaState) -> None:
-    ttnn.deallocate(state.recurrent)
-    ttnn.deallocate(state.convolution)
-
-
-def _device_program_label(kernel_sources: tuple[str, ...]) -> str:
-    names = set()
-    for source in kernel_sources:
-        parts = source.replace("\\", "/").split("/")
-        if "operations" not in parts:
-            continue
-        index = parts.index("operations") + 1
-        experimental = index < len(parts) and parts[index] == "experimental"
-        if experimental:
-            index += 1
-        if index < len(parts):
-            name = f"{'experimental.' if experimental else ''}{parts[index]}"
-            if name.endswith(("kda", "ccl")) and index + 1 < len(parts):
-                name = f"{name}.{parts[index + 1]}"
-            names.add(name)
-    if names:
-        return "+".join(sorted(names))
-    basenames = {Path(source).stem for source in kernel_sources}
-    return "+".join(sorted(basenames)) if basenames else "unknown"
-
-
-def test_device_program_label_preserves_material_operation_identity() -> None:
-    assert (
-        _device_program_label(("src/operations/experimental/kda/recurrent_chunk_scan/kernel.cpp",))
-        == "experimental.kda.recurrent_chunk_scan"
-    )
-    assert _device_program_label(("src/operations/ccl/all_gather_async/kernel.cpp",)) == "ccl.all_gather_async"
-    assert _device_program_label(("src/operations/matmul/kernel.cpp",)) == "matmul"
-    assert _device_program_label(("src/operations/experimental/matmul/kernel.cpp",)) == "experimental.matmul"
-    assert (
-        _device_program_label(("src/operations/experimental/ccl/reduce_scatter/kernel.cpp",))
-        == "experimental.ccl.reduce_scatter"
-    )
-    assert _device_program_label(("src/reader.cpp", "src/writer.cpp")) == "reader+writer"
-    assert _device_program_label(()) == "unknown"
 
 
 def _synthetic_perf_reference_ms(layout: str) -> float:
@@ -245,105 +111,13 @@ def test_synthetic_performance_uses_two_sided_margin(layout, monkeypatch, expect
         _assert_synthetic_performance(layout, reference_ms * 1.04)
 
 
-def _log_device_program_times(mesh_device: ttnn.MeshDevice, layer: ttKDA, hidden: ttnn.Tensor, layout: str) -> None:
-    if not ttnn.device.IsProgramRealtimeProfilerActive():
-        raise RuntimeError(f"real-time profiler is inactive for the {layout} KDA e2e device-time breakdown")
-    state = _allocate_state(layer)
-    output = None
-    next_state = None
-    profiled_results: list[tuple[ttnn.Tensor, KdaState]] = []
-
-    def run_profiled_forward() -> tuple[ttnn.Tensor, KdaState]:
-        result = layer.forward(hidden, state)
-        profiled_results.append(result)
-        return result
-
-    try:
-        (output, next_state), records = profile_realtime_program(
-            mesh_device,
-            run_profiled_forward,
-            collect_all=True,
-            record_timeout_seconds=30.0,
-        )
-        per_program: dict[int, dict[str, Any]] = {}
-        for record in records:
-            runtime_id = record["runtime_id"]
-            if not runtime_id:
-                continue
-            entry = per_program.setdefault(
-                runtime_id,
-                {
-                    "duration_ns": 0.0,
-                    "kernel_sources": record["kernel_sources"],
-                    "chip_ids": set(),
-                    "record_count": 0,
-                },
-            )
-            entry["duration_ns"] = max(entry["duration_ns"], record["duration_ns"])
-            entry["chip_ids"].add(record["chip_id"])
-            entry["record_count"] += 1
-        if not per_program:
-            raise RuntimeError("real-time profiler returned no KDA program records")
-        expected_chip_count = mesh_device.get_num_devices()
-        programs: list[dict[str, Any]] = [
-            {
-                "sequence": sequence,
-                "name": _device_program_label(info["kernel_sources"]),
-                "device_time_ns": round(float(info["duration_ns"]), 3),
-                "chip_count": len(info["chip_ids"]),
-                "record_count": int(info["record_count"]),
-                "complete": len(info["chip_ids"]) == expected_chip_count,
-            }
-            for sequence, info in enumerate(per_program.values())
-        ]
-        incomplete_program_sequences = [program["sequence"] for program in programs if not program["complete"]]
-        durations_by_name: dict[str, list[float]] = {}
-        for program in programs:
-            durations_by_name.setdefault(program["name"], []).append(program["device_time_ns"])
-        operation_summary = [
-            {
-                "name": name,
-                "program_count": len(durations),
-                "median_device_time_ns": round(statistics.median(durations), 3),
-                "max_device_time_ns": round(max(durations), 3),
-            }
-            for name, durations in durations_by_name.items()
-        ]
-        print(
-            "KDA_LAYER_DEVICE_TIMES="
-            + json.dumps(
-                {
-                    "layout": layout,
-                    "measurement": "one warm eager forward outside gated trace samples",
-                    "duration_semantics": (
-                        "per-program max across reported chip records; programs may overlap and durations must not be summed"
-                    ),
-                    "chip_completeness": {
-                        "expected_chip_count": expected_chip_count,
-                        "incomplete_program_sequences": incomplete_program_sequences,
-                    },
-                    "operation_summary": operation_summary,
-                    "programs": programs,
-                },
-                sort_keys=True,
-            )
-        )
-    finally:
-        if profiled_results and output is None:
-            output, next_state = profiled_results[-1]
-        if output is not None:
-            ttnn.deallocate(output)
-        if next_state is not None:
-            _deallocate_state(next_state)
-        _deallocate_state(state)
-
-
 def _trace_wall_samples_ms(
     mesh_device: ttnn.MeshDevice,
     layer: ttKDA,
     hidden: ttnn.Tensor,
     repetitions: int,
     validate_first_replay: Callable[[KdaState, ttnn.Tensor], dict[str, float]] | None = None,
+    actual_start: int = 0,
 ) -> tuple[list[float], dict[str, float] | None]:
     state = None
     warm_output = None
@@ -351,17 +125,18 @@ def _trace_wall_samples_ms(
     trace_id = None
     output = None
     next_state = None
+    actual_start_tt = make_actual_start(mesh_device, actual_start)
     try:
         state = _allocate_state(layer)
-        warm_output, warm_state = layer.forward(hidden, state)
+        warm_output, warm_state = layer.forward(hidden, state, actual_start_tt)
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(warm_output)
         warm_output = None
-        _deallocate_state(warm_state)
+        deallocate_state(warm_state)
         warm_state = None
 
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        output, next_state = layer.forward(hidden, state)
+        output, next_state = layer.forward(hidden, state, actual_start_tt)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
@@ -383,13 +158,13 @@ def _trace_wall_samples_ms(
             if warm_output is not None:
                 ttnn.deallocate(warm_output)
             if warm_state is not None:
-                _deallocate_state(warm_state)
+                deallocate_state(warm_state)
             if output is not None:
                 ttnn.deallocate(output)
             if state is not None:
-                _deallocate_state(state)
+                deallocate_state(state)
             if next_state is not None:
-                _deallocate_state(next_state)
+                deallocate_state(next_state)
 
 
 @pytest.mark.parametrize(
@@ -435,7 +210,7 @@ def test_kimi_k3_layer_1_perf(
     initial_state = _allocate_state(layer)
     start = time.perf_counter()
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        output, state = layer.forward(hidden_tt, initial_state)
+        output, state = layer.forward(hidden_tt, initial_state, make_actual_start(layer.device))
     ttnn.synchronize_device(mesh_device)
     device_forward_ms = (time.perf_counter() - start) * 1e3
     try:
@@ -452,8 +227,8 @@ def test_kimi_k3_layer_1_perf(
         )
     finally:
         ttnn.deallocate(output)
-    _deallocate_state(initial_state)
-    _deallocate_state(state)
+    deallocate_state(initial_state)
+    deallocate_state(state)
 
     validate_trace_replay = partial(
         check_kimi_k3_accuracy,
@@ -500,11 +275,7 @@ def test_kimi_k3_layer_1_perf(
         "device_forward_ms": device_forward_ms,
     }
     print("KDA_LAYER_PERF=" + json.dumps(result, sort_keys=True))
-    if layout == "SP2xTP4":
-        try:
-            _log_device_program_times(mesh_device, layer, hidden_tt, layout)
-        except Exception as error:
-            print("KDA_LAYER_DEVICE_TIMES_ERROR=" + json.dumps({"layout": layout, "error": str(error)}, sort_keys=True))
+
     assert min_wall_ms <= median_wall_ms <= max_wall_ms, (
         f"{layout} median trace wall {median_wall_ms:.3f} ms is outside LoudBox range "
         f"[{min_wall_ms:.3f}, {max_wall_ms:.3f}] ms (reference {reference_ms:.3f} ms ± {_PERF_MARGIN:.0%})"
@@ -557,8 +328,4 @@ def test_synthetic_kimi_k3_perf(
         "perf_margin_pct": _PERF_MARGIN * 100.0,
     }
     print("KDA_SYNTHETIC_PERF=" + json.dumps(result, sort_keys=True))
-    try:
-        _log_device_program_times(mesh_device, layer, hidden_tt, layout)
-    except Exception as error:
-        print("KDA_LAYER_DEVICE_TIMES_ERROR=" + json.dumps({"layout": layout, "error": str(error)}, sort_keys=True))
     _assert_synthetic_performance(layout, median_wall_ms)

@@ -411,16 +411,15 @@ Tensor div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::optio
     return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
 }
 
-Tensor prelu(
-    const Tensor& input, unary::ScalarVariant weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+Tensor prelu(const Tensor& input, unary::ScalarVariant weight, const std::optional<MemoryConfig>& output_mem_config) {
     float weight_f = std::visit([](auto v) -> float { return static_cast<float>(v); }, weight);
-    return ttnn::prelu_sfpu(input, weight_f);
+    return ttnn::prelu_sfpu(input, weight_f, output_mem_config);
 }
 
 Tensor prelu(
-    const Tensor& input, const std::array<float, 1>& weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    const Tensor& input, const std::array<float, 1>& weight, const std::optional<MemoryConfig>& output_mem_config) {
     float scalar_weight = weight[0];
-    return ttnn::prelu_sfpu(input, scalar_weight);
+    return ttnn::prelu_sfpu(input, scalar_weight, output_mem_config);
 }
 
 Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {

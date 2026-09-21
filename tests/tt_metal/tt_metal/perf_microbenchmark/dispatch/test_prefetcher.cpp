@@ -23,7 +23,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include "tt_metal/impl/dispatch/memcpy.hpp"
 
-#include <umd/device/pcie/tlb_window.hpp>
+#include <umd/device/io_window/io_window.hpp>
 
 #include <chrono>
 #include <functional>
@@ -2824,9 +2824,13 @@ public:
         const std::vector<uint32_t> prefetch_q_zeros(prefetch_q_size / sizeof(uint32_t), 0u);
         cluster.write_core(prefetch_q_zeros.data(), prefetch_q_size, prefetch_cxy, prefetch_q_base);
 
-        // FetchQ entries go through the static TLB so each 2-byte write hits L1 directly
-        // instead of round-tripping through the cluster API.
-        tt::umd::TlbWindow* prefetch_q_tlb = cluster.get_static_tlb_window(prefetch_cxy);
+        // FetchQ entries go through a window onto the prefetcher core, anchored at 0, so each write
+        // hits L1 directly at its device address instead of round-tripping through the cluster API.
+        std::unique_ptr<tt::umd::IoWindow> prefetch_q_window = cluster.get_driver()->create_io_window(
+            prefetch_cxy.chip,
+            cluster.get_soc_desc(prefetch_cxy.chip).get_coord_at(prefetch_cxy, tt::CoordSystem::TRANSLATED),
+            /*addr=*/0,
+            {.size = prefetch_q_base + prefetch_q_size});
 
         uint32_t prefetch_q_dev_ptr = prefetch_q_base;
         const uint32_t prefetch_q_dev_fence = prefetch_q_base + prefetch_q_size;
@@ -2859,7 +2863,7 @@ public:
                 tt::tt_metal::memcpy_to_device<true>(host_mem_ptr, src, cmd_size_bytes);
                 host_mem_ptr += cmd_size_bytes / sizeof(uint32_t);
             }
-            prefetch_q_tlb->write32(prefetch_q_dev_ptr, cmd_size_entry);
+            prefetch_q_window->write32(prefetch_q_dev_ptr, cmd_size_entry);
             prefetch_q_dev_ptr += entry_size;
             if (prefetch_q_dev_ptr >= prefetch_q_dev_fence) {
                 prefetch_q_dev_ptr = prefetch_q_base;

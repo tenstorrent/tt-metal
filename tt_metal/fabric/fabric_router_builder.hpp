@@ -10,7 +10,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
 #include <hostdevcommon/fabric_common.h>                                // chan_id_t
 #include "tt_metal/fabric/builder/fabric_manifest_router_instance.hpp"
-#include "tt_metal/fabric/builder/protected_domain_effect.hpp"  // ChipRoutingFacts
+#include "tt_metal/fabric/builder/protected_domain_effect.hpp"          // ChipRoutingFacts
 
 namespace tt::tt_metal {
 class IDevice;

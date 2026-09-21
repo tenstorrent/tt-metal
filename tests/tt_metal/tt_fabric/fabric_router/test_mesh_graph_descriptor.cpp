@@ -2545,8 +2545,10 @@ TEST(MeshGraphDescriptorTests, VectorReallocPreservesConnectionsByTypeLookup) {
 
 // express_links expands into the expected intra-mesh Z edges on the 8x4 [RING, RING] descriptor.
 TEST(MeshGraphDescriptorTests, ExpressLinks8x4) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
     const std::filesystem::path desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt_metal_home) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto";
 
     tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
@@ -2590,8 +2592,10 @@ TEST(MeshGraphDescriptorTests, ExpressLinks8x4) {
 }
 
 TEST(MeshGraphDescriptorTests, PlainFabric2DDowngradesExpressMgdToMesh) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
     const std::filesystem::path desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt_metal_home) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_8x4_mesh_graph_descriptor.textproto";
 
     const tt::tt_fabric::MeshGraph mesh_graph(
@@ -2614,8 +2618,10 @@ TEST(MeshGraphDescriptorTests, PlainFabric2DDowngradesExpressMgdToMesh) {
 
 // express_links (two ROW patterns) expand into 48 Z edges on the 32x4 [RING, RING] descriptor.
 TEST(MeshGraphDescriptorTests, ExpressLinks32x4) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
     const std::filesystem::path desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        std::filesystem::path(tt_metal_home) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_32x4_mesh_graph_descriptor.textproto";
 
     tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());

@@ -79,7 +79,7 @@ enum class SourceInjectCoverage {
 };
 
 template <typename Visitor>
-bool visit_candidate_branches(const tt_metal::distributed::MeshShape& mesh_shape, Visitor&& visitor) {
+bool visit_candidate_branches(const tt_metal::distributed::MeshShape& mesh_shape, const Visitor& visitor) {
     const uint32_t y_size = mesh_shape[0];
     const uint32_t x_size = mesh_shape[1];
 
@@ -665,6 +665,23 @@ protected:
 // Hardware coverage for an express-capable MGD. The fixture name deliberately does not match the
 // broad Fabric2D*Fixture CI filters; workflows that provide an express MGD must select it explicitly.
 TEST_F(FabricExpress2DTorusXYFixture, TestMeshMulticastSourceInjectApis) {
+    run_source_inject_test(this, SourceInjectCoverage::ExpressFanout);
+}
+
+class FabricExpress2DTorusXFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {
+        BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X);
+    }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+// Counterpart of the XY fixture for the express-capable subtorus MGDs, whose device_topology is
+// [LINE, RING]: only the short axis wraps, while dim 0 carries the express-link patterns. Multicast
+// never leaves a rank -- target_devices() rejects a branch as soon as one target chip is absent from
+// local_physical_ids -- so on the MGDs whose meshes span several hosts each rank independently
+// covers its own slice, and no inter-mesh branch is reachable.
+TEST_F(FabricExpress2DTorusXFixture, TestMeshMulticastSourceInjectApis) {
     run_source_inject_test(this, SourceInjectCoverage::ExpressFanout);
 }
 

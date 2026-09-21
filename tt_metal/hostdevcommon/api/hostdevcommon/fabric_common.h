@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <array>  // Routing2DCodec::fwd_dirs
 #include <type_traits>
 
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
@@ -149,7 +150,7 @@ struct RoutingFieldsConstants {
 // with route_buffer_y[Y] immediately followed by route_buffer_x[X]. The control plane generates the
 // 2-bit tables, workers widen them into packets at setup, and the router decodes an action byte using
 // its own coordinate.
-namespace detail {
+namespace routing_2d_detail {
 
 struct Routing2DRouteTableCapacity {
     uint32_t action_vectors;
@@ -169,7 +170,7 @@ constexpr Routing2DRouteTableCapacity derive_2d_route_table_capacity(
     return {vector_bytes, tree_bytes, vector_bytes + tree_bytes};
 }
 
-}  // namespace detail
+}  // namespace routing_2d_detail
 
 struct Routing2DCodec {
     // ---- Packet action byte -------------------------------------------------
@@ -242,8 +243,8 @@ struct Routing2DCodec {
     static constexpr uint32_t MCAST_TREE_EDGE_BYTES = 2;
     static_assert(MAX_MESH_SIZE % MAX_AXIS_SIZE == 0);
     static constexpr uint32_t MAX_ORTHOGONAL_AXIS_SIZE = MAX_MESH_SIZE / MAX_AXIS_SIZE;
-    static constexpr auto ROUTE_TABLE_CAPACITY =
-        detail::derive_2d_route_table_capacity(MAX_AXIS_SIZE, MAX_MESH_SIZE, ACTIONS_PER_BYTE, MCAST_TREE_EDGE_BYTES);
+    static constexpr auto ROUTE_TABLE_CAPACITY = routing_2d_detail::derive_2d_route_table_capacity(
+        MAX_AXIS_SIZE, MAX_MESH_SIZE, ACTIONS_PER_BYTE, MCAST_TREE_EDGE_BYTES);
     static constexpr uint32_t ACTION_VECTOR_CAPACITY_BYTES = ROUTE_TABLE_CAPACITY.action_vectors;
     static constexpr uint32_t MCAST_TREE_CAPACITY_BYTES = ROUTE_TABLE_CAPACITY.mcast_trees;
     static constexpr uint32_t ROUTE_TABLE_CAPACITY_BYTES = ROUTE_TABLE_CAPACITY.total;
@@ -282,20 +283,27 @@ struct Routing2DCodec {
     }
 
     // ---- Decode (packet-side action selection) -----------------------------------
+    // Y row while it still holds an action, X row once it is spent. Independent of facing.
+    static inline std::uint8_t decode_action_y_first(
+        const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
+        const std::uint8_t action_y = route_buffer[local_y];
+        if (action_y != 0) {
+            return action_y;
+        }
+        return route_buffer[y_size + local_x];
+    }
+
     // The router at logical (local_y, local_x) reads its action byte from the packet's flat [Y | X]
     // route buffer. E/W-facing routers consume X only; N/S/Z-facing routers consume Y whenever the
-    // whole Y byte is nonzero, and X otherwise.
+    // whole Y byte is nonzero, and X otherwise. Intermesh landings rebuild the map and restart the Y
+    // leg, so they must call decode_action_y_first rather than keying on facing.
     template <eth_chan_directions MY_DIR>
     static inline std::uint8_t decode_action(
         const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
         if constexpr (MY_DIR == eth_chan_directions::EAST || MY_DIR == eth_chan_directions::WEST) {
             return route_buffer[y_size + local_x];
         } else {
-            const std::uint8_t action_y = route_buffer[local_y];
-            if (action_y != 0) {
-                return action_y;
-            }
-            return route_buffer[y_size + local_x];
+            return decode_action_y_first(route_buffer, local_y, local_x, y_size);
         }
     }
 

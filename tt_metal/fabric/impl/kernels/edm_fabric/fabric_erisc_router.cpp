@@ -1453,9 +1453,13 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                     // Runs before decode, which would otherwise consume stale source-mesh action maps. The
                     // landing encode replaces them from this mesh's destination-major route table.
                     fabric_set_2d_intermesh_landing_route(packet_header, routing_table, MESH_Y_SIZE, MESH_X_SIZE);
+                    // Rebuilt map requires Y action decode first.
+                    action = Routing2DCodec::decode_action_y_first(
+                        packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
+                } else {
+                    action = Routing2DCodec::decode_action<static_cast<eth_chan_directions>(my_direction)>(
+                        packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 }
-                action = Routing2DCodec::decode_action<static_cast<eth_chan_directions>(my_direction)>(
-                    packet_header->route_buffer, my_mesh_coord_y, my_mesh_coord_x, MESH_Y_SIZE);
                 // This chip is the exit when the maps say deliver here but the final mesh is
                 // elsewhere. CT-gated so interior routers skip the mesh-id compare.
                 bool intermesh_exit = false;
