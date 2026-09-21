@@ -57,7 +57,21 @@ transport's launches only:
 On the single ring the gain is the links' other half; the two-launch
 fallback saves only the launches, which at these sizes is nothing, and its
 per-byte cost is a little higher than the two-phase transport's, so on the
-2x4 mesh it is a wash. Bit-exact with the two-phase transport and with
+2x4 mesh it is a wash.
+
+In the ring step (`DISABLED_CompareStepTimes`, 1x8 ring, zigzag, the
+cyclic forward and backward, median of five) and in training
+(`training_shakespeare_nanollama3_cp8_char.yaml`, 40 steps):
+
+| | two-phase shifts | fused shifts |
+|---|---|---|
+| 20/10 heads, 5632 rows a chip, d 64: forward / backward step | 43.3 / 37.3 ms | 41.6 / 33.0 ms (-4% / -12%) |
+| 32/8 heads, 5632 rows a chip, d 128: forward / backward step | 93.1 / 113.4 ms | 90.2 / 106.3 ms (-3% / -6%) |
+| 4/4 heads, 4096 rows a chip, d 64: forward / backward step | 12.7 / 12.7 ms | 12.1 / 11.2 ms |
+| training step, 20/10 heads, four layers | 462 ms | 392 ms (-15%) |
+
+The losses of the training run are the same at every printed step as
+before (2.7676 at step 10, 2.5176 at 20, 2.4922 at 30, 2.4688 at 40). Bit-exact with the two-phase transport and with
 Fifo (`RingShiftFusedMatchesTwoPhase`, `RingShiftFusedOneTensor`, both
 meshes, both directions, bf16 and Float32).
 

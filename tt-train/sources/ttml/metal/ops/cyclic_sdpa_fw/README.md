@@ -125,7 +125,8 @@ backward in place, 40 steps): the losses match the ttnn-forward run step
 for step (2.7676 at step 10, 2.5176 at 20, 2.4922 at 30, 2.4688 against
 2.4707 at 40) at 462 ms a step against 412 ms with `cp_forward: ttnn`
 and 534 ms with this kernel's first version (1875 ms with the original
-two-pass ring).
+two-pass ring); with the fused ring shifts (`ring_shift_fused`) the step
+is 392 ms.
 
 So: as accurate as the ring's driver could want, half of `sdpa_fw`'s time
 at the model shapes, and 2.3 to 3 times slower than ttnn's kernel on
