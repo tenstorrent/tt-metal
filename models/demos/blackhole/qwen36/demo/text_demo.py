@@ -79,6 +79,11 @@ from models.tt_transformers.tt.model_config import determine_device_name
 
 _MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
+# Speculative decode (the demo default, and every spec test that imports this module) needs the MTP head,
+# which the model no longer builds by default (model_config.mtp_requested_by_env). QWEN36_SPEC=0 is the
+# plain baseline and leaves the head out; an explicit QWEN36_MTP always wins.
+if os.environ.get("QWEN36_SPEC", "1") != "0":
+    os.environ.setdefault("QWEN36_MTP", "1")
 # TP=1 mode: the TP code path on ONE die (27B class auto, or QWEN36_FORCE_TP_PATH=1; see model_config).
 # It needs the TP trace region (chunk trace + per-width decode traces) but no fabric (no collectives).
 _TP1 = (not _MULTI) and tp_path_forced_for_single_device_from_hf()

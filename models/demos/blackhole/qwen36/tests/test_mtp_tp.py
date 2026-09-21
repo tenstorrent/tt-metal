@@ -49,7 +49,7 @@ from .test_factory import parametrize_mesh_tp
 def test_mtp_head_tp_pcc(mesh_device, reset_seeds, request):
     """Full MTP head (prefill path, internal attention cache) vs the composed torch reference."""
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256, enable_mtp=True)
     nd = mesh_device.get_num_devices()
     logger.info(f"devices={nd} dim={args.dim} NH={args.n_heads} NKV={args.n_kv_heads} rope_hd={args.rope_head_dim}")
 
@@ -138,7 +138,7 @@ def test_mtp_head_on_real_features(mesh_device, reset_seeds, request):
     feats = torch.load(feat_path, weights_only=False)
 
     os.environ.setdefault("HF_MODEL", model_path())
-    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=1024)
+    args = Qwen36ModelArgs(mesh_device, max_batch_size=1, max_seq_len=1024, enable_mtp=True)
     sd = load_head_sd(args.CKPT_DIR)
     args.n_layers = 0  # embedding + LM head + final norm + MTP head only
     from models.demos.blackhole.qwen36.tt.model import Qwen36Model

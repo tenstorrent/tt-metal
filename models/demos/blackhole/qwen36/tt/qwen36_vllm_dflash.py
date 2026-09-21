@@ -66,6 +66,10 @@ _SPEC_ON = (
 )
 if _SPEC_ON:
     os.environ["QWEN36_PREFILL_BUCKET_TRACE"] = "0"
+    # The DFlash2 decoder rides on the SpeculativeDecoder substrate (verify/accept, the MTP paged KV rows):
+    # the model must build its MTP head, which plain serving leaves out by default (model_config
+    # mtp_requested_by_env). QWEN36_MTP=0 with speculation on is a configuration error the model reports.
+    os.environ.setdefault("QWEN36_MTP", "1")
 
 from vllm.model_executor.models.qwen3_5 import Qwen3VLDummyInputsBuilder, Qwen3VLMultiModalProcessor  # noqa: E402
 from vllm.multimodal import MULTIMODAL_REGISTRY  # noqa: E402

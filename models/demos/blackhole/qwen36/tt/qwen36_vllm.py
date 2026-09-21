@@ -34,6 +34,29 @@ _PREFILL_WARMUP_BUCKET = 4096
 _BLOCK_SIZE = 64
 
 
+def _log_device_memory(mesh_device, tag):
+    """Allocator state per buffer type (DRAM / L1 / TRACE) summed over banks, at the points that size a serving
+    profile (the free DRAM after weights + the paged KV pool is the headroom QWEN36_MAX_TOKENS_ALL_USERS can grow
+    into, minus the prefill activations and the GDN slot state). Same accounting as the demo's _log_device_memory.
+    QWEN36_LOG_DRAM=0 turns it off; the view is best-effort and never fails the boot."""
+    if os.environ.get("QWEN36_LOG_DRAM", "1") != "1":
+        return
+    for name in ("DRAM", "L1", "TRACE"):
+        try:
+            mv = ttnn.get_memory_view(mesh_device, getattr(ttnn.BufferType, name))
+            nb = int(mv.num_banks)
+            tot = int(mv.total_bytes_per_bank) * nb
+            used = int(mv.total_bytes_allocated_per_bank) * nb
+            free = int(mv.total_bytes_free_per_bank) * nb
+            contig = int(mv.largest_contiguous_bytes_free_per_bank) * nb
+            logger.info(
+                f"[MEM {tag}] {name}: banks={nb} total={tot / 2**30:.2f} GiB allocated={used / 2**30:.2f} GiB "
+                f"free={free / 2**30:.2f} GiB largest_contiguous(x banks)={contig / 2**30:.2f} GiB (per device)"
+            )
+        except Exception as e:  # accounting only
+            logger.warning(f"[MEM {tag}] {name}: unavailable ({e})")
+
+
 class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
     def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
         # Serve a single visual item per request (B=1, max_concurrency=1). Image and video are both
@@ -208,6 +231,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # the caller's intent is visible and a future refactor that drops the model-side override stays correct).
         kv_dtype = ttnn.bfloat8_b if os.environ.get("QWEN_SDPA_BF8", "0") == "1" else ttnn.bfloat16
         kv = model.allocate_kv_caches(shape, kv_dtype, batch_size=batch_size)
+        _log_device_memory(model.mesh_device, f"after KV pool ({int(shape[0])} blocks x {int(shape[2])} tokens, B={batch_size})")
         if traced and int(model._pad_kv_block) != int(kv_cache_shape[0]):
             # QWEN36_PREFILL_BUCKET_PAD_BLOCK pointed inside the scheduler's pool (0..num_blocks-1): refuse to serve.
             raise RuntimeError(

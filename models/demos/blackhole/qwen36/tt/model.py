@@ -654,7 +654,8 @@ class Qwen36Model:
 
             os.environ["HF_MODEL"] = hf_model
 
-        # enable_mtp: None -> QWEN36_MTP env (default on); False -> no MTP head/weights/KV.
+        # enable_mtp: None -> the env rule (model_config.mtp_requested_by_env: OFF unless QWEN36_MTP=1 or
+        # QWEN36_DRAFTER=mtp); True/False force the MTP head/weights/KV on/off.
         args = Qwen36ModelArgs(
             mesh_device=device,
             max_batch_size=max_batch_size,
