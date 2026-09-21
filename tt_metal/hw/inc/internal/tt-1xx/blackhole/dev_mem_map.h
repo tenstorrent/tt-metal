@@ -289,17 +289,9 @@
 #define MEM_IERISC_L1_INLINE_BASE MEM_IERISC_MAILBOX_END
 #define MEM_IERISC_L1_INLINE_END (MEM_IERISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)
 #define MEM_IERISC_FIRMWARE_BASE MEM_IERISC_L1_INLINE_END
-// Idle-eth kernels execute in place right after the firmware of their RISC (main.ld: kernel TEXT_START =
-// MEM_IERISC_FIRMWARE_BASE, code limit = MEM_IERISC_KERNEL_SIZE - firmware text), so firmware and kernel share ONE
-// text region per RISC and MEM_IERISC_KERNEL_SIZE must not exceed either firmware region (bh_hal_eth_asserts.hpp).
-// The active-eth budget MEM_ERISC_FIRMWARE_SIZE (24 KiB, dictated by the base firmware layout) is too small for
-// idle eth: the idle_erisc firmware is ~13.7 KiB and the fast-dispatch kernels are 12.9 KiB (cq_dispatch) and
-// 16.6 KiB (cq_prefetch), so DispatchCoreType::ETH could not load on Blackhole. Idle eth runs no base firmware, so
-// its text region is bounded only by the L1 map below; 40 KiB leaves ~10 KiB for kernel/firmware growth.
-#define MEM_IERISC_TEXT_SIZE (40 * 1024)
-#define MEM_IERISC_FIRMWARE_SIZE MEM_IERISC_TEXT_SIZE
+#define MEM_IERISC_FIRMWARE_SIZE MEM_ERISC_FIRMWARE_SIZE
 #define MEM_SUBORDINATE_IERISC_FIRMWARE_BASE (MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE)
-#define MEM_SUBORDINATE_IERISC_FIRMWARE_SIZE MEM_IERISC_TEXT_SIZE
+#define MEM_SUBORDINATE_IERISC_FIRMWARE_SIZE MEM_ERISC_FIRMWARE_SIZE
 #define MEM_SUBORDINATE_IERISC_FIRMWARE_END \
     (MEM_SUBORDINATE_IERISC_FIRMWARE_BASE + MEM_SUBORDINATE_IERISC_FIRMWARE_SIZE)
 
@@ -315,7 +307,15 @@
 #define MEM_IERISC_EXIT_NODE_TABLE_END (MEM_IERISC_EXIT_NODE_TABLE_BASE + MEM_EXIT_NODE_TABLE_SIZE)
 
 #define MEM_IERISC_MAP_END (MEM_IERISC_EXIT_NODE_TABLE_END + MEM_ROUTING_TABLE_PADDING)
-#define MEM_IERISC_KERNEL_SIZE MEM_IERISC_TEXT_SIZE
+// Link-time text budget of an idle-eth kernel. A kernel is linked right after its RISC's firmware text (main.ld:
+// TEXT_START = MEM_IERISC_FIRMWARE_BASE, TEXT_SIZE = this) so it can bind to the firmware's exported symbols, but it is
+// XIP-relocated into the kernel config ring at launch (CONTIGUOUS_XIP; the firmware jumps to kernel_config_base +
+// kernel_text_offset), so the budget does not have to fit the 24 KiB firmware region (Wormhole already uses a 24 KiB
+// kernel budget with a 16 KiB firmware region). The idle_erisc firmware is ~13.7 KiB and the fast-dispatch kernels are
+// 12.9 KiB (cq_dispatch) and 16.6 KiB (cq_prefetch), so with MEM_ERISC_KERNEL_SIZE (24 KiB) only 10.9 KiB were left
+// and DispatchCoreType::ETH could not load on Blackhole. 40 KiB leaves ~10 KiB of headroom; the relocated kernel must
+// still fit the MEM_ERISC_KERNEL_CONFIG_SIZE ring together with its config data.
+#define MEM_IERISC_KERNEL_SIZE (40 * 1024)
 #define MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_IERISC_MAP_END
 #define MEM_SUBORDINATE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH (MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_ERISC_LOCAL_SIZE)
 #define MEM_IERISC_STACK_MIN_SIZE MEM_ERISC_STACK_MIN_SIZE
