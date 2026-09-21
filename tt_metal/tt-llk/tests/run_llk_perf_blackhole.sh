@@ -1,45 +1,68 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
-#
-# SPDX-License-Identifier: Apache-2.0
-# Blackhole LLK perf runner, shared by the 5 bh matrix groups in
-# tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
-#
-# pytest-split sharding: compile this shard's items (producer), then measure
-# them (consumer) -- one invocation each over the whole perf suite.
-#
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_blackhole.sh <group> <n_groups>
+# SETTLING -- eight identical measuring passes, nothing else varied.
 set -euo pipefail
-
-GROUP="${1:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
-N_GROUPS="${2:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
-SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
-export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
-
-case "$SPEED_OF_LIGHT" in
-  true)
-    SPEED_OF_LIGHT_ARGS=(--speed-of-light)
-    ;;
-  false)
-    SPEED_OF_LIGHT_ARGS=()
-    ;;
-  *)
-    echo "SPEED_OF_LIGHT must be 'true' or 'false', got '$SPEED_OF_LIGHT'" >&2
-    exit 2
-    ;;
-esac
+GROUP="${1:?}"
+N_GROUPS="${2:?}"
+if [ "$GROUP" != "1" ]; then
+  echo "experiment: only group 1 runs; this group exits."
+  exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LLK_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SCRIPT_DIR/python_tests"
-mkdir -p perf_data
+export PERF_KEEP_RUNS=0
+unset PERF_RUN_TAG
 
-PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+M="perf and not accuracy"
+PQ="-q --override-ini=log_cli=false"
+SEL=(--splits 5 --group 1 .)
+TEL=/tmp/tel
+mkdir -p "$TEL"
 
-pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-blackhole-${GROUP}-compile.xml" .
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-blackhole-${GROUP}-run.xml" .
-junitparser merge pytest-report-blackhole-${GROUP}-compile.xml pytest-report-blackhole-${GROUP}-run.xml pytest-report-blackhole-${GROUP}.xml
+echo "===== tt-smi: what does it actually offer"
+tt-smi --version 2>&1 | head -2 || true
+echo "----- help"
+tt-smi --help 2>&1 | head -50 || true
+echo "----- snapshot spellings"
+for form in "-s" "--snapshot" "-s -f $TEL/a.json" "--snapshot --filename $TEL/b.json"; do
+  echo "  trying: tt-smi $form"
+  # shellcheck disable=SC2086
+  tt-smi $form >"$TEL/try.out" 2>&1 && echo "    rc=0" || echo "    rc=$?"
+  head -3 "$TEL/try.out" | sed 's/^/      /'
+done
+echo "----- anything written"
+ls -la "$TEL" 2>&1 | head -10
+find . -maxdepth 2 -name "*snapshot*" -newermt "-5 minutes" 2>/dev/null | head -5 || true
+
+sampler() {
+  while true; do
+    tt-smi -s -f "$TEL/${ARM_LABEL}_$(date +%s%3N).json" >/dev/null 2>&1 || \
+      tt-smi -s >/dev/null 2>&1 || true
+    sleep 2
+  done
+}
+
+echo "===== compiling shard 1 once  $(date -u +%H:%M:%S)"
+PERF_RUN_TAG=compile pytest $PQ --compile-producer -n 10 -m "$M" --timeout=60 \
+  "${SEL[@]}" > /tmp/compile.log 2>&1 || echo "  (producer rc=$?)"
+tail -2 /tmp/compile.log | sed 's/^/  /'
+
+for i in 1 2 3 4 5 6 7 8; do
+  label="p$i"
+  echo "===== PASS $i  $(date -u +%H:%M:%S)"
+  export ARM_LABEL="$label" PERF_RUN_TAG="$label"
+  sampler & sp=$!
+  pytest $PQ --compile-consumer -n 15 -m "$M" --timeout=60 \
+    --maxschedchunk 374 "${SEL[@]}" > "/tmp/$label.log" 2>&1 \
+    || echo "  (consumer rc=$?)"
+  kill "$sp" 2>/dev/null || true
+  wait "$sp" 2>/dev/null || true
+  unset PERF_RUN_TAG ARM_LABEL
+  tail -2 "/tmp/$label.log" | sed 's/^/  /'
+  echo "  telemetry files: $(ls -1 "$TEL/${label}"_*.json 2>/dev/null | wc -l)"
+done
+
+echo "===== arms written:"
+ls -1 "$LLK_ROOT/perf_data/runs/" || true
+echo "===== experiment done ====="
