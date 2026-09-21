@@ -28,6 +28,7 @@ class Qwen36DecoderLayer:
         self.args = args
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1)
+        self.tp_enabled = self.num_devices > 1 or getattr(args, "sequence_parallel", False)
         self.is_full_attention = args.is_full_attention_layer(layer_num)
 
         prefix = f"layers.{layer_num}"
@@ -78,7 +79,7 @@ class Qwen36DecoderLayer:
             enable_all_gather=not self._fuse_ff_agmm,
         )
 
-        if self.num_devices > 1:
+        if self.tp_enabled:
             # Tensor-parallel modules (sharded weights from the raw substate).
             # Cache the sharded mesh weights to disk so re-runs skip the (slow,
             # single-threaded) reorder+shard of the full 27B.
@@ -182,7 +183,7 @@ class Qwen36DecoderLayer:
         # paths. Fail fast instead.
         assert mode in ("decode", "prefill"), f"mode must be 'decode' or 'prefill', got {mode!r}"
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
-        if self.num_devices > 1:
+        if self.tp_enabled:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
             # PREFILL: distributed rmsnorm outputs in L1 so the fused in-proj AGMM gathers from L1, not DRAM.
@@ -203,7 +204,7 @@ class Qwen36DecoderLayer:
             )
         attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
-        if self.num_devices > 1:
+        if self.tp_enabled:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
             # output is fractured along dim=3. cos/sin are in rope_tp format.
             if self.is_full_attention:

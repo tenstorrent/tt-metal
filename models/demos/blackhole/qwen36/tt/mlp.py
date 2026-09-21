@@ -167,6 +167,7 @@ class Qwen36MLP:
         self.args = args
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1) if args is not None else 1
+        self._sequence_parallel = getattr(args, "sequence_parallel", False)
         # 1D-decode (default): small-grid 1D matmuls beat the ~80-core DRAM-sharded grid on the
         # bandwidth-bound skinny decode MLP matmuls (see test_mlp_matmul_sweep). Forces interleaved weights.
         self._mlp_1d_decode = args is not None and getattr(args, "mlp_1d_decode", False)
@@ -198,7 +199,7 @@ class Qwen36MLP:
     def forward(self, x, mode=None):
         # mode is unused (accepted only for a uniform signature with Qwen36MoE, which needs an
         # explicit decode/prefill mode); the dense MLP still infers its path from the input shape.
-        if self.num_devices > 1:
+        if self.num_devices > 1 or self._sequence_parallel:
             return self._forward_tp(x)
         w = self.weights
         T = x.shape[1] if len(x.shape) >= 3 else 1
@@ -232,6 +233,7 @@ class Qwen36MLP:
 
         mc = ttnn.DRAM_MEMORY_CONFIG
         _silu_fused = False
+        gate_needs_silu = False  # prefill-only: SiLU deferred to the gate*up multiply, see below.
         # Prefill: x is K-sharded (ff_norm skipped AG); fused AG + [gate|up] + SwiGLU
         _fused_gu = self._fuse_gateup_agmm and x.shape[-2] > ttnn.TILE_SIZE and w.w_gate_up is not None
         if _fused_gu:
@@ -288,8 +290,11 @@ class Qwen36MLP:
             _gw = getattr(args, "decode_grid_w", 8)
             # TP-selected prefill tuning; absent (single-device 9B) => frozen TP=4 behavior.
             _pt = getattr(args, "prefill_tuning", None)
+            # SiLU fused into the packer doubles the gate matmul time (179 vs 91 us @1024x2048x6144,
+            # 2026-09-20 profile); apply it in the multiply instead (gate_needs_silu below), so pc_gate
+            # is unfused and identical to pc_up.
             pc_gate = tpc.create_prefill_mlp_matmul_program_config(
-                seq, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU, max_cols=_gw, tuning=_pt
+                seq, args.dim, w.w1.shape[-1], max_cols=_gw, tuning=_pt
             )
             pc_up = tpc.create_prefill_mlp_matmul_program_config(
                 seq, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt
@@ -303,6 +308,7 @@ class Qwen36MLP:
                 x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=ttnn.L1_MEMORY_CONFIG
             )
             _silu_fused = True
+            gate_needs_silu = True
         else:
             # Interleaved weights: auto matmul program for decode and prefill.
             w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
@@ -316,7 +322,17 @@ class Qwen36MLP:
         if not _fused_gu:
             mc_out = ttnn.L1_MEMORY_CONFIG if x.shape[-2] <= ttnn.TILE_SIZE else mc
             # Standalone silu only on DRAM-sharded decode path (SILU not fused there).
-            if _silu_fused:
+            if gate_needs_silu:
+                # SiLU fused into the packer doubles the gate matmul time (179 vs 91 us @1024x2048x6144,
+                # 2026-09-20 profile); apply it in the multiply instead.
+                hidden = ttnn.multiply(
+                    w1_out,
+                    w3_out,
+                    input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)],
+                    memory_config=mc_out,
+                )
+                ttnn.deallocate(w1_out)
+            elif _silu_fused:
                 hidden = ttnn.mul(w1_out, w3_out, memory_config=mc_out)
                 ttnn.deallocate(w1_out)
             else:
@@ -346,7 +362,10 @@ class Qwen36MLP:
         partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
         ttnn.deallocate(hidden)
 
-        # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).
+        # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3). It no-ops on a 1x1
+        # mesh (num_devices==1) and returns partial as-is without ever consulting memory_config, so
+        # skip forcing DRAM there and let w2's own L1 output (mc_w2_out above) stand.
+        _ar_mc = None if self.num_devices == 1 else ttnn.DRAM_MEMORY_CONFIG
         out = tt_all_reduce(
             partial,
             self.device,
@@ -354,6 +373,6 @@ class Qwen36MLP:
             cluster_axis=0,
             dim=3,
             topology=args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_ar_mc,
         )
         return out

@@ -28,6 +28,7 @@ class Qwen36ModelArgs(ModelArgs):
         mesh_device=None,
         max_batch_size=1,
         max_seq_len=2048,
+        sequence_parallel: bool = False,
         **kwargs,
     ):
         # HF_MODEL is canonical (defaults to Qwen/Qwen3.6-27B). Snapshot hub ids unless
@@ -114,7 +115,16 @@ class Qwen36ModelArgs(ModelArgs):
 
         # TP config (num_devices>1 only). 27B (1,4) sharded dims + DRAM matmul cfgs; see tp_common.py.
         self.num_devices = mesh_device.get_num_devices() if mesh_device is not None else 1
-        if mesh_device is not None and self.num_devices > 1:
+        # sequence_parallel: run the TP-path classes at tp=1 on a 1x1 (sub)mesh; per-die engine for SP prefill.
+        self.sequence_parallel = sequence_parallel
+        # SP-prefill perf experiments (effective only when sequence_parallel and num_devices==1 --
+        # see TPGatedDeltaNet/TPAttention in gdn/tp.py, attention/tp.py); sp_proj_lofi is opt-in
+        # (default OFF), sp_qkvzab_l1 is opt-out (default ON, see below).
+        self.sp_proj_lofi = os.environ.get("QWEN36_SP_PROJ_LOFI") == "1"
+        # L1 by default at tp=1 SP (measured -81 us/GDN layer, PCC identical, 2026-09-20);
+        # set QWEN36_SP_QKVZAB_DRAM=1 to fall back.
+        self.sp_qkvzab_l1 = os.environ.get("QWEN36_SP_QKVZAB_DRAM", "0") != "1"
+        if mesh_device is not None and (self.num_devices > 1 or sequence_parallel):
             self._init_tp_config(mesh_device)
 
     def _init_tp_config(self, mesh_device):
@@ -151,7 +161,38 @@ class Qwen36ModelArgs(ModelArgs):
         # Native depthwise conv1d (prefill) keeps all qkv_dim_tp channels resident per core (L1_FULL);
         # the 35B-A3B channel count overflows L1 on BH. Split the conv over N channel chunks (exact —
         # depthwise is per-channel-independent) so each call fits. 27B (chunks=1) is unchanged.
-        self.gdn_conv_channel_chunks = 2 if self.moe_num_experts > 0 else 1
+        # ttnn's 1D-depthwise conv coalesces kernel-width reads when
+        # in_channels * dtype_bytes * K <= 16384 (BH NOC burst), which multiplies its act/weight
+        # CBs by K and overflows L1. The 27B's 2560 ch/dev is too wide to coalesce so it fits at
+        # n_cc=1; narrower checkpoints (4B 2048, 2B 1536) coalesce, so split the channel dim.
+        # A third case: sequence_parallel at tp=1 runs the per-device width at full (undivided)
+        # size -- e.g. the 2B's 6144 ch/dev, 4x the TP=4 width -- which is neither MoE nor narrow
+        # enough to coalesce, so the un-split conv1d's static CBs clash with the persistent
+        # rec/conv-state L1 buffers. Split into the smallest number of equal chunks that keeps each
+        # chunk's width at or under the validated 27B width (2560).
+        _coalesces = self.gdn_qkv_dim_tp * 2 * self.gdn_conv_kernel_size <= 16384
+        _cap = 2560  # 27B runs 2560 at n_cc=1; tp=1 widths (6144+) need splitting
+        _wide = self.gdn_qkv_dim_tp > _cap
+        if _wide:
+            # Device measurements (BH, depthwise K=4 conv1d, T=1024, 1 die): chunk=3072 runs
+            # 142.6us (incl. shard/halo), chunk=2080 runs 102.5us, chunk=1536 runs 59.8us; chunk=2048
+            # and 2016 FAIL ("Statically allocated circular buffers ... grow to 1684544 B beyond max
+            # L1 1572864 B") because ttnn coalesces depthwise reads when in_channels*2*K <= 16384 (BH
+            # NOC burst) and then multiplies act_block_w by K
+            # (should_coalesce_1d_depthwise_conv_reads, conv2d_utils.cpp:548-571). Prefer the
+            # widest validated non-coalescing chunk (2048 < width <= 3072); fall back to the widest
+            # coalescing-safe chunk (<= 1536) only if no divisor lands in that window.
+            C = self.gdn_qkv_dim_tp
+            _wide_n_cc = next(
+                (n for n in range(1, C + 1) if C % n == 0 and 2048 < C // n <= 3072),
+                None,
+            )
+            if _wide_n_cc is None:
+                _wide_n_cc = next(n for n in range(1, C + 1) if C % n == 0 and C // n <= 1536)
+            assert _wide_n_cc is not None and C % _wide_n_cc == 0, f"no valid gdn conv chunk count for C={C}"
+        else:
+            _wide_n_cc = 1
+        self.gdn_conv_channel_chunks = 2 if (self.moe_num_experts > 0 or _coalesces) else _wide_n_cc
         self.gdn_z_dim_tp = self.gdn_z_dim // tp
         self.gdn_qkvz_dim_tp = (self.gdn_qkv_dim + self.gdn_z_dim) // tp
         # Per-device width of the [qkv|z|a|b] fused in-projection: folding the tiny a/b (decay/beta)
@@ -318,19 +359,20 @@ class Qwen36ModelArgs(ModelArgs):
         return (layer_idx + 1) % self.moe_decoder_sparse_step == 0
 
     def is_distributed_norm(self, mode):
-        """Force the distributed-norm path for multi-device MoE prefill.
+        """Force the distributed-norm path for multi-device prefill.
 
         The prefill norm-all-gather fusion (all_gather_minimal_matmul_async in-proj) needs the norm
         to honor enable_all_gather and leave its output hidden-fractured for the fused matmul to
         gather. The base enables the distributed-norm path only for dim>4096 (an L1 heuristic the
-        dense 27B's 5120 hits but the MoE 35B-A3B's 2048 misses) — on the miss it force-gathers the
-        norm output, so the AGMM in-proj double-gathers (K mismatch). Only the MoE configs need this
-        override (dense variants either hit the dim>4096 heuristic like the 27B, or are validated on
-        the base path), so gate it on moe_num_experts to avoid diverging the dense path from base.
+        dense 27B's 5120 hits but smaller-dim checkpoints miss) — on the miss it force-gathers the
+        norm output, so the AGMM in-proj double-gathers (K mismatch). This affects dense
+        small-hidden checkpoints (Qwen3.5-4B dim=2560, 2B dim=2048) as well as MoE (35B-A3B
+        dim=2048), so override unconditionally for multichip prefill instead of gating on
+        moe_num_experts.
         """
         from models.tt_transformers.tt.common import Mode
 
-        if self.moe_num_experts > 0 and self.is_multichip and mode == Mode.PREFILL:
+        if self.is_multichip and mode == Mode.PREFILL:
             return True
         return super().is_distributed_norm(mode)
 

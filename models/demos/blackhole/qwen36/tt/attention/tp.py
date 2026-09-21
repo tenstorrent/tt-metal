@@ -134,6 +134,13 @@ class TPAttention:
         self.scale = self.HD**-0.5
         self.rope_dim = args.rope_head_dim
         self.compute_cfg = tpc.COMPUTE_HIFI2
+        # EXPERIMENT (QWEN36_SP_PROJ_LOFI=1): LoFi on the prefill in-proj/out-proj matmuls, SP
+        # tp=1 only (see _qkv / _wo_proj). tp>1 and non-SP are unaffected.
+        self._proj_cfg_prefill = (
+            tpc.COMPUTE_LOFI_PROJ
+            if (args.sequence_parallel and args.num_devices == 1 and getattr(args, "sp_proj_lofi", False))
+            else tpc.COMPUTE_HIFI2
+        )
         # bf8 SDPA (QWEN_SDPA_BF8=1): bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower)
         self._sdpa_bf8 = os.environ.get("QWEN_SDPA_BF8", "0") == "1"
         # Must match load_attention_weights_tp gates
@@ -143,7 +150,7 @@ class TPAttention:
         self._qg_deint = self._fused_qkv
         # Fuse prefill norm-allgather + fused-QKV in-proj (all_gather_minimal_matmul_async).
         # Norm's prefill post-AG disabled in layer.py; decode path unchanged.
-        self._fuse_agmm = self._fused_qkv
+        self._fuse_agmm = self._fused_qkv and args.num_devices > 1
         # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
         self._use_nlp_decode_heads = True
         self.k_caches = None
@@ -183,6 +190,26 @@ class TPAttention:
                 self.args.attn_qkv_decode_1d_progcfg,
                 self.compute_cfg,
                 out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        elif x.shape[-2] > tpc.TILE_SIZE:
+            # Non-fused prefill fallback (e.g. sequence_parallel at tp=1, _fuse_agmm False):
+            # _col_proj's sharded_decode_matmul is decode-tuned and overflows L1 at this width
+            # (attn_qkv_fused_dim_tp) for a real prefill S. Unreachable at TP>1 prefill (the AGMM
+            # branch above is always taken there), so TP>1 behavior is unaffected. Mirrors
+            # TPAttention._wo_proj's prefill branch.
+            pc = tpc.create_prefill_mlp_matmul_program_config(
+                x.shape[-2],
+                tw["wqkv_fused"].shape[-2],
+                tw["wqkv_fused"].shape[-1],
+                max_cols=getattr(self.args, "decode_grid_w", 8),
+                tuning=getattr(self.args, "prefill_tuning", None),
+            )
+            qkv = ttnn.linear(
+                x,
+                tw["wqkv_fused"],
+                compute_kernel_config=self._proj_cfg_prefill,
+                program_config=pc,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
             qkv = self._col_proj(x, tw["wqkv_fused"], self.args.attn_qkv_fused_progcfg)
@@ -241,7 +268,7 @@ class TPAttention:
                 return ttnn.linear(
                     x,
                     weight,
-                    compute_kernel_config=self.compute_cfg,
+                    compute_kernel_config=self._proj_cfg_prefill,
                     program_config=pc,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
@@ -462,8 +489,10 @@ class TPAttention:
         attn = self._concat_heads(attn)
         # concat(attn)+sigmoid(gate) in L1; gated stays DRAM (feeds the wo matmul_reduce_scatter — an L1
         # CCL activation risks clashing with its CBs).
+        # At num_devices==1 there is no wo matmul_reduce_scatter to protect, so gated can stay L1.
+        _gated_mc = ttnn.L1_MEMORY_CONFIG if self.args.num_devices == 1 else ttnn.DRAM_MEMORY_CONFIG
         gated = ttnn.multiply(
-            attn, ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.DRAM_MEMORY_CONFIG
+            attn, ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=_gated_mc
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
@@ -798,15 +827,18 @@ class TPAttention:
 
         # Concat heads first, then gate (flat gate matches concat column order); see forward_prefill.
         attn = self._concat_heads(attn)
-        # concat(attn)+sigmoid(gate) in L1; gated stays DRAM (feeds the wo matmul_reduce_scatter — an L1
-        # CCL activation risks clashing with its CBs).
+        # At num_devices==1 there is no wo matmul_reduce_scatter to protect, so gated can stay L1.
+        _gated_mc = ttnn.L1_MEMORY_CONFIG if self.args.num_devices == 1 else ttnn.DRAM_MEMORY_CONFIG
         gated = ttnn.multiply(
-            attn, ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.DRAM_MEMORY_CONFIG
+            attn, ttnn.sigmoid(gate_flat, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=_gated_mc
         )
         ttnn.deallocate(attn)
         ttnn.deallocate(gate_flat)
         partial = self._wo_proj(gated, tw["wo"])
         ttnn.deallocate(gated)
+        # tt_all_reduce no-ops on a 1x1 mesh (num_devices==1) and returns partial as-is without ever
+        # consulting memory_config, so skip forcing DRAM there and let wo's own L1 output stand.
+        _ar_mc = None if self.args.num_devices == 1 else ttnn.DRAM_MEMORY_CONFIG
         return tt_all_reduce(
             partial,
             self.mesh,
@@ -814,5 +846,5 @@ class TPAttention:
             cluster_axis=0,
             dim=3,
             topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_ar_mc,
         )

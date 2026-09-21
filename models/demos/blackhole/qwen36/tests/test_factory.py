@@ -42,6 +42,11 @@ def model_path():
     return os.path.expanduser(os.environ.get("HF_MODEL", _DEFAULT_HF_MODEL))
 
 
+def _sp_enabled():
+    """QWEN36_SP=1 opts the TP-path classes into sequence_parallel (run at tp=1 on a 1x1 mesh)."""
+    return os.environ.get("QWEN36_SP", "0") == "1"
+
+
 # --------------------------------------------------------------------------- #
 # Checkpoint weight loaders (FP8-block dequant)
 # --------------------------------------------------------------------------- #
@@ -274,11 +279,19 @@ def parametrize_mesh_tp(max_tp=8):
     # Local import to keep this test helper's module load light (see module docstring).
     from models.demos.blackhole.qwen36.tt.model_config import GDN_CONV1D_L1_SMALL_SIZE
 
+    # l1_small_size required by ttnn.conv1d in the GDN prefill path. FABRIC_1D is needed for CCL
+    # (TP>1) but tp=1 (sequence_parallel on a genuine 1x1 mesh) needs no CCL at all -- and requesting
+    # it there still syncs fabric routers cluster-wide across every physical chip, which can time out
+    # if any other chip's link isn't healthy even though this test only opens one device. Drop it for
+    # that case; >1-device behavior is unchanged.
+    device_params = {"l1_small_size": GDN_CONV1D_L1_SMALL_SIZE}
+    if not (_sp_enabled() and shape == (1, 1)):
+        device_params["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
+
     def decorator(fn):
         fn = pytest.mark.parametrize(
             "device_params",
-            # l1_small_size required by ttnn.conv1d in the GDN prefill path
-            [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE}],
+            [device_params],
             indirect=True,
         )(fn)
         fn = pytest.mark.parametrize("mesh_device", [pytest.param(shape, id=f"{shape[0]}x{shape[1]}")], indirect=True)(

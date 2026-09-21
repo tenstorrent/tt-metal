@@ -26,6 +26,15 @@ COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 
+# SP-prefill experiment (QWEN36_SP_PROJ_LOFI=1, sequence_parallel + num_devices==1 only): LoFi on
+# the GDN/attention prefill in-proj/out-proj matmuls. Same as COMPUTE_HIFI2 otherwise.
+COMPUTE_LOFI_PROJ = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    math_approx_mode=True,
+    fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
 
 # Grid helpers
 def prefill_grid_default():
@@ -57,7 +66,17 @@ PREFILL_MAX_COLS_PORTABLE = 11
 # from attention/tp.py:241. A standalone per-op sweep CANNOT see this: in isolation the only L1
 # tenant is the op under test, so it reports a win that the full model has no room for. Any future
 # raise of this cap must be validated by test_model_tp_long_prefill, not by the sweep alone.
+# TP=1 (sequence_parallel, num_devices==1) values are from a one-die sweep of the actual MLP
+# prefill shapes (K=2048/6144, N=2048/5120/6144/8224) on the model's own compute config: 2026-09-20
+# one-die sweep, scratchpad/mm/results.md. Unlike TP=4/8, the full K never splits across devices, so
+# k_tiles (64 or 192) is always divisible by 8 -- in0_block_w_cap=8 is legal and faster than the TP=4
+# cap=4. `rows=8` pins the grid height to the 8 rows that per_core_M=4 (32 M-tiles / 8) actually uses,
+# instead of leaving 2 of the default 10 rows idle. `prefer_square_subblock` lets
+# `create_prefill_mlp_matmul_program_config` try a (2,2) output subblock (legal: fp32_dest_acc_en
+# caps subblock area at 4, and both 2,2 factors are area-4) when the plain wide-column search would
+# otherwise land on a smaller subblock -- see `_square_prefill_cols`.
 _PREFILL_TUNING = {
+    1: dict(widest_cols=False, in0_block_w_divisor=True, in0_block_w_cap=8, rows=8, prefer_square_subblock=True),
     4: dict(widest_cols=False, in0_block_w_divisor=False, in0_block_w_cap=4),
     8: dict(widest_cols=True, in0_block_w_divisor=True, in0_block_w_cap=4),
 }
@@ -211,19 +230,26 @@ def _full_grid_crs(grid):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
 
 
-def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activation=None, tuning=None):
+def create_prefill_matmul_program_config(
+    m, k, n, grid_size=None, fused_activation=None, tuning=None, out_subblock=None
+):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
     fused_activation in packer; sharded kernel rejects ttnn.linear(activation=...) with progcfg.
-    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior."""
+    tuning: a `_PREFILL_TUNING` entry (see `prefill_tuning`); None = the frozen TP=4 behavior.
+    out_subblock: optional (h, w) override (see `_square_prefill_cols`); None = the default (1, w)
+    search below."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
 
-    out_subblock_h = 1
-    out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
+    if out_subblock is not None:
+        out_subblock_h, out_subblock_w = out_subblock
+    else:
+        out_subblock_h = 1
+        out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
 
     k_tiles = math.ceil(k / TILE_SIZE)
     cap = tuning["in0_block_w_cap"]
@@ -281,6 +307,29 @@ def _best_prefill_cols(n, max_cols):
     return best_cols
 
 
+def _square_prefill_cols(m, n, limit, rows):
+    """TP=1 counterpart to `_best_prefill_cols`/`_widest_prefill_cols` (see `_PREFILL_TUNING[1]`).
+
+    Goes straight to the widest portable grid and checks whether a (2,2) output subblock reaches the
+    fp32_dest_acc_en area-4 cap when the plain (1, w<=4) search cannot (e.g. per_core_N=18 -> w=3 with
+    h=1, but 18 is even so (2,2) reaches area 4). Requires per_core_M and per_core_N both even. When
+    neither the plain nor the square subblock reach area 4, there's no win from going wide, so this
+    falls back to `_best_prefill_cols`'s narrower, subblock-maximizing search (e.g. N=5120 -> per_core_N
+    15 at 11 cols is odd, but 16 at 10 cols is a clean (1,4)).
+
+    Returns (cols, out_subblock | None); None means "let the caller's default (1, w) search decide"."""
+    n_tiles = math.ceil(n / TILE_SIZE)
+    m_tiles = math.ceil(m / TILE_SIZE)
+    per_core_M = max(1, math.ceil(m_tiles / rows))
+    cols = max(1, min(limit, PREFILL_MAX_COLS_PORTABLE, n_tiles))
+    per_core_N = max(1, math.ceil(n_tiles / cols))
+    if _get_out_subblock_w(per_core_N, 1) == 4:
+        return cols, None
+    if per_core_M % 2 == 0 and per_core_N % 2 == 0:
+        return cols, (2, 2)
+    return _best_prefill_cols(n, limit), None
+
+
 def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max_cols=None, tuning=None):
     """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
     subblock (drives prefill FPU) instead of the default full width.
@@ -292,11 +341,17 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
 
     tuning: a `_PREFILL_TUNING` entry. With `widest_cols` (TP=8) the subblock-first width heuristic
     is replaced by "take the width, clamped to PREFILL_MAX_COLS_PORTABLE" -- measured device time at
-    TP=8 falls monotonically with column count, so trading cores for a wider subblock loses."""
+    TP=8 falls monotonically with column count, so trading cores for a wider subblock loses. With
+    `prefer_square_subblock` (TP=1) cols/out_subblock instead come from `_square_prefill_cols`.
+    `rows`, if present, overrides the grid height (default prefill_grid_default()[1])."""
     grid = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
     limit = max_cols or grid[0]
-    if tuning["widest_cols"]:
+    rows = tuning.get("rows", grid[1])
+    out_subblock = None
+    if tuning.get("prefer_square_subblock"):
+        cols, out_subblock = _square_prefill_cols(m, n, limit, rows)
+    elif tuning["widest_cols"]:
         # Cap the width at PREFILL_MAX_COLS_PORTABLE (harvested parts expose 11, not 12) and never
         # exceed the output tile count -- columns beyond it get per_core_N=1 with nothing to compute,
         # paying mcast cost for no work.
@@ -304,7 +359,7 @@ def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None, max
     else:
         cols = _best_prefill_cols(n, limit)
     return create_prefill_matmul_program_config(
-        m, k, n, grid_size=(cols, grid[1]), fused_activation=fused_activation, tuning=tuning
+        m, k, n, grid_size=(cols, rows), fused_activation=fused_activation, tuning=tuning, out_subblock=out_subblock
     )
 
 
