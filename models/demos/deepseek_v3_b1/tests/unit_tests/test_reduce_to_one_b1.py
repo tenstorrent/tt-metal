@@ -463,7 +463,9 @@ def run_reduce_to_one_with_trace(
     indirect=["device_params"],
     ids=["fabric_1d"],
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_reduce_to_one_1d(bh_2d_mesh_device):
     """Test reduce_to_one with 1D fabric."""
     run_reduce_to_one(bh_2d_mesh_device)
@@ -476,7 +478,9 @@ def test_reduce_to_one_1d(bh_2d_mesh_device):
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_reduce_to_one_2d(bh_2d_mesh_device):
     """Test reduce_to_one with 2D fabric."""
     run_reduce_to_one(bh_2d_mesh_device)
@@ -498,7 +502,9 @@ def test_reduce_to_one_2d(bh_2d_mesh_device):
     indirect=["device_params"],
     ids=["fabric_2d_trace"],
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_reduce_to_one_trace(
     bh_2d_mesh_device,
     num_warmup_iter,

@@ -217,7 +217,9 @@ def test_get_device_mla_work_assignment():
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_pre_sdpa(
     bh_2d_mesh_device,
     mesh_rows,

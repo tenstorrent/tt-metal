@@ -89,7 +89,9 @@ def _build_chunk_stamped_sender_tensor(output_shape, chunk_size_bytes, iteration
     ],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_ccl_broadcast(
     bh_2d_mesh_device,
     mesh_rows,
@@ -202,7 +204,9 @@ def test_ccl_broadcast(
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_ccl_broadcast_loop(
     bh_2d_mesh_device,
     mesh_rows,
@@ -284,7 +288,9 @@ def test_ccl_broadcast_loop(
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "fabric_router_config": create_fabric_router_config(15232)}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_ccl_broadcast_host_iter_stamped_chunks(
     bh_2d_mesh_device,
     mesh_rows,
@@ -369,7 +375,9 @@ def test_ccl_broadcast_host_iter_stamped_chunks(
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize("chunk_size_bytes", [4352])
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_ccl_broadcast_remainder_chunk(
     bh_2d_mesh_device,
     mesh_rows,

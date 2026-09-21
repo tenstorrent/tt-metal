@@ -211,7 +211,9 @@ def build_all_reduce_test_inputs(
     indirect=True,
 )
 @pytest.mark.parametrize("fuse_residual_add", [True])
-@pytest.mark.requires_num_devices(NUM_DEVICES_2x1)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_2x1, reason=f"Requires at least {NUM_DEVICES_2x1} devices (2x1 mesh)"
+)
 def test_ccl_all_reduce(
     bh_2d_mesh_device,
     num_devices,
@@ -326,7 +328,9 @@ def test_ccl_all_reduce(
     ],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_2x1)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_2x1, reason=f"Requires at least {NUM_DEVICES_2x1} devices (2x1 mesh)"
+)
 def test_ccl_all_reduce_chunk_and_link_matrix(
     bh_2d_mesh_device,
     num_devices,

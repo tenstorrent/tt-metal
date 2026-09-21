@@ -220,7 +220,9 @@ def test_overlapped_tensor_roundtrip_mixed_tiles(tmp_path, device, dtype):
     indirect=True,
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.bfloat16])
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_overlapped_tensor_roundtrip_tp_4x2(tmp_path, bh_2d_mesh_device, dtype):
     """Roundtrip serialization with TP on a 4x2 mesh.
 

@@ -361,7 +361,9 @@ def verify_sdpa_reduce_to_all_output(
 )
 @pytest.mark.parametrize("scatter_enabled", [False, True], ids=["reduce_only", "reduce_and_scatter"])
 @pytest.mark.parametrize("position_id", [500, 1500, 2500, 3500], ids=["pos500", "pos1500", "pos2500", "pos3500"])
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x1)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x1, reason=f"Requires at least {NUM_DEVICES_4x1} devices (4x1 mesh)"
+)
 def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
     inputs = build_sdpa_reduce_to_all_test_inputs(
         bh_2d_mesh_device,
@@ -389,7 +391,9 @@ def test_sdpa_reduce_to_all(bh_2d_mesh_device, scatter_enabled, position_id):
     ],
     indirect=["device_params"],
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x1)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x1, reason=f"Requires at least {NUM_DEVICES_4x1} devices (4x1 mesh)"
+)
 def test_sdpa_reduce_to_all_trace(
     bh_2d_mesh_device,
     num_warmup_iter,

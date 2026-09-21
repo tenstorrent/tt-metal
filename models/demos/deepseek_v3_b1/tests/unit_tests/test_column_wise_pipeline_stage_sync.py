@@ -29,7 +29,9 @@ NUM_DEVICES_4x2 = 4 * 2
     [({"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X})],
     indirect=["device_params"],
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_column_wise_pipeline_stage_sync_2d(
     bh_2d_mesh_device,
     entry_device_mesh_col,

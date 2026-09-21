@@ -476,7 +476,9 @@ def test_compressed_tensor_target_assignment_hash_invalidates_cache():
     indirect=True,
 )
 @requires_hybrid_allocator
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_attention_weights_dense_4x2(bh_2d_mesh_device):
     """Prepare attention weights only for a dense layer on 4x2 mesh; verify shapes and fusion group sharing."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -500,7 +502,9 @@ def test_prepare_attention_weights_dense_4x2(bh_2d_mesh_device):
     indirect=True,
 )
 @requires_hybrid_allocator
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_attention_weights_moe_4x2(bh_2d_mesh_device):
     """Prepare attention weights only for an MoE layer on 4x2 mesh; verify shapes and gate_mm present."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -521,7 +525,9 @@ def test_prepare_attention_weights_moe_4x2(bh_2d_mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_shared_expert_weights_dense_4x2(bh_2d_mesh_device):
     """Prepare shared expert weights only for a dense layer on 4x2 mesh; verify shapes."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -538,7 +544,9 @@ def test_prepare_shared_expert_weights_dense_4x2(bh_2d_mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_shared_expert_weights_moe_4x2(bh_2d_mesh_device):
     """Prepare shared expert weights only for an MoE layer on 4x2 mesh; verify shapes."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -561,7 +569,9 @@ def test_prepare_shared_expert_weights_moe_4x2(bh_2d_mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_routed_expert_weights_dense_4x2(bh_2d_mesh_device):
     """Prepare routed expert weights only for a dense layer on 4x2 mesh; verify shapes."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -589,7 +599,9 @@ def test_prepare_routed_expert_weights_dense_4x2(bh_2d_mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_routed_expert_weights_moe_4x2(bh_2d_mesh_device):
     """Prepare routed expert weights only for an MoE layer on 4x2 mesh; verify shapes and expert count."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -616,7 +628,9 @@ def test_prepare_routed_expert_weights_moe_4x2(bh_2d_mesh_device):
     indirect=True,
 )
 @requires_hybrid_allocator
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_dense_layer_single_layer_4x2(bh_2d_mesh_device):
     """Build one dense layer on 4x2 mesh; verify type and shapes (MLA TP=2)."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -653,7 +667,9 @@ def test_prepare_dense_layer_single_layer_4x2(bh_2d_mesh_device):
     indirect=True,
 )
 @requires_hybrid_allocator
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     """Build one MoE layer on 4x2 mesh; verify type and shapes (MLA TP=2, MoE TP=8)."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -725,7 +741,9 @@ def _read_gate_indices_back(submesh, indices_tensor: ttnn.Tensor) -> torch.Tenso
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_create_gate_indices_tensor_sram_encoding_4x2(bh_2d_mesh_device):
     """SRAM bit-15 slot encoding round-trips correctly; DRAM eids stay identity."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -761,7 +779,9 @@ def test_create_gate_indices_tensor_sram_encoding_4x2(bh_2d_mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_create_gate_indices_tensor_sram_validation_4x2(bh_2d_mesh_device, expect_error):
     """create_gate_indices_tensor rejects malformed sram_expert_ids before any device upload."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -781,7 +801,9 @@ def test_create_gate_indices_tensor_sram_validation_4x2(bh_2d_mesh_device, expec
     indirect=True,
 )
 @requires_hybrid_allocator
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_moe_layer_weights_with_sram_expert_ids_4x2(bh_2d_mesh_device):
     """sram_expert_ids populates sram_*_proj per slot; DRAM expert list stays at num_routed_experts."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -813,7 +835,9 @@ def test_prepare_moe_layer_weights_with_sram_expert_ids_4x2(bh_2d_mesh_device):
     indirect=True,
 )
 @requires_hybrid_allocator
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_moe_layer_weights_empty_sram_expert_ids_4x2(bh_2d_mesh_device):
     """Default (no sram_expert_ids) leaves sram_*_proj empty — SRAM chain skips uniformly."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -831,7 +855,9 @@ def test_prepare_moe_layer_weights_empty_sram_expert_ids_4x2(bh_2d_mesh_device):
     indirect=True,
 )
 @requires_hybrid_allocator
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_dense_layer_weights_with_sram_expert_ids_4x2(bh_2d_mesh_device):
     """Dense MLP SRAM chunks populate sram_*_proj; DRAM chunk list stays at 8."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -861,7 +887,9 @@ def test_prepare_dense_layer_weights_with_sram_expert_ids_4x2(bh_2d_mesh_device)
     indirect=True,
 )
 @requires_hybrid_allocator
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_moe_layer_weights_compressed_tp8_4x2(bh_2d_mesh_device):
     """compressed_tp8=True returns CompressedTensor routed experts (TP8-sharded) instead of uniform ttnn.Tensor."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -889,7 +917,9 @@ def test_prepare_moe_layer_weights_compressed_tp8_4x2(bh_2d_mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_embedding_weights_4x2(bh_2d_mesh_device):
     """Prepare embedding weights on 4x2 mesh; verify shape."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -913,7 +943,9 @@ def test_prepare_embedding_weights_4x2(bh_2d_mesh_device):
 @pytest.mark.skip(
     reason="[SKIP REASON]: LM-head 4x2 prepare currently returns folded lm_head without standalone final_norm. Issue: #43025"
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_lm_head_weights_4x2(bh_2d_mesh_device):
     """Prepare LM head and final norm weights on 4x2 mesh; verify shapes. LM head is vocab-sharded on device (TP=8)."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -957,7 +989,9 @@ def _mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX, seed: int = 44) -> dict
 @pytest.mark.skip(
     reason="[SKIP REASON]: MTP 4x2 prepare produced eh_projection shape (1792, 7168) instead of expected (14336, 7168). Issue: #43025"
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_mtp_weights_4x2(bh_2d_mesh_device):
     """Prepare MTP weights on 4x2 mesh; verify type and shapes."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -982,7 +1016,9 @@ def test_prepare_mtp_weights_4x2(bh_2d_mesh_device):
 @pytest.mark.skip(
     reason="[SKIP REASON]: Spec 4x2 prepare currently returns folded lm_head without standalone shared_head_norm. Issue: #43025"
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_spec_weights_4x2(bh_2d_mesh_device):
     """Prepare spec-stage weights on 4x2 mesh; verify type and shapes."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -999,7 +1035,9 @@ def test_prepare_spec_weights_4x2(bh_2d_mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_embedding_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     """Prepare embedding weights via TensorCache on 4x2 mesh: cold miss then warm hit."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -1033,7 +1071,9 @@ def test_prepare_embedding_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
 @pytest.mark.skip(
     reason="[SKIP REASON]: LM-head 4x2 TensorCache prepare currently returns folded lm_head without standalone final_norm. Issue: #43025"
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_lm_head_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     """Prepare LM head + final norm via TensorCache on 4x2 mesh: cold miss then warm hit."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -1069,7 +1109,9 @@ def test_prepare_lm_head_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     indirect=True,
 )
 @requires_hybrid_allocator
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_attention_weights_with_cache_dense_4x2(bh_2d_mesh_device, tmp_path):
     """Attention fusion groups (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms) via TensorCache: miss then hit."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -1100,7 +1142,9 @@ def test_prepare_attention_weights_with_cache_dense_4x2(bh_2d_mesh_device, tmp_p
     indirect=True,
 )
 @requires_hybrid_allocator
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_attention_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp_path):
     """Attention fusion groups + gate_bias via TensorCache on MoE layer: miss then hit."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -1132,7 +1176,9 @@ def test_prepare_attention_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp_pat
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_shared_expert_weights_with_cache_dense_4x2(bh_2d_mesh_device, tmp_path):
     """gate_up fusion group via TensorCache (dense path): miss then hit."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -1161,7 +1207,9 @@ def test_prepare_shared_expert_weights_with_cache_dense_4x2(bh_2d_mesh_device, t
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_shared_expert_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp_path):
     """gate_up fusion group via TensorCache (MoE path): miss then hit."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -1190,7 +1238,9 @@ def test_prepare_shared_expert_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_routed_expert_weights_with_cache_dense_4x2(bh_2d_mesh_device, tmp_path):
     """Dense MLP routed projections (stacked on mesh) via TensorCache: miss then hit."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -1232,7 +1282,9 @@ def test_prepare_routed_expert_weights_with_cache_dense_4x2(bh_2d_mesh_device, t
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_routed_expert_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp_path):
     """MoE routed experts (per-expert DRAM) via TensorCache: miss then hit."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -1277,7 +1329,9 @@ def test_prepare_routed_expert_weights_with_cache_moe_4x2(bh_2d_mesh_device, tmp
     indirect=True,
 )
 @requires_hybrid_allocator
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_dense_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     """Full dense layer via TensorCache: attention + gate_up + shared_down + routed; miss then hit."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -1319,7 +1373,9 @@ def test_prepare_dense_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path)
     indirect=True,
 )
 @requires_hybrid_allocator
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     """Prepare MoE layer via TensorCache: fusion + gate_bias + gate_up + shared_down + routed experts."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -1374,7 +1430,9 @@ def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
 @pytest.mark.skip(
     reason="[SKIP REASON]: MTP 4x2 TensorCache prepare produced eh_projection shape (1792, 7168) instead of expected (14336, 7168). Issue: #43025"
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_mtp_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     """Prepare MTP weights via TensorCache on 4x2 mesh: cold miss then warm hit for h/e gamma, eh_proj."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -1420,7 +1478,9 @@ def test_prepare_mtp_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
 @pytest.mark.skip(
     reason="[SKIP REASON]: Spec 4x2 TensorCache prepare currently returns folded lm_head without standalone shared_head_norm. Issue: #43025"
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_spec_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
     """Prepare spec weights via TensorCache on 4x2 mesh: cold miss then warm hit for shared_head_norm."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -1519,7 +1579,9 @@ def _small_bspm_state_dict(
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_moe_routed_experts_bspm_output_types_4x2(bh_2d_mesh_device, tmp_path):
     """prepare_moe_routed_experts_bspm returns CompressedTensor per expert, correct counts,
     correct shapes, DRAM-contiguous; and tiles.bin files are written to TensorCache."""
@@ -1585,7 +1647,9 @@ def test_prepare_moe_routed_experts_bspm_output_types_4x2(bh_2d_mesh_device, tmp
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_routed_expert_weights_bspm_missing_raises_4x2(bh_2d_mesh_device, tmp_path, expect_error):
     """bspm_dir set + .bspm file missing raises FileNotFoundError — silent BFP4 fallback was removed
     so a typo'd --bspm-dir argument can't quietly degrade to a different (BFP4-only) model.
@@ -1613,7 +1677,9 @@ def test_prepare_routed_expert_weights_bspm_missing_raises_4x2(bh_2d_mesh_device
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_moe_routed_experts_bspm_tile_assignment_4x2(bh_2d_mesh_device, tmp_path):
     """Tile format distribution is preserved end-to-end: counts of BFP4/BFP2/zero codes in the
     returned CompressedTensor._assignment_flat match the input assignment_logical for each expert.
@@ -1680,7 +1746,9 @@ def test_prepare_moe_routed_experts_bspm_tile_assignment_4x2(bh_2d_mesh_device, 
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_moe_routed_experts_bspm_footprint_4x2(bh_2d_mesh_device, tmp_path):
     """Compact tiles.bin disk footprint is smaller than uniform BFP4 when assignment is mixed."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
@@ -1732,7 +1800,9 @@ def test_prepare_moe_routed_experts_bspm_footprint_4x2(bh_2d_mesh_device, tmp_pa
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_moe_layer_bspm_cache_roundtrip_4x2(bh_2d_mesh_device, tmp_path):
     """TensorCache roundtrip for BSPM experts: cold miss writes tiles.bin; warm hit loads from disk.
 
@@ -1811,7 +1881,9 @@ def test_prepare_moe_layer_bspm_cache_roundtrip_4x2(bh_2d_mesh_device, tmp_path)
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_prepare_routed_expert_weights_via_bspm_dir_4x2(bh_2d_mesh_device, tmp_path):
     """End-to-end integration: synthetic .bspm file on disk → load_bspm_for_layer →
     prepare_routed_expert_weights → CompressedTensor with correct remapped code distribution.

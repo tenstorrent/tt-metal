@@ -296,7 +296,9 @@ def test_sampling_argmax_single_device_101_cores(device, seed, final_core_idx):
     ids=["test_1", "test_2", "test_3", "test_4"],
 )
 @pytest.mark.requires_grid_size(101)
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 # TODO(#43087): Root-cause this exact Blackhole 4x2 FABRIC_2D mesh setup failure and remove the temporary skip.
 # @pytest.mark.skip(
 #     reason="[SKIP REASON]: 4x2 FABRIC_2D mesh_device setup for test_sampling_argmax_mesh_4x2_axis_x hit Fabric Router "
@@ -1032,7 +1034,9 @@ def create_fabric_router_config(max_payload_size):
     ids=["test_1", "test_2", "test_3", "test_4", "test_5", "test_6", "test_7", "test_8"],
 )
 @pytest.mark.requires_grid_size(101)
-@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
+@pytest.mark.skipif(
+    ttnn.get_num_devices() < NUM_DEVICES_4x2, reason=f"Requires at least {NUM_DEVICES_4x2} devices (4x2 mesh)"
+)
 def test_sampling_topk_mesh(
     bh_2d_mesh_device,
     final_mesh_coord,
