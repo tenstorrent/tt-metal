@@ -2941,6 +2941,21 @@ bool add_exit_node_constraints(
             const auto& mapped_physical_dst_mesh_id = mesh_mappings.at(dst_logical_mesh);
             auto valid_physical_exit_nodes_it = valid_physical_exit_nodes_by_mesh.find(mapped_physical_dst_mesh_id);
             if (valid_physical_exit_nodes_it == valid_physical_exit_nodes_by_mesh.end()) {
+                // No physical exit nodes toward this destination mesh at all. Under RELAXED zero-link
+                // tolerance (issue #56762) this is legal even in a MIXED topology where the source mesh
+                // has links to some OTHER destination -- the requested connection to this destination
+                // stays logical-only (host interconnect). Warn and skip its exit constraint instead of
+                // failing the whole mapping. STRICT still fails.
+                if (inter_mesh_validation_mode == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+                    log_warning(
+                        tt::LogFabric,
+                        "Relaxed mode: requested inter-mesh connection toward logical mesh {} has NO physical exit "
+                        "nodes from the mapped source mesh ({} logical channel(s) requested); the connection is "
+                        "logical-only and traffic must use the host interconnect",
+                        dst_logical_mesh.get(),
+                        num_logical_exit_nodes_assigned);
+                    continue;
+                }
                 return false;
             }
             const auto& valid_physical_exit_nodes = valid_physical_exit_nodes_it->second;
@@ -3364,6 +3379,16 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         }
 
         auto validation_mode = determine_intra_mesh_validation_mode(config, logical_mesh_id);
+
+        // Enforce the inter-mesh-only invariant of RELAXED zero-link tolerance (issue #56762): a
+        // mesh's own interior must be physically connected, so intra-mesh target edges are always
+        // hard. This fast-fails if a future edit ever flips the (shared-type) flag on this path.
+        // TODO(fabric-2.0): revisit intra-mesh zero-link tolerance.
+        TT_FATAL(
+            !intra_mesh_constraints.allow_unmatched_target_edges(),
+            "Intra-mesh solve must not allow unmatched target edges (zero-link tolerance is inter-mesh only); "
+            "logical mesh {}",
+            logical_mesh_id.get());
 
         auto sub_mapping = ::tt::tt_fabric::solve_topology_mapping(
             logical_graph, physical_graph, intra_mesh_constraints, validation_mode, /*quiet_mode=*/true);

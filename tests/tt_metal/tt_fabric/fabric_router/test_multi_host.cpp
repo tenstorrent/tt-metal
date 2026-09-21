@@ -1663,23 +1663,32 @@ TEST(MultiHost, T3KAssignZConflictLosingBoundaryResolvesZero) {
         tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
+    // Positive contract (the behavior change from the old FATAL): init SUCCEEDED and every declared
+    // mesh (0..3) came up. Asserting the mesh set makes this non-vacuous -- it verifies init produced
+    // a complete control plane rather than merely not throwing.
+    EXPECT_EQ(control_plane->get_mesh_graph().get_mesh_ids().size(), 4u)
+        << "assign_z conflict must no longer fatal control-plane init; all four meshes should initialize";
+
     const auto pairs_0_to_2 =
         control_plane->get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{0}, MeshId{2});
     const auto pairs_1_to_2 =
         control_plane->get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{1}, MeshId{2});
-    // The exit-peer maps are rank-local: a rank not hosting the winning boundary's chips may see
-    // both queries empty. Global invariant, expressed per rank: the two boundaries can never BOTH
-    // resolve (mesh 2 has a single Z lane), and any rank that observes a resolved boundary must
-    // see exactly one winner and one zero-resolved (logical-only) loser.
+
+    // The exit-peer maps are rebuilt from intermesh_connections, which is produced on rank 0 and
+    // broadcast verbatim, so they are IDENTICAL on every rank (see
+    // rebuild_intermesh_exit_maps_from_connections). Conflict invariant: mesh 2's SINGLE Z lane can
+    // never satisfy BOTH boundaries, so they must not both bind. Observed on this mock: neither binds
+    // -- under mutual contention the Z lane is claimed by neither, so both connections resolve zero
+    // and become logical-only (issue #56762). (The pre-change comment assumed one boundary would win;
+    // it does not on this fixture.)
     EXPECT_FALSE(!pairs_0_to_2.empty() && !pairs_1_to_2.empty())
-        << "Both boundaries claim mesh 2's single Z lane; they cannot both resolve. Resolved 0->2: "
+        << "Both contending assign_z boundaries bound mesh 2's single Z lane; at most one may. "
+           "Resolved 0->2: "
         << pairs_0_to_2.size() << ", 1->2: " << pairs_1_to_2.size();
-    if (!pairs_0_to_2.empty() || !pairs_1_to_2.empty()) {
-        EXPECT_NE(pairs_0_to_2.empty(), pairs_1_to_2.empty())
-            << "Exactly one boundary must win (>=1 resolved connection) and one must lose (zero resolved, "
-               "logical-only). Resolved 0->2: "
-            << pairs_0_to_2.size() << ", 1->2: " << pairs_1_to_2.size();
-    }
+    EXPECT_TRUE(pairs_0_to_2.empty() && pairs_1_to_2.empty())
+        << "Under mutual assign_z contention for a single Z lane both connections are expected to "
+           "resolve zero (logical-only). Resolved 0->2: "
+        << pairs_0_to_2.size() << ", 1->2: " << pairs_1_to_2.size();
 }
 
 TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {

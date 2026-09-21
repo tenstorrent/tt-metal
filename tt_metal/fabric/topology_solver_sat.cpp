@@ -26,6 +26,12 @@ namespace tt::tt_fabric::detail {
 
 static constexpr int kHostCapConflictBudget = 300'000;
 
+// Per-threshold conflict budget for the RELAXED zero-link realized-edge maximization loop (issue
+// #56762). Distinct objective from the host-group-cap search though the value currently matches:
+// if a threshold solve exceeds this, the loop keeps the best (valid, sub-maximal) mapping found so
+// far and warns. Kept as its own constant so the two loops can diverge without silent coupling.
+static constexpr int kZeroLinkMaximizeConflictBudget = 300'000;
+
 struct SatSearchBackend::Impl {
     TopologySatSolver solver;
     TopologySatHardEncoding enc;
@@ -417,8 +423,12 @@ void topology_sat_emit_combinations_indices(size_t n, size_t r, EmitCombination&
 // c[i][j] represents "at least j+1 of lits[0..i] are true"; assert c[m-1][k-1].
 // If extra_lit != 0 it is added only to the final assertion, so extra_lit => at-least-k without making the
 // cardinality hard (used for the optional preferred objective).
-inline void topology_sat_add_at_least_k_counter(
-    TopologySatSolver& solver, const std::vector<int>& lits, size_t k, int extra_lit = 0) {
+// Shared sequential-counter matrix builder. c[i][j] is a Tseitin variable meaning "at least j+1 of
+// lits[0..i] are true", encoded via the standard sequential-counter recurrences. Both the
+// at-least-k assertion helper and the threshold-literal builder use this so the recurrence lives in
+// one place. The final row c[m-1] is the counter output: c[m-1][t] <=> at least t+1 of all lits.
+inline std::vector<std::vector<int>> topology_sat_build_counter_matrix(
+    TopologySatSolver& solver, const std::vector<int>& lits, size_t k) {
     const size_t m = lits.size();
     std::vector<std::vector<int>> c(m);
     for (size_t i = 0; i < m; ++i) {
@@ -478,6 +488,13 @@ inline void topology_sat_add_at_least_k_counter(
             }
         }
     }
+    return c;
+}
+
+inline void topology_sat_add_at_least_k_counter(
+    TopologySatSolver& solver, const std::vector<int>& lits, size_t k, int extra_lit = 0) {
+    const size_t m = lits.size();
+    const auto c = topology_sat_build_counter_matrix(solver, lits, k);
     if (extra_lit != 0) {
         solver.add(extra_lit);
     }
@@ -485,10 +502,10 @@ inline void topology_sat_add_at_least_k_counter(
     solver.add(0);
 }
 
-// Full-width sequential counter over `lits` (same recurrences as topology_sat_add_at_least_k_counter
-// with k = lits.size() and no final assertion). thresholds_out[j] is a literal that, when ASSUMED,
-// forces at least j+1 of `lits` to be true -- used by the zero-link tolerance driver to maximize
-// realized soft edges by assuming successively higher thresholds on a warm incremental session.
+// Full-width sequential counter over `lits` (k = lits.size(), no final assertion). thresholds_out[j]
+// is a literal that, when ASSUMED, forces at least j+1 of `lits` to be true -- used by the zero-link
+// tolerance driver to maximize realized soft edges by assuming successively higher thresholds on a
+// warm incremental session.
 inline void topology_sat_build_at_least_threshold_lits(
     TopologySatSolver& solver, const std::vector<int>& lits, std::vector<int>& thresholds_out) {
     thresholds_out.clear();
@@ -496,65 +513,7 @@ inline void topology_sat_build_at_least_threshold_lits(
     if (m == 0) {
         return;
     }
-    const size_t k = m;
-    std::vector<std::vector<int>> c(m);
-    for (size_t i = 0; i < m; ++i) {
-        const size_t cols = std::min(k, i + 1);
-        c[i].resize(cols);
-        for (size_t j = 0; j < cols; ++j) {
-            c[i][j] = solver.declare_one_more_variable();
-        }
-    }
-    solver.add(-lits[0]);
-    solver.add(c[0][0]);
-    solver.add(0);
-    solver.add(-c[0][0]);
-    solver.add(lits[0]);
-    solver.add(0);
-    for (size_t i = 1; i < m; ++i) {
-        const size_t cols = std::min(k, i + 1);
-        for (size_t j = 0; j < cols; ++j) {
-            if (j == 0) {
-                solver.add(-lits[i]);
-                solver.add(c[i][0]);
-                solver.add(0);
-                solver.add(-c[i - 1][0]);
-                solver.add(c[i][0]);
-                solver.add(0);
-                solver.add(-c[i][0]);
-                solver.add(lits[i]);
-                solver.add(c[i - 1][0]);
-                solver.add(0);
-            } else if (j == i) {
-                solver.add(-lits[i]);
-                solver.add(-c[i - 1][j - 1]);
-                solver.add(c[i][j]);
-                solver.add(0);
-                solver.add(-c[i][j]);
-                solver.add(lits[i]);
-                solver.add(0);
-                solver.add(-c[i][j]);
-                solver.add(c[i - 1][j - 1]);
-                solver.add(0);
-            } else {
-                solver.add(-lits[i]);
-                solver.add(-c[i - 1][j - 1]);
-                solver.add(c[i][j]);
-                solver.add(0);
-                solver.add(-c[i - 1][j]);
-                solver.add(c[i][j]);
-                solver.add(0);
-                solver.add(-c[i][j]);
-                solver.add(c[i - 1][j]);
-                solver.add(lits[i]);
-                solver.add(0);
-                solver.add(-c[i][j]);
-                solver.add(c[i - 1][j]);
-                solver.add(c[i - 1][j - 1]);
-                solver.add(0);
-            }
-        }
-    }
+    const auto c = topology_sat_build_counter_matrix(solver, lits, /*k=*/m);
     thresholds_out.assign(c[m - 1].begin(), c[m - 1].end());
 }
 
@@ -1847,19 +1806,35 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
         };
         const size_t n_soft_edges = s.enc.edge_realized_lits.size();
         const auto& optional_lits = s.stages[std::min(s.stage, s.stages.size() - 1)];
+        // Try to satisfy edge-realization threshold `realized+1`. The symmetry-breaking assumption
+        // (fix target 0 -> global 0) is only a search hint, and on equal-size graphs it can make a
+        // higher threshold UNSAT even when it is achievable without the hint -- so, exactly like the
+        // primary solve, attempt WITH the hint first and, on non-SAT, retry WITHOUT it before
+        // concluding the maximum is reached.
+        const auto solve_threshold = [&](int threshold_lit) -> int {
+            auto attempt = [&](bool with_symmetry_hint) -> int {
+                if (with_symmetry_hint && s.symmetry_lit != 0) {
+                    s.solver.assume(s.symmetry_lit);
+                }
+                for (int lit : optional_lits) {
+                    s.solver.assume(lit);
+                }
+                s.solver.assume(threshold_lit);
+                ++s.solve_calls;
+                return s.solver.solve_limited(kZeroLinkMaximizeConflictBudget);
+            };
+            if (s.symmetry_lit != 0) {
+                if (attempt(/*with_symmetry_hint=*/true) == TopologySatSolver::kSat) {
+                    return TopologySatSolver::kSat;
+                }
+            }
+            return attempt(/*with_symmetry_hint=*/false);
+        };
         size_t realized = count_realized();
         while (realized < n_soft_edges) {
-            if (s.symmetry_lit != 0) {
-                s.solver.assume(s.symmetry_lit);
-            }
-            for (int lit : optional_lits) {
-                s.solver.assume(lit);
-            }
-            s.solver.assume(s.edge_threshold_lits[realized]);  // index j forces >= j+1 realized
-            ++s.solve_calls;
-            const int status = s.solver.solve_limited(kHostCapConflictBudget);
+            const int status = solve_threshold(s.edge_threshold_lits[realized]);  // forces >= realized+1
             if (status != TopologySatSolver::kSat) {
-                break;  // UNSAT (maximum proven) or budget exhausted (keep best found)
+                break;  // UNSAT (maximum proven, hint or no hint) or budget exhausted (keep best found)
             }
             if (!topology_sat_decode_hard_solution(s.solver, s.enc, mapping_out)) {
                 break;
