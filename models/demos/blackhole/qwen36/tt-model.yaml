@@ -1,19 +1,27 @@
 # tt-model.yaml — Qwen/Qwen3.8-27B on TWO p150a cards linked by ethernet (2 Blackhole chips), served through vLLM.
-#   profiles: tp2         (default) plain TP=2 over both chips, up to 32 users, full sampling
-#             p1d1        prefill chip + decode chip: prefill/decode disaggregation over the chip-to-chip fabric, <= 8 users
-#             tp2-dflash2 CONDITIONAL: TP=2 + lossless DFlash2 speculative decoding, 1-4 greedy users
-#                         (ships only if gate D on TP=2 passes: lossless in the bf16 near-tie class AND >= 1.3x per user;
-#                         see profiles/p150x2/DFLASH2_FEASIBILITY.md 3.4 — delete the profile before packaging otherwise)
+#   profiles: tp2         (default) plain TP=2 over both chips, up to 32 users, full sampling, 64K context, 622,592-token KV pool
+#             p1d1        prefill chip + decode chip: prefill/decode disaggregation over the chip-to-chip fabric, <= 8 users, 64K context
+#             tp2-dflash2 TP=2 + lossless DFlash2 speculative decoding, 1-4 greedy users, 64K context (gate D passed on TP=2:
+#                         lossless-class identity vs tp2 AND 1.5x per user at <= 2k ISL / 3.7x on code; DFLASH2_FEASIBILITY.md 3.4)
 #   not included: p1d1-dflash2 (the KV connector needs traced-bucket prefill, DFlash2 needs it off; 2-3 weeks of model work)
 #
 #   tt-model package --container models/demos/blackhole/qwen36/tt-model.yaml --out <builds>
 #   tt-model serve   <builds>/qwen3.8-27b-p150x2/tt_kernel_manifest.json [--profile p1d1]
-#   tt-model push    <builds>/qwen3.8-27b-p150x2 --publish
+#   tt-model push    <builds>/qwen3.8-27b-p150x2 --private
 #
 # Design: profiles/p150x2/MANIFEST_DESIGN.md (entry-point dispatch TT_SERVE_LAUNCHER -> pd_container supervisor, device/port
-# mapping, card layout). Deviation from its 2.3 draft: no `sample_on_device_mode` anywhere — Qwen36ForCausalLM refuses
-# on-device sampling on any mesh but 1x4 / 1x8 (tt/qwen36_vllm.py _validate_device_sampling_request), so every profile samples
-# on the host.
+# mapping, card layout). Every value below is the one the profile was validated and benchmarked with (profiles/p150x2/
+# tp2_env.sh + tp2_serve.sh, tp2_dflash2_serve.sh, p1d1_env.sh + p1d1_serve.sh, 2026-09-21):
+#   * KV cache is bf8 everywhere (QWEN_SDPA_BF8=1 in the common env): 17.0 KB/token/device at TP=2; the pools below do not
+#     fit at bf16.
+#   * tp2 and p1d1 sample on the host (Qwen36ForCausalLM refuses on-device sampling on any mesh but 1x4 / 1x8,
+#     tt/qwen36_vllm.py _validate_device_sampling_request). ONLY tp2-dflash2 carries additional_config.tt.sample_on_device_mode
+#     = decode_only: the plugin's block-output contract requires it (platform.py) and Qwen36DFlashForCausalLM accepts it at
+#     TP=2 when speculation is on (its decode tokens are its own greedy speculative outputs; prefill anchors are host-sampled).
+#     It is a PROFILE key, not a common one, so pd_container never has to drop it.
+#   * tp2-dflash2 speculates on EVERY prompt: the serving class pins tt_adaptive_block_max_prompt_tokens=0 (a plain trace
+#     followed by a spec replay hangs the device), so there is no per-ISL gate. The speed-up fades above ~8k ISL (1.07x at
+#     32k) -- documented on the card (1-4 users, best below ~8k ISL) rather than pretending a knob exists.
 schema: "5.1"
 repo: changh95/qwen3.8-27b-p150x2
 name: qwen3.8-27b-p150x2
@@ -24,7 +32,8 @@ kind: vllm-plugin
 arch: blackhole
 
 source:
-  tt_metal: /home/ttuser/experiments/qwen36_27b/tt-metal        # branch qwen36-p150x2 (PD/TP=1 mode + DFlash2 serving merged); push before `package`
+  tt_metal: /home/ttuser/experiments/qwen36_27b/tt-metal        # branch qwen36-p150x2 (PD/TP=1 mode + DFlash2 serving merged); pushed to
+                                                                 # tenstorrent/tt-metal before `package` (provenance: built.tt_metal.pushed)
   code:                                                          # = union of the two p300x2 manifests' allowlists
     - models/common
     - models/tt_transformers
@@ -43,11 +52,8 @@ runtime:
   vllm: {version: "0.26.0"}                                    # the validated serving venv; the dispatch relies on 0.26.0 calling
                                                                # load_general_plugins() before parsing `vllm serve` (arg_utils.py:2733)
   # vllm-tt-plugin branch pd-disagg (superset of the DFlash2 package's 7ddf2c8): PD connector + FabricSocketTransport + launch
-  # layer + the TT_SERVE_LAUNCHER dispatch / pd_container supervisor. {path:} packages the checkout as-is (uncommitted work
-  # included, flagged dirty on the card).
-  # TODO(packaging): once lane B pushes the branch, replace with
-  #   plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: <pd-disagg sha>}
-  plugin: {path: /home/ttuser/experiments/qwen36_27b/vllm-tt-plugin}
+  # layer + the TT_SERVE_LAUNCHER dispatch / pd_container supervisor (adc415b, 802 tests). Pinned to the pushed commit.
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: adc415b69a91704a8943fed65c35cfcf2b348adf}
   extra_models_dir: models/demos/blackhole/qwen36/vllm_bundle    # main_class Qwen36DFlashForCausalLM (tp2-dflash2); the plain
                                                                # profiles select Qwen36ForCausalLM via TT_MODEL_CLASS_OVERRIDES
 
@@ -61,11 +67,12 @@ serve:                                   # common to every profile; a profile's 
     reasoning_parser: qwen3
   additional_config:
     tt:
-      l1_small_size: 24576
+      l1_small_size: 24576               # no sample_on_device_mode here: tp2 / p1d1 sample on the host (see header)
   env:
     ARCH_NAME: blackhole
     TT_QWEN35_TEXT_VER: qwen36_blackhole
     QWEN36_SKIP_VISION: "1"
+    QWEN_SDPA_BF8: "1"                   # bf8 paged KV on every profile = every validated run (pd_container passes it to both ranks)
     VLLM_RPC_TIMEOUT: "900000"
     VLLM_CONFIGURE_LOGGING: "1"
     TORCHDYNAMO_DISABLE: "1"
@@ -73,21 +80,22 @@ serve:                                   # common to every profile; a profile's 
 
 serve_profiles:
   - name: tp2
-    description: Plain TP=2 decode over both chips, up to 32 concurrent users, full sampling support, 128K context.
-    max_model_len: 131072                 # KV pool 262,144 tokens (QWEN36_MAX_TOKENS_ALL_USERS) = TP=4's per-device KV bytes; lane A's gate may resize
+    description: Plain TP=2 decode over both chips, up to 32 concurrent users, full sampling support, 64K context.
+    max_model_len: 65536                  # = CTX of every TP=2 artifact (boot, stress, determinism, identity, the benchmark grid)
     max_num_seqs: 32
     additional_config:
       tt:
         fabric_config: FABRIC_1D
         trace_region_size: 1073741824
     args:
-      - [--max-num-batched-tokens, "131072"]
+      - [--max-num-batched-tokens, "65536"]
     env:
       MESH_DEVICE: P150x2
       TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/tt_metal/fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.textproto
       TT_MODEL_CLASS_OVERRIDES: "Qwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM"
       QWEN36_MTP: "0"                     # explicit: the plain class must not load the MTP drafter head / its paged KV cache
-      QWEN36_MAX_TOKENS_ALL_USERS: "262144"
+      QWEN36_MAX_TOKENS_ALL_USERS: "622592"   # bf8 KV pool (9,760 blocks -> vLLM reports 624,640 tokens): 2.76 GiB/die free after the
+                                              # prefill warmup; 786,432 OOMs in the chunk-prefill warmup; 64k prefill + 32-user burst pass
       TT_CACHE_PATH: /cache/tensors-tp2   # converted weights persist under BOTH consumer versions (docker: last --env wins)
 
   - name: p1d1
@@ -109,41 +117,45 @@ serve_profiles:
       QWEN36_PREFILL_BUCKET_TRACE: "1"     # required by the KV connector (platform.py:743)
       QWEN36_MTP: "0"                      # no speculation on either node (spec must be off on the PD decode node)
       QWEN36_MAX_TOKENS_ALL_USERS: "163840"   # = the decode pool
-      TT_PD_CHIPS: "0,1"                   # p150x2: card A / card B (dev P300x2 box: "0,3")
+      TT_PD_CHIPS: "0,1"                   # p150x2: card A / card B (dev P300x2 box: "0,3" with TT_PD_BOARD=p300x2)
       TT_PD_CONNS: "2"                     # = trained eth links between the cards (1 or 2); the two-mesh MGD channel count must match
       TT_PD_P_POOL: "65536"
       TT_PD_D_POOL: "163840"
-      TT_PD_EXPORT_SLOTS: "2"              # pipelines two full-length exports (4.25 GiB of P DRAM at CTX 65536)
+      TT_PD_EXPORT_SLOTS: "1"              # one full-length export slot (2.125 GiB of P DRAM at CTX 65536, bf8) = every validated run
       TT_PD_LEASE: "30"
-      TT_PD_FABRIC_CLAIM_LEASE_S: "0"      # 0 = 3 x LEASE (claim-gated sends)
+      TT_PD_FABRIC_CLAIM_LEASE_S: "0"      # 0 = 3 x LEASE = 90 s claim lease (claim-gated sends)
       TT_PD_TAG: ttm
       TT_CACHE_PATH: /cache/tensors-tp1
       TT_METAL_OPERATION_TIMEOUT_SECONDS: "600"
 
-  - name: tp2-dflash2                     # CONDITIONAL — include only if gate D (DFlash2 on TP=2) passes; fallback path of DFLASH2_FEASIBILITY.md 3.4
-    description: TP=2 with lossless DFlash2 speculative decoding (single 4x8 bucket, composite GDN verify), 1-4 concurrent users, greedy output.
-    max_model_len: 131072
+  - name: tp2-dflash2
+    description: TP=2 with lossless DFlash2 speculative decoding (single 4x8 bucket, composite GDN verify), 1-4 concurrent users, greedy output, 64K context.
+    max_model_len: 65536
     max_num_seqs: 4                       # gdn_spec_step / fused_recurrent core budget at Nv=24 -> B <= 4
     additional_config:
       tt:
         fabric_config: FABRIC_1D
         trace_region_size: 1073741824
+        sample_on_device_mode: decode_only   # REQUIRED by the plugin's block-output contract (all | decode_only); the DFlash class
+                                             # accepts it at TP=2 when speculation is on (decode tokens = its greedy speculative outputs)
     args:
-      - [--max-num-batched-tokens, "131072"]
+      - [--max-num-batched-tokens, "65536"]
       - --no-async-scheduling
     env:
       MESH_DEVICE: P150x2
       TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/tt_metal/fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.textproto
       QWEN36_DRAFTER: dflash2
-      QWEN36_DFLASH_TP: "1"
+      QWEN36_DFLASH_TP: "1"                # the TP drafter (the class default; the replicated oracle is test-only)
       QWEN36_GDN_SPEC_FUSED: "0"           # composite verify: the fused gdn_spec_step needs 2*Nv <= 32 (Nv=24 at TP=2)
       QWEN36_DFLASH_BLOCK: "8"
       QWEN36_DFLASH_FOLD_SEED: "1"
-      QWEN36_DFLASH_MAX_PROMPT: "2048"
       QWEN36_DFLASH_SERVE_BLOCK: "32"
-      QWEN36_PREFILL_BUCKET_TRACE: "0"
+      QWEN36_PREFILL_BUCKET_TRACE: "0"     # the class forces it off anyway (eager masked prefill); explicit so the env is self-describing
+      # The drafter is a second checkpoint the single `weights` pointer cannot carry: resolved from the HF cache mounted at /hf, so
+      # run `hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68adfb1afeaf7b7480c0a0243108177b4` once before `tt-model serve`.
+      # (The validated run used a local copy of exactly this snapshot: model.safetensors sha256 67fc76d6...)
       DFLASH_WEIGHTS: incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4
-      QWEN36_MAX_TOKENS_ALL_USERS: "262144"
+      QWEN36_MAX_TOKENS_ALL_USERS: "262144"   # 6.05 GiB/die free after warmup with the drafter + verify buffers resident
       TT_CACHE_PATH: /cache/tensors-tp2
 default_profile: tp2
 
@@ -166,11 +178,11 @@ verify:
 # benchmarks land; the text below is the pre-benchmark draft (placeholders in {{...}}).
 card:
   description: |
-    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served on two Tenstorrent p150a cards linked by ethernet (2 Blackhole chips) through vLLM. One image, three ways to use the two chips: `tp2` (tensor parallel, up to 32 users, full sampling), `p1d1` (one chip prefills, the other decodes — prefill/decode disaggregation over the chip-to-chip fabric, up to 8 users) and, if it validates, `tp2-dflash2` (TP=2 with lossless [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding, 1-4 greedy users). Siblings for a P300x2 box: [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2) and [changh95/qwen3.8-27b-dflash2-p300x2](https://huggingface.co/changh95/qwen3.8-27b-dflash2-p300x2).
+    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served on two Tenstorrent p150a cards linked by ethernet (2 Blackhole chips) through vLLM. One image, three ways to use the two chips: `tp2` (tensor parallel over both chips: 17 tok/s per user, 193 tok/s aggregate at 32 users, full sampling), `p1d1` (one chip prefills, the other decodes — prefill/decode disaggregation over the chip-to-chip fabric, up to 8 users, decode speed independent of arriving prompts) and `tp2-dflash2` (TP=2 with lossless [DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) speculative decoding: 24-36 tok/s per user on prompts up to 2k tokens, 52 tok/s on code, 1-4 greedy users). Siblings for a P300x2 box: [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2) (plain, up to 32 users) and [changh95/qwen3.8-27b-dflash2-p300x2](https://huggingface.co/changh95/qwen3.8-27b-dflash2-p300x2) (DFlash2, 1-8 users).
   quickstart: |
     ### How to query
 
-    The server speaks the OpenAI API on port 20000 (model id `Qwen/Qwen3.8-27B`):
+    OpenAI-compatible API on port 20000, model id `Qwen/Qwen3.8-27B`:
 
     ```bash
     curl -s http://localhost:20000/v1/chat/completions \
@@ -178,21 +190,169 @@ card:
       -d '{"model": "Qwen/Qwen3.8-27B", "messages": [{"role": "user", "content": "Explain KV caching in two sentences."}], "max_tokens": 256, "temperature": 0.7}'
     ```
 
-    Streaming (`"stream": true`), tool calls (`qwen3_coder` parser) and reasoning content (`qwen3` parser) work as in vLLM.
+    * Streaming (`"stream": true`), tool calls (`qwen3_coder` parser) and reasoning content (`qwen3` parser) work as in vLLM; `"chat_template_kwargs": {"enable_thinking": false}` turns thinking off.
+    * `p1d1` answers on the same port through its built-in proxy.
 
     ### Profiles
 
     ```bash
-    tt-model serve changh95/qwen3.8-27b-p150x2                      # default: tp2
+    tt-model serve changh95/qwen3.8-27b-p150x2                        # default: tp2
     tt-model serve changh95/qwen3.8-27b-p150x2 --profile p1d1
-    tt-model serve changh95/qwen3.8-27b-p150x2 --profile tp2-dflash2   # if shipped; drafter weights: hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68adfb1afeaf7b7480c0a0243108177b4
-    tt-model profiles changh95/qwen3.8-27b-p150x2                   # list them
+    tt-model serve changh95/qwen3.8-27b-p150x2 --profile tp2-dflash2
+    tt-model profiles changh95/qwen3.8-27b-p150x2                     # list them
     ```
 
-    * `tp2` — both chips as one tensor-parallel mesh: fastest per user, largest KV pool (128K context, up to 32 users), full sampling.
-    * `p1d1` — chip 0 prefills, chip 1 decodes; the KV cache crosses the ethernet fabric once per request: a new prompt never stalls the running decodes (64K context, up to 8 users).
-    * `tp2-dflash2` — TP=2 with the DFlash2 drafter: greedy output only, 1-4 users, best on code.
+    * `tp2` — both chips as one tensor-parallel mesh: 64K context, 622K-token KV pool (bf8), up to 32 users, every vLLM sampling feature (temperature, top-p/top-k, penalties, structured outputs, streaming).
+    * `p1d1` — chip 0 prefills, chip 1 decodes (TP=1 each); each request's KV cache crosses the ethernet fabric once. A new prompt never pauses the running decodes. 64K context, 164K-token decode pool, up to 8 users, full sampling.
+    * `tp2-dflash2` — TP=2 with the DFlash2 drafter (single 4x8 verify bucket, 7 drafts per step): greedy output, 1-4 users, best on code and below ~8k-token prompts. Drafter weights once, before the first `serve`: `hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68adfb1afeaf7b7480c0a0243108177b4`.
+
+    ### At a glance
+
+    * Model: [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) (hybrid Gated-DeltaNet + gated attention, 27B dense, reasoning) at revision `1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0`; bfp8 weights, bf16 activations, bf8 paged KV cache (64-token blocks).
+    * Hardware: 2× p150a (32 GB each) linked by ethernet, `/dev/tenstorrent/0` and `/1`, 2 × 1 GiB hugepages; the box needs Docker and the Tenstorrent driver only.
+    * `tp2`: 17.1 t/s/u at one user (TPOT 57 ms), 193 t/s at 32 users (128/128); TTFT 0.3 s / 1.9 s / 8.2 s at 128 / 8k / 32k prompt tokens, one user.
+    * `p1d1`: 10.2 t/s/u at one user (TPOT 95 ms), 56 t/s at 8 users (128/128); TTFT 0.5 s / 6.5 s / 26 s at 128 / 8k / 32k, one user; TPOT stays at 95-136 ms whatever the prompt mix.
+    * `tp2-dflash2`: 26.1 t/s/u at one user on 128-token prompts (1.5× `tp2`), 35-38 t/s/u on 1k-token answers (2.0-2.2×), 52 t/s per user on code (3.7×); lossless greedy output.
+    * Source: tt-metal branch `qwen36-p150x2` (PD disaggregation + DFlash2 serving at TP=2), vllm-tt-plugin branch `pd-disagg` (PD connector, fabric transport, container launcher); packaged with tt-model-manager (schema 5.1).
+
+    ### When to choose `p1d1` vs `tp2`
+
+    * `tp2` is the default for a reason: 17 t/s per user against 10 on `p1d1` (decode runs on two chips instead of one), a 3.8× larger KV pool (622K vs 164K tokens), 32 users instead of 8, TTFT 0.3 / 1.9 / 8.2 s at 128 / 8k / 32k tokens (one user), 193 t/s at 32 users. Its cost is shared: every prefill pauses every decode on the mesh, so at 8 users TPOT rises from 69 ms (128-token prompts) to 285 ms (32k prompts), and at 32 users TTFT is 10-71 s.
+    * `p1d1` isolates decode from prefill: the decode chip's TPOT stays at 95-136 ms at 1-8 users across the whole grid (128 to 32k prompt tokens) while `tp2` at 8 users goes to 146-285 ms at 16k-32k. Prompts queue on the prefill chip (one at a time), so its TTFT is 0.5 / 6.5 / 26 s at 128 / 8k / 32k for one user and grows about linearly with users; each request also pays one KV handoff over the fabric (on the same chip pair, Phase-3 measurements: 123-128 ms at ≤ 2k tokens, 156 / 210 / 305 / 523 ms at 4k / 8k / 16k / 32k) and, at ≥ 2 users, may wait for the producer's next pump before its export is claimed (claim-gated sends, 90 s lease).
+    * Rule of thumb: raw speed, long contexts, more than 8 users or the largest KV pool → `tp2`; steady per-token latency for a few interactive users while long prompts keep arriving → `p1d1`; 1-4 greedy users on code or short prompts → `tp2-dflash2`.
 
     ## Benchmarks
 
-    {{BENCHMARKS}}
+    * Method: tt-inference-server `--workflow benchmarks` grid, i.e. `vllm bench serve --backend openai-chat --dataset-name random` with streaming, prompts of exactly ISL random tokens (`truncate_prompt_tokens` = ISL) and OSL output tokens per request (every request produced exactly OSL tokens; no request stopped early). The harness passed neither `--ignore-eos` nor `--temperature`, so the servers applied the checkpoint's `generation_config.json` (temperature 1.0, top-k 20, top-p 0.95); on `tp2-dflash2` the output is the target model's greedy trajectory regardless. Each grid point runs 1 user and then the run's maximum (fewer where the KV pool does not seat that many prompts of that length); the 2/4/8/16/32-user columns come from separate runs of the same grid, the 1-user rows from the last run (run-to-run TTFT spread about ±5%).
+    * `t/s` = aggregate output tokens per second; `t/s/u` = tokens per second per user (= OSL / mean end-to-end latency); TTFT = mean time to first token; TPOT = mean time per output token.
+    * Code: tt-inference-server `--spec-decode` (aiperf, SPEED-Bench `coding`, 80 prompts, `enable_thinking: false`, answers end at EOS, same server-default sampling), one user, `tp2-dflash2` and `tp2` on the same box back to back.
+    * All numbers were measured on the development box described under "Validation and caveats", not on a p150a pair.
+
+    #### `tp2` (default): throughput by concurrent users, t/s (t/s/u)
+
+    | ISL / OSL | 1 user | 2 users | 4 users | 8 users | 16 users | 32 users |
+    |---|---|---|---|---|---|---|
+    | 128 / 128 | 17 (17.1) | 29 (14.7) | 54 (13.4) | 92 (11.4) | 143 (9.0) | 193 (6.0) |
+    | 1,024 / 128 | 17 (16.7) | 28 (14.1) | 50 (12.6) | 83 (10.4) | 123 (7.7) | 156 (4.9) |
+    | 2,048 / 128 | 16 (16.3) | 27 (13.7) | 48 (11.9) | 75 (9.3) | 107 (6.7) | 131 (4.1) |
+    | 4,096 / 128 | 15 (15.4) | 25 (12.4) | 41 (10.2) | 59 (7.4) | 78 (4.9) | 90 (2.8) |
+    | 8,192 / 128 | 14 (13.9) | 21 (10.5) | 31 (7.8) | 41 (5.1) | 50 (3.1) | 54 (1.7) |
+    | 16,384 / 128 | 11 (11.4) | 16 (7.9) | 21 (5.2) | 25 (3.1) | 28 (1.8) | 29 (0.9) |
+    | 32,768 / 128 | 8 (8.2) | 10 (5.0) | 12 (3.0) | 13 (1.7) | 14 (0.9) | 14 (0.8) @18 |
+    | 128 / 1,024 | 18 (17.6) | 33 (16.6) | 65 (16.1) | 123 (15.4) | 218 (13.6) | 361 (11.3) |
+    | 8,192 / 1,024 | 17 (16.9) | 31 (15.6) | 57 (14.3) | 98 (12.2) | 153 (9.6) | 210 (6.6) |
+    | 10,000 / 1,024 | 17 (16.8) | 30 (15.2) | 55 (13.7) | 93 (11.6) | 141 (8.8) | 187 (5.8) |
+
+    * `@N`: the KV pool seats only N prompts of that length, so the workflow ran the point at N users.
+
+    #### `tp2`: mean TTFT ms / mean TPOT ms
+
+    | ISL / OSL | 1 user | 8 users | 32 users |
+    |---|---|---|---|
+    | 128 / 128 | 316 / 56.6 | 2,394 / 69.2 | 10,226 / 87.0 |
+    | 1,024 / 128 | 464 / 56.8 | 3,409 / 70.4 | 14,847 / 90.5 |
+    | 2,048 / 128 | 610 / 56.9 | 4,518 / 72.4 | 19,498 / 92.9 |
+    | 4,096 / 128 | 1,046 / 57.1 | 7,664 / 76.1 | 25,212 / 160.5 |
+    | 8,192 / 128 | 1,941 / 57.3 | 14,217 / 83.9 | 39,474 / 285.3 |
+    | 16,384 / 128 | 3,867 / 57.6 | 22,316 / 146.3 | 71,113 / 547.0 |
+    | 32,768 / 128 | 8,243 / 58.4 | 40,999 / 284.9 | – |
+    | 128 / 1,024 | 317 / 56.7 | 2,379 / 62.8 | 10,322 / 78.6 |
+    | 8,192 / 1,024 | 1,952 / 57.3 | 14,174 / 68.1 | 39,372 / 113.9 |
+    | 10,000 / 1,024 | 2,474 / 57.3 | 16,119 / 70.5 | 47,682 / 124.7 |
+
+    #### `p1d1`: throughput by concurrent users, t/s (t/s/u)
+
+    | ISL / OSL | 1 user | 2 users | 4 users | 8 users |
+    |---|---|---|---|---|
+    | 128 / 128 | 10 (10.2) | 19 (9.4) | 33 (8.2) | 56 (7.1) |
+    | 1,024 / 128 | 10 (9.6) | 17 (8.5) | 29 (7.6) | 49 (6.4) |
+    | 2,048 / 128 | 9 (9.1) | 15 (7.7) | 27 (7.0) | 44 (6.0) |
+    | 4,096 / 128 | 8 (8.2) | 13 (6.5) | 22 (6.1) | 34 (4.5) |
+    | 8,192 / 128 | 7 (6.9) | 10 (5.0) | 15 (4.4) | 18 (2.6) |
+    | 16,384 / 128 | 5 (5.1) | 7 (3.3) | 9 (2.4) | 10 (1.4) |
+    | 32,768 / 128 | 3 (3.3) | 4 (1.9) | 4 (1.3) | – |
+    | 128 / 1,024 | 10 (10.5) | 20 (9.8) | 35 (8.7) | 62 (7.8) |
+    | 8,192 / 1,024 | 10 (9.7) | 17 (8.7) | 30 (7.7) | 50 (6.6) |
+    | 10,000 / 1,024 | 10 (9.8) | 17 (8.4) | 29 (7.5) | 47 (6.4) |
+
+    * No 8-user point at 32k: the 163,840-token decode pool seats 4 prompts of that length.
+
+    #### `p1d1`: mean TTFT ms / mean TPOT ms
+
+    | ISL / OSL | 1 user | 8 users |
+    |---|---|---|
+    | 128 / 128 | 465 / 94.8 | 1,059 / 134.5 |
+    | 1,024 / 128 | 1,146 / 95.8 | 2,814 / 134.4 |
+    | 2,048 / 128 | 1,924 / 95.2 | 4,537 / 133.2 |
+    | 4,096 / 128 | 3,441 / 96.1 | 11,164 / 136.0 |
+    | 8,192 / 128 | 6,454 / 95.9 | 34,963 / 109.8 |
+    | 16,384 / 128 | 12,725 / 95.7 | 77,957 / 97.0 |
+    | 32,768 / 128 | 26,369 / 97.0 | – |
+    | 128 / 1,024 | 470 / 95.2 | 1,208 / 127.8 |
+    | 8,192 / 1,024 | 6,483 / 96.7 | 21,490 / 131.1 |
+    | 10,000 / 1,024 | 7,975 / 94.7 | 26,533 / 131.0 |
+
+    #### `p1d1` vs `tp2` at the same load (1 and 8 users)
+
+    | users | ISL / OSL | `p1d1` t/s (t/s/u) | `tp2` t/s (t/s/u) | `p1d1` / `tp2` per user | TTFT ms `p1d1` / `tp2` | TPOT ms `p1d1` / `tp2` |
+    |---|---|---|---|---|---|---|
+    | 1 | 128 / 128 | 10 (10.2) | 17 (17.1) | 0.60x | 465 / 316 | 94.8 / 56.6 |
+    | 1 | 1,024 / 128 | 10 (9.6) | 17 (16.7) | 0.58x | 1,146 / 464 | 95.8 / 56.8 |
+    | 1 | 2,048 / 128 | 9 (9.1) | 16 (16.3) | 0.56x | 1,924 / 610 | 95.2 / 56.9 |
+    | 1 | 4,096 / 128 | 8 (8.2) | 15 (15.4) | 0.53x | 3,441 / 1,046 | 96.1 / 57.1 |
+    | 1 | 8,192 / 128 | 7 (6.9) | 14 (13.9) | 0.49x | 6,454 / 1,941 | 95.9 / 57.3 |
+    | 1 | 16,384 / 128 | 5 (5.1) | 11 (11.4) | 0.45x | 12,725 / 3,867 | 95.7 / 57.6 |
+    | 1 | 32,768 / 128 | 3 (3.3) | 8 (8.2) | 0.40x | 26,369 / 8,243 | 97.0 / 58.4 |
+    | 1 | 128 / 1,024 | 10 (10.5) | 18 (17.6) | 0.60x | 470 / 317 | 95.2 / 56.7 |
+    | 1 | 8,192 / 1,024 | 10 (9.7) | 17 (16.9) | 0.57x | 6,483 / 1,952 | 96.7 / 57.3 |
+    | 1 | 10,000 / 1,024 | 10 (9.8) | 17 (16.8) | 0.58x | 7,975 / 2,474 | 94.7 / 57.3 |
+    | 8 | 128 / 128 | 56 (7.1) | 92 (11.4) | 0.62x | 1,059 / 2,394 | 134.5 / 69.2 |
+    | 8 | 1,024 / 128 | 49 (6.4) | 83 (10.4) | 0.62x | 2,814 / 3,409 | 134.4 / 70.4 |
+    | 8 | 2,048 / 128 | 44 (6.0) | 75 (9.3) | 0.64x | 4,537 / 4,518 | 133.2 / 72.4 |
+    | 8 | 4,096 / 128 | 34 (4.5) | 59 (7.4) | 0.61x | 11,164 / 7,664 | 136.0 / 76.1 |
+    | 8 | 8,192 / 128 | 18 (2.6) | 41 (5.1) | 0.51x | 34,963 / 14,217 | 109.8 / 83.9 |
+    | 8 | 16,384 / 128 | 10 (1.4) | 25 (3.1) | 0.45x | 77,957 / 22,316 | 97.0 / 146.3 |
+    | 8 | 128 / 1,024 | 62 (7.8) | 123 (15.4) | 0.51x | 1,208 / 2,379 | 127.8 / 62.8 |
+    | 8 | 8,192 / 1,024 | 50 (6.6) | 98 (12.2) | 0.54x | 21,490 / 14,174 | 131.1 / 68.1 |
+    | 8 | 10,000 / 1,024 | 47 (6.4) | 93 (11.6) | 0.55x | 26,533 / 16,119 | 131.0 / 70.5 |
+
+    #### `tp2-dflash2` vs `tp2`, one user, random prompts
+
+    | ISL / OSL | `tp2` TTFT / TPOT ms | `tp2-dflash2` TTFT / TPOT ms | `tp2` t/s/u | `tp2-dflash2` t/s/u | speed-up |
+    |---|---|---|---|---|---|
+    | 128 / 128 | 316 / 56.6 | 153 / 37.4 | 17.1 | 26.1 | 1.53x |
+    | 1,024 / 128 | 464 / 56.8 | 304 / 39.2 | 16.7 | 24.3 | 1.45x |
+    | 2,048 / 128 | 610 / 56.9 | 520 / 38.6 | 16.3 | 23.6 | 1.44x |
+    | 4,096 / 128 | 1,046 / 57.1 | 1,033 / 43.2 | 15.4 | 19.6 | 1.27x |
+    | 8,192 / 128 | 1,941 / 57.3 | 2,088 / 42.6 | 13.9 | 17.1 | 1.23x |
+    | 16,384 / 128 | 3,867 / 57.6 | 4,376 / 43.0 | 11.4 | 13.0 | 1.14x |
+    | 32,768 / 128 | 8,243 / 58.4 | 9,459 / 42.6 | 8.2 | 8.6 | 1.05x |
+    | 128 / 1,024 | 317 / 56.7 | 153 / 27.9 | 17.6 | 35.7 | 2.03x |
+    | 8,192 / 1,024 | 1,952 / 57.3 | 2,087 / 24.5 | 16.9 | 37.7 | 2.23x |
+    | 10,000 / 1,024 | 2,474 / 57.3 | 2,641 / 26.4 | 16.8 | 34.6 | 2.06x |
+
+    * `tp2-dflash2` at 1 user: 3.4 committed tokens per speculative iteration on the random grid, 5.3 on code; the speed-up fades with prompt length (1.05× at 32k) because the TP=2 verify attention re-reads the KV cache per row, and TTFT is 8-15% higher than `tp2` at 8k-32k tokens (eager masked prefill). Every prompt speculates: there is no prompt-length switch to plain decode in serving.
+
+    #### `tp2-dflash2` vs `tp2` on code
+
+    | set | users | `tp2` | `tp2-dflash2` | speed-up |
+    |---|---|---|---|---|
+    | SPEED-Bench coding, 80 prompts, thinking off: per-user tok/s (1000 / mean TPOT) | 1 | 14.2 | 52.2 | 3.67x |
+    | same run: aggregate t/s over the run (prefill + gaps included) | 1 | 14.1 | 43.9 | 3.12x |
+    | same run: mean end-to-end latency per answer, s | 1 | 45.7 | 13.1 | 3.49x |
+    | identity set: 8 chat prompts x 96 greedy tokens, aggregate t/s | 1 | 16.5 | 30.9 | 1.87x |
+    | identity set: 8 chat prompts x 96 greedy tokens, aggregate t/s | 4 | 44.6 | 77.2 | 1.73x |
+
+    * Concurrency on `tp2-dflash2`: the (128, 128) grid point was not run at 2 or 4 users; the identity set above (4 greedy users, aggregate 77 vs 45 t/s) is the only multi-user measurement.
+    * Not included: `p1d1-dflash2` — the KV connector needs traced masked-bucket prefill on the decode node, DFlash2 serving needs it off (2-3 weeks of model work: `gdn_spec_step` at Nv=48, GQA spec SDPA, drafter taps over the fabric).
+
+    ### Validation and caveats
+
+    * What ran: the tt-inference-server `--workflow benchmarks` grid above for all three profiles (`tp2` 1/2/4/8/16/32 users, `p1d1` 1/2/4/8, `tp2-dflash2` 1) plus the SPEED-Bench coding run; `tp2`: 64k-token and 32k-token prefills (identical outputs on repeat), a 64-prompt burst at 32 users, an 8× determinism probe at six prompt lengths on two boots (identical), 8/8 prompts identical sequential vs concurrent; `p1d1`: two container up/down cycles (one READY line each, clean teardown in 29 s), 6/6 prompts identical to the standalone PD pair; `tp2-dflash2`: the lossless and serving device tests, and 8 chat prompts × 96 tokens checked token-by-token against `tp2` at 1 and 4 users (733 positions: 0 confident mismatches, 6 near-tie flips where `tp2`'s own top-2 logit gap was < 2.0, identical trajectories at 1 and 4 users).
+    * Where it ran: a P300x2 development box emulating the p150x2 — two dies on different cards form the 2-chip mesh / the PD pair over a 2-channel inter-card ethernet link (`channels {count 2 RELAXED}`). A real p150a pair (4 or 8 trained channels, `/dev/tenstorrent/0,1`) is untested: the image ships the stock `p150_x2` descriptor for `tp2` / `tp2-dflash2` and a 2-channel two-mesh descriptor for `p1d1` (`TT_PD_CONNS=2`; set `TT_PD_CONNS=1` if only one link trains). Reports were filed under the harness's `P300` / `P300x2` device labels (it has no p150x2 entry; the grid is device-independent).
+    * MTP (the checkpoint's multi-token-prediction head) is OFF in `tp2` and `p1d1` (`QWEN36_MTP=0`): the plain profiles load neither its weights nor its extra paged KV cache. Speculative decoding exists only in `tp2-dflash2`.
+    * `tp2-dflash2` is the TP=2 fallback path of the DFlash2 serving code: composite Gated-DeltaNet verify and per-row verify attention (the fused kernels need one KV head per device), a single 4x8 bucket, at most 4 users, `sample_on_device_mode: decode_only` (its decode tokens are the drafter/verify's own greedy outputs; prefill anchors are host-sampled). Use it for 1-4 users and prompts up to ~8k tokens; above that it is no faster than `tp2`. Lossless means the target model's greedy trajectory up to bf16 near-ties: outputs may differ from `tp2` after a near-tied token, and each profile is exact against its own greedy target — never "identical text". `temperature` / `top_p` affect only the anchor token; no `logprobs`, structured outputs or images on this profile.
+    * `p1d1`: one KV handoff per request on top of the prefill, claim-gated sends at ≥ 2 users (a request may wait for the producer's next pump; lease 90 s), prefix caching and async scheduling disabled (required by the KV connector); if the decode node loses an export it recomputes the prefill locally. It runs several processes inside one container (supervisor + proxy, two vLLM front-ends, two engine ranks under `tt-run`/`mpirun`); `docker stop` tears them down in order within 120 s. Child logs live under the package cache (`/cache/pd-launch/<tag>/`).
+    * Pad-row nondeterminism: the traced masked-bucket prefill writes the pad rows of a padded prompt into a dedicated scratch KV block outside the scheduler's pool, and those bytes are not run-to-run deterministic. No request ever reads that block, `p1d1`'s KV export fills its chunk tails from a persistent zero block instead of it (exported bytes depend on the request alone), and the real rows, logits and GDN state are bit-exact (determinism probes above) — harmless.
+    * `tp2` and `p1d1` sample on the host (on-device sampling is certified for 1x4 / 1x8 meshes only); `tp2` keeps every vLLM sampling feature.
+    * First boot converts the weights into the package cache (`tensors-tp2` for `tp2` / `tp2-dflash2`, `tensors-tp1` for `p1d1`, one copy per rank); later boots reuse them. Run `tt-model pull --with-weights` first: the container runs with `HF_HUB_OFFLINE=1`.
