@@ -680,11 +680,6 @@ const tt_fabric::FabricRouterConfig& MetalContext::get_fabric_router_config() co
     return MetalEnvAccessor(*env_).impl().get_fabric_router_config();
 }
 
-void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    MetalEnvAccessor(*env_).impl().set_fabric_tensix_config(fabric_tensix_config);
-}
-
 tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
     return MetalEnvAccessor(*env_).impl().get_fabric_tensix_config();

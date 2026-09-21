@@ -231,7 +231,7 @@ FabricContext::FabricContext(
     bool is_ubb_galaxy,
     tt::tt_fabric::FabricConfig fabric_config,
     const FabricRouterConfig& router_config) :
-    router_config_(router_config), is_ubb_galaxy_(is_ubb_galaxy) {
+    control_plane_(control_plane), router_config_(router_config), is_ubb_galaxy_(is_ubb_galaxy) {
     // === Initialization order critical - dependencies flow downward ===
     // fabric_config_ → topology_ → routing flags → packet specs
 

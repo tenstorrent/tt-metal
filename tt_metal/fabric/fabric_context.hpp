@@ -37,7 +37,6 @@ public:
     static constexpr auto routing_directions = {
         RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W, RoutingDirection::Z};
 
-    // control_plane and hal references are not held
     explicit FabricContext(
         const ControlPlane& control_plane,
         const tt_metal::Hal& hal,
@@ -52,6 +51,8 @@ public:
     FabricContext& operator=(const FabricContext&) = delete;
     FabricContext(FabricContext&&) = delete;
     FabricContext& operator=(FabricContext&&) = delete;
+
+    const ControlPlane& control_plane() const { return control_plane_; }
 
     // ============ Topology Queries ============
     bool is_wrap_around_mesh(MeshId mesh_id) const;
@@ -170,6 +171,8 @@ private:
     size_t get_1d_header_size(uint32_t extension_words) const;
     size_t get_2d_header_size(uint32_t route_buffer_size) const;
     size_t get_udm_header_size(uint32_t route_buffer_size) const;
+
+    const ControlPlane& control_plane_;
 
     tt::tt_fabric::FabricConfig fabric_config_{};
     tt::tt_fabric::Topology topology_{};
