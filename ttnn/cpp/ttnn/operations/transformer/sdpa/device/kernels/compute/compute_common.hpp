@@ -349,8 +349,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                     // Accurate exp does not fold scale into init. Keep the full FP32 scale before exponentiation.
                     binop_with_scalar_tile_init();
                     mul_unary_tile(j, scale_fp32);
-                    exp_tile_init<false, 0x3F800000, InputClamping::None>();
-                    exp_tile<false, false, InputClamping::None, iterations>(j, vector_mode_exp);
+                    exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative>();
+                    exp_tile<false, false, InputClamping::ClampToNegative, iterations>(j, vector_mode_exp);
                 }
             }
             tile_regs_commit();
