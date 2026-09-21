@@ -138,9 +138,16 @@ bool can_use_interleaved_to_sharded(
         total_cb_size += num_units_per_shard * output_page_size;
     }
 
+    // Sharded L1 outputs allocate one shard per core before CB placement; reserve that space.
+    uint32_t pending_output_bytes_per_core = 0;
+    if (!dst_is_dram) {
+        uint32_t aligned_output_page_size = tt::align(output_unit_size, dst_alignment);
+        pending_output_bytes_per_core = num_units_per_shard * aligned_output_page_size;
+    }
+
     uint32_t max_l1_size = operations::data_movement::get_max_l1_space(input_tensor);
 
-    return total_cb_size < max_l1_size;
+    return total_cb_size + pending_output_bytes_per_core < max_l1_size;
 }
 
 bool can_use_reshard(
