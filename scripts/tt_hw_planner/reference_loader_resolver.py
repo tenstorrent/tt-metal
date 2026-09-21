@@ -64,7 +64,7 @@ _NATIVE_CONFIG_FILE = NATIVE_CONFIG_FILE
 # not turn up. Only these refuse a loader; everything else is reported and stays out of the way.
 # `no_match` earns its place here only because the sample now spans every shard: on a one-file
 # sample it could not tell "loaded nothing" from "rewrote the file we happened to read".
-_FATAL_STATUSES = ("violated", "diverges", "no_match")
+_FATAL_STATUSES = ("violated", "diverges", "no_match", "undriven")
 # Long enough that a causal model has a past to respect, short enough to stay cheap on CPU.
 _PROBE_SEQ = 8
 # The invariants are exact statements, so this is float noise from reordered reductions only.
@@ -76,6 +76,12 @@ _INVARIANT_ATOL = 1e-4
 # so a many-shard model is read more widely than a single-file one rather than less.
 _FINGERPRINT_MIN_NUMEL = 4096
 _PROVENANCE_SAMPLE = 12
+# Per GROUP, so a submodel cannot be skipped by a sample the rest of the checkpoint spent.
+_COVERAGE_GROUP_SAMPLE = 8
+# A submodel is only called absent when it is too big to be a conversion artefact: a loader that
+# rewrites a handful of tensors matches nothing on those and is still correct. Both floors apply.
+_UNDRIVEN_MIN_TENSORS = 16
+_UNDRIVEN_MIN_SHARE = 0.05
 _MOMENT_TOL = 1e-4
 
 
@@ -329,15 +335,19 @@ def assess(ref, model_id: str) -> dict:
     invariants = check_invariants(ref)
     constants = config_fidelity(model_id, ref)
     provenance = weight_provenance(model_id, ref)
+    # WHAT THE REFERENCE DOES NOT IMPLEMENT AT ALL, which provenance cannot see: it passes on one
+    # matching tensor, so a reference covering part of the checkpoint satisfies it completely.
+    coverage = checkpoint_coverage(model_id, ref)
     detail = {
         "invariants": invariants,
         "constants": constants,
         "provenance": provenance,
+        "coverage": coverage,
     }
     # `absent` and `unverified` stay out of this: one is a value that did not turn up and the other
     # a check that could not run, both of which have innocent explanations, whereas these are the
     # reference contradicting itself, its own checkpoint, or the weights it claims to have loaded.
-    for verdict in (invariants, constants, provenance):
+    for verdict in (invariants, constants, provenance, coverage):
         if verdict.get("status") in _FATAL_STATUSES:
             return {"ok": False, "status": "broken", "reason": verdict["reason"], **detail}
     return {
@@ -706,6 +716,116 @@ def _shipped_fingerprints(files: List[Path], per_file: int):
                     yield fp
 
 
+def _reference_fingerprints(ref) -> dict:
+    """The reference's own parameter moments, keyed by element count. Shared by both checkpoint
+    checks so neither can disagree with the other about what the reference holds."""
+    have: dict = {}
+    for p in ref.parameters():
+        fp = _fingerprint(p)
+        if fp:
+            have.setdefault(fp[0], []).append(fp)
+    return have
+
+
+def _tensor_group(key: str) -> str:
+    """The top-level submodel a checkpoint tensor belongs to, as the checkpoint itself names it.
+
+    Read off the key, never matched against a list of names written here: a checkpoint that calls
+    its parts something else is grouped by whatever it calls them.
+    """
+    return str(key).split(".", 1)[0]
+
+
+def checkpoint_coverage(model_id: str, ref) -> dict:
+    """Is any whole submodel of the shipped checkpoint absent from the reference?
+
+    WHY THIS IS SEPARATE FROM `weight_provenance`. That check asks whether the reference's weights
+    are genuine, and one matching tensor settles it -- so a reference holding only part of the
+    checkpoint passes it comfortably. Nothing then asked the other question: whether anything in the
+    checkpoint has no counterpart in the reference at all.
+
+    Measured on mistralai/Voxtral-4B-TTS-2603: the resolver had no reference for that architecture
+    and fell back to the nearest sibling, a text-only causal LM, so the reference exposed the 26
+    decoder layers and nothing else. 116 of the checkpoint's 386 tensors -- the entire
+    `audio_tokenizer` vocoder, 30% of the model -- were never enumerated, never brought up, and
+    never mentioned. Every component the tool did enumerate graduated, and it reported COMPLETE.
+
+    A GROUP, NOT A TENSOR, and only a substantial one. A loader is allowed to transform individual
+    tensors (dequantise, merge, fuse QKV), and those legitimately match nothing -- refusing on a
+    single unmatched tensor would reject correct loaders. What no conversion explains is a whole
+    top-level submodel of many tensors matching nothing anywhere in the reference: that is not a
+    rewrite, it is an absence. Hence both floors below, and per-GROUP sampling rather than the
+    global sample `weight_provenance` takes -- a global cap can spend itself on one submodel and
+    never look at the missing one.
+    """
+    files = _checkpoint_files(model_id)
+    if not files:
+        return {"status": "unverified", "reason": "no local safetensors checkpoint to compare against"}
+    try:
+        from safetensors import safe_open
+    except Exception as exc:  # noqa: BLE001 -- absence of the reader is an environment fact
+        return {"status": "unverified", "reason": f"safetensors unavailable: {exc}"}
+
+    have = _reference_fingerprints(ref)
+    if not have:
+        return {"status": "unverified", "reason": "no parameters large enough to fingerprint"}
+
+    groups: dict = {}
+    try:
+        for path in files:
+            with safe_open(str(path), framework="pt") as f:
+                for key in f.keys():
+                    g = groups.setdefault(_tensor_group(key), {"tensors": 0, "sampled": 0, "matched": 0})
+                    g["tensors"] += 1
+                    if g["sampled"] >= _COVERAGE_GROUP_SAMPLE:
+                        continue
+                    fp = _fingerprint(f.get_tensor(key))
+                    if not fp:
+                        continue
+                    g["sampled"] += 1
+                    g["matched"] += any(
+                        abs(fp[1] - c[1]) <= _MOMENT_TOL and abs(fp[2] - c[2]) <= _MOMENT_TOL
+                        for c in have.get(fp[0], ())
+                    )
+    except Exception as exc:  # noqa: BLE001 -- an unreadable shard is not the loader's fault
+        return {"status": "unverified", "reason": f"could not read checkpoint: {exc}"}
+
+    total = sum(g["tensors"] for g in groups.values())
+    if not total:
+        return {"status": "unverified", "reason": "no comparable tensors in checkpoint"}
+    undriven = sorted(
+        (
+            name
+            for name, g in groups.items()
+            if g["sampled"]
+            and not g["matched"]
+            and g["tensors"] >= _UNDRIVEN_MIN_TENSORS
+            and g["tensors"] >= _UNDRIVEN_MIN_SHARE * total
+        ),
+        key=lambda n: -groups[n]["tensors"],
+    )
+    detail = {"groups": groups, "tensors": total}
+    if not undriven:
+        return {
+            "status": "covered",
+            "reason": f"every substantial submodel of {total} tensors is represented",
+            **detail,
+        }
+    missing = sum(groups[n]["tensors"] for n in undriven)
+    return {
+        "status": "undriven",
+        "reason": (
+            f"{missing}/{total} checkpoint tensors ({100.0 * missing / total:.0f}%) belong to submodel(s) "
+            f"the reference does not implement: "
+            + ", ".join(f"{n} ({groups[n]['tensors']} tensors)" for n in undriven)
+            + " -- nothing built from this reference can drive them, so a bring-up over it would "
+            "report complete while that part of the model was never ported"
+        ),
+        "undriven": undriven,
+        **detail,
+    }
+
+
 def weight_provenance(model_id: str, ref) -> dict:
     """Do this module's parameters actually come from the shipped checkpoint?
 
@@ -730,11 +850,7 @@ def weight_provenance(model_id: str, ref) -> dict:
     except Exception as exc:  # noqa: BLE001 -- absence of the reader is an environment fact
         return {"status": "unverified", "reason": f"safetensors unavailable: {exc}"}
 
-    have = {}
-    for p in ref.parameters():
-        fp = _fingerprint(p)
-        if fp:
-            have.setdefault(fp[0], []).append(fp)
+    have = _reference_fingerprints(ref)
     if not have:
         return {"status": "unverified", "reason": "no parameters large enough to fingerprint"}
 

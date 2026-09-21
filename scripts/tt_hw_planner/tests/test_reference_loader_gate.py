@@ -18,6 +18,7 @@ import importlib.util
 import pytest
 
 from scripts.tt_hw_planner.reference_loader_resolver import (
+    checkpoint_coverage,
     _resolved,
     _validates,
     _NATIVE_CONFIG_FILE,
@@ -585,3 +586,110 @@ def test_the_output_unwrap_needs_no_field_names_at_all() -> None:
     assert result_tensor({"whatever": (inner,)}) is inner
     assert result_tensor(inner) is inner
     assert result_tensor("not a tensor anywhere") is None
+
+
+# --------------------------------------------------------------------------------------------
+# Coverage. Provenance asks whether the reference's weights are genuine and is satisfied by one
+# matching tensor, so a reference implementing PART of a checkpoint passes it comfortably. Nothing
+# asked whether anything in the checkpoint has no counterpart in the reference at all.
+#
+# mistralai/Voxtral-4B-TTS-2603: no reference existed for that architecture, so the resolver fell
+# back to the nearest sibling -- a text-only causal LM. 116 of 386 tensors, the whole
+# `audio_tokenizer` vocoder and 30% of the model, were never enumerated and never brought up. Every
+# component the tool did enumerate graduated and it reported COMPLETE.
+
+
+def _big(n, scale=1.0):
+    import torch
+
+    return torch.randn(n) * scale
+
+
+def _named_checkpoint(tmp_path: Path, tensors: dict) -> str:
+    from safetensors.torch import save_file
+
+    d = tmp_path / "ckpt"
+    d.mkdir(parents=True, exist_ok=True)
+    save_file(tensors, str(d / "model-00000.safetensors"))
+    return str(d)
+
+
+@requires_torch
+def test_a_submodel_the_reference_never_implements_is_named(tmp_path: Path) -> None:
+    """The reported failure, reproduced: a reference holding only one of two submodels."""
+    driven = {f"backbone.layers.{i}.weight": _big(4096 + i) for i in range(20)}
+    absent = {f"some_vocoder.blocks.{i}.weight": _big(8192 + i) for i in range(20)}
+    ckpt = _named_checkpoint(tmp_path, {**driven, **absent})
+
+    out = checkpoint_coverage(ckpt, _module_with(*[t.clone() for t in driven.values()]))
+    assert out["status"] == "undriven", out
+    assert out["undriven"] == ["some_vocoder"], out
+    assert "some_vocoder" in out["reason"] and "20 tensors" in out["reason"], out
+
+
+@requires_torch
+def test_a_fully_implemented_checkpoint_is_covered(tmp_path: Path) -> None:
+    tensors = {f"backbone.layers.{i}.weight": _big(4096 + i) for i in range(20)}
+    ckpt = _named_checkpoint(tmp_path, tensors)
+    out = checkpoint_coverage(ckpt, _module_with(*[t.clone() for t in tensors.values()]))
+    assert out["status"] == "covered", out
+
+
+@requires_torch
+def test_a_handful_of_transformed_tensors_is_not_an_absent_submodel(tmp_path: Path) -> None:
+    """A loader may dequantise, merge or fuse individual tensors; those match nothing and are still
+    correct. Only a submodel too large to be a conversion artefact counts as absent."""
+    kept = {f"backbone.layers.{i}.weight": _big(4096 + i) for i in range(20)}
+    rewritten = {"fused.qkv.weight": _big(9999)}
+    ckpt = _named_checkpoint(tmp_path, {**kept, **rewritten})
+    out = checkpoint_coverage(ckpt, _module_with(*[t.clone() for t in kept.values()]))
+    assert out["status"] == "covered", out
+
+
+@requires_torch
+def test_a_small_submodel_is_below_the_floor_even_at_zero_matches(tmp_path: Path) -> None:
+    """Both floors apply: too few tensors AND too small a share stay quiet, so a stray norm the
+    loader folded away cannot refuse a correct reference."""
+    kept = {f"backbone.layers.{i}.weight": _big(4096 + i) for i in range(60)}
+    tiny = {f"odds.{i}.weight": _big(7777 + i) for i in range(3)}
+    ckpt = _named_checkpoint(tmp_path, {**kept, **tiny})
+    out = checkpoint_coverage(ckpt, _module_with(*[t.clone() for t in kept.values()]))
+    assert out["status"] == "covered", out
+
+
+@requires_torch
+def test_the_group_name_is_read_off_the_checkpoint_not_matched_to_a_list(tmp_path: Path) -> None:
+    """A checkpoint that calls its parts something nobody anticipated is still grouped correctly."""
+    driven = {f"aaa.layers.{i}.weight": _big(4096 + i) for i in range(20)}
+    absent = {f"zzz_unheard_of_thing.{i}.weight": _big(8192 + i) for i in range(20)}
+    ckpt = _named_checkpoint(tmp_path, {**driven, **absent})
+    out = checkpoint_coverage(ckpt, _module_with(*[t.clone() for t in driven.values()]))
+    assert out["undriven"] == ["zzz_unheard_of_thing"], out
+
+
+@requires_torch
+def test_an_absent_submodel_stops_the_run_rather_than_reporting_complete(tmp_path: Path) -> None:
+    """The point of the gate: bring-up must not grade itself against a reference that cannot reach
+    part of the model, because every component it DOES enumerate will pass."""
+    driven = {f"backbone.layers.{i}.weight": _big(4096 + i) for i in range(20)}
+    absent = {f"some_vocoder.blocks.{i}.weight": _big(8192 + i) for i in range(20)}
+    ckpt = _named_checkpoint(tmp_path, {**driven, **absent})
+    verdict = assess(_module_with(*[t.clone() for t in driven.values()]), ckpt)
+    assert verdict["ok"] is False, verdict
+    assert "some_vocoder" in verdict["reason"], verdict
+    assert verdict["coverage"]["status"] == "undriven", verdict
+
+
+@requires_torch
+def test_an_unreadable_checkpoint_is_unverified_not_undriven(tmp_path: Path) -> None:
+    """Same rule the provenance check already follows: a read that failed blames the environment."""
+    ckpt = _named_checkpoint(tmp_path, {"backbone.w": _big(4096)})
+    (Path(ckpt) / "model-00000.safetensors").write_bytes(b"truncated")
+    out = checkpoint_coverage(ckpt, _module_with(_big(4096)))
+    assert out["status"] == "unverified", out
+
+
+@requires_torch
+def test_no_checkpoint_on_disk_is_unverified(tmp_path: Path) -> None:
+    out = checkpoint_coverage(str(tmp_path / "nothing-here"), _module_with(_big(4096)))
+    assert out["status"] == "unverified", out
