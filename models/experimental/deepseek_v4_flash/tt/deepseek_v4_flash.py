@@ -6,8 +6,6 @@ The implementations live in the sibling modules (``model.py``, ``attention.py``,
 
 from .attention import (
     DeepSeekV4Attention,
-    DeepSeekV4CSACompressor,
-    DeepSeekV4HCACompressor,
     _StaticLayerCache,
     build_static_layer_cache,
     decode_sdpa_bounds,
@@ -17,6 +15,8 @@ from .attention import (
     sdpa_causal_cur_pos,
     sdpa_causal_ok,
 )
+from .attention_csa import DeepSeekV4CSACompressor
+from .attention_hca import DeepSeekV4HCACompressor
 from .common import (
     DeepSeekV4Module,
     _MASK_NEG,
