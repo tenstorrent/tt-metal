@@ -442,7 +442,8 @@ fi # bh-6u
 
 ######################################
 # BH Galaxy: single galaxy (32 ASICs)
-# Per-host-sliced MGDs 1x1/1x2/2x2/4x2; dual-pod intermesh; 4-stage Blitz ring (subtorus only).
+# Per-host-sliced MGDs 1x1/1x2/2x2/4x2; dual-pod intermesh; 4-stage Blitz ring
+# (RING+LINE on subtorus, LINE+LINE on non-subtorus).
 # Cluster mocks: revAB (aisle D, non-subtorus), revC (aisle C, non-subtorus), revC subtorus (aisle C / aisle D).
 ######################################
 if run_group "bh-single-galaxy"; then
@@ -457,14 +458,17 @@ for mock in \
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/single_bh_galaxy_2x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SINGLE_GALAXY_SLICE}"
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/single_bh_galaxy_4x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SINGLE_GALAXY_SLICE}"
 
-  # TODO: https://github.com/tenstorrent/tt-metal/issues/47718 Currently 4 stage loopback is not supported for non-subtorus galaxies
+  # 4-stage ring of 4x2 stages. RING+LINE needs subtorus wrap (issue #47718).
+  # LINE+LINE sits on one tray per stage and is valid on non-subtorus galaxies.
   if [[ "${mock}" == *subtorus* ]]; then
+    run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_single_galaxy_4x2_ring_4stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SINGLE_GALAXY_BLITZ}"
+  else
     run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_single_galaxy_4x2_line_4stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SINGLE_GALAXY_BLITZ}"
   fi
 
   # 4-stage ring of 2x2 RING+LINE stages: MGD-declared RING on a 2-device dimension stays allowed
   # (issue #54650 reserves ports only for fabric-config-driven torus axes) and routing planes are
-  # not downgraded. Subtorus-only for the same reason as the blitz 4-stage ring above.
+  # not downgraded. Subtorus-only: RING on a 2-device dim still needs wrap (#47718).
   if [[ "${mock}" == *subtorus* ]]; then
     run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_single_galaxy_2x2_ring_4stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SINGLE_GALAXY_2X2_RING}"
   fi
@@ -476,8 +480,6 @@ for mock in \
     run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_single_galaxy_2x2_line_4stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SINGLE_GALAXY_2X2_Z}"
   fi
 done
-
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_single_galaxy_4x2_line_4stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC16_REVAB_AISLED_SINGLE_GALAXY_CLUSTER_DESC}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
 
 fi # bh-single-galaxy
 
