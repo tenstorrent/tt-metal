@@ -39,7 +39,10 @@ ttnn::Tensor scaled_dot_product_attention(
     /// Windowed mode only. Per-device form of the offset above: a 1-element int32/uint32 ROW_MAJOR device
     /// tensor, read at runtime rather than baked into the program. Shard it on the sequence-parallel axis
     /// so every device runs the SAME program yet sees its own origin. Overrides the scalar when set.
-    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt,
+    /// Non causal with attn_mask only. [Bm, Hm, ceil(Sq / q_chunk), ceil(Sk / k_chunk)] int32 ROW_MAJOR, nonzero
+    /// where a (q chunk, k chunk) block of the mask has a visible entry; the other blocks are skipped.
+    const std::optional<ttnn::Tensor>& attn_mask_block_map = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
