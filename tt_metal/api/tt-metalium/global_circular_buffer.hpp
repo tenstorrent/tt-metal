@@ -48,15 +48,6 @@ public:
         uint32_t size,
         BufferType buffer_type = BufferType::L1);
 
-    [[deprecated(
-        "Use GlobalCircularBuffer(distributed::MeshDevice&, ...) instead. "
-        "GlobalCircularBuffer(IDevice*, ...) will be removed after 2026-09-20.")]]
-    GlobalCircularBuffer(
-        IDevice* device,
-        const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-        uint32_t size,
-        BufferType buffer_type = BufferType::L1);
-
     GlobalCircularBuffer(const GlobalCircularBuffer&) = default;
     GlobalCircularBuffer& operator=(const GlobalCircularBuffer&) = default;
 
@@ -149,24 +140,6 @@ private:
  */
 GlobalCircularBuffer CreateGlobalCircularBuffer(
     distributed::MeshDevice& device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type = BufferType::L1);
-
-/**
- * @brief Allocates a global circular buffer in L1 on the device.
- *
- * @param device The device to create the global circular buffer on.
- * @param sender_receiver_core_mapping The mapping of remote sender to remote receiver cores for the circular buffer.
- * @param size Size of the global circular buffer per core in bytes.
- * @param buffer_type Buffer type to store the global circular buffer. Can only be an L1 buffer type.
- * @return The allocated global circular buffer.
- */
-[[deprecated(
-    "Use CreateGlobalCircularBuffer(distributed::MeshDevice&, ...) instead. "
-    "CreateGlobalCircularBuffer(IDevice*, ...) will be removed after 2026-09-20.")]]
-GlobalCircularBuffer CreateGlobalCircularBuffer(
-    IDevice* device,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type = BufferType::L1);

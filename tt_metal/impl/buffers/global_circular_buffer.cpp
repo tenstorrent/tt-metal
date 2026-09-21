@@ -131,20 +131,13 @@ GlobalCircularBuffer::GlobalCircularBuffer(
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
     uint32_t size,
     BufferType buffer_type) :
-    GlobalCircularBuffer{&device, sender_receiver_core_mapping, size, buffer_type} {}
-
-GlobalCircularBuffer::GlobalCircularBuffer(
-    IDevice* device,
-    const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
-    uint32_t size,
-    BufferType buffer_type) :
-    device_(device),
+    device_(&device),
     sender_receiver_core_mapping_(sender_receiver_core_mapping),
     size_(size),
     sender_core_type_value_(static_cast<uint8_t>(experimental::SenderCoreType::Worker)) {
     uint32_t max_num_receivers_per_sender = 0;
     initialize_global_circular_buffer(
-        device,
+        &device,
         sender_receiver_core_mapping,
         /*is_dram_sender=*/false,
         sender_cores_,

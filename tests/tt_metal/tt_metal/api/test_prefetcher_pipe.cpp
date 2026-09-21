@@ -2444,8 +2444,8 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_CrossSubDevice_CoordinatedLivePeerN
 
     // Semaphores are allocated top-down before the PrefetcherPipe. The test-only
     // sender staging scratch is placed immediately above the persistent arena.
-    auto resized_sem = CreateGlobalSemaphore(mesh_device.get(), sender_cores, /*initial_value=*/0);
-    auto go_sem = CreateGlobalSemaphore(mesh_device.get(), sender_cores, /*initial_value=*/0);
+    auto resized_sem = CreateGlobalSemaphore(*mesh_device, sender_cores, /*initial_value=*/0);
+    auto go_sem = CreateGlobalSemaphore(*mesh_device, sender_cores, /*initial_value=*/0);
 
     const std::pair<CoreCoord, CoreRangeSet> mapping = {sender_core, receiver_cores};
     auto pipe =
