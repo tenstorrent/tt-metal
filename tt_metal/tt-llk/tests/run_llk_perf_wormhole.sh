@@ -1,45 +1,71 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# CONCURRENCY EXPERIMENT -- do the neighbours decide the number?
 #
-# SPDX-License-Identifier: Apache-2.0
-# Wormhole LLK perf runner, shared by the 5 wh matrix groups in
-# tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
-#
-# pytest-split sharding: compile this shard's items (producer), then measure
-# them (consumer) -- one invocation each over the whole perf suite.
-#
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_wormhole.sh <group> <n_groups>
+# The same 64 matmul targets, measured under different amounts of concurrent
+# work, each arm run twice. Stage 2 ruled out the predecessor on one core.
 set -euo pipefail
-
-GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-N_GROUPS="${2:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
-export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
-
-case "$SPEED_OF_LIGHT" in
-  true)
-    SPEED_OF_LIGHT_ARGS=(--speed-of-light)
-    ;;
-  false)
-    SPEED_OF_LIGHT_ARGS=()
-    ;;
-  *)
-    echo "SPEED_OF_LIGHT must be 'true' or 'false', got '$SPEED_OF_LIGHT'" >&2
-    exit 2
-    ;;
-esac
+GROUP="${1:?}"
+N_GROUPS="${2:?}"
+if [ "$GROUP" != "1" ]; then
+  echo "experiment: only group 1 runs; this group exits."
+  exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LLK_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SCRIPT_DIR/python_tests"
-mkdir -p perf_data
+export PERF_KEEP_RUNS=0
+unset PERF_RUN_TAG
 
-PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+M="perf and not accuracy"
+PQ="-q --override-ini=log_cli=false"
 
-pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-wormhole-${GROUP}-compile.xml" .
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-wormhole-${GROUP}-run.xml" .
-junitparser merge pytest-report-wormhole-${GROUP}-compile.xml pytest-report-wormhole-${GROUP}-run.xml pytest-report-wormhole-${GROUP}.xml
+pytest -q --collect-only -m "$M" perf_math_matmul.py > /tmp/mm.txt 2>&1 || true
+grep '::' /tmp/mm.txt > /tmp/mm_ids.txt
+TOTAL=$(wc -l < /tmp/mm_ids.txt)
+echo "===== matmul items collected: $TOTAL"
+[ "$TOTAL" -ge 1000 ] || { echo "FATAL: collection looks wrong" >&2; exit 1; }
+
+STEP=$(( TOTAL / 64 ))
+awk -v s="$STEP" 'NR % s == 1' /tmp/mm_ids.txt | head -64 > /tmp/target.txt
+mapfile -t TARGET < /tmp/target.txt
+# Filler is disjoint from the target: a different residue of the same stride.
+awk -v s="$STEP" 'NR % s == 5' /tmp/mm_ids.txt > /tmp/filler_all.txt
+head -600  /tmp/filler_all.txt > /tmp/f600.txt
+mapfile -t F600 < /tmp/f600.txt
+awk 'NR % 12 == 7' /tmp/mm_ids.txt | head -3000 > /tmp/f3000.txt
+mapfile -t F3000 < /tmp/f3000.txt
+echo "===== target ${#TARGET[@]}  f600 ${#F600[@]}  f3000 ${#F3000[@]}"
+
+arm() {
+  local label="$1" workers="$2" filler="$3"
+  local -a extra=()
+  case "$filler" in
+    0)     extra=() ;;
+    600)   extra=("${F600[@]}") ;;
+    3000)  extra=("${F3000[@]}") ;;
+  esac
+  echo "===== ARM $label  workers=$workers filler=$filler  $(date -u +%H:%M:%S)"
+  export PERF_RUN_TAG="$label"
+  pytest $PQ --compile-producer -n 10 -m "$M" --timeout=60 \
+    "${TARGET[@]}" ${extra[@]+"${extra[@]}"} > "/tmp/$label.c.log" 2>&1 \
+    || echo "  (producer rc=$?)"
+  pytest $PQ --compile-consumer -n "$workers" -m "$M" --timeout=60 \
+    "${TARGET[@]}" ${extra[@]+"${extra[@]}"} > "/tmp/$label.r.log" 2>&1 \
+    || echo "  (consumer rc=$?)"
+  tail -2 "/tmp/$label.r.log" | sed 's/^/  /'
+  unset PERF_RUN_TAG
+}
+
+arm n1_f600_a   1  600
+arm n1_f600_b   1  600
+arm n15_f0_a   15    0
+arm n15_f0_b   15    0
+arm n15_f600_a 15  600
+arm n15_f600_b 15  600
+arm n15_f3000_a 15 3000
+arm n15_f3000_b 15 3000
+
+echo "===== arms written:"
+ls -1 "$LLK_ROOT/perf_data/runs/" || true
+echo "===== experiment done ====="
