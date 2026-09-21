@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -42,15 +43,15 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer src_dfb(dfb::src);
-    DataflowBuffer dst_dfb(dfb::dst);
+    Scratchpad<uint32_t> dst(scratch::dst);
 
     // DFB in L1 memory for storing input
     const uint32_t src_dfb_addr = src_dfb.get_write_ptr();
     constexpr DataFormat src_dfb_addr_data_format = get_dataformat(dfb::src);
 
-    // DFB in L1 memory for storing output
-    const uint32_t dst_dfb_addr = dst_dfb.get_write_ptr();
-    volatile tt_l1_ptr uint32_t* out_idxs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_dfb_addr);
+    // Scratchpad in L1 memory for storing output
+    const uint32_t dst_addr = dst.get_base_address();
+    volatile tt_l1_ptr uint32_t* out_idxs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
 
     uint32_t max_idx = 0;
     auto max_val = get_default_value<src_dfb_addr_data_format>();
@@ -77,11 +78,9 @@ void kernel_main() {
             }
         }
 
-        // The results were written at dst_dfb's write pointer, and that is the address this send
-        // reads from: nothing on this DFB ever calls reserve_back/push_back/wait_front/pop_front, so
-        // its read and write pointers both stay at the buffer base for the whole kernel.
+        // The results were written at dst's base address, and that is where this send reads from.
         if constexpr (not reduce_all) {
-            noc.async_write(dst_dfb, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = k});
+            noc.async_write(dst, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = k});
             noc.async_write_barrier();
         }
     }
@@ -89,7 +88,7 @@ void kernel_main() {
     // TODO: Generalize write for argmax for other dims
     if constexpr (reduce_all) {
         out_idxs[0] = max_idx;
-        noc.async_write(dst_dfb, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = 0});
+        noc.async_write(dst, s_dst, dst_page_size, {.offset_bytes = 0}, {.page_id = 0});
         noc.async_write_barrier();
     }
 }

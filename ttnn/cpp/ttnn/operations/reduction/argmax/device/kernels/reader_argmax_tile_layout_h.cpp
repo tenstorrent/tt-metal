@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "experimental/kernel_args.h"
 
 #include <stdint.h>
@@ -42,8 +43,8 @@ void kernel_main() {
     const DataflowBuffer src_dfb(dfb::src);
     const uint32_t src_dfb_addr = src_dfb.get_write_ptr();
     constexpr DataFormat src_data_format = get_dataformat(dfb::src);
-    const DataflowBuffer dst_dfb(dfb::dst);
-    const uint32_t dst_dfb_addr = dst_dfb.get_write_ptr();
+    const Scratchpad<uint32_t> dst(scratch::dst);
+    const uint32_t dst_addr = dst.get_base_address();
 
     auto default_val = get_default_value<src_data_format>();
     using src_element_type = decltype(default_val);
@@ -74,7 +75,7 @@ void kernel_main() {
         src_data_format,
         src_dfb_addr);
 
-    OutputContext output_ctx(reinterpret_cast<uint32_t*>(stack_unused), 1, dst_dfb_addr, output_page_elements);
+    OutputContext output_ctx(reinterpret_cast<uint32_t*>(stack_unused), 1, dst_addr, output_page_elements);
 
     const Noc noc;
 
