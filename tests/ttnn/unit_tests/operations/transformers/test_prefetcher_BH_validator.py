@@ -477,12 +477,14 @@ def _setup_weight_and_pipes_recv_contig(
     distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
     row_offset=0,
     num_entries=_GCB_DEPTH_PAGES,
+    entry_divisor=1,
     return_space=False,
 ):
     """PrefetcherPipe analogue of _setup_weight_and_gcb_recv_contig: same weight and the same
     bank->receiver pairing (see _recv_contig_weight_and_bank_map), differing only in the target
-    object. The space ring is sized as `num_entries` whole blocks of this tensor; a later request
-    may push any other aligned block size the ring holds."""
+    object. The space ring is sized as `num_entries` blocks of this tensor's block size divided by
+    `entry_divisor`; a later request may push any other aligned block size the ring holds, so a
+    divisor above 1 is how a caller gets a ring the pushed block size does not divide."""
     tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
         device, K, N, dtype, recv_per_bank, distribution_strategy=distribution_strategy, row_offset=row_offset
     )
@@ -493,7 +495,7 @@ def _setup_weight_and_pipes_recv_contig(
         device,
         sender_cores=ttnn.CoreRangeSet(set()),
         receiver_domain=receiver_domain,
-        ring_size=push_page_size * num_entries,
+        ring_size=(push_page_size // entry_divisor) * num_entries,
         max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
         num_dram_senders=2 * len(bank_to_receivers),
     )
@@ -683,32 +685,11 @@ def test_validator_pipe_block_size_not_dividing_ring(device, K, N, dtype, recv_p
     block as padding at each wrap, so a lap credits the whole ring and its cursor comes back to the
     ring base on a block boundary. Two layers so the ring wraps at least once with a gap in play.
     """
-    tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
-        device, K, N, dtype, recv_per_bank
-    )
-    receiver_domain = ttnn.CoreRangeSet(
-        {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
-    )
-    pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
-        device,
-        sender_cores=ttnn.CoreRangeSet(set()),
-        receiver_domain=receiver_domain,
-        ring_size=(push_page_size // 2) * num_entries,
-        max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
-        num_dram_senders=2 * len(bank_to_receivers),
-    )
-    gapped_pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
-        pipe_space,
-        bank_to_receivers,
-        support_multi_receiver_shards=True,
+    tt_weight, gapped_pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank, num_entries=num_entries, entry_divisor=2
     )
     with tensor_prefetcher_session(device):
-        ttnn.experimental.queue_tensor_prefetcher_request(
-            device, [(tt_weight, ring_size)] * 2, prefetcher_pipes=gapped_pipes
-        )
-        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
-            device, tt_weight, num_layers=2, print_stride=max(1, ring_size // 4), prefetcher_pipes=gapped_pipes
-        )
+        _queue_and_validate_pipes(device, tt_weight, gapped_pipes, ring_size, num_layers=2)
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
@@ -721,32 +702,11 @@ def test_validator_pipe_ring_holds_one_block(device, K, N, dtype, recv_per_bank,
     half-block trailing gap after that one block, so each push credits payload plus gap and the
     cursor wraps back to zero every time.
     """
-    tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
-        device, K, N, dtype, recv_per_bank
-    )
-    receiver_domain = ttnn.CoreRangeSet(
-        {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
-    )
-    pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
-        device,
-        sender_cores=ttnn.CoreRangeSet(set()),
-        receiver_domain=receiver_domain,
-        ring_size=(push_page_size // entry_divisor) * num_entries,
-        max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
-        num_dram_senders=2 * len(bank_to_receivers),
-    )
-    shallow_pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
-        pipe_space,
-        bank_to_receivers,
-        support_multi_receiver_shards=True,
+    tt_weight, shallow_pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank, num_entries=num_entries, entry_divisor=entry_divisor
     )
     with tensor_prefetcher_session(device):
-        ttnn.experimental.queue_tensor_prefetcher_request(
-            device, [(tt_weight, ring_size)], prefetcher_pipes=shallow_pipes
-        )
-        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
-            device, tt_weight, num_layers=1, print_stride=max(1, ring_size // 4), prefetcher_pipes=shallow_pipes
-        )
+        _queue_and_validate_pipes(device, tt_weight, shallow_pipes, ring_size, num_layers=1)
 
 
 def _queue_and_validate_pipes(device, tt_weight, pipes, ring_size, num_layers=1):

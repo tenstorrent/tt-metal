@@ -19,6 +19,21 @@
 
 namespace prefetcher_validator {
 
+// Overflow poll: long enough to cover a sender's round trip to publish one more entry after this
+// receiver's last pop -- the window an overshoot would show up in -- while still ending the test if
+// none does.
+constexpr uint32_t kExtraPollCycles = 1u << 18;
+
+// What first_mismatching_word returns when the two buffers are identical, so a caller does not have
+// to re-derive the word count just to read the answer.
+constexpr uint32_t kNoMismatch = ~0u;
+
+// Whether this iteration should be logged: the first two and the last always, plus every
+// print_stride'th when a stride was requested.
+FORCE_INLINE bool should_log(uint32_t global_iter, uint32_t total_iters, uint32_t print_stride) {
+    return global_iter < 2 || global_iter + 1 == total_iters || (print_stride > 0 && global_iter % print_stride == 0);
+}
+
 // Gather this receiver's expected tiles for one block into `scratch_addr`, laid out as the sender
 // pushes them: page row h holds tiles (phys_blk * k_block_w_tiles + h, n_col_start + n) for n in
 // [0, n_per_recv_tiles). One accessor call per tile keeps bank routing out of the kernel. Returns
@@ -51,9 +66,9 @@ FORCE_INLINE uint32_t l1_word(uint32_t base_addr, uint32_t word_index) {
     return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_addr)[word_index];
 }
 
-// Index of the first word where the delivered block differs from the expected one, or the word
-// count when they match. Word-strided so a mismatch reports where it starts rather than just that
-// it happened.
+// Index of the first word where the delivered block differs from the expected one, or kNoMismatch
+// when they match. Word-strided so a mismatch reports where it starts rather than just that it
+// happened.
 FORCE_INLINE uint32_t first_mismatching_word(uint32_t received_addr, uint32_t expected_addr, uint32_t page_bytes) {
     const uint32_t words = page_bytes / sizeof(uint32_t);
     for (uint32_t w = 0; w < words; ++w) {
@@ -61,7 +76,7 @@ FORCE_INLINE uint32_t first_mismatching_word(uint32_t received_addr, uint32_t ex
             return w;
         }
     }
-    return words;
+    return kNoMismatch;
 }
 
 }  // namespace prefetcher_validator

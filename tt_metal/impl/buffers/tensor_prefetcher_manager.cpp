@@ -17,7 +17,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <limits>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -1088,12 +1087,6 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
         auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(templ.data());
         header->base.cmd_id = DRAM_PREFETCHER_CMD_PREFETCH;
         header->prefetch.transport = target.transport;
-        TT_FATAL(
-            plan.slots.size() <= std::numeric_limits<uint16_t>::max(),
-            "Tensor prefetcher: a request page holds {} layout slots, above the {} the header's num_layouts field can "
-            "carry.",
-            plan.slots.size(),
-            std::numeric_limits<uint16_t>::max());
         header->prefetch.num_entries = static_cast<uint16_t>(plan.entries.size());
         header->prefetch.num_layouts = static_cast<uint16_t>(plan.slots.size());
         for (uint32_t k = 0; k < plan.entries.size(); ++k) {
