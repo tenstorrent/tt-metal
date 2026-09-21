@@ -944,7 +944,10 @@ def run_indexer_short(device, heads):
     )
 
 
-INDEXER_PERF_MARGIN = 0.02  # default symmetric +/- 2% band on the expected math util
+# Default symmetric band on the expected math util, so it catches regressions and speedups. 8% covers board to
+# board variance: a p100a delivers 3 to 6% (relative) less than the board the glm5 value was measured on, with
+# 2 points of spread between runs.
+INDEXER_PERF_MARGIN = 0.08
 
 # indexer_score fills the full Blackhole 11x10 Tensix grid regardless of program config (QC=1 short chunks
 # get block-split across num_blocks=2 row-blocks to reach it). The real-time profiler record does not carry a
@@ -1199,7 +1202,7 @@ _MATH_UTIL_CASES = [
         # 100 local BH runs: median 35.97%, range 34.69-36.18%; allow single-dispatch variation.
         36.0,
         "LoFi",
-        0.04,
+        INDEXER_PERF_MARGIN,
     ),
     (
         "minimax_m3",
