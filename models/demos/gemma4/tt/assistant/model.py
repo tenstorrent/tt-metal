@@ -32,11 +32,14 @@ Constraints (first cut):
 """
 
 import torch
+from loguru import logger
 
 import ttnn
+from models.demos.gemma4.tt.activation_sharding import ActivationSharding
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.ccl import ccl_allgather
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
+from models.demos.gemma4.tt.matmul_tuning import DecodeMatmulTuner
 from models.demos.gemma4.tt.matmul_tuning import resolve as resolve_tuner
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
@@ -81,8 +84,15 @@ class Gemma4AssistantModel:
         max_local_batch_size=1,
         bounded_sliding_kv_cache=False,
         matmul_tuner=None,
+        activation_sharding=None,
     ):
         self.mm = resolve_tuner(matmul_tuner)
+        self.act_shard = (
+            activation_sharding if activation_sharding is not None else ActivationSharding.from_env(mesh_device)
+        )
+        if self.act_shard.enabled and not self.mm.enabled:
+            logger.info("[assistant] activation sharding requires compatible matmul blocking; enabling draft tuning")
+            self.mm = DecodeMatmulTuner(mesh_device, enabled=True, label="draft")
         self.mesh_device = mesh_device
         self.max_local_batch_size = max_local_batch_size
         self.args = assistant_args
@@ -135,6 +145,7 @@ class Gemma4AssistantModel:
                 max_local_batch_size=max_local_batch_size,
                 bounded_sliding_kv_cache=bounded_sliding_kv_cache,
                 matmul_tuner=self.mm,
+                activation_sharding=self.act_shard,
             )
             self.layers.append(layer)
 
@@ -145,6 +156,7 @@ class Gemma4AssistantModel:
             state_dict=substate(state_dict, "model.norm"),
             tensor_cache_path=f"{tensor_cache_path}/final_norm" if tensor_cache_path else None,
             mesh_config=mesh_config,
+            activation_sharding=self.act_shard,
         )
 
         # pre_projection (2*backbone -> hidden) and post_projection (hidden ->
@@ -237,7 +249,12 @@ class Gemma4AssistantModel:
                 position_idx_cache=pos_int32,
             )
 
-        normed = self.norm.forward(h)
+        normed_sharded = self.norm.forward(h)
+        # The output head and post projection consume an interleaved tensor; one
+        # boundary conversion serves both consumers.
+        normed = self.act_shard.from_stream(normed_sharded)
+        if normed is not normed_sharded:
+            normed_sharded.deallocate(True)
         h.deallocate(True)
 
         logits = None

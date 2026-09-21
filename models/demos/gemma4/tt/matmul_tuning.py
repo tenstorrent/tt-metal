@@ -36,7 +36,7 @@ def _pick_grid(n_tiles, max_x, max_y):
     return best
 
 
-def derive_decode_1d_config(m, k, n, max_x=8, max_y=8):
+def derive_decode_1d_config(m, k, n, max_x=8, max_y=8, in0_shard_tiles=None):
     """Return a 1D multicast config for a compatible decode linear."""
     tile_size = ttnn.TILE_SIZE
     if m <= 0 or k <= 0 or n <= 0 or k % tile_size or n % tile_size:
@@ -50,9 +50,12 @@ def derive_decode_1d_config(m, k, n, max_x=8, max_y=8):
     core_count = grid_x * grid_y
     if core_count < 2 or n_tiles % core_count:
         return None
+    in0_block_w = _largest_divisor(k_tiles, cap=8)
+    if in0_shard_tiles:
+        in0_block_w = _largest_divisor(in0_shard_tiles, cap=min(8, in0_shard_tiles))
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
-        in0_block_w=_largest_divisor(k_tiles, cap=8),
+        in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=1,
         per_core_M=m_tiles,
@@ -96,10 +99,16 @@ class DecodeMatmulTuner:
     def config_for(self, x, weight):
         if not self.enabled:
             return None
-        key = (tuple(x.shape), tuple(weight.shape))
+        shard_tiles = self._in0_shard_tiles(x)
+        key = (tuple(x.shape), tuple(weight.shape), shard_tiles)
         if key not in self._cache:
             config = derive_decode_1d_config(
-                int(x.shape[-2]), int(x.shape[-1]), int(weight.shape[-1]), self._max_x, self._max_y
+                int(x.shape[-2]),
+                int(x.shape[-1]),
+                int(weight.shape[-1]),
+                self._max_x,
+                self._max_y,
+                in0_shard_tiles=shard_tiles,
             )
             self._cache[key] = config
             logger.info(
@@ -111,6 +120,17 @@ class DecodeMatmulTuner:
                 "tuned" if config else "auto",
             )
         return self._cache[key]
+
+    @staticmethod
+    def _in0_shard_tiles(x):
+        """Return the per-core input shard width in tiles when available."""
+        try:
+            if not x.is_sharded():
+                return None
+            shard_spec = x.memory_config().shard_spec
+            return int(shard_spec.shape[1]) // ttnn.TILE_SIZE if shard_spec is not None else None
+        except Exception:  # noqa: BLE001 - tensor metadata may be unavailable to mocks
+            return None
 
     def stats(self):
         values = list(self._cache.values())

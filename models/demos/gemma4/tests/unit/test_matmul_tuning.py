@@ -33,6 +33,13 @@ def test_decode_config_rejects_incompatible_shapes(monkeypatch, shape):
     assert matmul_tuning.derive_decode_1d_config(*shape) is None
 
 
+def test_decode_config_respects_activation_shard_blocking(monkeypatch):
+    _patch_config_types(monkeypatch)
+    config = matmul_tuning.derive_decode_1d_config(1, 256, 1024, in0_shard_tiles=4)
+    assert config is not None
+    assert config.in0_block_w == 4
+
+
 @pytest.mark.parametrize(
     "value,draft,target",
     [
@@ -88,8 +95,8 @@ def test_tuner_caches_by_shape(monkeypatch):
     calls = []
     marker = object()
 
-    def derive(*args):
-        calls.append(args)
+    def derive(*args, **kwargs):
+        calls.append((args, kwargs))
         return marker
 
     monkeypatch.setattr(matmul_tuning, "derive_decode_1d_config", derive)
