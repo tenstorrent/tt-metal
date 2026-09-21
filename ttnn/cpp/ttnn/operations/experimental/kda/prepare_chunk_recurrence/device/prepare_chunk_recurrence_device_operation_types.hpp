@@ -28,7 +28,7 @@ struct PrepareChunkRecurrenceInputs {
     Tensor v;
     Tensor g;
     Tensor beta;
-    Tensor actual_start;
+    std::optional<Tensor> actual_start;
     std::optional<Tensor> actual_end;
 };
 

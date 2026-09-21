@@ -15,10 +15,10 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
     const ttnn::Tensor& g,
     const ttnn::Tensor& beta,
     uint32_t num_heads,
-    const Tensor& actual_start,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     uint32_t output_bf16_mask,
+    const std::optional<Tensor>& actual_start,
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis) {
     using namespace ttnn::experimental::prim::kda_factory_detail;

@@ -154,10 +154,13 @@ std::vector<Tensor> prepare_chunk_recurrence(
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     uint32_t output_bf16_mask,
-    const Tensor& actual_start,
+    const std::optional<Tensor>& actual_start,
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis) {
-    kda_factory_detail::check_actual_start(q, actual_start, "prepare_chunk_recurrence");
+    TT_FATAL(!actual_end || actual_start, "prepare_chunk_recurrence: actual_end requires actual_start");
+    if (actual_start) {
+        kda_factory_detail::check_actual_start(q, *actual_start, "prepare_chunk_recurrence");
+    }
     if (actual_end) {
         kda_factory_detail::check_actual_start(q, *actual_end, "prepare_chunk_recurrence");
     }

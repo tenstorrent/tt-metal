@@ -107,6 +107,7 @@ template <
     uint32_t Ct,
     uint32_t Kt,
     uint32_t Vt,
+    uint32_t has_actual_start,
     uint32_t has_actual_end,
     uint32_t sp_rank,
     uint32_t sp_size,
@@ -135,11 +136,14 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
     {
         DataflowBuffer control(dfb::chronology_compute);
         control.reserve_back(1);
-        const auto start_tensor = TensorAccessor(tensor::actual_start);
-        noc.async_read(start_tensor, control, 4, {.page_id = 0}, {});
-        noc.async_read_barrier();
         auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_write_ptr());
-        const uint32_t start = words[0];
+        uint32_t start = 0;
+        if constexpr (has_actual_start) {
+            const auto start_tensor = TensorAccessor(tensor::actual_start);
+            noc.async_read(start_tensor, control, 4, {.page_id = 0}, {});
+            noc.async_read_barrier();
+            start = words[0];
+        }
         auto topology = kda_chronology::derive(start, sp_rank, sp_size, local_rows);
         if constexpr (has_actual_end) {
             const auto end_tensor = TensorAccessor(tensor::actual_end);
