@@ -291,7 +291,7 @@ class QwenModel:
             x = x[:, length - 1 : length, :]
         return self.logits(x, decode=not all_logits)
 
-    def prefill_batch(self, tokens, *, cache, page_table, length, start_pos, slots):
+    def prefill_batch(self, tokens, *, cache, page_table, length, start_pos, slots, positions=None):
         """Experimental equal-length, page-aligned prefill over consecutive slots."""
         batch = len(slots)
         if batch < 2 or slots != list(range(slots[0], slots[0] + batch)):
@@ -302,11 +302,20 @@ class QwenModel:
             raise ValueError("Batched prefill exceeds cache capacity")
         first, end = slots[0], slots[-1] + 1
         x = self.embed(tokens, batch=batch, length=length)
-        positions = self.upload(
-            torch.arange(start_pos, start_pos + length, dtype=torch.int32).repeat(batch, 1),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
+        if positions is None:
+            positions = self.upload(
+                torch.arange(start_pos, start_pos + length, dtype=torch.int32).repeat(batch, 1),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        elif (
+            not isinstance(positions, ttnn.Tensor)
+            or tuple(positions.shape) != (batch, length)
+            or positions.dtype != ttnn.uint32
+            or positions.layout != ttnn.ROW_MAJOR_LAYOUT
+            or positions.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+        ):
+            raise ValueError("Batched prefill positions must be UINT32 row-major DRAM [batch, length]")
         cc, ss = self.rope(positions, batch=batch, length=length)
         table = page_table[first:end, :]
         for layer, state in zip(self.layers, cache.layers):

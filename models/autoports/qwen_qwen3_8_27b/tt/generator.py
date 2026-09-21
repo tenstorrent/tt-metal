@@ -29,6 +29,12 @@ class QwenGenerator(Generator):
         self.tokenizer = AutoTokenizer.from_pretrained(model.snapshot, local_files_only=True)
         self.host_sampling = host_sampling
         self.batched_prefill = os.getenv("QWEN_BATCHED_PREFILL", "0") == "1"
+        if os.getenv("QWEN_BATCHED_PREFILL_SDPA", "0") == "1":
+            for layer in model.layers:
+                layer.policy["batched_prefill_sdpa"] = True
+        if os.getenv("QWEN_FLATTEN_PREFILL_BATCH", "0") == "1":
+            for layer in model.layers:
+                layer.policy["flatten_prefill_batch"] = True
         self.seed = 0
         args = SimpleNamespace(
             vocab_size=model.config.vocab_size,

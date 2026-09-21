@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Device isolation/continuation check on real TP4 linear and full-attention layers."""
 
+import argparse
 import json
 
 import torch
@@ -21,6 +22,12 @@ def snapshot(cache):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--length", type=int, default=33)
+    args = parser.parse_args()
+    if not 1 <= args.length <= 96:
+        parser.error("Continuation length must fit the 128-token cache after a 32-token prefix")
+    end = 32 + args.length
     torch.set_num_threads(8)
     configure_fabric()
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=134217728)
@@ -39,14 +46,14 @@ def main():
             del output
             before = snapshot(cache)
             gen.batched_prefill = grouped
-            tokens = torch.arange(33).repeat(2, 1) + torch.tensor([[200], [300]])
+            tokens = torch.arange(args.length).repeat(2, 1) + torch.tensor([[200], [300]])
             if perturb:
                 tokens[0] += 19
             output = gen.prefill_forward(
                 tokens,
                 page_table=gen.page_table,
                 kv_cache=cache,
-                prompt_lens=[33, 33],
+                prompt_lens=[args.length, args.length],
                 slots=[1, 2],
                 start_pos=[32, 32],
             )
@@ -66,7 +73,7 @@ def main():
                 # Paged fill may overwrite causally masked rows after the logical end.
                 def live(tensor):
                     rows = tensor.permute(0, 2, 1, 3).reshape(4, 128, -1)
-                    return torch.cat([rows[i, : 65 if i in (1, 2) else 32] for i in range(4)])
+                    return torch.cat([rows[i, : end if i in (1, 2) else 32] for i in range(4)])
 
                 expected_live, actual_live = live(expected), live(actual)
             else:
@@ -80,8 +87,8 @@ def main():
             if key[1] in ("conv", "recurrent"):
                 peer_actual, peer_perturbed = actual[2], perturbed[1][key][2]
             else:
-                peer_actual = actual.permute(0, 2, 1, 3).reshape(4, 128, -1)[2, :65]
-                peer_perturbed = perturbed[1][key].permute(0, 2, 1, 3).reshape(4, 128, -1)[2, :65]
+                peer_actual = actual.permute(0, 2, 1, 3).reshape(4, 128, -1)[2, :end]
+                peer_perturbed = perturbed[1][key].permute(0, 2, 1, 3).reshape(4, 128, -1)[2, :end]
             assert torch.equal(peer_actual, peer_perturbed), ("cross-request state leak", key)
         correlations = []
         for expected, actual in zip(reference[0], batched[0]):

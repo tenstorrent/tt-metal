@@ -419,6 +419,17 @@ class MultichipDecoder(OptimizedDecoder):
 
     def _linear(self, x, name, activation=None, keep_sharded=False):
         if (
+            self.policy.get("flatten_prefill_batch", False)
+            and len(x.shape) == 3
+            and x.shape[0] > 1
+            and x.shape[1] > 1
+            and x.shape[1] % 32 == 0
+        ):
+            batch, length, width = x.shape
+            packed = ttnn.reshape(x, [1, batch * length, width])
+            output = self._linear(packed, name, activation=activation, keep_sharded=keep_sharded)
+            return ttnn.reshape(output, [batch, length, output.shape[-1]])
+        if (
             self.policy.get("fused_input", False)
             and x.shape[-1] == 1280
             and self._role(name) in ("attention", "gate", "up")

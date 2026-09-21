@@ -7,12 +7,14 @@ import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import torch
 
 import ttnn
 from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator, configure_fabric
 from models.autoports.qwen_qwen3_8_27b.tt.generator_vllm import Qwen38ForCausalLM
+from models.autoports.qwen_qwen3_8_27b.tt.precision import decoder_policy
 
 
 def main():
@@ -24,8 +26,19 @@ def main():
     parser.add_argument("--pool-tokens", type=int)
     parser.add_argument("--distinct-prompts", action="store_true")
     parser.add_argument("--compare-prefill", action="store_true", help="Compare serial and grouped prefill in one load")
+    parser.add_argument("--compare-fused-mlp", action="store_true", help="Fuse prefill MLP only; decode unchanged")
+    parser.add_argument("--compare-single-step", action="store_true", help="Experimental B16 decode recurrence")
+    parser.add_argument(
+        "--compare-sdpa", action="store_true", help="Compare per-user and batched SDPA with grouped prefill"
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if sum((args.compare_prefill, args.compare_sdpa, args.compare_fused_mlp, args.compare_single_step)) > 1:
+        parser.error("Select only one comparison per run")
+    if args.compare_single_step and args.batch != 16:
+        parser.error("The experimental one-step model path is restricted to batch 16")
+    if args.steps < 2:
+        parser.error("At least two decode steps are needed to separate first-use and steady execution")
     lengths = list(map(int, args.lengths.split(",")))
     context = args.context or ((max(lengths) + args.steps + 31) // 32) * 32
     pool_tokens = args.pool_tokens or args.batch * context
@@ -37,7 +50,14 @@ def main():
     adapter = None
     report = dict(batch=args.batch, context=context, pool_tokens=pool_tokens, steps=args.steps, rows=[])
     try:
-        generator = build_generator(Path("models/autoports/qwen_qwen3_8_27b"), mesh)
+
+        def policy(precision, layer):
+            return {**decoder_policy(precision, layer), "minimal_mlp": args.compare_fused_mlp}
+
+        with patch("models.autoports.qwen_qwen3_8_27b.tt.model.decoder_policy", side_effect=policy):
+            generator = build_generator(Path("models/autoports/qwen_qwen3_8_27b"), mesh)
+        for layer in generator.model.layers:
+            layer.policy["minimal_mlp"] = False
         adapter = Qwen38ForCausalLM(generator, args.batch, context)
         pages = (context + 31) // 32
         # Match the vLLM worker's one-extra-block-per-user allocation. Dividing
@@ -60,12 +80,32 @@ def main():
             tokens = (torch.arange(length).remainder(256) + 100).repeat(args.batch, 1)
             if args.distinct_prompts:
                 tokens += torch.arange(args.batch).reshape(-1, 1) * 13
-            for trial in range(4 if args.compare_prefill else 2):
+            for trial in range(
+                4
+                if args.compare_prefill or args.compare_sdpa or args.compare_fused_mlp or args.compare_single_step
+                else 2
+            ):
                 repeat = trial % 2
+                if args.compare_single_step and repeat == 0:
+                    generator._release_traces()
+                    generator.batched_prefill = True
+                    for layer in generator.model.layers:
+                        layer.policy["experimental_single_step_recurrence"] = trial >= 2
                 if args.compare_prefill and repeat == 0:
                     generator._release_traces()
                     generator.prefill_signatures.clear()
                     generator.batched_prefill = trial >= 2
+                if args.compare_sdpa and repeat == 0:
+                    generator._release_traces()
+                    generator.prefill_signatures.clear()
+                    generator.batched_prefill = True
+                    for layer in generator.model.layers:
+                        layer.policy["batched_prefill_sdpa"] = trial >= 2
+                if args.compare_fused_mlp:
+                    generator._release_traces()
+                    generator.batched_prefill = True
+                    for layer in generator.model.layers:
+                        layer.policy["minimal_mlp"] = trial >= 2
                 ttnn.synchronize_device(mesh)
                 begin = time.perf_counter()
                 decoded, _ = adapter.prefill_forward(
@@ -77,6 +117,9 @@ def main():
                 )
                 ttnn.synchronize_device(mesh)
                 prefill = time.perf_counter() - begin
+                if args.compare_fused_mlp:
+                    for layer in generator.model.layers:
+                        layer.policy["minimal_mlp"] = False
                 outputs = [decoded.reshape(-1).tolist()]
                 times = []
                 for step in range(args.steps):
@@ -94,6 +137,9 @@ def main():
                     outputs.append(decoded.reshape(-1).tolist())
                 row = dict(
                     batched_prefill=generator.batched_prefill,
+                    fused_prefill_mlp=args.compare_fused_mlp and trial >= 2,
+                    single_step_recurrence=args.compare_single_step and trial >= 2,
+                    batched_sdpa=generator.model.layers[0].policy.get("batched_prefill_sdpa", False),
                     length=length,
                     repeat=repeat,
                     prefill_s=prefill,

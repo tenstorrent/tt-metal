@@ -58,6 +58,9 @@ class Qwen38ForCausalLM:
         self._last_device_sampling = None
         self.prefill_diagnostics = os.getenv("QWEN_PREFILL_DIAGNOSTICS", "0") == "1"
         self.prefill_startup_warmup = os.getenv("QWEN_PREFILL_STARTUP_WARMUP", "0") == "1"
+        if os.getenv("QWEN_EXPERIMENT_CHUNKED_PREFILL", "0") == "1":
+            # Local protocol experiment only; CI must also pin a compatible plugin.
+            self.model_capabilities = {**self.model_capabilities, "supports_chunked_prefill_device_sampling": True}
 
     # vLLM inspects this protocol before selecting the TT loader. Execution is
     # through the TT plugin's prefill/decode APIs, never the GPU forward API.
