@@ -15,17 +15,16 @@ from models.vllm_test_utils.no_op_test.test_model import DummyNoOpModel
 # returning them unchanged, which makes the acceptance rate a knob and is what
 # every acceptance-accounting measurement wants.
 #
-# ``fixed`` chooses by a rule the drafts never enter, which makes the output
-# sequence independent of whether anything was drafted at all, and is what an
-# end-to-end losslessness comparison needs.
+# ``fixed`` applies one causal successor rule to each candidate input token
+# and position. It does not copy the candidate successor being scored, so the
+# same rule supports ordinary/speculative output-sequence comparisons.
 TARGET_DEPTH = "depth"
 TARGET_FIXED = "fixed"
 
-# How the drafter decides how much to offer. ``always`` offers the full draft
-# length on every step, which is what a fixed-width measurement needs.
-# ``solo`` offers it only while one request is live and nothing otherwise,
-# which is the adaptive shape a real deployment has: speculation pays for a
-# lone request and loses to batching for a full one.
+# ``always`` proposes the full draft length after each commit. ``solo``
+# proposes only for a single live request, to exercise transitions between
+# speculative verification and ordinary batched decode. Neither policy models
+# a real model's throughput crossover.
 DRAFT_POLICY_ALWAYS = "always"
 DRAFT_POLICY_SOLO = "solo"
 
@@ -61,8 +60,8 @@ def _declared_spec_requirements():
 class DummySpecDecodeModel(DummyNoOpModel):
     """Dummy model implementing the speculative-decoding contract.
 
-    Does no work: it accepts the drafts it is handed and returns arithmetic for
-    everything else. That makes it two things at once.
+    Performs host arithmetic without device execution. The ``depth`` target
+    controls acceptance; the ``fixed`` target supports output-sequence checks.
 
     First, an instrument. Its sibling ``DummyNoOpModel`` exists to measure what
     vLLM costs per step with the model removed; this one measures what vLLM
@@ -70,47 +69,45 @@ class DummySpecDecodeModel(DummyNoOpModel):
     accepted, so each step commits one token and its wall clock is the host
     cost of one whole verify-then-propose iteration: the scheduler, the
     candidate-block build, this model's own arithmetic, the plugin's acceptance
-    walk, the commit and the n-gram proposal, with no device work anywhere
-    under it. That is what a plugin-driven speculation loop can be compared
-    against a model-internal one with.
+    walk, the commit and the selected proposal path. Use ``always`` drafting
+    and exclude bootstrap and clipped terminal steps for a steady-state
+    measurement. No device execution occurs inside this model.
 
-    It is the cost of the loop and not of vLLM alone, because this model does
-    host work of its own on every step: ``_verified_ids`` builds a ``[B, 1+K]``
-    answer whatever the accept depth. That work measures about 17 microseconds
-    at every shape from ``[1, 6]`` to ``[32, 17]``, against a step whose other
-    costs are milliseconds, so it does not move the comparison. Subtract it
-    only if the comparison ever turns on a margin that small.
+    The measurement includes the dummy's tensor allocation and arithmetic.
+    Measure those costs separately if a comparison requires vLLM-only cost;
+    no fixed timing estimate applies to every host or candidate shape.
 
-    Second, the only way to exercise the plugin's speculative path end to end.
-    Everything between the runner and the engine needs a real server: the
-    ``take_draft_token_ids`` handshake, the scheduler's lookahead budget and
-    its grammar truncation of drafts, placeholder accounting, and KV cache
-    allocation. None of it is reachable from a host test.
+    A real server exercises the runner/engine handshake, scheduler lookahead,
+    placeholder accounting, and logical KV allocation together. Isolated host
+    tests can check individual transitions without proving device behavior.
 
     It serves both halves of the contract. ``decode_forward`` verifies a
     candidate block, and ``propose_draft_tokens`` drafts the next one, which is
     what a launch asking for the model's own drafter calls instead of an n-gram
-    proposer. The drafter proposes exactly what the verify accepts, so with
-    every draft accepted every step after the first commits ``1+K`` tokens. The
-    first decode step of a request commits one: the drafter runs after a
-    commit, so nothing is in flight yet. From there no step is ever draftless,
-    which an n-gram drafter cannot promise, because it stalls whenever the
-    generated text stops repeating and makes a fixed committed width impossible
-    to measure.
+    proposer. With ``always`` drafting, all drafts accepted, and enough
+    remaining request/context budget, steady-state commits contain ``1+K``
+    tokens. The first decode step commits one token because no proposal is
+    pending. ``solo`` may subsequently decline drafting, and the runner may
+    clip the valid draft count near a request or context limit.
 
-    ``README.md`` beside this file carries the server command, the two modes
-    and what the measurement mode measures.
+    ``README.md`` describes launches, targets, draft policies and measurements.
 
     The contract is
     https://github.com/tenstorrent/vllm-tt-plugin/issues/110 and the model side
     of it is ``docs/SPEC_DECODE_CONTRACT.md`` in that repository. This class
-    imports the plugin's value types, which is how a model declares a plan; the
-    plugin is therefore required to import this module, as it is to serve it.
+    imports the plugin's value types inside ``spec_plan``, speculative
+    ``decode_forward`` and ``propose_draft_tokens``. Those calls require the
+    plugin; importing this module or testing isolated arithmetic does not.
 
     Environment:
         ``TT_SPEC_ACCEPT_DEPTH``  how many of each row's drafts to accept.
             Default ``-1``, meaning all of them, which exercises the loop
             hardest. ``0`` accepts none, which is the measurement mode.
+        ``TT_SPEC_TARGET``  ``depth`` for acceptance accounting or ``fixed``
+            for matching ordinary/speculative output sequences.
+        ``TT_SPEC_DRAFT_POLICY``  ``always`` or ``solo``.
+        ``TT_SPEC_MAX_TOKENS_ALL_USERS``  declared logical KV token capacity;
+            defaults to 131072 and allocates no device KV cache.
     """
 
     # The explicit decode-input update contract, version 1: this model honors
@@ -121,8 +118,8 @@ class DummySpecDecodeModel(DummyNoOpModel):
 
     model_capabilities = {
         **DummyNoOpModel.model_capabilities,
-        # The master gate. Everything below it is read only when a launch
-        # carries a speculative_config.
+        # Speculative admission requires this declaration. Ordinary async
+        # admission independently reads supports_async_decode below.
         "supports_spec_decode": True,
         # This model drafts as well as verifies, so it declares both halves of
         # a device drafter. An n-gram launch requires neither and is unaffected:
@@ -142,12 +139,10 @@ class DummySpecDecodeModel(DummyNoOpModel):
         # valid across that readback until the next step's propose call. This
         # model satisfies both trivially, and the word is exact: it returns
         # host tensors, so the plugin reads no device buffer for it, and its
-        # handle is a host Python object with no lifetime to lose. What is not
-        # trivial, and is what the two order-independence tests beside this
-        # model assert, is that it keeps no state between steps: every answer
-        # is computed from the ``tokens``, ``start_pos`` and
-        # ``accepted_counts`` of the step being served.
-        #
+        # handle is a host Python object. Verification arithmetic uses the
+        # supplied candidate inputs, and fixed-target proposal arithmetic uses
+        # the supplied committed block. Ordinary decode retains resident
+        # inputs; hidden identity validation retains the latest verify handle.
         "supports_async_spec_decode": True,
         # And the ordinary half, which the plugin reads first: absent, it
         # disables asynchronous scheduling for the model whatever else is
@@ -198,11 +193,10 @@ class DummySpecDecodeModel(DummyNoOpModel):
     def _fixed_choice(self, tokens, positions):
         """``fixed`` target: the choice that follows each input, by one rule.
 
-        The rule reads the token and its position and nothing else, so what
-        this model chooses at a candidate position does not depend on what was
-        drafted there. That is what makes an end-to-end losslessness check
-        possible: the same prompt run with and without speculation has to emit
-        the same sequence, because the sequence is a property of the rule.
+        The rule predicts a successor from each candidate input token and its
+        position. Later columns therefore read preceding draft tokens, but
+        never copy the candidate successor being evaluated. Ordinary decode
+        uses the same rule, enabling complete output-sequence comparisons.
 
         The ``depth`` target cannot answer that question. It returns each draft
         unchanged up to its accept depth, so its output is a function of what
@@ -276,10 +270,10 @@ class DummySpecDecodeModel(DummyNoOpModel):
             drafter_state=DRAFTER_STATE_INTERNAL,
             # Under the adaptive policy this model is asked to decode steps
             # that verify nothing, which is the whole point of that policy:
-            # those steps are ordinary decodes and can overlap. It serves them
-            # with the decode its base class already implements, so it grows no
-            # input shape for them. Under ``always`` every step carries drafts
-            # and the question never arises.
+            # those steps use _plain_decode and can overlap. The depth target
+            # uses the base-class answer; the fixed target uses its successor
+            # rule. Under ``always``, even a draftless bootstrap uses the wide
+            # verify path to preserve hidden-handoff coverage.
             supports_narrow_decode=_draft_policy() == DRAFT_POLICY_SOLO,
         )
 
@@ -339,9 +333,9 @@ class DummySpecDecodeModel(DummyNoOpModel):
         if positions is None and len(args) > 1:
             positions = args[1]
         if self.target == TARGET_FIXED:
-            # Every column at once, and no reference to the drafts or to the
-            # accept depth: a draft is accepted exactly when it already equals
-            # what this rule would have chosen.
+            # Predict each successor from the corresponding candidate input.
+            # Acceptance depth does not alter this target rule; the drafter
+            # introduces mismatches when partial acceptance is requested.
             verified = self._fixed_choice(tokens, positions)
         else:
             verified = self._verified_ids(tokens, num_valid_drafts)
@@ -362,14 +356,13 @@ class DummySpecDecodeModel(DummyNoOpModel):
         """Draft the next ``num_drafts`` tokens per row, on the host.
 
         This is the device-drafter half of the contract, and what it exists to
-        exercise is the loop rather than any drafting quality: it proposes
-        exactly what its own verify accepts, ``last + 1 + j`` from each row's
-        last committed token, so with every draft accepted every step that has
-        drafts in flight commits ``1+K`` tokens. A request's first decode step
-        has none, because this call runs after a commit. An n-gram drafter
-        cannot promise even the steps after that, because it stalls whenever
-        the text stops repeating, which makes this the only way to measure a
-        speculative step's cost at a fixed committed width.
+        exercise is the proposal handoff. The depth target proposes ascending
+        ids from each row's last committed token; the fixed target walks its
+        successor rule and changes drafts beyond the acceptance depth. The
+        ``solo`` policy can decline proposals through ``DraftOutput.num_valid``.
+        With ``always``, full valid drafts and all drafts accepted, a
+        steady-state commit contains ``1+K`` tokens. Bootstrap and request or
+        context clipping must be accounted for separately.
 
         Which entry of the committed block is a row's last token is
         ``accepted_counts - 1``, the same arithmetic the verify uses to pick a
