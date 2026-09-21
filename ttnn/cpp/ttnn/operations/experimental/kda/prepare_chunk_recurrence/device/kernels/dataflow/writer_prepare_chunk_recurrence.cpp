@@ -13,15 +13,12 @@
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
 TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks) {
-    uint32_t valid_chunks = num_chunks;
-    {
-        DataflowBuffer control(dfb::chronology_writer);
-        control.wait_front(1);
-        valid_chunks =
-            kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_read_ptr())).valid_rows /
-            32;
-        control.pop_front(1);
-    }
+    DataflowBuffer control(dfb::chronology_writer);
+    control.wait_front(1);
+    const uint32_t valid_chunks =
+        kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(control.get_read_ptr())).valid_rows /
+        tt::constants::TILE_HEIGHT;
+    control.pop_front(1);
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
     constexpr uint32_t cv = Ct * Vt;

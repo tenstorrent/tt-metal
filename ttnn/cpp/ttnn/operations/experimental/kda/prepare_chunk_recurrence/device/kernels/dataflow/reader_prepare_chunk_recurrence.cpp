@@ -132,7 +132,7 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
     DataflowBuffer block_masks(dfb::block_masks);
     Noc noc;
 
-    uint32_t valid_chunks = num_chunks;
+    uint32_t valid_chunks;
     {
         DataflowBuffer control(dfb::chronology_compute);
         control.reserve_back(1);
@@ -140,18 +140,18 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         uint32_t start = 0;
         if constexpr (has_actual_start) {
             const auto start_tensor = TensorAccessor(tensor::actual_start);
-            noc.async_read(start_tensor, control, 4, {.page_id = 0}, {});
+            noc.async_read(start_tensor, control, sizeof(uint32_t), {.page_id = 0}, {});
             noc.async_read_barrier();
             start = words[0];
         }
         auto topology = kda_chronology::derive(start, sp_rank, sp_size, local_rows);
         if constexpr (has_actual_end) {
             const auto end_tensor = TensorAccessor(tensor::actual_end);
-            noc.async_read(end_tensor, control, 4, {.page_id = 0}, {});
+            noc.async_read(end_tensor, control, sizeof(uint32_t), {.page_id = 0}, {});
             noc.async_read_barrier();
             topology = kda_chronology::derive_interval(start, words[0], sp_rank, sp_size, local_rows);
         }
-        valid_chunks = topology.valid_rows / 32;
+        valid_chunks = topology.valid_rows / tt::constants::TILE_HEIGHT;
         kda_chronology::store(words, topology);
         control.push_back(1);
         DataflowBuffer writer_control(dfb::chronology_writer);
@@ -173,50 +173,34 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
     };
     fill_constant_tiles(eye, tril, ones, block_masks);
 
-    auto enqueue_value_read = [&](uint32_t head_chunk_index) {
-        const uint32_t head = head_chunk_index / num_chunks;
-        const uint32_t chunk = head_chunk_index % num_chunks;
-        const uint32_t row_stride = num_heads * Vt;
-        v.reserve_back(chunk_value_tiles);
-        for (uint32_t row = 0; row < Ct; ++row) {
-            for (uint32_t col = 0; col < Vt; ++col) {
-                const uint32_t page = (chunk * Ct + row) * row_stride + head * Vt + col;
-                noc.async_read(
-                    v_accessor,
-                    v,
-                    v.get_entry_size(),
-                    {.page_id = page},
-                    {.offset_bytes = (row * Vt + col) * v.get_entry_size()});
+    auto enqueue_head_chunk_read =
+        [&](const auto& accessor, DataflowBuffer& buffer, uint32_t head_chunk_index, uint32_t width_tiles) {
+            const uint32_t head = head_chunk_index / num_chunks;
+            const uint32_t chunk = head_chunk_index % num_chunks;
+            const uint32_t row_stride = num_heads * width_tiles;
+            buffer.reserve_back(Ct * width_tiles);
+            for (uint32_t row = 0; row < Ct; ++row) {
+                for (uint32_t col = 0; col < width_tiles; ++col) {
+                    const uint32_t page = (chunk * Ct + row) * row_stride + head * width_tiles + col;
+                    noc.async_read(
+                        accessor,
+                        buffer,
+                        buffer.get_entry_size(),
+                        {.page_id = page},
+                        {.offset_bytes = (row * width_tiles + col) * buffer.get_entry_size()});
+                }
             }
-        }
-    };
-    auto enqueue_key_width_read = [&](const auto& accessor, DataflowBuffer& buffer, uint32_t head_chunk_index) {
-        const uint32_t head = head_chunk_index / num_chunks;
-        const uint32_t chunk = head_chunk_index % num_chunks;
-        const uint32_t row_stride = num_heads * Kt;
-        buffer.reserve_back(chunk_key_tiles);
-        for (uint32_t row = 0; row < Ct; ++row) {
-            for (uint32_t col = 0; col < Kt; ++col) {
-                const uint32_t page = (chunk * Ct + row) * row_stride + head * Kt + col;
-                noc.async_read(
-                    accessor,
-                    buffer,
-                    buffer.get_entry_size(),
-                    {.page_id = page},
-                    {.offset_bytes = (row * Kt + col) * buffer.get_entry_size()});
-            }
-        }
-    };
+        };
 
     for (uint32_t index = 0; index < work_item_count; ++index) {
         const uint32_t head_chunk_index = work_item_start + index;
         if (head_chunk_index % num_chunks >= valid_chunks) {
             continue;
         }
-        enqueue_key_width_read(q_accessor, q, head_chunk_index);
-        enqueue_key_width_read(k_accessor, k, head_chunk_index);
-        enqueue_value_read(head_chunk_index);
-        enqueue_key_width_read(g_accessor, g, head_chunk_index);
+        enqueue_head_chunk_read(q_accessor, q, head_chunk_index, Kt);
+        enqueue_head_chunk_read(k_accessor, k, head_chunk_index, Kt);
+        enqueue_head_chunk_read(v_accessor, v, head_chunk_index, Vt);
+        enqueue_head_chunk_read(g_accessor, g, head_chunk_index, Kt);
         enqueue_contiguous_read(beta_accessor, beta, head_chunk_index * Ct, Ct);
         // All five inputs are independent reads on the same NoC. One barrier lets them overlap, then publishes
         // the complete work item atomically to compute.

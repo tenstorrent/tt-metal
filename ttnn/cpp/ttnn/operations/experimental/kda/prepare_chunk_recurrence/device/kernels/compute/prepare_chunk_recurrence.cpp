@@ -615,11 +615,8 @@ inline void prepare_decay_outputs(
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t SCALE_BITS, uint32_t EPS_BITS>
 TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks) {
-    uint32_t valid_chunks = num_chunks;
-    {
-        DataflowBuffer control(dfb::chronology_compute);
-        valid_chunks = kda_chronology::receive(control).valid_rows / 32;
-    }
+    DataflowBuffer control(dfb::chronology_compute);
+    const uint32_t valid_chunks = kda_chronology::receive(control).valid_rows / tt::constants::TILE_HEIGHT;
     static_assert(Ct == 1, "chunk KDA currently requires chunk_size=32");
 
     constexpr uint32_t chunk_matrix_tiles = Ct * Ct;

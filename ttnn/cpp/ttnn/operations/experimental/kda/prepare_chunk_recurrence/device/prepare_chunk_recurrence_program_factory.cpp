@@ -393,7 +393,7 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         tensor_coords,
         device,
         attrs.sequence_parallel_axis,
-        attrs.num_chunks * 32,
+        attrs.num_chunks * TILE_HEIGHT,
         READER);
 }
 
