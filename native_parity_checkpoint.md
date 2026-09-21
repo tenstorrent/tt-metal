@@ -2438,3 +2438,418 @@ decomposed through bf16.** Root mechanism inside the kernel: not identified. Ver
 *Diagnostic hooks in `models/demos/gemma4/tt/{rms_norm.py,layer.py,attention/operations.py}`
 were working-tree only and have been reverted; the TEMPORARY trace commit `0d38c356add`
 remains on both branches and should be dropped before any PR.*
+
+### 4m.6 The mechanism, found — and what was measured to find it (2026-09-18)
+
+**The generated op sums the squares of a row's eight width tiles element by element in the
+16-bit DEST before it sums any columns; native sums each tile's 32 columns first (fp32 inside
+the FPU matmul) and accumulates eight row totals.** That order difference is the whole
+regression. Two independent proofs:
+
+* **Bit identity.** Forcing the generated op onto native's order at Wt = 8 (fold off:
+  `DEST_ACC_SQUARE_MAX_WT = 0`, `SQ_FOLD_GROUP = 1`; FPU column sum: `REDUCE_ACC_VIA_ADD_MIN_WT
+  ≥ 9`) makes its output **identical to native on 100 % of elements** of all six captured
+  per-head inputs, and its row-scale bias becomes native's to the digit (k: +0.72 → −0.00).
+  Both of the op's own orders carry the bias: the square fold (D12/D43, FPU multiply-accumulate)
+  and, with the fold off, AccumulateViaAdd's pairwise `add_tiles` (D7) — k +0.70, fold-in-pairs
+  +0.72. Common factor: eight 16-bit narrowings of every element's partial sum before the
+  column sum. Heavy-tailed rows (k: absmax ≈ 16 against typical values well under 1) lose the
+  small squares behind a large one in the same column; the total comes out low, the scale high.
+* **Full model, one knob set at a time, same driver.** Shipped knobs reproduce the CI digits
+  exactly (0.8971450092151074). Native's order for rows ≤ 8 tiles: **0.973648, PASS**. Fold off
+  but pairwise add kept: 0.960750 (passes the threshold, below native). Native: 0.972826.
+
+**Values, not state — settled by record-and-replay.** A hook in `apply_per_head_norm`
+(`PHN_RECORD` / `PHN_REPLAY`, saved as `phn_record_replay_hook.patch` in the session scratchpad
+and reverted) saved all 144 per-head outputs per device and rebuilt them from disk with
+`ShardTensorToMesh(dim=0)`. Control: native recorded → native replayed = 0.972826, secondary
+PCC 0.9792507200373034 identical to 16 digits. Generated recorded (0.8971450092151074) →
+replayed into an all-native run in which the generated op never executes: **0.8965846569680925,
+FAIL**. Determinism: 12 fresh dispatches per input, bitwise identical, both ops.
+
+**What is NOT the difference, each excluded on device.** The finalize: with a sum exactly
+representable in bf16 and a generic mean, gen = nat on 63/64 rows in both approx modes, and
+`ttnn.rsqrt` on bf16 is round-to-nearest of exact on 100 % of elements (max 0.5 ulp) in both
+modes. The 32-bit path: gen = nat on 63/64 rows under `fp32_dest_acc_en`. The final multiply:
+both ops deviate from the exact x·s by up to ±1.5 ulp on ~25 % of elements — identically —
+while plain `ttnn.multiply` is exact round-to-nearest; a shared broadcast-multiply quirk worth
+its own look, not the differentiator.
+
+**Why every isolated metric missed it.** Max relative error vs fp64 is 1.4–1.7 % on both ops on
+every call. The difference is a *coherent* shift of the per-row scale: on one k call 57 of 64
+rows are exactly +1 bf16 step high (native: 60 of 64 exact). PCC, L2 and max-error cannot see
+one step applied to a whole row; a signed per-row scale test against the exact value can. The
+§4m.2 injections could not reproduce it because a random +1 on a random 40–70 % of rows is not a
+data-correlated +1 on 90 %.
+
+**Measurement notes worth keeping.** (1) My first knob flip was a silent no-op — identical
+digits and 44/44 JIT cache hits — because the fold's grouped fallback kept folding and the reduce
+was already on the FPU path at one tile wide; identical digits plus a 100 % cache-hit line is the
+tell. (2) Emulating either order with round-to-nearest, truncation or ties-away narrowing
+predicts at best 51/64 rows: the 16-bit DEST narrowing is none of these. Measure it; do not model
+it. Power-of-two inputs and witness columns (x = 1, 2, 4, 8) make the final multiply exact so the
+row scale can be read off the output bit for bit. (3) Single-card `tt-probe` runs (with
+`TT_VISIBLE_DEVICES=0`) reset only that card and left the 4-card fabric unable to hand-shake
+("Fabric Router Sync: Timeout on Device 2"); a trivial mesh probe *without* the restriction
+resets all four through the lock-protected path.
+
+**Additions to 4m.4.** (6) D7 and D12/D43 were each gated on `randn` with a relative-RMS metric
+and found "at least as accurate as base"; precision refinements need a heavy-tailed row family
+and a signed per-row statistic. (7) Where a design claims a path is as accurate as the seed's,
+require a bit-comparison against the seed on captured real inputs — 100 % identity was one probe
+away. (8) The knob-level workaround (native's order when `fp32_dest_acc_en` is off) is not the
+fix: that order is the one that drifts −1.5 ulp at 64 tiles and +12 % at W = 11008, which is why
+D7 exists. The design-level answer is a 32-bit cross-tile accumulation (fp32 DEST, or the
+per-tile carry through the fp32 statistic CB) — a planner decision, not a parity patch.
+
+*Probes 051–057 auto-saved under `tests/ttnn/unit_tests/operations/rms_norm_ttnn/probes/`
+(untracked). Descriptor and switch edits were made by the driver and restored after every run;
+`git diff` on the code tree is empty apart from the untracked probes. Artifact updated:
+https://claude.ai/artifact/KZ4gL7ajvmZTkcqSwsmCQd §8.*
+
+*Ablation switch added 2026-09-18 (tt-metal3 working tree, uncommitted):
+`RMS_REDUCE_ORDER=native[:WT]` makes the generated op sum each tile's 32 positions first
+(FPU, fp32) then the tile totals, for rows whose width chunk is ≤ WT tiles (default all);
+`nofold[:WT]` only disables the square fold. Host-side in
+`rms_norm_ttnn_program_descriptor.py` (`_reduce_order`, `_x_squared_wt`, `reduce_acc_via_add`),
+because both choices size CBs and CT args. Verified on device: `native` → bit-identical to
+native on all six captured inputs; `nofold` → the fold-off numbers of 4m.6. Same mechanism as
+`RMS_ABLATE`; distinct CT args mean distinct JIT cache keys, no purge needed.*
+
+*Width sweep 2026-09-18 (probe 060; 64 heavy-tailed rows: randn with 2 % of elements ×16; row-scale
+bias in bf16 ulps, mean / frac<0):*
+
+| tiles | gen shipped (path) | gen `RMS_REDUCE_ORDER=native` | native |
+|---|---|---|---|
+| 8 | +0.23 / .33 (fold all → FPU reduce) | −0.02 / .50 | −0.02 / .50 |
+| 16 | +0.09 / .48 (fold all → FPU reduce) | −0.09 / .59 | −0.32 / .73 |
+| 32 | +0.07 / .42 (fold 16/group → pairwise add + SFPU) | −0.13 / .59 | −0.96 / .80 |
+| 64 | −0.05 / .58 (fold 16/group) | −0.06 / .59 | **+2.01** / .14 |
+| 120 | +0.47 / .20 (fold 15/group) | −0.16 / .64 | **+7.20** / .00 |
+| 344 | +0.52 / .09 (fold 8/group) | −0.09 / .50 | **+12.21** / .00 |
+
+*Native has the same defect on the other axis: past ~64 tiles its serial 16-bit row total swamps
+the tile totals (each < ½ ulp of the running sum), scale +7 ulp at 120 tiles, +12 at 344 — the
++12.4 % D7 recorded. The shipped generated order swamps small squares behind an outlier at the same
+position (one-sided +0.5 at 8 and ≥120 tiles). Native's order inside the generated op stays
+unbiased at every width because the cross-chunk carry goes through the fp32 stat CB, so its 16-bit
+serial depth is bounded by the chunk (inferred from the absent drift; WT_CHUNK not printed). Both
+failures are one 16-bit serial accumulation; 32-bit accumulation across tiles fixes both.*
+
+*Correction, 2026-09-18 (probe 062, the textbook row on hardware: one square of 256 and 255 squares
+of 1, W = 256): the fold does NOT drop the small squares — with the outlier in tiles 0–5 the shipped
+op's believed sum is 515–520 against 511 (scale one bf16 step LOW), i.e. each +1 landing on 256 came
+out as +2: 257 lands as 258, so the 16-bit landing is not round-to-nearest-even. Outlier in tiles
+6–7, native's order, and native are exact on every row; two outliers push the shipped op high or
+low depending on placement. The mechanism statement stands (per-position 16-bit accumulation of a
+large value with small increments, absent in native's order), but the direction is data-dependent,
+not "always lost"; on the real k rows the net was a sum ~1.4 ulp low. Rows with the outlier in tile
+4 or 5 sit one unit above a simple ties-up model, so the landing rule is still unpinned. 4m.6's
+"loses the small squares behind a large one" should be read with this correction.*
+
+*Larger outliers (probe 064, W = 256, one outlier at position 12 of tile t, x_small elsewhere, scale
+read off the outlier position): with x_out ≥ 64 the shipped generated op's believed sum matches the
+"drop every sub-half-step increment" prediction in all 12 rows (e.g. 4344 ∈ 4313..4346 vs exact
+4351; 16632 ∈ 16578..16708 vs 16639), so the per-position 16-bit landing is round-to-nearest with
+ties away from zero (the x_out = 16 / +1 case is the tie). Native, and the generated op in native's
+order (identical in every row), are off by up to 5 % when one tile total dwarfs the others — outlier
+in tile 0: 4565..4602 vs exact 4351; 6612..6677 vs 6391; 16257..16448 vs 16639 — each later +32 on a
+running total of ~4127 landing as ≈ +64. Same defect, one level up: native's 16-bit accumulator is
+the row total (hurt when one tile dominates the row, or by many tiles); the generated op's are the
+32 positions (hurt when one tile dominates a position — Gemma's k rows).*
+
+### 4m.7 Corrections, Monte Carlo, and what the ISA actually says (2026-09-18, later)
+
+**Three corrections to 4m.3 / 4m.6.**
+
+1. **The k-row bias numbers were a measurement artefact.** +0.72 (gen) / −0.003 (nat) came from a
+   least-squares fit of the scale through the output, and on rows with a gamma that fit is biased
+   ≈ +0.5 ulp for both ops. Read exactly through a witness element (x = 1 at one position, so the
+   output there *is* the scale), the same k rows give **gen +0.22, nat −0.67**; gamma absent, gamma =
+   1.0 and gamma = 0.125 give identical scales (probe 067), so gamma changes nothing in the kernel.
+   The fit's per-row snapping ("57 of 64 rows +1", "60 of 64 exact") is invalid: |fit − witness| has
+   a median of 0.3 ulp per row. Mean biases read by fit on no-gamma calls (v) agree with the witness.
+2. **"Sum over 32 positions in fp32 inside the FPU" was wrong.** ISA (WormholeB0 MVMUL.md): one
+   MVMUL forms a 16-term dot product at unspecified internal precision, adds it to the value already
+   in Dst and writes back with the 16-bit conversion. `llk_math_reduce.h` REDUCE_ROW SUM issues 8
+   MVMULs per tile per fidelity phase and repeats them `math_fidelity` times (4 for HiFi4), so one
+   tile's row sum is 8 separate 16-bit landings on the running row total. ELWMUL (the fold) "always
+   accumulates" onto Dst the same way, once per fidelity phase. Both orders run every running sum
+   through 16-bit landings; the difference is only *which* running sum — 32 per-position sums vs one
+   row total. Dst.md does not specify the conversion rounding; measured: half-step ties round away
+   from zero, sub-half-step increments are dropped (probes 062, 064).
+3. **The generated op is not the less accurate op.** Paired Monte Carlo on device (8192 rows per
+   cell, witness readout, sign test), 4–64 tiles: gen is statistically more accurate than native in
+   every family at every width (p ≪ 1e-10) except Gaussian at 4 tiles (p = 0.83). Families: scattered
+   hot (Poisson(3.5·W/256) elements at 8–16× median — the captured per-head rows have 3–4 per 256),
+   channel-concentrated hot, 2 fixed massive channels at 100× median (Sun et al. 2024; LLM.int8
+   reports ~6 fixed dims of thousands ≥ 6.0), Gaussian control; plus rows resampled i.i.d. from the
+   captured q/k/v values and the real k rows with permuted elements. Native's bias grows with width
+   (−0.1 → −2.4 ulp at 64 tiles on scattered; +0.8…+2.3 on massive), gen's stays +0.05…+0.25 with
+   mean |e| ≈ 0.33 (ideal RNE = 0.25).
+
+**Arrangement, not values.** The same real rows with only the tile order changed: k as-is gen
++0.22 / nat −0.67; tiles reversed −0.15 / +0.14; rotated by 4 +0.17 / +0.56; v rotated gen +0.62 /
+nat +0.15. Both ops' errors are properties of where values sit relative to the accumulation order.
+
+**What still stands, and what is open.** The causal chain is unchanged: the per-position order
+is what breaks Gemma (bit-identity with native under native's order; model 0.8971 → 0.9736 by that
+knob alone; recorded values replayed without the op reproduce the failure). What is *not* true is
+that the generated op is "more biased" — on the failing rows native's error is larger. The softmax
+consumer reacts to the generated pattern and not to native's; §4m.5's dose curve remains the honest
+description of that, now with a kernel-level handle on what the pattern is.
+
+**Pipeline lessons, revised.** (a) A scale readout through the op's own output multiply is not
+exact; use a witness element, and treat fit-based per-row claims as invalid. (b) "Statistically
+more accurate than the seed" is *not* a safe-to-substitute criterion — the consumer-differential
+test of 4m.4(2) is the one that would have caught this, not a better isolated metric. (c) Do not
+describe FPU accumulation from memory; MVMUL/ELWMUL accumulate through Dst, and the ISA leaves the
+16-bit conversion's rounding unspecified. (d) The design answer is unchanged and now better founded:
+no running sum of squares over transformer activations in a 16-bit accumulator, in either order.
+
+*4m.7 addendum — two consumer-level tests, both negative as differentiators (2026-09-18). (a) Within-head
+coherence of the per-row scale error (rows head-major; per device 4 q-heads / 2 kv-heads × 32 tokens — the 4×32 / 2×32 groupings): R² by head gen 0.66–0.77 vs native
+0.76–0.81 on the loud calls, sign agreement 0.75 vs 0.94 on k; shuffled-row null ≈ 0.1. Native's error is
+at least as coherent across tokens — coherence is not the differentiator. (b) Offline attention from both
+ops' outputs on identical inputs (one layer, per-device 4 q-heads / 2 kv-heads × 32 tokens, causal, no RoPE; a first run with a wrong 16×8 split is superseded by the numbers below): output PCC
+vs exact gen 0.999997 / 0.999999, native 0.999995 / 0.999997; logits/exact mean gen 1.0067 / 1.0050,
+native 1.0029 / 1.0027, std ≈ 0.004 both; argmax flips layer B gen 8.6 % vs native 9.4 %; |logit| ≤ 1.2 at
+these two layers, so their softmax is nearly flat and insensitive.
+Per layer both are harmless. What is consistently different is the SIGN: the generated op's scale is high
+(P(e>0) 0.55–0.75 in every MC family), so q·k logits are scaled up ~0.5–0.7 % in the same direction in
+every layer; native's is low or mixed. Compounding one-directional sharpening over 48 layers is consistent
+with the super-linear dose curve of 4m.5 and with fp32 acc fixing it, but it is a hypothesis, and one
+earlier injection (rows ×(1+2⁻⁷) on 70 % of per-head rows → 0.984, no harm) argues against a pure
+temperature mechanism. Decisive test not yet run: model with the generated per-head output rescaled by
+(1 − its mean bias) per call — if PCC recovers, the sign is the mechanism; if not, the mechanism is not
+visible at the single-layer level at all and only the full model can localise it.*
+
+### 4m.8 The sign, tested in the model (2026-09-18, later)
+
+**Why the signs differ, and why they are not noise.** 8192 rows per Monte-Carlo cell (SE of the mean
+≈ 0.005 ulp). The measured landing rule — sub-half-step increments dropped, half-step ties rounded away
+from zero — biases a running sum DOWN when its increments are small relative to its step and UP when they
+are comparable. The generated op's accumulator is one position's sum, fed cold squares on top of a hot
+one → dropped → sum low → scale high (e > 0). Native's accumulator is the row total, fed 16-term partials
+that are several steps of the total → ties-away → sum high → scale low (e < 0) — until the row is long
+or one tile dominates, when its partials fall below half a step and it flips positive (+2/+7/+12 ulp at
+64/120/344 tiles; +0.8…+2.3 on the massive family). One rule, both signs, and the width flip.
+
+**Bias-cancel is impossible on bf16 output** (×(1−0.001) rounds back to the same value), so the test
+is the mirror: an exact fp64 per-head norm on the host, scale ×(1+β) BEFORE the bf16 rounding, injected
+into an all-native model (hook v2, `PHN_HOST_BETA` / `PHN_HOST_PATTERN`, saved as
+`phn_hook_v2_record_replay_hostnorm.patch`, reverted). Full model, 1×4 mesh, one run each:
+
+| injection into the exact host norm (all 144 per-head calls) | PCC |
+|---|---|
+| β = −0.002 | 0.9855 |
+| β = −0.0009 | 0.9889 |
+| β = 0 (exact norm) | **0.9848** |
+| β = +0.0009 (the generated op's k bias, ≈ +0.22 ulp) | 0.9704 |
+| β = +0.002 | 0.9561 |
+| β = +0.004 | 0.9633 |
+| 48 % of rows at random +1 step (0.0039), rest exact — the generated op's k pattern | 0.9612 |
+| same, −1 step | 0.9822 |
+| only rows holding an outlier (|x| > 8·median) +1 step | 0.9699 |
+| only outlier rows −1 step | 0.9490 |
+
+**Reading.** (1) An exact per-head norm scores 0.985, above native's 0.973 — native's −0.67-ulp error
+costs it too. (2) A coherent up-scale of the generated op's magnitude, before rounding, costs 0.015–0.03;
+the same magnitude down costs nothing. The sign is a real mechanism with a strongly asymmetric consumer.
+(3) But no first-order injection reaches the generated op's 0.878 (per-head generated, block native):
+the best reproduction is ~0.956–0.961, roughly a third to a half of the loss. (4) Content-correlated
+injection inverts the asymmetry (outlier rows: +1 step 0.970, −1 step 0.949), so "up is bad" is not a
+universal rule either — which rows move matters. The remaining loss is in a pattern none of these
+one-parameter injections capture; the honest description remains §4m.5's dose curve, now with the
+first-order part quantified.
+
+**Pipeline lesson (final form).** The consumer-differential test must be run *in the model*, with the
+candidate's actual outputs, not with a synthetic perturbation and not at one layer: single-layer attention
+from both ops sits within 5e-6 PCC of exact, every synthetic injection under-reproduces, and only the real
+values (record-and-replay, 4m.6) carry the full effect. The gate for an op that replaces a production symbol
+is the e2e model with the op's own numbers; everything cheaper is a detector at best.
+
+### 4m.9 What the simulator says the FPU does (craq-sim, cloned to /localdev/dnijemcevic/craq-sim, 2026-09-18)
+
+`src/tensix.cpp` (the ttsim functional model; the BH SIMD path is bit-exact with it over 128M vectors,
+and it is what tt-metal's ttsim CI runs against). MVMUL (`mvmul`, ~L4686) and ELWMUL (`elwmul`, ~L4602)
+both end in `fpu_accum_normalize_encode` (~L4437):
+
+* **Products**: per fidelity phase, 5 mantissa bits of SrcA × 7 of SrcB (HiFi4 covers A bits 10..1 and
+  all 11 of B), product ≤ 12 bits, exponent = exp_a + exp_b + phase adjust.
+* **MVMUL's 16 products are summed as two groups of 8**: each product is aligned to its group's max
+  exponent by a *truncating* right shift (`man >>= exp_diff`, no rounding) and summed as integers. A 9
+  aligned under a 4096 becomes 8 here — not dropped, but truncated.
+* **Then the two group sums and the Dst value are aligned to the common max exponent** (round-half-up
+  on the shift) and — **when Dst is 16-bit** — each of the three is rounded to **11 significant bits**
+  (`(man + (1<<12) − sign) & ~0x1FFF`, "low 13 mantissa bits are rounded away unless fp32_acc") *before*
+  the addition. So the internal accumulator for a 16-bit Dst is fp16-width (11 bits), not fp32.
+* **Sum, normalise, then the landing**: for bf16 Dst the mantissa is reduced to **8 bits** with
+  `(man + (1 << (shift−1))) >> shift` on the magnitude — **round-half-up in magnitude = ties away from
+  zero** — then stored. ELWMUL: one product, same routine.
+
+This is the arithmetic behind every sign in 4m.8: a sub-half-step increment survives the 11-bit stage
+(9 → 8 beside 4096) and is then rounded away at the 8-bit landing (4104 → 4096); a half-step tie rounds
+up (257 → 258, 4368 → 4384). The model matches both hardware tie cases. Worked check on the x=64/x=3 row:
+group with the 4096: 1024 + 7·2 = 1038 units → 4152; other group 72; 4224 lands (I had guessed 4231 →
+4224 by a different route); tile 0's second half 4368 → 4384 tie-up; then 14 × 144 each a 4.5-step tie
+→ +160: 6624 — hardware said 6612..6677.
+
+**Caveats.** (1) The ttsim FPU body is a hand-rolled functional model of the ISA; the diff-fuzz harness
+compares ttsim against a second hand-rolled "silicon-faithful" reference, not against silicon
+(`tests/diff-fuzz/MVMUL/README.md`: "the strongest claim we can make without bringing up the real
+silicon"). (2) That reference rounds its per-K narrowing **half-to-even** while the core model rounds
+**half-up**; my two hardware tie measurements side with the core model. (3) `fp_exponent_8b` selects the
+bf16 carrier; WH keeps a modelled renormalisation bug at `TT_VERSION == 0`.
+
+**Consequence for the design conclusion**: unchanged and sharper. With `fp32_dest_acc_en=False` the
+FPU adds in 11 bits and lands in 8, per instruction, whatever the order; the only sums that escape are
+the 8-product integer groups inside one MVMUL. A 32-bit running sum is the fix; the order is not.
+
+### 4m.10 Cross-check against mstaletovic/sdxl-gn-fullgrid (PRECISION_WRITEUP.md §3.6, WORKLOG.md Part 4/5, 2026-09-18)
+
+Independent silicon probe (deterministic 1-core matmul, fp32 DEST off, l1acc off, p150a) reaches the same
+arithmetic: **ties round away from zero** (256 + 1 → 258; 40 tie adds → 336), **a K-tile lands in two 16-row
+halves, each rounded** (= one landing per MVMUL, two per tile, as here), **fp32 DEST accumulates exactly and only
+the pack rounds (ties away)**, and long in-DEST accumulation of comparable increments **inflates** (gain 1.0011 /
+1.0045 / 1.0172 at 2 / 8 / 40 K-tiles; conv_out +3.7 %). That inflation is the same effect as native's negative
+scale error at ≤ 32 tiles (sum high → scale low). Their probe sat in the comparable-increment regime; ours adds the
+sub-half-step regime (dropping → deflation), and both follow from "add half an ULP, then truncate". Their model-level
+story — a MORE accurate GroupNorm made the UNet WORSE because the reference op's 3.8 % shrinkage had been
+cancelling DEST inflation in SDPA/conv — is the same shape as ours: Gemma's β sweep shows a slight downscale of the
+per-head norm scoring *above* the exact norm (0.9889 vs 0.9848), i.e. something downstream inflates, and native's
+−0.67-ulp shrinkage partly compensates while the generated op's +0.22 compounds. Their lesson "report gain and bias
+next to PCC" is our signed per-row scale metric.
+
+**Two discrepancies worth acting on.** (1) They measure the pre-add product grid at **6 bits below the bf16 ULP**
+(0.984375 = 31.5/32 ties up; 0.96875 = 31/32 exact, lands down); ttsim's `fpu_accum_normalize_encode` rounds each
+term to **11 significant bits = 3 bits below the ULP** before the add (`& ~0x1FFF`), which would round 0.96875 to
+1.0 and land 258 where silicon lands 256 — a testable ttsim gap; their `test_dest_rounding_probe.py` is the
+oracle. (2) ttsim's diff-fuzz "silicon-faithful" MVMUL reference narrows with round-half-to-even; silicon (theirs
+and ours) rounds ties away.
+
+### 4m.11 State at handoff (2026-09-21) — read this first when resuming
+
+**Settled.** The Gemma-4-12B regression is caused by the generated op's summation order (per-position across
+tiles, in 16-bit Dst) — bisection, bit-identity, record-and-replay (4m.6). Both ops accumulate every running
+sum in 16-bit Dst (ISA + ttsim, 4m.7/4m.9); the generated op is statistically the MORE accurate op on every
+few-hot family and width (4m.7); the consumer is one-sided in sign (4m.8); the first-order scale effect
+explains a third to a half of the loss; the rest is unexplained (4m.8). Independent SDXL work agrees on the
+arithmetic and on the "compensation removed" shape (4m.10). Design fix: 32-bit cross-tile accumulation.
+
+**Corrections to earlier sections, in force:** 4m.3/4m.6's "+0.72 / −0.003 on k" → +0.22 / −0.67 (fit artefact,
+4m.7 §1); "sum over 32 positions in fp32 inside the FPU" → 16 products per MVMUL then 16-bit landing (4m.7 §2);
+"small squares always dropped" → direction is data-dependent (4m.6 correction note, 4m.8).
+
+**Tree state (tt-metal3, branch dnijemcevic/rms_norm_replacement_run0, tip still 0d38c356add TEMPORARY):**
+* modified, uncommitted: `rms_norm_ttnn_program_descriptor.py` — the `RMS_REDUCE_ORDER=native[:WT]|nofold[:WT]`
+  ablation switch (23 lines; verified: `native` → bit-identical to native on the six captured inputs).
+* untracked: probes 051–067 under `tests/ttnn/unit_tests/operations/rms_norm_ttnn/probes/`.
+* `models/demos/gemma4/tt/attention/operations.py` is clean; the two diagnostic hooks are saved as patches.
+* `0d38c356add` (trace commit) and `b569dcf57cf` (inactive firmware note) sit on top; irrelevant now — see the
+  framing below.
+
+**Durable artifacts:** `/localdev/dnijemcevic/gemma_norm_investigation_0918/` (README inside) — captured
+inputs, both ops' outputs, the 144+144 recorded per-head tensors, the full-model driver and all 22 run logs,
+the hook patches, the Monte Carlo data, the artifact HTML. Simulator clone: `/localdev/dnijemcevic/craq-sim`.
+
+**Operational:** single-card probes (`TT_VISIBLE_DEVICES=0`) leave the 4-card fabric unable to hand-shake; run a
+trivial 1×4 mesh probe WITHOUT the restriction before any Gemma run (4m.6 notes). A Gemma full-model run is
+~25 s test time; the driver in the durable folder reproduces the CI digits with the shipped knobs.
+
+**Open, in priority order.** (1) The unexplained remainder of the loss (0.96 → 0.878): only the real values carry
+it; a per-layer replay of `rec_gen` into a native run (replace call i only) would localise it by layer/operand.
+(2) Pipeline changes from 4m.4 + 4m.7 + 4m.8: consumer-differential e2e gate with the op's real values; signed
+per-row metric on few-hot rows; witness-element readout; precision refinements gated on 32-bit accumulation.
+(3) ttsim gap candidates for the craq-sim owners: 11-bit pre-add rounding vs measured 6-bits-below-ULP grid;
+diff-fuzz reference's RNE vs silicon's ties-away (4m.10). (4) From 4l.8: rebase the eval
+submodule onto main and reconcile perf_shim/op_window.
+
+**Framing (2026-09-21).** The op is a playground and will NOT be PR'd. The goal is to consolidate the lessons into
+the agentic framework (tt_ops_code_gen: prompts, skills, golden-test scaffold, verifier, perf agents, runner) and
+then regenerate the op from scratch. §4n is the consolidated index for that. The 4l.7 split still applies — to
+the FRAMEWORK commits, not to the op.
+
+## 4n. Consolidated lessons → framework changes (index, 2026-09-21)
+
+*One line per lesson, grouped by the component that has to change, each pointing at the section with the
+evidence. Status: (L) landed in the submodule, (–) not done. This is the worklist for "update the framework,
+then regenerate from scratch"; the op itself is not shipped.*
+
+### A. Golden tests / feature spec (`/golden-tests`, feature_spec template)
+* (–) Tolerances at least as tight as the target's for the same case — 4i.4.
+* (–) A detector built for one blindness is crossed with every format where it can occur — 4i.5.
+* (–) Every property in a shard/config type is an axis (orientation cost 73 cases) — 4i.6.
+* (–) Test a core grid larger than the work — 4i.7. Sweep every caller-settable knob — 4i.8.
+* (–) The suite never supplies a piece the op lacks (class, constant, conversion) — 4i.9.
+* (–) `buffer_type` is an axis: DRAM-interleaved, L1-interleaved, sharded are three regimes; one L1 cell and one
+  L1 perf case minimum — 4k.3.
+* (–) Signed per-row statistic against an exact reference (not vs the seed) — 4m.4(3), 4m.7, 4m.8.
+* (–) Few-hot input families calibrated from real activations (scattered per-token outliers; channel-concentrated;
+  2 fixed massive channels), Gaussian is the blind spot — 4m.7, 4m.8 (MC tables), 4m.10.
+* (–) Exact scale readout via a witness element; never a least-squares fit through the output — 4m.7 §1.
+* (L) Rules not examples; no hand-enumerated combinatorics; quirk notes say what a call DOES — 4i.1–3.
+
+### B. Planner (blocking model, precision design)
+* (–) No 16-bit running sum of squares over activations, in either order; accumulate across tiles in 32 bits
+  (fp32 DEST or fp32 CB carry). Order is not a fix — 4m.6, 4m.7 §2, 4m.9, 4m.10.
+* (–) Read cadence is a knob, placement-dependent, non-monotonic; cap transactions not bytes; read placement from
+  the accessor's IsDram bit — 4k.4.
+* (–) Re-examine inherited (seed) assumptions against every axis the successor adds — 4i.10.
+* (–) Parity-pass guardrails: no mechanism change, no scheme change, no inherited interface bugs, no target
+  golden — 4l.5.
+
+### C. Implementer
+* (–) A departed-only fence is never sufficient at kernel exit; writer AND reader take an acked barrier — 4k.11.
+* (–) A new CT arg must move both the host list and the kernel's hardcoded index; the count assert does not catch
+  it — 4k.4.
+* (–) Knob flips that leave CT args unchanged are silent no-ops: identical digits + "JIT cache stats N/N hits" —
+  4m.6 notes, 4m.7.
+* (–) Consume the emitted seam; do not write the switch — 4l.6.
+
+### D. Verifier / precision gate
+* (L) Probe what SUPPORTED refuses; handle empty TARGET−SUPPORTED; no-regression vs the SEED — 4e TODO-1.
+* (–) `TARGET` says what we test, `SUPPORTED` says what works — a gate, not a doc line — 4l.7 (510bc66's lesson).
+* (–) PCC / L2 / max-error cannot rank two ops for a consumer; the e2e model with the op's REAL values is the
+  gate (record-and-replay hook pattern); synthetic perturbations under-reproduce — 4m.4(1,2), 4m.7 §3, 4m.8.
+* (–) Perf claims report count slower / count faster / worst case, never a total or mean — 4j.11.
+* (–) Re-run a failing case alone before blaming the op — 4j.12. Charts must show what they could not plot — 4j.13.
+* (–) Calibrate the harness against itself before attributing a per-case delta — 4k.15.
+
+### E. Perf agents (coordinator, part-optimizer, `/perf-measure`, `/perf-ceiling-dm`)
+* (–) After any change: "what is the last NoC op on any compiled path, and is it acked?" A fence deletion is not
+  a local decision — 4k.11.
+* (–) Measure both sides through the same window; selection in exactly one place; prove which side ran — 4k.1.
+* (–) One dispatch per case; repeats are unsafe on ops that mutate inputs — 4k.2. Detector corrections — 4k.15.
+* (–) Precision refinements (fold, AccumulateViaAdd, SFPU finalizers) gated on PCC/rel-RMS on randn are unsafe;
+  gate on A's signed metric + few-hot inputs, and require 32-bit accumulation — 4m.4(4), 4m.7.
+* (–) Fixed round counts waste money — 4e TODO-3; a fix's own bench is not the set — 4k.4.
+
+### F. Eval runner / pipeline structure
+* (–) Generate on the nuked branch, MERGE into a fork of the helper library; integrity by direction of travel —
+  4l.1, 4l.2. Parity before perf — 4l.3. Three buckets with ratified refusals — 4l.4.
+* (–) Emit the seam (5 load-bearing details) — 4k.5, 4l.6.
+* (–) Run the op's sharded cases under `--dev` once per generation — 4k.12.
+* (–) Model e2e entries are a REQUIRED gate for an op replacing a production symbol; how to find them — 4k.8,
+  4m.4(1). Say which entries are pointless, in writing — 4k.8.
+* (–) Report the harness revision and its distance from the submodule tip — 4k.0.
+* (–) 4e TODO-2 (effort split), -5 (ingest last refinement), -8 (outside witness runs last), -10/-11/-12 (blind
+  pass gating, suite numbers, self-reflection gating), -13 (`PYTHON_ENV_DIR`).
+* (–) Generic rules living in one op's prompt must be lifted (0b13d59, ba0b374's provenance convention) — 4l.7.
+
+### G. Helper library docs (`/tune-dm-helper`, `/apply-dm-helper`)
+* (–) A helper whose completion is weaker than acked states it beside its source-reuse guarantee — 4k.11.
+
+### H. Outside the framework (issues to file)
+* tt-metal: end-of-kernel check tests SENT not ACKED — 4k.11 (highest leverage).
+* ttsim (craq-sim): 11-bit pre-add rounding vs measured 6-bits-below-ULP grid; diff-fuzz reference RNE vs
+  silicon ties-away — 4m.10.
+* tt-metal: the broadcast multiply x·s deviates up to ±1.5 ulp from the exact product on both ops while plain
+  `ttnn.multiply` is exact RNE — 4m.7 §8b of the artifact; not chased.
+
+### I. Method rules for any agent (prompt-level)
+* Triage differentially against a matched control — 4k.13. Cheapest experiment first; do not ask CI a one-word
+  question — 4k.14.
+* Every injection needs a zero-magnitude control; sub-ulp bf16 injections are no-ops — 4m.4(5), 4m.8.
+* A bound falsifies a contradicting ablation (memory: bound-falsifies-ablation).
+* Do not describe hardware arithmetic from memory; ISA + simulator + a witness probe — 4m.7 §2, 4m.9.
