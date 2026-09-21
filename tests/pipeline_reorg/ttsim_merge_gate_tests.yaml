@@ -39,3 +39,4 @@
       timeout: 15
   owner_id: U08PR765YJ1 # Matt Craighead
   team: ttsim
+  budget_type: merge_gate

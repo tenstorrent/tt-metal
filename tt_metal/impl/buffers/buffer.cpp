@@ -41,6 +41,7 @@
 #include "impl/buffers/buffer_sharding_args_impl.hpp"
 #include "impl/buffers/generate_buffer_page_mapping.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -499,8 +500,14 @@ BufferImpl::BufferImpl(
     page_size_(page_size),
     shard_spec_(sharding_args.shard_spec()),
     buffer_distribution_spec_(sharding_args.buffer_distribution_spec()),
-    per_core_allocation_(experimental::per_core_allocation::is_per_core_allocation(sharding_args)) {
+    per_core_allocation_(experimental::per_core_allocation::is_per_core_allocation(sharding_args)),
+    range_lockstep_allocation_(experimental::range_lockstep_allocation::is_range_lockstep_allocation(sharding_args)) {
     TT_FATAL(this->device_ != nullptr, "Device needs to not be null.");
+    // BufferShardingArgs does not know the buffer type; this is the first point where both are visible.
+    TT_FATAL(
+        !this->range_lockstep_allocation_ || buffer_type == BufferType::L1,
+        "range_lockstep_allocation is only supported for L1 buffers, but this buffer is {}",
+        enchantum::to_string(buffer_type));
     if (this->sub_device_id_.has_value()) {
         validate_sub_device_id(this->sub_device_id_, this->device_, buffer_type, shard_spec_);
         this->sub_device_manager_id_ = this->device_->get_active_sub_device_manager_id();
@@ -628,15 +635,16 @@ std::shared_ptr<Buffer> BufferImpl::view(Buffer& self, const BufferRegion& regio
 
     TT_FATAL(!per_core_allocation_, "Buffer::view() with sub-regions is not supported for per-core allocated buffers");
 
+    // A view takes the parent's address rather than allocating, so the flag changes nothing about
+    // placement here. It is carried anyway so is_range_lockstep_allocation() agrees on a buffer and
+    // its views; the parent's specs come along unchanged, so the setter's guards still hold.
+    auto sharding_args = BufferShardingArgs(buffer_distribution_spec_, shard_spec_, buffer_layout_);
+    if (range_lockstep_allocation_) {
+        experimental::range_lockstep_allocation::set_range_lockstep_allocation(sharding_args, true);
+    }
+
     auto buffer = BufferImpl::create(
-        device_,
-        address_,
-        region.size,
-        page_size_,
-        buffer_type_,
-        BufferShardingArgs(buffer_distribution_spec_, shard_spec_, buffer_layout_),
-        bottom_up_,
-        sub_device_id_);
+        device_, address_, region.size, page_size_, buffer_type_, sharding_args, bottom_up_, sub_device_id_);
 
     std::shared_ptr<const BufferPageMapping> new_page_mapping;
     if (is_sharded(buffer_layout_)) {
