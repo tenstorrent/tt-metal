@@ -43,7 +43,7 @@ No checkpoint commits along the way — work uncommitted until the end. At the e
 **whether it finished or you stopped because of an irrecoverable blocker** — make exactly ONE commit
 summarizing what was built, which shapes are graded vs. skip-only, and where PCC numbers /
 bringup_log entries live. If you stopped on a blocker, say so plainly in that commit message rather
-than presenting it as done.
+than presenting it as done. Than you must push that commit to remote!!!
 
 ## Report
 
