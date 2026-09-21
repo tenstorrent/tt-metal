@@ -3,7 +3,9 @@
 `pride_and_prejudice.txt` is a short excerpt from Jane Austen's *Pride and
 Prejudice*, a public-domain work. `provenance.json` identifies the exact Project
 Gutenberg source, source/body hashes and selected character/token ranges. Preserve
-the excerpt's CRLF bytes: changing line endings changes tokenization.
+the excerpt's CRLF bytes and lack of a final newline: its end is a token boundary,
+not a complete source line. The file is excluded from the end-of-file fixer because
+normalizing it would invalidate the pinned prompt hash.
 
 `token_ids.json` contains one Llama BOS followed by 4,095 book tokens. The 2K case
 uses its first 2,048 IDs; the 4K case uses all 4,096. These are raw book-continuation
