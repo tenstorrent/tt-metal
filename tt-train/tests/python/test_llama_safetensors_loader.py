@@ -262,15 +262,21 @@ class TestReadCheckpoint:
 
 # ── Coverage: does the rule set match the model? ──
 
-_TOP_LEVEL = ("Llama/tok_emb/weight", "Llama/fc/weight", "Llama/ln_fc/gamma")
-_PER_LAYER_FUSED = (
-    "attention_norm/gamma",
-    "mlp_norm/gamma",
-    "attention/qkv_linear/weight",
-    "attention/out_linear/weight",
-    "mlp/w_gate_up/weight",
-    "mlp/w2/weight",
-)
+_HF_TOP_LEVEL = {
+    "Llama/tok_emb/weight": ("model.embed_tokens.weight",),
+    "Llama/fc/weight": ("lm_head.weight",),
+    "Llama/ln_fc/gamma": ("model.norm.weight",),
+}
+_HF_PER_LAYER = {
+    "attention_norm/gamma": ("input_layernorm.weight",),
+    "mlp_norm/gamma": ("post_attention_layernorm.weight",),
+    "attention/qkv_linear/weight": ("self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight"),
+    "attention/out_linear/weight": ("self_attn.o_proj.weight",),
+    "mlp/w_gate_up/weight": ("mlp.gate_proj.weight", "mlp.up_proj.weight"),
+    "mlp/w2/weight": ("mlp.down_proj.weight",),
+}
+_TOP_LEVEL = tuple(_HF_TOP_LEVEL)
+_PER_LAYER_FUSED = tuple(_HF_PER_LAYER)
 _PER_LAYER_PRE_FUSION = (
     "attention_norm/gamma",
     "mlp_norm/gamma",
@@ -298,7 +304,7 @@ def param_names(per_layer, num_layers=N_LAYERS):
 
 
 def coverage_config(**overrides):
-    return LlamaConfig(
+    defaults = dict(
         hidden_size=MODEL_HIDDEN,
         num_attention_heads=N_HEADS,
         num_key_value_heads=N_KV_HEADS,
@@ -306,8 +312,16 @@ def coverage_config(**overrides):
         intermediate_size=INTERMEDIATE,
         vocab_size=VOCAB,
         max_position_embeddings=SEQ_LEN,
-        **overrides,
     )
+    return LlamaConfig(**{**defaults, **overrides})
+
+
+def hf_sources(param: str) -> tuple[str, ...]:
+    """The HF tensors *param* holds."""
+    if param in _HF_TOP_LEVEL:
+        return _HF_TOP_LEVEL[param]
+    _, _, layer, suffix = param.split("/", 3)
+    return tuple(f"model.layers.{layer}.{source}" for source in _HF_PER_LAYER[suffix])
 
 
 class TestCoverage:
@@ -316,6 +330,13 @@ class TestCoverage:
     def test_accepts_the_current_model(self):
         config, names = coverage_config(), param_names(_PER_LAYER_FUSED)
         _check_coverage(names, list(_rules(config, names)), frozenset())
+
+    def test_rules_name_the_sources_each_parameter_holds(self):
+        config, names = coverage_config(), param_names(_PER_LAYER_FUSED)
+        rules = list(_rules(config, names))
+        assert {r.param: r.sources for r in rules} == {n: tuple(map(_canonical, hf_sources(n))) for n in names}
+        transformed = {r.param for r in rules if r.transform is not None}
+        assert transformed == {n for n in names if n.endswith("qkv_linear/weight")}, "only qkv is unpermuted"
 
     def test_rejects_the_pre_fusion_model_naming_both_directions(self, expect_error):
         """The break this loader was fixed for: the model fused q/k/v and gate/up while the
@@ -473,6 +494,47 @@ def read_param(params, name: str, shard_dim: int | None) -> np.ndarray:
     return full.reshape(full.shape[-2], full.shape[-1])
 
 
+def tp_shard_dim(param: str, placement: EmbeddingPlacement) -> int | None:
+    if param.endswith(("qkv_linear/weight", "w_gate_up/weight", "Llama/fc/weight")):
+        return ROW_DIM
+    if param.endswith(("out_linear/weight", "w2/weight")):
+        return COL_DIM
+    if param == "Llama/tok_emb/weight":
+        return {
+            EmbeddingPlacement.Replicated: None,
+            EmbeddingPlacement.VocabParallel: ROW_DIM,
+            EmbeddingPlacement.FeatureParallel: COL_DIM,
+        }[placement]
+    return None
+
+
+def expected_value(param: str, hf: dict[str, np.ndarray], tp_size: int) -> np.ndarray:
+    """*param*'s full ``[rows, cols]`` value, laid out for *tp_size* ranks."""
+    sources = [hf[name] for name in hf_sources(param)]
+    if param.endswith("qkv_linear/weight"):
+        q, k, v = sources
+        return fuse_qkv(q, k, v, N_HEADS, N_KV_HEADS, tp_size)
+    if param.endswith("w_gate_up/weight"):
+        gate, up = sources
+        return fuse_gate_up(gate, up, tp_size)
+    (single,) = sources
+    return single.reshape(1, -1) if single.ndim == 1 else single
+
+
+def assert_every_parameter_loaded(model, hf, tp_size=1, placement=EmbeddingPlacement.Replicated):
+    """Every parameter holds its HF sources bit-exactly, in the layout its placement demands. A
+    tile-padded parameter holds them in its leading rows, with noise rather than zeros below."""
+    params = model.parameters()
+    for name in params:
+        expected = as_bf16(expected_value(name, hf, tp_size))
+        got = read_param(params, name, tp_shard_dim(name, placement) if tp_size > 1 else None)
+        rows = expected.shape[0]
+        assert got.shape[0] >= rows and got.shape[1] == expected.shape[1], f"{name}: {got.shape} vs {expected.shape}"
+        assert np.array_equal(got[:rows], expected), f"{name}: does not hold its checkpoint sources"
+        if got.shape[0] > rows:
+            assert got[rows:].any(), f"{name}: padding is all zeros, which leaves dead rows"
+
+
 @pytest.mark.requires_device
 class TestConsumerContract:
     """A wrong block order here still yields finite, varying logits -- silently wrong
@@ -545,28 +607,21 @@ class TestLoadIntoModel:
         with expect_error(RuntimeError, "the checkpoint has no"):
             load_from_safetensors(Llama(config), tmp_path, config)
 
-    def test_without_tensor_parallelism_is_a_plain_concat(self, tmp_path):
+    def test_every_parameter_holds_its_sources(self, tmp_path):
         hf = write_hf_checkpoint(tmp_path)
         config = e2e_config(False, EmbeddingPlacement.Replicated)
         model = Llama(config)
         load_from_safetensors(model, tmp_path, config)
+        assert_every_parameter_loaded(model, hf)
 
-        params = model.parameters()
-        pfx = "model.layers.0"
-        expected_qkv = np.concatenate(
-            [
-                _unpermute_proj_rows(hf[f"{pfx}.self_attn.q_proj.weight"], N_HEADS),
-                _unpermute_proj_rows(hf[f"{pfx}.self_attn.k_proj.weight"], N_KV_HEADS),
-                hf[f"{pfx}.self_attn.v_proj.weight"],
-            ],
-            axis=0,
-        )
-        got = read_param(params, "Llama/blocks/0/attention/qkv_linear/weight", None)
-        assert np.array_equal(got, as_bf16(expected_qkv)), "qkv_linear without TP"
-
-        expected_gate_up = np.concatenate([hf[f"{pfx}.mlp.gate_proj.weight"], hf[f"{pfx}.mlp.up_proj.weight"]], axis=0)
-        got = read_param(params, "Llama/blocks/0/mlp/w_gate_up/weight", None)
-        assert np.array_equal(got, as_bf16(expected_gate_up)), "w_gate_up without TP"
+    def test_pads_the_vocab_the_model_rounds_up_to_a_tile(self, tmp_path):
+        vocab = VOCAB - 8
+        hf = write_hf_checkpoint(tmp_path, vocab=vocab)
+        config = e2e_config(False, EmbeddingPlacement.Replicated, vocab_size=vocab)
+        model = Llama(config)
+        assert model.padded_vocab_size > vocab, "premise: the model rounds the vocab up"
+        load_from_safetensors(model, tmp_path, config)
+        assert_every_parameter_loaded(model, hf)
 
     def test_rejects_a_checkpoint_whose_vocab_disagrees_with_the_config(self, tmp_path, expect_error):
         write_hf_checkpoint(tmp_path, vocab=VOCAB - 8)
@@ -607,39 +662,7 @@ class TestLoadIntoTensorParallelModel:
         config = e2e_config(True, placement)
         model = Llama(config)
         load_from_safetensors(model, tmp_path, config)
-
-        params = model.parameters()
-        tp = ttml.mesh().axis_size("tp")
-        for layer in range(N_LAYERS):
-            pfx = f"model.layers.{layer}"
-            expected_qkv = fuse_qkv(
-                hf[f"{pfx}.self_attn.q_proj.weight"],
-                hf[f"{pfx}.self_attn.k_proj.weight"],
-                hf[f"{pfx}.self_attn.v_proj.weight"],
-                N_HEADS,
-                N_KV_HEADS,
-                tp,
-            )
-            got = read_param(params, f"Llama/blocks/{layer}/attention/qkv_linear/weight", ROW_DIM)
-            assert np.array_equal(got, as_bf16(expected_qkv)), f"layer {layer}: qkv_linear layout"
-
-            expected_gate_up = fuse_gate_up(hf[f"{pfx}.mlp.gate_proj.weight"], hf[f"{pfx}.mlp.up_proj.weight"], tp)
-            got = read_param(params, f"Llama/blocks/{layer}/mlp/w_gate_up/weight", ROW_DIM)
-            assert np.array_equal(got, as_bf16(expected_gate_up)), f"layer {layer}: w_gate_up layout"
-
-            # Row-parallel weights shard the input features (dim 3), unfused and uninterleaved.
-            got = read_param(params, f"Llama/blocks/{layer}/attention/out_linear/weight", COL_DIM)
-            assert np.array_equal(got, as_bf16(hf[f"{pfx}.self_attn.o_proj.weight"])), f"layer {layer}: o_proj"
-            got = read_param(params, f"Llama/blocks/{layer}/mlp/w2/weight", COL_DIM)
-            assert np.array_equal(got, as_bf16(hf[f"{pfx}.mlp.down_proj.weight"])), f"layer {layer}: down_proj"
-
-        embedding_shard = {
-            EmbeddingPlacement.Replicated: None,
-            EmbeddingPlacement.VocabParallel: ROW_DIM,
-            EmbeddingPlacement.FeatureParallel: COL_DIM,
-        }[placement]
-        got = read_param(params, "Llama/tok_emb/weight", embedding_shard)
-        assert np.array_equal(got, as_bf16(hf["model.embed_tokens.weight"])), "token embedding"
+        assert_every_parameter_loaded(model, hf, ttml.mesh().axis_size("tp"), placement)
 
     def test_pads_the_vocab_the_model_rounds_up_to_a_tile(self, tmp_path):
         """The one end-to-end vocab that is not tile-aligned: 120 rounds up to 128, and the pad rows shard too."""
@@ -647,12 +670,9 @@ class TestLoadIntoTensorParallelModel:
         hf = write_hf_checkpoint(tmp_path, vocab=vocab)
         config = e2e_config(True, EmbeddingPlacement.VocabParallel, vocab_size=vocab)
         model = Llama(config)
+        assert model.padded_vocab_size > vocab, "premise: the model rounds the vocab up"
         load_from_safetensors(model, tmp_path, config)
-
-        got = read_param(model.parameters(), "Llama/tok_emb/weight", ROW_DIM)
-        assert got.shape == (model.padded_vocab_size, MODEL_HIDDEN), "not grown to the parameter's vocab"
-        assert np.array_equal(got[:vocab], as_bf16(hf["model.embed_tokens.weight"])), "checkpoint rows moved"
-        assert got[vocab:].any(), "padding is all zeros, which leaves dead rows"
+        assert_every_parameter_loaded(model, hf, ttml.mesh().axis_size("tp"), EmbeddingPlacement.VocabParallel)
 
     def test_forward_runs_on_loaded_weights(self, tmp_path):
         """Loaded weights must actually drive the fused ops, not just sit at the right shape."""
