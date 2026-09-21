@@ -57,7 +57,7 @@ KV occupies **212.5 GiB**. The loader reads each head's requested token prefix a
 
 ## PCC definition and threshold
 
-Each score is Pearson correlation between a TT cache head and its GPU counterpart, flattened over the entire requested token prefix and the compared channels. Global rotary K and V are scored separately. There are 1680 scores per context. The validator uses a reusable FP32 buffer of at most 8 MiB and accumulates centered statistics across blocks in FP32. Each block uses three dot products for the two sums of squares and the cross-product. Nonfinite inputs propagate into these statistics and are rejected before a score is returned. This produces one whole-head PCC; it does not average block correlations. TT readback remains BF16 until copied into that buffer.
+Each score is Pearson correlation between a TT cache head and its GPU counterpart, flattened over the entire requested token prefix and the compared channels. Global rotary K and V are scored separately. There are 1680 scores per context. The validator uses a reusable FP32 buffer of at most 12 MiB and accumulates centered statistics across blocks in FP32. Each block uses three dot products for the two sums of squares and the cross-product. Nonfinite inputs propagate into these statistics and are rejected before a score is returned. This produces one whole-head PCC; it does not average block correlations. TT readback remains BF16 until copied into that buffer.
 
 - `layer_minima`: the lowest head score for each cache type in the current layer. It can increase between layers.
 - `running_min_pcc`: the lowest score seen across all layers checked so far. It cannot increase.
@@ -76,6 +76,21 @@ The regression threshold is **0.91** for this captured prompt. The 256K validati
 
 The lowest score is sliding V, layer 39, head 9: **0.916626**, about **0.0066** above the threshold. The threshold is a regression floor for this prompt and model precision. PCC values depend on the token prefix, so minima need not decrease with context length.
 
+## Per-layer and overall metrics
+
+The canonical migration test prints a PCC, RMSE, and relative RMSE table with `pytest -s` and saves the metrics in its JSON report. It includes two views: one result per layer, pooling all its K/V heads, and one overall result pooling all 60 layers. Both cover every token and channel compared against the GPU reference. Global rotary K and V together cover each packed head once.
+
+The table's PCC is Pearson correlation over all compared values in the layer or the entire model. The validator merges each head's means and centered sums, including differences between head means. This matches correlating the concatenated tensors; it does not average head PCCs. Higher PCC is better. The per-head minima and their regression threshold are reported separately.
+
+```text
+RMSE          = sqrt(sum((TT - GPU)^2) / number_of_elements)
+Relative RMSE = sqrt(sum((TT - GPU)^2) / sum(GPU^2))
+```
+
+Lower is better. RMSE is in the tensor's units; relative RMSE expresses the error relative to the GPU reference's RMS magnitude. For example, `0.10` means an RMS error of 10% of the reference RMS. The sums are pooled before taking the square root: these are not averages of head or layer RMSE values. Larger tensors contribute more elements, and higher-energy tensors contribute more to the overall normalization.
+
+The validator computes these sums in FP32 during the PCC pass, using the same readback and reference tensors. It adds no device or disk reads. `gemma4_slot0.json` stores the results under `error_metrics.overall` and `error_metrics.layers`, including pooled PCC, element counts, and squared sums. Relative RMSE is `null` for a zero-energy reference. RMSE is reported without a pass/fail threshold; the existing PCC threshold remains the accuracy gate.
+
 ## Gate 1: GPU-trace comparison
 
 The test starts the service with `PREFILL_MOCK_MIGRATION=1`, which exports the address table and device map without requiring a migration endpoint. The shared producer sends tokens followed by a shutdown sentinel. The runner synchronizes each chunk on the device before processing the next message. The test intercepts the end of the service request loop to read and compare KV before the mesh closes. The service keeps KV resident throughout validation. TT KV is read directly into host memory; only address metadata, logs, and PCC reports are written to disk.
@@ -91,7 +106,7 @@ pytest 'models/demos/gemma4_d_p/tests/test_prefill_migration.py::test_prefill_mi
 
 The test defaults `OMP_NUM_THREADS` to `16` when it is unset. An exported value overrides this.
 
-The test uses `GPU_PCC_THRESHOLD` in `tests/test_prefill_migration.py`. Each case starts a fresh runner process and closes its mesh after validation. It retains `producer.log`, the table, the device map, and `gemma4_slot0.json` with every layer/head PCC and total and per-layer phase timings. Each completed layer logs reference-loading, readback, and PCC time. Runner output is saved in `runner.log`. The test sets `PREFILL_PRODUCER_CHECK_PCC=0` because the owning process performs the GPU comparison; the runner synchronizes device completion before leaving its request loop.
+The test uses `GPU_PCC_THRESHOLD` in `tests/test_prefill_migration.py`. Each case starts a fresh runner process and closes its mesh after validation. It retains `producer.log`, the table, the device map, and `gemma4_slot0.json` with every layer/head PCC, overall and per-layer RMSE, and total and per-layer phase timings. Each completed layer logs its RMSE values and reference-loading, readback, and comparison time. Runner output is saved in `runner.log`. The test sets `PREFILL_PRODUCER_CHECK_PCC=0` because the owning process performs the GPU comparison; the runner synchronizes device completion before leaving its request loop.
 
 To use an already-running service, set matching service/table/map paths and invoke the shared producer. This external-process path reads the entire prefix through the migration table using slower UMD MMIO reads:
 
