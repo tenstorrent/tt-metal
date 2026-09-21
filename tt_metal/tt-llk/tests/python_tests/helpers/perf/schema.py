@@ -113,6 +113,5 @@ STAT_KINDS = (MEAN, STD)
 KEY_COLUMNS = (MARKER, TEST_NAME_COLUMN, LOOP_FACTOR_COLUMN, TILE_CNT_COLUMN)
 
 
-# Derived metric base names: exactly the keys compute_metrics emits (and _exportable() keeps),
-# taken from the shared engine so this schema cannot drift from the formulas.
+# Derived metric base names, taken from the shared engine so the schema cannot drift from the formulas.
 METRIC_BASES = frozenset(_mc.METRIC_LABELS)

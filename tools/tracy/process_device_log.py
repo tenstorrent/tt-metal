@@ -234,10 +234,8 @@ def get_ops(timeseries):
         op = opsDict[opID]
         opCores = {}
 
-        # Perf-counter records (TS_DATA) never mark an op boundary. A multipass capture
-        # merges records from several runs into one log, so their timestamps can fall
-        # outside this run's FW window; walk the boundary rows without them and attach
-        # them to the op afterwards.
+        # TS_DATA counter rows never mark an op boundary, and in a merged multipass log their timestamps can fall
+        # outside this FW window (records of later runs); walk the boundary rows without them, then attach them.
         counterRows = [ts for ts in op if ts[0]["type"] == "TS_DATA"]
         op = [ts for ts in op if ts[0]["type"] != "TS_DATA"]
         opEntry = ops[-1]

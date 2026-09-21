@@ -47,7 +47,6 @@ def test_empty_view_yields_none_not_zero():
 
 
 def test_full_view_percentages_stay_bounded():
-    # Every counter present and equal: no _pct may leave 0..100 (cross-bank clamps are tested separately).
     names = set(COUNTER_TYPE_NAMES.values()) - {"UNDEF"}
     out = mc.compute_metrics(_View({n: 1000.0 for n in names}))
     for key, value in out.items():
@@ -101,7 +100,6 @@ def test_l1_port_groups_use_the_reference_of_the_pass_that_captured_each_port():
 
 
 def test_enum_parser_matches_the_compiled_ordinals():
-    # UNDEF anchors ordinal 0 and the table is dense from there.
     assert COUNTER_TYPE_NAMES[0] == "UNDEF"
     assert sorted(COUNTER_TYPE_NAMES) == list(range(len(COUNTER_TYPE_NAMES)))
     enum_names = set(COUNTER_TYPE_NAMES.values())
@@ -121,8 +119,7 @@ def test_every_metric_is_none_when_any_of_its_inputs_is_missing():
     # a port dropped out of a mean, but it must never collapse to a fake 0 or 100.
     names = [n for n in COUNTER_TYPE_NAMES.values() if n not in ("UNDEF", "QUASAR_L1_CLIENT_EVENT")]
     for trial in range(5):
-        # Varied, deterministic counts in 200..900; grant <= request keeps the clamped L1 metrics away from
-        # their saturation points.
+        # Deterministic counts in 200..900; grant <= request keeps the clamped L1 metrics off their saturation points.
         full = {n: 200.0 + (37 * i + 101 * trial) % 700 for i, n in enumerate(names)}
         for i, n in enumerate(names):
             if n.endswith("_GRANT") and n[: -len("_GRANT")] in full:
@@ -165,7 +162,7 @@ def test_formulas_with_distinct_values():
     assert out["fpu_utilization_pct"] == 25.0
     assert out["compute_utilization_pct"] == 40.0
     assert out["pack_dest_eff_pct"] == 25.0
-    assert out["fpu_exec_eff_ratio"] == 0.5  # a ratio: raw value, not a percentage
+    assert out["fpu_exec_eff_ratio"] == 0.5
     assert out["compute_to_unpack_ratio"] == 0.8
 
 
@@ -265,7 +262,6 @@ def test_l1_grant_ratios_stay_bounded_when_ready_exceeds_requests():
 
 
 def test_tech_report_catalogue_matches_metric_labels_exactly():
-    # One catalogue row per engine metric, no stale rows, labels identical to the engine's.
     report = (
         Path(__file__).resolve().parents[3]
         / "tt_metal"

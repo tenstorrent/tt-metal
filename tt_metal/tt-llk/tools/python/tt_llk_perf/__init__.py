@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host side of the tt-llk perf counter infrastructure.
-
-headers: parsers for tools/include/perf_counters (counter names by ordinal,
-per-arch tables by bank and select). metrics: the derived-metric engine shared
-by the metal profiler (tools/tracy) and the LLK perf harness. Stdlib only.
+"""Host side of the tt-llk perf counters: header parsers plus the metric engine shared with the metal profiler.
+Stdlib only, so tools/tracy can import it without the LLK harness.
 """
 
 from . import headers, metrics
