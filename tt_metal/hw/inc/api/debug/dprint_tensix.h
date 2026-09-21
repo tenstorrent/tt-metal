@@ -71,22 +71,12 @@ inline void dprint_data_format(uint8_t data_format) {
     }
 }
 #else
-// Not provided on Quasar, but still declared, so that a Quasar build which references it fails with
-// an explicit message naming the reason and the replacement rather than a bare "not declared in this
-// scope". The assert is dependent on the defaulted template parameter, so it fires only when
-// something actually calls this. A plain `#else #error` cannot be used: the rest of this header is
-// Quasar's own DEST-print path, so an #error would break every Quasar build instead of only a
-// genuine reference.
-template <typename>
-inline constexpr bool dprint_unavailable_on_quasar = false;
-
-template <typename Caller = void>
-void dprint_data_format(uint8_t) {
-    static_assert(
-        dprint_unavailable_on_quasar<Caller>,
-        "dprint_data_format is not available on Quasar: the Quasar DataFormat enum has no "
-        "Bfp*/Lf8/UInt32 entries for it to name. Print a format with dprint_array_with_data_type.");
-}
+// Declared and deleted rather than simply absent, so that a Quasar build which does reach this
+// function fails at the call site with "use of deleted function 'dprint_data_format'" instead of a
+// bare "not declared in this scope". An `#else #error` cannot be used here: this header is also
+// Quasar's DEST-print path, so it must keep compiling on Quasar, and an #error would fire on every
+// Quasar build rather than only on an actual reference.
+void dprint_data_format(uint8_t data_format) = delete;
 #endif  // !ARCH_QUASAR
 
 // if flag DEST_ACCESS_CFG_remap_addrs is enabled
@@ -243,40 +233,15 @@ inline void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) 
     dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
 #else
-// Declared but not provided on Quasar, on the same basis as dprint_data_format above and reusing its
-// dprint_unavailable_on_quasar helper: each of these reads a DEST row over the debug bus, whose
-// RISCV_DEBUG_REG_* wrapper macros are unwired on Quasar, so a reference from a Quasar build is a
-// bug. Quasar reads DEST through the memory-mapped window in dprint_tensix_dest_reg below.
-#define QUASAR_NO_DEBUG_BUS_DEST_ROW_READ                                                           \
-    "This DEST row reader is not available on Quasar: it reads DEST over the debug bus, whose "     \
-    "RISCV_DEBUG_REG_* wrapper macros are unwired here. Use dprint_tensix_dest_reg instead, which " \
-    "reads DEST through the RISC memory-mapped window."
-
-template <typename Caller = void>
-void dprint_tensix_dest_reg_row_float32(uint16_t) {
-    static_assert(dprint_unavailable_on_quasar<Caller>, QUASAR_NO_DEBUG_BUS_DEST_ROW_READ);
-}
-template <typename Caller = void>
-void dprint_tensix_dest_reg_row_float16(uint32_t, uint16_t) {
-    static_assert(dprint_unavailable_on_quasar<Caller>, QUASAR_NO_DEBUG_BUS_DEST_ROW_READ);
-}
-template <typename Caller = void>
-void dprint_tensix_dest_reg_row_int32(uint16_t) {
-    static_assert(dprint_unavailable_on_quasar<Caller>, QUASAR_NO_DEBUG_BUS_DEST_ROW_READ);
-}
-template <typename Caller = void>
-void dprint_tensix_dest_reg_row_uint16(uint32_t, uint16_t) {
-    static_assert(dprint_unavailable_on_quasar<Caller>, QUASAR_NO_DEBUG_BUS_DEST_ROW_READ);
-}
-template <typename Caller = void>
-void dprint_tensix_dest_reg_row_uint8(uint32_t, uint16_t) {
-    static_assert(dprint_unavailable_on_quasar<Caller>, QUASAR_NO_DEBUG_BUS_DEST_ROW_READ);
-}
-template <typename Caller = void>
-void dprint_tensix_dest_reg_row_int8(uint32_t, uint16_t) {
-    static_assert(dprint_unavailable_on_quasar<Caller>, QUASAR_NO_DEBUG_BUS_DEST_ROW_READ);
-}
-#undef QUASAR_NO_DEBUG_BUS_DEST_ROW_READ
+// Deleted on Quasar for the same reason as dprint_data_format above: these read DEST through the
+// debug bus, so a reference from a Quasar build is a bug, and a deleted declaration names the
+// offending call site instead of failing as an undeclared identifier.
+void dprint_tensix_dest_reg_row_float32(uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_float16(uint32_t data_format, uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_int32(uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_uint16(uint32_t data_format, uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_uint8(uint32_t data_format, uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) = delete;
 #endif  // !ARCH_QUASAR
 
 #if !defined(ENV_LLK_INFRA)
