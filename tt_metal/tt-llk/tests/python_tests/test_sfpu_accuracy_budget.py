@@ -14,6 +14,8 @@ about enrolment touch the real one.
 """
 
 import math
+import re
+import textwrap
 
 import pytest
 import torch
@@ -28,6 +30,7 @@ from helpers.llk_params import (
 from helpers.sfpu_accuracy_budget import (
     _BUDGET_KEY_TYPES,
     _SFPU_ACCURACY_BUDGET,
+    _TABLE_PATH,
     BFP8_B_EXACT_INTEGER_DOMAIN,
     DEFAULT,
     MEASURED_ARCH,
@@ -35,10 +38,9 @@ from helpers.sfpu_accuracy_budget import (
     AccuracyContract,
     BudgetKey,
     Metric,
+    _load_table,
     accuracy_contract,
-    budget_table,
     enrolled_ops,
-    registry,
     resolve_contract,
     validate_registry,
 )
@@ -390,125 +392,6 @@ def test_a_variant_specific_tolerance_needs_no_driver_override():
     assert broad.atol == 0.13
 
 
-#: Every enrolled op's resolved budget on every gateable output format, at the standard
-#: variant -- so this pins behaviour rather than restating what __post_init__ guarantees,
-#: and pins it on the formats a Float32-only table leaves unbounded. ``None`` is the
-#: tolerance metric. A retune changes the number here in the same diff that changes the
-#: registry.
-#:
-#: Float32 alone was not enough: ``Square`` resolves to tolerance there, so the only
-#: assertion it received was ``metric is Metric.TOLERANCE``, and it is deliberately
-#: outside ``EXACT_BY_CONSTRUCTION``, so the ``<= 1`` canary skipped it too. Its
-#: ``DEFAULT`` 4 and its ``Float16_b`` 1 were bounded only by ``MAX_MEANINGFUL_ULP`` --
-#: 128 for bf16 and 1024 for fp16 -- and widening either to 100 passed the whole suite.
-_EXPECTED_BUDGET = {
-    # op: {output format: max_ulp, or None for the tolerance metric}
-    MathOperation.Abs: {
-        DataFormat.Float32: 0,
-        DataFormat.Float16_b: 1,
-        DataFormat.Float16: 1,
-    },
-    MathOperation.Neg: {
-        DataFormat.Float32: 0,
-        DataFormat.Float16_b: 1,
-        DataFormat.Float16: 1,
-    },
-    MathOperation.Identity: {
-        DataFormat.Float32: 0,
-        DataFormat.Float16_b: 1,
-        # Never measured: Identity was not in BROAD_SWEEP_OPS, so no sweep reached a
-        # Float16 output for it. An unmeasured format falls back to tolerance.
-        DataFormat.Float16: None,
-    },
-    MathOperation.Floor: {
-        DataFormat.Float32: 0,
-        DataFormat.Float16_b: 0,
-        DataFormat.Float16: 0,
-    },
-    MathOperation.Ceil: {
-        DataFormat.Float32: 0,
-        DataFormat.Float16_b: 0,
-        DataFormat.Float16: 0,
-    },
-    MathOperation.Trunc: {
-        DataFormat.Float32: 0,
-        DataFormat.Float16_b: 0,
-        DataFormat.Float16: 0,
-    },
-    MathOperation.Square: {
-        # 65536 steps measured on Float32, deliberately unenrolled.
-        DataFormat.Float32: None,
-        DataFormat.Float16_b: 1,
-        DataFormat.Float16: 4,  # via DEFAULT
-    },
-    MathOperation.SigmoidAppx: {
-        DataFormat.Float32: None,
-        DataFormat.Float16_b: None,
-        DataFormat.Float16: None,
-    },
-    MathOperation.GeluAppx: {
-        DataFormat.Float32: None,
-        DataFormat.Float16_b: None,
-        DataFormat.Float16: None,
-    },
-}
-
-#: The Float32 column of the above. Derived, not a second hand-written copy, so the two
-#: cannot disagree about the same op.
-_EXPECTED_FLOAT32_BUDGET = {
-    op: per_format[DataFormat.Float32] for op, per_format in _EXPECTED_BUDGET.items()
-}
-
-
-def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_every_format():
-    """The Float32 column alone bounds one format per op, which left Square's DEFAULT 4
-    and its Float16_b 1 held only by MAX_MEANINGFUL_ULP -- widening either to 100 passed
-    the whole suite. That is the "raise the budget until it stops failing" drift."""
-    assert set(_EXPECTED_BUDGET) == set(
-        enrolled_ops()
-    ), "an op was enrolled or removed without updating the expected budgets"
-    for op, per_format in sorted(_EXPECTED_BUDGET.items(), key=lambda kv: kv[0].name):
-        assert set(per_format) == set(ULP_FORMATS), op.name
-        for fmt, expected in per_format.items():
-            contract = accuracy_contract(
-                op,
-                output_format=fmt,
-                approx_mode=ApproximationMode.No,
-                dest_acc=DestAccumulation.No,
-                arch=MEASURED_ARCH,
-            )
-            where = f"{op.name} on {fmt.name}"
-            if expected is None:
-                assert contract.metric is Metric.TOLERANCE, where
-            else:
-                assert contract.metric is Metric.ULP, where
-                assert contract.max_ulp == expected, where
-
-
-def test_every_enrolled_op_resolves_to_the_budget_it_declares_on_float32():
-    """``metric in (ULP, TOLERANCE)`` and ``max_ulp >= 0`` are guaranteed the instant a
-    contract exists, so asserting them pinned nothing. This asserts the resolved
-    number."""
-    assert set(_EXPECTED_FLOAT32_BUDGET) == set(
-        enrolled_ops()
-    ), "an op was enrolled or removed without updating the expected budgets"
-    for op, expected in sorted(
-        _EXPECTED_FLOAT32_BUDGET.items(), key=lambda kv: kv[0].name
-    ):
-        contract = accuracy_contract(
-            op,
-            output_format=DataFormat.Float32,
-            approx_mode=ApproximationMode.No,
-            dest_acc=DestAccumulation.No,
-            arch=MEASURED_ARCH,
-        )
-        if expected is None:
-            assert contract.metric is Metric.TOLERANCE, op.name
-        else:
-            assert contract.metric is Metric.ULP, op.name
-            assert contract.max_ulp == expected, op.name
-
-
 def test_enrolled_ops_is_sorted_and_stable():
     ops = enrolled_ops()
     assert list(ops) == sorted(ops, key=lambda op: op.name)
@@ -645,51 +528,40 @@ def test_the_bfp8_b_enrolment_depends_on_the_swept_domain_not_on_the_format():
 # ── Integers never reach the ULP metric through the registry ──────────────────
 
 
-@pytest.mark.parametrize("fmt", INTEGER_FORMATS, ids=lambda f: f.name)
-def test_the_integer_short_circuit_holds_for_every_op(fmt):
-    """``accuracy_contract`` consults the table first and *then* downgrades a ULP
-    contract on ``not has_ulp_gate`` -- the ordering changed when the off-Wormhole
-    tolerance fix landed -- so this still pins the downgrade rather than the table's
-    contents: adding ``LeftShift: {DEFAULT: AccuracyContract(max_ulp=0)}`` would leave it
-    green. ``test_no_table_entry_can_gate_an_integer_format`` is what guards the table.
+def test_the_registry_never_carries_a_budget_that_gates_nothing():
+    """The two ways a step budget can be inert, and the ops that must never carry one.
+
+    The *downgrade* itself is pinned elsewhere and not repeated here:
+    ``test_an_enrolled_op_keeps_todays_gate_on_a_format_without_a_per_element_ulp``
+    drives ``accuracy_contract`` over every block format that lacks a per-element ULP,
+    and ``test_ulp.py`` pins ``has_ulp_gate`` False for every integer format. What is
+    left is the table.
+
+    Both halves are needed, because neither sees what the other does. A row *keyed* on
+    a non-gateable format is caught below by its key -- and that is wider than the
+    integers: Bfp4_b, Bfp2_b, the MX formats and Tf32 are downgraded the same way, and
+    ``validate_registry`` sweeps only the gateable formats plus the proxies, so a
+    ``BudgetKey(output_format=Bfp4_b)`` carrying a measured budget would otherwise pass
+    every guard and gate nothing. An op enrolled under ``DEFAULT`` has
+    ``key.output_format is None``, so the key check cannot see it at all; only the
+    enrolment check can.
     """
-    for op in MathOperation:
-        contract = accuracy_contract(op, output_format=fmt, arch=MEASURED_ARCH)
-        assert contract.metric == Metric.TOLERANCE, (
-            f"{op.name} resolves to a {contract.metric} contract on {fmt.name}. ULP is "
-            "not a gate for an integer format; it wants bit equality."
-        )
-
-
-def test_no_table_entry_can_gate_an_integer_format():
-    """Asserted against ``_SFPU_ACCURACY_BUDGET`` directly, because the short-circuit
-    above means a bad entry is unreachable through ``accuracy_contract`` and so invisible
-    to it. The alternative guard — a name-token list — misses any integer op not named
-    ``Int32``/``Int16``/``Int8``/``Shift``/``Bitwise``."""
     for op, table in _SFPU_ACCURACY_BUDGET.items():
         for key, contract in table.items():
-            if contract.metric != Metric.ULP:
+            if contract.metric != Metric.ULP or key.output_format is None:
                 continue
-            fmt = key.output_format
-            # has_ulp_gate, not is_integer: accuracy_contract downgrades a ULP contract on
-            # *any* format without a per-element ULP -- Bfp4_b, Bfp2_b, the MX formats and
-            # Tf32 as well as the integers -- and validate_registry sweeps only the
-            # gateable ones plus the proxies, so a BudgetKey(output_format=Bfp4_b) carrying
-            # a measured max_ulp would have passed every guard here and gated nothing.
-            assert fmt is None or has_ulp_gate(fmt), (
-                f"{op.name} carries a step budget keyed on {fmt.name}, which has no "
-                "per-element ULP, so accuracy_contract will silently downgrade it to the "
-                "tolerance metric and the number will gate nothing."
+            assert has_ulp_gate(key.output_format), (
+                f"{op.name} carries a step budget keyed on {key.output_format.name}, "
+                "which has no per-element ULP, so accuracy_contract downgrades it to "
+                "the tolerance metric and the number gates nothing."
             )
 
-
-def test_the_integer_ops_are_not_enrolled():
-    """Enrolling one would be meaningless rather than merely loose, and the driver would
-    raise at the call. Derived from the canonical classification and driver sets rather
-    than from name patterns, so a new integer op is covered without an edit here."""
+    # Enrolling an integer-only op would be meaningless rather than merely loose, and
+    # the driver would raise at the call. Derived from the canonical classification and
+    # driver sets, not from name tokens: a token list over Int32/Int16/Int8/Shift/
+    # Bitwise misses UnaryMaxUint32 and UnaryMinUint32 ("Uint32" does not contain
+    # "Int32"), every SFPU_BINARY_INT member such as SfpuGtInt, and SfpuGcd.
     integer_ops = _integer_only_ops()
-    # Pin the ops a name-token derivation used to miss, so this set cannot silently
-    # narrow back to one.
     for op in (
         MathOperation.UnaryMaxUint32,
         MathOperation.UnaryMinUint32,
@@ -702,10 +574,8 @@ def test_the_integer_ops_are_not_enrolled():
         MathOperation.SfpuRsubInt32,
     ):
         assert op in integer_ops, f"{op.name} dropped out of the integer-op derivation"
-
-    enrolled = set(enrolled_ops())
-    assert not (enrolled & integer_ops), sorted(
-        op.name for op in enrolled & integer_ops
+    assert not (set(enrolled_ops()) & integer_ops), sorted(
+        op.name for op in set(enrolled_ops()) & integer_ops
     )
 
 
@@ -757,23 +627,79 @@ def test_every_budget_key_field_is_guarded():
     ).specificity == len(_BUDGET_KEY_TYPES)
 
 
-def test_a_repeated_op_in_the_registry_is_refused():
-    """The same hazard ``budget_table`` closes, one level up: a dict literal keeps only the
-    later table, and nothing downstream sees the dropped one."""
-    exact = budget_table((DEFAULT, AccuracyContract(max_ulp=0)))
-    loose = budget_table((DEFAULT, AccuracyContract(max_ulp=99)))
-    assert (
-        registry((MathOperation.Abs, exact), (MathOperation.Neg, loose))[
-            MathOperation.Abs
-        ]
-        is exact
-    )
-    with _refuses("duplicate registry entry for Square"):
-        registry(
-            (MathOperation.Square, exact),
-            (MathOperation.Abs, exact),
-            (MathOperation.Square, loose),
+def _table(tmp_path, text):
+    """*text* as a budget table on disk, loaded the way the real one is."""
+    path = tmp_path / "budget.yaml"
+    path.write_text(textwrap.dedent(text), encoding="utf-8")
+    return _load_table(path)
+
+
+def test_a_repeated_op_in_the_table_is_refused(tmp_path):
+    """YAML keeps only the last of two identical mapping keys, so the earlier op's whole
+    budget would vanish with nothing downstream able to see it."""
+    with _refuses("duplicate entry for 'Abs'"):
+        _table(
+            tmp_path,
+            """\
+            Abs:
+              - {max_ulp: 0}
+            Neg:
+              - {max_ulp: 1}
+            Abs:
+              - {max_ulp: 99}
+            """,
         )
+
+
+def test_a_duplicate_row_is_refused_rather_than_deduplicated(tmp_path):
+    """Two rows with the same key are two list items, not one -- so nothing collapses
+    them, and a copy-pasted row replacing a measured budget would otherwise take effect
+    silently as the later of the two."""
+    with _refuses("repeats BudgetKey"):
+        _table(
+            tmp_path,
+            """\
+            Abs:
+              - {out: Float16_b, max_ulp: 1}
+              - {out: Float16_b, max_ulp: 4}
+            """,
+        )
+    both = _table(
+        tmp_path,
+        """\
+        Abs:
+          - {max_ulp: 4}
+          - {out: Float16_b, max_ulp: 1}
+        """,
+    )
+    assert len(both[MathOperation.Abs]) == 2
+
+
+def test_the_loader_refuses_what_it_cannot_turn_into_a_contract(tmp_path):
+    """Every failure here is the author's, so each one names the op it came from."""
+    with _refuses("'Nope' is not a MathOperation"):
+        _table(tmp_path, "Nope:\n  - {max_ulp: 1}\n")
+    with _refuses("unknown field"):
+        _table(tmp_path, "Abs:\n  - {max_ulp: 1, budget: 2}\n")
+    with _refuses("not a DataFormat"):
+        _table(tmp_path, "Abs:\n  - {out: Float17, max_ulp: 1}\n")
+    with _refuses("has no rows"):
+        _table(tmp_path, "Abs:\n")
+    # ...and the contract invariants still come from AccuracyContract itself.
+    with _refuses("a ulp contract replaces the tolerance gate"):
+        _table(tmp_path, "Abs:\n  - {max_ulp: 1, atol: 0.5}\n")
+
+
+def test_a_quoted_and_an_unquoted_no_mean_the_same_thing(tmp_path):
+    """YAML 1.1 reads a bare ``No`` as ``False``, and ``ApproximationMode.No`` is spelled
+    ``False`` too, so the two spellings must not disagree. The table quotes them; the
+    loader takes either."""
+    quoted = _table(tmp_path, 'Abs:\n  - {approx: "No", dest: "Yes", max_ulp: 1}\n')
+    bare = _table(tmp_path, "Abs:\n  - {approx: No, dest: Yes, max_ulp: 1}\n")
+    assert quoted == bare
+    key = next(iter(quoted[MathOperation.Abs]))
+    assert key.approx_mode is ApproximationMode.No
+    assert key.dest_acc is DestAccumulation.Yes
 
 
 @pytest.mark.parametrize("field", ["atol", "rtol", "near_zero_atol"], ids=str)
@@ -789,27 +715,6 @@ def test_a_negative_tolerance_field_is_refused(field):
         kwargs["max_ulp"] = 1
     with _refuses("must not be negative"):
         AccuracyContract(**kwargs)
-
-
-def test_a_duplicate_budget_key_is_refused_rather_than_deduplicated():
-    """``BudgetKey`` is frozen, so two identical keys in a dict literal are equal and
-    hash-equal and Python keeps only the later contract -- which means
-    ``validate_registry()`` saw an already-deduplicated table and the tie-raise in
-    ``resolve_contract`` could never fire for the duplicate ``BudgetKey``'s own docstring
-    promises to reject. A copy-pasted key replacing a measured budget with a broader one
-    failed nothing."""
-    key = BudgetKey(output_format=DataFormat.Float16_b)
-    with _refuses("duplicate budget key"):
-        budget_table(
-            (key, AccuracyContract(max_ulp=1)),
-            (key, AccuracyContract(max_ulp=4)),
-        )
-    # The non-duplicate case still builds, and every live table goes through it.
-    table = budget_table(
-        (DEFAULT, AccuracyContract(max_ulp=4)),
-        (key, AccuracyContract(max_ulp=1)),
-    )
-    assert len(table) == 2
 
 
 @pytest.mark.parametrize(
@@ -872,3 +777,88 @@ def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
             "whose hand-built stimulus no recorded measurement covers. Measure it there "
             "before enrolling, or key the budget away from the formats it reaches."
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A budget must be backed by the measurement it records
+#
+# The table used to be shadowed by a second file holding what every op *should*
+# resolve to. That file pinned nothing: resolving the registry reproduced it exactly,
+# so it agreed with the table by construction and only ever caught "you changed a
+# number and did not change the copy". Regenerate both and it caught nothing.
+#
+# The provenance is the real invariant. Every row carries the measurement its budget
+# came from, and the emitter's rule is that a budget sits at or above it with bounded
+# headroom. Widening a budget without re-measuring therefore has to falsify the comment
+# next to it -- a sentence someone has to write -- rather than re-run a generator.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: How far a budget may sit above the measurement it records. The emitter's own headroom
+#: is 1.25x on most rows and 2x at its widest; nothing in the table exceeds that.
+MEASUREMENT_HEADROOM = 2
+
+#: ``max 65536 ULP`` in the emitted rows, ``0 ULP`` in the hand-measured ones.
+_MEASUREMENT = re.compile(r"(?:max )?(\d+) ULP")
+
+
+def _measured_budget_rows(path=_TABLE_PATH):
+    """Every ``max_ulp`` row in the table, with the measurement it records.
+
+    The measurement is the row's own trailing comment, or its op's header comment where
+    one sweep covered the whole op. Read from the text, not the loaded table: the comment
+    *is* the provenance, YAML discards it, and a budget whose comment no longer supports
+    it is precisely the drift this guards against.
+    """
+    rows, op, op_measured = [], None, None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line.startswith(" "):  # `OpName:`, optionally with a header comment
+            head, _, comment = line.partition("#")
+            op = head.split(":")[0].strip()
+            found = _MEASUREMENT.search(comment)
+            op_measured = int(found.group(1)) if found else None
+            continue
+        body, _, comment = line.strip().partition("#")
+        declared = re.search(r"max_ulp:\s*(\d+)", body)
+        if not declared:
+            continue  # a tolerance row has no step budget to back
+        found = _MEASUREMENT.search(comment)
+        measured = int(found.group(1)) if found else op_measured
+        rows.append((op, body.strip(), int(declared.group(1)), measured))
+    return rows
+
+
+def test_every_step_budget_names_the_measurement_it_came_from():
+    """A budget with no measurement behind it is a guess, and the table's whole claim is
+    that it holds none. The number may sit on the row or on the op, whichever the sweep
+    covered."""
+    rows = _measured_budget_rows()
+    assert rows, "no max_ulp rows found -- the parser has drifted from the table"
+    unbacked = [(op, body) for op, body, _, measured in rows if measured is None]
+    assert not unbacked, "budgets with no recorded measurement:\n" + "\n".join(
+        f"  {op}: {body}" for op, body in unbacked
+    )
+
+
+def test_no_step_budget_exceeds_the_measurement_it_records():
+    """The guard that replaced the expected-budget file.
+
+    Raising ``max_ulp`` until a failure goes away now has to move the measurement beside
+    it past what was actually measured. A budget *below* its measurement is the other
+    error -- it cannot pass, so it was never measured on the sweep it claims.
+    """
+    for op, body, budget, measured in _measured_budget_rows():
+        if measured is None:
+            continue  # test_every_step_budget_names_the_measurement_it_came_from owns this
+        where = f"{op}: {body} (records {measured} ULP)"
+        if measured == 0:
+            # Floored to 1 where a finite sample cannot assert exactness; 0 only where
+            # the op is exact by construction and the sweep was exhaustive.
+            assert budget <= 1, f"{where}: a 0-ULP measurement cannot justify {budget}"
+        else:
+            assert budget >= measured, f"{where}: budget {budget} is below it"
+            assert budget <= MEASUREMENT_HEADROOM * measured, (
+                f"{where}: budget {budget} is more than "
+                f"{MEASUREMENT_HEADROOM}x the measurement"
+            )
