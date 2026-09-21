@@ -96,6 +96,12 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
         if (arch == tt::ARCH::GRENDEL) {
             arch = tt::ARCH::QUASAR;
         }
+    } else if (rtoptions.get_target_device() == tt::TargetDevice::GrendelJtag) {
+        arch = umd::SocDescriptor::get_arch_from_soc_descriptor_path(rtoptions.get_grendel_jtag_soc_desc_path());
+        // UMD still has ARCH::GRENDEL for YAML-only Grendel packages with no fixed floorplan.
+        if (arch == tt::ARCH::GRENDEL) {
+            arch = tt::ARCH::QUASAR;
+        }
     } else {
         arch = get_physical_architecture();
     }
