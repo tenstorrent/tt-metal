@@ -16,6 +16,9 @@ from models.autoports.qwen_qwen3_8_27b.tt.precision import decoder_policy
 
 VARIANTS = {
     "baseline": {},
+    "compact_head": dict(prefill_compact_head=True),
+    "sharded_norm": dict(prefill_sharded_residual=True),
+    "sharded_replicated_norm": dict(prefill_sharded_residual=True, prefill_replicated_norm=True),
     "mmrs": dict(output_scheme="mmrs", fused_n=8, fused_grid=[10, 8], flatten_prefill_batch=True),
     "mmrswide": dict(output_scheme="mmrs", fused_n=8, fused_grid=[11, 8], flatten_prefill_batch=True),
     "m8n8": dict(minimal_m=8, minimal_n=8),
@@ -56,6 +59,7 @@ def main():
     parser.add_argument("--variants", default=",".join(VARIANTS))
     parser.add_argument("--full", action="store_true")
     parser.add_argument("--load-fused-mlp", action="store_true")
+    parser.add_argument("--load-sharded-prefill", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     torch.set_num_threads(8)
@@ -66,7 +70,11 @@ def main():
     try:
 
         def policy(precision, layer):
-            return {**decoder_policy(precision, layer), "minimal_mlp": args.load_fused_mlp}
+            return {
+                **decoder_policy(precision, layer),
+                "minimal_mlp": args.load_fused_mlp,
+                "prefill_sharded_residual": args.load_sharded_prefill,
+            }
 
         with patch("models.autoports.qwen_qwen3_8_27b.tt.model.decoder_policy", side_effect=policy):
             gen = build_generator(
@@ -81,6 +89,8 @@ def main():
         tokens += torch.arange(args.batch)[:, None] * 13
         reference = None
         for name in args.variants.split(","):
+            gen.model.prefill_sharded_residual = VARIANTS[name].get("prefill_sharded_residual", False)
+            gen.model.prefill_compact_head = VARIANTS[name].get("prefill_compact_head", False)
             for layer, baseline in zip(gen.model.layers, policies):
                 layer.policy = {**baseline, **VARIANTS[name]}
             for repeat in range(3):

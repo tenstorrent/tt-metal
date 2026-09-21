@@ -74,6 +74,15 @@ class QwenModel:
             list(range(self.config.num_hidden_layers)) if layer_indices is None else list(layer_indices)
         )
         self.layers = []
+        prefill_layout = os.getenv("QWEN_PREFILL_RESIDUAL_LAYOUT", "replicated")
+        if prefill_layout not in ("replicated", "sharded", "sharded_replicated_norm"):
+            raise ValueError("Unknown QWEN_PREFILL_RESIDUAL_LAYOUT")
+        self.prefill_sharded_residual = prefill_layout != "replicated"
+        prefill_policy = (
+            {"prefill_sharded_residual": True, "prefill_replicated_norm": prefill_layout == "sharded_replicated_norm"}
+            if self.prefill_sharded_residual
+            else {}
+        )
         for i in self.layer_indices:
             print(f"LOAD_LAYER {i}", flush=True)
             self.layers.append(
@@ -83,7 +92,7 @@ class QwenModel:
                     layer_idx=i,
                     mesh_device=mesh_device,
                     ccl=self.ccl,
-                    policy=decoder_policy(self.precision, i),
+                    policy={**decoder_policy(self.precision, i), **prefill_policy},
                 )
             )
         self.embedding_weight = self.upload(
@@ -164,11 +173,13 @@ class QwenModel:
                 if tensor is not None:
                     ttnn.copy(ttnn.zeros_like(tensor), tensor)
 
-    def embed(self, tokens, *, batch, length):
+    def embed(self, tokens, *, batch, length, sharded=False):
         out = ttnn.embedding(
             tokens, self.embedding_weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         out = ttnn.reshape(out, [1, 1, batch * length, self.config.hidden_size // 4])
+        if sharded:
+            return ttnn.reshape(out, [batch, length, self.config.hidden_size // 4])
         out = ttnn.experimental.all_gather_async(
             out,
             dim=3,
@@ -301,7 +312,8 @@ class QwenModel:
         if length < 1 or start_pos < 0 or start_pos + length > cache.capacity:
             raise ValueError("Batched prefill exceeds cache capacity")
         first, end = slots[0], slots[-1] + 1
-        x = self.embed(tokens, batch=batch, length=length)
+        sharded = getattr(self, "prefill_sharded_residual", False)
+        x = self.embed(tokens, batch=batch, length=length, sharded=sharded)
         if positions is None:
             positions = self.upload(
                 torch.arange(start_pos, start_pos + length, dtype=torch.int32).repeat(batch, 1),
@@ -322,7 +334,8 @@ class QwenModel:
             local = state
             if layer.kind == "linear_attention" and batch != cache.batch_size:
                 local = DecoderState(conv=state.conv[first:end], recurrent=state.recurrent[first:end])
-            x = layer.prefill_forward(x, state=local, start_pos=start_pos, page_table=table, cos=cc, sin=ss)
+            forward = layer.prefill_sharded_forward if sharded else layer.prefill_forward
+            x = forward(x, state=local, start_pos=start_pos, page_table=table, cos=cc, sin=ss)
             if local is not state:
                 for name in ("conv", "recurrent"):
                     before = getattr(state, name)
@@ -331,6 +344,12 @@ class QwenModel:
                         pieces.append(before[end:])
                     ttnn.copy(ttnn.concat(pieces, dim=0), before)
         # Preserve the proven B1 head and independently owned public outputs.
+        if sharded or getattr(self, "prefill_compact_head", False):
+            x = x[:, length - 1 : length, :]
+            length = 1
+        if sharded:
+            x = self.layers[-1]._gather(ttnn.reshape(x, [1, batch, 1, self.config.hidden_size // 4]))
+            x = ttnn.reshape(x, [batch, 1, self.config.hidden_size])
         return [self.logits(x[row : row + 1, length - 1 : length, :], decode=True) for row in range(batch)]
 
     def decode(self, tokens, positions, *, cache, page_table, rope_indices=None, active_slots=None):

@@ -28,15 +28,30 @@ def main():
     parser.add_argument("--compare-prefill", action="store_true", help="Compare serial and grouped prefill in one load")
     parser.add_argument("--compare-fused-mlp", action="store_true", help="Fuse prefill MLP only; decode unchanged")
     parser.add_argument("--compare-single-step", action="store_true", help="Experimental B16 decode recurrence")
+    parser.add_argument("--compare-sharded-prefill", action="store_true", help="Prefill-only sharded residual")
+    parser.add_argument("--replicated-prefill-norm", action="store_true", help="Gather residual before unchanged norm")
     parser.add_argument(
         "--compare-sdpa", action="store_true", help="Compare per-user and batched SDPA with grouped prefill"
     )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    if sum((args.compare_prefill, args.compare_sdpa, args.compare_fused_mlp, args.compare_single_step)) > 1:
+    if (
+        sum(
+            (
+                args.compare_prefill,
+                args.compare_sdpa,
+                args.compare_fused_mlp,
+                args.compare_single_step,
+                args.compare_sharded_prefill,
+            )
+        )
+        > 1
+    ):
         parser.error("Select only one comparison per run")
     if args.compare_single_step and args.batch != 16:
         parser.error("The experimental one-step model path is restricted to batch 16")
+    if args.replicated_prefill_norm and not args.compare_sharded_prefill:
+        parser.error("--replicated-prefill-norm requires --compare-sharded-prefill")
     if args.steps < 2:
         parser.error("At least two decode steps are needed to separate first-use and steady execution")
     lengths = list(map(int, args.lengths.split(",")))
@@ -52,7 +67,12 @@ def main():
     try:
 
         def policy(precision, layer):
-            return {**decoder_policy(precision, layer), "minimal_mlp": args.compare_fused_mlp}
+            return {
+                **decoder_policy(precision, layer),
+                "minimal_mlp": args.compare_fused_mlp,
+                "prefill_sharded_residual": args.compare_sharded_prefill,
+                "prefill_replicated_norm": args.replicated_prefill_norm,
+            }
 
         with patch("models.autoports.qwen_qwen3_8_27b.tt.model.decoder_policy", side_effect=policy):
             generator = build_generator(Path("models/autoports/qwen_qwen3_8_27b"), mesh)
@@ -82,10 +102,19 @@ def main():
                 tokens += torch.arange(args.batch).reshape(-1, 1) * 13
             for trial in range(
                 4
-                if args.compare_prefill or args.compare_sdpa or args.compare_fused_mlp or args.compare_single_step
+                if args.compare_prefill
+                or args.compare_sdpa
+                or args.compare_fused_mlp
+                or args.compare_single_step
+                or args.compare_sharded_prefill
                 else 2
             ):
                 repeat = trial % 2
+                if args.compare_sharded_prefill and repeat == 0:
+                    generator._release_traces()
+                    generator.prefill_signatures.clear()
+                    generator.batched_prefill = True
+                    generator.model.prefill_sharded_residual = trial >= 2
                 if args.compare_single_step and repeat == 0:
                     generator._release_traces()
                     generator.batched_prefill = True
@@ -138,6 +167,8 @@ def main():
                 row = dict(
                     batched_prefill=generator.batched_prefill,
                     fused_prefill_mlp=args.compare_fused_mlp and trial >= 2,
+                    sharded_prefill=args.compare_sharded_prefill and trial >= 2,
+                    replicated_prefill_norm=args.replicated_prefill_norm,
                     single_step_recurrence=args.compare_single_step and trial >= 2,
                     batched_sdpa=generator.model.layers[0].policy.get("batched_prefill_sdpa", False),
                     length=length,

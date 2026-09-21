@@ -4,7 +4,8 @@
 
 Only setup partitions Torch weights. Runtime attention, recurrence, paged cache,
 and logical-tail handling reuse OptimizedDecoder with local head dimensions.
-Residual ownership is fixed at construction; caller inputs and outputs match.
+Residual ownership defaults to the construction layout; an optional serialized
+prefill scope uses sharded residuals and restores the decode contract afterwards.
 Layers in one ordered CQ0 stack share a TT_CCL context. Its workspace must stay
 alive through replay and must not be shared by concurrently executing models.
 """
@@ -150,6 +151,9 @@ class MultichipDecoder(OptimizedDecoder):
         for name in ("input_layernorm", "post_attention_layernorm"):
             t = (state_dict[name + ".weight"].float() + 1).reshape(1, 1, -1)
             self.weights[name + ".weight"] = upload(t, dim=2 if self.sharded_residual else None)
+            if self.policy.get("prefill_sharded_residual", False) and not self.sharded_residual:
+                self.weights[name + ".prefill_weight"] = upload(t, dim=2)
+                self.weights[name + ".replicated_weight"] = self.weights[name + ".weight"]
         if not self.policy.get("packed_mlp", False):
             for name in ("gate", "up"):
                 weight("mlp." + name + "_proj", split(state_dict["mlp." + name + "_proj.weight"]))
@@ -640,10 +644,41 @@ class MultichipDecoder(OptimizedDecoder):
             output = ttnn.typecast(output, ttnn.bfloat16)
         return ttnn.reshape(output, [*shape[:-1], 1280 if self.sharded_residual else 5120])
 
+    def prefill_sharded_forward(self, x, **kwargs):
+        """Opt-in prefill layout; restore the decode contract even on failure.
+
+        Like the shared CCL workspace, this scope requires serialized submission.
+        Weights are allocated at model construction, never during trace capture.
+        """
+        names = ("input_layernorm", "post_attention_layernorm")
+        replacements = [self.weights[name + ".prefill_weight"] for name in names]
+        original = [self.weights[name + ".weight"] for name in names]
+        sharded, carry = self.sharded_residual, self.policy["carry_residual"]
+        try:
+            self.sharded_residual = True
+            self.policy["carry_residual"] = False
+            for name, weight in zip(names, replacements):
+                self.weights[name + ".weight"] = weight
+            return self.prefill_forward(x, **kwargs)
+        finally:
+            self.sharded_residual = sharded
+            self.policy["carry_residual"] = carry
+            for name, weight in zip(names, original):
+                self.weights[name + ".weight"] = weight
+
     def _norm(self, x, name):
         if not self.sharded_residual or not name.endswith("layernorm"):
             return super()._norm(x, name)
         shape = list(x.shape)
+        if self.policy.get("prefill_replicated_norm", False):
+            full = self._gather(ttnn.reshape(x, [1, *shape]))
+            full = ttnn.reshape(full, [*shape[:-1], 5120])
+            local_weight = self.weights[name + ".weight"]
+            try:
+                self.weights[name + ".weight"] = self.weights[name + ".replicated_weight"]
+                return super()._norm(full, name)
+            finally:
+                self.weights[name + ".weight"] = local_weight
         memory = self._collective_memory(x)
         x = ttnn.to_memory_config(x, memory)
         x = ttnn.reshape(x, [1, *shape] if len(shape) == 3 else shape)

@@ -27,6 +27,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--lengths", default="4096,32768")
+    parser.add_argument("--steps", type=int, default=0, help="Diagnostic untraced decode steps per repetition")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.batch % 4:
@@ -81,7 +82,7 @@ def main():
             math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
         batch = args.batch // 4
-        pages = (max(lengths) + 31) // 32
+        pages = (max(lengths) + args.steps + 31) // 32
         table = upload(
             torch.arange(batch * pages, dtype=torch.int32).reshape(batch, pages), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
         )
@@ -138,6 +139,56 @@ def main():
                 report["rows"].append(row)
                 args.output.write_text(json.dumps(report, indent=2) + "\n")
                 print("DP4_PREFILL", json.dumps(row), flush=True)
+                generated = [row["first_tokens"]]
+                decode_seconds = []
+                for step in range(args.steps):
+                    dc, ds = rotary(
+                        torch.empty(batch, 1, 1, dtype=torch.bfloat16),
+                        torch.full((batch, 1), length + step, dtype=torch.int64),
+                    )
+                    ttnn.synchronize_device(mesh)
+                    begin = time.perf_counter()
+                    ids = upload(
+                        torch.tensor(generated[-1], dtype=torch.int32).reshape(args.batch, 1),
+                        ttnn.uint32,
+                        ttnn.ROW_MAJOR_LAYOUT,
+                        shard=True,
+                    )
+                    cc, ss = upload(dc), upload(ds)
+                    positions = upload(
+                        torch.full((batch,), length + step, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
+                    )
+                    x = ttnn.embedding(ids, embedding, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    x = ttnn.reshape(x, [batch, 1, config.hidden_size])
+                    for layer, state in zip(layers, states):
+                        x = layer.decode_forward(
+                            x, state=state, current_pos=positions, page_table=table, cos=cc, sin=ss
+                        )
+                    hidden = ttnn.rms_norm(
+                        x,
+                        weight=norm,
+                        epsilon=config.rms_norm_eps,
+                        compute_kernel_config=norm_compute,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    logits = ttnn.linear(
+                        hidden,
+                        head,
+                        compute_kernel_config=compute,
+                        core_grid=ttnn.CoreGrid(y=8, x=8),
+                        dtype=ttnn.bfloat16,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    ttnn.synchronize_device(mesh)
+                    decode_seconds.append(time.perf_counter() - begin)
+                    host = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float()
+                    generated.append(host.argmax(-1).reshape(-1).tolist())
+                    row["finite"] = row["finite"] and bool(torch.isfinite(host).all())
+                    del x, ids, cc, ss, positions
+                if args.steps:
+                    row.update(tokens=generated, decode_step_s=decode_seconds)
+                    args.output.write_text(json.dumps(report, indent=2) + "\n")
+                    print("DP4_DECODE", json.dumps(row), flush=True)
                 del logits, hidden, host
     finally:
         ttnn.close_mesh_device(mesh)
