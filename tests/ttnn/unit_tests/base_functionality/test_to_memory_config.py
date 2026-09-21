@@ -2781,35 +2781,14 @@ def _allocate_l1_blocker(device, bytes_per_l1_bank):
 
 
 def test_to_memory_config_interleaved_to_sharded_with_resident_l1(device):
-    """Regression #54621: interleaved_to_sharded fast-path selection must budget CB size
-    against LIVE free L1, not against the whole of L1 (``l1_size_per_core - base_addr``).
-
-    Statically allocated CBs grow upward from the allocator's base L1 address while L1
-    tensors are allocated downward from the top of L1, so the space actually available to
-    a program's CBs is ``lowest_occupied_compute_l1_address() - base``. Before this fix,
-    ``can_use_interleaved_to_sharded`` in ``to_memory_config_op.cpp`` compared against the
-    whole-of-L1 budget, so the fast path was still selected when a resident L1 buffer left
-    insufficient space, and the program's static CB region clashed with the resident buffer
-    at dispatch:
-
-        Statically allocated circular buffers in program N clash with L1 buffers on core range ...
-
-    The fix routes the eligibility check through ``get_max_l1_space()``, which subtracts
-    ``lowest_occupied_compute_l1_address()``. This test reserves L1 so that the required CB
-    for the DRAM-sharded destination would fit under the old total-L1 budget but not under
-    free L1, and asserts that ``to_memory_config`` still succeeds (by falling back to
-    ``ttnn.prim.copy``) rather than clashing.
-
-    Asserts only on the result, never on which implementation served it: a future refactor
-    that goes back to whole-of-L1 budgeting would compile fine and pass the other tests in
-    this file, but would crash here at dispatch.
+    """Regression #54621: ``can_use_interleaved_to_sharded`` must budget the fast-path CB
+    against live free L1, not the whole of L1. Asserts only on the result, so a regression
+    back to whole-of-L1 budgeting compiles fine but crashes here at dispatch.
     """
     torch.manual_seed(0)
 
-    # Scale both the L1 blocker and the fast-path CB from actual free L1 (b) so the
-    # regression scenario reproduces at any headroom level:
-    #   * blocker         = 0.75 * b on every L1 bank -> ~0.25 * b free per bank
-    #   * fast-path CB    = 0.75 * b per core
+    # Scale both sides off actual free L1 (b): blocker = 0.75 * b per bank -> ~0.25 * b
+    # free per bank; fast-path CB = 0.75 * b per core.
     free_l1_per_bank = ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank
     cb_target_bytes_per_l1_bank = int(free_l1_per_bank * 0.75)
 
@@ -2818,8 +2797,6 @@ def test_to_memory_config_interleaved_to_sharded_with_resident_l1(device):
     )
     resident = _allocate_l1_blocker(device, cb_target_bytes_per_l1_bank)
     try:
-        # Vacuous-pass guard: after the blocker, free L1 per bank must be below the
-        # would-be fast-path CB size, or the regression scenario is not set up.
         free_after = ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank
         assert free_after < cb_target_bytes_per_l1_bank, (
             f"blocker left {free_after} B free per L1 bank; " f"regression needs < {cb_target_bytes_per_l1_bank} B"
