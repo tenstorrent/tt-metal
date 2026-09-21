@@ -511,6 +511,10 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             # Compile the device-side slot-write programs (QWEN36_GDN_SLOT_DEVICE_COPY=2: fill_cache + masked where) and
             # upload the per-slot row masks now, so the first real request does not pay ~450 ms for it.
             model.warmup_gdn_slot_write()
+        # Steady-state view: weights + KV pool + GDN slot state + the persistent prefill buffers are all allocated
+        # (the decode traces are captured earlier by warmup_model_decode). The free DRAM here, minus a margin for
+        # the transient prefill activations, is the headroom QWEN36_MAX_TOKENS_ALL_USERS can grow into.
+        _log_device_memory(self.mesh_device, "after prefill warmup")
 
     def warmup_model_decode(self, *args, **kwargs):
         # Defer to WarmupForwardMixin, which warms the paged-SDPA + GDN decode path at pos 0.
