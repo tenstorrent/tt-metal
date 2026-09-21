@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import os
 import shlex
 import subprocess
@@ -28,6 +29,7 @@ from .ulp import (
     ulp_distance,
     ulp_dtype,
     ulp_elementwise_valid,
+    ulp_stats,
     ulp_verdict_message,
     warn_if_threshold_unmeaningful,
 )
@@ -526,6 +528,51 @@ _RECORD_TEST_ORDER: bool = False
 #: against a p99 of 1.
 _ULP_REPORT: bool = False
 
+#: Set by ``--ulp-measure=<path>``: append one JSON row per comparison, so a full sweep
+#: can be folded straight back into the budget table. Like ``_ULP_REPORT`` it is written
+#: after the verdict and never read back into one, so it cannot change a result.
+_ULP_MEASURE_PATH: Optional[str] = None
+
+
+def _record_ulp_measurement(distance, mask, output_data_format) -> None:
+    """The worst measurable lane of one comparison, tagged with the variant it belongs to.
+
+    ``ulp_stats`` rather than a bare ``max()``, so the number recorded is the one the log
+    reports: unmeasurable lanes excluded, floor-rescued lanes masked out. The key comes
+    from ``accuracy_contract``'s last query rather than from the test id, because the
+    dedicated per-op sweeps (div, signbit) name their op in the function rather than in
+    the parameters, and the edge sweeps do not parametrise ``approx_mode`` at all.
+    """
+    if not _ULP_MEASURE_PATH:
+        return
+    from . import sfpu_accuracy_budget as budget
+
+    # Consumed, not just read: a comparison that never went through the registry must
+    # not inherit the previous one's key.
+    query, budget.LAST_QUERY = budget.LAST_QUERY, None
+    if query is None:
+        return
+    op, in_fmt, out_fmt, approx, dest = query
+    with open(_ULP_MEASURE_PATH, "a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    # pytest sets this per test, so the collector needs no hook of its own.
+                    "test": os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[
+                        0
+                    ],
+                    "op": op,
+                    "in": getattr(in_fmt, "name", None),
+                    "out": getattr(out_fmt, "name", None) or output_data_format.name,
+                    "approx": getattr(approx, "name", None),
+                    "dest": getattr(dest, "name", None),
+                    "max_ulp": ulp_stats(distance, mask)["max"],
+                }
+            )
+            + "\n"
+        )
+
+
 # Per-format params for _mxfp_block_aware_compare:
 # (mantissa_bits, max_steps, max_normal, min_subnormal).
 #   mantissa_bits of the SxEyMz element -> local step = 2^(floor(log2|v|) - mantissa_bits).
@@ -895,6 +942,7 @@ def passed_test(
         # Ranked without the lanes the floor accepted -- they hold the largest step counts
         # by construction, so ranking every lane names one that passed.
         ranked = ~ulp_rescued
+        _record_ulp_measurement(ulp_distances, ranked, output_data_format)
 
         def _ulp_summary():
             return ulp_verdict_message(
@@ -929,6 +977,13 @@ def passed_test(
             # appends to the persistent test_errors.log that CI uploads.
             logger.opt(lazy=True).debug("ULP budget exceeded — {}", _ulp_summary)
 
+    if (
+        (_ULP_REPORT or _ULP_MEASURE_PATH)
+        and ulp_distances is None
+        and has_ulp_gate(output_data_format)
+    ):
+        unenrolled = ulp_distance(golden_tensor, res_tensor)
+        _record_ulp_measurement(unenrolled, None, output_data_format)
     if _ULP_REPORT and ulp_distances is None and has_ulp_gate(output_data_format):
         # The op has no step budget, so nothing above measured one -- and this is exactly
         # where the report earns its keep: it is the ops still on the tolerance metric

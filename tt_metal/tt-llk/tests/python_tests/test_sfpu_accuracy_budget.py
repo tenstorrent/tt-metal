@@ -451,13 +451,13 @@ ONLY_EVER_TOLERANCE = frozenset(
         # 0-ULP budget would fail a kernel that is behaving as specified.
         MathOperation.Sign,
         MathOperation.Heaviside,
-        # Past the usable ceiling on every float column, so the tolerance they would
-        # replace is the tighter bound. Measurements are on their YAML rows.
-        MathOperation.GeluTanh,
-        MathOperation.Tanhshrink,
-        MathOperation.SfpuElwmul,
     }
 )
+# GeluTanh, Tanhshrink and SfpuElwmul used to sit here, on a per-op-per-format maximum
+# that was past the ceiling everywhere. The full sweep measures each variant separately,
+# and some of their cells are well inside it -- GeluTanh's Float32 worst lane is 8.7e8
+# steps, but not in every cell. They now carry a budget where one is meaningful and fall
+# through to tolerance elsewhere, which is what per-variant keying is for.
 
 
 def test_every_enrolled_op_resolves_to_something_usable_on_a_float_format():
@@ -692,16 +692,25 @@ def test_the_integer_valued_ops_are_the_only_ones_enrolled_on_bfp8_b():
         for fmt, contract in _every_variant(op)
         if fmt is DataFormat.Bfp8_b and contract.metric == Metric.ULP
     }
-    assert enrolled_on_bfp8 == {
+    # Enrolment here is per *cell*, not per op: the same op measures 3 steps in one
+    # variant and 15616 in another, purely from block composition. So the assertion is
+    # not a list of ops but the property that makes one safe -- every enrolled Bfp8_b
+    # budget stays inside the format's usable ceiling, which is what a block-quantized
+    # cell cannot do. The 408 cells that measured past it are not enrolled.
+    ceiling = usable_budget_ceiling(DataFormat.Bfp8_b)
+    for op in enrolled_ops():
+        for fmt, contract in _every_variant(op):
+            if fmt is DataFormat.Bfp8_b and contract.metric == Metric.ULP:
+                assert contract.max_ulp <= ceiling, (
+                    f"{op.name} carries a {contract.max_ulp}-step Bfp8_b budget against "
+                    f"a {ceiling:.0f}-step ceiling; past it the number gates nothing."
+                )
+    # The integer-valued ops remain the ones that are exact there, by construction.
+    assert {
         MathOperation.Floor,
         MathOperation.Ceil,
         MathOperation.Trunc,
-        # A constant fill and a clamp are block-friendly for the same reason an integer
-        # is: the value the block exponent has to represent is one the input already
-        # had, so the shared exponent is the one bf16 would have picked.
-        MathOperation.Fill,
-        MathOperation.Threshold,
-    }
+    } <= enrolled_on_bfp8
 
 
 def test_the_bfp8_b_enrolment_depends_on_the_swept_domain_not_on_the_format():

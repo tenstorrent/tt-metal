@@ -55,6 +55,11 @@ from .yaml_table import enum_member, load_yaml_table
 #: tolerance metric anywhere else until the sweep has been re-run there.
 MEASURED_ARCH = ChipArchitecture.WORMHOLE
 
+#: The last variant :func:`accuracy_contract` was asked about, as
+#: ``(op, input_format, output_format, approx_mode, dest_acc)``. Written on every call
+#: and read only by the ``--ulp-measure`` collector; nothing here depends on it.
+LAST_QUERY: Optional[Tuple[Any, ...]] = None
+
 
 class Metric(Enum):
     """Which gate a contract is written against: a closed two-member set, so there is no
@@ -349,6 +354,13 @@ def accuracy_contract(
     explicitly do not transfer, so defaulting it would resolve an unknown chip straight
     against the Wormhole table.
     """
+    # The variant just asked about, for --ulp-measure to tag its reading with. The
+    # driver resolves a contract immediately before it compares, so this is the exact
+    # key the comparison belongs to -- which a test id cannot always give: the dedicated
+    # per-op sweeps (div, signbit) name their op in the function, not the parameters.
+    global LAST_QUERY
+    LAST_QUERY = (op.name, input_format, output_format, approx_mode, dest_acc)
+
     table = _SFPU_ACCURACY_BUDGET.get(op)
     if table is None:
         return TOLERANCE_CONTRACT

@@ -214,12 +214,12 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
-        "--ulp-emit",
-        action="store_true",
-        help="Re-measure rather than gate: the exhaustive unary sweep records what it "
-        "measures and folds it back into helpers/sfpu_accuracy_budget.yaml at the end "
-        "of the session, replacing each swept op's rows. Writes the table; use it "
-        "deliberately.",
+        "--ulp-measure",
+        default=None,
+        metavar="PATH",
+        help="Append one JSON row per comparison (test, output format, measured max "
+        "ULP) to PATH, for folding a full sweep back into the budget table. "
+        "Reporting only: it cannot change a verdict.",
     )
     parser.addoption(
         "--ulp-report",
@@ -480,6 +480,8 @@ def pytest_configure(config):
         ulp_sweep.EMIT = True
     if config.getoption("--ulp-report"):
         utils_module._ULP_REPORT = True
+    if config.getoption("--ulp-measure"):
+        utils_module._ULP_MEASURE_PATH = config.getoption("--ulp-measure")
 
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
