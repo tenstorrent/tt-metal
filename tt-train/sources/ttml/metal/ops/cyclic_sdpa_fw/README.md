@@ -181,6 +181,29 @@ is not a forward to train with; it is the measurement. Tests: the forward's
 suite with `TTML_CYCLIC_FW_FAST=1` (looser lse grading) and
 `CyclicSdpaFwTest.FastTallBlocks`.
 
+### Is there a single-chip size where the exact kernel is faster than ttnn's?
+
+No. Measured where the schedule has its best chance, few heads and long
+sequences (`DISABLED_CompareForwardsWithTtnn`, shapes from
+`TTML_CYCLIC_FW_COMPARE_SHAPES="heads:kv:N:d,..."`), d 64, causal, one chip,
+ttnn at its best chunk:
+
+| | `sdpa_fw` | cyclic, blocks of 4 | ttnn with lse |
+|---|---|---|---|
+| 1 head, 5632 rows | 0.57 ms | 1.00 ms | 0.49 ms |
+| 1 head, 28160 rows | 8.9 ms | 4.9 ms | 2.3 ms |
+| 2 heads (1 key head), 16384 rows | 6.5 ms | 5.4 ms | 1.8 ms |
+
+ttnn's re-reads of K and V cost a fixed number of bytes per FLOP (one per
+256 at its 256-row chunk, about 250 GB/s at 63 TFLOP/s, half the card's
+DRAM), so a longer sequence scales its bandwidth need and its compute
+together and it never becomes bandwidth-bound; our per-core rate is
+independent of the sequence too, and two constant rates do not cross. The
+schedule wins in the ring at few heads (12.1 against 28.4 ms at 4 heads and
+4096 rows a chip) because a ring step's small launches cannot fill 110
+cores in ttnn's per-(head, chunk) parallelism, while the cyclic schedule
+spreads one head over many cores; and it wins on accuracy everywhere.
+
 ## Testing
 
 Single chip: `ttml_tests --gtest_filter='CyclicSdpaFwTest.*'` (8 tests,
