@@ -56,7 +56,7 @@ public:
     template <
         BuildFromArgsMode build_mode = BuildFromArgsMode::BUILD_ONLY,
         uint8_t WORKER_HANDSHAKE_NOC = get_fabric_worker_noc(),
-        typename WorkerSemArg = DefaultWorkerSemArg>
+        typename WorkerSemArg = SemaphoreIdArg>
     static RoutingPlaneConnectionManager build_from_args(std::size_t& arg_idx, uint32_t num_connections_to_build) {
         constexpr bool connect = build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION ||
                                  build_mode == BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY;

@@ -449,7 +449,7 @@ static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
 // clang-format on
 template <
     uint8_t WORKER_HANDSHAKE_NOC = tt::tt_fabric::get_fabric_worker_noc(),
-    typename WorkerSemArg = tt::tt_fabric::DefaultWorkerSemArg>
+    typename WorkerSemArg = tt::tt_fabric::SemaphoreIdArg>
 FORCE_INLINE void open_connections(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint32_t num_connections_to_build,
