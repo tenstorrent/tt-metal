@@ -89,20 +89,15 @@ void kernel_main() {
         uint32_t C_slice_first_M_tile = get_arg(args::C_slice_first_M_tile);
         uint32_t C_slice_first_N_tile = get_arg(args::C_slice_first_N_tile);
         for (uint32_t MN_chunk = 0; MN_chunk < num_C_slices; ++MN_chunk) {
-            // Rows / columns of this C slice that lie inside the matrices (edge C slices are clipped).
-            const uint32_t valid_M_tiles =
-                (M_tiles - C_slice_first_M_tile < C_slice_M_tiles) ? (M_tiles - C_slice_first_M_tile) : C_slice_M_tiles;
-            const uint32_t valid_N_tiles =
-                (N_tiles - C_slice_first_N_tile < C_slice_N_tiles) ? (N_tiles - C_slice_first_N_tile) : C_slice_N_tiles;
-
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
                 const uint32_t K_chunk_first_K_tile = K_chunk * K_chunk_tiles;
 
                 if constexpr (!A_borrowed) {
                     // A slice: rows C_slice_first_M_tile.., columns K_chunk_first_K_tile.., slot (m_tile, k_tile).
-                    // Clipped rows trail, so they are simply not written.
+                    // Rows past the edge of A are clipped: they trail, so they are simply not written.
                     A_slice.reserve_back(A_slice_tiles);
-                    for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
+                    for (uint32_t m_tile = 0; m_tile < C_slice_M_tiles && C_slice_first_M_tile + m_tile < M_tiles;
+                         ++m_tile) {
                         const uint32_t A_row_first_tile =
                             A_batch_first_tile + (C_slice_first_M_tile + m_tile) * K_tiles + K_chunk_first_K_tile;
                         const uint32_t A_row_offset_bytes = m_tile * K_chunk_tiles * A_tile_bytes;
@@ -127,13 +122,14 @@ void kernel_main() {
                 }
                 if constexpr (!B_borrowed) {
                     // B slice: rows K_chunk_first_K_tile.., columns C_slice_first_N_tile.., slot (k_tile, n_tile).
-                    // Clipped columns keep their slot (they only ever feed clipped outputs).
+                    // Columns past the edge of B are clipped; they keep their slot, which only feeds clipped C.
                     B_slice.reserve_back(B_slice_tiles);
                     for (uint32_t k_tile = 0; k_tile < K_chunk_tiles; ++k_tile) {
                         const uint32_t B_row_first_tile =
                             B_batch_first_tile + (K_chunk_first_K_tile + k_tile) * N_tiles + C_slice_first_N_tile;
                         const uint32_t B_row_offset_bytes = k_tile * C_slice_N_tiles * B_tile_bytes;
-                        for (uint32_t n_tile = 0; n_tile < valid_N_tiles; ++n_tile) {
+                        for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles && C_slice_first_N_tile + n_tile < N_tiles;
+                             ++n_tile) {
                             noc.async_read(
                                 B,
                                 B_slice,
