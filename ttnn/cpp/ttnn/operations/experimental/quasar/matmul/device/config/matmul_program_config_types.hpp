@@ -91,27 +91,27 @@ struct MatmulMultiCoreProgramConfig {
 // GEMM vocabulary, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N]. The caller describes the
 // work directly instead of picking a 1D / 2D / DRAM-sharded strategy:
 //   - `cores`                    the clusters that take part;
-//   - `MN_chunk_M_tiles` / `MN_chunk_N_tiles` the MN chunk of C (in tiles) each cluster produces in one go.
-// The factory walks the MN chunks of one batch (across N, then down M) and hands that walk to
+//   - `C_slice_M_tiles` / `C_slice_N_tiles` the C slice of C (in tiles) each cluster produces in one go.
+// The factory walks the C slices of one batch (across N, then down M) and hands that walk to
 // `cores` in enumeration order (x fastest when `row_major_cores`, y fastest otherwise) as contiguous
-// runs; when there are fewer MN chunks than cores the trailing cores idle, when there are more each core
+// runs; when there are fewer C slices than cores the trailing cores idle, when there are more each core
 // produces several. Blocks on the right / bottom edge are computed at full size and clipped on read
 // and write, so any M / N works. Every operand is addressed by tile index through the tensor accessor, so interleaved,
 // L1-sharded and DRAM-sharded tensors all take the same kernels. The legacy strategies are particular
-// choices of (cores, MN_chunk_M_tiles, MN_chunk_N_tiles): e.g. a 1D "mcast_in0" matmul is MN_chunk_M_tiles = M_tiles on
-// a row of cores, a 2D matmul is a rectangle of cores with MN_chunk_M_tiles x MN_chunk_N_tiles MN chunks.
+// choices of (cores, C_slice_M_tiles, C_slice_N_tiles): e.g. a 1D "mcast_in0" matmul is C_slice_M_tiles = M_tiles on
+// a row of cores, a 2D matmul is a rectangle of cores with C_slice_M_tiles x C_slice_N_tiles C slices.
 //
 // Stage A limits: one NEO, one reader and one writer per cluster; no data sharing between clusters;
 // no bias (the op applies it as a separate add), no fused activation, no untilize, 32x32 tiles only,
-// sharded output needs batch 1 and exactly one MN chunk per core.
+// sharded output needs batch 1 and exactly one C slice per core.
 struct MatmulUnifiedProgramConfig {
     CoreRangeSet cores;
-    std::size_t MN_chunk_M_tiles{};
-    std::size_t MN_chunk_N_tiles{};
+    std::size_t C_slice_M_tiles{};
+    std::size_t C_slice_N_tiles{};
     // K tiles accumulated per K chunk (one A slice + one B slice in L1 at a time); must divide K_tiles.
     // 0 = auto: the largest divisor of K_tiles <= 8 whose rings fit L1.
     std::size_t K_chunk_tiles = 0;
-    // Subblock: the MN chunk's tiles accumulated in DST at once; must divide MN_chunk_M_tiles / MN_chunk_N_tiles and
+    // Subblock: the C slice's tiles accumulated in DST at once; must divide C_slice_M_tiles / C_slice_N_tiles and
     // hold
     // <= 8 tiles (4 with fp32 accumulation). 0 for both = auto.
     std::size_t subblock_M_tiles = 0;

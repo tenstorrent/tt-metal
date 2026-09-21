@@ -440,13 +440,13 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                     const uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
                     TT_FATAL(
                         num_blocks_total <= num_cores,
-                        "Number of MN chunks exceeds number of cores: {} MN chunks > {} cores",
+                        "Number of blocks exceeds number of cores: {} blocks > {} cores",
                         num_blocks_total,
                         num_cores);
                     if (program_config.mcast_in0) {
                         TT_FATAL(
                             num_blocks_y == 1,
-                            "mcast_in0 requires M ({}) to fit within a single per_core_M MN chunk ({}), got "
+                            "mcast_in0 requires M ({}) to fit within a single per_core_M block ({}), got "
                             "num_blocks_y={}",
                             Mt,
                             per_core_M,
@@ -472,14 +472,13 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                 }
                 TT_FATAL(
                     num_blocks_x <= grid.x,
-                    "Num output MN chunks along x ({}) must be smaller than or equal to the number of columns in "
-                    "compute "
+                    "Num output blocks along x ({}) must be smaller than or equal to the number of columns in compute "
                     "grid ({})!",
                     num_blocks_x,
                     grid.x);
                 TT_FATAL(
                     num_blocks_y <= grid.y,
-                    "Num output MN chunks along y ({}) must be smaller than or equal to the number of rows in compute "
+                    "Num output blocks along y ({}) must be smaller than or equal to the number of rows in compute "
                     "grid ({})!",
                     num_blocks_y,
                     grid.y);
@@ -2107,7 +2106,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                     // The output CB is globally allocated against the output tensor on the factory's
-                    // work grid {start_core, start_core + num_MN_chunks - 1}, so the output shard grid
+                    // work grid {start_core, start_core + num_blocks - 1}, so the output shard grid
                     // computed here must match it exactly. Mirror the factory's start_core derivation
                     // (allowed_worker_cores is the single source of truth for core placement) rather
                     // than trusting a user-supplied output shard grid, which need not agree.
@@ -2185,8 +2184,8 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,
                                          operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>) {
-                    // One MN chunk of C per core; the shard grid is the active cores in assignment order, so
-                    // the accessor's shard -> core mapping is the factory's MN chunk -> core mapping and every
+                    // One C slice of C per core; the shard grid is the active cores in assignment order, so
+                    // the accessor's shard -> core mapping is the factory's C slice -> core mapping and every
                     // core writes its own shard.
                     // Reached only when no output tensor was supplied, so C is allocated from this plan.
                     const UnifiedMatmulPlan plan =
@@ -2196,7 +2195,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         plan.row_major_cores ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
                     ShardSpec shard_spec = ShardSpec{
                         grid,
-                        {plan.MN_chunk_M_tiles * in0_tile.get_height(), plan.MN_chunk_N_tiles * in1_tile.get_width()},
+                        {plan.C_slice_M_tiles * in0_tile.get_height(), plan.C_slice_N_tiles * in1_tile.get_width()},
                         orientation};
                     const tt::tt_metal::MemoryConfig mem_config(
                         plan.sharded_output_layout(), attributes.output_mem_config.buffer_type(), shard_spec);
