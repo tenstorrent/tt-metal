@@ -45,9 +45,18 @@ class Qwen36DecoderLayer:
         # Prefill fuses the norm all-gather into the in-proj matmul (all_gather_minimal_matmul_async):
         # GDN qkvzab and full-attn QKV. attention_norm then skips its post-norm AG (prefill only;
         # decode gathers pre-norm). Gates must match the module-side _fuse_agmm gates.
-        self._fuse_norm_agmm = self.num_devices > 1 and (
-            (not self.is_full_attention and getattr(args, "gdn_qkvz_weight_memcfg", None) is not None)
-            or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
+        # tpc.prefill_norm_agmm_enabled: the fusion needs the norm to emit a K-SHARDED
+        # activation, which only holds in distributed-norm mode (2-D mesh or dim > 4096).
+        # Qwen3.5-2B (dim 2048, 1-D mesh) is not, so it keeps the plain pre-norm gather.
+        from models.demos.blackhole.qwen36.tt import tp_common as _tpc
+
+        self._fuse_norm_agmm = (
+            self.num_devices > 1
+            and _tpc.prefill_norm_agmm_enabled(args)
+            and (
+                (not self.is_full_attention and getattr(args, "gdn_qkvz_weight_memcfg", None) is not None)
+                or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
+            )
         )
         self.attention_norm = self._make_norm(
             mesh_device,
@@ -65,7 +74,7 @@ class Qwen36DecoderLayer:
 
         # MoE layers gather in the norm (the sparse MoE + shared expert need full/replicated
         # hidden and do NOT run the fused gate/up AGMM), so only fuse for the dense MLP.
-        self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices) and not args.is_moe_layer(layer_num)
+        self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices, args) and not args.is_moe_layer(layer_num)
         self.ffn_norm = self._make_norm(
             mesh_device,
             args,
@@ -118,7 +127,14 @@ class Qwen36DecoderLayer:
                 mesh_device, MoEConfig.from_args(args), mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl
             )
         else:
-            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
+            self.feed_forward = Qwen36MLP(
+                mesh_device,
+                mlp_state,
+                mlp_cache,
+                args=args,
+                tt_ccl=tt_ccl,
+                use_gateup_agmm=self._fuse_ff_agmm,
+            )
 
     def _make_norm(
         self,

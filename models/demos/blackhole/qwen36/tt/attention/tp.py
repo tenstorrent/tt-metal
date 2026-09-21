@@ -143,7 +143,8 @@ class TPAttention:
         self._qg_deint = self._fused_qkv
         # Fuse prefill norm-allgather + fused-QKV in-proj (all_gather_minimal_matmul_async).
         # Norm's prefill post-AG disabled in layer.py; decode path unchanged.
-        self._fuse_agmm = self._fused_qkv
+        # Also requires distributed-norm prefill; see tp_common.prefill_norm_agmm_enabled.
+        self._fuse_agmm = self._fused_qkv and tpc.prefill_norm_agmm_enabled(args)
         # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
         self._use_nlp_decode_heads = True
         self.k_caches = None

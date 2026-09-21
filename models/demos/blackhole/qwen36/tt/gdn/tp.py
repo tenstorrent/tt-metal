@@ -206,11 +206,15 @@ class TPGatedDeltaNet:
         self._fuse_ab = self._dram_sharded
         # Fuse prefill norm-allgather + qkvzab in-proj into all_gather_minimal_matmul_async.
         # Requires the folded qkvzab weight; norm's post-AG is disabled in layer.py (GDN, prefill).
-        self._fuse_agmm = self._fuse_ab
+        # Also requires distributed-norm prefill, else the norm hands over a full-width
+        # activation and the AG-matmul would gather it a second time (see tp_common).
+        self._fuse_agmm = self._fuse_ab and tpc.prefill_norm_agmm_enabled(args)
         # PREFILL out-proj fusion (matmul_reduce_scatter, (8,8) grid). Slight TTFT cost at small ISL
         # (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL (e.g.
         # 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul.
-        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1
+        self._fuse_out_mmrs_prefill = (
+            not self._out_sharded and args.num_devices > 1 and tpc.mmrs_prefill_supported(mesh, args.num_devices)
+        )
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).

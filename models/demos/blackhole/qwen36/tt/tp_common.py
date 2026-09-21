@@ -11,6 +11,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.tt_transformers.tt.common import Mode
 
 # Hardware constants
 TILE_SIZE = 32
@@ -392,9 +393,32 @@ def all_gather_matmul_prefill(
     return out
 
 
-def mlp_gateup_agmm_enabled(num_devices):
+def prefill_norm_agmm_enabled(args):
+    """Whether a prefill norm's all-gather may be fused into the following in-proj matmul.
+
+    all_gather_minimal_matmul_async consumes a K-SHARDED activation and gathers it itself,
+    so the fusion is only valid when the norm actually leaves its output K-sharded -- i.e.
+    when the framework runs it in distributed mode. ModelArgs.is_distributed_norm is True in
+    prefill only for a 2-D mesh or dim > 4096, so on a 1-D TP mesh a narrow model takes the
+    ordinary PRE-norm all-gather instead and the activation reaches the matmul already
+    full-width. Fusing then double-gathers and the op rejects it:
+
+        all_gather_minimal_matmul_async inner dimensions must match, got K=16384 and K_w=2048
+
+    (K = the already-full 2048 x ring_size 8, against the weight's true K of 2048.)
+
+    This is why the 27B (dim 5120 -> distributed) fuses but Qwen3.5-2B (dim 2048) must not.
+    Every AGMM gate -- layer.py's two norm gates and the GDN / attention / MLP module gates --
+    keys off this one predicate so they cannot drift apart.
+    """
+    if args is None or getattr(args, "num_devices", 1) <= 1:
+        return False
+    return args.is_distributed_norm(Mode.PREFILL)
+
+
+def mlp_gateup_agmm_enabled(num_devices, args=None):
     """Fuse the ff_norm all-gather into the MLP gate/up matmul (prefill). TP-only (needs the gather)."""
-    return num_devices > 1
+    return num_devices > 1 and prefill_norm_agmm_enabled(args)
 
 
 def all_gather_swiglu_prefill(
@@ -523,6 +547,28 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
         )
         cache[key] = (mk(N), mk(N // nd))
     return cache[key]
+
+
+def mmrs_prefill_supported(device, nd, grid=(8, 8), rs_offset=(0, 8)):
+    """Whether the fused prefill out-proj matmul_reduce_scatter can be placed on this device.
+
+    matmul_reduce_scatter_async sizes its reduce-scatter worker set from num_links AND the ring
+    size, and places it at ``rs_offset`` -- above the matmul's own grid. The (8,8)/(0,8) tuning
+    was measured at TP=4, where the workers fit the two rows left free. At nd=8 the op asks for
+    three full rows (36 cores on this 12-wide Blackhole grid) and the third falls off the bottom:
+
+        ccl_common.cpp:562 Core grid offset 0-8 pushed 12 of the 36 selected worker cores
+        (first: 0-10) off the worker grid; kernels cannot be placed there.
+
+    Dropping to num_links=1 makes the placement legal but then DEADLOCKS the collective -- the
+    prefill warmup never returns and ttnn.synchronize_device hangs -- so that is not a safe
+    workaround. Until the fused op is retuned for a wider ring, fall back to the unfused
+    row-parallel matmul + tt_all_reduce, which is verified working at TP=8.
+
+    Returns True only when the worker set is known to fit, i.e. TP<=4 with two rows free.
+    """
+    rows_free = max(0, device.compute_with_storage_grid_size().y - rs_offset[1])
+    return nd <= 4 and rows_free >= 2
 
 
 def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8)):
