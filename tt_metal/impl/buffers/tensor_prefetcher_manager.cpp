@@ -635,7 +635,10 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     };
     log_info(
         tt::LogMetal,
-        "TENSOR_PREFETCHER_MPFE_POLICY active={}/{}/{} dynamic={}",
+        "TENSOR_PREFETCHER_MPFE_POLICY idle={}/{}/{} active={}/{}/{} dynamic={}",
+        mpfe_policy.active.ordinary,
+        mpfe_policy.active.ordinary,
+        mpfe_policy.active.ordinary,
         mpfe_policy.active.free_sender,
         mpfe_policy.active.noc1_sender,
         mpfe_policy.active.ordinary,

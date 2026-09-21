@@ -20,6 +20,7 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
+from models.tt_transformers.tt.prefetcher import colocating_prefetcher
 from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 
 
@@ -93,6 +94,7 @@ class Transformer(LightweightModule):
         state_dict_prefix = args.get_state_dict_prefix("", None)
         self.decoders_optimizations = args.decoders_optimizations
         self.prefetcher = prefetcher
+        self.lm_head_prefetcher = colocating_prefetcher(prefetcher)
         self.tt_ccl = TT_CCL(self.mesh_device)
         # Runtime bounds for the post-prefill tail's slice. Allocated here, before any trace exists,
         # and rewritten in place per call - see process_logits_after_prefill_trace.
@@ -141,7 +143,7 @@ class Transformer(LightweightModule):
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
             use_qk_fused=args.use_qk_fused,
-            prefetcher=prefetcher,
+            prefetcher=self.lm_head_prefetcher,
             **global_rope_kwargs,
         )
 
@@ -222,7 +224,7 @@ class Transformer(LightweightModule):
             ),
             args,
             tt_ccl=self.tt_ccl,
-            prefetcher=prefetcher,
+            prefetcher=self.lm_head_prefetcher,
             TG=args.is_galaxy,
         )
 
@@ -235,7 +237,7 @@ class Transformer(LightweightModule):
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=weight_cache_path,
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
-            prefetcher=prefetcher,
+            prefetcher=self.lm_head_prefetcher,
         )
 
         # Initialize on-device sampling if supported
@@ -454,7 +456,9 @@ class Transformer(LightweightModule):
     def _apply_norm_and_lm_head(self, x):
         """Shared norm + lm_head for prefill logit processing. Input: [1, 1, 32, hidden_dim]."""
         x = self.norm(
-            x, mode=Mode.PREFILL, norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, self.prefetcher)
+            x,
+            mode=Mode.PREFILL,
+            norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, self.lm_head_prefetcher),
         )
         lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(Mode.PREFILL, None)
         if lm_head_input_mem_cfg.is_sharded():
@@ -1179,15 +1183,15 @@ class Transformer(LightweightModule):
                 x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
         # Output norm
-        x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.prefetcher))
+        x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.lm_head_prefetcher))
 
         lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(
-            mode, None if mode == Mode.PREFILL else self.prefetcher
+            mode, None if mode == Mode.PREFILL else self.lm_head_prefetcher
         )
         if mode == Mode.PREFILL and lm_head_input_mem_cfg.is_sharded():
             x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
-        if mode == Mode.DECODE and self.prefetcher is not None:
-            x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, self.prefetcher))
+        if mode == Mode.DECODE and self.lm_head_prefetcher is not None:
+            x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, self.lm_head_prefetcher))
 
         x = self.lm_head(x)
         x = self._apply_final_logit_softcapping(x)

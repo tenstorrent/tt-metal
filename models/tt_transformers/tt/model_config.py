@@ -1434,6 +1434,7 @@ class ModelArgs:
                         self.hidden_dim // self.cluster_shape[1],  # Use padded N
                         prefetcher.ring_size,
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
+                        stream_in1=prefetcher.stream_in1,
                     )
                 else:
                     return self.dram_matmul_config(
@@ -1490,6 +1491,7 @@ class ModelArgs:
                         self.dim,  # Use padded N
                         prefetcher.ring_size,
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
+                        stream_in1=prefetcher.stream_in1,
                     )
                 else:
                     return self.dram_matmul_config(
@@ -1808,6 +1810,7 @@ class ModelArgs:
                     prefetcher.ring_size,
                     num_global_cb_receivers=prefetcher.num_receiver_cores,
                     untilize_out=True,
+                    stream_in1=prefetcher.stream_in1,
                 )
             else:
                 return self.dram_matmul_config(
@@ -2075,6 +2078,7 @@ class ModelArgs:
                     n_wo,
                     prefetcher.ring_size,
                     num_global_cb_receivers=prefetcher.num_receiver_cores,
+                    stream_in1=prefetcher.stream_in1,
                 )
             else:
                 if self.use_fused_all_gather_matmul:
@@ -2137,6 +2141,7 @@ class ModelArgs:
                     n_wo,
                     prefetcher.ring_size,
                     num_global_cb_receivers=prefetcher.num_receiver_cores,
+                    stream_in1=prefetcher.stream_in1,
                 )
             elif self.is_galaxy:
                 return None  # TG uses core_grid parameter instead
@@ -2298,7 +2303,11 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_norm_config(self, norm_type: str, mode: Mode, prefetcher: Prefetcher = None):
         """Get the norm config dict for attention, ff, or lm_head norms."""
-        prefetcher_norm_grid = ttnn.CoreGrid(y=8, x=4)
+        prefetcher_norm_grid = (
+            prefetcher.dynamic_worker_core_grid(32)
+            if prefetcher is not None and not getattr(prefetcher, "colocate_ops", True)
+            else ttnn.CoreGrid(y=8, x=4)
+        )
         match norm_type:
             case "attn":
                 if mode == Mode.DECODE and prefetcher is not None:
@@ -3841,6 +3850,7 @@ class ModelArgs:
         num_global_cb_receivers,
         prefetch=True,
         untilize_out=False,
+        stream_in1=False,
     ):
         M *= B  # Fuse batch always enabled
 
@@ -3890,6 +3900,7 @@ class ModelArgs:
             hop_cores=hop_core_range_set,
             num_global_cb_receivers=num_global_cb_receivers if prefetch else 1,
             untilize_out=untilize_out,
+            stream_in1=stream_in1,
         )
 
         return program_config

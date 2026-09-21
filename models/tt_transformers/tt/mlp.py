@@ -10,6 +10,7 @@ from models.common.utility_functions import copy_to_buffer
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+from models.tt_transformers.tt.prefetcher import prefetcher_linear
 
 
 class MLP(LightweightModule):
@@ -51,6 +52,14 @@ class MLP(LightweightModule):
 
         w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
         w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
+        if prefetcher is not None:
+            w1_w3_mem_config = prefetcher.weight_mem_config(
+                args.dim, args.hidden_dim // args.num_devices, w1_w3_mem_config
+            )
+            w2_mem_config = prefetcher.weight_mem_config(
+                args.hidden_dim // args.num_devices, args.dim, w2_mem_config
+            )
+        prefetcher_cache_suffix = prefetcher.weight_cache_suffix() if prefetcher is not None else ""
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
         # Note: unsqueeze(0).unsqueeze(0) makes weights 4D [1, 1, H, W] to match attention weights
@@ -72,7 +81,7 @@ class MLP(LightweightModule):
                 memory_config=(
                     ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else w2_mem_config if "w2" in name else w1_w3_mem_config
                 ),
-                cache_file_name=cache_name(name),
+                cache_file_name=cache_name(name + prefetcher_cache_suffix),
             )
             return result
 
@@ -110,9 +119,11 @@ class MLP(LightweightModule):
         if self.prefetcher is not None:
 
             def register_weights():
-                self.prefetcher.insert_tensor(self.w1)
-                self.prefetcher.insert_tensor(self.w3)
-                self.prefetcher.insert_tensor(self.w2)
+                ff1_3_program_config = self.args.get_mlp_ff1_3_prg_config(Mode.DECODE, 1, self.prefetcher)
+                ff2_program_config = self.args.get_mlp_ff2_prg_config(Mode.DECODE, 1, self.prefetcher)
+                self.prefetcher.insert_tensor(self.w1, program_config=ff1_3_program_config)
+                self.prefetcher.insert_tensor(self.w3, program_config=ff1_3_program_config)
+                self.prefetcher.insert_tensor(self.w2, program_config=ff2_program_config)
 
             self.prefetcher.register_callback(register_weights)
 
@@ -204,9 +215,11 @@ class MLP(LightweightModule):
         if use_tg_decode_no_prefetch:
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
-        w1_out = ttnn.linear(
+        w1_out = prefetcher_linear(
+            self.prefetcher,
             x,
             self.w1,
+            mode=mode,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
@@ -216,14 +229,12 @@ class MLP(LightweightModule):
                 if use_tg_decode_no_prefetch
                 else self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher)
             ),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
         )
-        w3_out = ttnn.linear(
+        w3_out = prefetcher_linear(
+            self.prefetcher,
             x,
             self.w3,
+            mode=mode,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
@@ -233,10 +244,6 @@ class MLP(LightweightModule):
                 if use_tg_decode_no_prefetch
                 else self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher)
             ),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
         )
         ttnn.deallocate(x)
 
@@ -376,9 +383,11 @@ class MLP(LightweightModule):
             if TG:
                 w2_output_dtype = self.args.ccl_dtype
 
-            w2_out = ttnn.linear(
+            w2_out = prefetcher_linear(
+                self.prefetcher,
                 w2_in,
                 self.w2,
+                mode=mode,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 dtype=w2_output_dtype,
                 program_config=None if use_tg_decode_no_prefetch else pc_2,
@@ -388,10 +397,6 @@ class MLP(LightweightModule):
                     else self.args.get_mlp_ff2_mem_config(mode, self.prefetcher)
                 ),
                 core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-                sub_device_id=self.prefetcher.worker_sub_device_id
-                if self.prefetcher is not None and mode == Mode.DECODE
-                else None,
             )
         ttnn.deallocate(w2_in)
 

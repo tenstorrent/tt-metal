@@ -3887,9 +3887,24 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table = torch.cat([page_table, padding], dim=1)
             return page_table[:, :num_blocks]
 
-    ## Destructor
+    ## Cleanup
 
-    def __del__(self):
+    def close(self):
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+
+        # Stop the long-running device prefetcher before releasing traces or
+        # closing a submesh. Worker-prefetcher instances have no teardown hook.
+        for model in getattr(self, "model", []):
+            prefetcher = getattr(model, "prefetcher", None)
+            teardown = getattr(prefetcher, "teardown", None)
+            if teardown is not None:
+                try:
+                    teardown()
+                except Exception as error:
+                    logger.warning(f"Tensor Prefetcher teardown failed during Generator.close(): {error}")
+
         # Release all captured traces to prevent nanobind memory leaks
         # Traces must be released before closing the mesh device
         try:
@@ -3965,6 +3980,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             for m in self.model:
                 ttnn.close_mesh_device(m.mesh_device)
 
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
         if hasattr(super(Generator, self), "__del__"):
             super().__del__()
 

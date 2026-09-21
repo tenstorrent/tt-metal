@@ -37,6 +37,66 @@ VERIFIED_MODEL_CONFIGS = {
     "Gemma3-27B": {"dim": 4608, "hidden_dim": 24576, "n_heads": 32, "n_kv_heads": 8},
 }
 
+TENSOR_PREFETCHER_VERIFIED_MODEL_CONFIGS = {
+    name: config
+    for name, config in VERIFIED_MODEL_CONFIGS.items()
+    if name in ("Llama-3.2-3B", "Llama-3.1-8B")
+}
+
+TILE_BYTES = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
+
+
+def uses_tensor_prefetcher(prefetcher) -> bool:
+    return prefetcher is not None and getattr(prefetcher, "uses_tensor_prefetcher", False)
+
+
+def colocating_prefetcher(prefetcher):
+    """Return backends that reserve and manage worker-grid sender cores."""
+    return prefetcher if prefetcher is not None and getattr(prefetcher, "colocate_ops", True) else None
+
+
+def prefetcher_linear(prefetcher, input_tensor_a, weight, *, mode, program_config, **linear_kwargs):
+    """Run a linear op through the selected prefetcher backend."""
+    if mode == Mode.DECODE and uses_tensor_prefetcher(prefetcher):
+        return ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+            input_tensor_a,
+            weight,
+            global_cb=prefetcher.global_cb,
+            program_config=program_config,
+            **linear_kwargs,
+        )
+
+    use_prefetcher = prefetcher is not None and mode == Mode.DECODE
+    return ttnn.linear(
+        input_tensor_a,
+        weight,
+        program_config=program_config,
+        global_cb=prefetcher.global_cb if use_prefetcher else None,
+        sub_device_id=prefetcher.worker_sub_device_id if use_prefetcher else None,
+        **linear_kwargs,
+    )
+
+
+def is_tensor_prefetcher_supported(mesh_device: ttnn.MeshDevice, model_name: Optional[str] = None) -> bool:
+    """Return whether this model and topology can use the DRISC Tensor Prefetcher."""
+    if not is_blackhole() or not ttnn.experimental.is_tensor_prefetcher_supported(mesh_device):
+        return False
+    if list(mesh_device.shape)[0] != 1:
+        return False
+
+    from models.tt_transformers.tt.tensor_prefetcher import has_supported_receiver_configuration
+
+    return has_supported_receiver_configuration(mesh_device, model_name or os.getenv("HF_MODEL", ""))
+
+
+def make_prefetcher(mesh_device: ttnn.MeshDevice, num_tensors: int, num_layers: int):
+    """Prefer the device Tensor Prefetcher and preserve the worker backend as fallback."""
+    if is_tensor_prefetcher_supported(mesh_device):
+        from models.tt_transformers.tt.tensor_prefetcher import TensorPrefetcher
+
+        return TensorPrefetcher(mesh_device, num_tensors, num_layers)
+    return Prefetcher(mesh_device, num_tensors, num_layers)
+
 
 def generate_sender_receiver_mapping(num_receivers_per_sender: int = 8) -> dict:
     """
@@ -244,6 +304,9 @@ class Prefetcher(LightweightModule):
         self.pf_config: dict = ARCH_CONFIG["blackhole"]
         self.legal_receiver_cores: List[int] = self.pf_config["legal_receiver_cores"]
         self.mesh_device: ttnn.MeshDevice = mesh_device
+        self.uses_tensor_prefetcher: bool = False
+        self.colocate_ops: bool = True
+        self.stream_in1: bool = False
         self.enable_performance_mode: bool = True
         self.global_cb: Optional[ttnn.GlobalCircularBuffer] = None
         self.worker_sub_device_id: Optional[ttnn.SubDeviceId] = None
@@ -430,14 +493,15 @@ class Prefetcher(LightweightModule):
         )
         return tt_tensor_addrs
 
-    def insert_tensor(self, tensor: ttnn.Tensor):
+    def insert_tensor(self, tensor: ttnn.Tensor, program_config=None):
         """
         Populates the tensor addresses that need to be prefetched
         Args:
             tensor: The tensor to insert into the prefetcher queue
         """
         assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot insert tensors"
-        bytes_in_tile = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
+        del program_config
+        bytes_in_tile = TILE_BYTES
         if tensor.volume() % self.ring_size != 0:
             raise ValueError(
                 f"Tensor volume ({tensor.volume()}) must be divisible by ring_size ({self.ring_size}) for prefetcher."
@@ -514,3 +578,10 @@ class Prefetcher(LightweightModule):
         ttnn.deallocate(self.garbage)
         self.garbage = None
         return
+
+    def weight_cache_suffix(self) -> str:
+        return ""
+
+    def weight_mem_config(self, k: int, n: int, default: ttnn.MemoryConfig) -> ttnn.MemoryConfig:
+        del k, n
+        return default
