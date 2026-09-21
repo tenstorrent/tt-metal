@@ -4415,3 +4415,37 @@ def test_issue_bootstrap_rejects_main_checkout(issue_bootstrap_sandbox):
     assert result.returncode != 0
     assert "linked worktree" in result.stderr
     assert not (main_checkout / "tt_metal/tt-llk/.codegen_run_state.json").exists()
+
+
+def test_setup_lock_reuses_existing_file_with_inherited_noclobber(
+    tmp_path, monkeypatch
+):
+    original_run = subprocess.run
+    lock_paths = {}
+    sentinel = b"existing shared flock inode; do not truncate\n"
+
+    def run_with_noclobber(argv, *args, **kwargs):
+        if (
+            isinstance(argv, list)
+            and argv[:2] == ["bash", "-c"]
+            and "setup_worktree " in argv[2]
+        ):
+            repo = Path(argv[5])
+            lock_path = repo / ".git" / "codegen-worktree-setup.lock"
+            if lock_path not in lock_paths:
+                lock_path.write_bytes(sentinel)
+                lock_paths[lock_path] = lock_path.stat().st_ino
+            argv = [argv[0], "-C", *argv[1:]]
+        return original_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run_with_noclobber)
+    # Reuse the real-Git setup/import fixture, including failed resume rejection
+    # and a subsequent ordinary setup on the same pre-existing lock file.
+    test_setup_worktree_records_exact_base_before_bootstrap(
+        tmp_path, "outer_timeout", False, "supervisor-checkpoint.patch"
+    )
+    assert lock_paths
+    assert all(
+        path.read_bytes() == sentinel and path.stat().st_ino == inode
+        for path, inode in lock_paths.items()
+    )

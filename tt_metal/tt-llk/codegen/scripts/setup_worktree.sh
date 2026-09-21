@@ -209,7 +209,8 @@ PY
 
   # Reserve a unique branch + dir under a lock (concurrency-safe).
   local lock_fd
-  exec {lock_fd}>"$CODEGEN_SETUP_LOCK"
+  # This file is only a flock inode; append-open also works under bash noclobber.
+  exec {lock_fd}>>"$CODEGEN_SETUP_LOCK"
   flock "$lock_fd"
 
   local version
