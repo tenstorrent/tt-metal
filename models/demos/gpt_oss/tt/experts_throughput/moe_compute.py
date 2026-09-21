@@ -284,7 +284,14 @@ def create_moe_compute_config(
     mux_core_range_set = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(2, mux_y0), ttnn.CoreCoord(5, min(mux_y0 + 3, compute_grid.y - 2)))]
     )
-    _per_user_cores = {(b % 8, b // 8) for b in range(max(1, tokens_per_device))}
+    # Derive the per-user block from the same helper attention uses rather than assuming an
+    # 8-wide grid: get_decode_user_grid falls back to the *device* compute grid (12 wide here)
+    # whenever the per-device batch is not a multiple of 32, so a hardcoded (b % 8, b // 8)
+    # silently checks the wrong cores at those batches.
+    from models.demos.gpt_oss.tt.attention.config import ProgramConfig as _AttnProgramConfig
+
+    _user_core_range_set, _ = _AttnProgramConfig.get_decode_user_grid(mesh_device, max(1, tokens_per_device))
+    _per_user_cores = {(c.x, c.y) for c in ttnn.corerange_to_cores(_user_core_range_set, row_wise=True)}
     _mux_cells = {
         (c.x, c.y)
         for cr in mux_core_range_set.ranges()

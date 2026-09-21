@@ -336,6 +336,28 @@ def prepare_gpt_oss_generator_args(
             True,  # stop_at_eos
             True,  # run_in_ci
         ),
+        # Batch 64. Diagnostic/coverage case: 16 users per row on a 4-row mesh means
+        # batch_size % 32 != 0, so RotarySetup and SDPA both fall back to the *device* compute
+        # grid (12 wide on this Blackhole galaxy) instead of the 8x8 used at batch 128. User b
+        # therefore lands on core (b % 12, b // 12) rather than (b % 8, b // 8) -- which is what
+        # separates a core-placement defect from a token-index one.
+        (
+            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            1,  # data_parallel
+            64,  # batch_size
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
+            False,  # warmup_prefill
+            True,  # users_row_sharded
+            False,  # long_context_mode
+            True,  # stop_at_eos
+            False,  # run_in_ci
+        ),
         # Batch 128 with logprobs (top-5)
         (
             "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -437,6 +459,7 @@ def prepare_gpt_oss_generator_args(
         "prefill_64k",
         "prefill_128k",
         "batch128",
+        "batch64",
         "batch128_logprobs",
         "long_context_128k",
         "long_context_short_prefill_long_decode",
@@ -592,6 +615,12 @@ def test_gpt_oss_demo(
     # cap (e.g. tp=1 on a single Blackhole card → 262K-padded vocab). In that case
     # fall back to host-side sampling. Only greedy is supported for the fallback.
     on_device_sampling_supported = all(getattr(m, "sampling", None) is not None for m in model)
+    # DIAGNOSTIC: the on-device sampling op preallocates its output for 32 users per device, so a
+    # per-device batch other than 32 trips a TT_FATAL. Let the host-side greedy fallback take over
+    # so off-nominal batches can still be run for placement experiments.
+    if os.getenv("GPT_OSS_HOST_SAMPLING") == "1":
+        on_device_sampling_supported = False
+        logger.warning("GPT_OSS_HOST_SAMPLING=1: forcing host-side greedy argmax (diagnostic)")
     if not on_device_sampling_supported:
         assert greedy, (
             "On-device sampling is unavailable on this mesh (per-device vocab > 64K) "
