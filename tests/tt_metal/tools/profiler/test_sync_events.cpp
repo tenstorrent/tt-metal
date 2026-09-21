@@ -231,7 +231,8 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        ReadMeshDeviceProfilerResults(*mesh_device);
+        // Streaming profiler writes the zone CSV automatically on device close
+        // (via TT_METAL_STREAMING_PROFILER_ZONE_CSV env var)
         pass &= mesh_device->close();
 
         fmt::print("\nExpected events & timing:\n");
