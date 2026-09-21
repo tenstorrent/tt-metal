@@ -181,18 +181,23 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         // their traffic is confined to the block's columns (short -x legs, then -y within the block).
         const uint32_t L = NV + NP;
         TT_FATAL(L <= grid.x, "chunk_gdn_fused: row-local placement needs NV+NP={} <= grid.x={}", L, grid.x);
-        const uint32_t n_row_heads = std::min<uint32_t>(BH, grid.y);
+        // k heads per row, each in its own column segment [i*L, (i+1)*L): the segments' -x legs are
+        // disjoint, so heads sharing a row still share no link.
+        const uint32_t k_per_row = grid.x / L;
+        const uint32_t n_row_heads = std::min<uint32_t>(BH, k_per_row * grid.y);
         for (uint32_t h = 0; h < n_row_heads; h++) {
+            const uint32_t row = h / k_per_row;
+            const uint32_t xs = (h % k_per_row) * L;
             for (uint32_t v = 0; v < NV; v++) {
-                rcv_cores[h * NV + v] = CoreCoord{v, h};
+                rcv_cores[h * NV + v] = CoreCoord{xs + v, row};
             }
             for (uint32_t j = 0; j < NP; j++) {
-                prod_cores.push_back(CoreCoord{NV + j, h});
+                prod_cores.push_back(CoreCoord{xs + NV + j, row});
             }
         }
         if (BH > n_row_heads) {
             const uint32_t rem = BH - n_row_heads;
-            const uint32_t wl = grid.x - L;
+            const uint32_t wl = grid.x - k_per_row * L;
             TT_FATAL(wl >= 1, "chunk_gdn_fused: row-local placement: no leftover columns for {} extra heads", rem);
             const uint32_t rw = std::min<uint32_t>(NV, wl);
             TT_FATAL(
@@ -211,11 +216,12 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
             for (uint32_t kk = 0; kk < rem; kk++) {
                 const uint32_t h = n_row_heads + kk;
                 const uint32_t y_base = kk * block_h;
+                const uint32_t xl = k_per_row * L;  // first leftover column
                 for (uint32_t v = 0; v < NV; v++) {
-                    rcv_cores[h * NV + v] = CoreCoord{L + (v % rw), y_base + v / rw};
+                    rcv_cores[h * NV + v] = CoreCoord{xl + (v % rw), y_base + v / rw};
                 }
                 for (uint32_t j = 0; j < NP; j++) {
-                    prod_cores.push_back(CoreCoord{L + (j % wl), y_base + rh + j / wl});
+                    prod_cores.push_back(CoreCoord{xl + (j % wl), y_base + rh + j / wl});
                 }
             }
         }

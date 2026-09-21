@@ -108,6 +108,31 @@ struct ChunkGdnFusedOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
+// The per-head row-local cost model, calibrated on QB2:
+//   T_fused(NV, NP) = NC * max(w_p / NP, t_step(Vt / NV)) + fill   over (NV | Vt, NP) with a feasible
+//   row-local layout (D9), ties -> fewer cores, then smaller NV; T_phased(BH) from the measured table.
+// The op host uses it for nv / np / placement when the QWEN_GDN_NV / QWEN_GDN_NP / QWEN_GDN_PLACEMENT
+// knobs are unset; gdnopt/fused_geometry.py::choose_geometry is the host-side oracle it mirrors.
+struct FusedGeometryChoice {
+    uint32_t nv = 0;  // 0 => no fused geometry fits this grid
+    uint32_t np = 0;
+    uint32_t placement = 0;  // 1 row-local, 0 row-major fallback
+    float t_fused_us = 0.0f;
+    float t_phased_us = 0.0f;
+    bool fused_pays = false;
+};
+bool fused_row_local_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP);
+// fixed_nv / fixed_np = 0 -> free; a non-zero value pins that field (an env override) and the model
+// chooses the other one so the pair still fits (and prefers a row-local layout for it).
+FusedGeometryChoice choose_fused_geometry(
+    uint32_t grid_x,
+    uint32_t grid_y,
+    uint32_t BH,
+    uint32_t NC,
+    uint32_t Vt,
+    uint32_t fixed_nv = 0,
+    uint32_t fixed_np = 0);
+
 // Returns {o [BH,NC,C,V] fp32, final_state [BH,K,V] fp32} — exactly the scan prim's output specs.
 // Needs BH*(NV+NP) cores (NP producers + NV receivers per head; both default to 1 and are explicit
 // QWEN_GDN_NP / QWEN_GDN_NV opt-ins) and BH <= (grid.x / NV) * grid.y receiver row rectangles;

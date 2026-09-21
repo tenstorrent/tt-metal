@@ -4,6 +4,7 @@
 #include "chunk_gated_delta_rule_nanobind.hpp"
 #include "chunk_gated_delta_rule.hpp"
 #include "device/chunk_gdn_phased.hpp"
+#include "device/chunk_gdn_fused.hpp"
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/device.hpp"
@@ -138,6 +139,40 @@ std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
 }  // namespace
 
 void bind_chunk_gated_delta_rule(nb::module_& mod) {
+    // Host-side geometry oracle (design D8 v0.3): what the fused op will choose for (grid, BH, NC, Vt)
+    // when no QWEN_GDN_* knob overrides it. Pure function of its arguments — no device needed — so
+    // the dispatch-table tests can run for any grid (validation plan N12).
+    mod.def(
+        "chunk_gdn_fused_geometry",
+        [](uint32_t grid_x,
+           uint32_t grid_y,
+           uint32_t BH,
+           uint32_t NC,
+           uint32_t Vt,
+           uint32_t fixed_nv,
+           uint32_t fixed_np) {
+            const auto c = ttnn::prim::choose_fused_geometry(grid_x, grid_y, BH, NC, Vt, fixed_nv, fixed_np);
+            return std::make_tuple(c.nv, c.np, c.placement, c.t_fused_us, c.t_phased_us, c.fused_pays);
+        },
+        nb::arg("grid_x"),
+        nb::arg("grid_y"),
+        nb::arg("BH"),
+        nb::arg("NC"),
+        nb::arg("Vt") = 4,
+        nb::arg("fixed_nv") = 0,
+        nb::arg("fixed_np") = 0,
+        R"doc(Fused prep->scan geometry the op picks for (grid_x, grid_y, BH, NC, Vt) without env
+        overrides: (nv, np, placement, T_fused_us, T_phased_us, fused_pays). nv == 0 means no fused
+        geometry fits the grid.)doc");
+    mod.def(
+        "chunk_gdn_fused_row_local_feasible",
+        &ttnn::prim::fused_row_local_feasible,
+        nb::arg("grid_x"),
+        nb::arg("grid_y"),
+        nb::arg("BH"),
+        nb::arg("NV"),
+        nb::arg("NP"));
+
     const auto* doc =
         R"doc(
         Standalone chunked Gated Delta Rule forward (flash-linear-attention algorithm).

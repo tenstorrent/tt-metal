@@ -93,9 +93,10 @@ void ChunkGdnFusedOperation::validate_on_program_cache_miss(
         // leftover W-L columns as blocks of NV receivers (rw x rh rectangle) + NP producers.
         const uint32_t L = attrs.nv + attrs.np;
         TT_FATAL(L <= grid.x, "chunk_gdn_fused: row-local placement needs NV+NP={} <= grid.x={}", L, grid.x);
-        if (attrs.BH > grid.y) {
-            const uint32_t rem = attrs.BH - grid.y;
-            const uint32_t wl = grid.x - L;
+        const uint32_t k_per_row = grid.x / L;
+        if (attrs.BH > k_per_row * grid.y) {
+            const uint32_t rem = attrs.BH - k_per_row * grid.y;
+            const uint32_t wl = grid.x - k_per_row * L;
             TT_FATAL(
                 wl >= 1,
                 "chunk_gdn_fused: row-local placement: {} heads exceed the {} rows and no columns are left",
@@ -153,6 +154,108 @@ ChunkGdnFusedOperation::tensor_return_value_t ChunkGdnFusedOperation::create_out
     return outs;
 }
 
+namespace {
+// QB2 constants, measured 2026-09-21 (design doc v0.3 §5): producer item under load, receiver step
+// (period) per V-slice width, pipeline fill, and the phased wall-op reference at NC=64.
+constexpr float kWpUs = 34.0f;
+constexpr float kFillUs = 65.0f;
+float t_step_us(uint32_t Vtl) {
+    switch (Vtl) {
+        case 1: return 3.7f;
+        case 2: return 5.07f;
+        case 4: return 7.9f;
+        default: return -1.0f;  // unmeasured width
+    }
+}
+float t_phased_us(uint32_t BH, uint32_t NC) {
+    // Measured wall-op at NC=64 (wall - 115 us glue): 4 -> 453, 8 -> 593, 12 -> 706, 16 -> 883,
+    // 32 -> 1449, 48 -> 2475. Linear 310 + 35.8*BH to BH=32, then interpolated to the DRAM-saturated
+    // BH=48 point.
+    const float t32 = 310.0f + 35.8f * 32.0f;
+    float t = (BH <= 32) ? (310.0f + 35.8f * BH) : (t32 + (2475.0f - t32) * (std::min<uint32_t>(BH, 48) - 32) / 16.0f);
+    if (BH > 48) {
+        t *= BH / 48.0f;
+    }
+    return t * NC / 64.0f;
+}
+}  // namespace
+
+bool fused_row_local_feasible(uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NV, uint32_t NP) {
+    const uint32_t L = NV + NP;
+    if (NV < 1 || NP < 1 || L > grid_x) {
+        return false;
+    }
+    const uint32_t k = grid_x / L;
+    if (BH <= k * grid_y) {
+        return true;
+    }
+    const uint32_t rem = BH - k * grid_y;
+    const uint32_t wl = grid_x - k * L;
+    if (wl < 1) {
+        return false;
+    }
+    const uint32_t rw = std::min<uint32_t>(NV, wl);
+    if (NV % rw != 0) {
+        return false;
+    }
+    return rem * (NV / rw + (NP + wl - 1) / wl) <= grid_y;
+}
+
+FusedGeometryChoice choose_fused_geometry(
+    uint32_t grid_x, uint32_t grid_y, uint32_t BH, uint32_t NC, uint32_t Vt, uint32_t fixed_nv, uint32_t fixed_np) {
+    FusedGeometryChoice best;
+    best.t_phased_us = t_phased_us(BH, NC);
+    bool have = false;
+    auto consider = [&](uint32_t nv, uint32_t np, uint32_t placement) {
+        const float ts = t_step_us(Vt / nv);
+        if (ts < 0.0f) {
+            return;
+        }
+        const float t = NC * std::max(kWpUs / np, ts) + kFillUs;
+        // ties -> fewer cores, then smaller NV
+        const bool better =
+            !have || t < best.t_fused_us ||
+            (t == best.t_fused_us && (nv + np < best.nv + best.np || (nv + np == best.nv + best.np && nv < best.nv)));
+        if (better) {
+            best.nv = nv;
+            best.np = np;
+            best.placement = placement;
+            best.t_fused_us = t;
+            have = true;
+        }
+    };
+    auto nv_ok = [&](uint32_t nv) { return Vt % nv == 0 && (fixed_nv == 0 || nv == fixed_nv); };
+    auto np_ok = [&](uint32_t np) { return fixed_np == 0 || np == std::min(fixed_np, NC); };
+    for (uint32_t nv : {1u, 2u, 4u, 8u}) {
+        if (!nv_ok(nv)) {
+            continue;
+        }
+        for (uint32_t np = 1; np + nv <= grid_x; np++) {
+            const uint32_t np_eff = std::min(np, NC);
+            if (BH * (nv + np_eff) > grid_x * grid_y) {
+                break;
+            }
+            if (np_ok(np_eff) && fused_row_local_feasible(grid_x, grid_y, BH, nv, np_eff)) {
+                consider(nv, np_eff, 1);
+            }
+        }
+    }
+    if (!have) {  // no row-local layout: the row-major fallback (optimistic — ignores link sharing)
+        for (uint32_t nv : {1u, 2u, 4u, 8u}) {
+            if (!nv_ok(nv) || nv > grid_x || BH > (grid_x / nv) * grid_y) {
+                continue;
+            }
+            const uint32_t free = grid_x * grid_y - BH * nv;
+            const uint32_t np = fixed_np ? std::min(fixed_np, NC) : std::min(free / BH, NC);
+            if (np >= 1 && BH * (nv + np) <= grid_x * grid_y) {
+                consider(nv, np, 0);
+            }
+        }
+    }
+    best.fused_pays = have && best.t_fused_us < best.t_phased_us;
+    return best;
+}
+
 std::vector<Tensor> chunk_gdn_fused(
     const Tensor& q,
     const Tensor& k,
@@ -181,23 +284,37 @@ std::vector<Tensor> chunk_gdn_fused(
     const uint32_t num_chunks = qk_flat ? (q_shape[1] / chunk_size) : q_shape[1];
     const uint32_t key_dim = qk_flat ? (q_shape[2] / Hk) : q_shape[3];
     const uint32_t val_dim = v_flat ? (v_shape[2] / HV) : v_shape[3];
-    // F3a producers per head: read HERE (attrs construction), never in the factory — np is hashed,
-    // so an env toggle compiles a fresh program instead of silently serving a stale cached one.
-    // Clamped to num_chunks: a producer beyond NC would own no chunks (wasted core, and the
-    // receiver's rotating credit c % NP would skip it anyway).
-    uint32_t np = 1;
+    // Geometry defaults from the calibrated cost model (design D8 v0.3); every knob below overrides
+    // its field. Read HERE (attrs construction), never in the factory — all of them are hashed, so a
+    // toggle compiles a fresh program instead of silently serving a stale cached one.
+    const auto grid0 = q.device()->compute_with_storage_grid_size();
+    uint32_t np_env = 0, nv_env = 0;
     if (const char* e = std::getenv("QWEN_GDN_NP")) {
         const int v_np = std::atoi(e);
         TT_FATAL(v_np >= 1, "QWEN_GDN_NP must be a positive integer (got '{}')", e);
-        np = std::min<uint32_t>(static_cast<uint32_t>(v_np), num_chunks);
+        np_env = static_cast<uint32_t>(v_np);
     }
-    // Receivers per head: read HERE (hashed) for the same reason as np. Must divide Vt (validated).
-    uint32_t nv = 1;
     if (const char* e = std::getenv("QWEN_GDN_NV")) {
         const int v_nv = std::atoi(e);
         TT_FATAL(v_nv >= 1, "QWEN_GDN_NV must be a positive integer (got '{}')", e);
-        nv = static_cast<uint32_t>(v_nv);
+        nv_env = static_cast<uint32_t>(v_nv);
     }
+    // The model fills whatever the knobs leave free (both, one, or none) so the pair fits the grid.
+    const auto choice = choose_fused_geometry(grid0.x, grid0.y, BH, num_chunks, val_dim / TILE_WIDTH, nv_env, np_env);
+    TT_FATAL(
+        choice.nv >= 1,
+        "chunk_gdn_fused: no fused geometry fits BH={} on a {}x{} grid with NV={} NP={} (0 = free); the dispatch must "
+        "choose phased",
+        BH,
+        grid0.x,
+        grid0.y,
+        nv_env,
+        np_env);
+    // F3a producers per head, clamped to num_chunks: a producer beyond NC would own no chunks (wasted
+    // core, and the receiver's rotating credit c % NP would skip it anyway). Receivers per head must
+    // divide Vt (validated).
+    const uint32_t np = np_env ? std::min<uint32_t>(np_env, num_chunks) : choice.np;
+    const uint32_t nv = nv_env ? nv_env : choice.nv;
     uint32_t nbuf = 2;
     if (const char* e = std::getenv("QWEN_GDN_HANDOFF_NBUF")) {
         const int v_nb = std::atoi(e);
@@ -214,7 +331,8 @@ std::vector<Tensor> chunk_gdn_fused(
     }
     TT_FATAL(
         !posted || unicast, "chunk_gdn_fused: QWEN_GDN_POSTED requires the unicast transport (QWEN_GDN_UNICAST=1)");
-    uint32_t placement = 0;
+    // Placement: row-local whenever the (possibly overridden) geometry has a row-local layout.
+    uint32_t placement = fused_row_local_feasible(grid0.x, grid0.y, BH, nv, np) ? 1 : 0;
     if (const char* e = std::getenv("QWEN_GDN_PLACEMENT")) {
         const int v_pl = std::atoi(e);
         TT_FATAL(v_pl == 0 || v_pl == 1, "QWEN_GDN_PLACEMENT must be 0 (row-major) or 1 (row-local), got '{}'", e);
