@@ -157,7 +157,7 @@ bool is_axis_straight(const tt::tt_metal::distributed::MeshDevice& mesh_device, 
     return true;
 }
 
-tt::tt_metal::BufferType carried_semaphore_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
     const size_t l1_small_bank_size = mesh_device.allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
     return l1_small_bank_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
 }

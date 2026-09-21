@@ -204,7 +204,7 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterMinimalDirectProgramFactory::creat
     // Parked on the descriptor's `semaphores` slot, which keeps them alive for the cached workload's
     // lifetime -- the kernels take their addresses as runtime args. Order is the contract in
     // SemaphoreIndex: arrivals [0..N-1], then reader_gen, writer_gen, compute_gen, init_sync.
-    const auto sem_buffer_type = ttnn::ccl::carried_semaphore_buffer_type(*mesh_device);
+    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
     auto& sems = workload_descriptor.semaphores;
     sems.reserve(SemaphoreIndex::count(operation_attributes.num_devices));
     for (size_t s = 0; s < SemaphoreIndex::count(operation_attributes.num_devices); ++s) {

@@ -53,7 +53,7 @@ bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device
 // (#56769). L1_SMALL sits above the mux's ceiling, so prefer it; with no L1_SMALL region configured
 // there is nowhere safer than general L1, and an op that cannot tolerate that is expected to say so
 // itself (see selective_reduce_combine, whose mux is by far the greediest).
-tt::tt_metal::BufferType carried_semaphore_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device);
+tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
 // Floor of the L1_SMALL region, i.e. the highest address a fabric mux's raw-L1 map may reach. Derived
 // from immutable limits: worker L1 is fixed and the L1_SMALL bank is never shrunk, whereas the L1 bank

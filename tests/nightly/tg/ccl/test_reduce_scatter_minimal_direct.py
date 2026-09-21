@@ -34,21 +34,12 @@ from tests.nightly.t3000.ccl.test_reduce_scatter_minimal_direct import (
     run_reduce_scatter_minimal_direct_impl,
 )
 
-# "both" and "none" are the two that matter here: they select whether the writer's start barrier --
-# where the hang parks -- is compiled in. The "staging" helper path is covered on t3000/blackhole and
-# is orthogonal to the mesh shape.
+# "both" tests init barrier skip. "none" tests internal op alloc and init barrier
 NON_STAGING_MODES = [m for m in PERSISTENT_MODES if m != "staging"]
 
-# None asks for every link the cluster axis has (4 on a Galaxy) rather than hardcoding 4: an over-ask
-# is a TT_FATAL, not a skip, and the count a host reports for axis 0 is not guaranteed to match axis 1
-# (see the dispatch-link note in reduce_scatter.cpp).
 LINK_IDS = {1: "1link", None: "all_links"}
 
-
-# The cross products below are the honest full matrix, but a few corners of it are not worth a
-# Galaxy's time. They stay in the matrix as collection-time skips rather than being filtered out of
-# the case list, so `-rs` prints why each one did not run. These are marks, not pytest.skip() calls
-# in the body: a mark is evaluated before fixtures, so a skipped case never brings up the mesh.
+# skip some slightly redundant test cases to keep test time reasonable.
 DEEPSEEK_SHAPES = [shape for shape, _ in RS_DIRECT_DEEPSEEK_SHAPES]
 
 

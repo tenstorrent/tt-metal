@@ -825,11 +825,7 @@ def test_deepseek_perf(
         logger.info(f"Decode iter: {i} success")
 
 
-# Guard test for #56769. The op builds its fabric mux from raw L1 outside the allocator, so it refuses
-# to run on a device with no L1_SMALL region: GlobalSemaphores would fall back to BufferType::L1, land
-# inside the mux's map, and be silently overwritten -- a hang, not an error. The mux ceiling cannot
-# save them because at mux-build time the semaphores do not exist yet. This asserts the refusal is a
-# clean build-time fatal, which is the only reason the hang cannot come back silently.
+# Guard test for #56769. 
 @pytest.mark.parametrize(
     "device_params",
     [

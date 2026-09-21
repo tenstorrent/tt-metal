@@ -50,13 +50,6 @@ def run_reduce_scatter_minimal_direct_impl(
     torch.manual_seed(0)
     assert persistent_mode in PERSISTENT_MODES, f"unknown persistent_mode {persistent_mode}"
 
-    # A mesh with more than one device on BOTH axes runs one INDEPENDENT ring per row (or column) of the
-    # other axis, all of them concurrently -- the configuration this op is not validated for and hangs in
-    # (#54864). Distributing over a single axis cannot express it, so build the input over both mesh axes
-    # instead: the scatter dim is sharded along cluster_axis and REPLICATED along the other, which makes
-    # every ring compute the same reduce-scatter. Composing back over both axes then puts each ring's
-    # answer at its own index of `replica_dim`, so a single ring going wrong is a failure rather than an
-    # unchecked device.
     mesh_shape = tuple(mesh_device.shape)
     multi_ring = cluster_axis is not None and len(mesh_shape) == 2 and min(mesh_shape) > 1
     if multi_ring:

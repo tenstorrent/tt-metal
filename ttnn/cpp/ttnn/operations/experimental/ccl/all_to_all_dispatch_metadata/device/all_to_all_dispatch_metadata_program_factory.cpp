@@ -192,7 +192,7 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
         tensor_args.optional_output_tensors.has_value());
 
     // Carried counters: prefer L1_SMALL, which sits above the fabric mux's ceiling (#56769).
-    const auto sem_buffer_type = ttnn::ccl::carried_semaphore_buffer_type(*mesh_device);
+    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
     std::optional<GlobalSemaphore> init_barrier_semaphore = std::nullopt;
     GlobalSemaphore final_barrier_semaphore =
         skip_init_semaphore ? operation_attributes.cross_device_semaphore.value()
