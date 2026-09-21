@@ -247,6 +247,25 @@ def test_add_fp32_input_activ(device, ttnn_function, shape):
     assert status
 
 
+@pytest.mark.parametrize("activation", [ttnn.UnaryOpType.EXP, ttnn.UnaryOpType.RECIP])
+@pytest.mark.parametrize(
+    "ttnn_dtype, torch_dtype, ulp_threshold",
+    [(ttnn.float32, torch.float32, 2), (ttnn.bfloat16, torch.bfloat16, 2)],
+)
+def test_exp_recip_activation_golden_matches_device(device, activation, ttnn_dtype, torch_dtype, ulp_threshold):
+    """Both activations reach the device but had no entry in the golden's activation map, so the
+    golden raised KeyError for every dtype. Comparison mode downgrades that to a warning, which
+    leaves the call reporting as validated with nothing compared."""
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 320, 384), dtype=torch_dtype) + 0.5
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    expected = ttnn.get_golden_function(ttnn.add)(torch_input, torch_input, input_tensor_a_activations=[activation])
+    output = ttnn.to_torch(ttnn.add(input_tensor, input_tensor, input_tensor_a_activations=[activation]))
+
+    assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=ulp_threshold)
+
+
 @pytest.mark.parametrize(
     "ttnn_function",
     [
