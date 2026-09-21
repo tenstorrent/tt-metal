@@ -783,6 +783,8 @@ def test_int_tensor_boundary_scalar_accepted(device, tensor_dtype, scalar):
 
     assert output.dtype == tensor_dtype
     assert ttnn.to_torch(output, dtype=torch.int64).flatten().tolist() == [int(scalar)] * torch_input.numel()
+
+
 @pytest.mark.parametrize("op_name", ("add", "subtract", "multiply", "div"))
 @pytest.mark.parametrize("ttnn_dtype, torch_dtype", ((ttnn.bfloat16, torch.bfloat16), (ttnn.int32, torch.int32)))
 def test_scalar_tensor_golden_matches_device(device, op_name, ttnn_dtype, torch_dtype):
@@ -860,6 +862,12 @@ def test_unsigned_golden_wraps_scalar_outside_operand_range(op_name, torch_dtype
     """A scalar wider than the operand wraps to its storage width, so the golden masks it rather
     than rejecting it. Materializing the scalar in the unsigned dtype instead fails Torch's
     conversion range check, turning the wrap into an error in both operand orders."""
+    # A scalar the integer arms of the variant cannot hold arrives as a float, and multiply then
+    # promotes the operand to float32 instead of wrapping it.
+    binds_as_float = not float(scalar).is_integer() or not -(1 << 31) <= scalar < (1 << 32)
+    if op_name == "multiply" and bit_width == 32 and binds_as_float:
+        pytest.skip("multiply promotes a 32-bit integer operand against a float-bound scalar")
+
     torch.manual_seed(0)
     torch_fn = getattr(torch, op_name)
     mask = (1 << bit_width) - 1
@@ -897,6 +905,71 @@ def test_scalar_tensor_div_rounding_golden_matches_device(device, rounding_mode,
         assert_equal(expected, output)
 
 
+@pytest.mark.parametrize("scalar_first", (True, False))
+@pytest.mark.parametrize("op_name", ("multiply", "div"))
+@pytest.mark.parametrize(
+    "scalar, promotes",
+    (
+        (2.5, True),
+        (-1.5, True),
+        # An integral float still promotes: the device keys the decision off the scalar's type so
+        # the output dtype cannot depend on a runtime value.
+        (2.0, True),
+        # Too wide for either integer arm of the scalar variant, so it arrives as a float.
+        ((1 << 32) + 512, True),
+        # The integer arms, which stay on the integer path and keep the operand's dtype.
+        (2, False),
+        (-2, False),
+    ),
+)
+@pytest.mark.parametrize("ttnn_dtype, torch_dtype", ((ttnn.int32, torch.int32), (ttnn.uint32, torch.uint32)))
+def test_float_scalar_promotes_integer_tensor(device, ttnn_dtype, torch_dtype, scalar, promotes, op_name, scalar_first):
+    """multiply and div promote a 32-bit integer operand against a float scalar rather than
+    truncating it; every other op rejects the call. The golden has to follow the same rule, or it
+    reports an integer where the device returns float32 and comparison mode fails on dtype alone."""
+    if op_name == "div" and not promotes:
+        pytest.skip("div is true division, so an integer scalar has no integer device path here")
+
+    torch_input = torch.arange(1, 1025, dtype=torch.int64).reshape(1, 1, 32, 32).to(torch_dtype)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    golden_args = (scalar, torch_input) if scalar_first else (torch_input, scalar)
+    device_args = (scalar, input_tensor) if scalar_first else (input_tensor, scalar)
+    expected = ttnn.get_golden_function(getattr(ttnn, op_name))(*golden_args)
+    output = ttnn.to_torch(getattr(ttnn, op_name)(*device_args))
+
+    assert expected.dtype == output.dtype, f"golden {expected.dtype} != device {output.dtype}"
+    assert (expected.dtype == torch.float32) == promotes, f"{scalar!r} promoted to {expected.dtype}"
+    if promotes:
+        assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
+    else:
+        assert_equal(expected, output)
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract"))
+@pytest.mark.parametrize(
+    "scalar",
+    (
+        # Above the operand's range, and fractional: the integer path refuses both rather than
+        # letting the pack change the value silently. The golden still masks, which stays
+        # unreachable through the device because the op rejects the call before a golden runs.
+        (1 << 32) + 512,
+        -2.5,
+    ),
+)
+def test_uint32_scalar_the_integer_path_cannot_represent_is_rejected(device, op_name, scalar, expect_error):
+    """A UINT32 operand takes a scalar only where packing it as an integer is exact. Only add and
+    subtract refuse: multiply promotes the operand to float32 and keeps the scalar. UINT16 wraps
+    all of these, so the guard is keyed to the 32-bit path rather than to unsignedness."""
+    torch_input = torch.tensor([[[[0, 1, 2, 3, 100, 500, 4464, 65535]]]], dtype=torch.int64).repeat(1, 1, 32, 4)
+    input_tensor = ttnn.from_torch(
+        torch_input.to(torch.uint32), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    with expect_error(RuntimeError, "cannot represent the scalar"):
+        getattr(ttnn, op_name)(scalar, input_tensor)
+
+
 @pytest.mark.parametrize("rounding_mode", ("trunc", "floor"))
 @pytest.mark.parametrize("scalar_first", (True, False))
 def test_zero_dim_float_tensor_promotes_like_a_python_float(device, rounding_mode, scalar_first):
@@ -932,16 +1005,11 @@ def test_tensor_operand_keeps_a_dtype_when_neither_operand_is_shaped():
     "ttnn_dtype, torch_dtype, bit_width, scalar",
     (
         (ttnn.uint16, torch.uint16, 16, (1 << 16) + 4464),
-        # pack_scalar_runtime_arg routes the scalar through a float before the cast, so a value
-        # above 2**24 would be rounded to the nearest float32 and the rounding, not the wrap,
-        # would decide the result. 2**32 + 512 lands on a float32 boundary exactly.
-        (ttnn.uint32, torch.uint32, 32, (1 << 32) + 512),
         # A negative scalar reaches the operand width through a float-to-unsigned conversion whose
         # truncated value is out of range, which C++ leaves undefined rather than defining as
-        # modulo. Both widths are measured to wrap here, so the golden matches what the hardware
-        # does; it is not a guarantee the standard makes.
+        # modulo. These are measured to wrap, so the golden matches what the hardware does; it is
+        # not a guarantee the standard makes.
         (ttnn.uint16, torch.uint16, 16, -2.5),
-        (ttnn.uint32, torch.uint32, 32, -2.5),
         (ttnn.uint16, torch.uint16, 16, -2),
         (ttnn.uint32, torch.uint32, 32, -2),
     ),

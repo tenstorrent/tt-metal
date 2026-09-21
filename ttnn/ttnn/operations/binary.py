@@ -117,20 +117,55 @@ def _copy_inplace_golden_result(input_tensor_a, output_tensor):
     return input_tensor_a
 
 
+# The scalar overloads take std::variant<uint32_t, int32_t, float>, so a Python int outside the
+# union of the two integer arms is bound as a float and carries their promotion with it.
+_SCALAR_INT_ARM_RANGE = (-(1 << 31), 1 << 32)
+
+# Promotion is scoped to the dtypes whose bits binary_ng would otherwise reinterpret as float.
+_PROMOTABLE_INTEGER_DTYPES = ("int32", "uint32")
+
+
 def _has_float_scalar(input_tensor_a, input_tensor_b):
-    """Whether either operand is a scalar of floating type. A Python float and a 0-d float tensor
-    both promote an INT32 tensor before division, so neither may be read as an integer divisor.
+    """Whether either operand is a scalar the kernel receives on the float arm of its variant.
+    That is the scalar's binding, not its value: 2.0 counts and 2 does not, matching the device,
+    which keys promotion off the type so an output dtype never depends on a runtime value. An
+    integer too wide for both integer arms is bound as a float and so counts as well.
+
     A 0-d tensor's dtype answers this question even though it does not set the arithmetic width
     -- see _tensor_operand, which keys that off the shaped operand instead."""
-    import torch
 
     def is_float_scalar(value):
         if not _is_scalar_like(value):
             return False
         dtype = getattr(value, "dtype", None)
-        return dtype.is_floating_point if dtype is not None else isinstance(value, float)
+        if dtype is not None:
+            return dtype.is_floating_point
+        if isinstance(value, bool):
+            return False
+        low, high = _SCALAR_INT_ARM_RANGE
+        return isinstance(value, float) or not low <= value < high
 
     return is_float_scalar(input_tensor_a) or is_float_scalar(input_tensor_b)
+
+
+def _promoted_for_float_scalar(input_tensor_a, input_tensor_b):
+    """The operands as multiply and divide compute them. A float scalar against a 32-bit integer
+    tensor promotes that tensor to float32 on device; the other ops reject the call instead, so
+    this is scoped to the two that promote. Resolving it before activations run also stops them
+    materializing the scalar into the integer dtype, which would truncate it first."""
+    import torch
+
+    tensor_operand = _tensor_operand(input_tensor_a, input_tensor_b)
+    promotable = torch.is_tensor(tensor_operand) and str(tensor_operand.dtype).endswith(_PROMOTABLE_INTEGER_DTYPES)
+    if not promotable or not _has_float_scalar(input_tensor_a, input_tensor_b):
+        return input_tensor_a, input_tensor_b
+
+    return tuple(
+        operand.to(torch.float32)
+        if torch.is_tensor(operand) and str(operand.dtype).endswith(_PROMOTABLE_INTEGER_DTYPES)
+        else operand
+        for operand in (input_tensor_a, input_tensor_b)
+    )
 
 
 def _tensor_operand(input_tensor_a, input_tensor_b):
@@ -415,6 +450,7 @@ def _golden_function_multiply(
 ):
     # Captured before activations, which materialize a scalar operand into a tensor.
     has_scalar_operand = _is_scalar_like(input_tensor_a) or _is_scalar_like(input_tensor_b)
+    input_tensor_a, input_tensor_b = _promoted_for_float_scalar(input_tensor_a, input_tensor_b)
     input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
     tensor_operand = _tensor_operand(input_tensor_a, input_tensor_b)
@@ -610,15 +646,7 @@ def _golden_function_divide(
     # other operand's dtype -- that erases the scalar's own type, and with it the promotion a
     # float scalar forces on an INT32 tensor.
     has_scalar_operand = _is_scalar_like(input_tensor_a) or _is_scalar_like(input_tensor_b)
-    float_scalar = _has_float_scalar(input_tensor_a, input_tensor_b)
-    if float_scalar:
-        # A float scalar promotes an INT32 tensor operand to float32 on device before the
-        # division. Promoting here first also keeps the activation below from materializing the
-        # scalar into the integer dtype, which would truncate it.
-        input_tensor_a, input_tensor_b = (
-            operand.to(torch.float32) if torch.is_tensor(operand) and operand.dtype == torch.int32 else operand
-            for operand in (input_tensor_a, input_tensor_b)
-        )
+    input_tensor_a, input_tensor_b = _promoted_for_float_scalar(input_tensor_a, input_tensor_b)
     input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
     tensor_operand = _tensor_operand(input_tensor_a, input_tensor_b)
