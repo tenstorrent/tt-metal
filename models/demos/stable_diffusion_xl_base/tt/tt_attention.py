@@ -49,13 +49,10 @@ class TtAttention(LightweightModule):
         )
 
         sdpa_math_fidelity = ttnn.MathFidelity.LoFi
-        # Scope the higher fidelity to base-model Wormhole 1024 self-attention;
-        # refiner/VAE subclasses must retain their existing precision settings.
-        if (
-            type(model_config) is ModelOptimisations1024x1024
-            and self.is_self_attention
-            and module_path.startswith("up_blocks.0.")
-        ):
+        # Use higher fidelity for self-attention throughout the base Wormhole 1024
+        # model to reduce denoising error. Keep cross-attention and refiner/VAE
+        # subclasses on their existing precision settings.
+        if type(model_config) is ModelOptimisations1024x1024 and self.is_self_attention:
             sdpa_math_fidelity = ttnn.MathFidelity.HiFi2
 
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
