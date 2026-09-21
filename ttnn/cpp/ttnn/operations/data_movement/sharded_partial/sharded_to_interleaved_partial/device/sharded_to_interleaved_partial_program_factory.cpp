@@ -107,6 +107,7 @@ ProgramDescriptor ShardedToInterleavedPartialProgramFactory::create_descriptor(
     }
 
     // re-calculate end_core in the case shard grid is larger than used grid
+    std::optional<CoreRange> block_used_rect;
     if (shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED) {
         num_cores_unpadded = div_up(num_units_height, num_units_per_shard_height);
     } else if (shard_strategy == TensorMemoryLayout::WIDTH_SHARDED) {
@@ -115,13 +116,26 @@ ProgramDescriptor ShardedToInterleavedPartialProgramFactory::create_descriptor(
         } else {
             num_cores_unpadded = div_up(num_units_per_row, output_unit_size);
         }
+    } else if (shard_strategy == TensorMemoryLayout::BLOCK_SHARDED) {
+        uint32_t used_h = div_up(num_units_height, num_units_per_shard_height);
+        uint32_t used_w = (output.layout() == Layout::TILE)
+                              ? div_up(num_units_per_row, num_units_per_shard_width)
+                              : div_up(num_units_per_row, output_unit_size);
+        uint32_t used_x = rm_orientation ? used_w : used_h;
+        uint32_t used_y = rm_orientation ? used_h : used_w;
+        block_used_rect = CoreRange(CoreCoord(0, 0), CoreCoord(used_x - 1, used_y - 1));
+        num_cores_unpadded = used_x * used_y;
     }
-    end_core = cores[num_cores_unpadded - 1];
 
     // Create CoreRangeSet for only the cores that will be used (fixes NOC error when grid > data)
-    CoreRangeSet used_cores = num_cores_unpadded < num_cores
-                                  ? select_from_corerangeset(all_cores, 0, num_cores_unpadded - 1, rm_orientation)
-                                  : all_cores;
+    CoreRangeSet used_cores =
+        block_used_rect.has_value()
+            ? CoreRangeSet(*block_used_rect)
+            : (num_cores_unpadded < num_cores
+                   ? select_from_corerangeset(all_cores, 0, num_cores_unpadded - 1, rm_orientation)
+                   : all_cores);
+    const auto used_cores_list = corerange_to_cores(used_cores, std::nullopt, rm_orientation);
+    end_core = used_cores_list[num_cores_unpadded - 1];
 
     bool convert_df = input_cb_data_format != output_cb_data_format;
 
@@ -209,7 +223,7 @@ ProgramDescriptor ShardedToInterleavedPartialProgramFactory::create_descriptor(
     uint32_t curr_idx_w = 0;
 
     for (uint32_t core_idx = 0; core_idx < num_cores_unpadded; core_idx++) {
-        const auto& core = cores[core_idx];
+        const auto& core = used_cores_list[core_idx];
         uint32_t shard_height = num_units_per_shard_height;
         uint32_t shard_width = input.layout() == Layout::TILE ? num_units_per_shard_width : output_unit_size;
         if (input.layout() == Layout::TILE) {
