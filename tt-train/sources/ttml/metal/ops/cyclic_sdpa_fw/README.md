@@ -86,55 +86,62 @@ results, slower); `LAZY_TAU=<x>` sets the threshold.
 
 ## What to expect
 
-Accuracy first, since that is what this forward buys today. Against a
-Float32 host reference from bfloat16 inputs (`CyclicSdpaFwTest`, one chip):
+Accuracy first, since that is what this forward buys. Against a Float32
+host reference from bfloat16 inputs (`CyclicSdpaFwTest`, one chip):
 
 | | `cyclic_sdpa_fw` | `sdpa_fw` | ttnn's kernel with lse |
 |---|---|---|---|
-| output, relative RMS | 1.7e-3 to 2.0e-3 | 1.8e-3 to 3.3e-3 | 2.5e-2 to 3.2e-2 |
+| output, relative RMS | 1.6e-3 to 1.8e-3 | 1.8e-3 to 3.3e-3 | 2.5e-2 to 3.2e-2 |
 | lse, max absolute error | 4e-4 to 7e-4, independent of N | 1.7e-3 at N = 64, 5e-3 at 1024, 1e-2 at 2048 | 2.6e-2 |
 
 The output's error is the bfloat16 rounding of the result; the lse's is the
-exponential's and does not grow with the sequence, because every rescale
-factor is exact.
+19-bit rounding of the scores on their way into the exponential and does
+not grow with the sequence, because every rescale factor is exact and the
+lazy rescale changes nothing but the reference point.
 
 Speed, one p150, median of five (`CyclicSdpaBwTimingTest.DISABLED_CompareForwardsWithTtnn`
-and `CyclicSdpaFwTimingTest.DISABLED_TimeTheForward`), `Bt = 4`:
+and `CyclicSdpaFwTimingTest.DISABLED_TimeTheForward`), `Bt = 4`; the
+cyclic column varies by about 3% from run to run:
 
 | shape | `sdpa_fw` | `cyclic_sdpa_fw` | ttnn with lse (chunk 256) |
 |---|---|---|---|
-| 4/4 heads, 4096, d 64, causal | 1.01 ms | 1.90 ms | 0.54 ms |
-| 20/10 heads, 5632, d 64, causal | 7.38 ms | 6.97 ms (11.6 TFLOP/s) | 1.28 ms (63 TFLOP/s) |
-| 32/8 heads, 5632, d 128, causal | 22.3 ms | 19.9 ms (13.1 TFLOP/s) | 3.57 ms (73 TFLOP/s) |
+| 4/4 heads, 4096, d 64, causal | 1.01 ms | 0.77 ms | 0.54 ms |
+| 20/10 heads, 5632, d 64, causal | 7.38 ms | 3.75 ms (22 TFLOP/s) | 1.28 ms (63 TFLOP/s) |
+| 32/8 heads, 5632, d 128, causal | 22.3 ms | 8.1 ms (32 TFLOP/s) | 3.57 ms (73 TFLOP/s) |
 
 Eight chips, zigzag layout, direct shifts, the cyclic backward, forward
-time of one ring step (`LoudboxRingSDPATest.DISABLED_CompareStepTimes`):
+time of one ring step (`LoudboxRingSDPATest.DISABLED_CompareStepTimes`,
+`TTML_LOUDBOX_RING8=1`):
 
 | shape | `sdpa_fw` forward | cyclic forward | ttnn forward |
 |---|---|---|---|
-| 4/4 heads, 4096 rows/chip, d 64 | 10.3 ms | 21.7 ms | 28.8 ms |
-| 20/10 heads, 5632 rows/chip, d 64 | 66.8 ms | 61.4 ms (-8%) | 30.9 ms |
-| 32/8 heads, 5632 rows/chip, d 128 | 191 ms | 143 ms (-25%) | 40.6 ms |
+| 4/4 heads, 4096 rows/chip, d 64 | 10.2 ms | 12.7 ms | 29.9 ms |
+| 20/10 heads, 5632 rows/chip, d 64 | 66.8 ms | 43.3 ms (-35%) | 32.9 ms |
+| 32/8 heads, 5632 rows/chip, d 128 | 191 ms | 93 ms (-51%) | 40.7 ms |
 
 In training (`training_shakespeare_nanollama3_cp8_char.yaml`, 20/10
 heads, 45056 tokens over 8 chips, zigzag, direct shifts, the cyclic
 backward in place, 40 steps): the losses match the ttnn-forward run step
 for step (2.7676 at step 10, 2.5176 at 20, 2.4922 at 30, 2.4688 against
-2.4707 at 40) at 534 ms a step against 412 ms with `cp_forward: ttnn`
-(1875 ms with the original two-pass ring).
+2.4707 at 40) at 462 ms a step against 412 ms with `cp_forward: ttnn`
+and 534 ms with this kernel's first version (1875 ms with the original
+two-pass ring).
 
-So: as accurate as the ring's driver could want, a little faster than
-`sdpa_fw` at the model shapes, and two to three and a half times slower
-than ttnn's kernel. The kernel is the first version; where its time goes
-at the 20/10 shape (10 ms before the exponential was replaced): the
-exponential 4.3 ms (now ~1.2), the statistics passes 2.6 ms, everything
-else -- the two matmuls, the packs and the relay -- 2.7 ms against ttnn's
-1.3 ms for the whole launch. The backward kernel reaches 44 TFLOP/s per
-chip on the same relay with the same block height; what it does that this
-kernel does not yet: the pack thread's SFPU overlapped with the FPU, groups
-of two key tiles in a half-synchronised destination file, no per-stage
-round trips of the statistics. `TTML_CYCLIC_FW_EXPERIMENT=NO_EXP,NO_STATS,...`
-switches stages off for timing (the results are then wrong).
+So: as accurate as the ring's driver could want, half of `sdpa_fw`'s time
+at the model shapes, and 2.3 to 3 times slower than ttnn's kernel on
+one chip (1.3 to 2.3 in the ring, where the relay's overlap helps). Where
+the time goes at the 20/10 shape, per timestep of a core (15.5 us; the
+device profile, `CyclicSdpaFwProfileTest`): the exponential 4 us on the
+vector unit, the two matmuls about 7 us on the FPU at HiFi3 (HiFi2 would
+save a fifth but costs the accuracy edge: lse 1.2e-3, output 3.4e-3),
+the block maximum and its check 3 us, the rest synchronisation. The
+probabilities, sums and output products of one query tile run while the
+next tile's exponential runs; the scores of the next timestep do not, and
+that overlap -- worth perhaps a fifth -- is the next item.
+`TTML_CYCLIC_FW_EXPERIMENT=NO_EXP,NO_STATS,...` switches stages off for
+timing (the results are then wrong); `NO_LAZY`, `LAZY_TAU=<x>` and
+`EXP_GUARD=<0|1|2>` are exact-result variants (0 is not: no underflow
+guard).
 
 ## Testing
 
