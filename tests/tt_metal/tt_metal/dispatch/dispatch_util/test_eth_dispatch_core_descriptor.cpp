@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
-#include <cstdlib>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -24,9 +23,9 @@ namespace tt::tt_metal {
 // Regression test for the ETH dispatch core descriptor on chips whose logical ethernet grid is smaller than the
 // descriptor's `dispatch_cores` list.
 //
-// UMD numbers a chip's logical ETH cores over its unharvested ethernet channels only. Blackhole always harvests 2
-// of its 14 ethernet channels, so every Blackhole exposes the logical ETH cores (0,0)..(0,11), while
-// blackhole_140_arch_eth_dispatch.yaml lists (0,0)..(0,13). Without the existence check in
+// UMD numbers a chip's logical ETH cores over its unharvested ethernet channels only. An ethernet-capable Blackhole
+// part (p150) has 2 of its 14 channels harvested and exposes the logical ETH cores (0,0)..(0,11); an ethernet-less
+// part (p100) exposes none. blackhole_140_arch_eth_dispatch.yaml lists (0,0)..(0,13). Without the existence check in
 // MetalEnvImpl::get_core_descriptor_config, the two missing cores reach L1BankingAllocator::generate_config, whose
 // logical-to-virtual translation throws
 //     "No core coordinate found at location: (0, 12, ETH, LOGICAL)"
@@ -39,10 +38,10 @@ namespace tt::tt_metal {
 class EthDispatchCoreDescriptorTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
+        env_ = &MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+        if (!env_->get_rtoptions().get_fast_dispatch()) {
             GTEST_SKIP() << "The core descriptor reserves no dispatch cores in slow dispatch mode";
         }
-        env_ = &MetalEnvAccessor(MetalContext::instance().get_env()).impl();
         const tt::ARCH arch = env_->get_cluster().arch();
         if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "No ETH dispatch core descriptor for arch " << tt::arch_to_str(arch);

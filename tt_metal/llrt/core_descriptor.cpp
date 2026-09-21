@@ -283,8 +283,9 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
         logical_active_eth_cores = get_control_plane().get_active_ethernet_cores(device_id);
     }
     // The logical ETH cores this chip actually has. UMD numbers them 0..N-1 over the unharvested ethernet channels
-    // only (Blackhole always harvests 2 of its 14 channels), so an ETH dispatch descriptor written for the full
-    // ethernet grid can name logical cores that do not exist on this chip and cannot be translated.
+    // only (an ethernet-capable Blackhole has 12 of its 14 channels, an ethernet-less part such as the p100 has none),
+    // so an ETH dispatch descriptor written for the full ethernet grid can name logical cores that do not exist on
+    // this chip and cannot be translated.
     const auto& logical_eth_cores = soc_desc.logical_eth_core_to_chan_map;
 
     dispatch_cores.reserve(desc_yaml[dispatch_cores_string].size());
