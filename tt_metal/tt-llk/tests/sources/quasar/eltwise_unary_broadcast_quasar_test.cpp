@@ -179,14 +179,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        if (is_fp32_dest_acc_en && static_cast<DataFormat>(formats.pack_src) == DataFormat::Int32)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
-        }
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+
         if constexpr (unpack_to_dest)
         {
             _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(math_format, math_format);
@@ -268,7 +262,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const Operand& buffer_Res                 = params.buffer_Res;
 #endif
-
 
     {
         ZONE_SCOPED("INIT")

@@ -133,16 +133,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
 
         const DataFormat math_format = static_cast<DataFormat>(formats.math);
-        constexpr bool is_int_reduce = (REDUCE_MATH_FORMAT == DataFormat::Int32);
-
-        if constexpr (is_int_reduce)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
-        }
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
 
         _llk_math_eltwise_sfpu_init_();
         ckernel::sfpu::init_reduce<POOL_TYPE, REDUCE_MATH_FORMAT, is_fp32_dest_acc_en>();

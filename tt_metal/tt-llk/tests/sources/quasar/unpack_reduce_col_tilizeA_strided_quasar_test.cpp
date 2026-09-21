@@ -128,21 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         DataFormat math_format = static_cast<DataFormat>(formats.math);
-        if constexpr (is_fp32_dest_acc_en)
-        {
-            if (static_cast<DataFormat>(formats.pack_src) == DataFormat::Int32)
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-            }
-            else
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-            }
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        }
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
 
         _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(tensor_shape);
         PROFILER_SYNC();

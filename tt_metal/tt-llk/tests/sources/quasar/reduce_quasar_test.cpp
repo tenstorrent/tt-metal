@@ -115,14 +115,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        if (use_int32_dest_alu)
-        {
-            _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, false /* fp32 dest */, true /* int32 dest */>(src_format, src_format);
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* int32 dest */>(src_format, src_format);
-        }
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
 
         if (is_int_fpu_en)
         {
