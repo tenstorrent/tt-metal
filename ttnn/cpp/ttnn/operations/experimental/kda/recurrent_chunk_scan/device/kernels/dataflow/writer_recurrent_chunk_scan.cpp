@@ -108,31 +108,35 @@ FORCE_INLINE void write_recurrent(
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary, uint32_t has_actual_end>
 TT_KERNEL void writer(uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t group) {
-    uint32_t split_group = 0;
-    uint32_t split_in_group = 0;
-    bool local_split = false;
+    kda_chronology::Topology topology{};
+    uint32_t groups = 0;
     uint32_t valid_chunks = num_chunks;
-    uint32_t final_head = head;
     if constexpr (summary || has_actual_end) {
         DataflowBuffer chronology(*dfb::get_token_if_present<"chronology_writer">());
         chronology.wait_front(1);
-        auto topology = kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_read_ptr()));
+        topology = kda_chronology::load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chronology.get_read_ptr()));
         chronology.pop_front(1);
-        uint32_t groups = topology.local_rows / tt::constants::TILE_HEIGHT / num_chunks;
-        split_group = topology.split_group(groups);
-        split_in_group = topology.split_in_group(groups);
-        local_split = topology.has_valid_tail();
+        groups = topology.local_rows / tt::constants::TILE_HEIGHT / num_chunks;
         valid_chunks = topology.valid_chunks(group, groups);
         if (valid_chunks == 0) {
             return;
         }
-        if (group + 1 == topology.active_groups(groups)) {
-            final_head = head - group + groups - 1;
-        }
     }
     if constexpr (summary) {
-        write_summary<Kt, Vt, Vt_full>(head, value_block, group, split_group, split_in_group, local_split);
+        write_summary<Kt, Vt, Vt_full>(
+            head,
+            value_block,
+            group,
+            topology.split_group(groups),
+            topology.split_in_group(groups),
+            topology.has_valid_tail());
     } else {
+        uint32_t final_head = head;
+        if constexpr (has_actual_end) {
+            if (group + 1 == topology.active_groups(groups)) {
+                final_head = head - group + groups - 1;
+            }
+        }
         write_recurrent<Ct, Kt, Vt, Vt_full>(head, value_block, num_chunks, valid_chunks, final_head);
     }
 }

@@ -409,9 +409,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         run_args.tensor_args.emplace(q_decay_tensor_name, q_decay_tensor);
         run_args.tensor_args.emplace(intra_tensor_name, intra_tensor);
         run_args.tensor_args.emplace(group_entry_states_tensor_name, in.group_entry_states->mesh_tensor());
-        {
-            run_args.tensor_args.emplace(tail_entry_states_tensor_name, in.tail_entry_states->mesh_tensor());
-        }
+        run_args.tensor_args.emplace(tail_entry_states_tensor_name, in.tail_entry_states->mesh_tensor());
     }
 
     if (summary) {
