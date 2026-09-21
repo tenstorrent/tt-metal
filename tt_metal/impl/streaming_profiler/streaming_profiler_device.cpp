@@ -27,8 +27,6 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>  // MeshCoreCoord
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/chip_helpers/tlb_manager.hpp>
-#include <umd/device/types/tlb.hpp>
 
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -151,32 +149,6 @@ DeviceClock sync_device_clock(tt::Cluster& cluster, uint32_t chip_id, const Core
         steady_now_ns() -
         static_cast<int64_t>(static_cast<double>(profiler_ticks_now() - static_cast<int64_t>(hx)) * ns_per_tick);
     return out;
-}
-
-// A static TLB window skips UMD's per-access reconfigure on the socket's ack write (171 vs 382 ns). Metal
-// maps a window per DRAM channel only on the channel's preferred worker endpoint port (configure_static_tlbs
-// -> ddr_to_noc0) and the relay sits on the unused port, so it maps its own: 2 MB at address 0 spans the whole
-// 128 KB DRISC L1. Best-effort: windows are finite, and losing the race costs only the ~210 ns.
-void configure_relay_static_tlb(tt::Cluster& cluster, uint32_t device_id, const CoreCoord& drisc_virtual) {
-    if (cluster.is_mock_or_emulated()) {
-        return;
-    }
-    auto* tlb_manager = cluster.get_driver()->get_chip(device_id)->get_tlb_manager();
-    const tt_xy_pair tlb_core(drisc_virtual.x, drisc_virtual.y);
-    if (tlb_manager->is_tlb_mapped(tlb_core)) {
-        return;
-    }
-    try {
-        tlb_manager->configure_tlb(tlb_core, /*tlb_size=*/2 * 1024 * 1024, /*address=*/0, tt::umd::tlb_data::Strict);
-    } catch (const std::exception& e) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] could not configure a static TLB for DRISC core ({}, {}): {} "
-            "-- the socket ack write stays on the dynamic path",
-            tlb_core.x,
-            tlb_core.y,
-            e.what());
-    }
 }
 
 // A resident relay launches fire-and-forget, so a core that never leaves reset produces no error and the
@@ -515,8 +487,6 @@ bool Devices::launch_relay(
         tt::umd::CoreCoord(translated.x, translated.y, CoreType::DRAM, CoordSystem::TRANSLATED), CoordSystem::NOC0);
     relay.virt = ctx.device->virtual_core_from_logical_core(relay.logical, CoreType::DRAM);
     const tt_cxy_pair drisc(chip, relay.virt);
-
-    configure_relay_static_tlb(cluster, chip, relay.virt);
 
     try {
         auto socket = std::make_unique<distributed::D2HSocket>(
