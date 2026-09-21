@@ -26,7 +26,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc, profiler, skip_for_blackhole
+from models.common.utility_functions import comp_pcc, profiler
 from models.demos.gpt_oss.tests.test_factory import TestFactory
 from models.demos.gpt_oss.tt.mlp import MLP
 from models.demos.gpt_oss.utils.general_utils import throughput_experts_supported_on_arch
@@ -356,7 +356,6 @@ def _skip_single_device_ccl():
     ],
     indirect=True,
 )
-@skip_for_blackhole("gpt_oss_moe multi-device test exclusively exercises throughput experts, unsupported on Blackhole")
 def test_gpt_oss_moe(
     mode,
     seq_len,

@@ -7,13 +7,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.common import gather_cos_sin, precompute_freqs, rope_scaling_model_factory
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 from models.tt_transformers.tt.rope import RotarySetup
 
 from ...tt.layer import DecoderLayer
-from ...utils.general_utils import throughput_experts_supported_on_arch
+from ...utils.general_utils import fused_moe_kernels_supported_on_arch, throughput_experts_supported_on_arch
 from ..test_factory import TestFactory, compare_tensors, parametrize_batch_seq, parametrize_mesh_with_fabric
 
 
@@ -725,12 +724,6 @@ def test_decoder(
             "Only batch size 1 is supported for mesh shape without row-sharding."
         )
 
-    if is_blackhole() and mesh_device.shape[0] > 1 and batch_size * seq_len > 1:
-        pytest.skip(
-            f"Skipping batch={batch_size} seq_len={seq_len} on Blackhole {tuple(mesh_device.shape)}: "
-            "this configuration uses throughput experts which are not supported on Blackhole."
-        )
-
     assert batch_size == 1 or seq_len == 1, "Only single user prefill or single token decode is supported"
     is_decode = seq_len == 1
     mode = "decode" if is_decode else "prefill"
@@ -911,7 +904,14 @@ def test_decoder(
             logger.info("Router test only runs in decode mode (seq_len=1). Skipping...")
 
     if should_test("fused_experts"):
-        if decoder_layer.mlp.use_throughput_experts and is_decode and is_row_sharded:
+        # The fused variant builds its own moe_gpt config, which requires the
+        # Wormhole 12-DRAM-bank layout; Blackhole runs the dense flow instead.
+        if (
+            decoder_layer.mlp.use_throughput_experts
+            and is_decode
+            and is_row_sharded
+            and fused_moe_kernels_supported_on_arch()
+        ):
             logger.info(f"Testing Fused Throughput Experts for mesh shape {tuple(mesh_device.shape)}...")
             hidden_states_throughput_experts = hidden_states.reshape(1, 1, batch_size * seq_len, -1)
             run_fused_throughput_experts_component(
@@ -1229,12 +1229,6 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, num_layers
     if mesh_shape[0] == 1 and batch_size > 1:
         pytest.skip(
             f"Skipping batch size {batch_size} for mesh shape {mesh_shape}. Only batch size 1 is supported when mesh rows = 1."
-        )
-
-    if is_blackhole() and batch_size > 32 and mesh_device.shape[0] > 1:
-        pytest.skip(
-            f"Skipping batch={batch_size} on Blackhole {tuple(mesh_device.shape)}: row-sharded batches "
-            "use throughput experts which are not supported on Blackhole."
         )
 
     is_decode = mode == "decode"
