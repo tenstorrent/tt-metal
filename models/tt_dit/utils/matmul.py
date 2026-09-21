@@ -372,20 +372,6 @@ def get_matmul_core_grid(mesh_device):
     return core_grid
 
 
-def get_sdpa_core_grid(mesh_device):
-    """The rail cap applied to a non-matmul compute grid (SDPA, and any op handed the whole device).
-
-    Same constraint and same clamp as :func:`get_matmul_core_grid`: what the rail cannot sustain is
-    every Tensix drawing at once, and the op issuing the work does not change that. Separate name
-    because the callers are not matmuls and reading `get_matmul_core_grid` at an SDPA site looks
-    like a copy-paste rather than the deliberate reuse it is.
-
-    NOT for op-config *lookup keys* -- `get_fused_mmrs_config` is keyed on the true device grid, and
-    handing it a clamped one misses the table and lands on a far slower default.
-    """
-    return get_matmul_core_grid(mesh_device)
-
-
 def agmm_worker_grid(full_grid, transpose):
     """all_gather_minimal_matmul_async matmul worker grid, sized to leave the mux axis free.
 

@@ -21,7 +21,6 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import tensor
-from ...utils.matmul import get_sdpa_core_grid
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -561,7 +560,7 @@ class Qwen3VlAttention(Module):
         return x
 
     def _sdpa_program_config(self, seq_len: int) -> ttnn.SDPAProgramConfig:
-        grid_size = get_sdpa_core_grid(self._device)
+        grid_size = self._device.compute_with_storage_grid_size()
 
         seq_len = -(-seq_len // 32) * 32
         chunk_size = min(seq_len, SEQ_BUCKET_SIZE)  # flash q/k tiling; SDPA handles a partial last chunk

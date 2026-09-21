@@ -43,7 +43,7 @@ import ttnn
 from ....layers.linear import Linear
 from ....layers.module import Module, ModuleList, Parameter
 from ....layers.normalization import LayerNorm, RMSNorm
-from ....utils.matmul import get_matmul_config, get_matmul_core_grid, get_sdpa_core_grid
+from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.tensor import bf16_tensor
 from .blockings_minimax_h3_vae import register_h3_vae_decoder_blockings
@@ -118,7 +118,7 @@ class MiniMaxH3ViTAttention(Module):
         # resolve it. q=k=192 with HiFi2 is ~2.95x the default blocking, 128 is slightly worse,
         # and 256 and above hang the sweep. SDPA is ~40 % of layer device time.
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=get_sdpa_core_grid(mesh_device),
+            compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
             q_chunk_size=192,
             k_chunk_size=192,
             exp_approx_mode=False,  # False is more correct, matching wan/ltx
