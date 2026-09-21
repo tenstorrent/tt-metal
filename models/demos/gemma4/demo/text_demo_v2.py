@@ -670,8 +670,10 @@ def run_demo_text(
     # Iteration 0 is the decode compile step — exclude from the steady-state average.
     steady_iters = max(iteration - 1, 1)
     total_decode = sum(profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, iteration))
+    total_prefill_tokens = sum(prefill_lens)
     ttft_ms = total_prefill * 1000
     amortized_prefill_ms = total_prefill / batch_size * 1000
+    prefill_tps = total_prefill_tokens / total_prefill if total_prefill > 0 else 0
     decode_tps_u = steady_iters / total_decode if total_decode > 0 else 0
     decode_tps = decode_tps_u * batch_size
 
@@ -679,6 +681,8 @@ def run_demo_text(
     logger.info("=== Performance metrics ===")
     logger.info(f"Prompt tokens: {prefill_lens[0]}, generated tokens: {iteration}")
     logger.info(f"Time to First Token (TTFT): {ttft_ms:.1f} ms")
+    if prefill_tps > 0:
+        logger.info(f"Prefill: {prefill_tps:.2f} tok/s ({total_prefill_tokens} tokens in {total_prefill:.2f} s)")
     if batch_size > 1:
         logger.info(f"Amortized prefill/user: {amortized_prefill_ms:.1f} ms")
     if decode_tps_u > 0:
@@ -700,6 +704,7 @@ def run_demo_text(
             "inference_decode": total_decode,
             "prefill_time_to_token": total_prefill,
             "prefill_time_to_token_per_user_amortized": total_prefill / batch_size,
+            "prefill_t/s": prefill_tps,
             "decode_t/s/u": decode_tps_u,
             "decode_t/s": decode_tps,
             "Full demo runtime": profiler.get_duration("run"),

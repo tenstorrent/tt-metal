@@ -367,11 +367,21 @@ def decode_1d_matmul_config(mesh_device, k, n, m=TILE_SIZE):
     return program_config, compute_kernel_config
 
 
-def activation_memcfg(k):
-    """WIDTH_SHARDED L1 activation config for a [*, k] activation."""
-    k_tiles = k // TILE_SIZE
-    rows, cols = _find_grid(k_tiles)
-    num_cores = rows * cols
+def activation_memcfg(k, n):
+    """WIDTH_SHARDED L1 activation config matching ``decode_progcfg``'s core grid.
+
+    MUST use ``_decode_core_grid(k, n)`` — the grid dividing BOTH K and N tiles —
+    and not a K-only grid. ``decode_progcfg`` derives ``in0_block_w`` from
+    ``k_tiles / num_cores`` on that same grid, and the matmul kernel asserts that
+    ``in0_block_w`` and the activation's shard width divide one another. Two
+    different core counts silently break that: E4B ``down_proj`` at TP=2
+    (k=5120, n=2560) picks 32 cores on a K-only grid (shard 5 tiles) but 40 on
+    the K/N grid (``in0_block_w=2``), and 5 and 2 divide neither way ->
+    "shard_shape[1] / in0_tile.get_width() (5) and in0_block_w (2) must divide
+    one another". ``can_dram_shard`` gates on the K/N grid too, so it cannot
+    catch a mismatch introduced here.
+    """
+    rows, cols, num_cores = _decode_core_grid(k, n)
     return ttnn.create_sharded_memory_config(
         shape=(TILE_SIZE, k // num_cores),
         core_grid=ttnn.CoreGrid(x=cols, y=rows),
@@ -1208,7 +1218,7 @@ class DramShardedLinear:
             cache_file_name=cache_file_name,
             memory_config=weight_memcfg(k, n),
         )
-        self._act_memcfg = activation_memcfg(k)
+        self._act_memcfg = activation_memcfg(k, n)
         self._decode_pc = decode_progcfg(TILE_SIZE, k, n, dtype=dtype)
 
     def _prefill_pc(self, m):
