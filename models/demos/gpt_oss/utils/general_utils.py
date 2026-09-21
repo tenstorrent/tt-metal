@@ -6,6 +6,8 @@
 General utilities for the GPT-OSS demo.
 """
 
+import os
+
 from models.common.utility_functions import is_blackhole
 
 
@@ -32,7 +34,15 @@ def throughput_experts_supported_on_arch():
     ops (all_to_all_dispatch, matmul, all_to_all_combine, all_reduce), none of which carry
     arch-specific assumptions. The *fused* variant of this path is a separate question --
     see fused_moe_kernels_supported_on_arch().
+
+    Set GPT_OSS_LOW_LATENCY_EXPERTS=1 to force the sparse_matmul (low-latency) expert path
+    instead, at any batch. On Blackhole the throughput path runs its *dense* flow, which
+    computes every token through every local expert and brackets the CCL ops with
+    tilize/untilize; the sparse path does neither. Which one wins at a given batch is a
+    measurement, so this knob exists to make the A/B cheap.
     """
+    if os.getenv("GPT_OSS_LOW_LATENCY_EXPERTS") == "1":
+        return False
     return True
 
 
