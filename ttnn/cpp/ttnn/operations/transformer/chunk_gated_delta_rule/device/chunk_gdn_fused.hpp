@@ -43,6 +43,10 @@ struct ChunkGdnFusedParams {
     // credits). Read from QWEN_GDN_NP at attrs construction (never in the factory — this field
     // being hashed is what keeps the program cache honest) and clamped to num_chunks.
     uint32_t np = 1;
+    // Receivers per head (NV): a head's NV receiver cores form a 1xNV row rectangle and each carries a
+    // V-slice of Vt/NV tiles (the phased scan's V-block split, fed over the NoC). Read from QWEN_GDN_NV
+    // at attrs construction (hashed); default 1 until the cost model (Phase 2) chooses it.
+    uint32_t nv = 1;
     bool has_initial_state = false;
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -81,9 +85,9 @@ struct ChunkGdnFusedOperation {
 };
 
 // Returns {o [BH,NC,C,V] fp32, final_state [BH,K,V] fp32} — exactly the scan prim's output specs.
-// Needs BH*(1+NP) cores (NP producers + one receiver per head; NP defaults to 1 and is an
-// explicit QWEN_GDN_NP opt-in); validate FATALs otherwise, so the op-level dispatch must gate on
-// grid size before choosing this path.
+// Needs BH*(NV+NP) cores (NP producers + NV receivers per head; both default to 1 and are explicit
+// QWEN_GDN_NP / QWEN_GDN_NV opt-ins) and BH <= (grid.x / NV) * grid.y receiver row rectangles;
+// validate FATALs otherwise, so the op-level dispatch must gate on grid size before choosing this path.
 std::vector<Tensor> chunk_gdn_fused(
     const Tensor& q,
     const Tensor& k,
