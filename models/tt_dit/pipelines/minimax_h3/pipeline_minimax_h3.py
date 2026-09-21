@@ -202,7 +202,9 @@ MODEL_NAME = "minimax-h3"
 # canvas ceiling with two keyframes and a full 3008-token prompt (~120.2k). The top rung is the
 # admission cap: a longer request raises, it is not served untraced. A property of the sequence-length
 # envelope rather than of the mesh, hence a module default and a constructor knob, not a preset.
-MINIMAX_H3_BUCKET_LADDER = (22528, 31744, 44032, 61440, 86016, 120832)
+# 32768 and 45056 replace 31744/44032: VSA needs `sp_factor * 64` (2048 at SP=32) so no 64-token tile
+# straddles an SP shard; both remain 1024-aligned, so the dense path is unaffected.
+MINIMAX_H3_BUCKET_LADDER = (22528, 32768, 45056, 61440, 86016, 120832)
 
 # ref2va shares the machinery but not the envelope: reference rows (up to 9 images and 3 video clips)
 # push the packed length far past t2va's. The ladder runs from the smallest measured case (~46k, one
@@ -297,6 +299,9 @@ class _BucketState:
     tsi: StateTensor = field(default_factory=StateTensor)  # same
     assembly_idx: StateTensor = field(default_factory=StateTensor)  # [1, 1, 1, rung] int32, replicated
     warm: bool = False  # this rung has had its untraced pass; its next traced call may capture
+    # VSA coarse stage: one per rung, built on the untraced pass and never rebuilt (the rung's trace
+    # bakes its buffers). Its per-request content rebinds each request; see `bind_request`.
+    vsa_stage: object | None = None
 
 
 # Per-mesh-shape defaults, following `pipelines/wan/pipeline_wan.py`'s `_PRESETS_BH`. An unlisted
@@ -475,8 +480,6 @@ class MiniMaxH3Pipeline:
         self.lora_strength = 1.0 if lora_strength is None else float(lora_strength)
         self._lora_entries = None
         self._lora_report = None
-        self._vsa_stage = None
-        self._vsa_signature = None
         # Diagnostic VAE knobs (accepted for parity with the timing tests; base defaults match).
         self.vae_stitch_exchange = vae_stitch_exchange
         self.vae_profile = bool(vae_profile)
@@ -561,9 +564,19 @@ class MiniMaxH3Pipeline:
         # beyond the top rung or any cap raises), both default to the task's envelope, both validated
         # now that the SP alignment is known.
         self.bucket_ladder = tuple(bucket_ladder if bucket_ladder is not None else default_bucket_ladder(task))
-        validate_bucket_ladder(self.bucket_ladder, self.sp_factor * ttnn.TILE_SIZE)
+        # VSA tiles are 64 tokens and none may straddle an SP shard, so a VSA-served rung aligns to
+        # `sp_factor * 64` rather than the dense path's `sp_factor * TILE_SIZE`.
+        ladder_alignment = self.sp_factor * (64 if self.vsa_config is not None else ttnn.TILE_SIZE)
+        validate_bucket_ladder(self.bucket_ladder, ladder_alignment)
         self.arena_caps = arena_caps or MiniMaxH3ArenaCaps.for_task(task)
         self.arena_caps.validate()
+        # VSA reserves the full prefix envelope as fixed exempt slots so the exempt/candidate split is
+        # constant per rung; each prefix segment tiles to at most ceil(cap / 64) exempt tiles.
+        if self.vsa_config is not None:
+            caps = self.arena_caps
+            self._vsa_exempt_tiles = sum(
+                -(-rows // 64) for rows in (caps.prompt, caps.condition_video_rows, caps.audio_rows)
+            )
         # The two admission checks must agree: a request that passes every cap must also fit the top
         # rung, or it would clear cap admission and then fail bucket selection at serving time. The
         # default cap/ladder pairs satisfy this; a custom pairing that does not is a config error.
@@ -1462,11 +1475,12 @@ class MiniMaxH3Pipeline:
         """Build the request's VSA tile geometry and bind one shared coarse stage to the model.
 
         v0 supports the standard `[text | cond | audio | video]` packing (t2va / fl2va): condition
-        keyframes are one 1D exempt segment. Cached per geometry signature so repeated requests at
-        one shape re-upload nothing.
+        keyframes are one 1D exempt segment. The rung is chosen on exempt + video tiles and its
+        exempt/candidate split is fixed, so the stage is built once per `_BucketState` and rebound
+        per request; capture reuses the same object rather than constructing a new one.
         """
         from ...models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSACoarseStage
-        from .vsa_geometry import build_vsa_geometry
+        from .vsa_geometry import VSA_TILE_TOKENS, build_vsa_geometry, video_tile_valid_counts
 
         if layout.num_condition_audio_rows:
             raise NotImplementedError("VSA v0 supports t2va/fl2va layouts only (no audio condition rows)")
@@ -1482,28 +1496,39 @@ class MiniMaxH3Pipeline:
                 f"sequence length {layout.sequence_length}"
             )
 
-        signature = (n_text, n_cond, n_audio, grid, self.vsa_config)
-        if self._vsa_signature != signature:
-            geometry = build_vsa_geometry(
-                (n_text, n_cond, n_audio), grid, sp_factor=self.sp_factor, placement=self.vsa_config.placement
-            )
-            self._vsa_stage = MiniMaxH3VSACoarseStage(
+        # The exempt/candidate split is constant per rung, so the rung must reserve the full exempt
+        # envelope and hold this request's video tiles. Cube tiling makes the tile count exceed
+        # rows/64, so the rung is chosen on tiles, not rows.
+        exempt_tiles = self._vsa_exempt_tiles
+        n_video_tiles = int(video_tile_valid_counts(grid).numel())
+        rung = self._select_bucket((exempt_tiles + n_video_tiles) * VSA_TILE_TOKENS)
+        geometry = build_vsa_geometry(
+            (n_text, n_cond, n_audio),
+            grid,
+            sp_factor=self.sp_factor,
+            placement=self.vsa_config.placement,
+            exempt_tiles=exempt_tiles,
+            total_tiles=rung // VSA_TILE_TOKENS,
+        )
+        state = self._buckets.setdefault(rung if self.bucket_denoise else 0, _BucketState())
+        if state.vsa_stage is None:
+            state.vsa_stage = MiniMaxH3VSACoarseStage(
                 geometry,
                 sparsity=self.vsa_config.sparsity,
                 padded_pooling=self.vsa_config.padded_pooling,
                 head_dim=self.transformer_config["attention_head_dim"],
+                num_heads=self.transformer_config["num_attention_heads"] // self.tp_factor,
                 mesh_device=self.mesh_device,
                 sp_axis=self.sp_axis,
                 ccl_manager=self.ccl_manager,
             )
-            self._vsa_signature = signature
             logger.info(
-                f"VSA geometry: {geometry.n_tiles} tiles ({geometry.n_pad_tiles} pad), "
-                f"k={self._vsa_stage.k} of {self._vsa_stage.n_candidates} candidates, "
+                f"VSA rung {rung}: {geometry.n_tiles} tiles, {exempt_tiles} exempt, "
+                f"k={state.vsa_stage.k} of {geometry.candidate_capacity} candidates, "
                 f"placement={self.vsa_config.placement}"
             )
-        transformer.set_vsa_stage(self._vsa_stage)
-        return self._vsa_stage.geometry
+        transformer.set_vsa_stage(state.vsa_stage)
+        return geometry
 
     @property
     def patch_size(self) -> tuple[int, int, int]:
@@ -2811,6 +2836,11 @@ class MiniMaxH3Pipeline:
         traced = self.trace_denoise and state.warm
         if self.trace_denoise and not state.warm:
             self.release_traces()
+
+        # VSA's per-request coarse-stage buffers, refreshed like the rest of the rung's device state:
+        # bound on the untraced pass, same-shape copy when traced (a repeated request shape is a no-op).
+        if geometry is not None:
+            state.vsa_stage.bind_request(geometry, traced=traced)
 
         # Per-request-constant device state, updated once now that the trace decision is made: the
         # rung-shaped tensors in this rung's `_BucketState`, the capacity-shaped arenas and index

@@ -34,6 +34,7 @@ import ttnn
 
 from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS, MiniMaxH3VSAGeometry
 from ....utils.tensor import from_torch
+from ....utils.tracing import StateTensor
 
 VSA_INDEX_SENTINEL = 0xFFFFFFFF
 _TOPK_K_MULTIPLE = 16  # ttnn.experimental.topk_large_indices wants k % 16 == 0, k in [16, 2048]
@@ -87,7 +88,15 @@ def _round_up(value: int, multiple: int) -> int:
 
 
 class MiniMaxH3VSACoarseStage:
-    """Uploads the static geometry tensors once; `__call__` runs the coarse stage on device."""
+    """Coarse VSA stage for one ladder rung.
+
+    Rung-constant tensors (broadcast, pad/exempt/blend-keep structure) upload in `__init__`. The
+    per-request content -- averaging matrices, candidate mask, block counts, dense blend -- lives in
+    `StateTensor`s that `bind_request` refreshes: the rung's trace bakes the addresses `__call__`
+    reads, so a new request copies into the same buffers rather than allocating fresh ones. `k` and
+    every device shape derive from the geometry's rung structure (fixed across requests), so the
+    stage is built once per bucket and reused for every request that lands on it.
+    """
 
     def __init__(
         self,
@@ -96,6 +105,7 @@ class MiniMaxH3VSACoarseStage:
         sparsity: float,
         padded_pooling: bool = False,
         head_dim: int,
+        num_heads: int,
         mesh_device: ttnn.MeshDevice,
         sp_axis: int,
         ccl_manager=None,
@@ -103,6 +113,7 @@ class MiniMaxH3VSACoarseStage:
         self.geometry = geometry
         self.sparsity = sparsity
         self.head_dim = head_dim
+        self.num_heads = num_heads
         self.mesh_device = mesh_device
         self.sp_axis = sp_axis
         self.ccl_manager = ccl_manager
@@ -111,30 +122,20 @@ class MiniMaxH3VSACoarseStage:
         tiles_per_shard = geometry.tiles_per_shard
         rows_per_shard = tiles_per_shard  # one selection row per 64-token q tile
         exempt_ids = torch.nonzero(geometry.is_exempt, as_tuple=False).reshape(-1)
-        real_ids = torch.nonzero(geometry.valid_counts > 0, as_tuple=False).reshape(-1)
         self.n_exempt = int(exempt_ids.numel())
-        self.n_candidates = int(geometry.is_candidate.sum())
+        self.n_candidates = geometry.candidate_capacity  # rung-constant top-k denominator
         self.k = compute_topk(sparsity, self.n_candidates)
         self.k_pad = max(_TOPK_K_MULTIPLE, _round_up(self.k, _TOPK_K_MULTIPLE))
         # Index width: global tile count, padded so W*4 bytes meets DRAM row alignment and the
         # static row layout [exempt | top-k | sentinel tail] fits.
         self.index_width = _round_up(max(n_tiles, self.n_exempt + self.k), _TOPK_K_MULTIPLE)
 
-        # --- averaging matrices, sharded: shard s owns the diagonal block of A^T ---
-        matrix = geometry.averaging_matrix()  # [n_tiles, padded_len] fp64->fp32
-        rows_local = geometry.padded_len // geometry.sp_factor
-        blocks = [
-            matrix[s * tiles_per_shard : (s + 1) * tiles_per_shard, s * rows_local : (s + 1) * rows_local].T
-            for s in range(geometry.sp_factor)
-        ]
-        a_t = torch.cat(blocks, dim=0)  # [padded_len, tiles_per_shard]
-        # Padded pooling: pad each shard's tile axis to a power of two >= 32 (zero columns) so the
+        # Padded pooling pads each shard's tile axis to a power of two >= 32 (zero columns) so the
         # pooled K^T / V gathers are tile-aligned (the CCL otherwise falls back to a broadcast+concat
         # composite, ~1.6 ms per block at 15 s). Scores/top-k then run in the padded per-shard
         # numbering (shard j, slot s -> j * slots + s); vsa_sdpa maps ids back (coarse_slots_shift).
-        # A keyframe condition (fl2va/ref2va) pushes the exempt tile count past the kernel's raw
-        # prefix, so those shapes assemble indices on host; padded pooling rides on raw selection
-        # (the kernel is what maps padded ids back), so it has to stand down together with it.
+        # An exempt-tile count past the kernel's raw prefix assembles indices on host; padded pooling
+        # rides on raw selection (the kernel maps padded ids back), so it stands down together with it.
         self.raw_selection_ok = self.n_exempt <= _MAX_RAW_EXEMPT_IDS
         if padded_pooling and not self.raw_selection_ok:
             logger.info(
@@ -148,39 +149,17 @@ class MiniMaxH3VSACoarseStage:
             self.slots_per_shard = 32
             while self.slots_per_shard < tiles_per_shard:
                 self.slots_per_shard *= 2
-            a_t = torch.nn.functional.pad(a_t, (0, self.slots_per_shard - tiles_per_shard))
         self.coarse_slots_shift = self.slots_per_shard.bit_length() - 1 if padded_pooling else 0
-        mesh_axes = [..., sp_axis, None]
-        self.a_t_kv = from_torch(
-            a_t.reshape(1, 1, geometry.padded_len, self.slots_per_shard),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            mesh_axes=mesh_axes,
-        )
-        self.a_t_q = from_torch(
-            (a_t / math.sqrt(head_dim)).reshape(1, 1, geometry.padded_len, self.slots_per_shard),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            mesh_axes=mesh_axes,
-        )
-        # Left-multiply form A [slots, S_local] (per shard: A^T's diagonal block, transposed) for pooling an
-        # un-split [1, 1, S_local, H*d] activation without any transpose: pooled = A @ x is [slots, H*d].
-        self.a_kv_flat = from_torch(
-            a_t.T.contiguous().reshape(1, 1, self.slots_per_shard, geometry.padded_len),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            mesh_axes=[..., None, sp_axis],
-        )
+        self.n_coarse_cols = geometry.sp_factor * self.slots_per_shard if padded_pooling else n_tiles
 
         # tile -> token broadcast for the coarse output, B = kron(I_tiles_local, ones(1, 64)) as
         # [tiles_local, S_local] (replicated: every shard has the same local structure). A 0/1
         # matmul copies each tile's row to its 64 tokens exactly; used in place of
-        # repeat_interleave, whose permute/concat/tilize chain cost ~3 ms at 15 s. Stored transposed:
+        # repeat_interleave, whose permute/concat/tilize chain cost ~3 ms at 15 s. Stored transposed
+        # as [S_local, slots]: o_c = B^T @ o_c_tiles[slots, H*d] lands directly in the gate's layout.
         bcast = torch.kron(torch.eye(tiles_per_shard), torch.ones(1, VSA_TILE_TOKENS))
         if padded_pooling:  # pooled rows are padded to slots_per_shard; the extra rows broadcast nothing
             bcast = torch.nn.functional.pad(bcast, (0, 0, 0, self.slots_per_shard - tiles_per_shard))
-        # as [S_local, slots]: o_c = B^T @ o_c_tiles[slots, H*d] lands directly in the [1, 1, S_local, H*d]
-        # layout the gate is applied in after the head concat (no transposes)
         self.bcast_flat = from_torch(
             bcast.T.contiguous().reshape(1, 1, tiles_per_shard * VSA_TILE_TOKENS, self.slots_per_shard),
             device=mesh_device,
@@ -188,14 +167,6 @@ class MiniMaxH3VSACoarseStage:
             mesh_axes=None,
         )
 
-        # --- selection constants (replicated; row space is shard-local but content is global) ---
-        # additive candidate mask over score columns: 0 for candidates, -inf otherwise
-        cand_mask = torch.where(geometry.is_candidate, 0.0, -float("inf")).to(torch.float32)
-        if padded_pooling:  # shard-major padded columns; pad slots are never candidates
-            padded = torch.full((geometry.sp_factor, self.slots_per_shard), -float("inf"))
-            padded[:, :tiles_per_shard] = cand_mask.reshape(geometry.sp_factor, tiles_per_shard)
-            cand_mask = padded.reshape(-1)
-        self.n_coarse_cols = int(cand_mask.numel())
         # padded pooling adds (slots_per_shard - tiles_per_shard) zero-key slots per shard: the top-k masks
         # them via cand_mask, but the coarse o_c softmax must not give them exp(0) weight either (it did:
         # attention-level oracle 92.7% -> fixed). Real pad TILES stay in, as in the unpadded path.
@@ -206,54 +177,152 @@ class MiniMaxH3VSACoarseStage:
             self.pool_pad_mask = from_torch(
                 pad_mask.reshape(1, 1, 1, self.n_coarse_cols), device=mesh_device, dtype=ttnn.bfloat16, mesh_axes=None
             )
-        self.cand_mask = from_torch(
-            cand_mask.reshape(1, 1, 1, self.n_coarse_cols), device=mesh_device, dtype=ttnn.bfloat16, mesh_axes=None
-        )
 
-        # per-shard row mask: rows whose q tile is exempt take the dense (all real tiles) list
-        row_exempt = geometry.is_exempt.reshape(geometry.sp_factor, rows_per_shard)
-        dense_row = torch.full((self.index_width,), VSA_INDEX_SENTINEL, dtype=torch.int64)
-        dense_row[: real_ids.numel()] = real_ids
+        # Rung-constant selection structure: exempt-slot ids and per-shard exempt-row layout are fixed
+        # by the placement, so the exempt prefix, sentinel tail and blend-keep mask upload once here;
+        # only the dense-row content (which real tiles exist) is per-request.
         self._host_exempt_ids = exempt_ids
-        self._host_dense_row = dense_row
-        self._host_row_exempt = row_exempt
+        self._host_row_exempt = geometry.is_exempt.reshape(geometry.sp_factor, rows_per_shard)
+        self._upload_row_structure(num_heads)
+        if self.raw_selection_ok:  # rung-constant; the raw kernel reads it inside the trace
+            self.dense_row_mask_tensor()
 
-    def _upload_row_constants(self, num_heads: int) -> None:
-        """Head-expanded selection constants (uploaded lazily once num_heads is known)."""
-        if hasattr(self, "_rows_ready"):
-            return
+        # Per-request content, refreshed in place by `bind_request`.
+        self.a_t_kv = StateTensor()
+        self.a_t_q = StateTensor()
+        self.a_kv_flat = StateTensor()
+        self.cand_mask = StateTensor()
+        self.blend_dense = StateTensor()
+        self._block_counts = StateTensor()
+        self._bound_signature = None
+        # The tile <-> packed-row gathers run outside the traced block stack, so they rebind freely.
+        self.pack_idx = None
+        self.unpack_idx = None
+
+    def _upload_row_structure(self, num_heads: int) -> None:
+        """Head-expanded, rung-constant selection tensors: exempt prefix, sentinel tail, blend keep."""
         geometry = self.geometry
         rows = geometry.tiles_per_shard
         w = self.index_width
-        # tensors are [sp, H, rows, *], sharded on dim 0 across the SP axis -> per-device [1, H, rows, *]
         mesh_axes = [self.sp_axis, None, None, None]
 
         def upload(x: torch.Tensor, dtype, layout=ttnn.Layout.TILE) -> ttnn.Tensor:
             return from_torch(x.contiguous(), device=self.mesh_device, dtype=dtype, layout=layout, mesh_axes=mesh_axes)
 
-        # [sp, H, rows, n_exempt] exempt prefix (identical content everywhere)
         prefix = (
             self._host_exempt_ids.to(torch.int32).reshape(1, 1, 1, -1).expand(geometry.sp_factor, num_heads, rows, -1)
         )
         self.exempt_prefix = upload(prefix, ttnn.uint32, ttnn.Layout.ROW_MAJOR)
 
-        # [sp, H, rows, tail] sentinel tail (absent when exempt + top-k fill the row exactly)
         tail = w - self.n_exempt - self.k
         self.sentinel_tail = None
         if tail > 0:
             sentinel = torch.full((geometry.sp_factor, num_heads, rows, tail), -1, dtype=torch.int32)
             self.sentinel_tail = upload(sentinel, ttnn.uint32, ttnn.Layout.ROW_MAJOR)
 
-        # dense-list blend, int32 TILE domain: final = sparse * keep + dense_masked
         row_exempt = self._host_row_exempt.to(torch.int32)  # [sp, rows]
         keep = (1 - row_exempt).reshape(geometry.sp_factor, 1, rows, 1).expand(-1, num_heads, -1, w)
-        dense = self._host_dense_row.to(torch.int32).reshape(1, 1, 1, w) * row_exempt.reshape(
-            geometry.sp_factor, 1, rows, 1
-        )
-        dense = dense.expand(-1, num_heads, -1, -1)
         self.blend_keep = upload(keep, ttnn.int32)
-        self.blend_dense = upload(dense, ttnn.int32)
-        self._rows_ready = True
+
+    def _averaging_torch(self, geometry: MiniMaxH3VSAGeometry):
+        """(a_t_kv, a_t_q, a_kv_flat) host tensors: shard s owns the diagonal block of A^T."""
+        matrix = geometry.averaging_matrix()  # [n_tiles, padded_len] fp64->fp32
+        tps = geometry.tiles_per_shard
+        rows_local = geometry.padded_len // geometry.sp_factor
+        a_t = torch.cat(
+            [
+                matrix[s * tps : (s + 1) * tps, s * rows_local : (s + 1) * rows_local].T
+                for s in range(geometry.sp_factor)
+            ],
+            dim=0,
+        )  # [padded_len, tiles_per_shard]
+        if self.padded_pooling:
+            a_t = torch.nn.functional.pad(a_t, (0, self.slots_per_shard - tps))
+        pl, sl = geometry.padded_len, self.slots_per_shard
+        return (
+            a_t.reshape(1, 1, pl, sl),
+            (a_t / math.sqrt(self.head_dim)).reshape(1, 1, pl, sl),  # scores scale baked into Q's matrix
+            a_t.T.contiguous().reshape(1, 1, sl, pl),  # left-multiply form for the transpose-free V pool
+        )
+
+    def _cand_mask_torch(self, geometry: MiniMaxH3VSAGeometry) -> torch.Tensor:
+        """Additive score-column mask: 0 for real candidates, -inf elsewhere (empty slots included)."""
+        cand = torch.where(geometry.is_candidate, 0.0, -float("inf")).to(torch.float32)
+        if self.padded_pooling:  # shard-major padded columns; pad slots are never candidates
+            tps = geometry.tiles_per_shard
+            padded = torch.full((geometry.sp_factor, self.slots_per_shard), -float("inf"))
+            padded[:, :tps] = cand.reshape(geometry.sp_factor, tps)
+            cand = padded.reshape(-1)
+        return cand.reshape(1, 1, 1, self.n_coarse_cols)
+
+    def _block_counts_torch(self, geometry: MiniMaxH3VSAGeometry) -> torch.Tensor:
+        counts = torch.zeros(self.index_width, dtype=torch.int32)
+        counts[: geometry.n_tiles] = geometry.valid_counts.to(torch.int32)
+        return counts.reshape(1, 1, 1, -1)
+
+    def _blend_dense_torch(self, geometry: MiniMaxH3VSAGeometry) -> torch.Tensor:
+        """[sp, H, rows, W] dense-list masked by exempt rows: final = sparse * keep + this."""
+        w = self.index_width
+        real_ids = torch.nonzero(geometry.valid_counts > 0, as_tuple=False).reshape(-1)
+        dense_row = torch.full((w,), VSA_INDEX_SENTINEL, dtype=torch.int64)
+        dense_row[: real_ids.numel()] = real_ids
+        row_exempt = self._host_row_exempt.to(torch.int32)
+        dense = dense_row.to(torch.int32).reshape(1, 1, 1, w) * row_exempt.reshape(geometry.sp_factor, 1, -1, 1)
+        return dense.expand(-1, self.num_heads, -1, -1)
+
+    def bind_request(self, geometry: MiniMaxH3VSAGeometry, *, traced: bool) -> None:
+        """Refresh the per-request content buffers for `geometry`; a no-op when the request repeats.
+
+        Must run before the rung's trace captures (the pipeline binds on the untraced pass); a traced
+        call copies into the buffers the capture baked. `gather_index` fully determines the content,
+        so an unchanged one leaves the buffers as-is -- steady-state serving of one shape uploads nothing.
+        """
+        signature = hash(geometry.gather_index.numpy().tobytes())
+        if signature == self._bound_signature and self.a_t_kv.value is not None:
+            return
+        self.geometry = geometry
+        md, sp = self.mesh_device, self.sp_axis
+        a_t_kv, a_t_q, a_kv_flat = self._averaging_torch(geometry)
+        self.a_t_kv.update(from_torch(a_t_kv, device=md, dtype=ttnn.bfloat16, mesh_axes=[..., sp, None]), traced=traced)
+        self.a_t_q.update(from_torch(a_t_q, device=md, dtype=ttnn.bfloat16, mesh_axes=[..., sp, None]), traced=traced)
+        self.a_kv_flat.update(
+            from_torch(a_kv_flat, device=md, dtype=ttnn.bfloat16, mesh_axes=[..., None, sp]), traced=traced
+        )
+        self.cand_mask.update(
+            from_torch(self._cand_mask_torch(geometry), device=md, dtype=ttnn.bfloat16, mesh_axes=None), traced=traced
+        )
+        self._block_counts.update(
+            from_torch(
+                self._block_counts_torch(geometry),
+                device=md,
+                dtype=ttnn.uint32,
+                layout=ttnn.Layout.ROW_MAJOR,
+                mesh_axes=None,
+            ),
+            traced=traced,
+        )
+        if not self.raw_selection_ok:
+            self.blend_dense.update(
+                from_torch(
+                    self._blend_dense_torch(geometry), device=md, dtype=ttnn.int32, mesh_axes=[sp, None, None, None]
+                ),
+                traced=traced,
+            )
+        self.pack_idx = from_torch(
+            geometry.row_source.to(torch.int32).reshape(1, -1),
+            device=md,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=None,
+        )
+        self.unpack_idx = from_torch(
+            geometry.untile_index.to(torch.int32).reshape(1, -1),
+            device=md,
+            dtype=ttnn.uint32,
+            layout=ttnn.Layout.ROW_MAJOR,
+            mesh_axes=None,
+        )
+        self._bound_signature = signature
 
     def _all_gather(self, x: ttnn.Tensor, dim: int) -> ttnn.Tensor:
         if self.geometry.sp_factor == 1:
@@ -298,7 +367,9 @@ class MiniMaxH3VSACoarseStage:
         # adjacent tile-aligned dims is a view, no data movement.
         x_t = ttnn.reshape(x_t, [1, 1, num_heads * d, s_local])
         pooled_t = ttnn.matmul(
-            x_t, self.a_t_q if scaled else self.a_t_kv, program_config=self._pool_program_config(num_heads * d, s_local)
+            x_t,
+            self.a_t_q.value if scaled else self.a_t_kv.value,
+            program_config=self._pool_program_config(num_heads * d, s_local),
         )  # [1, 1, H*d, slots]
         ttnn.deallocate(x_t)
         return ttnn.reshape(pooled_t, [1, num_heads, d, pooled_t.shape[-1]])
@@ -315,7 +386,7 @@ class MiniMaxH3VSACoarseStage:
         A[slots, S_local] @ x, then the head split on the small pooled tensor (26 us at 15 s)."""
         _, _, s_local, hd = x_1bnf.shape
         pooled = ttnn.matmul(
-            self.a_kv_flat, x_1bnf, program_config=self._pool_program_config(self.slots_per_shard, s_local, hd)
+            self.a_kv_flat.value, x_1bnf, program_config=self._pool_program_config(self.slots_per_shard, s_local, hd)
         )  # [1, 1, slots, H*d]
         heads, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             pooled, num_heads=num_heads, num_kv_heads=0, transpose_k_heads=False
@@ -347,7 +418,7 @@ class MiniMaxH3VSACoarseStage:
         Saves ~10 layout ops (~2.5 ms per block at 15 s / 768p).
         """
         num_heads = q_bhnd.shape[1]
-        self._upload_row_constants(num_heads)
+        assert self.a_t_kv.value is not None, "call bind_request before the coarse stage runs"
 
         q_c = self.pool(q_bhnd, scaled=True)  # scores scale baked into the Q averaging matrix
         k_c_t = self.pool_t(k_bhnd, scaled=False)  # [1, H, d, slots]: the scores consume K^T directly
@@ -401,7 +472,7 @@ class MiniMaxH3VSACoarseStage:
             ttnn.deallocate(o_flat)
 
         # (e) selection: top-k over candidate columns only
-        masked = ttnn.add(scores, self.cand_mask)  # -inf on non-candidate columns
+        masked = ttnn.add(scores, self.cand_mask.value)  # -inf on non-candidate columns
         ttnn.deallocate(scores)
         masked_rm = ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(masked)
@@ -423,7 +494,7 @@ class MiniMaxH3VSACoarseStage:
         # the sentinel 0xFFFFFFFF is -1 in int32 and survives the arithmetic)
         sparse_i32 = ttnn.typecast(ttnn.to_layout(sparse_rows, ttnn.TILE_LAYOUT), ttnn.int32)
         ttnn.deallocate(sparse_rows)
-        blended = ttnn.add(ttnn.multiply(sparse_i32, self.blend_keep), self.blend_dense)
+        blended = ttnn.add(ttnn.multiply(sparse_i32, self.blend_keep), self.blend_dense.value)
         ttnn.deallocate(sparse_i32)
         indices = ttnn.to_layout(ttnn.typecast(blended, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(blended)
@@ -472,15 +543,5 @@ class MiniMaxH3VSACoarseStage:
         return self._dense_row_mask
 
     def block_counts_tensor(self) -> ttnn.Tensor:
-        """[1,1,1,W] uint32 valid tokens per block, replicated (vsa_sdpa's block_counts input). Cached."""
-        if not hasattr(self, "_block_counts"):
-            counts = torch.zeros(self.index_width, dtype=torch.int32)
-            counts[: self.geometry.n_tiles] = self.geometry.valid_counts.to(torch.int32)
-            self._block_counts = from_torch(
-                counts.reshape(1, 1, 1, -1),
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.Layout.ROW_MAJOR,
-                mesh_axes=None,
-            )
-        return self._block_counts
+        """[1,1,1,W] uint32 valid tokens per block (vsa_sdpa's block_counts input); per-request."""
+        return self._block_counts.value

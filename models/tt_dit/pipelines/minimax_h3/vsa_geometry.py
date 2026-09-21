@@ -117,9 +117,12 @@ class MiniMaxH3VSAGeometry:
     placement: str
     video_grid: tuple[int, int, int]  # (t, h, w) token grid
     seq_len: int  # packed rows before tiling
-    n_prefix_tiles: int  # counts by kind, placement-independent
-    n_video_tiles: int
-    n_pad_tiles: int
+    n_prefix_tiles: int  # exempt-region size (prefix chunks + empty exempt slots); the video tiles'
+    # canonical base id, so `stream_order`'s grid math keys off it
+    n_video_tiles: int  # real (valid) video tiles
+    n_pad_tiles: int  # zero-valid slots (empty exempt + empty candidate + trailing pad)
+    candidate_capacity: int  # top-k denominator: candidate slots on the rung, not this request's
+    # real video count -- fixed per rung so `k` is trace-constant (equals n_video_tiles when uncapped)
 
     valid_counts: torch.Tensor  # [n_tiles] long; 0 for pad tiles
     tile_ids: torch.Tensor  # [n_tiles] long; canonical id, -1 for pad tiles
@@ -278,6 +281,8 @@ def build_vsa_geometry(
     *,
     sp_factor: int,
     placement: str = "identity",
+    exempt_tiles: int | None = None,
+    total_tiles: int | None = None,
 ) -> MiniMaxH3VSAGeometry:
     """Build the tile geometry for one packed ``[prefix... | video]`` sequence.
 
@@ -288,6 +293,14 @@ def build_vsa_geometry(
 
     v0 policy: every prefix tile is 1D and exempt; every video tile is 3D and
     a top-k candidate; pad tiles are neither exempt nor candidates.
+
+    Capacity mode (``exempt_tiles`` and ``total_tiles`` given together) fixes the
+    slot layout to a ladder rung so every request landing on the rung shares one
+    structure -- ``exempt_tiles`` exempt slots then ``total_tiles - exempt_tiles``
+    candidate slots. This request's prefix chunks fill the leading exempt slots
+    and its video tiles the leading candidate slots; the remainder are zero-valid
+    (masked out of top-k and no-op'd by ``vsa_sdpa``). ``k`` derives from the
+    candidate-slot count, not this request's video tiles, so it is rung-constant.
     """
     if placement not in VSA_PLACEMENTS:
         raise ValueError(f"placement must be one of {VSA_PLACEMENTS}, got {placement!r}")
@@ -295,49 +308,57 @@ def build_vsa_geometry(
         raise ValueError(f"sp_factor must be positive, got {sp_factor}")
     if any(d < 1 for d in video_grid):
         raise ValueError(f"video grid must be positive, got {video_grid}")
+    if (exempt_tiles is None) != (total_tiles is None):
+        raise ValueError("exempt_tiles and total_tiles are a capacity pair: pass both or neither")
 
     prefix_len = sum(prefix_segments)
     n_video_rows = math.prod(video_grid)
     seq_len = prefix_len + n_video_rows
 
     prefix_sizes = chop_prefix_segments(prefix_segments)
-    n_prefix_tiles = len(prefix_sizes)
+    n_prefix_chunks = len(prefix_sizes)
     video_counts = video_tile_valid_counts(video_grid)
     n_video_tiles = int(video_counts.numel())
 
-    n_real_tiles = n_prefix_tiles + n_video_tiles
-    n_tiles = math.ceil(n_real_tiles / sp_factor) * sp_factor
-    n_pad_tiles = n_tiles - n_real_tiles
+    prefix_rows = torch.arange(prefix_len, dtype=torch.long).split(prefix_sizes) if prefix_sizes else ()
+    video_rows_by_tile = torch.split(video_tile_partition_indices(video_grid) + prefix_len, video_counts.tolist())
+    empty = lambda: torch.empty(0, dtype=torch.long)  # noqa: E731
 
-    # Canonical (FastVideo-order) per-tile metadata, pad tiles appended.
-    valid_counts = torch.cat(
-        [torch.tensor(prefix_sizes, dtype=torch.long), video_counts, torch.zeros(n_pad_tiles, dtype=torch.long)]
-    )
-    is_3d = torch.cat(
-        [
-            torch.zeros(n_prefix_tiles, dtype=torch.bool),
-            torch.ones(n_video_tiles, dtype=torch.bool),
-            torch.zeros(n_pad_tiles, dtype=torch.bool),
-        ]
-    )
-    is_exempt = torch.cat(
-        [torch.ones(n_prefix_tiles, dtype=torch.bool), torch.zeros(n_video_tiles + n_pad_tiles, dtype=torch.bool)]
-    )
+    if total_tiles is None:
+        n_exempt_tiles = n_prefix_chunks
+        n_tiles = math.ceil((n_prefix_chunks + n_video_tiles) / sp_factor) * sp_factor
+        n_trailing = n_tiles - n_prefix_chunks - n_video_tiles
+        candidate_capacity = n_video_tiles
+        prefix_valid, prefix_slots = list(prefix_sizes), list(prefix_rows)
+        video_valid, video_slots = video_counts.tolist(), list(video_rows_by_tile)
+        trailing = n_trailing
+    else:
+        if total_tiles % sp_factor:
+            raise ValueError(f"total_tiles={total_tiles} must be a multiple of sp_factor={sp_factor}")
+        if exempt_tiles < n_prefix_chunks:
+            raise ValueError(f"prefix needs {n_prefix_chunks} exempt tiles, capacity is {exempt_tiles}")
+        candidate_capacity = total_tiles - exempt_tiles
+        if n_video_tiles > candidate_capacity:
+            raise ValueError(f"video needs {n_video_tiles} candidate tiles, capacity is {candidate_capacity}")
+        n_exempt_tiles = exempt_tiles
+        n_tiles = total_tiles
+        n_ex_empty = exempt_tiles - n_prefix_chunks
+        prefix_valid = list(prefix_sizes) + [0] * n_ex_empty
+        prefix_slots = list(prefix_rows) + [empty() for _ in range(n_ex_empty)]
+        video_valid = video_counts.tolist() + [0] * (candidate_capacity - n_video_tiles)
+        video_slots = list(video_rows_by_tile) + [empty() for _ in range(candidate_capacity - n_video_tiles)]
+        trailing = 0
+
+    # Canonical order: [exempt region | candidate region | trailing pad]. Exempt-region and
+    # candidate-region empties are pads too; the exempt slots' ids are what stays fixed per rung.
+    valid_counts = torch.tensor(prefix_valid + video_valid + [0] * trailing, dtype=torch.long)
+    is_exempt = torch.zeros(n_tiles, dtype=torch.bool)
+    is_exempt[:n_exempt_tiles] = True
+    is_3d = torch.zeros(n_tiles, dtype=torch.bool)
+    is_3d[n_exempt_tiles : n_exempt_tiles + n_video_tiles] = True
     is_candidate = ~is_exempt & (valid_counts > 0)
-
-    # Per-tile source rows in canonical order: prefix chunks are contiguous
-    # runs of [0, prefix_len); video tiles follow the cube-major partition.
-    video_rows = video_tile_partition_indices(video_grid) + prefix_len
-    canonical_rows: list[torch.Tensor] = []
-    start = 0
-    for size in prefix_sizes:
-        canonical_rows.append(torch.arange(start, start + size, dtype=torch.long))
-        start += size
-    start = 0
-    for count in video_counts.tolist():
-        canonical_rows.append(video_rows[start : start + count])
-        start += count
-    canonical_rows.extend(torch.empty(0, dtype=torch.long) for _ in range(n_pad_tiles))
+    n_pad_tiles = int((valid_counts == 0).sum())
+    canonical_rows: list[torch.Tensor] = prefix_slots + video_slots + [empty() for _ in range(trailing)]
 
     if placement == "identity":
         order = torch.arange(n_tiles, dtype=torch.long)
@@ -350,7 +371,10 @@ def build_vsa_geometry(
     is_3d = is_3d[order]
     is_exempt = is_exempt[order]
     is_candidate = is_candidate[order]
-    tile_ids = torch.where(order < n_real_tiles, order, torch.full_like(order, -1))
+    canonical_ids = torch.where(
+        torch.tensor([r.numel() > 0 for r in canonical_rows]), torch.arange(n_tiles), torch.full((n_tiles,), -1)
+    )
+    tile_ids = canonical_ids[order]
 
     gather_index = torch.full((n_tiles * VSA_TILE_TOKENS,), -1, dtype=torch.long)
     row_source = torch.zeros(n_tiles * VSA_TILE_TOKENS, dtype=torch.long)
@@ -371,9 +395,10 @@ def build_vsa_geometry(
         placement=placement,
         video_grid=tuple(video_grid),
         seq_len=seq_len,
-        n_prefix_tiles=n_prefix_tiles,
+        n_prefix_tiles=n_exempt_tiles,
         n_video_tiles=n_video_tiles,
         n_pad_tiles=n_pad_tiles,
+        candidate_capacity=candidate_capacity,
         valid_counts=valid_counts,
         tile_ids=tile_ids,
         is_3d=is_3d,
