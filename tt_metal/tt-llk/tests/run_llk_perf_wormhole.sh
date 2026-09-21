@@ -1,45 +1,48 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# CHUNK DOSE-RESPONSE -- one shard, one job, chunk size the only variable.
 #
-# SPDX-License-Identifier: Apache-2.0
-# Wormhole LLK perf runner, shared by the 5 wh matrix groups in
-# tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
-#
-# pytest-split sharding: compile this shard's items (producer), then measure
-# them (consumer) -- one invocation each over the whole perf suite.
-#
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_wormhole.sh <group> <n_groups>
+# xdist chunk = max(2, len(pending)//nodes//2), capped by --maxschedchunk. With
+# shard 1's 11,240 items over 15 workers the uncapped value is 374, which is the
+# configuration that fires. Smaller caps are the workarounds we already know.
 set -euo pipefail
-
-GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-N_GROUPS="${2:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
-export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
-
-case "$SPEED_OF_LIGHT" in
-  true)
-    SPEED_OF_LIGHT_ARGS=(--speed-of-light)
-    ;;
-  false)
-    SPEED_OF_LIGHT_ARGS=()
-    ;;
-  *)
-    echo "SPEED_OF_LIGHT must be 'true' or 'false', got '$SPEED_OF_LIGHT'" >&2
-    exit 2
-    ;;
-esac
+GROUP="${1:?}"
+N_GROUPS="${2:?}"
+if [ "$GROUP" != "1" ]; then
+  echo "experiment: only group 1 runs; this group exits."
+  exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LLK_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SCRIPT_DIR/python_tests"
-mkdir -p perf_data
+export PERF_KEEP_RUNS=0
+unset PERF_RUN_TAG
 
-PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+M="perf and not accuracy"
+PQ="-q --override-ini=log_cli=false"
+SEL=(--splits 5 --group 1 .)
 
-pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-wormhole-${GROUP}-compile.xml" .
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-wormhole-${GROUP}-run.xml" .
-junitparser merge pytest-report-wormhole-${GROUP}-compile.xml pytest-report-wormhole-${GROUP}-run.xml pytest-report-wormhole-${GROUP}.xml
+echo "===== compiling shard 1 once  $(date -u +%H:%M:%S)"
+PERF_RUN_TAG=compile pytest $PQ --compile-producer -n 10 -m "$M" --timeout=60 \
+  "${SEL[@]}" > /tmp/compile.log 2>&1 || echo "  (producer rc=$?)"
+tail -2 /tmp/compile.log | sed 's/^/  /'
+
+arm() {
+  local label="$1" chunk="$2"
+  echo "===== ARM $label  maxschedchunk=$chunk  $(date -u +%H:%M:%S)"
+  export PERF_RUN_TAG="$label"
+  pytest $PQ --compile-consumer -n 15 -m "$M" --timeout=60 \
+    --maxschedchunk "$chunk" "${SEL[@]}" > "/tmp/$label.log" 2>&1 \
+    || echo "  (consumer rc=$?)"
+  tail -2 "/tmp/$label.log" | sed 's/^/  /'
+  unset PERF_RUN_TAG
+}
+
+for c in 374 10 50 100 200; do
+  arm "c${c}_a" "$c"
+  arm "c${c}_b" "$c"
+done
+
+echo "===== arms written:"
+ls -1 "$LLK_ROOT/perf_data/runs/" || true
+echo "===== experiment done ====="
