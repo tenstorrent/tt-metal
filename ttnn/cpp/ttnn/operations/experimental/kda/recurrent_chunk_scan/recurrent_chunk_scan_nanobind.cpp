@@ -32,25 +32,31 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 ``[B*H, N, K, 1]``.
             t_inv (ttnn.Tensor): Triangular correction inverse
                 ``[B*H, N, 32, 32]`` in FLOAT32.
-            initial_state (ttnn.Tensor): Initial recurrent state ``[B*H, K, V]``
+            initial_state (ttnn.Tensor): Initial recurrent state ``[B*H, K, V]`` or ``[B, H, K, V]``
                 in FLOAT32.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
+            state_memory_config (ttnn.MemoryConfig, optional): Final-state memory
+                configuration. Defaults to ``memory_config`` and may be ND-sharded.
+            state_group_count (int, optional): Number of adjacent scan groups per
+                logical head. Only the last group writes final state. Defaults to 1.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
                 Compute-kernel configuration.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: New tensors containing BFLOAT16 token
-                outputs ``Y[B*H,N,32,V]`` and FLOAT32 final state ``S[B*H,K,V]``.
+                outputs ``Y[B*H,N,32,V]`` and FLOAT32 final state. The state keeps
+                the rank-3 or rank-4 logical form of ``initial_state`` after any
+                grouped-head reduction.
 
         Note:
             ``v_beta``, ``kd``, ``q_decay``, ``k_dec_t``, and ``final_decay`` may be
             FLOAT32 or BFLOAT16. ``intra``, ``t_inv``, and ``initial_state`` must be
             FLOAT32. ``K`` and ``V`` must be positive and tile-aligned. All inputs
-            must be interleaved TILE-layout tensors on the same device and are not
-            modified.
+            except ``initial_state`` must be interleaved TILE-layout tensors on the
+            same device and are not modified. ``initial_state`` may be ND-sharded.
         )doc",
         &ttnn::experimental::kda::recurrent_chunk_scan,
         nb::arg("v_beta").noconvert(),
@@ -63,6 +69,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("initial_state").noconvert(),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
+        nb::arg("state_memory_config") = nb::none(),
+        nb::arg("state_group_count") = 1,
         nb::arg("compute_kernel_config") = nb::none());
 
     ttnn::bind_function<"summarize_chunk_recurrence", "ttnn.experimental.kda.">(
