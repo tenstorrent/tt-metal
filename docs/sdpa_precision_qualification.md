@@ -9,8 +9,10 @@ No research library, include override or Python operation monkeypatch was used.
 The numerical reference is frozen snapshot
 `e13f445161ad598de9700edf915e5ed7faa6dc34` (`sdpa-recipes-20260921-v1`).
 The production test fixture pins the source evidence hashes, original and
-prepared input digests, output digests and per-case metrics. Research media and
-experimental sources are not imported into this PR.
+prepared input digests, output digests and per-case metrics. Experimental sources
+are not imported. The [frontier plot](images/sdpa_precision_frontier.png) is copied
+unchanged from the frozen research evidence; its resident timings are historical,
+not new measurements of this production branch.
 
 ## Numerical preservation
 
