@@ -617,6 +617,11 @@ def prepare_comp_inputs_uint(
 #   int->float : SFPCAST (+ fp16 narrow if the dst is fp16)
 #   int<->int : store sfpmem mode (widen/equal) or RNE narrow to 8-bit
 #
+# Int16 (signed 16-bit) is not in the ttnn typecast matrix, but the kernel handles
+# it on every path (float<->int16 via SFPCAST + 16-bit store-narrow, int16<->int
+# via the int->int path), so it is swept here too. Mirrors the UInt16 set; Int16
+# has a native Quasar dest format.
+#
 # The functor `calculate_typecast<IN_FMT, OUT_FMT>` needs the format pair at
 # COMPILE time, but the unified dispatcher only carries `SfpuType` at compile time
 # and formats at runtime. We bridge that with the `TYPECAST_FORMATS` template param,
@@ -629,30 +634,39 @@ class TypecastCase:
     dst: DataFormat
 
 
-_TYPECAST_PAIRS = (
-    (DataFormat.Float16_b, DataFormat.Float32),
-    (DataFormat.Float16_b, DataFormat.Int32),
-    (DataFormat.Float16_b, DataFormat.UInt8),
-    (DataFormat.Float16_b, DataFormat.UInt16),
-    (DataFormat.Float32, DataFormat.Int32),
-    (DataFormat.Float32, DataFormat.UInt8),
-    (DataFormat.Float32, DataFormat.UInt16),
-    (DataFormat.UInt16, DataFormat.Int32),
-    (DataFormat.UInt16, DataFormat.UInt8),
-    # Int16 (signed 16-bit) — not in the ttnn typecast matrix, but the kernel handles it on every
-    # path (float<->int16 via SFPCAST + 16-bit store-narrow, int16<->int via the int->int path), so
-    # it is swept here too. Mirrors the UInt16 set; Int16 has a native Quasar dest format.
-    (DataFormat.Float16_b, DataFormat.Int16),
-    (DataFormat.Float32, DataFormat.Int16),
-    (DataFormat.Int16, DataFormat.Int32),
-    (DataFormat.Int16, DataFormat.UInt8),
-)
-
-# Expand each unordered pair into both cast directions.
-TYPECAST_CASES = tuple(
-    TypecastCase(a, b)
-    for src, dst in _TYPECAST_PAIRS
-    for a, b in ((src, dst), (dst, src))
+TYPECAST_CASES = (
+    # float <-> float: widen on store, RNE narrow to fp16
+    TypecastCase(DataFormat.Float16_b, DataFormat.Float32),
+    TypecastCase(DataFormat.Float32, DataFormat.Float16_b),
+    # float <-> int32: SFPCAST (+ fp16 narrow when the dst is fp16)
+    TypecastCase(DataFormat.Float16_b, DataFormat.Int32),
+    TypecastCase(DataFormat.Int32, DataFormat.Float16_b),
+    TypecastCase(DataFormat.Float32, DataFormat.Int32),
+    TypecastCase(DataFormat.Int32, DataFormat.Float32),
+    # float <-> int16
+    TypecastCase(DataFormat.Float16_b, DataFormat.Int16),
+    TypecastCase(DataFormat.Int16, DataFormat.Float16_b),
+    TypecastCase(DataFormat.Float32, DataFormat.Int16),
+    TypecastCase(DataFormat.Int16, DataFormat.Float32),
+    # float <-> uint16
+    TypecastCase(DataFormat.Float16_b, DataFormat.UInt16),
+    TypecastCase(DataFormat.UInt16, DataFormat.Float16_b),
+    TypecastCase(DataFormat.Float32, DataFormat.UInt16),
+    TypecastCase(DataFormat.UInt16, DataFormat.Float32),
+    # float <-> uint8: clamps negatives, then RNE narrows
+    TypecastCase(DataFormat.Float16_b, DataFormat.UInt8),
+    TypecastCase(DataFormat.UInt8, DataFormat.Float16_b),
+    TypecastCase(DataFormat.Float32, DataFormat.UInt8),
+    TypecastCase(DataFormat.UInt8, DataFormat.Float32),
+    # int <-> int: store sfpmem mode (widen/equal) or RNE narrow to 8-bit
+    TypecastCase(DataFormat.UInt16, DataFormat.Int32),
+    TypecastCase(DataFormat.Int32, DataFormat.UInt16),
+    TypecastCase(DataFormat.UInt16, DataFormat.UInt8),
+    TypecastCase(DataFormat.UInt8, DataFormat.UInt16),
+    TypecastCase(DataFormat.Int16, DataFormat.Int32),
+    TypecastCase(DataFormat.Int32, DataFormat.Int16),
+    TypecastCase(DataFormat.Int16, DataFormat.UInt8),
+    TypecastCase(DataFormat.UInt8, DataFormat.Int16),
 )
 
 _RANGE_SAFETY_FACTOR = 0.9
