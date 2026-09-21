@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "cpack_common.h"
 #include "llk_defs.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -189,14 +190,13 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
  * @tparam reduce_type: Pool type; MAX selects negative-infinity mode, except BFP outputs retain zero fill.
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
- * @param face_r_dim: Rows per face.
- * @param geometry: Output face grid, independent of the height of each face.
+ * @param tensor_shape: Output face dimensions and face grid.
  * @note Untilize retains its existing row-mask configuration; face selection below is for Default only.
  * @note Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
  * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
  */
 template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
-inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const TileGeometry geometry = TileGeometry::Faces2x2)
+inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
 {
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
 
@@ -255,7 +255,7 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
     // Wait for packer to finish to avoid breaking its current configuration
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
 
-    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(face_r_dim);
+    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(tensor_shape.face_r_dim);
 
     // Configure packer
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
@@ -275,24 +275,24 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
         // The constants repeat 2-bit row-table selectors across all 16 face-table entries:
         // 0x55555555 = [1], 0x11111111 = [1,0], 0x05050505 = [1,1,0,0], 0x01010101 = [1,0,0,0].
         // Row-table 1 applies the reduction mask; row-table 0 masks the entire face.
-        const std::uint32_t face_set_mapping = [geometry]
+        const std::uint32_t face_set_mapping = [&tensor_shape]
         {
             static_assert(dim == ReduceDim::REDUCE_ROW || dim == ReduceDim::REDUCE_COL || dim == ReduceDim::REDUCE_SCALAR, "Invalid reduction dimension");
-            if (geometry == TileGeometry::Faces1x1)
+            if (tensor_shape.num_faces_r_dim == 1 && tensor_shape.num_faces_c_dim == 1)
             {
                 return 0x55555555;
             }
-            else if (geometry == TileGeometry::Faces1x2)
+            else if (tensor_shape.num_faces_r_dim == 1 && tensor_shape.num_faces_c_dim == 2)
             {
                 return dim == ReduceDim::REDUCE_COL ? 0x55555555 : 0x11111111;
             }
-            else if (geometry == TileGeometry::Faces2x1)
+            else if (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 1)
             {
                 return dim == ReduceDim::REDUCE_ROW ? 0x55555555 : 0x11111111;
             }
             else
             {
-                LLK_ASSERT(geometry == TileGeometry::Faces2x2, "Invalid tile geometry");
+                LLK_ASSERT(tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2, "Invalid tensor shape face grid");
                 if constexpr (dim == ReduceDim::REDUCE_ROW)
                 {
                     return 0x11111111;
