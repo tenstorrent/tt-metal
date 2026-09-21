@@ -1,45 +1,43 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
-#
-# SPDX-License-Identifier: Apache-2.0
-# Wormhole LLK perf runner, shared by the 5 wh matrix groups in
-# tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
-#
-# pytest-split sharding: compile this shard's items (producer), then measure
-# them (consumer) -- one invocation each over the whole perf suite.
-#
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_wormhole.sh <group> <n_groups>
-set -euo pipefail
+# tt-smi PROBE -- find a spelling that prints or writes AICLK. No device work.
+set -uo pipefail
+GROUP="${1:?}"
+N_GROUPS="${2:?}"
+if [ "$GROUP" != "1" ]; then
+  echo "probe: only group 1 runs; this group exits."
+  exit 0
+fi
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUT=/tmp/smi
+mkdir -p "$OUT"
 
-GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-N_GROUPS="${2:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
-export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
+echo "===== which tt-smi"
+command -v tt-smi || echo "  not on PATH"
+tt-smi --version 2>&1 | head -3
 
-case "$SPEED_OF_LIGHT" in
-  true)
-    SPEED_OF_LIGHT_ARGS=(--speed-of-light)
-    ;;
-  false)
-    SPEED_OF_LIGHT_ARGS=()
-    ;;
-  *)
-    echo "SPEED_OF_LIGHT must be 'true' or 'false', got '$SPEED_OF_LIGHT'" >&2
-    exit 2
-    ;;
-esac
+echo "===== --help"
+tt-smi --help 2>&1 | head -60
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR/python_tests"
-mkdir -p perf_data
+echo "===== python module form"
+python3 -c "import tt_smi, os; print('tt_smi at', os.path.dirname(tt_smi.__file__))" 2>&1 | head -3
 
-PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+for form in "-s" "-s -f $OUT/s1.json" "--snapshot" "-ls" "-l" "-f $OUT/s2.json"; do
+  echo "===== tt-smi $form"
+  # shellcheck disable=SC2086
+  timeout 60 tt-smi $form >"$OUT/out.txt" 2>&1
+  echo "  rc=$?"
+  head -25 "$OUT/out.txt" | sed 's/^/  /'
+done
 
-pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-wormhole-${GROUP}-compile.xml" .
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-wormhole-${GROUP}-run.xml" .
-junitparser merge pytest-report-wormhole-${GROUP}-compile.xml pytest-report-wormhole-${GROUP}-run.xml pytest-report-wormhole-${GROUP}.xml
+echo "===== files tt-smi wrote anywhere obvious"
+ls -la "$OUT" 2>&1 | head
+find / -maxdepth 4 -name "*tt_smi*snapshot*" -newermt "-10 minutes" 2>/dev/null | head -5
+find . -maxdepth 3 -newermt "-10 minutes" -name "*.json" 2>/dev/null | head -5
+
+echo "===== sysfs / driver telemetry as a fallback"
+ls /sys/class/tenstorrent 2>&1 | head
+for d in /sys/class/tenstorrent/*; do
+  echo "--- $d"
+  ls "$d" 2>/dev/null | head -20
+done
+echo "===== probe done ====="
