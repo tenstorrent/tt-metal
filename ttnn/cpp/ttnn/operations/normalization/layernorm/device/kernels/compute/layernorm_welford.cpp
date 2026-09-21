@@ -86,7 +86,7 @@ void kernel_main() {
     // Welford-fp32 alias of dfb_x. Shares SRAM with dfb_x but has its own buffer index
     // configured with UnpackToDest. Welford's transpose_tile reads
     // through dfb_x_welford to get full fp32 into DEST; the post-welford eltwise keeps reading
-    // dfb_x via SrcA. When welford_fp32_alias is false, dfb_x_welford == dfb_x.
+    // dfb_x via SrcA. When the alias is inactive the name resolves to dfb_x itself.
 #ifdef WELFORD_FP32_ALIAS
     constexpr auto dfb_x_welford = dfb::x_welford;
 #else
@@ -165,7 +165,7 @@ void kernel_main() {
         // waits/pops are gated out.
         uint32_t start_N = 0;
         reconfig_data_format_srca(dfb_x_welford);
-        // Reconfigure the transpose op for the welford intake DFB. When the alias is active,
+        // Reconfigure the transpose op for the welford intake buffer. When the alias is active,
         // dfb_x_welford has UnpackToDest mode so transpose_tile preserves fp32 precision.
         transpose_init(dfb_x_welford);
         tile_regs_acquire();
@@ -202,7 +202,7 @@ void kernel_main() {
 #endif
             transpose_tile(dfb_x_welford, wt, input_dst);
 #ifdef WELFORD_FP32_ALIAS
-            // transpose_tile took the UnpackToDest path. Its math-side init clobbered
+            // transpose_tile took the UnpackToDest fp32 path. Its math-side init clobbered
             // the welford recurrence at SFPU replay slots [16, 32).
             // welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots with
             // the welford recurrence; PreserveStats keeps the running mean / M2 accumulator
@@ -236,7 +236,7 @@ void kernel_main() {
         tile_regs_commit();
 
         // Pop dfb_x_welford so its rd_ptr advances in lock-step with dfb_x's pop in the eltwise
-        // loop below. Multi-buffer-index DFB indices have independent read/write pointers
+        // loop below. Aliased buffer indices have independent read/write pointers
         // but share the underlying SRAM; popping the alias only
         // advances dfb_x_welford's own rd_ptr, leaving dfb_x's state untouched. Without this
         // pop, subsequent NCHt iterations would read stale tiles from the start of the buffer
@@ -292,8 +292,7 @@ void kernel_main() {
                 dfb_xmm,
                 ckl::ReservePolicy::Upfront,
                 ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled)>(
-            ckl::IterationShape::tiles(total_buffer_size).block_size(/*block_size=*/blk));
+                ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(total_buffer_size).block_size(blk));
         dfb_ex_obj.pop_front(1);
         dfb_xmm_obj.wait_front(static_cast<uint16_t>(total_buffer_size));
 

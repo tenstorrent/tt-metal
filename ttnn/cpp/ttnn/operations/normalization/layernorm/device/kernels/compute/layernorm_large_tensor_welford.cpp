@@ -99,7 +99,8 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     for (auto block : generic::blocks(Wt, blk)) {
         const auto block_shape =
             ckl::IterationShape::tiles(block.size()).block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
-        // Keep pre-add in a separate DFB to avoid the transpose_dest aliasing issue.
+        // Pack to an intermediate buffer (needed
+        // to workaround transpose_dest bug)
         ckl::add<
             ckl::input(
                 dfb_in, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
@@ -188,7 +189,8 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     dfb_ex2_welford_obj.wait_front(1);
 #endif
     tile_regs_acquire();
-    // Reload through the FP32 alias before finalizing.
+    // Final reload before welford_finalize_to_row: same fp32-via-Dst rationale as the
+    // per-block reload above.
     copy_init(dfb_ex_welford);
     copy_tile(dfb_ex_welford, 0, mean_dst);
     reconfig_data_format_srca(dfb_ex_welford, dfb_ex2_welford);
@@ -210,13 +212,13 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
 #ifndef FUSE_PRE_ADD
 /* @brief: Welford's algorithm for no fused pre-add
- * @param: dfb_in: input DFB
+ * @param: dfb_in: input buffer
  * @param: input_dst: input tile for Welford's algorithm
  * @param: mean_dst: mean tile for Welford's algorithm
  * @param: Wt: width of the input in tiles
  * @param: tile_width: width of each tile
  * @param: W: width of the input
- * @param: p_reciprocals: pointer to the reciprocal LUT
+ * @param: reciprocal_lut: the reciprocal LUT
  */
 template <
     uint32_t dfb_in,
@@ -230,6 +232,8 @@ template <
     uint32_t blk>
 void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     DataflowBuffer dfb_in_obj(dfb_in);
+    // Only built when the alias is active; otherwise dfb_x_welford names dfb_in itself and the
+    // waits and pops below fall to dfb_in_obj.
 #ifdef WELFORD_FP32_ALIAS
     DataflowBuffer dfb_x_welford_obj(dfb_x_welford);
 #endif
@@ -243,7 +247,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     uint32_t sample_idx = 0;
     reconfig_data_format_srca(dfb_x_welford);
-    // Reconfigure the transpose op for the welford intake DFB. When the alias is active,
+    // Reconfigure the transpose op for the welford intake buffer. When the alias is active,
     // dfb_x_welford has UnpackToDest mode so transpose_tile preserves fp32 precision.
     transpose_init(dfb_x_welford);
     tile_regs_acquire();
@@ -264,7 +268,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         // Welford's needs transposed input tile
         transpose_tile(dfb_x_welford, 0, input_dst);
 #ifdef WELFORD_FP32_ALIAS
-        // transpose_tile took the UnpackToDest path. Its math-side init clobbered
+        // transpose_tile took the UnpackToDest fp32 path. Its math-side init clobbered
         // the welford recurrence at SFPU replay slots [16, 32).
         // welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots with the
         // welford recurrence; PreserveStats keeps the running mean / M2 accumulator in
@@ -507,11 +511,12 @@ void kernel_main() {
         dfb_ex2pe_obj.wait_front(onetile);
         dfb_ex_obj.wait_front(onetile);
 
-        // Lockstep the dfb_x_welford alias's read/write pointers with dfb_in's across the eltwise pass.
-        // The reader pushes dfb_x_welford in pass 2 to match its pass 1 push (see
+        // Lockstep the dfb_x_welford alias's read/write pointers with dfb_in's across the eltwise
+        // pass. The reader pushes dfb_x_welford in pass 2 to match its pass 1 push (see
         // reader_unary_interleaved_ln_large_tensor_welford.cpp); compute pops it here to match
-        // dfb_in's pop. Both share SRAM but have independent state; popping dfb_x_welford keeps it aligned
-        // with dfb_in so the next NCHt Welford iteration reads from the correct SRAM offset after DFB wrap.
+        // dfb_in's pop. Both share SRAM but have independent state; popping dfb_x_welford keeps it
+        // aligned with dfb_in so the next NCHt Welford iteration reads from the correct SRAM
+        // offset after the buffer wraps.
 #if defined(WELFORD_FP32_ALIAS) && !defined(FUSE_PRE_ADD)
         DataflowBuffer dfb_x_welford_obj_eltwise(dfb_x_welford);
 #endif

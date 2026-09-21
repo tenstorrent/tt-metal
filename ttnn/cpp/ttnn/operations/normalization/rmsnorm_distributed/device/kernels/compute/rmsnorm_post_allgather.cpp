@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: Production post-allgather factories bind the Metal 2.0 fork beside this file,
-// rmsnorm_post_allgather_metal2.cpp. This legacy source remains as a kernel-source composition
-// fixture; keep its algorithm aligned with the fork until the fixture is retired.
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// rmsnorm_post_allgather_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and
+// this file is retired, changes here likely belong in the fork too.
 
 /*
  * This kernel computes rmsnorm, dependent on the RMSNORM define.
@@ -101,7 +102,7 @@ void kernel_main() {
                 ckl::InputTileMapping::Block),
             ckl::input(cb_recip_sqrt_var_idx, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::output(normed_output_cb_idx, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-            ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
+            ckl::IterationShape::tiles(Wt).block_size(blk));
 
         if constexpr (do_gamma) {
             // x_normed * gamma
@@ -118,7 +119,7 @@ void kernel_main() {
                     ckl::PopPolicy::None,
                     ckl::InputTileMapping::Block),
                 ckl::output(cb_times_gamma_out_idx, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-                ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
+                ckl::IterationShape::tiles(Wt).block_size(blk));
 
             if constexpr (do_beta) {
                 // x_normed * gamma + beta
@@ -135,7 +136,7 @@ void kernel_main() {
                         ckl::PopPolicy::None,
                         ckl::InputTileMapping::Block),
                     ckl::output(cb_out_idx, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
-                    ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/blk));
+                    ckl::IterationShape::tiles(Wt).block_size(blk));
             }
         }
     }

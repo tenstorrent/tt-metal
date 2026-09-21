@@ -126,10 +126,7 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         reconfig_data_format(dfb::reduce, dfb::stats);
         pack_reconfig_data_format(dfb::stats_reduced);
-        /*
-         * Reduce stats input.
-         * RMSNorm packs mean(x**2) into dfb::var. Layernorm just uses dfb::stats_reduced.
-         */
+
         /*
          * Reduce stats input.
          * dfb::stats = [sum(x0**2), sum(x0), sum(x1**2), sum(x1), ...]

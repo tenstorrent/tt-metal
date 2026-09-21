@@ -48,8 +48,8 @@ void kernel_main() {
     constexpr std::uint32_t num_channels_per_group = get_compile_time_arg_val(24);
     constexpr std::uint32_t tile_width = get_compile_time_arg_val(25);
 
-    // Welford-fp32 alias args. When the alias is active, dfb_in0_welford_id points
-    // to c_29 (shares SRAM with c_0) and dfb_in_welford_id points to c_31 (shares SRAM with c_1).
+    // Welford-fp32 alias args. When the alias is active, cb_in0_welford_id points
+    // to c_29 (shares SRAM with c_0) and cb_in_welford_id points to c_31 (shares SRAM with c_1).
     // Both alias indices are configured with unpack_to_dest_mode=UnpackToDestFp32 so
     // transpose_tile preserves FP32 precision for the SFPU Welford.
     // The final-stage sub_tiles_bcast_scalar reads c_0 / c_1 (Default SrcA path).
@@ -57,7 +57,7 @@ void kernel_main() {
     // Unlike the mcast / no_mcast groupnorm kernels, no separate
     // welford_unpack_fp32_active flag is needed here. Both the TILIZE_IN and
     // non-TILIZE_IN branches route the welford intake transpose through an alias
-    // CB (dfb_in_welford_id or dfb_in0_welford_id), so the unpack-to-DEST fp32
+    // CB (cb_in_welford_id or cb_in0_welford_id), so the unpack-to-DEST fp32
     // path is active on both branches iff the alias is active. In the
     // mcast/no_mcast kernels the TILIZE_IN branch tilizes directly into the
     // unpack-fp32 CB without an alias, so those kernels need the unpack-fp32
@@ -343,7 +343,7 @@ void kernel_main() {
         dfb_ex_partial.push_back(2);
 
         // Start Variance Calc
-        // Wait for final welford values in dfb_ex_global_id
+        // Wait for final welford values in cb_ex_global_id
         dfb_ex_global.wait_front(2 * num_groups);
         // fp32: dfb_ex_global is fp32 (var), dfb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
         if constexpr (enable_fp32_reconfig) {
@@ -426,14 +426,14 @@ void kernel_main() {
                     if (group_offset == 0) {
                         ckl::copy<xmm_per_tile_input, x_per_tile_output>(ckl::IterationShape::one_tile());
                     } else {
-                        // Not the first group for this tile: add what is already in dfb_x.
+                        // Not the first group for this tile: add what is already in cb_x.
                         reconfig_data_format_srca(dfb_xmm_id, dfb_x_id);
                         reconfig_data_format_srcb(dfb_input_mask_id, dfb_xmm_id);
                         ckl::add<x_per_tile_input, xmm_per_tile_input, x_per_tile_output>(
                             ckl::IterationShape::one_tile());
                     }
 
-                    // The blocks after this loop assume srcb still carries dfb_xmm's format.
+                    // The blocks after this loop assume srcb still carries cb_xmm's format.
                     reconfig_data_format_srcb(dfb_xmm_id);
                     const std::uint32_t cols_available = tile_width - group_offset;
                     const std::uint32_t cols_consumed = std::min(cols_available, channels_left);
@@ -465,7 +465,7 @@ void kernel_main() {
                 ++tile_id;
 
                 if constexpr (do_gamma) {
-                    // fp32: reset SrcA to dfb_x.
+                    // fp32: reset SrcA to dfb_x (fp32).
                     if constexpr (enable_fp32_reconfig) {
                         reconfig_data_format_srca(dfb_x_id);
                     }
@@ -480,7 +480,7 @@ void kernel_main() {
                 }
 
                 if constexpr (do_beta) {
-                    // fp32: reset SrcA to dfb_x.
+                    // fp32: reset SrcA to dfb_x (fp32).
                     if constexpr (enable_fp32_reconfig) {
                         reconfig_data_format_srca(dfb_x_id);
                     }
@@ -506,7 +506,6 @@ void kernel_main() {
                 }
                 reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
 #ifndef UNTILIZE_OUT
-                // The streaming output disables automatic reconfiguration, so select the fp32 output format.
                 // Packer was last set for bf16 dfb_xmm; reconfigure to write_dfb_id (may be fp32) before pack, restore
                 // after. Gated out for bf16 (no format change).
                 if constexpr (enable_fp32_reconfig) {
@@ -535,7 +534,7 @@ void kernel_main() {
     dfb_eps.pop_front(1);
     dfb_input_mask.pop_front(num_tiles_input_mask);
 
-    // Pop all the dfb_beta_id and dfb_gamma_id if used
+    // Pop all the cb_beta_id and cb_gamma_id if used
     if constexpr (do_beta) {
         dfb_beta.pop_front(per_core_N);
     }

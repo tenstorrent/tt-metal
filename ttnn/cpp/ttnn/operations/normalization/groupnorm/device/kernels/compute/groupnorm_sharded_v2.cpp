@@ -323,7 +323,7 @@ void kernel_main() {
                     for (uint32_t w = 0; w < subblock_w; ++w) {
                         uint32_t index = w + index_subblock_w_offset + index_h_offset;
                         // When the last group spans fewer than block_w tiles, the index can
-                        // exceed the DFB tile count. Clamp it so the read stays in bounds;
+                        // exceed the CB tile count. Clamp it so the read stays in bounds;
                         // the input mask guarantees the result from the clamped tile is zeroed.
                         if (index >= per_core_MN) {
                             index = per_core_MN - 1;
@@ -396,7 +396,7 @@ void kernel_main() {
             // non-result datum of dfb_ex_partial to zero.
             // If this `reduce<…, REDUCE_SCALAR>` pack into dfb_ex_partial is
             // ever replaced by something that does not have the same
-            // packer-zero contract (e.g. a `pack_tile` / `pack_block`
+            // packer-zero contract (e.g. a `pack_tile` / `pack_tile_block`
             // path like welford_groupnorm_sharded_v2.cpp uses), the sharded
             // reader's "single-tile-overwrite trick" must be adjusted accordingly
             // (e.g. use `zero_whole_cb` from groupnorm_zero_fill.hpp, mirroring the
@@ -662,8 +662,8 @@ void kernel_main() {
                             ckl::DataFormatReconfig::Disabled)>{output_range},
                     ckl::PackTile<in_strided_output>{output_range});
 
-                // data in dfb_x_id has valid data only for current group
-                // dfb_in_id has cleared data for that group
+                // data in cb_x_id has valid data only for current group
+                // cb_in_id has cleared data for that group
                 // just add them together
                 reconfig_data_format_srcb(dfb_in_negative_mask_id, dfb_x_id);
                 ckl::eltwise_chain(
@@ -720,8 +720,8 @@ void kernel_main() {
         dfb_in.pop_front(per_core_MN);
 
     } else {
-        // nothing, for the negative mask implementation, dfb_in_id is the only dfb_id in use, and it already has the
-        // data required for the rest of kernel.
+        // nothing, for the negative mask implementation, cb_in_id is the only cb in use, and it already has the data
+        // required for the rest of kernel.
     }
 
     if constexpr (do_gamma) {
@@ -752,7 +752,7 @@ void kernel_main() {
                     ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::grid(per_core_M, per_core_N));
             dfb_outgamma.wait_front(per_core_MN);
         } else {
-            // dfb_in has data required for gamma, so we do it inplace
+            // cb in has data required for gamma, so we do it inplace
             // fp32: see non-negative-mask branch above.
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_in_id);
@@ -804,7 +804,7 @@ void kernel_main() {
                     ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::grid(per_core_M, per_core_N));
             dfb_outbeta.wait_front(per_core_MN);
         } else {
-            // dfb_in_id has data required for beta, so we do it inplace
+            // cb_in_id has data required for beta, so we do it inplace
             // fp32: see non-negative-mask branch above.
             if constexpr (enable_fp32_reconfig) {
                 reconfig_data_format_srca(dfb_in_id);

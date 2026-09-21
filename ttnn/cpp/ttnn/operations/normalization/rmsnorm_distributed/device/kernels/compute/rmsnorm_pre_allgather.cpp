@@ -2,7 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Produces one E[x^2] tile per row; the scalar statistic occupies the leftmost column.
+/*
+ * This kernel computes rmsnorm statistics.
+ * For rmsnorm we compute E(x**2) and return it as a one tile wide output
+ * tensor containing E(x**2) in the left most column per tile.
+ */
 
 #include <cstdint>
 
@@ -39,6 +43,7 @@ void kernel_main() {
     // Accurate mode only supports SUM; with the reader's scaler of 1.0, SUM and AVG are equivalent.
     constexpr auto reduce_type = unpack_fp32_active ? PoolType::SUM : PoolType::AVG;
     constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
+    DataflowBuffer dfb_inp(dfb_inp_id);
     DataflowBuffer dfb_reduce(dfb::reduce);
 #ifdef FUSE_PRE_ADD
     constexpr auto in0_input =
@@ -47,7 +52,7 @@ void kernel_main() {
         ckl::input(dfb::res, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block);
 #endif
     constexpr auto input_squared =
-        ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block);
+        ckl::input(dfb_inp_id, ckl::WaitPolicy::Cumulative, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
 
 #ifdef FUSE_PRE_ADD
     compute_kernel_hw_startup(dfb::in0, dfb::res, dfb_inp_id);
@@ -93,6 +98,7 @@ void kernel_main() {
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop,
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
             reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        dfb_inp.pop_front(Wt);
     }
     dfb_reduce.pop_front(1);
 }

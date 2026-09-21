@@ -57,12 +57,12 @@ void kernel_main() {
     //       Local Reduce:
     //           First we apply an input mask
     //           This is where we sum up our core's subtensor
-    //           After summing up, we pass our scalar tile to dfb_ex_partial_id
+    //           After summing up, we pass our scalar tile to cb_ex_partial_id
     //           The reader kernels then aggregate all of the local scalars into a single tile
     //       Global Reduce:
-    //           This single tile (dfb_ex_external_id) is a tile that contains each partial reduce from all the other cores
+    //           This single tile (cb_ex_external_id) is a tile that contains each partial reduce from all the other cores
     //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
-    //           The reader core then sends this data out to all other cores as dfb_ex_global_id
+    //           The reader core then sends this data out to all other cores as cb_ex_global_id
     //
     //     Variance Calc: ∑(x-E[x])^2
     //     This follows the same pattern as the average calculation
@@ -70,15 +70,15 @@ void kernel_main() {
     //           First we subtract each value from our core's subtensor by the average value
     //           We next apply our input mask to zero our the values we wish to ignore
     //           Next we square our residuals to obtain the squared residuals
-    //           After summing up, we pass our scalar tile to dfb_ex2_partial_id
+    //           After summing up, we pass our scalar tile to cb_ex2_partial_id
     //           The reader kernels then aggregate all of the local scalars into a single tile
     //       Global Reduce:
-    //           This single tile (dfb_ex_external_id) is a tile that contains each partial reduce from all the other cores
+    //           This single tile (cb_ex_external_id) is a tile that contains each partial reduce from all the other cores
     //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
-    //           The reader core then sends this data out to all other cores as dfb_ex2_global_id
+    //           The reader core then sends this data out to all other cores as cb_ex2_global_id
     //
-    //     dfb_ex2pe_id Calculation:
-    //       First we add dfb_ex2_global_id with dfb_eps_id
+    //     cb_ex2pe_id Calculation:
+    //       First we add cb_ex2_global_id with cb_eps_id
     //       Then we take the sqrt
     //       Lastly we take the reciprocal and he have the denominator of our calculation
     //     Final Val Calc:

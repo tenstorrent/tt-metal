@@ -9,9 +9,6 @@
  * tensor containing E(x**2) in the left most column.
  */
 
-// Produces two tiles per tile-row in this order: sum(x^2), then sum(x). The per-row statistics
-// occupy column 0 of each tile.
-
 #include <cstdint>
 
 #include "api/compute/reduce.h"
@@ -95,7 +92,11 @@ void kernel_main() {
                 ckl::output(dfb::x2, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(squaring_shape);
         }
 
-        // First output: sum(x^2) for the tile-row.
+        /*
+         * sum(x**2)
+         */
+        // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
+        // Bulk mode for optimal performance
         compute_kernel_lib::reduce<
             reduce_type,
             ReduceDim::REDUCE_ROW,
@@ -106,8 +107,11 @@ void kernel_main() {
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
             reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
-        // Second output: sum(x) for the tile-row. The square stage above waited cumulatively but
-        // popped nothing, so all Wt input tiles are already resident and this reduce drains them in bulk.
+        /*
+         * sum(x)
+         */
+        // BulkWaitBulkPop: All Wt tiles already in the buffer (see cumulative wait above)
+        // Bulk mode for optimal performance
         compute_kernel_lib::reduce<
             reduce_type,
             ReduceDim::REDUCE_ROW,

@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RMSNorm-only 2D path: every core produces a partial sum(x^2) tile; merge cores additionally combine
-// their column's partials into the final statistic. Each output tile carries its per-row statistics in column 0.
+/*
+ * This kernel computes rmsnorm statistics.
+For rmsnorm it computes E(x**2) and returns it as a one tile wide output
+ */
 
 #include <cstdint>
 
@@ -25,8 +27,8 @@
 namespace ckl = compute_kernel_lib;
 
 // The statistics pass reads either the raw input or the fused a + b result, depending on whether a
-// residual was supplied. Only the buffer selected here is bound on this build, so naming the other
-// handle would not compile even in a discarded C++ branch.
+// residual was supplied. Only the buffer selected here is bound on this build, so the alias is gated
+// at the preprocessor: naming an unbound handle would not compile even on a discarded branch.
 #ifdef FUSE_PRE_ADD
 constexpr auto dfb_inp_id = dfb::fused;  // fused a + b
 #else
@@ -44,6 +46,10 @@ void kernel_main() {
     constexpr auto reduce_fp32_mode = unpack_fp32_active ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
     DataflowBuffer dfb_inp(dfb_inp_id);
     DataflowBuffer dfb_reduce(dfb::reduce);
+    constexpr uint32_t onetile = 1;
+#ifdef IS_MERGE_CORE
+    DataflowBuffer dfb_zero(dfb::zero);
+#endif
 #ifdef FUSE_PRE_ADD
     constexpr auto in0_input =
         ckl::input(dfb::in0, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block);
@@ -62,7 +68,7 @@ void kernel_main() {
     constexpr auto squaring_shape = ckl::IterationShape::tiles(Wt).block_size(blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // Fuse pre-add: dfb_inp_id = dfb::in0 + dfb::res (absent entirely when there is no residual)
+        // Fuse pre-add: dfb_inp = dfb::in0 + dfb::res (absent entirely when there is no residual)
 #ifdef FUSE_PRE_ADD
         if constexpr (unpack_fp32_active) {
             ckl::binary_sfpu<
@@ -106,63 +112,56 @@ void kernel_main() {
     }
 
     // On a merge core, do a final sum over the column's partial statistics and write the result to
-    // the output buffer.
+    // the output buffer. Only the merge-core build binds that output buffer, so the whole block is
+    // gated at the preprocessor rather than on a runtime flag.
 #ifdef IS_MERGE_CORE
-    // Only merge-core builds bind out_final, so this block must be selected by the preprocessor.
-    DataflowBuffer dfb_x2_merge(dfb::x2_merge);
-    DataflowBuffer dfb_zero(dfb::zero);
-    // Wait for all num_cores_y tiles
-    dfb_x2_merge.wait_front(num_cores_y);
-    dfb_zero.wait_front(1);
-
-    // Initialize accumulation
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup
-    // full-init behaviour) should become a targeted DST re-arm.
-    compute_kernel_hw_startup(dfb::x2_merge, dfb::zero, dfb::out_final);
-
-    if constexpr (unpack_fp32_active) {
+    {
+        DataflowBuffer dfb_x2_merge(dfb::x2_merge);
         DataflowBuffer dfb_out_final(dfb::out_final);
         constexpr int dst0 = 0;
 
+        // Wait for all num_cores_y tiles
+        dfb_x2_merge.wait_front(num_cores_y);
+        dfb_zero.wait_front(1);
+
+        // Initialize accumulation
+        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the
+        // pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+        compute_kernel_hw_startup(dfb::x2_merge, dfb::zero, dfb::out_final);
         reconfig_data_format(dfb::x2_merge, dfb::zero);
         pack_reconfig_data_format(dfb::out_final);
         // Add all the column's partials together. The accurate path sums them in Dest on the SFPU;
         // add_tiles would pull each through SrcA/SrcB and round it to TF32.
-        copy_init(dfb::x2_merge);
-        add_binary_tile_init();
+        if constexpr (unpack_fp32_active) {
+            copy_init(dfb::x2_merge);
+            add_binary_tile_init();
+        } else {
+            add_init(dfb::x2_merge, dfb::zero, true);
+        }
 
         tile_regs_acquire();
-        copy_tile(dfb::x2_merge, 0, dst0);
-        for (uint32_t i = 1; i < num_cores_y; i++) {
-            copy_tile(dfb::x2_merge, i, dst0 + 1);
-            add_binary_tile(dst0, dst0 + 1, dst0);
+        if constexpr (unpack_fp32_active) {
+            copy_tile(dfb::x2_merge, 0, dst0);
+            for (uint32_t i = 1; i < num_cores_y; i++) {
+                copy_tile(dfb::x2_merge, i, dst0 + 1);
+                add_binary_tile(dst0, dst0 + 1, dst0);
+            }
+        } else {
+            for (uint32_t i = 0; i < num_cores_y; i++) {
+                add_tiles(dfb::x2_merge, dfb::zero, i, 0, dst0);
+            }
         }
         tile_regs_commit();
 
-        dfb_out_final.reserve_back(1);
+        dfb_x2_merge.pop_front(num_cores_y);
+
+        dfb_out_final.reserve_back(onetile);
 
         tile_regs_wait();
         pack_tile(dst0, dfb::out_final);
         tile_regs_release();
 
-        dfb_out_final.push_back(1);
-    } else {
-        ckl::eltwise_chain(
-            ckl::IterationShape::tiles(num_cores_y),
-            ckl::BinaryFpu<
-                ckl::BinaryFpuOp::Add,
-                ckl::input(dfb::x2_merge, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
-                ckl::input(dfb::zero, ckl::WaitPolicy::None, ckl::PopPolicy::None),
-                ckl::Dst::D0,
-                ckl::DestAccumulation::WholeShape>{},
-            ckl::PackTile<ckl::output(
-                dfb::out_final,
-                ckl::ReservePolicy::OneUpfront,
-                ckl::PushPolicy::OneAtEnd,
-                ckl::DataFormatReconfig::Enabled,
-                ckl::TileAddressing::Direct,
-                ckl::DestAccumulation::WholeShape)>{});
+        dfb_out_final.push_back(onetile);
     }
-    dfb_x2_merge.pop_front(num_cores_y);
 #endif
 }

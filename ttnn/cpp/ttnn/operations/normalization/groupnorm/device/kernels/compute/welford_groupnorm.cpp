@@ -98,14 +98,14 @@ void kernel_main() {
      *   Statistics Aggregation:
      *       Local aggregation per core:
      *           Convert accumulated M2 to variance using welford_finalize_to_face()
-     *           Store per-group statistics in dfb_ex_partial_id for inter-core communication
+     *           Store per-group statistics in cb_ex_partial_id for inter-core communication
      *       Global reduction across cores:
-     *           Reader kernels aggregate local statistics from all cores into dfb_ex_global_id
+     *           Reader kernels aggregate local statistics from all cores into cb_ex_global_id
      *           Designated sender core produces final global mean and variance per group
      *   Normalization Factor Calculation:
      *       Add epsilon to variance: Var + eps
      *       Compute reciprocal square root: 1/sqrt(Var + eps)
-     *       Store normalization factor in dfb_ex2pe_id for use in final calculation
+     *       Store normalization factor in cb_ex2pe_id for use in final calculation
      *   Final Normalization:
      *       Center inputs: x - μ (mean subtraction)
      *       Scale by normalization factor: (x - μ) * (1/sqrt(Var + eps))
@@ -470,7 +470,7 @@ void kernel_main() {
         // End Statistics Aggregation
 
         // Start Normalization Factor Calculation
-        // Wait for final welford values in dfb_ex_global_id
+        // Wait for final welford values in cb_ex_global_id
         dfb_ex_global.wait_front(2 * num_groups);
         // fp32: dfb_ex_global is fp32 (var), dfb_eps is bf16; the welford intake left SrcA on the fp32 input alias.
         // Reset both srcs so they match the operands read below. no-op for bf16.
@@ -532,8 +532,9 @@ void kernel_main() {
                     for (uint32_t g = min_group; g < num_groups; ++g) {
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
-                        // fp32: reset both sources after the previous group's multiply; the old two-argument SrcB
-                        // transition did not reset SrcA.
+                        // fp32: SrcA needs dfb_in0 (fp32 input), SrcB needs dfb_ex_global (fp32 mean); the prior
+                        // group's mul_tiles(dfb_xmm) left SrcA on dfb_xmm. Use the unconditional 1-arg form: the old
+                        // 2-arg srcb(dfb_eps -> dfb_ex_global) never reset SrcA at all.
                         if constexpr (enable_fp32_reconfig) {
                             reconfig_data_format_srca(dfb_in0_id);
                             reconfig_data_format_srcb(dfb_ex_global_id);
@@ -561,10 +562,7 @@ void kernel_main() {
                                 ckl::input(ex2pe_scalar_offset_input, ckl::BroadcastDim::Scalar)>{0u, g},
                             ckl::PackTile<xmm_per_tile_output>{});
 
-                        // Apply the current group's row selector and accumulate into dfb_x. The mask
-                        // product stays in DEST and, when a tile spans multiple groups, the running
-                        // dfb_x is added via DEST_TO_SRCB reuse before the single pack — mirroring the
-                        // raw kernel's fused c+d structure (no extra DEST -> L1 -> DEST round trip).
+                        // Keep the masked value in DEST and add the existing output before packing.
                         const uint32_t mask_offset = g * block_w;
                         const uint32_t mask_index = mask_offset + block_w_index;
                         reconfig_data_format_srcb(dfb_ex2pe_id, dfb_input_mask_id);
@@ -577,7 +575,7 @@ void kernel_main() {
                                     ckl::input(input_mask_scalar_offset_input, ckl::BroadcastDim::Row)>{0u, mask_index},
                                 ckl::PackTile<x_per_tile_output>{});
                         } else {
-                            // Not the first group for this tile: add what is already in dfb_x.
+                            // Not the first group for this tile: add what is already in cb_x.
                             reconfig_data_format_srca(dfb_x_id);
                             ckl::eltwise_chain(
                                 ckl::IterationShape::one_tile(),
@@ -627,7 +625,7 @@ void kernel_main() {
                     }
 
                     if constexpr (do_gamma) {
-                        // fp32: reset SrcA to dfb_x; the prior mask/accumulate step may leave it on bf16.
+                        // fp32: reset SrcA to dfb_x (fp32); the prior mask/accumulate step left SrcA on a bf16 format.
                         if constexpr (enable_fp32_reconfig) {
                             reconfig_data_format_srca(dfb_x_id);
                         }
@@ -642,7 +640,7 @@ void kernel_main() {
                     }
 
                     if constexpr (do_beta) {
-                        // fp32: reset SrcA to dfb_x, as in the gamma step above.
+                        // fp32: reset SrcA to dfb_x (fp32), same as the gamma step above.
                         if constexpr (enable_fp32_reconfig) {
                             reconfig_data_format_srca(dfb_x_id);
                         }
@@ -662,7 +660,6 @@ void kernel_main() {
                     }
                     reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
 #ifndef UNTILIZE_OUT
-                    // The streaming output disables automatic reconfiguration, so select the fp32 output format.
                     // Packer was last set for bf16 dfb_x; reconfigure to dfb_out_id (may be fp32) before pack, restore
                     // after. Only needed when out differs from dfb_x (fp32 path); no-op gated out for bf16.
                     if constexpr (enable_fp32_reconfig) {
@@ -702,7 +699,7 @@ void kernel_main() {
     dfb_eps.pop_front(1);
     dfb_input_mask.pop_front(num_tiles_input_mask);
 
-    // Pop all the dfb_beta_id and dfb_gamma_id if used
+    // Pop all the cb_beta_id and cb_gamma_id if used
     if constexpr (do_beta) {
         dfb_beta.pop_front(per_core_N);
     }

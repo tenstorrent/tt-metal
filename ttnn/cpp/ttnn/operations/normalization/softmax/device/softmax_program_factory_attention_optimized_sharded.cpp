@@ -229,10 +229,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
             reader_defines["SHARDED_CAUSAL_MASK"] = "1";
         }
     }
-    KernelSpec::CompilerOptions::Defines compute_defines;
-    if (has_mask) {
-        compute_defines["FUSED_SCALE_MASK"] = "1";
-    }
+    KernelSpec::CompilerOptions::Defines compute_defines = reader_defines;
     if (attributes.numeric_stable) {
         compute_defines["NUMERIC_STABLE"] = "1";
     }

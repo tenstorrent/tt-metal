@@ -185,7 +185,7 @@ void kernel_main() {
 #else
     // Always call compute_kernel_hw_startup regardless of TILIZE_IN.
     // This initializes llk_pack_dest_init, which sets up the MATH-PACK DST semaphore
-    // in the "available for MATH" state.  Without it, the first tilize_block call's
+    // in the "available for MATH" state. Without it, the first tilize_block call's
     // internal llk_math_wait_for_dest_available() spins forever (deadlock).
 #ifdef RMSNORM
     compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_xmm2_id);
@@ -247,7 +247,7 @@ void kernel_main() {
                 ckl::Optional<
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{},
-                // (x-E[x])^2. Pack to CB
+                // (x-E[x])^2. Pack to the buffer
                 ckl::Square<ckl::Dst::D0>{},
                 ckl::PackTile<ckl::output(
                     dfb_xmm2_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
@@ -301,7 +301,7 @@ void kernel_main() {
         // Start of
         // Calculation
         //                     1
-        // dfb_ex2pe = ---------
+        //  dfb_ex2pe =   -------------
         //               √(Var(X) + ε)
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),
@@ -312,7 +312,7 @@ void kernel_main() {
             ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(dfb_ex2pe_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd)>{});
 
-        // broadcasts the tile since dfb_ex2pe_id is a column vector that contains the important data
+        // broadcasts the tile since dfb_ex2pe is a column vector that contains the important data
         ckl::unary_bcast<ckl::BroadcastDim::Col, ckl::input(dfb_ex2pe_id), ckl::output(dfb_ex2pe_id)>(
             ckl::IterationShape::tiles(onetile));
         dfb_ex2pe.wait_front(onetile);
@@ -320,7 +320,7 @@ void kernel_main() {
         // End of
         // Calculation
         //                     1
-        // dfb_ex2pe = ---------
+        //  dfb_ex2pe =   -------------
         //               √(Var(X) + ε)
 
         // Start of
@@ -332,7 +332,7 @@ void kernel_main() {
             const auto block_shape = ckl::IterationShape::tiles(block.size())
                                          .block_size(block.full_block_size(), ckl::BlockTailSync::FullBlock);
 #ifdef TILIZE_IN
-            // Tilize one block from dfb_in_rm_id → dfb_in_id per loop iteration (Pass 2).
+            // Tilize one block from dfb_in_rm → dfb_in per loop iteration (Pass 2).
             // Reader supplies this second pass of data after the variance data.
             tilize_row_major_block(dfb_in_rm, dfb_in, block_size, block);
 
@@ -361,7 +361,7 @@ void kernel_main() {
                     do_fuse_pre_add,  // FUSE_PRE_ADD: + b (DEST-reuse), else stripped
                     ckl::DestReuseBinary<ckl::BinaryFpuOp::Add, inb_input, ckl::DestReuseType::DEST_TO_SRCB>>{},
                 // Note: We shouldn't have to pack to
-                // intermediate CB. We should be able to
+                // an intermediate buffer. We should be able to
                 // do a binary dest with reuse (as we used
                 // to). However, tt-llk #868 is preventing
                 // that from working at the moment.

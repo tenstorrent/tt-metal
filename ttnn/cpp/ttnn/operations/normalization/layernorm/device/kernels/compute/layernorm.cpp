@@ -177,7 +177,7 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
         tilize_all_blocks_to_dfb<block_size>(dfb_in_rm, dfb_in, Wt);
-        // Re-init binary ops after tilize/untilize reconfiguration. compute_kernel_hw_startup is call-once;
+        // Re-init binary ops after tilize hardware reconfiguration.
         // TODO(#52395): replace this mid-kernel re-init with a targeted DST re-arm.
 #ifdef FUSE_PRE_ADD
         compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_x_id);
@@ -187,7 +187,9 @@ void kernel_main() {
         compute_kernel_hw_startup(dfb_x_id, dfb_scaler_id, dfb_ex_id);
 #endif
 #endif
-        // X + Y
+/*
+ * X + Y
+ */
 #ifdef FUSE_PRE_ADD
         // The reader streams block-sized chunks, so waiting for the whole row would deadlock.
         // In/inb come from the reader and need to be
@@ -413,7 +415,7 @@ void kernel_main() {
     static_assert(
         tile_width == tt::constants::TILE_WIDTH,
         "layernorm reader generates reduce scalers using TILE_WIDTH; compute must use the same tile "
-        "width or cb_scaler push/pop counts diverge (issue #48487)");
+        "width or dfb_scaler push/pop counts diverge (issue #48487)");
     constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tile_width);
     dfb_scaler.pop_front(num_scaler_tiles);
 }

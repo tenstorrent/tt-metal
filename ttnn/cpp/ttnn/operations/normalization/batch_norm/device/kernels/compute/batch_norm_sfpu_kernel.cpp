@@ -41,14 +41,9 @@ void kernel_main() {
     const uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     // out = ((input - batch_mean) / sqrt(batch_var + eps)) * optional(weight) + optional(bias).
-    // batchnorm_bcast_tiles: For each output tile in [tile_start, freq), computes batch-norm on tiles from dfb::input
-    // (input) broadcast against dfb::batch_mean (batch mean). First builds 1/sqrt(batch_var + eps) in dfb::den, then
-    // per tile: (input - mean) * den, optional multiply by weight, optional add bias. When needs_output_typecast,
-    // SFPU typecasts to the writer-facing dfb::writer_out.
     const auto batchnorm_bcast_tiles = [](uint32_t freq, uint32_t tile_start) __attribute__((always_inline)) {
         using namespace compute_kernel_lib;
 
-        // 1/(sqrt(batch_var + eps)) = dfb::den
         eltwise_chain(
             IterationShape::one_tile(),
             CopyTile<input(dfb::batch_var, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D0>{},
@@ -71,20 +66,13 @@ void kernel_main() {
 
         eltwise_chain(
             IterationShape::tiles(inner_count),
-            // (input - batch_mean) * den
             CopyTile<input(dfb::input)>{},
-            // batch_mean, broadcast against the input
             CopyTile<input(dfb::batch_mean, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>{},
             SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
-            // 1/(sqrt(batch_var + eps))
             CopyTile<input(dfb::den, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>{},
-            // (input - batch_mean)/(sqrt(batch_var + eps)) = result
             MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-            // weight tensor
             Optional<weight_has_value, CopyTile<input(dfb::weight, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>>{},
-            // result = result * weight
             Optional<weight_has_value, MulBinary<Dst::D0, Dst::D1, Dst::D0>>{},
-            // result = result + bias
             Optional<bias_has_value, CopyTile<input(dfb::bias, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D1>>{},
             Optional<bias_has_value, AddBinary<Dst::D0, Dst::D1, Dst::D0>>{},
             Optional<needs_output_typecast, Typecast<tc_in_fmt, tc_out_fmt, Dst::D0>>{},

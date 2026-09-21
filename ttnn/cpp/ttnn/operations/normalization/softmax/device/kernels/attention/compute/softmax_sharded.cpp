@@ -28,7 +28,7 @@ template <
     std::uint32_t dfb_max_id,
     std::uint32_t dfb_out_id>
 ALWI void calc_numeric_stable() {
-    DataflowBuffer dfb_out(dfb_out_id);
+    DataflowBuffer dfb_out_obj(dfb_out_id);
 
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
@@ -50,7 +50,7 @@ ALWI void calc_numeric_stable() {
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
             dfb_out_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled)>{});
-    dfb_out.wait_front(block_w);
+    dfb_out_obj.wait_front(block_w);
 }
 
 void kernel_main() {
@@ -75,8 +75,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in0, dfb::max_scaler, dfb::exps);
 
-    DataflowBuffer dfb_exps(dfb::exps);
-    DataflowBuffer dfb_x(dfb_x_id);
+    DataflowBuffer dfb_exps_obj(dfb::exps);
+    DataflowBuffer dfb_x_obj(dfb_x_id);
 
 #ifdef FUSED_SCALE_MASK
     constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
@@ -107,7 +107,7 @@ void kernel_main() {
 // add numeric_stable
 // fuse exp with sub tiles
 #ifdef NUMERIC_STABLE
-        dfb_x.wait_front(block_w);
+        dfb_x_obj.wait_front(block_w);
         calc_numeric_stable<block_w, num_subblocks_w, subblock_w, dfb_x_id, dfb::max_scaler, dfb::max, dfb::exps>();
 #endif
 
@@ -131,7 +131,7 @@ void kernel_main() {
         // SUM reduce with reciprocal operation using PRELOADED mode
         // PRELOADED is correct for sharded - all tiles loaded at once
         // Auto-detects FP32 mode from ENABLE_FP32_DEST_ACC define
-        dfb_exps.wait_front(block_w);
+        dfb_exps_obj.wait_front(block_w);
         compute_kernel_lib::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,

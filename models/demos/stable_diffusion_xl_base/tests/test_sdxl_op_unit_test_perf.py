@@ -135,7 +135,7 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 1319491  # 2026-09-16 N300: maximum DEVICE KERNEL AVG across 10 local runs
+    expected_duration_ns = 1319491  # Measured: ~1.319ms for GroupNorm VAE welford_reciprocal
 
     # Log the performance result
     print(
@@ -172,7 +172,7 @@ def test_block_sharded_group_norm_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 68875  # Measured: ~68.8μs with full-block synchronization and valid-tail math
+    expected_duration_ns = 68875  # Measured: ~68.9μs for GroupNorm SDXL block sharded
 
     # Log the performance result
     print(
@@ -209,7 +209,7 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 460175  # Measured: ~460μs after the eltwise-chain migration
+    expected_duration_ns = 460175  # Measured: ~460μs for GroupNorm SDXL negative mask
 
     # Log the performance result
     print(
@@ -246,7 +246,7 @@ def test_ff_matmul_with_gelu_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 235541  # 2026-09-16 N300: maximum DEVICE KERNEL AVG across 10 local runs
+    expected_duration_ns = 235541  # Measured: ~235.5μs for FF Matmul SDXL with GELU
 
     # Log the performance result
     print(
@@ -283,7 +283,7 @@ def test_conv2d_block_sharded_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 994294  # 2026-09-16 N300: maximum DEVICE KERNEL AVG across 10 local runs
+    expected_duration_ns = 994294  # Measured: ~0.9943ms for Conv2D SDXL block sharded
 
     # Log the performance result
     print(
