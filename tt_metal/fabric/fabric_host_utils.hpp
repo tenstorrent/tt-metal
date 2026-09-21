@@ -30,10 +30,6 @@ namespace tt::tt_metal {
 class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
-namespace tt::llrt {
-class RunTimeOptions;
-}  // namespace tt::llrt
-
 namespace tt::tt_fabric {
 
 class TopologyMapper;
@@ -139,21 +135,6 @@ void serialize_intermesh_port_assignment_to_file(
     const std::map<FabricNodeId, std::unordered_map<chan_id_t, std::pair<FabricNodeId, chan_id_t>>>&
         intermesh_chan_to_peer,
     const std::filesystem::path& output_file_path);
-
-// Version of the fabric manifest schema emitted below.
-constexpr int FABRIC_MANIFEST_VERSION = 1;
-
-// Standard per-rank path for the fabric manifest.
-std::filesystem::path fabric_manifest_path(const tt::llrt::RunTimeOptions& rtoptions);
-
-// Serialize this fabric instance's topology to the fabric manifest JSON file.
-//
-// This captures state that is frozen for the run, including fabric config, meshes, chip coordinates, and the set of
-// ethernet cores actually running fabric routers.
-//
-// This should be called only after fabric router synchronization succeeds.
-void serialize_fabric_manifest_to_file(
-    const ControlPlane& control_plane, const std::filesystem::path& output_file_path);
 
 }  // namespace tt::tt_fabric
 

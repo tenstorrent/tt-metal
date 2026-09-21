@@ -27,7 +27,7 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/fabric_manifest.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {

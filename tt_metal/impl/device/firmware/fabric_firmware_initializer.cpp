@@ -23,6 +23,7 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_host_utils.hpp"
+#include "fabric/fabric_manifest.hpp"
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder_context.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
