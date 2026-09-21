@@ -5,14 +5,16 @@
 
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON_TESTS="$(cd "$HERE/.." && pwd)"
+SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TTNOP_DIR="$(cd "$SCRIPTS_DIR/.." && pwd)"
+PYTHON_TESTS="$(cd "$TTNOP_DIR/.." && pwd)"
 LLK_ROOT="$(cd "$PYTHON_TESTS/../.." && pwd)"
+RUNTIME_DIR="$TTNOP_DIR/runtime"
 
 export CHIP_ARCH="${CHIP_ARCH:-wormhole}"
 export LLK_HOME="$LLK_ROOT"
 # The plugin and its modules are imported by bare name from the pytest process.
-export PYTHONPATH="$HERE:$PYTHON_TESTS${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$RUNTIME_DIR:$PYTHON_TESTS${PYTHONPATH:+:$PYTHONPATH}"
 
 # Quasar LLK tests run through tt-exalens against the simulator, same flags as
 # run_quasar_regression.sh. Silicon (WH/BH) leaves this empty.
@@ -39,7 +41,7 @@ reset_report_dir() {
 
 setup_report_dir() {
     # Call before cd so a relative report dir stays under ttnop/.
-    [[ "$REPORT_DIR" = /* ]] || REPORT_DIR="$HERE/$REPORT_DIR"
+    [[ "$REPORT_DIR" = /* ]] || REPORT_DIR="$TTNOP_DIR/$REPORT_DIR"
     mkdir -p "$REPORT_DIR"
     REPORT_DIR="$(cd "$REPORT_DIR" && pwd)"
     export TTNOP_REPORT_DIR="$REPORT_DIR"
@@ -47,7 +49,7 @@ setup_report_dir() {
 }
 
 build_scanner() {
-    make --silent -C "$HERE" "scan-$CHIP_ARCH"
+    make --silent -C "$TTNOP_DIR/native" "scan-$CHIP_ARCH"
 }
 
 # Run pytest over a node-id file (so a huge suite never hits ARG_MAX), under a
@@ -56,5 +58,5 @@ build_scanner() {
 supervise_nodeids() {
     local ids_file="$1"
     shift
-    python3 "$HERE/supervise.py" "$ids_file" "$@"
+    python3 "$RUNTIME_DIR/supervise.py" "$ids_file" "$@"
 }

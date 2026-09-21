@@ -2,14 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-CXXFLAGS ?= -O2 -std=c++17 -Wall -Wextra
-
-
-scan-%: scan.cpp tensix_isa.h elf32.h
-	$(CXX) $(CXXFLAGS) -DARCH_$(shell echo $* | tr a-z A-Z) -o $@ scan.cpp
+scan-%:
+	$(MAKE) --no-print-directory -C native $@
 
 clean:
-	rm -f scan-*
+	$(MAKE) --no-print-directory -C native clean
 
 check:
 	python3 tests/ttnop_check.py

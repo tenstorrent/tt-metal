@@ -92,7 +92,7 @@ jobs:
 
           # One selector is shared with ci.sh so planning and execution cannot drift.
           selection="$(
-            python3 tt_metal/tt-llk/tests/python_tests/ttnop/changed_tests.py \
+            python3 tt_metal/tt-llk/tests/python_tests/ttnop/tools/changed_tests.py \
               --repo . --base "$base" --arch "$ARCHITECTURE"
           )"
           mapfile -t selected_tests < <(

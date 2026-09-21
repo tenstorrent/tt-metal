@@ -5,7 +5,7 @@
 # Breadth runner: compile the suite once, then sweep every planned
 # (thread, site, delay) exactly once behind a clean baseline pass.
 #
-#   ./ci.sh --test test_eltwise_unary_datacopy.py [--k EXPR]
+#   ./scripts/ci.sh --test test_eltwise_unary_datacopy.py [--k EXPR]
 #           [--markers 'not perf and not nightly and not accuracy and not quasar']
 #           [--splits N --group G] [--report-dir DIR] [--jobs N]
 #           [--device-jobs N] [--collect-to FILE] [--nodeids FILE]
@@ -25,7 +25,7 @@ GROUP=""
 JOBS="${TTNOP_JOBS:-15}"
 # One Tensix core per xdist worker (pytest's parallel process).
 DEVICE_JOBS="${TTNOP_DEVICE_JOBS:-8}"
-REPORT_DIR="${TTNOP_REPORT_DIR:-$HERE/reports}"
+REPORT_DIR="${TTNOP_REPORT_DIR:-$TTNOP_DIR/reports}"
 COLLECT_TO=""
 NODEIDS=""
 CHANGED_SINCE="${TTNOP_CHANGED_SINCE:-}"
@@ -50,14 +50,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -n "$CHANGED_SINCE" && -z "$NODEIDS" ]]; then
-    REPO_ROOT="$(git -C "$HERE" rev-parse --show-toplevel)"
+    REPO_ROOT="$(git -C "$TTNOP_DIR" rev-parse --show-toplevel)"
     git -C "$REPO_ROOT" cat-file -e "$CHANGED_SINCE^{commit}"
     TESTS=()
     # Use the same dependency mapping that sized the workflow matrix.
     while IFS= read -r path; do
         TESTS+=("$REPO_ROOT/$path")
     done < <(
-        python3 "$HERE/changed_tests.py" \
+        python3 "$TTNOP_DIR/tools/changed_tests.py" \
             --repo "$REPO_ROOT" --base "$CHANGED_SINCE" --arch "$CHIP_ARCH" --paths
     )
     if [[ ${#TESTS[@]} -eq 0 ]]; then

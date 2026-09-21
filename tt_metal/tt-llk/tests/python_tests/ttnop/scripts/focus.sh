@@ -11,12 +11,12 @@
 #   gives every worker the case, then TTNOP_SHARD_VARIANTS splits the NOP plan
 #   between those workers.
 #
-#   ./focus.sh --sites unpack:3 --nop risc_nop --delays 8,16 \
+#   ./scripts/focus.sh --sites unpack:3 --nop risc_nop --delays 8,16 \
 #       'test_x.py::test_y[params]'
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env.sh"
 
-REPORT_DIR="${TTNOP_REPORT_DIR:-$HERE/reports/focus}"
+REPORT_DIR="${TTNOP_REPORT_DIR:-$TTNOP_DIR/reports/focus}"
 # Defaults to 8 Tensix on this one case. --device-jobs 1 stays in-process.
 DEVICE_JOBS="${TTNOP_DEVICE_JOBS:-8}"
 NODE_IDS=()
