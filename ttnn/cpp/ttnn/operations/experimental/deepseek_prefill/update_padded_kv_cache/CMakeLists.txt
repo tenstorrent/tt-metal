@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_update_padded_kv_cache
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_update_padded_kv_cache REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_update_padded_kv_cache TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_update_padded_kv_cache)
 
 set_target_properties(

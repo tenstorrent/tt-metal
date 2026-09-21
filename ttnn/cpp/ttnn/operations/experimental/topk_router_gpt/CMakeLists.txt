@@ -7,7 +7,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_topk_router_gpt ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::TopkRouterGpt ALIAS ttnn_op_experimental_topk_router_gpt)
 
-target_precompile_headers(ttnn_op_experimental_topk_router_gpt REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_topk_router_gpt TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_topk_router_gpt)
 
 set_target_properties(

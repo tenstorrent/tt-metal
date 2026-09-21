@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_rotary_embedding_indexed
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_rotary_embedding_indexed REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_rotary_embedding_indexed TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_rotary_embedding_indexed)
 
 set_target_properties(
