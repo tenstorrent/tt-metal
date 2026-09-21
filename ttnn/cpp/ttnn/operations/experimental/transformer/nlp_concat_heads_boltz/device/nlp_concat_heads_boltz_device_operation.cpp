@@ -7,6 +7,39 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
+namespace {
+
+// Head occupies padded[1]*padded[2] rows. Also called from compute_output_specs (before validate).
+uint32_t boltz_heads_per_shard(const Tensor& input_tensor) {
+    const auto shard_spec = input_tensor.shard_spec().value();
+    const auto& padded_shape = input_tensor.padded_shape();
+    const uint32_t rows_per_head = padded_shape[1] * padded_shape[2];
+    TT_FATAL(
+        shard_spec.shape[1] == padded_shape[-1],
+        "Input tensor shard width ({}) must equal padded width ({})",
+        shard_spec.shape[1],
+        padded_shape[-1]);
+    TT_FATAL(
+        rows_per_head > 0 && shard_spec.shape[0] % rows_per_head == 0,
+        "Input tensor shard height ({}) must be divisible by rows per head (padded[1] * padded[2] = {} * {} = {})",
+        shard_spec.shape[0],
+        padded_shape[1],
+        padded_shape[2],
+        rows_per_head);
+    const uint32_t heads_per_shard = shard_spec.shape[0] / rows_per_head;
+    TT_FATAL(
+        heads_per_shard > 0 && padded_shape[0] % heads_per_shard == 0,
+        "Input tensor num_heads ({}) must be divisible by heads per shard (shard height / rows per head = {} / "
+        "{} = {})",
+        padded_shape[0],
+        shard_spec.shape[0],
+        rows_per_head,
+        heads_per_shard);
+    return heads_per_shard;
+}
+
+}  // namespace
+
 void NLPConcatHeadsBoltzDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
@@ -27,26 +60,16 @@ void NLPConcatHeadsBoltzDeviceOperation::validate_on_program_cache_miss(
             input_tensor.memory_config().memory_layout() != tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
             "Input tensor memory layout must not be WIDTH_SHARDED but got {}",
             input_tensor.memory_config().memory_layout());
-        auto shard_spec = input_tensor.shard_spec().value();
-        TT_FATAL(
-            shard_spec.shape[1] == input_tensor.padded_shape()[-1],
-            "Input tensor shard width ({}) must equal padded width ({})",
-            shard_spec.shape[1],
-            input_tensor.padded_shape()[-1]);
-        TT_FATAL(
-            shard_spec.shape[0] % input_tensor.padded_shape()[-2] == 0,
-            "Input tensor shard height ({}) must be divisible by padded height ({})",
-            shard_spec.shape[0],
-            input_tensor.padded_shape()[-2]);
-        TT_FATAL(
-            input_tensor.padded_shape()[1] % (shard_spec.shape[0] / input_tensor.padded_shape()[-2]) == 0,
-            "Input tensor padded height ({}) must be divisible by shard height / padded height ({} / {})",
-            input_tensor.padded_shape()[1],
-            shard_spec.shape[0],
-            input_tensor.padded_shape()[-2]);
+        boltz_heads_per_shard(input_tensor);
         TT_FATAL(
             args.output_mem_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
             "Output memory config layout must not be HEIGHT_SHARDED but got {}",
+            args.output_mem_config.memory_layout());
+        // The sharded kernel writes directly into the output shard; an interleaved output has no
+        // shard to write to (legacy silently produced garbage through an unconfigured CB here).
+        TT_FATAL(
+            args.output_mem_config.is_sharded(),
+            "Sharded input requires a sharded output memory config but got {}",
             args.output_mem_config.memory_layout());
     } else {
         TT_FATAL(
@@ -74,16 +97,15 @@ NLPConcatHeadsBoltzDeviceOperation::spec_return_value_t NLPConcatHeadsBoltzDevic
     const auto& input_shape = input_tensor.logical_shape();
 
     auto num_heads = input_shape[0];
-    auto sequence_length = input_shape[2];
     auto head_dim = input_shape[3];
 
     auto hidden_dim = num_heads * head_dim;
 
-    Shape output_shape({1, sequence_length, sequence_length, hidden_dim});
+    Shape output_shape({1, input_shape[1], input_shape[2], hidden_dim});
 
     if (args.output_mem_config.is_sharded()) {
         tt::tt_metal::ShardSpec shard_spec = input_tensor.shard_spec().value();
-        uint32_t heads_per_shard = shard_spec.shape[0] / input_tensor.padded_shape()[-2];
+        const uint32_t heads_per_shard = boltz_heads_per_shard(input_tensor);
         shard_spec.shape = {shard_spec.shape[0] / heads_per_shard, shard_spec.shape[1] * heads_per_shard};
         auto mem_config = tt::tt_metal::MemoryConfig(
             args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), shard_spec);
