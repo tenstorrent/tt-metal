@@ -52,6 +52,14 @@ _ENV_FLAG = "TT_HW_PLANNER_LOADER_RESOLVER"
 # purpose: the fallback used to be recorded in a module docstring, which nothing reads, so a run
 # could be scored against a reference unrelated to the shipped weights with no trace in the result.
 _RANDOM_WEIGHTS_FLAG = "REFERENCE_USES_RANDOM_WEIGHTS"
+# WHAT A LOADER ON DISK WAS ASKED FOR, so one written under an older, weaker brief is replaced
+# rather than reused. Bumped when the brief changes in a way that makes an existing loader wrong:
+#   1  a loader that imports and defines load_reference_model
+#   2  ...and covers the WHOLE checkpoint, having searched outside the repo when nothing in it did
+# A loader that does not declare at least the current number is regenerated. Cheap by construction:
+# read off the source, so nothing has to build a multi-billion-parameter reference to find out.
+_LOADER_CONTRACT_VAR = "REFERENCE_LOADER_CONTRACT"
+_LOADER_CONTRACT = 2
 
 _WEIGHT_GLOB = "*.safetensors"
 # Config numbers are copied verbatim, so anything but float round-trip noise is a real divergence.
@@ -208,6 +216,10 @@ def build_prompt(model_id: str, demo_dir: Path, failure_text: str) -> str:
         f"If and ONLY if you take this path, set `{_RANDOM_WEIGHTS_FLAG} = True` at module level, so "
         f"the run can report that PCC was scored against structure and not against the real weights. "
         f"Do not set it on any other path.\n\n"
+        f"Set `{_LOADER_CONTRACT_VAR} = {_LOADER_CONTRACT}` at module level once the loader reaches "
+        f"every substantial group of the checkpoint. It records which brief the loader was written "
+        f"to, so a later resolver knows whether to reuse it or replace it; omit it and this loader "
+        f"will simply be regenerated next run.\n\n"
         f"The loader must be import-safe (no side effects at import) and deterministic. After writing, "
         f"run a quick self-check that `load_reference_model('{model_id}')` returns a module and a "
         f"forward runs. Do NOT edit any test file or weaken any assertion — only write "
@@ -276,9 +288,43 @@ def uses_random_weights(demo_dir: Path) -> bool:
     return False
 
 
+def _declared_contract(tree) -> int:
+    """The contract a loader on disk says it was written to, or 0 when it says nothing."""
+    for node in getattr(tree, "body", ()):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name) and target.id == _LOADER_CONTRACT_VAR:
+                value = getattr(node, "value", None)
+                if isinstance(value, ast.Constant) and isinstance(value.value, int):
+                    return int(value.value)
+    return 0
+
+
 def _validates(demo_dir: Path) -> bool:
     tree = _loader_ast(demo_dir)
     return tree is not None and _defines_loader(tree)
+
+
+def _reusable(demo_dir: Path) -> bool:
+    """Is the loader on disk one this resolver would still write today?
+
+    STRUCTURAL SOUNDNESS IS NOT THE SAME QUESTION AS "ASKED THE SAME THING". The reuse check was
+    `_validates` alone, so any file defining load_reference_model was handed back forever and the
+    resolver never ran again. On voxtral_4b_tts_2603 the loader on disk was correct and carefully
+    verified -- it pinned the RoPE permute bit-identically against the base model -- but it had
+    explicitly declined the TTS submodels as having "no transformers equivalent", written before
+    covering the whole checkpoint was part of the brief. It was reused indefinitely and the
+    116-tensor audio_tokenizer stayed unreachable. The file was not wrong; the brief had moved.
+    Deleting it by hand is not a workflow, so the brief is versioned and an older one regenerates.
+
+    Kept separate from `_validates`, which answers the structural question for every caller and
+    must keep meaning exactly that: only the decision to REUSE cares which brief was in force.
+    """
+    tree = _loader_ast(demo_dir)
+    if tree is None or not _defines_loader(tree):
+        return False
+    return _declared_contract(tree) >= _LOADER_CONTRACT
 
 
 def load_reference(demo_dir: Path, model_id: str):
@@ -945,7 +991,7 @@ def resolve(
     demo_dir = Path(demo_dir)
     if not is_enabled(enabled):
         return {"resolved": False, "reason": f"disabled (set {_ENV_FLAG}=1 to enable)"}
-    if has_loader(demo_dir) and _validates(demo_dir):
+    if has_loader(demo_dir) and _reusable(demo_dir):
         return _resolved(demo_dir, "loader already present")
     loader_path(demo_dir).parent.mkdir(parents=True, exist_ok=True)
     prompt = build_prompt(model_id, demo_dir, failure_text)

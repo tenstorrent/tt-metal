@@ -721,3 +721,67 @@ def test_the_resolver_is_given_tools_that_can_reach_outside_the_repo() -> None:
 
     src = inspect.getsource(rlr.resolve) if hasattr(rlr, "resolve") else inspect.getsource(rlr)
     assert '"WebSearch"' in src and '"WebFetch"' in src, "no tool can reach past the HF file list"
+
+
+# --------------------------------------------------------------------------------------------
+# Reusing a loader written to an older brief. `_validates` checked only that the file defines
+# load_reference_model, so once any loader existed the resolver never ran again. On
+# voxtral_4b_tts_2603 the loader on disk was correct and carefully verified -- it pinned the RoPE
+# permute bit-identically against the base model -- but it had explicitly declined the TTS
+# submodels as having "no transformers equivalent", written before covering the whole checkpoint
+# was part of the brief. It was reused indefinitely and the vocoder stayed unreachable. Deleting it
+# by hand is not a workflow.
+
+
+def _loader_file(tmp_path: Path, body: str) -> Path:
+    d = tmp_path / "tests" / "pcc"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "_reference_loader.py").write_text(body)
+    return tmp_path
+
+
+_DEF = "def load_reference_model(model_id):\n    return None\n"
+
+
+def test_a_loader_written_to_the_current_brief_is_reused(tmp_path: Path) -> None:
+    from scripts.tt_hw_planner.reference_loader_resolver import _LOADER_CONTRACT, _LOADER_CONTRACT_VAR, _reusable
+
+    d = _loader_file(tmp_path, f"{_LOADER_CONTRACT_VAR} = {_LOADER_CONTRACT}\n{_DEF}")
+    assert _reusable(d) is True
+
+
+def test_a_loader_that_declares_no_brief_is_regenerated(tmp_path: Path) -> None:
+    """The pre-existing case: every loader written before the brief was versioned."""
+    from scripts.tt_hw_planner.reference_loader_resolver import _reusable
+
+    assert _reusable(_loader_file(tmp_path, _DEF)) is False
+
+
+def test_a_loader_written_to_an_older_brief_is_regenerated(tmp_path: Path) -> None:
+    from scripts.tt_hw_planner.reference_loader_resolver import _LOADER_CONTRACT_VAR, _reusable
+
+    d = _loader_file(tmp_path, f"{_LOADER_CONTRACT_VAR} = 1\n{_DEF}")
+    assert _reusable(d) is False
+
+
+def test_a_newer_brief_than_this_resolver_knows_is_still_reused(tmp_path: Path) -> None:
+    """Forward compatible: a loader from a newer tool is not thrown away by an older one."""
+    from scripts.tt_hw_planner.reference_loader_resolver import _LOADER_CONTRACT, _LOADER_CONTRACT_VAR, _reusable
+
+    d = _loader_file(tmp_path, f"{_LOADER_CONTRACT_VAR} = {_LOADER_CONTRACT + 5}\n{_DEF}")
+    assert _reusable(d) is True
+
+
+def test_the_brief_still_requires_a_real_loader_function(tmp_path: Path) -> None:
+    """Stamping the contract does not excuse a file that defines nothing."""
+    from scripts.tt_hw_planner.reference_loader_resolver import _LOADER_CONTRACT, _LOADER_CONTRACT_VAR, _reusable
+
+    d = _loader_file(tmp_path, f"{_LOADER_CONTRACT_VAR} = {_LOADER_CONTRACT}\n# no definition here\n")
+    assert _reusable(d) is False
+
+
+def test_the_prompt_asks_for_the_contract_to_be_stamped(tmp_path: Path) -> None:
+    from scripts.tt_hw_planner.reference_loader_resolver import _LOADER_CONTRACT_VAR, build_prompt
+
+    text = build_prompt("some-org/some-model", tmp_path, "Unrecognized model")
+    assert _LOADER_CONTRACT_VAR in text, "the agent is never told to stamp the brief it was given"
