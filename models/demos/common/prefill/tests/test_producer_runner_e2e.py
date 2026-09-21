@@ -22,6 +22,7 @@ import time
 import pytest
 
 from models.common.utility_functions import is_blackhole, skip_for_slow_dispatch
+from models.demos.common.prefill.adapter import get_adapter
 
 CHUNK_SIZE = 5120
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", "2"))
@@ -224,6 +225,17 @@ def _scenario_env(sc: dict, **extra) -> dict:
     )
 
 
+def _layer_ack_mode(sc: dict, extra: dict) -> str:
+    """PREFILL_LAYER_ACK_D2H for the scenario's model: "1" (D2H device records) where the runtime ships
+    them, "0" (host on_layer_complete callback) otherwise. Each runtime accepts only its own mode."""
+    model = (
+        extra.get("PREFILL_MODEL")
+        or sc.get("env", {}).get("PREFILL_MODEL")
+        or os.environ.get("PREFILL_MODEL", "kimi_k2_7")
+    )
+    return "1" if get_adapter(model).supports_d2h_layer_ack else "0"
+
+
 def _cleanup_ipc() -> None:
     for path in (TABLE_PATH, DEVMAP_PATH, *glob.glob(f"/dev/shm/*{SERVICE_ID}*")):
         try:
@@ -388,7 +400,7 @@ def _running_runner(tag: str, sc: dict, **extra):
     os.makedirs(_REPORT_DIR, exist_ok=True)
     log_path = os.path.join(_REPORT_DIR, f"ci_runner_{tag}.log")
     _cleanup_ipc()  # a stale table/descriptor from a prior scenario would make the readiness poll pass early
-    env = _scenario_env(sc, PREFILL_MOCK_MIGRATION="1", PREFILL_LAYER_ACK_D2H="1", **extra)
+    env = _scenario_env(sc, PREFILL_MOCK_MIGRATION="1", PREFILL_LAYER_ACK_D2H=_layer_ack_mode(sc, extra), **extra)
     ready_timeout_s = int(sc.get("ready_timeout_s", _READY_TIMEOUT_S))
     mode = _launch_mode()
     if mode == "ci":

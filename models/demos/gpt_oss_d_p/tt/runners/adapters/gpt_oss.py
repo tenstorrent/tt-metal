@@ -22,7 +22,6 @@ from typing import Optional
 
 from loguru import logger
 
-from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 
@@ -79,20 +78,17 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
     # Weight cache
     # ------------------------------------------------------------------
     def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
-        """Mirror the pytest weight_cache_path layout:
-        $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {sp}x{tp}. None if explicitly empty.
-
-        Use ``sp * tp`` for N — not ``ttnn.get_num_devices()``. The runner calls this from
-        ``_print_config`` before ``open_mesh_device``; with co-located migration workers
-        ``GetNumAvailableDevices`` can throw ``unordered_map::at`` and abort Gate 2.
+        """The model's own tilized-cache layout, $PREFILL_TTNN_CACHE / tensor_cache_bfp8_MeshShape([sp, tp]),
+        so the runner reads the files the standalone harness writes (``ModelArgs.weight_cache_path``).
+        None if PREFILL_TTNN_CACHE is explicitly empty. Built from the mesh shape alone: the runner calls
+        this before ``open_mesh_device``.
         """
         env_cache = os.environ.get("PREFILL_TTNN_CACHE", self.ttnn_cache_default)
         if not env_cache:
             return None
-        arch = "bh" if is_blackhole() else "wh"
-        sp, tp = mesh_shape
-        num_devices = int(sp) * int(tp)
-        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / f"{sp}x{tp}"
+        from models.demos.gpt_oss_d_p.tt.model_config import tensor_cache_dir_name
+
+        path = Path(env_cache) / tensor_cache_dir_name("bfp8", mesh_shape)
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -148,6 +144,8 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             sp_axis=params.sp_axis,
             tp_axis=params.tp_axis,
             weight_cache_path=params.weight_cache_path,
+            # Same knob as the standalone harness; the tilized cache is keyed by mesh shape only.
+            expert_weight_dtype=(ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b),
             owns_kv_cache=False,  # engine owns the cache (from allocate_kv_cache); passed into every call
             # PREFILL_TOPOLOGY=linear runs pods without torus wraparound (same knob as the harness).
             topology=(
