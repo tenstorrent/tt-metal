@@ -36,6 +36,28 @@ def _merge_optional(current: Any, incoming: Any, location: str) -> Any:
     return current
 
 
+def _is_link_stub(router: dict[str, Any]) -> bool:
+    """True for the placeholder inserted from a remote link endpoint.
+
+    The owning rank's manifest has the full router; the peer rank only names the
+    same (mesh, chip, eth_chan) as a link src/dst and never lists it under
+    chip.routers. A stub must yield to a full description, not disagree with it.
+    """
+
+    return set(router) <= {"eth_chan"}
+
+
+def _put_router(routers: dict[Endpoint, dict[str, Any]], endpoint: Endpoint, candidate: dict[str, Any]) -> None:
+    previous = routers.get(endpoint)
+    if previous is None or _is_link_stub(previous):
+        routers[endpoint] = candidate
+        return
+    if _is_link_stub(candidate):
+        return
+    if previous != candidate:
+        raise DecodeError(f"router {endpoint} disagrees across manifests")
+
+
 def _manifest_topology(inputs: tuple[DecodeInput, ...]):
     meshes: dict[int, dict[str, Any]] = {}
     chips: dict[tuple[int, int], dict[str, Any]] = {}
@@ -77,10 +99,7 @@ def _manifest_topology(inputs: tuple[DecodeInput, ...]):
 
                 for router in chip.get("routers", []):
                     endpoint = (mesh_id, chip_id, int(router["eth_chan"]))
-                    candidate_router = deepcopy(router)
-                    if endpoint in routers and routers[endpoint] != candidate_router:
-                        raise DecodeError(f"router {endpoint} disagrees across manifests")
-                    routers[endpoint] = candidate_router
+                    _put_router(routers, endpoint, deepcopy(router))
 
         for link in data["links"]:
             src = endpoint_key(link["src"])
@@ -89,8 +108,8 @@ def _manifest_topology(inputs: tuple[DecodeInput, ...]):
             if key in links and links[key] != link:
                 raise DecodeError(f"link {src}->{dst} disagrees across manifests")
             links[key] = deepcopy(link)
-            routers.setdefault(src, {"eth_chan": src[2]})
-            routers.setdefault(dst, {"eth_chan": dst[2]})
+            _put_router(routers, src, {"eth_chan": src[2]})
+            _put_router(routers, dst, {"eth_chan": dst[2]})
 
     topology_meshes = []
     for mesh_id in sorted(meshes):

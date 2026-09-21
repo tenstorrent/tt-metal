@@ -50,6 +50,55 @@ class DecodeMergeTest(unittest.TestCase):
             with self.assertRaisesRegex(DecodeError, "owned by more than one snapshot"):
                 merge_inputs(discover_inputs([root / "a", root / "b"]))
 
+    def test_cross_rank_link_stub_yields_to_owner_router(self):
+        """A peer rank names the remote endpoint as a link dst before the owner
+        rank lists the full local router. The stub must not disagree with it."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_input(
+                root / "r0",
+                rank=0,
+                local_chip=0,
+                all_chip_ids=(0, 1),
+                links=[
+                    {
+                        "src": {"mesh_id": 0, "chip_id": 0, "eth_chan": 1},
+                        "dst": {"mesh_id": 0, "chip_id": 1, "eth_chan": 2},
+                        "direction": "S",
+                        "routing_plane": 0,
+                        "link_class": "intermesh",
+                        "wrap": False,
+                        "cross_host": True,
+                    }
+                ],
+            )
+            write_input(
+                root / "r1",
+                rank=1,
+                local_chip=1,
+                all_chip_ids=(0, 1),
+                links=[
+                    {
+                        "src": {"mesh_id": 0, "chip_id": 1, "eth_chan": 2},
+                        "dst": {"mesh_id": 0, "chip_id": 0, "eth_chan": 1},
+                        "direction": "S",
+                        "routing_plane": 0,
+                        "link_class": "intermesh",
+                        "wrap": False,
+                        "cross_host": True,
+                    }
+                ],
+            )
+            merged = merge_inputs(discover_inputs([root / "r0", root / "r1"]))
+
+            by_chip = {router["id"]["chip_id"]: router for router in merged["routers"]}
+            self.assertEqual(merged["coverage"]["captured"], 2)
+            self.assertEqual(by_chip[1]["direction"], "E")
+            self.assertEqual(by_chip[1]["layout_id"], "L0123456789abcdef")
+            self.assertIsNotNone(by_chip[1]["instance"])
+            self.assertEqual(len(merged["topology"]["links"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
