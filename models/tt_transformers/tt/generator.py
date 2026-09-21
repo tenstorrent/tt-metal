@@ -1858,6 +1858,17 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             and (reset_batch or mode_switched)
             and enable_trace
             and self.trace_inputs_decode[on_device_sampling]
+            # Only for models whose token buffer receives the device-sampled token. For always-refresh models
+            # (_tt_vllm_always_refresh_decode_trace_inputs, e.g. qwen36) the buffer holds whatever host tokens were
+            # staged the last time THIS trace store (per decode bucket) ran, so "dev_pos == host_pos (+1)" is a
+            # coincidence that hands a new occupant of the row a stale token and position (seen as a wrong or
+            # token-0 first token under bucketing + device sampling, and as the P/D leading "\n\n").
+            and any(
+                self._decode_token_feedback_buffer(self.model[i], self.trace_inputs_decode[on_device_sampling][i])
+                is not None
+                for i in range(self.data_parallel)
+                if i < len(self.trace_inputs_decode[on_device_sampling])
+            )
         ):
             new_tokens = []
             new_start_pos = []

@@ -24,6 +24,20 @@ from models.demos.blackhole.qwen36.tt.pd_transfer import GdnSnapshotPool
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
+_PREFILL_DRAIN = (
+    os.environ.get("QWEN36_PREFILL_DRAIN", "1") == "1"
+)  # prefill_paged_slots: mesh drain after the device slot write
+_HIST_WRITE_FILL_CACHE = (
+    os.environ.get("QWEN36_HIST_WRITE_FILL_CACHE", "0") == "1"
+)  # _host_repack_slot_all_layers writer
+_PREFILL_DRAIN_READS = (
+    os.environ.get("QWEN36_PREFILL_DRAIN_READS", "0") == "1"
+)  # hang isolation, see prefill_paged_slots
+_PREFILL_TAIL_SLEEP_MS = (lambda v: float(v) if v not in (None, "") else None)(
+    os.environ.get("QWEN36_PREFILL_TAIL_SLEEP_MS")
+)  # None = per-mesh default
+_PREFILL_TAIL_SLEEP_MIN_N = int(os.environ.get("QWEN36_PREFILL_TAIL_SLEEP_MIN_N", "8"))
+
 
 @dataclass
 class _MaskedBucketBufs:
@@ -1926,13 +1940,21 @@ class Qwen36Model:
                                 ttnn.deallocate(c)
                                 c = c_c
                             dn._write_index(conv_b[m], c, slot, dim=1)
-                        if _hist_fix and dn.hist_device_pack_ready():
+                        if _hist_fix and getattr(dn, "_decode_fused_conv", False) and dn.hist_device_pack_ready():
                             # Packed conv history of this slot, built ON DEVICE from the scratch taps just written above
                             # (pack_hist_device -> fill_cache into conv_hist_packed[slot]); the decode trace reads that
-                            # buffer at its baked address. Replaces the host repack (~340 ms/request over the layers).
+                            # buffer at its baked address.
                             _th = _tp()
                             dn._sync_conv_hist_packed(slot=slot, taps=dn.conv_states)
                             _h += _tp() - _th
+                    if _hist_fix and not all(dn.hist_device_pack_ready() for dn in dn_states):
+                        # Device pack not in use (e.g. the 8-chip mesh): repack this slot for ALL layers at once on the
+                        # host from the same scratch taps -- one device concat + one mesh read, one vectorised pack,
+                        # one upload + fill_cache per layer (~48 x 3 ops) instead of K x n_dev reads and a slice/concat/
+                        # copy of the whole packed buffer per layer (0.4-1 s of host time per request at TP=8).
+                        _th = _tp()
+                        self._host_repack_slot_all_layers(dn_states, slot)
+                        _h += _tp() - _th
                     if os.environ.get("QWEN36_GDN_SLOT_VERIFY", "0") == "1":
                         # Probe: read back the copied slot row and its scratch source; log the first layers that differ.
                         bad = []
@@ -2018,7 +2040,7 @@ class Qwen36Model:
             # device inside the loop (hist_device_pack_ready). The host write_slot path below does this inside write_slot.
             _th = _tp()
             for dn in dn_states:
-                if getattr(dn, "_decode_fused_conv", False) and not (_dev_copy == 2 and dn.hist_device_pack_ready()):
+                if getattr(dn, "_decode_fused_conv", False) and _dev_copy != 2:  # mode 2 repacked inside the loop
                     for u in range(N):
                         dn._sync_conv_hist_packed(slot=int(empty_slots[u]))
             _t["hist"] += _tp() - _th
@@ -2034,6 +2056,37 @@ class Qwen36Model:
             for u in range(len(per_user_rec)):
                 self.pd_gdn_snapshot_release(per_user_rec[u], per_user_conv[u])
         _t["write_slot"] += _tp() - _t6
+        if _dev_copy and _PREFILL_DRAIN:
+            # Drain the mesh before returning to the decode path. The device-side slot write + history repack enqueue
+            # ~1.6k small eager ops per user with nothing blocking behind them; on the 1x8 mesh the decode trace (whose
+            # first op is a ring reduce-scatter/all-gather) then started behind a deep, per-device-skewed queue and the
+            # boards wedged intermittently on the first decode after a 31-prompt burst (2026-09-20/21, three grids;
+            # never with the host repack, whose per-tap readbacks drained the queue as a side effect). The wait costs
+            # only the time the decode step would have spent waiting for these ops anyway. QWEN36_PREFILL_DRAIN=0 skips.
+            _t7 = _tp()
+            ttnn.synchronize_device(self.mesh_device)
+            if _PREFILL_DRAIN_READS:
+                # Isolation variant: one tiny blocking per-device readback per chip (the access pattern of the slow host
+                # repack, the only slot-write variant that never wedged the 1x8 mesh).
+                for dn in dn_states[:1]:
+                    for d in ttnn.get_device_tensors(dn.conv_states[0]):
+                        ttnn.to_torch(d)
+            _tail_ms = (
+                _PREFILL_TAIL_SLEEP_MS
+                if _PREFILL_TAIL_SLEEP_MS is not None
+                else (500.0 if self.num_devices >= 8 else 0.0)
+            )
+            if _tail_ms and N >= _PREFILL_TAIL_SLEEP_MIN_N:
+                # Idle wait before the decode path resumes. On the 1x8 mesh the first decode after a burst of >= 8
+                # prompts wedged one chip inside SDPA-decode (tt-triage: compute stuck in the matmul unpack handshake,
+                # writers waiting on the tree-reduction child) whenever the slot write's tail was fast (device pack,
+                # batched host repack: 7 hangs in 7 soaks/grids); the slow per-device-readback repack never did, and
+                # this wait alone made the fast repack survive the same soak (2026-09-21 07:56). The device is already
+                # idle here (the drain above returns in <1 ms), so the mechanism is host-side timing, still open.
+                # Default 500 ms for N >= 8 on >= 8-device meshes only (the 4-chip P/D halves never hung);
+                # QWEN36_PREFILL_TAIL_SLEEP_MS / _MIN_N override.
+                time.sleep(_tail_ms / 1e3)
+            _t["drain"] = _tp() - _t7
         if _timing:
             lens = [int(v) for v in valid_lens] if valid_lens is not None else [int(t.shape[1]) for t in token_ids_list]
             logger.info(
@@ -2041,6 +2094,47 @@ class Qwen36Model:
                 + " ".join(f"{k}={1e3 * v:.1f}" for k, v in _t.items())
             )
         return host_logits
+
+    def _host_repack_slot_all_layers(self, dn_states, slot):
+        """Host repack of decode slot `slot`'s packed conv history for every fused-conv GDN layer from the layers' B=1
+        prefill scratch taps (conv_states, K x [1, 1, C] per device): concat all L*K taps on device, one mesh read,
+        pack_head_tiles_host_batched over (layer, device), then per layer one upload + ttnn.fill_cache into the
+        [B, Nv*4, 32, 32] view of the trace-baked packed buffer (the write the device pack uses; bitwise-verified by
+        tests/hist_device_pack_canary.py)."""
+        from models.demos.blackhole.qwen36.tt.gdn.tp import pack_head_tiles_host_batched
+
+        dns = [dn for dn in dn_states if getattr(dn, "_decode_fused_conv", False) and dn.conv_hist_packed is not None]
+        if not dns:
+            return
+        if any(not dn.hist_device_pack_ready() and dn.conv_states[0].shape[1] != 1 for dn in dns):
+            raise RuntimeError("host repack expects the B=1 prefill scratch taps to be bound")
+        mesh, n_dev, K, Nv = self.mesh_device, self.num_devices, dns[0].K, dns[0].Nv
+        cat = ttnn.concat([t for dn in dns for t in dn.conv_states], dim=1)  # [1, L*K, C] per device
+        rows = ttnn.to_torch(cat, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+        ttnn.deallocate(cat)
+        rows = rows.reshape(n_dev, len(dns), K, -1).permute(1, 0, 2, 3).reshape(len(dns) * n_dev, K, -1)
+        packed = pack_head_tiles_host_batched(rows, Nv, dns[0].Nk, dns[0].Dk, dns[0].Dv, parity=slot & 1)
+        packed = packed.reshape(len(dns), n_dev, Nv, 4, 32, 32)
+        for l, dn in enumerate(dns):
+            src = ttnn.from_torch(
+                packed[l],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            )  # [1, Nv, 4, 32, 32] per device
+            if _HIST_WRITE_FILL_CACHE:
+                dst = ttnn.reshape(dn.conv_hist_packed, (dn.conv_hist_packed.shape[0], Nv * 4, 32, 32))  # view
+                ttnn.fill_cache(dst, ttnn.reshape(src, (1, Nv * 4, 32, 32)), slot)
+                ttnn.deallocate(src)
+            else:
+                # slice/concat/copy row write (the pre-existing host path's writer; consumes src). Both device-pack
+                # variants that wedged the 1x8 mesh wrote conv_hist_packed[slot] with ttnn.fill_cache into a reshape
+                # view of the trace-baked buffer; the slice/concat/copy writer never has (2026-09-21 soaks), so it is
+                # the default here. QWEN36_HIST_WRITE_FILL_CACHE=1 selects fill_cache (one op per layer) for isolation.
+                dn._write_index(dn.conv_hist_packed, src, slot, dim=0)
+            dn._hist_packed_valid = True
 
     def _plain_gdn_slot_copy_mode(self):
         """Resolved mode of the plain serving path's per-request GDN slot write (prefill_paged_slots): 0 = host

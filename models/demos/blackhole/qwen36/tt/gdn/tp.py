@@ -74,6 +74,47 @@ def pack_head_tiles_host(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
     return out
 
 
+_HIST_PACK_CHANS = {}
+
+
+def _hist_pack_chans(Nv, Nk, Dk, Dv):
+    """[Nv, (2*Dk+Dv)//32, 32] channel indices: chunk c of head h's [q_hk | k_hk | v_h] row (pack_head_tiles_host order)."""
+    key = (int(Nv), int(Nk), int(Dk), int(Dv))
+    idx = _HIST_PACK_CHANS.get(key)
+    if idx is None:
+        rf = Nv // Nk
+        kd = Nk * Dk
+        idx = torch.stack(
+            [
+                torch.cat(
+                    [
+                        torch.arange(hk * Dk, (hk + 1) * Dk),
+                        torch.arange(kd + hk * Dk, kd + (hk + 1) * Dk),
+                        torch.arange(2 * kd + h * Dv, 2 * kd + (h + 1) * Dv),
+                    ]
+                ).reshape(-1, 32)
+                for h in range(Nv)
+                for hk in (h // rf,)
+            ]
+        )
+        _HIST_PACK_CHANS[key] = idx
+    return idx
+
+
+def pack_head_tiles_host_batched(rows, Nv, Nk, Dk, Dv, parity=0):
+    """Vectorised pack_head_tiles_host over devices: rows [n_dev, K, C] -> [n_dev, Nv, 4, 32, 32] bf16, bitwise the same
+    tiles (one gather + one strided store instead of Nv x K python loops per device; 384 of those per request at TP=8
+    cost ~0.5 s of host time)."""
+    rows = rows.to(torch.bfloat16)
+    n_dev, K, _ = rows.shape
+    chans = _hist_pack_chans(Nv, Nk, Dk, Dv)  # [Nv, n, 32]
+    n = chans.shape[1]
+    g = rows[:, :, chans.reshape(-1)].reshape(n_dev, K, Nv, n, 32).permute(0, 2, 1, 3, 4)  # [n_dev, Nv, K, n, 32]
+    out = torch.zeros(n_dev, Nv, K, 32, 32, dtype=torch.bfloat16)
+    out[:, :, :, parity : 2 * n + parity : 2, :] = g
+    return out
+
+
 def hist_pack_selection_host(Nv, Nk, Dk, Dv, C, parity):
     """[Nv, 1, 32, C] 0/1 selection: P[h, 0, 2c + parity, k] = 1 iff channel k is the c-th 32-chunk of head h's
     [q_hk | k_hk | v_h] row. Row 2c + parity of the pack is then P[h, 0, 2c + parity, :] . (channel-spread tap)."""
@@ -1655,9 +1696,11 @@ class TPGatedDeltaNet:
     def _packed_slot_tensor(self, conv_rows_per_device, b):
         """One user's packed history [1, Nv, 4, 32, 32] per device (parity b & 1) from 4 per-device rows."""
         n_dev = len(conv_rows_per_device[0])
-        per_dev = torch.stack(
-            [self._pack_head_tiles([conv_rows_per_device[j][d] for j in range(4)], parity=b & 1) for d in range(n_dev)]
-        )  # [n_dev, Nv, 4, 32, 32] sharded on dim 0 -> [1, Nv, 4, 32, 32] per device
+        rows = torch.stack(
+            [torch.stack([conv_rows_per_device[j][d].reshape(-1) for j in range(4)]) for d in range(n_dev)]
+        )  # [n_dev, K, C]
+        per_dev = pack_head_tiles_host_batched(rows, self.Nv, self.Nk, self.Dk, self.Dv, parity=b & 1)
+        # [n_dev, Nv, 4, 32, 32] sharded on dim 0 -> [1, Nv, 4, 32, 32] per device
         return ttnn.from_torch(
             per_dev,
             dtype=ttnn.bfloat16,
@@ -1697,10 +1740,19 @@ class TPGatedDeltaNet:
             logger.warning(
                 "[hist] device pack constants were not built at warm-up (warmup_hist_device_pack); using the host repack"
             )
-        rows = [
-            [ttnn.to_torch(d).reshape(-1, d.shape[-1])[slot].float() for d in ttnn.get_device_tensors(c)]
-            for c in self.conv_states
-        ]
+        if taps is not None:
+            # The slot's taps were handed over (mode-2 slot write: the B=1 prefill scratch's conv_states, [.., 1, C] per
+            # device): one mesh read per tap (K reads) instead of K x n_dev per-device reads of the batched buffers
+            # (1,536 round trips per request at TP=8, 0.4-1 s of host time; this is ~8x fewer).
+            n_dev = int(self.mesh.get_num_devices())
+            comp = ttnn.ConcatMeshToTensor(self.mesh, dim=0)
+            per_tap = [ttnn.to_torch(t, mesh_composer=comp).reshape(n_dev, -1, t.shape[-1])[:, 0].float() for t in taps]
+            rows = [[per_tap[j][d] for d in range(n_dev)] for j in range(self.K)]
+        else:
+            rows = [
+                [ttnn.to_torch(d).reshape(-1, d.shape[-1])[slot].float() for d in ttnn.get_device_tensors(c)]
+                for c in self.conv_states
+            ]
         packed_slot = self._packed_slot_tensor(rows, slot)
         self._write_index(self.conv_hist_packed, packed_slot, slot, dim=0)
         ttnn.deallocate(packed_slot)

@@ -15,6 +15,9 @@ from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
+_SDPA_DEC_K_CHUNK = int(os.environ.get("QWEN36_SDPA_DEC_K_CHUNK", "0"))  # 0 = ttnn DYNAMIC_CHUNK_SIZE (default)
+_SDPA_DEC_MAX_CORES_PER_HEAD = int(os.environ.get("QWEN36_SDPA_DEC_MAX_CORES_PER_HEAD", "0"))  # 0 = factory default
+
 
 def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     """Shard one full-attention layer's weights across the mesh."""
@@ -600,11 +603,20 @@ class TPAttention:
         # 215.5us (-2.4%, no regression). Using the full grid unconditionally since it never hurts
         # and helps significantly at long context, where batched decode is otherwise slowest.
         _sdpa_grid = self.mesh.compute_with_storage_grid_size()
+        # Hang-isolation knobs (2026-09-21, TP=8 first-decode wedge inside SdpaDecode on one device: readers blocked in
+        # read_k, writers polling the tree-reduction child semaphore): QWEN36_SDPA_DEC_K_CHUNK=<tokens> replaces the
+        # data-dependent DYNAMIC_CHUNK_SIZE (k_chunk_size=0) with a fixed chunk; QWEN36_SDPA_DEC_MAX_CORES_PER_HEAD=1
+        # gives every (batch row, kv head) one core, i.e. no cross-core tree reduction at all. Both default to the
+        # original config.
+        _sdpa_dec_kwargs = {}
+        if _SDPA_DEC_MAX_CORES_PER_HEAD:
+            _sdpa_dec_kwargs["max_cores_per_head_batch"] = _SDPA_DEC_MAX_CORES_PER_HEAD
         sdpa_dec_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(_sdpa_grid.x, _sdpa_grid.y),
             exp_approx_mode=False,
             q_chunk_size=0,
-            k_chunk_size=0,
+            k_chunk_size=_SDPA_DEC_K_CHUNK,
+            **_sdpa_dec_kwargs,
         )
         if use_paged:
             # External paged KV: update at cur_pos, then paged SDPA-decode
