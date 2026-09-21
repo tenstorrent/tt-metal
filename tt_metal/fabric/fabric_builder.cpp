@@ -9,9 +9,9 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
+#include "llrt/tt_cluster.hpp"
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
 #include <set>
@@ -25,26 +25,23 @@ FabricBuilder::FabricBuilder(
     program_(program),
     fabric_context_(fabric_context),
     builder_context_(fabric_context.get_builder_context()),
-    local_node_(tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
-        device->id())),
+    local_node_(fabric_context.control_plane().get_fabric_node_id_from_physical_chip_id(device->id())),
     wrap_around_mesh_(fabric_context_.is_wrap_around_mesh(local_node_.mesh_id)) {
     // Bind this node's ring predicates once: every router on the chip shares them.
-    chip_facts_.protected_ring_queries =
-        make_protected_ring_queries(tt::tt_metal::MetalContext::instance().get_control_plane(), local_node_);
+    chip_facts_.protected_ring_queries = make_protected_ring_queries(fabric_context_.control_plane(), local_node_);
 
     // Determine if this device has tunneling dispatch
-    auto mmio_device_id =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
-    auto tunnels_from_mmio =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
+    const auto& cluster = fabric_context_.control_plane().cluster();
+    auto mmio_device_id = cluster.get_associated_mmio_device(device_->id());
+    auto tunnels_from_mmio = cluster.get_devices_controlled_by_mmio_device(mmio_device_id);
     TT_ASSERT(!tunnels_from_mmio.empty());
     device_has_dispatch_tunnel_ = (tunnels_from_mmio.size() - 1) > 0;
 }
 
 void FabricBuilder::discover_channels() {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto& control_plane = fabric_context_.control_plane();
     const bool is_2D_routing = fabric_context_.is_2D_routing_enabled();
-    bool is_galaxy_cluster = tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster();
+    bool is_galaxy_cluster = control_plane.cluster().is_galaxy_cluster();
 
     auto is_dispatch_link = [&](chan_id_t eth_chan, uint32_t dispatch_link_idx) {
         auto link_idx = control_plane.get_routing_plane_id(local_node_, eth_chan);
@@ -103,8 +100,8 @@ void FabricBuilder::discover_channels() {
 }
 
 void FabricBuilder::create_routers() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& control_plane = fabric_context_.control_plane();
+    const auto& cluster = control_plane.cluster();
 
     // Create router builders
     for (const auto& [direction, eth_channels] : channels_by_direction_) {
@@ -120,10 +117,11 @@ void FabricBuilder::create_routers() {
                 .is_dispatch_link = is_dispatch,
             };
 
-            cluster.register_sim_fabric_endpoint_direction(
+            const_cast<::tt::Cluster&>(cluster).register_sim_fabric_endpoint_direction(
                 device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
 
-            auto router_builder = FabricRouterBuilder::create(device_, program_, local_node_, location, chip_facts_);
+            auto router_builder =
+                FabricRouterBuilder::create(device_, program_, local_node_, location, chip_facts_, fabric_context_);
             routers_.insert({eth_chan, std::move(router_builder)});
         }
     }
@@ -207,7 +205,7 @@ std::vector<FabricBuilder::RouterConnectionPair> FabricBuilder::get_router_conne
 
 void FabricBuilder::connect_routers() {
     const auto topology = fabric_context_.get_fabric_topology();
-    const bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
+    const bool is_galaxy = fabric_context_.control_plane().cluster().is_ubb_galaxy();
 
     // If NeighborExchange topology is used, message forwarding is not supported, and thus there is no need to connect
     // routers on the same device together
@@ -245,7 +243,7 @@ void FabricBuilder::compile_ancillary_kernels() {
 
 void FabricBuilder::compile_kernels_for_missing_directions() {
     // Only applicable in UDM mode
-    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    auto fabric_tensix_config = fabric_context_.control_plane().get_fabric_tensix_config();
     if (fabric_tensix_config != FabricTensixConfig::UDM) {
         return;
     }

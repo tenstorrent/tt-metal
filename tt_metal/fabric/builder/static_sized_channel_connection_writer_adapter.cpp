@@ -4,19 +4,17 @@
 
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "tt_metal/fabric/fabric_context.hpp"
-#include "tt_metal/fabric/fabric_builder_context.hpp"
-#include "tt_metal/fabric/fabric_tensix_builder.hpp"
 
 namespace tt::tt_fabric {
 
 StaticSizedChannelConnectionWriterAdapter::StaticSizedChannelConnectionWriterAdapter(
     FabricStaticSizedChannelsAllocator& /*allocator*/,
     tt::tt_fabric::Topology topology,
-    eth_chan_directions my_direction) :
+    eth_chan_directions my_direction,
+    uint32_t tensix_relay_connection_buffer_index_id) :
     is_2D_routing(topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus),
-    my_direction(my_direction) {}
+    my_direction(my_direction),
+    tensix_relay_connection_buffer_index_id_(tensix_relay_connection_buffer_index_id) {}
 
 void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     const SenderWorkerAdapterSpec& adapter_spec,
@@ -93,21 +91,15 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::get_packed_downstream_sender
 }
 
 void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
-    const SenderWorkerAdapterSpec& adapter_spec, eth_chan_directions /*tensix_direction*/, tt::tt_metal::CoreCoord tensix_noc_xy) {
+    const SenderWorkerAdapterSpec& adapter_spec,
+    eth_chan_directions /*tensix_direction*/,
+    tt::tt_metal::CoreCoord tensix_noc_xy,
+    uint32_t free_slots_stream_id) {
     this->relay_connection_info.noc_xy = tensix_noc_xy;
     this->relay_connection_info.buffer_base_address = adapter_spec.edm_buffer_base_addr;
     this->relay_connection_info.worker_registration_address = adapter_spec.edm_connection_handshake_addr;
     this->relay_connection_info.worker_location_info_address = adapter_spec.edm_worker_location_info_addr;
-
-    // Get relay-specific info from fabric context
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-    const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
-
-    // Store free slots stream ID
-    constexpr uint32_t relay_channel_id = static_cast<uint32_t>(UdmRelayChannelId::ROUTER_CHANNEL);
-    this->relay_connection_info.free_slots_stream_id =
-        tensix_config.get_channel_credits_stream_id(relay_channel_id, FabricTensixCoreType::RELAY);
-
+    this->relay_connection_info.free_slots_stream_id = free_slots_stream_id;
     this->relay_connection_info.is_connected = true;
 }
 
@@ -198,12 +190,6 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
     if (!this->relay_connection_info.is_connected) {
         args_out.push_back(0u);  // has_local_tensix_relay_connection = false
     } else {
-        // Query the fabric router config from fabric context
-        const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
-        const auto& fabric_router_config = fabric_context.get_builder_context().get_fabric_router_config();
-
-        // Pack full relay connection info
-        // Query connection_buffer_index_id from fabric router config (consistent with other adapter connections)
         auto relay_rt_args = std::initializer_list<uint32_t>{
             1u,  // has_local_tensix_relay_connection = true
             static_cast<uint32_t>(this->relay_connection_info.buffer_base_address),  // relay_buffer_base_addr
@@ -214,9 +200,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_adaptor_to_relay_rt_args(st
             static_cast<uint32_t>(
                 this->relay_connection_info.worker_location_info_address),            // relay_worker_location_info_addr
             static_cast<uint32_t>(this->relay_connection_info.free_slots_stream_id),  // relay_free_slots_stream_id
-            static_cast<uint32_t>(
-                fabric_router_config.tensix_relay_connection_buffer_index_id),  // relay_connection_buffer_index_id
-                                                                                // (queried from fabric context)
+            tensix_relay_connection_buffer_index_id_,  // relay_connection_buffer_index_id
         };
 
         args_out.reserve(args_out.size() + relay_rt_args.size());

@@ -7,7 +7,6 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "core_coord.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 #include <vector>
 
@@ -65,7 +64,11 @@ public:
     virtual void emit_ct_args(std::vector<uint32_t>& ct_args_out, size_t num_fwd_paths) const = 0;
 
     // Add connection to local tensix (relay in UDM mode)
-    virtual void add_local_tensix_connection(const SenderWorkerAdapterSpec&, eth_chan_directions, tt::tt_metal::CoreCoord) = 0;
+    virtual void add_local_tensix_connection(
+        const SenderWorkerAdapterSpec&,
+        eth_chan_directions,
+        tt::tt_metal::CoreCoord,
+        uint32_t free_slots_stream_id) = 0;
 
     // Get the number of downstream EDMs connected for a specific VC
     virtual uint32_t get_downstream_edm_count_for_vc(uint32_t vc_idx) const = 0;
@@ -97,7 +100,8 @@ public:
     StaticSizedChannelConnectionWriterAdapter(
         FabricStaticSizedChannelsAllocator& allocator,
         tt::tt_fabric::Topology topology,
-        eth_chan_directions my_direction);
+        eth_chan_directions my_direction,
+        uint32_t tensix_relay_connection_buffer_index_id);
 
     void add_downstream_connection(
         const SenderWorkerAdapterSpec& adapter_spec,
@@ -110,7 +114,8 @@ public:
     void add_local_tensix_connection(
         const SenderWorkerAdapterSpec& adapter_spec,
         eth_chan_directions tensix_direction,
-        tt::tt_metal::CoreCoord tensix_noc_xy) override;
+        tt::tt_metal::CoreCoord tensix_noc_xy,
+        uint32_t free_slots_stream_id) override;
 
     void pack_inbound_channel_rt_args(uint32_t vc_idx, std::vector<uint32_t>& args_out) const override;
     void pack_adaptor_to_relay_rt_args(std::vector<uint32_t>& args_out) const override;
@@ -189,6 +194,7 @@ private:
 
     bool is_2D_routing = false;
     eth_chan_directions my_direction = eth_chan_directions::EAST;
+    uint32_t tensix_relay_connection_buffer_index_id_ = 0;
 
     // Local tensix (relay) connection info for UDM mode
     LocalTensixRelayConnectionInfo relay_connection_info;

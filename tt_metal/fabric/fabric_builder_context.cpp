@@ -223,6 +223,7 @@ std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_con
     auto edm_options = FabricEriscDatamoverOptions{
         .fabric_tensix_config = fabric_tensix_config,
         .direction = direction,
+        .arch = fabric_context_.control_plane().cluster().arch(),
     };
 
     // MUX/UDM modes are mutually exclusive with VC2 — zero out VC2 channels

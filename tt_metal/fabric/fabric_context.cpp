@@ -225,7 +225,7 @@ size_t FabricContext::compute_max_payload_size_bytes(const tt_metal::Hal& hal, t
 }
 
 FabricContext::FabricContext(
-    const ControlPlane& control_plane,
+    ControlPlane& control_plane,
     const tt_metal::Hal& hal,
     tt::ARCH arch,
     bool is_ubb_galaxy,

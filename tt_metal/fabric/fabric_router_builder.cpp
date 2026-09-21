@@ -6,8 +6,6 @@
 #include "tt_metal/fabric/compute_mesh_router_builder.hpp"
 #include "tt_metal/fabric/switch_mesh_router_builder.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "impl/context/metal_context.hpp"
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 namespace tt::tt_fabric {
 
@@ -16,17 +14,15 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::create(
     tt::tt_metal::Program& program,
     FabricNodeId local_node,
     const RouterLocation& location,
-    const ChipRoutingFacts& chip_facts) {
-    // Query fabric context to determine router type
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const ChipRoutingFacts& chip_facts,
+    const FabricContext& fabric_context) {
     bool is_switch_mesh = fabric_context.is_switch_mesh(local_node.mesh_id);
 
     if (is_switch_mesh) {
-        return SwitchMeshRouterBuilder::build(device, program, local_node, location, chip_facts);
+        return SwitchMeshRouterBuilder::build(device, program, local_node, location, chip_facts, fabric_context);
     }
 
-    // Create compute mesh router - it handles its own config lookup
-    return ComputeMeshRouterBuilder::build(device, program, local_node, location, chip_facts);
+    return ComputeMeshRouterBuilder::build(device, program, local_node, location, chip_facts, fabric_context);
 }
 
 }  // namespace tt::tt_fabric

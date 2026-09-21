@@ -813,7 +813,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         "error.");
     this->receiver_channel_to_downstream_adapter =
         std::make_shared<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter>(
-            *static_allocator, config.topology, direction);
+            *static_allocator, config.topology, direction, config.tensix_relay_connection_buffer_index_id);
     // Worker channels need their buffer-index-counter L1 address set so the EDM kernel can reset it on each launch.
     // Channel 0 is always a worker. VC2 is also a worker channel when active.
     downstream_vcs_sender_channel_buffer_index_semaphore_id[0] = sender_channels_buffer_index_semaphore_id[0];

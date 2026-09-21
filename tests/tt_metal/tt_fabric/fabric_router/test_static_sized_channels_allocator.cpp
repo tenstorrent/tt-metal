@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <gtest/gtest.h>
+#include <umd/device/types/arch.hpp>
 
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 
@@ -22,7 +23,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshAssignsStrandedSlotsToLocalWork
     for (const auto topology : {Topology::Mesh, Topology::Torus}) {
         const FabricStaticSizedChannelsAllocator allocator(
             topology,
-            FabricEriscDatamoverOptions{},
+            FabricEriscDatamoverOptions{.arch = tt::ARCH::WORMHOLE_B0},
             sender_channels,
             receiver_channels,
             channel_buffer_size,
@@ -62,7 +63,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, MeshCapsLocalWorkerInjectionDepth) 
 
     const FabricStaticSizedChannelsAllocator allocator(
         Topology::Torus,
-        FabricEriscDatamoverOptions{},
+        FabricEriscDatamoverOptions{.arch = tt::ARCH::WORMHOLE_B0},
         sender_channels,
         receiver_channels,
         channel_buffer_size,
@@ -81,7 +82,7 @@ TEST(FabricStaticSizedChannelsAllocatorTest, RingKeepsUniformChannelDepth) {
 
     const FabricStaticSizedChannelsAllocator allocator(
         Topology::Ring,
-        FabricEriscDatamoverOptions{},
+        FabricEriscDatamoverOptions{.arch = tt::ARCH::WORMHOLE_B0},
         sender_channels,
         receiver_channels,
         channel_buffer_size,

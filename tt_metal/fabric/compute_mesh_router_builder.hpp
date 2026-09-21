@@ -19,6 +19,7 @@ namespace tt::tt_fabric {
 // Forward declarations
 class FabricDatamoverBuilderBase;
 class ControlPlane;
+class FabricContext;
 
 /**
  * ComputeMeshRouterBuilder
@@ -49,6 +50,7 @@ public:
         FabricNodeId local_node,
         const RouterLocation& location,
         const ChipRoutingFacts& chip_facts,
+        const FabricContext& fabric_context,
         std::shared_ptr<ConnectionRegistry> connection_registry = nullptr);
 
     // ============ FabricRouterBuilder Interface Implementation ============
@@ -116,7 +118,8 @@ private:
         RouterVcShape vc_shape,
         RouterTurnSet turns_by_vc,
         bool downstream_is_tensix_builder,
-        std::shared_ptr<ConnectionRegistry> connection_registry);
+        std::shared_ptr<ConnectionRegistry> connection_registry,
+        const FabricContext& fabric_context);
 
     /**
      * Generic helper to establish connections from this router to a downstream router.
@@ -174,6 +177,7 @@ private:
     bool downstream_is_tensix_builder_ = false;
     std::shared_ptr<ConnectionRegistry> connection_registry_;
     bool is_inter_mesh_;  // True if this router connects different meshes
+    const FabricContext& fabric_context_;
 };
 
 }  // namespace tt::tt_fabric

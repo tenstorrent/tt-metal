@@ -18,6 +18,8 @@ class Program;
 
 namespace tt::tt_fabric {
 
+class FabricContext;
+
 // ============ Router Location ============
 
 /**
@@ -64,7 +66,7 @@ struct KernelCreationContext {
  * - SwitchMeshRouterBuilder: For switch mesh routers (future, routing-only)
  *
  * Usage:
- *   auto router = FabricRouterBuilder::create(device, program, local_node, location);
+ *   auto router = FabricRouterBuilder::create(device, program, local_node, location, chip_facts, fabric_context);
  *   router->configure_connection(*other_router, link_idx, num_links, topology, is_galaxy);
  */
 class FabricRouterBuilder {
@@ -87,7 +89,8 @@ public:
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
         const RouterLocation& location,
-        const ChipRoutingFacts& chip_facts);
+        const ChipRoutingFacts& chip_facts,
+        const FabricContext& fabric_context);
 
     // ============ Connection Methods ============
 
