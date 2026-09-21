@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -36,6 +38,32 @@ def run_component_comparison(tt_output, reference_output, mesh_device, pcc_thres
         return False, output
 
 
+def report_identical_users(tt_output_torch, hidden_size, label):
+    """Cross-user agreement for a batch where every user was given identical activations.
+
+    A correct decode must return the same vector for every user. Divergence that clusters on
+    (user % 8) points at the per-user core column, since decode pins user b's attention state
+    to core (b % 8, b // 8).
+    """
+    import collections
+
+    m = tt_output_torch.reshape(-1, hidden_size).float()
+    n_users = m.shape[0]
+    d = (m - m[0]).abs().amax(dim=1)
+    clusters, by_col = collections.defaultdict(list), collections.defaultdict(float)
+    for u in range(n_users):
+        clusters[hash(m[u].numpy().tobytes())].append(u)
+        by_col[u % 8] = max(by_col[u % 8], float(d[u]))
+    logger.info(
+        f"IDENTICAL USERS [{label}]: {int((d == 0).sum())}/{n_users} bit-identical to user 0; "
+        f"{len(clusters)} distinct outputs; max abs diff {d.max():.6f}"
+    )
+    logger.info(
+        f"IDENTICAL USERS [{label}]: max abs diff by (user % 8): "
+        + " ".join(f"{c}:{by_col[c]:.6f}" for c in sorted(by_col))
+    )
+
+
 def run_attention_component(
     mesh_device,
     hidden_shape,
@@ -60,6 +88,14 @@ def run_attention_component(
     # Create input
     batch_size, seq_len, hidden_size = hidden_shape
     hidden_states = torch.randn(hidden_shape)
+
+    # DIAGNOSTIC: give every user the SAME activations. Decode attention pins user b's Q/K/V and
+    # RoPE tables to core (b % 8, b // 8), so a per-core-column defect shows up as attention
+    # returning different vectors for identical users -- something the PCC-vs-reference check
+    # below cannot see, since it compares the batch as a whole.
+    identical_users = os.getenv("GPT_OSS_ATTN_IDENTICAL_USERS") == "1" and is_decode
+    if identical_users:
+        hidden_states = hidden_states[:1].repeat(batch_size, *([1] * (hidden_states.dim() - 1)))
 
     # Convert to TTNN tensors
     mesh_mapper = (
@@ -101,6 +137,24 @@ def run_attention_component(
     # Compare outputs
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
     tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=mesh_composer)[..., : batch_size * seq_len, :hidden_size]
+
+    if identical_users:
+        import collections
+
+        m = tt_output_torch.reshape(-1, hidden_size).float()
+        n_users = m.shape[0]
+        d = (m - m[0]).abs().amax(dim=1)
+        clusters, by_col = collections.defaultdict(list), collections.defaultdict(float)
+        for u in range(n_users):
+            clusters[hash(m[u].numpy().tobytes())].append(u)
+            by_col[u % 8] = max(by_col[u % 8], float(d[u]))
+        logger.info(
+            f"IDENTICAL USERS: {int((d == 0).sum())}/{n_users} bit-identical to user 0; "
+            f"{len(clusters)} distinct outputs; max abs diff {d.max():.6f}"
+        )
+        logger.info(
+            "IDENTICAL USERS: max abs diff by (user % 8): " + " ".join(f"{c}:{by_col[c]:.6f}" for c in sorted(by_col))
+        )
 
     # Compare outputs
     passing, output = compare_tensors(tt_output_torch, reference_out, mesh_device, pcc_threshold=pcc_threshold)
@@ -246,13 +300,26 @@ def run_throughput_experts_component(
     _, _, num_tokens, hidden_size = hidden_shape
     hidden_states = torch.randn(hidden_shape)
 
+    # DIAGNOSTIC: see report_identical_users -- every user gets the same activations.
+    identical_users = os.getenv("GPT_OSS_ATTN_IDENTICAL_USERS") == "1" and is_decode
+    if identical_users:
+        hidden_states = (
+            hidden_states[..., :1, :].expand(*hidden_states.shape[:-2], num_tokens, hidden_size).contiguous()
+        )
+
     router_indices = torch.zeros(num_tokens, config.num_experts_per_tok, dtype=torch.long)
     routing_weights = torch.zeros(num_tokens, config.num_local_experts)
+    _fixed_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
+    _fixed_weights = torch.rand(config.num_experts_per_tok)
 
     for t in range(num_tokens):
-        active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
+        active_experts = (
+            _fixed_experts
+            if identical_users
+            else torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
+        )
         router_indices[..., t, :] = active_experts
-        weights = torch.rand(config.num_experts_per_tok)
+        weights = _fixed_weights if identical_users else torch.rand(config.num_experts_per_tok)
         weights = weights / weights.sum()  # Normalize
         routing_weights[..., t, active_experts] = weights
     topk_weights_dense = torch.tensor(
@@ -311,6 +378,8 @@ def run_throughput_experts_component(
 
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
     tt_output = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[..., :num_tokens, :hidden_size]
+    if identical_users:
+        report_identical_users(tt_output, hidden_size, "throughput_experts")
     # Compare outputs
     passing, output = compare_tensors(tt_output, reference_output, mesh_device, pcc_threshold=pcc_threshold)
     if passing:
@@ -564,6 +633,11 @@ def run_full_mlp_pipeline(
     batch, seq_len, hidden_size = hidden_shape
     hidden_states = torch.randn(hidden_shape)
 
+    # DIAGNOSTIC: see report_identical_users -- every user gets the same activations.
+    identical_users = os.getenv("GPT_OSS_ATTN_IDENTICAL_USERS") == "1" and is_decode
+    if identical_users:
+        hidden_states = hidden_states[:1].repeat(batch, *([1] * (hidden_states.dim() - 1)))
+
     reference_model = reference_layer.mlp
     reference_output, routing_scores = reference_model(hidden_states)
 
@@ -587,6 +661,8 @@ def run_full_mlp_pipeline(
     tt_output = tt_mlp(tt_hidden_states, is_decode=is_decode)
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[..., : batch * seq_len, :hidden_size]
+    if identical_users:
+        report_identical_users(tt_output_torch, hidden_size, "mlp_pipeline")
 
     # Compare outputs
     passing, output = compare_tensors(tt_output_torch, reference_output, mesh_device, pcc_threshold=pcc_threshold)
