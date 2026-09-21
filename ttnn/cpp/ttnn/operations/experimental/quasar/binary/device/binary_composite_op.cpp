@@ -11,6 +11,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/experimental/quasar/binary/binary_composite.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
@@ -31,22 +32,7 @@ namespace q = ttnn::operations::experimental::quasar::binary;
 
 // nextafter
 Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    const float eps = tt::tt_metal::hal::get_eps();
-    Tensor result(input_a);
-    {
-        Tensor eps_gt(input_a);
-        {
-            eps_gt = ttnn::where(
-                q::gt(input_a, input_b, std::nullopt, output_mem_config),
-                q::add(input_a, eps, std::nullopt, output_mem_config),
-                input_a);
-        }
-        result = ttnn::where(
-            q::lt(input_a, input_b, std::nullopt, output_mem_config),
-            q::subtract(input_a, eps, std::nullopt, output_mem_config),
-            eps_gt);
-    }
-    return result;
+    return ttnn::nextafter(input_a, input_b, output_mem_config);
 }
 
 Tensor minimum(
