@@ -224,21 +224,19 @@ DETERMINISM_HALF_THRESHOLDS = CacheHalfThresholds(DETERMINISM_PCC_THRESHOLD, DET
 
 # How many times the whole n_chunks prefill is replayed. Two roles, named apart so a -k says which:
 # perf_median_runsNN are the timing samples print_duration_table takes the median over (iteration 0 is
-# the compile pass), stressNN are the soak counts inherited from test_prefill_transformer.py's
+# the compile pass), stressNNNN are the soak counts inherited from test_prefill_transformer.py's
 # num_iterations=[1, 2, 5, 25, 2000]. Zero-padded for the same reason as chunks01..chunks51 below:
-# unpadded, `-k perf_median_runs1` would also match perf_median_runs10.
+# unpadded, `-k perf_median_runs1` would also match perf_median_runs10, and `-k stress2` would match
+# stress25 and stress2000.
 _PERF_MEDIAN_RUNS = [1, 2, 10, 20, 25]
 _PERF_MEDIAN_RUNS_IDS = [f"perf_median_runs{n:02d}" for n in _PERF_MEDIAN_RUNS]
-_CHUNKED_ITERS = [1, 2, 5, 10, 20, 25, 2000]
-_CHUNKED_ITERS_IDS = [
-    "perf_median_runs01",
-    "perf_median_runs02",
-    "stress5",
-    "perf_median_runs10",
-    "perf_median_runs20",
-    "perf_median_runs25",
-    "stress2000",
-]
+_STRESS_RUNS = [1, 2, 5, 25, 2000]
+_STRESS_RUNS_IDS = [f"stress{n:04d}" for n in _STRESS_RUNS]
+# The two roles stay separately addressable, so 1/2/25 appear under both names: `-k stress0025` is a
+# 25-iteration soak, `-k perf_median_runs25` is a 25-sample timing run. Same count, different intent,
+# and only one of them belongs in a perf -k.
+_CHUNKED_ITERS = _PERF_MEDIAN_RUNS + _STRESS_RUNS
+_CHUNKED_ITERS_IDS = _PERF_MEDIAN_RUNS_IDS + _STRESS_RUNS_IDS
 
 
 def _ci_unsupported_stress_combos(**params):
@@ -2834,9 +2832,9 @@ def test_kimi_prefill_transformer_chunked(
 # Needs num_iters >= 2; iteration 0 is the baseline.
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("perf_margin", [None], ids=["margin_auto"])
-# perf_median_runs10 exists for determinism: two iterations only prove the second replay matches the first,
-# and a reordering that depends on queue depth or a race needs more attempts to show up. A replay
-# iteration is ~29 s at L24/11 chunks, nearly free next to the weight load.
+# Determinism wants more than two replays: two only prove the second matches the first, and a
+# reordering that depends on queue depth or a race needs more attempts to surface. stress0025 (or
+# perf_median_runs10) is the cheap one for that -- a replay is ~29 s at L24/11 chunks.
 @pytest.mark.parametrize("num_iters", _CHUNKED_ITERS, ids=_CHUNKED_ITERS_IDS)
 @pytest.mark.uncollect_if(pred=_ci_unsupported_stress_combos)
 @pytest.mark.parametrize("n_chunks", [2, 11], ids=["chunks2", "chunks_eleven"])

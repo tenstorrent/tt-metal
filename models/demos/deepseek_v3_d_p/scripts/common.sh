@@ -28,11 +28,12 @@ LOG_DIR="/data/$USER/$LOG_NAME"
 # too: -k alone no longer selects one.
 TEST_FILE="$TT_METAL_HOME/models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py"
 TEST_FUNC="test_ds_prefill_transformer_chunked_no_pcc"
-KFILTER="deepseek_v3 and torus-xy-8x4 and L10 and chunks2 and not chunks20 and no_determinism and perf_median_runs25"
+KFILTER="deepseek_v3 and torus-xy-8x4 and L10 and chunks2 and not chunks20 and no_determinism and stress0025"
 
 # Inner-iteration count, from the first perf_median_runsNN/stressNN token in the filter above — so the positive
 # selector must come before any `not stressNNNN` clause.
-INNER_ITERS=$(grep -oE '(perf_median_runs|stress)[0-9]+' <<<"$KFILTER" | grep -oE '[0-9]+$' | head -1)
+_iters_tok=$(grep -oE '(perf_median_runs|stress)[0-9]+' <<<"$KFILTER" | grep -oE '[0-9]+$' | head -1)
+INNER_ITERS=$((10#${_iters_tok:-0}))  # 10# strips the id's zero padding
 
 # Model + cache paths handed to pytest.
 # PREFILL_TRACE_DIR is what the chunked test reads for its golden (check_pcc); the TT_DS_* names
