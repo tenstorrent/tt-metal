@@ -29,7 +29,7 @@ from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mes
 
 # Import GPT-OSS components using our refactored patterns
 from models.demos.gpt_oss.tt.common import create_tt_model
-from models.demos.gpt_oss.utils.general_utils import throughput_experts_supported_on_arch
+from models.demos.gpt_oss.utils.general_utils import decode_expert_parallel, throughput_experts_supported_on_arch
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
@@ -486,8 +486,18 @@ def test_gpt_oss_demo(
         config_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
         pytest.skip(f"This test configuration is skipped in CI: {config_id}")
 
+    # Total batch across all devices. Needed before setup_test so the mesh config can pick
+    # the right expert-parallel degree (the sparse expert path needs EP=1 when users are
+    # row-sharded; see decode_expert_parallel).
+    global_batch_size = batch_size * data_parallel
+    use_throughput = mesh_device.shape[0] > 1 and global_batch_size > 1 and throughput_experts_supported_on_arch()
+
     # Use our refactored TestFactory for consistent setup
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    setup = TestFactory.setup_test(
+        mesh_device,
+        use_real_weights=False,
+        decode_ep=decode_expert_parallel(mesh_device, users_row_sharded, use_throughput),
+    )
     config = setup["config"]
     mesh_config = setup["mesh_config"]
 
@@ -496,7 +506,6 @@ def test_gpt_oss_demo(
     # Configuration matching tt_transformers defaults
     num_devices = mesh_device.get_num_devices()
     paged_attention = True  # Always use paged attention for GPT-OSS
-    global_batch_size = batch_size * data_parallel  # Total batch across all devices
 
     # Validate data parallel configuration (like tt-transformers)
     if data_parallel > num_devices or num_devices % data_parallel != 0:

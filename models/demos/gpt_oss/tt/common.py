@@ -37,8 +37,18 @@ def create_tt_model(
     # Use provided mesh_config or create optimal MeshConfig for the mesh shape
     if mesh_config is None:
         from models.demos.gpt_oss.config import ModeConfig
+        from models.demos.gpt_oss.utils.general_utils import decode_expert_parallel
 
-        mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
+        # EP=rows is only coherent when every row holds the same tokens. With users
+        # row-sharded, only the throughput path re-gathers them (all_to_all_dispatch); the
+        # sparse path needs the rows to be data-parallel instead. See decode_expert_parallel.
+        mesh_config = MeshConfig(
+            mesh_device.shape,
+            decode=ModeConfig(
+                tp=mesh_device.shape[1],
+                ep=decode_expert_parallel(mesh_device, users_row_sharded, use_throughput_experts),
+            ),
+        )
 
     # Create GPT-OSS ModelArgs
     gpt_oss_model_args = ModelArgs(
