@@ -4,6 +4,7 @@
 
 """Tests for perf_eval.py — intent-aware perf regression judgement."""
 
+import csv
 import importlib.util
 import json
 import subprocess
@@ -307,3 +308,145 @@ def test_cli_records_explicit_metric_and_rejects_invalid_configuration(tmp_path)
         invalid = subprocess.run(command + flags, capture_output=True, text=True)
         assert invalid.returncode == 2
         assert "error:" in invalid.stderr
+
+
+def _variant_csv(path, variants, *, include_dest_acc=True):
+    columns = ["dest_acc", "tile_cnt", "marker", "mean(L1_TO_L1)"]
+    if not include_dest_acc:
+        columns.remove("dest_acc")
+    with path.open("w", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=columns)
+        writer.writeheader()
+        for acc, cycles in variants:
+            row = {
+                "dest_acc": acc,
+                "tile_cnt": "1",
+                "marker": "TILE_LOOP",
+                "mean(L1_TO_L1)": cycles,
+            }
+            writer.writerow({key: row[key] for key in columns})
+    return path
+
+
+def test_dest_acc_mismatch_is_not_a_comparable_variant(tmp_path):
+    cur = _variant_csv(tmp_path / "cur.csv", [("Yes", 100)])
+    base = _variant_csv(tmp_path / "base.csv", [("No", 100)])
+    result = _eval(cur, base, op=None, goal="no_regress")
+    assert result["exit_code"] == 2 and result["verdict"] == "no_baseline"
+    assert result["coverage"]["matched_variants"] == 0
+    assert result["coverage"]["current_only_variants"] == 1
+    assert result["coverage"]["baseline_only_variants"] == 1
+
+
+@pytest.mark.parametrize("goal", ["no_regress", "improve"])
+def test_new_current_variant_prevents_whole_sweep_success_without_claiming_regression(
+    tmp_path, goal
+):
+    cur = _variant_csv(tmp_path / "cur.csv", [("No", 100), ("Yes", 300)])
+    base = _variant_csv(tmp_path / "base.csv", [("No", 100)])
+    result = _eval(cur, base, op=None, goal=goal)
+    assert result["exit_code"] == 2 and result["verdict"] == "no_baseline"
+    assert result["measured"] is True
+    assert result["matched_verdict"] in ("neutral", "not_improved")
+    assert result["variants_compared"] == 1
+    assert result["coverage"] == {
+        "current_rows": 2,
+        "baseline_rows": 1,
+        "current_variants": 2,
+        "baseline_variants": 1,
+        "matched_variants": 1,
+        "current_only_variants": 1,
+        "baseline_only_variants": 0,
+        "duplicate_current_rows": 0,
+        "duplicate_baseline_rows": 0,
+        "comparison_complete": False,
+    }
+    assert "do not certify" in result["reason"]
+
+
+@pytest.mark.parametrize("missing_in", ["current", "baseline"])
+def test_asymmetric_configuration_columns_cannot_certify_same_variant(
+    tmp_path, missing_in
+):
+    # Omitting current dest_acc used to match against baseline No, regardless
+    # of the actual current configuration. The converse is equally unprovable.
+    cur = _variant_csv(
+        tmp_path / "cur.csv", [("Yes", 100)], include_dest_acc=missing_in != "current"
+    )
+    base = _variant_csv(
+        tmp_path / "base.csv", [("No", 100)], include_dest_acc=missing_in != "baseline"
+    )
+    result = _eval(cur, base, op=None, goal="no_regress")
+    assert result["exit_code"] == 2 and result["verdict"] == "no_baseline"
+    assert "configuration columns differ" in result["reason"]
+    assert result["coverage"]["matched_variants"] is None
+    assert result["coverage"]["comparison_complete"] is False
+
+
+@pytest.mark.parametrize("source", ["current", "baseline"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_duplicate_variant_keys_are_rejected_independent_of_csv_order(
+    tmp_path, source, reverse
+):
+    duplicates = [("Yes", 50), ("Yes", 100)]
+    if reverse:
+        duplicates.reverse()
+    cur = _variant_csv(
+        tmp_path / "cur.csv", duplicates if source == "current" else [("Yes", 100)]
+    )
+    base = _variant_csv(
+        tmp_path / "base.csv", duplicates if source == "baseline" else [("Yes", 100)]
+    )
+    result = _eval(cur, base, op=None, goal="no_regress")
+    assert result["exit_code"] == 2 and result["verdict"] == "no_baseline"
+    assert "duplicate variant keys" in result["reason"]
+    assert result["coverage"][f"duplicate_{source}_rows"] == 1
+    assert result["coverage"]["comparison_complete"] is False
+
+
+def test_broader_baseline_is_allowed_and_its_extra_variants_are_disclosed(tmp_path):
+    cur = _variant_csv(tmp_path / "cur.csv", [("Yes", 100)])
+    base = _variant_csv(tmp_path / "base.csv", [("No", 200), ("Yes", 100)])
+    result = _eval(cur, base, op=None, goal="no_regress")
+    assert result["exit_code"] == 0 and result["verdict"] == "neutral"
+    assert result["coverage"]["comparison_complete"] is True
+    assert result["coverage"]["matched_variants"] == 1
+    assert result["coverage"]["current_only_variants"] == 0
+    assert result["coverage"]["baseline_only_variants"] == 1
+
+
+def test_partial_overlap_retains_proven_regression_without_full_coverage_claim(
+    tmp_path,
+):
+    cur = _variant_csv(tmp_path / "cur.csv", [("No", 120), ("Yes", 100)])
+    base = _variant_csv(tmp_path / "base.csv", [("No", 100)])
+    result = _eval(cur, base, op=None, goal="no_regress")
+    assert result["exit_code"] == 1 and result["verdict"] == "regressed"
+    assert result["matched_verdict"] == "regressed"
+    assert result["coverage"]["comparison_complete"] is False
+    assert "no matching baseline" in result["reason"]
+
+
+def test_cli_incomplete_coverage_is_exit_two_and_reports_counts(tmp_path):
+    cur = _variant_csv(tmp_path / "cur.csv", [("No", 100), ("Yes", 300)])
+    base = _variant_csv(tmp_path / "base.csv", [("No", 100)])
+    out = tmp_path / "result.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).parent / "perf_eval.py"),
+            "--current",
+            str(cur),
+            "--baseline",
+            str(base),
+            "--goal",
+            "no_regress",
+            "--json-out",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "matched=1 current-only=1 baseline-only=0 complete=False" in result.stdout
+    assert json.loads(out.read_text())["verdict"] == "no_baseline"

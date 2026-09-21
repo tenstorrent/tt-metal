@@ -22,6 +22,11 @@ columns, so the variant key is "all columns that are not a metric column"
 never substitutes a more favorable metric. It uses the `TILE_LOOP` marker
 (per-tile, the most comparable number), falling back to `KERNEL`.
 
+Configuration columns must agree and variant keys must be unique. A broader
+baseline is allowed, but every selected current variant needs a baseline before
+the whole comparison can pass. New unmatched variants are not regressions: they
+remain measured but make a favorable comparison incomplete (exit 2).
+
 The perf tests' run-to-run noise is ~0.5% (per the perf team), so deltas within
 +/-0.5% are treated as noise (neutral) by default — see --regress-pct /
 --improve-pct.
@@ -154,6 +159,17 @@ def evaluate(
         baseline_rows = [r for r in baseline_rows if r.get("marker") == marker]
 
     primary_label = f"{primary_metric} @ {marker or 'all-markers'}"
+    coverage = {
+        "current_rows": len(current_rows),
+        "baseline_rows": len(baseline_rows),
+        # Schema errors make cross-file identity unknown, not an empty match.
+        "current_variants": None,
+        "baseline_variants": None,
+        "matched_variants": None,
+        "current_only_variants": None,
+        "baseline_only_variants": None,
+        "comparison_complete": False,
+    }
 
     def not_comparable(verdict: str, reason: str) -> dict[str, Any]:
         return {
@@ -164,6 +180,7 @@ def evaluate(
             "verdict": verdict,
             "reason": reason,
             "exit_code": 2,
+            "coverage": coverage,
         }
 
     for source, rows in (("current", current_rows), ("baseline", baseline_rows)):
@@ -172,6 +189,33 @@ def evaluate(
                 "missing_metric", f"{source} rows lack selected metric {primary_metric}"
             )
 
+    expected_columns = set(key_cols)
+    for source, rows in (("current", current_rows), ("baseline", baseline_rows)):
+        if any(set(_key_columns(list(row))) != expected_columns for row in rows):
+            return not_comparable(
+                "no_baseline",
+                f"{source} variant configuration columns differ from current schema",
+            )
+
+    current_keys = [tuple(row.get(c, "") for c in key_cols) for row in current_rows]
+    baseline_keys = [tuple(row.get(c, "") for c in key_cols) for row in baseline_rows]
+    current_set, baseline_set = set(current_keys), set(baseline_keys)
+    coverage.update(
+        current_variants=len(current_set),
+        baseline_variants=len(baseline_set),
+        matched_variants=len(current_set & baseline_set),
+        current_only_variants=len(current_set - baseline_set),
+        baseline_only_variants=len(baseline_set - current_set),
+        duplicate_current_rows=len(current_keys) - len(current_set),
+        duplicate_baseline_rows=len(baseline_keys) - len(baseline_set),
+    )
+    if coverage["duplicate_current_rows"] or coverage["duplicate_baseline_rows"]:
+        return not_comparable(
+            "no_baseline",
+            "duplicate variant keys make current/baseline matching ambiguous",
+        )
+    # A cached baseline may contain a wider sweep; those extra rows do not
+    # weaken coverage of the selected current sweep and need not be rerun.
     base_index = _index_by_key(baseline_rows, key_cols)
 
     per_variant: list[dict[str, Any]] = []
@@ -211,6 +255,8 @@ def evaluate(
             deltas.append(delta)
         per_variant.append(entry)
 
+    coverage["comparison_complete"] = bool(current_set) and current_set <= baseline_set
+
     if not deltas:
         return {
             "measured": True,
@@ -222,6 +268,7 @@ def evaluate(
             "reason": "no matching baseline variants to compare against",
             "variants_measured": len(per_variant),
             "exit_code": 2,
+            "coverage": coverage,
         }
 
     worst = max(deltas)  # most positive == worst regression
@@ -246,6 +293,18 @@ def evaluate(
             verdict, exit_code = "not_improved", 1
     else:  # goal == no_regress
         verdict, exit_code = base_verdict, 0  # improved or neutral both pass
+
+    matched_verdict = verdict
+    incomplete_reason = None
+    if coverage["current_only_variants"]:
+        incomplete_reason = (
+            f"{coverage['current_only_variants']} current variants have no matching baseline; "
+            "matched-subset deltas do not certify the complete current sweep"
+        )
+        # A proven regression remains a failure even if other variants lack a
+        # baseline. A favorable or inconclusive subset cannot certify the whole.
+        if verdict != "regressed":
+            verdict, exit_code = "no_baseline", 2
 
     worst_variant = max(
         (e for e in per_variant if "delta_pct" in e),
@@ -281,7 +340,7 @@ def evaluate(
     # variant (with its per-thread breakdown) are enough for run.json /
     # runs.jsonl. Full per-variant detail lives in the archived
     # perf_current_*/perf_baseline_* CSVs, not here.
-    return {
+    result = {
         "measured": True,
         "goal": goal,
         "op": op,
@@ -290,6 +349,7 @@ def evaluate(
         "regress_pct": regress_pct,
         "improve_pct": improve_pct,
         "variants_compared": len(deltas),
+        "coverage": coverage,
         "delta_pct_median": round(median, 3),
         "delta_pct_worst": round(worst, 3),
         "delta_pct_best": round(best, 3),
@@ -297,6 +357,9 @@ def evaluate(
         "worst_variant": worst_variant,
         "exit_code": exit_code,
     }
+    if incomplete_reason:
+        result.update(reason=incomplete_reason, matched_verdict=matched_verdict)
+    return result
 
 
 def _format_summary(result: dict[str, Any]) -> str:
@@ -307,6 +370,17 @@ def _format_summary(result: dict[str, Any]) -> str:
         lines.append(f"  op: {result['op']}")
     if result.get("primary_metric"):
         lines.append(f"  metric: {result['primary_metric']}")
+    coverage = result.get("coverage") or {}
+    if coverage:
+        lines.append(
+            "  coverage: matched=%s current-only=%s baseline-only=%s complete=%s"
+            % (
+                coverage.get("matched_variants"),
+                coverage.get("current_only_variants"),
+                coverage.get("baseline_only_variants"),
+                coverage.get("comparison_complete"),
+            )
+        )
     if "delta_pct_median" in result:
         lines.append(
             "  delta%%: median=%.2f  worst=%.2f  best=%.2f  (variants=%d)"
