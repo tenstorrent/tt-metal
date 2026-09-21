@@ -1319,8 +1319,9 @@ class ModelArgs:
     def lm_head_compute_kernel_config(self):
         """Math fidelity for the LM-head output projection.
 
-        LoFi where it has been measured against the full-model accuracy gate, HiFi2
-        everywhere else. On P150x4 Llama-3.1-8B the LoFi head is 8x(76.8 -> 56.0) us
+        LoFi where it has been measured against the full-model accuracy gate; everywhere
+        else the exact config lm_head.py used to hard-code (HiFi2, math_approx_mode=False,
+        fp32_dest_acc_en=False, packer_l1_acc=True). On P150x4 Llama-3.1-8B the LoFi head is 8x(76.8 -> 56.0) us
         per token with no top-1/top-5 loss against the pinned baseline. Gated on
         `_measured_fidelity_applies` for the same reason as the decoder overlay: the
         `accuracy` level is a correctness reference and must keep HiFi2.
@@ -1331,7 +1332,12 @@ class ModelArgs:
             and self._measured_fidelity_applies()
         ):
             return self.compute_kernel_config_lofi
-        return self.compute_kernel_config_hifi2
+        # compute_kernel_config_hifi2_fp16, not compute_kernel_config_hifi2: the constant this
+        # property replaced in lm_head.py was HiFi2 with math_approx_mode=False and
+        # fp32_dest_acc_en=False, which is the _fp16 variant. The plain hifi2 config sets both
+        # to True, so using it here would hand every unmeasured model/SKU - and the accuracy
+        # level on this one - a numerics and DEST-capacity change this stage never measured.
+        return self.compute_kernel_config_hifi2_fp16
 
     @property
     def use_fused_all_gather_matmul(self):

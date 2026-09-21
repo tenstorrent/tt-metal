@@ -168,7 +168,9 @@ class LMHead(LightweightModule):
         # fidelity is a performance knob, not a correctness constant. Isolated traced
         # sweep of one 32x4096x4008 BFP8 split on P150x4: HiFi2 76.8 us, LoFi 56.0 us
         # (x8 splits = 614 -> 448 us per token). ``args.lm_head_compute_kernel_config``
-        # falls back to HiFi2 for every model that has not been measured at LoFi.
+        # falls back to the exact config this line used to hard-code (HiFi2,
+        # math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True) for every
+        # model, SKU and optimization level that has not been measured at LoFi.
         self.compute_kernel_config = args.lm_head_compute_kernel_config
 
     def _update_output_weights_dram_sharded(self, weight: ttnn.Tensor) -> None:
