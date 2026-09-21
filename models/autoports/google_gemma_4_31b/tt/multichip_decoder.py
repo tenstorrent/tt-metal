@@ -265,7 +265,29 @@ PREFILL_REDUCE_ROW_BUCKET = int(os.environ.get("GEMMA4_PREFILL_REDUCE_ROW_BUCKET
 #            the permute + copying-reshape rewrite (3.5 ms/sliding layer, 8.8 ms/global layer
 #            at 4K rows vs 0.12/0.21 ms; bit-identical output). The rewrite exists for the
 #            single-chip 32-head case whose concat kernel overflowed L1; 8 local heads fit.
-PREFILL_OPTS = {key: False for key in ("matmul", "gelu", "scalar", "sdpa8", "concat")}
+#   lofi   : run the explicit-config prefill projections at LoFi instead of the heuristic's
+#            HiFi2 (requires ``matmul``). Worth a further ~110 ms per 4K prefill but costs
+#            ~2.5 points of teacher-forced next-token accuracy at 4096 tokens; gate on evals.
+PREFILL_OPTS = {key: False for key in ("matmul", "lofi", "gelu", "scalar", "sdpa8", "concat")}
+_PREFILL_MATMUL_COMPUTE: dict = {}
+
+
+def prefill_matmul_compute_config(mesh_device, lofi_config):
+    """LoFi (the decode policy config) when ``lofi`` is set, else HiFi2 with the same packer settings."""
+    if PREFILL_OPTS["lofi"]:
+        return lofi_config
+    arch = mesh_device.arch()
+    if arch not in _PREFILL_MATMUL_COMPUTE:
+        _PREFILL_MATMUL_COMPUTE[arch] = ttnn.init_device_compute_kernel_config(
+            arch,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+    return _PREFILL_MATMUL_COMPUTE[arch]
+
+
 for _flag in os.environ.get("GEMMA4_PREFILL_OPTS", "").split(","):
     _flag = _flag.strip()
     if _flag:
@@ -773,7 +795,7 @@ class _TPOptimizedSharedMLP:
                     hidden_states,
                     self.gate_prefill,
                     name="gate_up",
-                    compute_kernel_config=self.gate_up_compute,
+                    compute_kernel_config=prefill_matmul_compute_config(self.mesh_device, self.gate_up_compute),
                     mesh_device=self.mesh_device,
                     fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0) if fuse_gelu else None,
                 )
@@ -785,7 +807,7 @@ class _TPOptimizedSharedMLP:
                     hidden_states,
                     self.up_prefill,
                     name="gate_up",
-                    compute_kernel_config=self.gate_up_compute,
+                    compute_kernel_config=prefill_matmul_compute_config(self.mesh_device, self.gate_up_compute),
                     mesh_device=self.mesh_device,
                 )
                 activated = ttnn.mul(gate, up)
@@ -795,7 +817,7 @@ class _TPOptimizedSharedMLP:
                     activated,
                     self.down_prefill,
                     name="down",
-                    compute_kernel_config=self.down_compute,
+                    compute_kernel_config=prefill_matmul_compute_config(self.mesh_device, self.down_compute),
                     mesh_device=self.mesh_device,
                 )
                 activated.deallocate(True)
@@ -1449,7 +1471,7 @@ class MultichipDecoder(OptimizedDecoder):
                 hidden_states,
                 weights.wqkv,
                 name="qkv",
-                compute_kernel_config=self.attention_qkv_compute,
+                compute_kernel_config=prefill_matmul_compute_config(self.mesh_device, self.attention_qkv_compute),
                 mesh_device=self.mesh_device,
             )
         else:
@@ -1688,7 +1710,7 @@ class MultichipDecoder(OptimizedDecoder):
                 concatenated,
                 weights.o_proj,
                 name="o",
-                compute_kernel_config=self.attention_o_compute,
+                compute_kernel_config=prefill_matmul_compute_config(self.mesh_device, self.attention_o_compute),
                 mesh_device=self.mesh_device,
             )
         else:
