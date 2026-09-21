@@ -16,6 +16,7 @@ from .experts_throughput import (
     ThroughputExperts,
     create_fused_moe_gpt_config,
 )
+from .experts_throughput.moe_compute import create_moe_compute_config
 from .topk import TopKRouter
 
 
@@ -68,6 +69,19 @@ class MLP:
             # ThroughputExperts.forward_decode falls back to the dense flow
             # (all_to_all_dispatch -> matmul -> all_to_all_combine), which is
             # numerically equivalent. See fused_moe_kernels_supported_on_arch().
+            # Blackhole takes moe_compute, the arch-agnostic successor to moe_gpt: it sizes its
+            # matmul ring from the live DRAM-bank count instead of assuming Wormhole's 12, and
+            # folds the combine and the routing-score multiply into the kernel.
+            moe_compute_config = None
+            if not fused_moe_kernels_supported_on_arch() and mesh_device.shape[0] > 1:
+                moe_compute_config = create_moe_compute_config(
+                    mesh_device=mesh_device,
+                    config=throughput_expert_config,
+                    state_dict=experts_state_dict,
+                    tokens_per_device=tokens_per_device,
+                    num_links=ccl_manager.num_links,
+                )
+
             fused_config = None
             if fused_moe_kernels_supported_on_arch():
                 fused_config = create_fused_moe_gpt_config(
@@ -132,6 +146,7 @@ class MLP:
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 fused_config=fused_config,
+                moe_compute_config=moe_compute_config,
                 prefill_config=prefill_config,
             )
         else:

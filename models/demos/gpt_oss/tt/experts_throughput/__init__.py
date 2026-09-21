@@ -49,6 +49,7 @@ from .config import (
 )
 from .decode import decode_forward
 from .fused_decode import fused_decode_forward
+from .moe_compute import moe_compute_decode_forward
 from .prefill import DeepSeekPrefillConfig, forward_prefill_deepseek, _prepare_expert_weights_for_deepseek
 from .weights import (
     ThroughputExpertWeights,
@@ -111,6 +112,7 @@ class ThroughputExperts:
         decode_memory_config: ttnn.MemoryConfig = None,
         prefill_memory_config: ttnn.MemoryConfig = None,
         fused_config: Optional[FusedMoeGptConfig] = None,
+        moe_compute_config=None,
         prefill_config: Optional["DeepSeekPrefillConfig"] = None,
     ):
         """
@@ -142,6 +144,8 @@ class ThroughputExperts:
         self.config = config
         self.program_config = program_config or ThroughputProgramConfig()
         self.fused_config = fused_config
+        # Blackhole's fused path: moe_compute replaces moe_gpt + selective_reduce_combine.
+        self.moe_compute_config = moe_compute_config
         self.prefill_config = prefill_config
 
         # Memory configurations
@@ -291,6 +295,16 @@ class ThroughputExperts:
             Fused flow: [1, 1, tokens_per_device, hidden_size] (unweighted expert sum +
                 all_reduce across cluster_axis=1; PCC vs. reference is low without bias)
         """
+        if self.moe_compute_config is not None:
+            return moe_compute_decode_forward(
+                hidden_states=hidden_states,
+                topk_expert_indices=topk_expert_indices,
+                topk_expert_scores=topk_expert_weights,
+                config=self.config,
+                mc_config=self.moe_compute_config,
+                mesh_device=self.mesh_device,
+                ccl_manager=self.ccl_manager,
+            )
         if self.fused_config is not None:
             return fused_decode_forward(
                 hidden_states=hidden_states,
