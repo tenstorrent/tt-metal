@@ -142,8 +142,22 @@ path, not `1`). The 1x3 emu has no fast-dispatch cores, hence slow dispatch.
 | `WidthSweep` | `last_tile_w` 8 / 16 / 24 / 32 — the widths RV_PACR supports, so the two paths compare on equal ground. 32 is the degenerate whole-tile case (`matrix_w == pad_w`, the gather becomes a straight copy), a good null check on the address math. |
 | `TileRowSweep` | `ct_dim` 1 / 2 / 4 / 8 x `last_tile_w` 8 / 16 / 32. The shape a real matrix has, and where rows grow long enough for the payload to start dominating the per-entry cost. `ct_dim` 8 is the half-sync 16-bit DEST limit for `pack_untilize`. |
 | `SubFaceWidths` | `last_tile_w` 1 / 2 / 3 / 4 / 12 / 20 — below the RV_PACR floor, and the odd ones make `out_row_bytes` odd, probing byte- rather than word-granular placement. |
-| `EngineComparison` | **the decisive one.** All three engines over three shapes chosen around the measured knee — 32, 224 and 504 B/row, the last being the 32x252 matrix — plus the two iDMA engines at 8 channels where bytes dominate. |
+| `EngineComparison` | all three engines over three shapes chosen around the measured knee — 32, 224 and 504 B/row — plus the two iDMA engines at 8 channels where bytes dominate. |
 | `ChannelSweep` | whether sub-splitting a row into packets helps fan-out or just costs issue, below the knee and well past it. |
+| `WorkaroundSweep` | **the adoption decision.** The full grid: `ct_dim` 1/2/4/8 x `last_tile_w` 8/16/24/32, each run as the workaround, as iDMA at 1 channel, and as iDMA at 8 channels. 48 runs. |
+| `NarrowExtremes` | the high-waste end — `last_tile_w` 1/2/4/8, where up to 97% of the padded row is junk and reading it whole is not an option. Workaround vs iDMA, 16 runs. |
+| `ScatterListDrainProbe` | diagnostic, not perf: scatter-list with `num_iterations = 1` so there is no re-arm inside the zone. Confirms or refutes the drain race. |
+
+## Correctness and timing are joined, not assumed
+
+The profiler CSV records cycles and knows nothing about whether a run was right, so a report
+built from it alone will present the cycle count of a wrong computation as a result. That is
+not hypothetical: every scatter-list 8-channel run measured so far has been both fast and
+wrong. Each run therefore appends its verdict to
+`generated/profiler/.logs/narrow_row_results.csv`, in the same order as the profiler log, and
+the report joins the two — flagging `!! WRONG OUTPUT` and excluding those rows from the
+verdict table. If the verdict file is missing, the report says correctness is unknown rather
+than implying everything passed.
 
 ## Measured so far (emu-quasar-1x3)
 

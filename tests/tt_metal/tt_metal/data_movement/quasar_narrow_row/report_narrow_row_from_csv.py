@@ -108,7 +108,32 @@ def reconstruct(csv_path):
     return stage1, stage2
 
 
-def report_vs_workaround(stage2):
+RESULTS_CSV = "generated/profiler/.logs/narrow_row_results.csv"
+
+
+def load_verdicts(path):
+    """Per-run pass/fail, written by the host in execution order (see record_result).
+
+    The profiler log knows timing and nothing else, so without this a wrong computation's
+    cycle count reads exactly like a result. Returns a list of bools in run order, or None if
+    the file is absent -- in which case the report says so rather than implying everything
+    passed.
+    """
+    try:
+        with open(path) as f:
+            rows = [line.rstrip("\n").split(",") for line in f]
+    except FileNotFoundError:
+        return None
+    if not rows or rows[0][0] != "ct_dim":
+        return None
+    out = []
+    for r in rows[1:]:
+        if len(r) >= 9:
+            out.append(r[-1] == "1")
+    return out
+
+
+def report_vs_workaround(stage2, verdicts=None):
     """Group the compaction runs by shape and put every engine next to the NOC baseline.
 
     This is the question the test exists to answer: the NOC per-row read IS the current
@@ -118,41 +143,81 @@ def report_vs_workaround(stage2):
     one cycle per 16-20 B), so comparing engines across different shapes means nothing.
     """
     groups = {}
-    for run in stage2:
+    for i, run in enumerate(stage2):
         key = (run.get("rows"), run.get("row_bytes"))
         # A repeat of the same configuration is a run-to-run stability check; keep both and
         # average, rather than letting the later one silently win.
         cfg = (run.get("engine"), run.get("channels"), run.get("packet"))
         per_pass = run["dur"] / run["iters"] if run.get("iters") else float("nan")
-        groups.setdefault(key, {}).setdefault(cfg, []).append(per_pass)
+        # verdicts is in the same execution order as the zones, so index i lines up.
+        ok = verdicts[i] if verdicts is not None and i < len(verdicts) else None
+        groups.setdefault(key, {}).setdefault(cfg, []).append((per_pass, ok))
+
+    if verdicts is None:
+        print("NOTE: no verdict file -- correctness unknown, every number below could be a wrong answer.")
+    elif len(verdicts) != len(stage2):
+        print(f"NOTE: {len(verdicts)} verdicts vs {len(stage2)} timed runs -- not joining; correctness unknown.")
+        verdicts = None
 
     print("=== vs the current workaround (NOC per-row), grouped by shape ===")
+    verdict_rows = []
     for (rows, row_bytes), cfgs in sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][0])):
-        noc_vals = [v for (e, _c, _p), vals in cfgs.items() if e == ENGINE_NOC_PER_ROW for v in vals]
+        # Only a CORRECT baseline is a baseline. A wrong one would flatter everything.
+        noc_vals = [
+            v for (e, _c, _p), vals in cfgs.items() if e == ENGINE_NOC_PER_ROW for v, ok in vals if ok is not False
+        ]
         baseline = sum(noc_vals) / len(noc_vals) if noc_vals else None
-        total_bytes = (rows or 0) * (row_bytes or 0)
-        print(f"  {rows} rows x {row_bytes} B = {total_bytes} B")
+        # matrix_w -> the tile count that covers it -> how much of the padded row was junk.
+        matrix_w = (row_bytes or 0) // 2
+        ct = max(1, (matrix_w + 31) // 32)
+        pad_bytes = ct * 32 * 2
+        waste = 100.0 * (pad_bytes - row_bytes) / pad_bytes if pad_bytes else 0.0
+        print(
+            f"  {rows} rows x {row_bytes} B  (matrix_w {matrix_w}, ct_dim {ct}, "
+            f"padded {pad_bytes} B/row, {waste:.1f}% of the padded row is junk)"
+        )
         if baseline is None:
-            print("    no NOC baseline in this CSV -- run *EngineComparison* for this shape")
+            print("    no correct NOC baseline for this shape -- nothing to compare against")
+        best = None
         for (engine, channels, packet), vals in sorted(cfgs.items()):
-            avg = sum(vals) / len(vals)
+            avg = sum(v for v, _ in vals) / len(vals)
+            bad = sum(1 for _, ok in vals if ok is False)
+            unknown = any(ok is None for _, ok in vals)
             split = "" if packet in (None, row_bytes) else f", split {packet} B"
             tag = f"{ENGINE_NAMES.get(engine, '?')} ch={channels}{split}"
-            rel = ""
-            if baseline is not None and avg > 0:
-                rel = (
-                    "   <- baseline"
-                    if engine == ENGINE_NOC_PER_ROW
-                    else f"   {baseline / avg:.2f}x vs NOC" + ("" if baseline > avg else "  (SLOWER)")
-                )
+            if bad:
+                status = f"  !! WRONG OUTPUT ({bad}/{len(vals)}) -- timing meaningless"
+            elif unknown:
+                status = "  (correctness unknown)"
+            elif baseline is None or avg <= 0:
+                status = ""
+            elif engine == ENGINE_NOC_PER_ROW:
+                status = "  <- baseline"
+            else:
+                status = f"  {baseline / avg:.2f}x vs NOC" + ("" if baseline > avg else "  (SLOWER)")
             n = f" (n={len(vals)})" if len(vals) > 1 else ""
-            print(f"    {tag:<44} {avg:>8.1f} cyc/pass {avg / rows:>7.2f} cyc/row{n}{rel}")
+            print(f"    {tag:<44} {avg:>8.1f} cyc/pass {avg / rows:>7.2f} cyc/row{n}{status}")
+            # Headline candidate: correct, iDMA, and beats the baseline.
+            if not bad and not unknown and engine != ENGINE_NOC_PER_ROW and baseline is not None:
+                if best is None or avg < best[1]:
+                    best = (tag, avg)
+        if best is not None and baseline is not None:
+            verdict_rows.append((row_bytes, matrix_w, waste, baseline, best[0], best[1], baseline / best[1]))
+
+    if verdict_rows:
+        print()
+        print("=== verdict: best VERIFIED iDMA configuration vs the workaround, by row size ===")
+        print(f"{'B/row':>7} {'matrix_w':>9} {'junk%':>6} {'NOC cyc':>9} {'best iDMA':>10}  {'speedup':>8}  config")
+        for row_bytes, matrix_w, waste, base, tag, avg, ratio in verdict_rows:
+            flag = "" if ratio > 1.0 else "   <- workaround wins"
+            print(f"{row_bytes:>7} {matrix_w:>9} {waste:>5.1f}% {base:>9.1f} {avg:>10.1f}  {ratio:>7.2f}x  {tag}{flag}")
     return
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", default="generated/profiler/.logs/profile_log_device.csv")
+    ap.add_argument("--results", default=RESULTS_CSV, help="per-run pass/fail written by the test")
     args = ap.parse_args()
 
     try:
@@ -193,7 +258,7 @@ def main():
         )
 
     print()
-    report_vs_workaround(stage2)
+    report_vs_workaround(stage2, load_verdicts(args.results))
 
     # Pair by index: each program run emits exactly one zone of each kind, and programs run
     # sequentially, so the Nth of each belongs to the same run. If the counts differ, the
