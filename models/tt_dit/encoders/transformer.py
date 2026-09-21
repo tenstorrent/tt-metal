@@ -352,6 +352,8 @@ class TransformerEncoder(Module):
         cos, sin = pos_embeds
         cos = ttnn.embedding(rope_index, cos, layout=ttnn.TILE_LAYOUT)
         sin = ttnn.embedding(rope_index, sin, layout=ttnn.TILE_LAYOUT)
+        cos = _shard_rope_decode(cos, device=self._device)
+        sin = _shard_rope_decode(sin, device=self._device)
 
         x = self.token_embedding.forward(tokens)
 
@@ -1099,8 +1101,8 @@ class Attention(Module):
 
         if pos_embeds is not None:
             cos, sin = pos_embeds
-            q = _apply_rope_decode(q, cos, sin)
-            k = _apply_rope_decode(k, cos, sin)
+            q = ttnn.experimental.rotary_embedding_hf(q, cos, sin, is_decode_mode=True)
+            k = ttnn.experimental.rotary_embedding_hf(k, cos, sin, is_decode_mode=True)
 
         k, v = cache.update(self._cache_id, k, v)
 
@@ -1389,18 +1391,21 @@ def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tens
     return x * ttnn.unsqueeze(cos, 1) + _rotate_half(x) * ttnn.unsqueeze(sin, 1)
 
 
-def _apply_rope_decode(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-    one, n, _heads, dim = x.shape
-    seq = 1
+def _shard_rope_decode(x: ttnn.Tensor, *, device: ttnn.MeshDevice) -> ttnn.Tensor:
+    """Shards the cos or sin rows of a decode step for the fused rope op."""
+    batch, _one, head_size = x.shape
 
-    assert one == 1
-    assert cos.shape in ((n, seq, dim), (1, seq, dim))
-    assert cos.shape == sin.shape
+    grid = ttnn.num_cores_to_corerangeset(batch, device.compute_with_storage_grid_size(), row_wise=True)
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, head_size),
+        core_grid=grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
 
-    memory_config = x.memory_config()
-    x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-    x = x * ttnn.unsqueeze(cos, 0) + _rotate_half(x) * ttnn.unsqueeze(sin, 0)
-    return ttnn.to_memory_config(x, memory_config)
+    x = ttnn.reshape(x, [1, batch, 1, head_size])
+    return ttnn.interleaved_to_sharded(x, memory_config)
 
 
 def _rotate_half(x: ttnn.Tensor) -> ttnn.Tensor:
