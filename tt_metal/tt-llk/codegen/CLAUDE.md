@@ -91,11 +91,13 @@ Extract and store verbatim:
 - `ISSUE_LABELS` — all labels as a list
 - `ISSUE_COMMENTS` — all comments in full, unmodified (includes follow-up context, clarifications, stack traces, etc.)
 
-**CRITICAL: Never alter, summarize, paraphrase, or truncate any issue content.** The raw title, body, and comments must be passed as-is to every subagent. Agents depend on exact error messages, code snippets, and reproduction steps from the issue to do their work correctly.
+**CRITICAL: Never alter, summarize, paraphrase, or truncate any issue content.** The bootstrap helper stores the title, body, and full comment objects verbatim in state. Every agent reads that state directly; do not duplicate issue payloads in delegation prompts. Exact error messages, code snippets, reproduction steps, and comment author metadata must remain available.
 
 #### Determine Architecture(s) (issues only)
 
 Collect **all** relevant architectures into `TARGET_ARCHES` (a list). Issues labeled for more than one arch are real — an API change to an LLK function usually needs to land on every arch that implements it — and must be handled as a single coordinated fix, not N independent runs.
+
+An explicit operator-selected architecture or architecture list takes precedence; preserve it unchanged. Infer targets only when the operator did not specify them.
 
 1. **Check labels** — collect every matching label into a list: `blackhole`, `quasar`, `wormhole`. All are equally valid entries.
 2. **Fallback: scan content** — if no architecture labels are found, scan the issue title and body for:
@@ -218,33 +220,37 @@ Route by task type and by `len(TARGET_ARCHES)`:
 `codegen/agents/issue-solver/review/orchestrator.md`, which reads `RUN_MODE` from
 the seeded state.)
 
-**Mandatory:** before invoking the orchestrator, seed its inputs via
-`state.py --worktree-dir` (do not pass them in the prompt). `RUN_MODE` and the
-arch key are chosen by `len(TARGET_ARCHES)` — the same test that picks the
-orchestrator above:
+**Mandatory:** after the existing worktree launcher finishes, seed the issue
+bootstrap with one deterministic helper call. Pass only the operator's routing
+options; never copy issue title, body, comments, or labels into shell arguments:
+
 ```bash
-WT="{worktree_dir}"; S=codegen/scripts/state.py
-python $S --worktree-dir "$WT" set ISSUE_NUMBER     "{issue_number}"
-python $S --worktree-dir "$WT" set ISSUE_TITLE      "{issue_title}"
-python $S --worktree-dir "$WT" set ISSUE_BODY       "{issue_body}"          # verbatim
-python $S --worktree-dir "$WT" set ISSUE_LABELS     "{label1,label2,...}"   # comma-joined string
-python $S --worktree-dir "$WT" set ISSUE_COMMENTS   "{issue_comments}"      # verbatim
-python $S --worktree-dir "$WT" set ISSUE_URL        "{issue_url}"           # or "" (setup_run derives the default)
-python $S --worktree-dir "$WT" set WORKTREE_BRANCH  "{worktree_branch}"
-python $S --worktree-dir "$WT" set TEST_BACKEND     "{local|ttsim}"
-python $S --worktree-dir "$WT" set CREATE_LOCAL_BRANCH "{yes|no}"
-python $S --worktree-dir "$WT" set CREATE_PR        "{yes|no}"
-# single-arch (len(TARGET_ARCHES)==1) → orchestrator.md:
-python $S --worktree-dir "$WT" set RUN_MODE      single
-python $S --worktree-dir "$WT" set TARGET_ARCH   "{target_arch}"
-python $S --worktree-dir "$WT" set TTSIM_SO_PATH "{path}"                    # only when TEST_BACKEND=ttsim
-# multi-arch (len>1) → orchestrator-multi.md:
-python $S --worktree-dir "$WT" set RUN_MODE       multi
-python $S --worktree-dir "$WT" set TARGET_ARCHES  '["{arch}","..."]'         # JSON array string
-python $S --worktree-dir "$WT" set TTSIM_SO_PATHS '{"{arch}":"{path}",...}'  # only when TEST_BACKEND=ttsim
+python codegen/scripts/load_issue.py {issue_number} --seed-state \
+  --worktree-dir "{worktree_dir}" --worktree-branch "{worktree_branch}" \
+  --arches '{target_arches_json}' --test-backend "{local|ttsim}" \
+  --create-local-branch "{yes|no}" --create-pr "{yes|no}"
 ```
-Then invoke the selected orchestrator, telling it only `WORKTREE_DIR={worktree_dir}`
-— it reads everything else back via `state.py`.
+
+The helper reads `CODEGEN_ISSUE_SNAPSHOT` when set; otherwise it fetches full
+GitHub issue JSON directly. For an issue in another repository, add
+`--repo "{owner/repo}"`. `--snapshot "{path}"` can select an explicit frozen
+input. Existing snapshot-print use from Step 1 remains unchanged. Operator
+architectures take precedence over inference from labels or content. The helper
+sets `RUN_MODE=single`/`multi` and the matching arch key from that exact list.
+It preserves the existing worktree's admission/resume metadata and refuses to
+reseed a bootstrap already bound to a run.
+
+For `TEST_BACKEND=ttsim`, add `--ttsim-so-path "{absolute_library_path}"` for a
+single target or `--ttsim-so-paths '{arch_to_absolute_path_json}'` for multiple
+targets. The corresponding `TTSIM_SO_PATH`/`TTSIM_SO_PATHS` environment values
+are accepted when no path flag is supplied. Every target must have an existing
+library file. `CODEGEN_NO_PUSH=1` always keeps the local branch and disables PR
+creation regardless of the requested create flags.
+
+Stop if the helper fails. Then delegate using only the selected orchestrator's
+role-file path and `WORKTREE_DIR={worktree_dir}`. The child reads its own
+playbook and the seeded state; the parent must not paste either into the prompt.
+Do not reconstruct the helper's state writes or create another worktree.
 
 ---
 

@@ -643,12 +643,19 @@ PY
     ss TEST_BACKEND           "$TEST_BACKEND"
     ss CREATE_LOCAL_BRANCH    "$CREATE_LOCAL_BRANCH"
     ss CREATE_PR              "$CREATE_PR"
-    ss ISSUE_NUMBER           "$ISSUE_NUMBER"
-    ss ISSUE_TITLE            "$ISSUE_TITLE"
-    ss ISSUE_BODY             "$ISSUE_BODY"
-    ss ISSUE_LABELS           "$ISSUE_LABELS"
-    ss ISSUE_COMMENTS         "$ISSUE_COMMENTS"
-    ss ISSUE_URL              "$(python "$S/state.py" --worktree-dir "$wt" get ISSUE_URL)"
+    # Copy issue text directly between JSON stores: command substitution strips
+    # trailing newlines, and issue/comment content must remain verbatim.
+    _disk_guard python - "$S" "$wt" "$LOG_DIR" <<'PY_ISSUE_STATE' || return $?
+import sys
+sys.path.insert(0, sys.argv[1])
+import state
+source = state._load(state._resolve_path(None, None, sys.argv[2]))
+keys = ("ISSUE_NUMBER", "ISSUE_TITLE", "ISSUE_BODY", "ISSUE_LABELS",
+        "ISSUE_LABELS_JSON", "ISSUE_COMMENTS", "ISSUE_URL")
+patch = {key: source[key] for key in keys if key in source}
+state._locked_update(state._resolve_path(None, sys.argv[3], None),
+                     lambda store: store.update(patch))
+PY_ISSUE_STATE
     ss DASHBOARD_PROJECT_ID   "$DASHBOARD_PROJECT_ID"
     ss CODEGEN_LOGS_ROOT      "$CODEGEN_LOGS_ROOT"
     ss LOGS_BASE              "$LOGS_BASE"
@@ -709,14 +716,18 @@ execute_step_write_initial_run_json() {
     first_step="analyzer"
     if [ "$kind" = "review" ]; then steps="$_PIPELINE_STEPS_REVIEW"; first_step="addresser"; fi
 
-    issue_json="$(python - "$num" "$title" "$(sg ISSUE_URL)" "$(sg ISSUE_LABELS)" <<'PY'
+    issue_json="$(python - "$_L/state.json" <<'PY'
 import json, sys
-num, title, url, labels = sys.argv[1:5]
+state = json.load(open(sys.argv[1]))
+num = state["ISSUE_NUMBER"]
+labels = state.get("ISSUE_LABELS_JSON")
+if not isinstance(labels, list):
+    labels = [label for label in (state.get("ISSUE_LABELS") or "").split(",") if label]
 print(json.dumps({
     "number": int(num),
-    "title": title,
-    "url": url or f"https://github.com/tenstorrent/tt-metal/issues/{num}",
-    "labels": [l for l in labels.split(",") if l] if labels else [],
+    "title": state["ISSUE_TITLE"],
+    "url": state.get("ISSUE_URL") or f"https://github.com/tenstorrent/tt-metal/issues/{num}",
+    "labels": labels,
 }))
 PY
 )"

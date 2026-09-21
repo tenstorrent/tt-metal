@@ -3723,3 +3723,283 @@ def test_autodebug_export_failure_does_not_mask_launcher_timeout(
         module.cmd_autodebug(args)
     assert caught.value.timeout == 0.3
     assert any(logs.glob("autodebug-*/AUTODEBUG.md"))
+
+
+@pytest.fixture
+def issue_bootstrap_sandbox(tmp_path):
+    worktree = tmp_path / "source"
+    llk = worktree / "tt_metal" / "tt-llk"
+    version = llk / "codegen" / "agents" / "issue-solver" / "VERSION"
+    version.parent.mkdir(parents=True)
+    version.write_text("2.5.0\n")
+    for command in (
+        ["git", "init", "-q", "-b", "fixture-base", str(worktree)],
+        ["git", "-C", str(worktree), "add", "-A"],
+        [
+            "git",
+            "-C",
+            str(worktree),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+    ):
+        subprocess.run(command, check=True, capture_output=True)
+    linked = tmp_path / "worktree"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(worktree),
+            "worktree",
+            "add",
+            "-qb",
+            "issue-bootstrap",
+            str(linked),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    worktree = linked
+    llk = worktree / "tt_metal" / "tt-llk"
+    issue = {
+        "number": 123,
+        "title": "'Quoted' \"title\" $(touch SHOULD_NOT_EXIST)\n\n",
+        "body": "Unicode λ, `code`, $HOME, quotes '\"\nsecond line\n\n",
+        "labels": [{"name": "bug, regression"}, {"name": "wormhole"}],
+        "comments": [
+            {
+                "id": "IC_123",
+                "author": {"login": "someone"},
+                "createdAt": "2026-09-20T00:00:00Z",
+                "body": "Comment '\"`$()\nverbatim\n\n",
+            }
+        ],
+        "url": "https://github.com/example/project/issues/123",
+    }
+    snapshot = tmp_path / "issue.json"
+    snapshot.write_text(json.dumps(issue, ensure_ascii=False, indent=2) + "\n")
+    bootstrap = llk / ".codegen_run_state.json"
+    bootstrap.write_text(json.dumps({"QUEUE_ATTEMPT_ID": "preserved-admission"}))
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text(
+        "#!/usr/bin/env python3\nimport json, os, pathlib, sys\n"
+        "pathlib.Path(os.environ['GH_MARKER']).write_text(json.dumps(sys.argv[1:]))\n"
+        "sys.stdout.write(pathlib.Path(os.environ['GH_FIXTURE']).read_text())\n"
+    )
+    fake_gh.chmod(0o755)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("CODEGEN_", "TTSIM_", "CLAUDE_"))
+    }
+    env.update(
+        {
+            "PATH": f"{fake_bin}:{env['PATH']}",
+            "HOME": str(tmp_path / "empty-home"),
+            "CODEGEN_ISSUE_SNAPSHOT": str(snapshot),
+            "CODEGEN_LOGS_ROOT": str(tmp_path / "logs"),
+            "LOG_DIR": str(tmp_path / "unrelated-log-dir"),
+            "GH_FIXTURE": str(snapshot),
+            "GH_MARKER": str(tmp_path / "gh-called"),
+        }
+    )
+    command = [
+        sys.executable,
+        str(SCRIPT.parent / "load_issue.py"),
+        "123",
+        "--seed-state",
+        "--worktree-dir",
+        str(worktree),
+        "--worktree-branch",
+        "issue-bootstrap",
+        "--arches",
+        "bh",
+        "--test-backend",
+        "local",
+        "--create-local-branch",
+        "yes",
+        "--create-pr",
+        "no",
+    ]
+    return worktree, issue, snapshot, bootstrap, env, command
+
+
+@pytest.mark.parametrize("legacy_labels", [False, True])
+def test_issue_bootstrap_snapshot_preserved_through_setup_run(
+    issue_bootstrap_sandbox, legacy_labels
+):
+    worktree, issue, snapshot, bootstrap, env, command = issue_bootstrap_sandbox
+    result = subprocess.run(
+        command, env=env, text=True, capture_output=True, check=True
+    )
+    assert json.loads(result.stdout)["target_arches"] == ["blackhole"]
+    seeded = json.loads(bootstrap.read_text())
+    assert seeded["QUEUE_ATTEMPT_ID"] == "preserved-admission"
+    assert seeded["TARGET_ARCH"] == "blackhole"  # Explicit arch beats label.
+    assert not Path(env["GH_MARKER"]).exists()
+    assert not Path(env["LOG_DIR"]).exists()
+    if legacy_labels:
+        # Older routers stored only a comma-separated string; retain support.
+        seeded.pop("ISSUE_LABELS_JSON")
+        seeded["ISSUE_LABELS"] = "bug,wormhole"
+        bootstrap.write_text(json.dumps(seeded))
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; execute_step_setup_run && execute_step_write_initial_run_json',
+            "bootstrap-test",
+            str(ORCHESTRATOR_STEPS),
+        ],
+        cwd=worktree / "tt_metal" / "tt-llk",
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    logs = Path(json.loads(bootstrap.read_text())["LOG_DIR"])
+    final = json.loads((logs / "state.json").read_text())
+    for state in (seeded, final):
+        assert state["ISSUE_TITLE"] == issue["title"]
+        assert state["ISSUE_BODY"] == issue["body"]
+        assert json.loads(state["ISSUE_COMMENTS"]) == issue["comments"]
+        if not legacy_labels:
+            assert state["ISSUE_LABELS_JSON"] == [
+                label["name"] for label in issue["labels"]
+            ]
+    run = json.loads((logs / "run.json").read_text())
+    assert run["issue"]["title"] == issue["title"]
+    assert run["issue"]["labels"] == (
+        ["bug", "wormhole"]
+        if legacy_labels
+        else [label["name"] for label in issue["labels"]]
+    )
+    assert final["QUEUE_ATTEMPT_ID"] == "preserved-admission"
+    assert not (worktree / "SHOULD_NOT_EXIST").exists()
+
+
+def test_issue_bootstrap_live_fetch_and_snapshot_print_compatibility(
+    issue_bootstrap_sandbox,
+):
+    worktree, issue, snapshot, bootstrap, env, command = issue_bootstrap_sandbox
+    printed = subprocess.run(
+        command[:3], env=env, text=True, capture_output=True, check=True
+    )
+    assert printed.stdout == snapshot.read_text()
+    assert not Path(env["GH_MARKER"]).exists()
+    del env["CODEGEN_ISSUE_SNAPSHOT"]
+    subprocess.run(
+        command + ["--repo", "example/project"],
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    assert json.loads(Path(env["GH_MARKER"]).read_text()) == [
+        "issue",
+        "view",
+        "123",
+        "--json",
+        "number,title,body,labels,comments,url",
+        "--repo",
+        "example/project",
+    ]
+    assert (
+        json.loads(json.loads(bootstrap.read_text())["ISSUE_COMMENTS"])
+        == issue["comments"]
+    )
+
+
+@pytest.mark.parametrize(
+    "option,value",
+    [
+        ("--arches", "not-an-arch"),
+        ("--arches", "[]"),
+        ("--arches", '["bh", 2]'),
+        ("--test-backend", "silicon"),
+        ("--worktree-branch", "different-branch"),
+        ("--test-backend", "ttsim"),
+    ],
+)
+def test_issue_bootstrap_invalid_inputs_do_not_mutate(
+    issue_bootstrap_sandbox, option, value
+):
+    worktree, issue, snapshot, bootstrap, env, command = issue_bootstrap_sandbox
+    before = bootstrap.read_bytes()
+    command[command.index(option) + 1] = value
+    result = subprocess.run(command, env=env, text=True, capture_output=True)
+    assert result.returncode != 0
+    assert bootstrap.read_bytes() == before
+    assert not Path(env["GH_MARKER"]).exists()
+
+
+@pytest.mark.parametrize("mismatch", ["snapshot", "bootstrap", "bound"])
+def test_issue_bootstrap_identity_conflicts_do_not_mutate(
+    issue_bootstrap_sandbox, mismatch
+):
+    worktree, issue, snapshot, bootstrap, env, command = issue_bootstrap_sandbox
+    if mismatch == "snapshot":
+        issue["number"] = 456
+        snapshot.write_text(json.dumps(issue))
+    elif mismatch == "bootstrap":
+        bootstrap.write_text(json.dumps({"ISSUE_NUMBER": "456"}))
+    else:
+        bootstrap.write_text(json.dumps({"RUN_ID": "existing-run"}))
+    before = bootstrap.read_bytes()
+    result = subprocess.run(command, env=env, text=True, capture_output=True)
+    assert result.returncode != 0
+    assert bootstrap.read_bytes() == before
+
+
+def test_issue_bootstrap_multi_simulator_and_no_push(issue_bootstrap_sandbox):
+    worktree, issue, snapshot, bootstrap, env, command = issue_bootstrap_sandbox
+    bh = snapshot.parent / "libbh.so"
+    wh = snapshot.parent / "libwh.so"
+    bh.touch()
+    wh.touch()
+    command[command.index("--arches") + 1] = '["bh", "wh", "bh"]'
+    command[command.index("--test-backend") + 1] = "ttsim"
+    command[command.index("--create-local-branch") + 1] = "no"
+    command[command.index("--create-pr") + 1] = "yes"
+    env["CODEGEN_NO_PUSH"] = "1"
+    before = bootstrap.read_bytes()
+    result = subprocess.run(
+        command + ["--ttsim-so-paths", json.dumps({"bh": str(bh)})],
+        env=env,
+        capture_output=True,
+    )
+    assert result.returncode != 0
+    assert bootstrap.read_bytes() == before
+    subprocess.run(
+        command + ["--ttsim-so-paths", json.dumps({"bh": str(bh), "wh": str(wh)})],
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    state = json.loads(bootstrap.read_text())
+    assert state["RUN_MODE"] == "multi"
+    assert json.loads(state["TARGET_ARCHES"]) == ["blackhole", "wormhole"]
+    assert json.loads(state["TTSIM_SO_PATHS"]) == {
+        "blackhole": str(bh),
+        "wormhole": str(wh),
+    }
+    assert state["CREATE_LOCAL_BRANCH"] == "yes"
+    assert state["CREATE_PR"] == "no"
+    assert "TARGET_ARCH" not in state
+
+
+def test_issue_bootstrap_rejects_main_checkout(issue_bootstrap_sandbox):
+    worktree, issue, snapshot, bootstrap, env, command = issue_bootstrap_sandbox
+    main_checkout = snapshot.parent / "source"
+    command[command.index("--worktree-dir") + 1] = str(main_checkout)
+    command[command.index("--worktree-branch") + 1] = "fixture-base"
+    result = subprocess.run(command, env=env, text=True, capture_output=True)
+    assert result.returncode != 0
+    assert "linked worktree" in result.stderr
+    assert not (main_checkout / "tt_metal/tt-llk/.codegen_run_state.json").exists()
