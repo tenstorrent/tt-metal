@@ -305,6 +305,7 @@ class RunTimeOptions {
     std::filesystem::path simulator_path = "";
     std::string emu_server;
     std::string emu_soc_desc_path;
+    bool sival_emu_bringup = false;
 
     bool fast_dispatch = true;
 
@@ -806,6 +807,7 @@ public:
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
     const std::string& get_emu_server() const { return emu_server; }
     const std::string& get_emu_soc_desc_path() const { return emu_soc_desc_path; }
+    bool get_sival_emu_bringup() const { return sival_emu_bringup; }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size

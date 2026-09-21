@@ -56,6 +56,7 @@ enum class EnvVarID {
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_EMU_SERVER,                      // Chippy emu_axi endpoint (host:port)
     TT_METAL_EMU_SOC_DESC,                    // SoC descriptor for the emulated package
+    TT_METAL_EMU_BRINGUP,                     // Emulation bring-up owner (umd_server or sival)
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
@@ -530,6 +531,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         case EnvVarID::TT_METAL_EMU_SOC_DESC: this->emu_soc_desc_path = std::string(value); break;
+
+        case EnvVarID::TT_METAL_EMU_BRINGUP:
+            if (std::strcmp(value, "umd_server") == 0) {
+                this->sival_emu_bringup = false;
+            } else if (std::strcmp(value, "sival") == 0) {
+                this->sival_emu_bringup = true;
+            } else {
+                TT_THROW("TT_METAL_EMU_BRINGUP must be 'umd_server' or 'sival', got '{}'", value);
+            }
+            break;
 
         // TT_METAL_MOCK_CLUSTER_DESC_PATH
         // Path to mock cluster descriptor for testing without hardware.
@@ -1997,6 +2008,9 @@ void RunTimeOptions::InitializeFromEnvVars() {
     }
     if (this->runtime_target_device_ == tt::TargetDevice::EmuAxi && this->emu_soc_desc_path.empty()) {
         TT_THROW("TT_METAL_EMU_SERVER requires TT_METAL_EMU_SOC_DESC to be set");
+    }
+    if (this->sival_emu_bringup && this->runtime_target_device_ != tt::TargetDevice::EmuAxi) {
+        TT_THROW("TT_METAL_EMU_BRINGUP=sival requires TT_METAL_EMU_SERVER to be set");
     }
 
     // Set inspector log path

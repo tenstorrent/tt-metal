@@ -503,6 +503,9 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             .target_devices = {0},
             .emu_host = host,
             .emu_port = port,
+            // sival bring-up is owned by chippy, which has already run against this server. INIT
+            // would reset the model and undo it.
+            .emu_skip_init = rtoptions_.get_sival_emu_bringup(),
         });
     }
 
