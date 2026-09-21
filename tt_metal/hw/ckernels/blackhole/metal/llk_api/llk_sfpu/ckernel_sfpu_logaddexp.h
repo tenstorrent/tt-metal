@@ -18,11 +18,11 @@ namespace ckernel::sfpu {
 // Call _sfpu_logaddexp_max_ before _sfpu_logaddexp_gap_: the gap relies on a NaN pair
 // already having been copied into the result.
 
-// max(a, b), with a NaN in either operand propagated rather than left to the arithmetic.
-// max() is a bare SFPSWAP with no NaN guard, so it orders a NaN by its sign: a negative NaN
-// loses to any finite operand and would drop out of the result. Copying the NaN operand
-// into the result settles it, because SFPMAD addition is IEEE-754 for a non-finite input:
-// NaN + correction stays NaN whatever the correction makes of the NaN difference.
+// max(a, b), with a NaN in either operand copied through rather than left to SFPSWAP.
+// Defence in depth, not a correctness requirement: for a NaN operand the gap below is NaN
+// and calculate_log1p_fp32 returns NaN for it on both of its branches, so the sum is NaN
+// whichever operand max() picked. The copy stays because max() is a bare SFPSWAP with no
+// NaN guard, which orders a NaN by its sign -- the result should not rest on that.
 sfpi_inline sfpi::vFloat _sfpu_logaddexp_max_(const sfpi::vFloat& a, const sfpi::vFloat& b) {
     sfpi::vFloat result = sfpi::max(a, b);
     v_if(sfpi::is_nan(a)) { result = a; }
@@ -60,7 +60,7 @@ sfpi_inline void _sfpu_logaddexp_gap_(sfpi::vFloat& a, const sfpi::vFloat& b) {
 // logaddexp2 shares. Without the gap helper the fused form would regress on equal
 // infinities, which the composed form returns as +/-inf.
 //
-// APPROXIMATION_MODE is accepted and ignored, as in calculate_log1p_fp32: the exponential
+// APPROXIMATION_MODE is accepted and ignored, as in log1p_init: the exponential
 // below is always the accurate one, because the approximate body is not accurate enough here.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {

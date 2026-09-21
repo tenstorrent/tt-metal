@@ -37,7 +37,7 @@ namespace ckernel::sfpu {
 // Equal infinities and NaN operands are handled by _sfpu_logaddexp_max_ and
 // _sfpu_logaddexp_gap_ in ckernel_sfpu_logaddexp.h, shared with logaddexp.
 //
-// APPROXIMATION_MODE is accepted and ignored, as in calculate_log1p_fp32: the exponential
+// APPROXIMATION_MODE is accepted and ignored, as in log1p_init: the exponential
 // below is always the accurate one, because the approximate body is not accurate enough here.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
@@ -75,10 +75,9 @@ inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_i
 // exactly the ones log1p expects.
 template <bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_logaddexp2_init() {
-    // Delegating to log1p_init rather than copying its values keeps one source for the
-    // tuned coefficients: a retune of the log1p polynomial reaches this op instead of
-    // silently desyncing from it. log1p_init ignores its first two template parameters.
-    log1p_init<false /* APPROXIMATION_MODE */, false /* FAST_APPROX */, is_fp32_dest_acc_en>();
+    // Identical setup to logaddexp: both need the log1p coefficients and nothing else. This
+    // forwards instead of repeating the call so the two cannot drift apart.
+    calculate_sfpu_logaddexp_init<is_fp32_dest_acc_en>();
 }
 
 }  // namespace ckernel::sfpu

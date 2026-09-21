@@ -249,6 +249,12 @@ OpConfig::OpConfig(
             break;
         // max(a, b) + log1p(exp(-|a - b|)): the composed log(exp(a) + exp(b)) form
         // overflows at |x| > 88.7 even though the result is bounded by its inputs.
+        // The else arms below are unreachable under today's dtype policy: LOGADDEXP is
+        // float_only, supports_mixed_float_inputs is false for it, and the SFPU gate in
+        // binary_ng_device_operation.cpp accepts exactly that set. They are kept rather than
+        // replaced with TT_THROW because the two sets answer different questions and only
+        // coincide today -- the same reason mixed_float and float_only are kept distinct in
+        // binary_op_dtype_policy.hpp -- so a widening of either reopens this path.
         case BinaryOpType::LOGADDEXP:
             if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::LOGADDEXP;
