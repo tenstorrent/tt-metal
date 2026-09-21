@@ -54,11 +54,14 @@ class TtAttention(LightweightModule):
 
         sdpa_math_fidelity = ttnn.MathFidelity.LoFi
         # Validated base-model self-attention policies: all blocks at 512/1024 on
-        # Wormhole, up-block0 on Blackhole. Keep cross-attention and refiner/VAE
-        # subclasses on their existing precision settings.
+        # Wormhole, down-block1 and up-block0 on Blackhole. Keep cross-attention
+        # and refiner/VAE subclasses on their existing precision settings.
         if self.is_self_attention and (
             type(model_config) in (ModelOptimisations512x512, ModelOptimisations1024x1024)
-            or (type(model_config) is ModelOptimisations1024x1024BH and module_path.startswith("up_blocks.0."))
+            or (
+                type(model_config) is ModelOptimisations1024x1024BH
+                and module_path.startswith(("down_blocks.1.", "up_blocks.0."))
+            )
         ):
             sdpa_math_fidelity = ttnn.MathFidelity.HiFi2
 
