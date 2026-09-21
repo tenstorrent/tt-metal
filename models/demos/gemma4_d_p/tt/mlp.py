@@ -3,6 +3,10 @@
 
 """Tensor-parallel dense MLP for Gemma4-31B prefill."""
 
+import os
+
+from loguru import logger
+
 import ttnn
 from models.demos.gemma4_d_p.tt.attention.operations import prefill_short_lived_memcfg
 from models.demos.gemma4_d_p.tt.ccl import ccl_allreduce
@@ -11,6 +15,8 @@ from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 
 class MLP:
+    _mm_logged = False  # DIAG GEMMA4_MLP_MM_CFG: one-shot engagement witness
+
     def __init__(
         self, mesh_config, hf_config, state_dict, ccl_manager=None, dtype=ttnn.bfloat8_b, tensor_cache_path=None
     ):
@@ -30,6 +36,21 @@ class MLP:
         # loss. All three projections use it for that reason.
         grid = mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
+
+        # DIAG GEMMA4_MLP_MM_CFG: explicit program config for the three projections.
+        # Asif's core_grid above hands ttnn a grid but lets it choose in0_block_w. The
+        # 2026-09-18 ablation found BOTH are needed (1.17x / 1.23x alone, 1.85-1.92x
+        # together). That patch was dropped as "redundant with core_grid" on inference,
+        # never measured on this base -- this re-tests it. See p4/PREDICTION.md.
+        self._mm_grid = None
+        self._mm_bw = 0
+        if os.environ.get("GEMMA4_MLP_MM_CFG", "0").lower() in ("1", "true", "yes"):
+            gx, gy = 12, 10
+            spec = os.environ.get("GEMMA4_MLP_MM_GRID", "")
+            if "x" in spec:
+                gx, gy = (int(v) for v in spec.split("x", 1))
+            self._mm_grid = (min(gx, grid.x), min(gy, grid.y))
+            self._mm_bw = int(os.environ.get("GEMMA4_MLP_MM_BW") or 14)
 
         tp = mesh_config.tp_degree
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
@@ -87,6 +108,46 @@ class MLP:
             **common,
         )
 
+    def _mm_pc(self, m_tiles, k_tiles, n_tiles, gelu=False):
+        """Explicit matmul program config, or None to keep the core_grid path.
+
+        All three projections are 5376 x 5376 per device (intermediate 21504, TP=4), so
+        one shape serves all three; only M = chunk/CP differs.
+        """
+        if self._mm_grid is None:
+            return None
+        if k_tiles % self._mm_bw:  # in0_block_w must divide the inner dim
+            return None
+        gx, gy = self._mm_grid
+        per_core_M = -(-m_tiles // gy)
+        per_core_N = -(-n_tiles // gx)
+        sh = 4
+        while sh > 1 and per_core_M % sh:
+            sh -= 1
+        sw = 2
+        while sw > 1 and per_core_N % sw:
+            sw -= 1
+        if not MLP._mm_logged:
+            MLP._mm_logged = True
+            logger.info(
+                f"[DIAG] MLP explicit matmul cfg ENGAGED: grid={gx}x{gy}={gx * gy}c "
+                f"in0_block_w={self._mm_bw} per_core_M={per_core_M} per_core_N={per_core_N} "
+                f"subblock={sh}x{sw} (m_tiles={m_tiles} k_tiles={k_tiles} n_tiles={n_tiles})"
+            )
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            in0_block_w=self._mm_bw,
+            out_subblock_h=sh,
+            out_subblock_w=sw,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            # The fused GELU must ride INSIDE the config: ttnn.linear rejects activation=
+            # alongside program_config=, and dropping it would change numerics as well as
+            # speed -- two knobs at once.
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH) if gelu else None,
+        )
+
     def __call__(self, hidden_states):
         """Apply column-parallel gate/up projections and row-parallel down projection."""
         # All three intermediates are short-lived, deallocated in this call, and touch no
@@ -101,20 +162,29 @@ class MLP:
         # "gelu_tanh" resolves to the same UnaryOpType that GeluVariant.Tanh selects, so
         # this stays gelu_pytorch_tanh rather than the erf or LUT variant, and the result
         # is bit-identical to the separate gelu at the same core_grid.
+        # DIAG GEMMA4_MLP_MM_CFG: _mm_pc returns None unless the flag is on, so the
+        # default path below is byte-for-byte the pre-patch call.
+        _mt, _kt = hidden_states.shape[-2] // 32, hidden_states.shape[-1] // 32
+        _nt = self.gate_proj.shape[-1] // 32
+        _pc_gate = self._mm_pc(_mt, _kt, _nt, gelu=True)
+        _pc_plain = self._mm_pc(_mt, _kt, _nt)
         gate = ttnn.linear(
             hidden_states,
             self.gate_proj,
             compute_kernel_config=self.compute_kernel_config,
-            activation="gelu_tanh",
-            core_grid=self.core_grid,
             memory_config=act_mc,
+            **(
+                {"program_config": _pc_gate}
+                if _pc_gate is not None
+                else {"activation": "gelu_tanh", "core_grid": self.core_grid}
+            ),
         )
         up = ttnn.linear(
             hidden_states,
             self.up_proj,
             compute_kernel_config=self.compute_kernel_config,
-            core_grid=self.core_grid,
             memory_config=act_mc,
+            **({"program_config": _pc_plain} if _pc_plain is not None else {"core_grid": self.core_grid}),
         )
         # mul takes its output config from the first input, so this only says out loud
         # what `gate` already decided -- but it is what keeps the two in step if either
@@ -125,12 +195,13 @@ class MLP:
         # The output must be DRAM ahead of ccl_allreduce -- an L1 activation clashes with
         # the circular buffers the collective reserves -- and matmul would otherwise
         # inherit L1 from `hidden`, so DRAM is explicit here.
+        _pc_down = self._mm_pc(hidden.shape[-2] // 32, hidden.shape[-1] // 32, self.down_proj.shape[-1] // 32)
         output = ttnn.linear(
             hidden,
             self.down_proj,
             compute_kernel_config=self.compute_kernel_config,
-            core_grid=self.core_grid,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **({"program_config": _pc_down} if _pc_down is not None else {"core_grid": self.core_grid}),
         )
         hidden.deallocate(True)
         if self.mesh_config is not None and self.mesh_config.tp_degree > 1:
