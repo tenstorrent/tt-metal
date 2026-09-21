@@ -73,6 +73,7 @@ def write_input(
     local_chip: int = 0,
     all_chip_ids: tuple[int, ...] = (0,),
     status: str = "ok",
+    links: list[dict] | None = None,
 ) -> tuple[Path, Path, Path]:
     directory.mkdir(parents=True, exist_ok=True)
     chips = []
@@ -98,12 +99,15 @@ def write_input(
     )
     manifest_data["hal"]["fabric_telemetry"] = {"base": 2000, "size": 160}
     manifest_data["hal"]["routing_table"] = {"base": 3000, "size": 2704}
-    manifest_data["links"] = [
-        {
-            "src": {"mesh_id": 0, "chip_id": local_chip, "eth_chan": local_chip + 1},
-            "dst": {"mesh_id": 0, "chip_id": local_chip, "eth_chan": local_chip + 1},
-        }
-    ]
+    if links is None:
+        manifest_data["links"] = [
+            {
+                "src": {"mesh_id": 0, "chip_id": local_chip, "eth_chan": local_chip + 1},
+                "dst": {"mesh_id": 0, "chip_id": local_chip, "eth_chan": local_chip + 1},
+            }
+        ]
+    else:
+        manifest_data["links"] = links
     for chip_row in manifest_data["meshes"][0]["chips"]:
         for router_row in chip_row.get("routers", []):
             router_row["instance"]["worker_sender_channel"] = 0
