@@ -371,6 +371,7 @@ public:
 
     // Getters
     const ::tt::Cluster& cluster() const { return cluster_; }
+    const ::tt::tt_metal::Hal& hal() const { return hal_; }
     const ::tt::llrt::RunTimeOptions& rtoptions() const { return rtoptions_; }
     FabricConfig get_fabric_config() const { return fabric_config_; }
     FabricReliabilityMode get_fabric_reliability_mode() const { return fabric_reliability_mode_; }

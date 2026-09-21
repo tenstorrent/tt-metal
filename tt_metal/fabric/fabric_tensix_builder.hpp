@@ -23,6 +23,8 @@
 
 namespace tt::tt_fabric {
 
+class FabricContext;
+
 // Core type enum for fabric tensix datamover (identifies MUX vs RELAY cores)
 enum class FabricTensixCoreType : uint32_t {
     MUX = 0,   // BRISC - runs MUX kernel
@@ -43,7 +45,7 @@ namespace tt::tt_fabric {
 
 class FabricTensixDatamoverConfig {
 public:
-    FabricTensixDatamoverConfig();
+    explicit FabricTensixDatamoverConfig(const FabricContext& fabric_context);
 
     // Getters for core and channel configuration
     size_t get_num_configs_per_core() const { return num_configs_per_core_; }
@@ -133,8 +135,8 @@ public:
 
     // UDM mode: Worker assignment info
     struct WorkerTensixInfo {
-        tt::tt_metal::CoreCoord tensix_core;     // The tensix mux core assigned to this worker (virtual coordinate)
-        uint32_t channel_index{};  // The channel index on that tensix mux core
+        tt::tt_metal::CoreCoord tensix_core;  // The tensix mux core assigned to this worker (virtual coordinate)
+        uint32_t channel_index{};             // The channel index on that tensix mux core
     };
 
     // Get worker assignment info (tensix core + channel index) for a specific worker (UDM mode only)
@@ -254,7 +256,7 @@ private:
 
     bool initialize_channel_mappings();
     void calculate_buffer_allocations();
-    void create_configs();  // Creates mode-aware configs based on FabricTensixConfig
+    void create_configs(const FabricContext& fabric_context);  // Creates mode-aware configs based on FabricTensixConfig
 
     // Helper to track missing directions for UDM mode
     // For edge devices that don't have neighbors in all 4 directions, tracks which (routing_plane_id, direction)
@@ -267,8 +269,10 @@ private:
         size_t& channel_index);
 
     // Helper methods for config creation
-    std::shared_ptr<FabricTensixDatamoverMuxConfig> create_mux_config(FabricTensixCoreType core_id);
-    std::shared_ptr<FabricTensixDatamoverRelayConfig> create_relay_config(FabricTensixCoreType core_id);
+    std::shared_ptr<FabricTensixDatamoverMuxConfig> create_mux_config(
+        FabricTensixCoreType core_id, const FabricContext& fabric_context);
+    std::shared_ptr<FabricTensixDatamoverRelayConfig> create_relay_config(
+        FabricTensixCoreType core_id, const FabricContext& fabric_context);
 
     // Helper to calculate number of channels for mux (handles both UDM and Legacy modes)
     // Also builds worker_to_tensix_core_map_ in UDM mode

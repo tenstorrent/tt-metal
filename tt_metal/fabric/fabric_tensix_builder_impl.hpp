@@ -23,6 +23,7 @@ namespace tt::tt_fabric {
 
 // Forward declarations
 enum class FabricTensixCoreType : uint32_t;
+class FabricContext;
 
 // Shared struct for mux/relay connection info (used by both mux→mux and relay→mux connections)
 struct MuxConnectionInfo {
@@ -138,6 +139,8 @@ protected:
 public:
     virtual ~FabricTensixDatamoverBaseConfig() = default;
 
+    const FabricContext& fabric_context() const { return fabric_context_; }
+
     // Common getters - accept ChannelTypes to select the correct channel type configuration
     size_t get_num_channels(ChannelTypes channel_type) const;
     size_t get_total_num_channels() const;  // Returns total channels across all types
@@ -179,6 +182,7 @@ protected:
     // Constructor for derived classes - accepts map of channel type configurations
     // Uses std::map (not unordered_map) to maintain sorted order by ChannelTypes enum
     FabricTensixDatamoverBaseConfig(
+        const FabricContext& fabric_context,
         const std::map<ChannelTypes, ChannelTypeConfig>& channel_configs,
         size_t base_l1_address,
         size_t l1_end_address);
@@ -191,6 +195,7 @@ protected:
     // Configuration parameters
     size_t core_type_index_ = 0;
     size_t noc_aligned_address_size_bytes_ = 0;
+    const FabricContext& fabric_context_;
 
     // Channel type configurations (sorted by ChannelTypes enum)
     std::map<ChannelTypes, ChannelTypeConfig> channel_configs_;
@@ -271,6 +276,7 @@ class FabricTensixDatamoverMuxConfig : public FabricTensixDatamoverBaseConfig {
 public:
     // Constructor accepting channel type configuration map (sorted by ChannelTypes enum)
     FabricTensixDatamoverMuxConfig(
+        const FabricContext& fabric_context,
         const std::map<ChannelTypes, ChannelTypeConfig>& channel_type_configs,
         size_t base_l1_address,
         size_t l1_end_address);
@@ -339,6 +345,7 @@ class FabricTensixDatamoverRelayConfig : public FabricTensixDatamoverBaseConfig 
 public:
     // Constructor accepting channel type configuration map (sorted by ChannelTypes enum)
     FabricTensixDatamoverRelayConfig(
+        const FabricContext& fabric_context,
         const std::map<ChannelTypes, ChannelTypeConfig>& channel_type_configs,
         size_t base_l1_address,
         size_t l1_end_address);
