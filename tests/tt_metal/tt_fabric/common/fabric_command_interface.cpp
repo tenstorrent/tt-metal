@@ -5,9 +5,9 @@
 
 #include "fabric_command_interface.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "common/device_polling.hpp"
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
-#include <thread>
 #include <chrono>
 
 namespace tt::tt_fabric {
@@ -71,38 +71,43 @@ bool FabricCommandInterface::wait_for_pause(
 }
 
 bool FabricCommandInterface::wait_for_state(
-    RouterState target_state,
-    std::chrono::milliseconds timeout,
-    std::chrono::milliseconds poll_interval) const {
-    // Wait for all routers to reach target state with timeout
-    // Uses polling with std::this_thread::sleep_for between polls (NO BUSY-WAIT)
-
-    auto start_time = std::chrono::steady_clock::now();
-
-    while (true) {
-        if (all_routers_in_state(target_state)) {
-            return true;
-        }
-
-        auto elapsed = std::chrono::steady_clock::now() - start_time;
-        if (elapsed >= timeout) {
-            const auto& router_cores = get_all_router_cores();
-
-            // Empty topology returns false (no routers to verify)
-            if (router_cores.empty()) {
-                return false;
-            }
-
-            for (const auto& [fabric_node_id, channel_id] : router_cores) {
-                RouterState state = read_router_state(fabric_node_id, channel_id);
-
-                log_debug(LogTest, "Router state: {} (fabric_node_id: (m={}, c={}), channel_id: {})", state, fabric_node_id.mesh_id, fabric_node_id.chip_id, channel_id);
-            }
-            return false;
-        }
-
-        std::this_thread::sleep_for(poll_interval);
+    RouterState target_state, std::chrono::milliseconds timeout, std::chrono::milliseconds poll_interval) const {
+    const auto& router_cores = get_all_router_cores();
+    if (router_cores.empty()) {
+        return false;
     }
+
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const ChipId progress_device = control_plane.get_physical_chip_id_from_fabric_node_id(router_cores.front().first);
+    const bool reached_state = tt::tt_metal::poll_until(
+        [&]() { return all_routers_in_state(target_state); },
+        [&]() { cluster.advance_device_execution(progress_device, DEFAULT_POLLING_PROGRESS_CYCLES); },
+        timeout,
+        poll_interval);
+
+    if (reached_state) {
+        for (const auto& [fabric_node_id, channel_id] : router_cores) {
+            log_info(
+                LogTest,
+                "Router reached state {} (fabric_node_id: (m={}, c={}), channel_id: {})",
+                target_state,
+                fabric_node_id.mesh_id,
+                fabric_node_id.chip_id,
+                channel_id);
+        }
+    } else {
+        for (const auto& [fabric_node_id, channel_id] : router_cores) {
+            RouterState state = read_router_state(fabric_node_id, channel_id);
+            log_debug(
+                LogTest,
+                "Router state: {} (fabric_node_id: (m={}, c={}), channel_id: {})",
+                state,
+                fabric_node_id.mesh_id,
+                fabric_node_id.chip_id,
+                channel_id);
+        }
+    }
+    return reached_state;
 }
 
 RouterState FabricCommandInterface::read_router_state(
