@@ -420,7 +420,9 @@ ProgramDescriptor build_ring_program_descriptor(
     const bool has_slot_meta = tensors.has_cache_slot_metadata();
     const uint32_t local_slot_pages_ct = (k_local.logical_shape()[2] / tt::constants::TILE_HEIGHT) *
                                          (k_local.logical_shape()[3] / tt::constants::TILE_WIDTH);
-    reader_ct.push_back(has_slot_meta ? 1u : 0u);
+    // No presence flag: metadata mode is one flag, selected above. The slot index goes in
+    // UNCONDITIONALLY -- the kernel decides from the common arg's VALUE (0 = no slot to select), and a 0
+    // here would alias slot 0 (q's address, never 0) and read as "slot supplied".
     reader_ct.push_back(indexer_common::reader::SlotMetadata);
     reader_ct.push_back(has_slot_meta ? local_slot_pages_ct : 0u);
     reader_ct.push_back(has_slot_meta ? cb_meta_slot : 0u);
@@ -428,8 +430,10 @@ ProgramDescriptor build_ring_program_descriptor(
     tt::tt_metal::TensorAccessorArgs(has_slot_meta ? *tensors.cache_batch_idx_tensor->buffer() : *q.buffer())
         .append_to(reader_ct);
     const bool has_valid_end = tensors.has_valid_end_metadata();
-    reader_ct.push_back(has_valid_end ? 1u : 0u);
-    reader_ct.push_back(has_valid_end ? static_cast<uint32_t>(indexer_common::reader::ValidEnd) : 0u);
+    // No presence flag: metadata mode is selected once, above. The slot index is pushed UNCONDITIONALLY
+    // -- the kernel decides from the common arg's VALUE (0 = uncapped), so a 0 here would alias slot 0
+    // (q's address, never 0) and read as "bound supplied".
+    reader_ct.push_back(static_cast<uint32_t>(indexer_common::reader::ValidEnd));
     tt::tt_metal::TensorAccessorArgs(has_valid_end ? *tensors.valid_end_tensor->buffer() : *q.buffer())
         .append_to(reader_ct);
 
