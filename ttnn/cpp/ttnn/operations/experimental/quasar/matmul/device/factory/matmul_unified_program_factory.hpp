@@ -79,10 +79,10 @@ struct UnifiedMatmulPlan {
     uint32_t C_partials_slot_bytes = 0;
     uint32_t A_slice_ring_slots = 0;
     uint32_t B_slice_ring_slots = 0;
-    uint32_t MN_chunk_ring_slots = 0;
+    uint32_t C_slice_ring_slots = 0;
     uint32_t C_partials_ring_slots = 0;
-    // C_partials shares MN_chunk's L1; only safe when partials are never live while MN_chunk holds unread data.
-    bool alias_C_partials_onto_MN_chunk = false;
+    // C_partials shares C_slice's L1; only safe when partials are never live while C_slice holds unread data.
+    bool alias_C_partials_onto_C_slice = false;
     uint64_t l1_bytes = 0;  // total ring footprint per core
 
     // Only valid for a sharded output: the shard layout implied by how the MN chunks tile C.

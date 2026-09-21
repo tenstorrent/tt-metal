@@ -36,10 +36,10 @@ namespace ttnn::prim::qsr {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-// Names the kernels see: dfb::A_slice / B_slice / MN_chunk / C_partials and tensor::A / B / C.
+// Names the kernels see: dfb::A_slice / B_slice / C_slice / C_partials and tensor::A / B / C.
 const DFBSpecName A_SLICE_DFB{"A_slice"};
 const DFBSpecName B_SLICE_DFB{"B_slice"};
-const DFBSpecName MN_CHUNK_DFB{"MN_chunk"};
+const DFBSpecName C_SLICE_DFB{"C_slice"};
 const DFBSpecName C_PARTIALS_DFB{"C_partials"};
 
 const TensorParamName A_TENSOR{"A"};
@@ -87,9 +87,9 @@ struct RingSizes {
     uint32_t C_partials_slot_bytes = 0;
     uint32_t A_slice_ring_slots = 0;
     uint32_t B_slice_ring_slots = 0;
-    uint32_t MN_chunk_ring_slots = 0;
+    uint32_t C_slice_ring_slots = 0;
     uint32_t C_partials_ring_slots = 0;
-    bool alias_C_partials_onto_MN_chunk = false;
+    bool alias_C_partials_onto_C_slice = false;
     bool borrow_A = false;
     bool borrow_B = false;
     bool borrow_C = false;
@@ -99,7 +99,7 @@ struct RingSizes {
         const uint64_t rings[] = {
             (uint64_t)A_slice_ring_slots * A_slot_bytes,
             (uint64_t)B_slice_ring_slots * B_slot_bytes,
-            (uint64_t)MN_chunk_ring_slots * C_slot_bytes,
+            (uint64_t)C_slice_ring_slots * C_slot_bytes,
             (uint64_t)C_partials_ring_slots * C_partials_slot_bytes};
         for (uint64_t ring_bytes : rings) {
             if (ring_bytes > MAX_DFB_RING_BYTES) {
@@ -129,7 +129,7 @@ RingSizes size_rings(
     r.C_partials_slot_bytes = tt::tile_size(r.C_partials_format);
 
     const uint32_t MN_chunk_tiles = plan.MN_chunk_M_tiles * plan.MN_chunk_N_tiles;
-    r.MN_chunk_ring_slots = MN_chunk_tiles;
+    r.C_slice_ring_slots = MN_chunk_tiles;
     r.C_partials_ring_slots = MN_chunk_tiles;
 
     // Copied operands: interleaved tiles live in DRAM at the DRAM-aligned stride and the reader copies at that
@@ -154,20 +154,20 @@ RingSizes size_rings(
     r.B_slice_ring_slots =
         r.borrow_B ? plan.K_tiles * plan.MN_chunk_N_tiles : K_chunk_tiles * plan.MN_chunk_N_tiles * slice_ring_depth;
 
-    // Aliasing C_partials onto MN_chunk when a core produces more than one MN chunk (counting batches) is a
-    // race: the writer may still be draining chunk i from MN_chunk while the compute packs chunk i+1's first
-    // partials into the same bytes. Alias only when the partials can never be live while MN_chunk holds
+    // Aliasing C_partials onto C_slice when a core produces more than one MN chunk (counting batches) is a
+    // race: the writer may still be draining chunk i from C_slice while the compute packs chunk i+1's first
+    // partials into the same bytes. Alias only when the partials can never be live while C_slice holds
     // unread data: a single chunk per core, or no partials at all (one K chunk).
     const bool partials_ever_written = r.num_K_chunks > 1;
     const bool one_MN_chunk_per_core = plan.batch_size == 1 && plan.max_MN_chunks_per_core == 1;
-    r.alias_C_partials_onto_MN_chunk =
+    r.alias_C_partials_onto_C_slice =
         (r.C_partials_format == plan.C_format) && (!partials_ever_written || one_MN_chunk_per_core);
 
     // Borrowed rings are the tensors' own memory and cost nothing here.
     r.l1_bytes = (r.borrow_A ? 0 : (uint64_t)r.A_slice_ring_slots * r.A_slot_bytes) +
                  (r.borrow_B ? 0 : (uint64_t)r.B_slice_ring_slots * r.B_slot_bytes) +
-                 (r.borrow_C ? 0 : (uint64_t)r.MN_chunk_ring_slots * r.C_slot_bytes) +
-                 (r.alias_C_partials_onto_MN_chunk ? 0 : (uint64_t)r.C_partials_ring_slots * r.C_partials_slot_bytes);
+                 (r.borrow_C ? 0 : (uint64_t)r.C_slice_ring_slots * r.C_slot_bytes) +
+                 (r.alias_C_partials_onto_C_slice ? 0 : (uint64_t)r.C_partials_ring_slots * r.C_partials_slot_bytes);
     return r;
 }
 
@@ -403,7 +403,7 @@ UnifiedMatmulPlan plan_unified_matmul(
             MAX_DFB_RING_BYTES,
             (uint64_t)chosen->A_slice_ring_slots * chosen->A_slot_bytes,
             (uint64_t)chosen->B_slice_ring_slots * chosen->B_slot_bytes,
-            (uint64_t)chosen->MN_chunk_ring_slots * chosen->C_slot_bytes,
+            (uint64_t)chosen->C_slice_ring_slots * chosen->C_slot_bytes,
             (uint64_t)chosen->C_partials_ring_slots * chosen->C_partials_slot_bytes);
     }
     // The plan takes the winning candidate exactly once; nothing downstream adjusts it.
@@ -417,9 +417,9 @@ UnifiedMatmulPlan plan_unified_matmul(
     plan.C_partials_slot_bytes = chosen->C_partials_slot_bytes;
     plan.A_slice_ring_slots = chosen->A_slice_ring_slots;
     plan.B_slice_ring_slots = chosen->B_slice_ring_slots;
-    plan.MN_chunk_ring_slots = chosen->MN_chunk_ring_slots;
+    plan.C_slice_ring_slots = chosen->C_slice_ring_slots;
     plan.C_partials_ring_slots = chosen->C_partials_ring_slots;
-    plan.alias_C_partials_onto_MN_chunk = chosen->alias_C_partials_onto_MN_chunk;
+    plan.alias_C_partials_onto_C_slice = chosen->alias_C_partials_onto_C_slice;
     plan.borrow_A = chosen->borrow_A;
     plan.borrow_B = chosen->borrow_B;
     plan.borrow_C = chosen->borrow_C;
@@ -532,15 +532,15 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         if (plan.borrow_B) {
             B_slice_dfb.borrowed_from = B_TENSOR;  // the resident B shard is the ring
         }
-        DataflowBufferSpec MN_chunk_dfb{
-            .unique_id = MN_CHUNK_DFB,
+        DataflowBufferSpec C_slice_dfb{
+            .unique_id = C_SLICE_DFB,
             .entry_size = plan.C_slot_bytes,
-            .num_entries = plan.MN_chunk_ring_slots,
+            .num_entries = plan.C_slice_ring_slots,
             .data_format_metadata = plan.C_format,
             .tile_format_metadata = C_tile,
         };
         if (plan.borrow_C) {
-            MN_chunk_dfb.borrowed_from = C_TENSOR;  // finished tiles are packed straight into the C shard
+            C_slice_dfb.borrowed_from = C_TENSOR;  // finished tiles are packed straight into the C shard
         }
         DataflowBufferSpec C_partials_dfb{
             .unique_id = C_PARTIALS_DFB,
@@ -549,16 +549,16 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             .data_format_metadata = plan.C_partials_format,
             .tile_format_metadata = C_tile,
         };
-        if (plan.alias_C_partials_onto_MN_chunk) {
-            MN_chunk_dfb.advanced_options.alias_with = {C_PARTIALS_DFB};
-            C_partials_dfb.advanced_options.alias_with = {MN_CHUNK_DFB};
+        if (plan.alias_C_partials_onto_C_slice) {
+            C_slice_dfb.advanced_options.alias_with = {C_PARTIALS_DFB};
+            C_partials_dfb.advanced_options.alias_with = {C_SLICE_DFB};
             if (plan.borrow_C) {
                 C_partials_dfb.borrowed_from = C_TENSOR;  // partials accumulate in the shard too
             }
         }
         dataflow_buffers.push_back(std::move(A_slice_dfb));
         dataflow_buffers.push_back(std::move(B_slice_dfb));
-        dataflow_buffers.push_back(std::move(MN_chunk_dfb));
+        dataflow_buffers.push_back(std::move(C_slice_dfb));
         dataflow_buffers.push_back(std::move(C_partials_dfb));
     }
 
@@ -600,7 +600,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
         .unique_id = WRITER_KERNEL,
         .source = std::filesystem::path(std::string(KERNEL_DIR) + "dataflow/unified_matmul_writer.cpp"),
         .compiler_options = {},
-        .dfb_bindings = {ConsumerOf(MN_CHUNK_DFB, "MN_chunk")},
+        .dfb_bindings = {ConsumerOf(C_SLICE_DFB, "C_slice")},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = C_TENSOR, .accessor_name = "C"}},
         .compile_time_args =
             {
@@ -660,7 +660,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             {
                 ConsumerOf(A_SLICE_DFB, "A_slice"),
                 ConsumerOf(B_SLICE_DFB, "B_slice"),
-                ProducerOf(MN_CHUNK_DFB, "MN_chunk"),
+                ProducerOf(C_SLICE_DFB, "C_slice"),
                 ProducerOf(C_PARTIALS_DFB, "C_partials"),
                 ConsumerOf(C_PARTIALS_DFB, "C_partials"),
             },

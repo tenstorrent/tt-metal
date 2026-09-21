@@ -36,22 +36,22 @@ void kernel_main() {
     constexpr uint32_t MN_chunk_N_tiles = get_arg(args::MN_chunk_N_tiles);
     constexpr uint32_t subblock_M_tiles = get_arg(args::subblock_M_tiles);
     constexpr uint32_t subblock_N_tiles = get_arg(args::subblock_N_tiles);
-    constexpr bool C_borrowed = get_arg(args::C_borrowed) != 0;  // C's shard is the MN_chunk ring
+    constexpr bool C_borrowed = get_arg(args::C_borrowed) != 0;  // C's shard is the C_slice ring
 
     constexpr uint32_t C_tiles_per_batch = M_tiles * N_tiles;
     constexpr uint32_t subblock_tiles = subblock_M_tiles * subblock_N_tiles;  // what the compute packs at once
 
-    DataflowBuffer MN_chunk(dfb::MN_chunk);
+    DataflowBuffer C_slice(dfb::C_slice);
     if constexpr (C_borrowed) {
-        // The MN_chunk ring IS this core's C shard: the compute packs the finished tiles in place, so there is
+        // The C_slice ring IS this core's C shard: the compute packs the finished tiles in place, so there is
         // nothing to move. Wait for the whole chunk so the ring's credits balance. (Borrowing needs one chunk
         // per core and batch 1, so this is the entire output.)
-        MN_chunk.wait_front(MN_chunk_M_tiles * MN_chunk_N_tiles);
+        C_slice.wait_front(MN_chunk_M_tiles * MN_chunk_N_tiles);
         return;
     }
     const auto C = TensorAccessor(tensor::C);
     Noc noc;
-    const uint32_t C_tile_bytes = MN_chunk.get_entry_size();
+    const uint32_t C_tile_bytes = C_slice.get_entry_size();
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
         const uint32_t C_batch_first_tile = batch * C_tiles_per_batch;
@@ -63,7 +63,7 @@ void kernel_main() {
             // the chunk.
             for (uint32_t m_tile = 0; m_tile < MN_chunk_M_tiles; m_tile += subblock_M_tiles) {
                 for (uint32_t n_tile = 0; n_tile < MN_chunk_N_tiles; n_tile += subblock_N_tiles) {
-                    MN_chunk.wait_front(subblock_tiles);
+                    C_slice.wait_front(subblock_tiles);
                     uint32_t slot_offset = 0;
                     for (uint32_t tile_row = 0; tile_row < subblock_M_tiles; ++tile_row) {
                         const uint32_t C_m_tile = MN_chunk_M_tile + m_tile + tile_row;  // tile position in C
@@ -72,7 +72,7 @@ void kernel_main() {
                             const uint32_t C_n_tile = MN_chunk_N_tile + n_tile + tile_column;
                             if (C_m_tile < M_tiles && C_n_tile < N_tiles) {
                                 noc.async_write(
-                                    MN_chunk,
+                                    C_slice,
                                     C,
                                     C_tile_bytes,
                                     {.offset_bytes = slot_offset},
@@ -81,7 +81,7 @@ void kernel_main() {
                         }
                     }
                     noc.async_write_barrier();
-                    MN_chunk.pop_front(subblock_tiles);
+                    C_slice.pop_front(subblock_tiles);
                 }
             }
 

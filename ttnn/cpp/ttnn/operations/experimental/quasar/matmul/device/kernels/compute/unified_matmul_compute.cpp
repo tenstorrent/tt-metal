@@ -15,12 +15,12 @@
 // Between K chunks the running sums have to leave DST. Default: they are packed into the C_partials ring
 // and copied back into DST at the start of the next K chunk (spill / reload). With packer_l1_acc the packer
 // adds DST onto the partials already in L1 instead, so only the last K chunk reloads. The last K chunk packs
-// the finished subblocks into the MN_chunk ring for the writer.
+// the finished subblocks into the C_slice ring for the writer.
 //
 // Loop order matches the reader and the writer: batch, MN chunk, K chunk, subblocks (m_tile, n_tile)
 // row-major over the chunk, k_tile within the K chunk. Runtime args: num_MN_chunks. Compile-time args:
 // batch_size, K_chunk_tiles, num_K_chunks, MN_chunk_M_tiles, MN_chunk_N_tiles, subblock_M_tiles,
-// subblock_N_tiles, packer_l1_acc, partials_format_differs (C_partials and MN_chunk hold different formats,
+// subblock_N_tiles, packer_l1_acc, partials_format_differs (C_partials and C_slice hold different formats,
 // so the packer must be reconfigured when switching between them).
 
 #include <cstdint>
@@ -53,7 +53,7 @@ void kernel_main() {
 
     DataflowBuffer A_slice(dfb::A_slice);
     DataflowBuffer B_slice(dfb::B_slice);
-    DataflowBuffer MN_chunk(dfb::MN_chunk);
+    DataflowBuffer C_slice(dfb::C_slice);
     DataflowBuffer C_partials(dfb::C_partials);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::A_slice, dfb::B_slice, dfb::C_partials);
@@ -61,22 +61,28 @@ void kernel_main() {
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
         for (uint32_t MN_chunk_index = 0; MN_chunk_index < num_MN_chunks; ++MN_chunk_index) {
-            if constexpr (partials_format_differs && num_K_chunks > 1) {
-                if (batch > 0 || MN_chunk_index > 0) {
-                    // The previous chunk's last K chunk left the packer on MN_chunk's format. (The unpacker needs
-                    // no fix-up: the partials reload already restores SrcA to B's format.)
-                    pack_reconfig_data_format(dfb::C_partials);
-                }
-            }
-
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
                 const bool last_K_chunk = K_chunk == num_K_chunks - 1;
                 // Partials exist once a previous K chunk has packed them. Without packer L1 accumulation every
                 // later K chunk reloads them; with it the packer has been accumulating in L1 and only the last
                 // K chunk reloads the sum.
                 const bool reload_partials = K_chunk > 0 && (last_K_chunk || !packer_l1_acc);
+                // Every subblock of this K chunk is packed to the same ring: the finished sum to C_slice on the
+                // last K chunk, the running sum to C_partials before that.
+                DataflowBuffer& pack_target = last_K_chunk ? C_slice : C_partials;
+                const uint32_t pack_target_id = last_K_chunk ? uint32_t(dfb::C_slice) : uint32_t(dfb::C_partials);
                 A_slice.wait_front(A_slice_tiles);
                 B_slice.wait_front(B_slice_tiles);
+
+                // Packer setup for this K chunk. The two rings may hold different formats; with packer L1
+                // accumulation K chunk 0 overwrites the partials, later K chunks add DST onto them, and the
+                // finished sum is packed without accumulation. (The reload below touches only the unpacker.)
+                if constexpr (partials_format_differs) {
+                    pack_reconfig_data_format(pack_target_id);
+                }
+                if constexpr (packer_l1_acc) {
+                    pack_reconfig_l1_acc((!last_K_chunk && K_chunk > 0) ? 1 : 0);
+                }
 
                 // Slice layouts: A is [MN_chunk_M_tiles][K_chunk_tiles] row-major, B is
                 // [K_chunk_tiles][MN_chunk_N_tiles]. Walk the chunk in subblocks: (m_tile, n_tile) is the
@@ -131,29 +137,11 @@ void kernel_main() {
                         }
                         tile_regs_commit();
 
-                        if (last_K_chunk) {
-                            MN_chunk.reserve_back(subblock_tiles);
-                            tile_regs_wait();
-                            if constexpr (partials_format_differs) {
-                                pack_reconfig_data_format(dfb::MN_chunk);
-                            }
-                            if constexpr (packer_l1_acc) {
-                                pack_reconfig_l1_acc(0);
-                            }
-                            pack_block(/*ifrom_dst=*/0, dfb::MN_chunk, subblock_tiles);
-                            tile_regs_release();
-                            MN_chunk.push_back(subblock_tiles);
-                        } else {
-                            C_partials.reserve_back(subblock_tiles);
-                            tile_regs_wait();
-                            if constexpr (packer_l1_acc) {
-                                // K chunk 0 overwrites the partials; from K chunk 1 on the packer adds DST onto L1.
-                                pack_reconfig_l1_acc(K_chunk > 0 ? 1 : 0);
-                            }
-                            pack_block(/*ifrom_dst=*/0, dfb::C_partials, subblock_tiles);
-                            tile_regs_release();
-                            C_partials.push_back(subblock_tiles);
-                        }
+                        pack_target.reserve_back(subblock_tiles);
+                        tile_regs_wait();
+                        pack_block(/*ifrom_dst=*/0, pack_target_id, subblock_tiles);
+                        tile_regs_release();
+                        pack_target.push_back(subblock_tiles);
                     }
                 }
 
