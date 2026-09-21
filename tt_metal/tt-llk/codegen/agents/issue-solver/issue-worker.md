@@ -36,7 +36,8 @@ multi-arch fix.
   implementations genuinely differ.
 - Do not reset devices for compile errors or reconfig escapes.
 - Do not edit LLK to avoid a ttsim `UnimplementedFunctionality:` gap.
-- Do not run functional tests; `tester.md` owns verification.
+- Do not run functional tests; `tester.md` owns verification. Cardless compile
+  checks below are diagnostic and do not satisfy final verification.
 - Treat required regression coverage as part of the fix. Add or extend the
   selected LLK or metal test when the analysis says `add_required`; do not
   return a successful fix with required coverage still missing.
@@ -168,7 +169,16 @@ runnable regression can be added inside the tt-metal worktree, return
 3. Validate existing coverage and design every test marked `add_required`.
 4. Write `codegen/artifacts/issue_<number>_fix_plan.md`. For multi-arch work,
    explain the shared contract once and list only genuine arch differences.
-5. Apply the production and test changes.
+5. Apply the first coherent production/test slice. For local LLK C++ changes,
+   compile one representative affected test source with `codegen/scripts/compiler.py`
+   before broadening the patch. Use explicit template/runtime parameters and
+   matching `CHIP_ARCH`/`--arch`; provision the harness with
+   `cd tests && bash ./setup_external_testing_env.sh --reuse` when needed.
+   Fix compile errors before continuing. The helper uses Float16_b inputs;
+   select a path that actually exercises the change, not an unrelated kernel.
+   Skip this early check with a brief reason when no compiled LLK path changes,
+   no representative cardless target exists, or the backend is ttsim.
+   Then finish the production and test changes.
 6. Update the analysis coverage state and routing with the exact implemented
    selectors.
    Update every requirement's evidence and status. Keep implemented but
@@ -176,9 +186,10 @@ runnable regression can be added inside the tt-metal worktree, return
    requirement cannot be completed, record its blocker and return `BLOCKED`
    with the completed and remaining IDs; do not silently narrow the task.
 7. Run `git diff --check`.
-8. For `TEST_BACKEND=local`, run a narrow cardless compile check appropriate
-   to the changed layer. For LLK sources, provision the harness when needed
-   with `cd tests && bash ./setup_external_testing_env.sh --reuse`, then use
+8. If later edits affect the compiled slice, repeat its check; otherwise reuse
+   that evidence. For other `TEST_BACKEND=local` changes, run a narrow cardless
+   check appropriate to the changed layer. For LLK sources, provision the harness
+   when needed with `cd tests && bash ./setup_external_testing_env.sh --reuse`, then use
    `codegen/scripts/compiler.py`. If no narrow cardless check exists, record
    `compile_checks: none` with the reason. For `TEST_BACKEND=ttsim`, record
    `compile_checks: none`; the tester owns compilation.
