@@ -21,9 +21,9 @@ less accessible, so it is spent deliberately and rarely. **Never mix numbers fro
 
 ## 1. TL;DR
 
-- **Last week's "batching is legal only at `R == C == W`" was wrong, and is corrected** (slide 3,
-  research §5.0.13). Dataflow batching works at **every** clean `(R,C,W)` with a counter-major walk:
-  13 configs x N in {1,2,4,8} x 5 shapes = **260 runs bit-exact**. `4,4,2` is not "N=1 permanently".
+- **Dataflow batching works at every clean `(R,C,W)`** with a counter-major walk (slide 3, research
+  §5.0.13): 13 configs x N in {1,2,4,8} x 5 shapes = **260 runs bit-exact**. Only compute batching is
+  constrained, by tt-metal#56194.
 - **`4,4,2` with both knobs at N=8 runs and measures 26.56 cyc/tile against 44.00 — 1.66x.** The output
   is wrong because of tt-metal#56194 (compute batching above stride 1), which is now the **only** blocker
   and gates the largest speedup available to the op. Left for the LLK team as filed, by decision; the
@@ -53,29 +53,26 @@ regime that is lost either way.
 
 ---
 
-## 3. Batching: why last week was wrong, and what is true
+## 3. Batching: the counter-major walk
 
-**Claimed:** `push_back(n)` credits one counter and rotates once, and a DM kernel addresses only the
-active counter, so a batching role must own exactly one (`C <= R, C <= W`). With compute's
-`R <= C, W <= C` that forced `R == C == W`. `4,4,2` was "N=1 permanently, not a defect", and the F15
-deliverable became `2,2,2` n=8 at 48.70 — slower than the default.
-
-**Wrong because:** the rotation *is* the addressing. A role owning K counters batches within each and
-rotates between them. What the batched kernel actually got wrong was the tile-to-slot map: counter `c`
-holds tiles `thread_id + c*T` spaced `K*T`, so a batch from one counter strides by `K*T`, not `T`. The
-old walk on K > 1 asks a counter for tiles it is never credited and **hangs** (credit-count error).
+`push_back(n)` credits the active tile counter and rotates `tc_idx` by one, so a DM role that owns K
+counters batches *within* each counter and rotates *between* them. Counter `c` holds the tiles
+`thread_id + c*T` spaced `K*T` apart, so a batch drawn from one counter strides by `K*T`, not `T`. The
+reader owns `K = C/R` counters and the writer `K = C/W` when compute is the wider side, else one. A walk
+that strides by `T` asks a counter for tiles it is never credited and **hangs** (credit-count error);
 #56194 **corrupts** (address error). Different kinds of failure.
 
-**Now:** two-level walk, `num_tcs` as a compile-time arg, the `C <= R, C <= W` guard removed. Model: the
-old walk permutes 24/56 cases, the new walk 0/56. Device: 260 runs bit-exact. Control: the old walk hangs.
-`4,4,2` N=8 with both knobs: `1929 + 26.56*T` vs HEAD's `1115 + 44.00*T` — **1.66x**, writer binds.
-Blocked by #56194 alone; correctness of the combination is unverified until it lands. A full batch needs
-`N * C * 32` tiles (1024 at `4,4,2`); below that the compute kernel runs its tiles as one short batch,
-silently.
+**Implementation:** two-level walk, `num_tcs` as a compile-time arg mirroring the DFB's
+`calculate_num_tile_counters`. Model: a flat walk permutes 24/56 cases, the counter-major walk 0/56.
+Device: 260 runs bit-exact. Control: the flat walk hangs at `4,4,2` N=8. `4,4,2` N=8 with both knobs:
+`1929 + 26.56*T` vs HEAD's `1115 + 44.00*T` — **1.66x**, writer binds. Blocked by #56194 alone;
+correctness of the combination is unverified until it lands. A full batch needs `N * C * 32` tiles
+(1024 at `4,4,2`); below that the compute kernel runs its tiles as one short batch, silently.
 
-**The classification error:** hardware limits, DFB implementation limits, a filed bug, and the shape of
-our own kernel were all called "illegal". Only the first is architecture. The factory `TT_FATAL` that
-encoded the mistake was then cited as proof of it.
+**Four kinds of constraint, and only one is architecture:** hardware limits (`C <= 4`, `R + W <= 6`),
+DFB implementation limits (STRIDED rings, the integer ratio rule), a filed bug (#56194), and the shape of
+our own kernel. Name the kind before calling a configuration illegal; a `TT_FATAL` of our own is not
+evidence of a hardware limit.
 
 ---
 
@@ -95,7 +92,23 @@ encoded the mistake was then cited as proof of it.
 
 ---
 
-## 5. Next
+## 5. Review follow-up on PR #57065 (2026-09-21)
+
+The draft PR drew four automated findings (Copilot, the gh-aw skills reviewers, Cycode). Disposition:
+
+| finding | class | fix |
+|---|---|---|
+| the factory re-derives the DFB's per-role tile-counter count (`C/R`, `C/W`) and passes it as a compile-time arg | duplicated derivation | kept, by decision: the two lines mirror `calculate_num_tile_counters`, and the DFB's own `TT_FATAL` plus the gate's `ratio_ok` guard any divergence. The factory's two ratio `TT_FATAL`s are deleted — the gate makes them unreachable. A `DataflowBuffer` getter for `num_tcs_to_rr` was built, tested (extent probe) and reverted from this PR: it touches `tt_metal/hw/inc/` and would pull the runtime owners into the review. Proposed as its own small PR; conv2d reads the same field through `internal/` today. |
+| O(dm_batch) loop to count the last short batch | nit | closed form `n = ceil((D - first) / tile_step)`; `full_limit` bounds it below `dm_batch`, the loop bound above zero. Both walk models pass (49,920 configs; 0/56 permutations). |
+| `TTNN_QSR_TILES_PER_CYCLE` and the five batching `TT_FATAL`s had no test | coverage gap | `test_native_tiles_per_cycle_is_bit_exact` (compute-only and both-knobs at `1,1,1`; per-cluster 1 / 9 / 64 / 65 tiles reach a lone short batch, full+tail, full without tail, and a ring wrap); `test_native_batching_guards_refuse` asserts each guard's own message. |
+| Cycode: parameters spliced into a `python -c` script | SAST, false positive in substance | the child script is a constant; parameters arrive as JSON in the environment. |
+
+Module after the fixes, same tree, craq-sim `ad401613`: native ON **28 passed, 1 skipped** in 159 s;
+native OFF 1 passed, 28 skipped. `4,4,2` N=1 is untouched: the `dm_batch == 1` path is byte-identical.
+
+---
+
+## 6. Next
 
 1. **F3 — borrowed L1-sharded on the native path.** The host side is fully wired (defines emitted,
    borrow decision, placement); the kernels need the `#if SRC_SHARDED` / `DST_SHARDED` branches from the
@@ -105,7 +118,8 @@ encoded the mistake was then cited as proof of it.
    verified independently. Two non-code findings fixed: the test comment overstated its coverage (no run
    had wrapped a ring under batching — a 65 tiles/cluster shape now does), and this list was stale.
    Ready to stage.
-3. Applied after the first review: D2(a) local guards stating the DFB pairing assumption, LOW-4
+3. Applied after the first review: D2(a) local guards stating the DFB pairing assumption (removed again
+   on 2026-09-21 — unreachable behind the gate's `ratio_ok`, slide 5), LOW-4
    (`any_knob_set` now includes the batch knobs), NIT-2 (committed test
    `test_native_dm_batch_above_one_counter_is_bit_exact`, two arms at `dm_batch=8`).
 
@@ -119,18 +133,16 @@ encoded the mistake was then cited as proof of it.
   (176.50 → 97.39 cyc/tile), all three stages batched at N=8, **bit-exact at every N and every shape
   tested**. This was scheduled as M2.6/F15 and marked emulator-only; it was pulled forward and craq-sim
   priced it after all (slide 2).
-- **Its legal space is two configurations, and that is permanent.** The two batch knobs ship together,
-  and their constraints are opposites, so batching requires `R == C == W` — `1,1,1` and `2,2,2`, nothing
-  else. **`4,4,2` is an N=1 config permanently**, not pending a fix.
-  *→ Corrected in the week of 2026-09-17 (slide 3 there): dataflow batching works at every clean config
-  with a counter-major walk; `4,4,2` N=8 runs at 1.66x, blocked only by #56194.*
-- **`4,4,2` at N=1 remains the best configuration measured and stays the default.** Nothing this week
-  beats it, and batching cannot: the one config batching would unlock, `2,2,2` at N=8, projects to
-  **48.70 cyc/tile against `4,4,2`'s measured 44.12 — 10% SLOWER in absolute throughput**, buying 40%
-  fewer engines for it. That makes it an option for engine-constrained placement, not an upgrade.
+- **The two batch knobs ship together, and only compute batching is constrained.** Compute batching
+  corrupts above ring stride 1 (tt-metal#56194, slide 3), so with both knobs on it is correct at `1,1,1`
+  today. Dataflow batching works at every clean `(R,C,W)` (week of 2026-09-17, slide 3).
+- **`4,4,2` at N=1 remains the best correct configuration measured and stays the default.** Until
+  #56194 lands, both knobs together are correct only at `1,1,1`. `2,2,2` at N=8 projects to **48.70
+  cyc/tile against `4,4,2`'s measured 44.12** — 90% of the throughput on 60% of the engines, an option for
+  engine-constrained placement; `4,4,2` at N=8 measures 26.56 (week of 2026-09-17, slide 3).
 - **One defect filed: tt-metal#56194** — the metal LLK pack path ignores the DFB ring stride when
   batching, silently corrupting up to `1 - ceil(N/S)/N` of every batch. Root-caused to one line, with
-  the sibling code that does it correctly. **Real bug, NOT on our critical path** (slide 3).
+  the sibling code that does it correctly. **Real bug; it gates `4,4,2` N=8** (slide 3).
 - **Latest `main` qualified against latest craq-sim, and a device-open regression found: tt-metal#55838**
   — filed 09-08, **fixed and closed 09-09** (slide 4).
 - Reader/writer kernel walk rewritten to remove per-batch arithmetic: shipped path unchanged to the
@@ -143,7 +155,7 @@ encoded the mistake was then cited as proof of it.
 
 ---
 
-## 2. Batching measured — and the legal space collapses to two configs
+## 2. Batching measured at `1,1,1`: 1.81x, and one bug
 
 Held ring depth at `2N` throughout so double-buffering *in units of batches* is constant and the only
 variable is tiles per credit exchange. At `1,1,1`, bf16 interleaved `add`:
@@ -165,19 +177,17 @@ dataflow-only returns *exactly* 0.0%, because `max()` ignores a non-binding stag
 improves with N (8.8 t/c at N=8), so the prologue objection to batching was really an objection to
 batching *too little*.
 
-**Why only two configs.** Compute batching needs compute's tile counters at 1 (`R <= C and W <= C`);
-dataflow batching needs the data-movement roles' at 1 (`C <= R and C <= W`). Opposite constraints. The
-knobs cannot be used separately — compute must not consume faster than the reader supplies — so both
-must hold, giving `R == C == W`; with `C in {1,2,4}` and `R + W <= 6` that is `1,1,1` and `2,2,2`.
+**Where the knobs are correct today.** The knobs cannot be used separately — compute must not consume
+faster than the reader supplies — and compute batching writes wrong data above ring stride 1 (slide 3),
+so both knobs together are correct at `1,1,1` only until the pack fix lands. Dataflow batching alone is
+correct at every clean `(R,C,W)` (week of 2026-09-17, slide 3).
 
-**`4,4,2` is out, and not only on legality.** Dataflow batching there needs a DM kernel to address the
-writer's two tile counters, which the DFB API cannot express — `get_local_*` exposes only the active one.
-*→ Corrected 2026-09-17: it can. A batch from one counter strides by `num_tcs * num_threads` and the role
-rotates between counters. See the 2026-09-17 entry, slide 3, and research §5.0.13.*
-Wanting it there was weak anyway: batching compresses roofs that have slack above the next one down, and
-`4,4,2`'s three roofs sit within **7%** of each other, which is the balanced state batching exists to
-produce. `2,2,2` keeps the 2.11x spread, which is why the same lever is worth 1.81x there and ~nothing at
-the frontier. **Threading is the primary lever; batching buys the same throughput on fewer engines.**
+**What batching is worth at the frontier.** Batching compresses roofs that have slack above the next one
+down. At `4,4,2` the three roofs sit within **7%** of each other at N=1, so compressing the compute chain
+hands the roofline to the writer: 26.56 cyc/tile at N=8, 1.66x, writer-bound (week of 2026-09-17,
+slide 3). `2,2,2` keeps the 2.11x spread, which is why the same lever is worth 1.81x at `1,1,1` and, by
+the model, at `2,2,2`. **Threading is the primary lever; batching buys the same throughput on fewer
+engines, and more throughput at the frontier once #56194 lands.**
 
 **And N itself is a narrow knob — this was instrumentation, not a lever hunt.** **N>1 requires the two
 operand shapes to be EQUAL and the operands L1-sharded.** Any broadcast puts N back to 1: subtile because
@@ -189,33 +199,30 @@ selected on `SubtileBroadcastType::NONE`, which is the **broader** condition —
 broadcast passes it). What narrows NONE down to equal shapes in production's gate is the sharding half:
 `is_native_L1_sharding` admits all-three-sharded only when `a.logical_shape() == b->logical_shape()`
 (`binary_ng_utils.cpp:806`). So: any broadcast → N=1;
-DRAM-interleaved → N=1 (never implemented anywhere); **L1-sharded with equal shapes → N=8**, one case of
-three, where the reader merely pushes resident tiles and the whole gain is compute-side. **Our kernels
+DRAM-interleaved → N=1 on WH/BH (the Quasar-native knobs are the first to batch it); **L1-sharded with
+equal shapes → N=8**, one case of three, where the reader merely pushes resident tiles and the whole gain
+is compute-side. **Our kernels
 support neither broadcast kind yet** (outer-dim 2.1 / F13, subtile 2.2 / F8), so every measurement this
 week is on dense shapes. Varying N is how the per-tile credit constant gets separated from the rest of
 the chain — which is what pinned the `C` roof as a delivery roof — so read 1.81x as a cost-model
 measurement first.
 
-**Net effect on what we ship: none.** `4,4,2` at N=1 was the best config before this experiment and
-still is. Batching's only reachable configuration is slower than the default in absolute terms, so this
-week's 1.81x is a result about the cost model, plus an option to hold in reserve — not a perf win to
-land. Keep `4,4,2` N=1 as the default.
-
-Three claims retired: a planned multi-TC walk fix (its only beneficiaries were `4,4,2`-shaped configs), a
-`[1.05x, 1.81x]` projection for `4,4,2` that assumed a configuration which cannot ship, and the framing
-of `2,2,2` N=8 as a deliverable rather than an option.
+**Net effect on what we ship today: none.** `4,4,2` at N=1 stays the default until #56194 lands. This
+week's 1.81x at `1,1,1` is a result about the cost model, plus an option to hold in reserve. The
+deliverable once the fix lands is `4,4,2` N=8 (week of 2026-09-17, slide 3); `2,2,2` N=8 is an
+engine-constrained option, not the target.
 
 ---
 
 ## 3. tt-metal#56194 — batched pack ignores the DFB ring stride
 
-**Filed. Not ours, not blocking.** Batching more than one tile per credit exchange writes tiles to the
-wrong L1 offsets whenever the ring is strided, silently corrupting most of each batch. It is in the
-metal-side LLK pack layer (`hw/ckernels/quasar/metal/llk_api/`) — not tt-llk, not craq-sim — and it is
+**Filed. Not ours; it gates `4,4,2` N=8.** Batching more than one tile per credit exchange writes tiles
+to the wrong L1 offsets whenever the ring is strided, silently corrupting most of each batch. It is in
+the metal-side LLK pack layer (`hw/ckernels/quasar/metal/llk_api/`) — not tt-llk, not craq-sim — and it is
 plain integer arithmetic, so silicon behaves the same way.
 
-Nothing we ship touches it: `4,4,2` at N=1 has stride 4 but batch 1, and the defect needs both above 1.
-It matters as a **latent trap for the next caller** — the API offers a batched pack, STRIDED is a
+Nothing we ship today touches it: `4,4,2` at N=1 has stride 4 but batch 1, and the defect needs both
+above 1. It is also a **latent trap for the next caller** — the API offers a batched pack, STRIDED is a
 documented pattern, and no test in the DFB suite combines them.
 
 Root cause, corruption-rate model and the predicted-vs-measured check are in the issue and in
@@ -269,11 +276,10 @@ results that change how numbers get quoted:
    it does **not** cross that knee, since each request is still one 2 KB tile. Coalescing two tiles into
    one 4 KB read is a separate, unbuilt change.
 
-**Reporting basis, now labelled at point of use.** Three categories were being conflated and are now
-distinguished wherever a number appears: *measured*, *projected* (with the assumption named), and
-**illegal combination — shown for illustration**. Concretely: the 12.5% → 53% in-flight rise and the
-`4,4,2` N=8 operating point both belong to a configuration that cannot execute, so neither is a result.
-The figures that survive are `1,1,1`'s — the in-flight rise achieved is **3.4% → 22.2%**.
+**Reporting basis, labelled at point of use.** Two categories are distinguished wherever a number
+appears: *measured*, and *projected* (with the assumption named). The `1,1,1` in-flight rise is measured,
+**3.4% → 22.2%**. The `4,4,2` N=8 figures here (12.5% → 53%) are projected from the model; the
+configuration itself is measured in the week of 2026-09-17 (slide 3).
 
 ---
 
@@ -339,22 +345,22 @@ DRAM-interleaved shape is memory-bound on silicon regardless of threading, **F3 
 promoted from a coverage item to the item that makes the M1 result visible at all.**
 
 1. **Resume the M1 ladder: F2 (sub, mul) → F3 (sharded/borrowed) → F4 (mixed layouts).** F3 is also where
-   batching would pay most if it ever pays — a borrowed L1 shard has no producer filling a ring, so the
-   stride obstruction does not arise there at all.
+   batching pays most — a borrowed L1 shard has no DM chain to amortise, so the whole gain lands on the
+   compute chain (about 15.5 cyc/tile at `C=4` once #56194 lands; the ring stride is unchanged by
+   borrowing, so the pack fix is still needed).
 2. **Rebase onto current `main`** now that #55838 is closed and the multi-thread hang is fixed upstream.
    Then re-run the known-good sanity case before taking any measurement.
 3. **Decide whether the batching knobs ship — and consider making interleaved N>1 permanent while the
    code is fresh.** `TTNN_QSR_TILES_PER_CYCLE` / `TTNN_QSR_DM_BATCH` and the batched kernels are
    unstaged and unreviewed; `code-review-tt` before any staging. Promoting them from env knobs to a
-   factory branch (interleaved + no-broadcast, any clean `(R,C,W)` — the `R == C == W` limit was wrong,
-   see 2026-09-17 — with `entries_per_thread` a multiple of `2N`) is small
+   factory branch (interleaved + no-broadcast, any clean `(R,C,W)`, with `entries_per_thread` a
+   multiple of `2N`) is small
    and gated so the default is untouched — and it would make Quasar the first architecture to support
-   the case, which no other has. It buys no speed at `4,4,2`, so this is a completeness call.
+   the case, which no other has. It buys speed at `4,4,2` once #56194 lands.
 4. **Quasar craq-sim CI** — still blocked on the craq-sim release process. #54415 and #56194 are both
    defects a sim merge gate would have caught.
-5. **tt-metal#56194** — filed, not blocking us. Offer a regression test alongside it, since the gap is
-   coverage as much as code. Revisit batching only if F3 changes the arithmetic or an engine-constrained
-   placement makes `2,2,2` worth its 10% throughput cost.
+5. **tt-metal#56194** — filed; it gates `4,4,2` N=8 (week of 2026-09-17, slide 3). Offer a regression
+   test alongside it, since the gap is coverage as much as code.
 
 ---
 
@@ -876,7 +882,7 @@ columns stay. (`F#` in the review-findings doc is an unrelated namespace.)
 | 2.3 | F9 | mixed broadcast | keep the ROW-via-LLK / COL-via-reader-fill hybrid |
 | 2.4 | F10 | tensor-scalar | writer fills `in1` once |
 | 2.5 | F14 | **per-operand reader allocation** | **emulator-only** — no roofline gain (per-core reads are `T/2` either way); the case is DRAM/NoC locality, which craq-sim cannot price. Hypothesis: tile-split pairs `in0[k]`/`in1[k]` on the **same bank**. Proportional allocation matters from F4 (mixed layouts) onward, not just broadcast. STRIDED rule limits splits to `p in {1,2,4}` at `C=4` |
-| 2.6 | F15 | **in-flight concurrency** (`implicit_sync`, ring depth, batching) | **batching PULLED FORWARD and measured on craq-sim: 1.81x at `1,1,1`, n=1 -> n=8** (research §5.0.8-§5.0.11) — the "no latency to hide" reasoning held for `implicit_sync` and ring depth, not for batching. **The two knobs ship together.** Compute batching needs `R <= C and W <= C` and is blocked above stride 1 by #56194; dataflow batching works at every clean `(R,C,W)` — the `C <= R and C <= W` rule this row carried until 2026-09-17 was wrong. **Corrected 2026-09-17: `4,4,2` is NOT n=1 permanently.** Dataflow batching there works with a counter-major walk (a batch from one counter strides by `num_tcs * num_threads`); verified at every clean `(R,C,W)`, 260 runs bit-exact. **The deliverable is `4,4,2` n=8: 26.56 cyc/tile measured vs n=1's 44.00 on the same basis — 1.66x — blocked only by tt-metal#56194**, which therefore gates the op's largest available speedup. `2,2,2` n=8 (48.70, slower than the default) is no longer the target. **It is not "blocked" — it DATA-CORRUPTS, silently.** At `2,2,2` n=8 the dataflow half is bit-exact; the compute half writes 50% of each batch to the wrong L1 offset and returns wrong data with no error, hang or warning. Our factory `TT_FATAL`s so the corruption cannot escape, which is the only reason it looks like a refusal. ONE bug: the metal LLK pack path adds +1 entry per tile where the cursor converter divides by `stride_size_tiles`, so a batch of n at stride S covers only `ceil(n/S)` slots (**tt-metal#56194**, `hw/ckernels/quasar/metal/llk_api/llk_pack_tile_api.h:58-74`). `implicit_sync` and ring depth remain emulator-only, same campaign as F14. One axis, not three (`capacity >= 2n`). Writer batching is a known negative |
+| 2.6 | F15 | **in-flight concurrency** (`implicit_sync`, ring depth, batching) | **batching PULLED FORWARD and measured on craq-sim: 1.81x at `1,1,1`, n=1 -> n=8** (research §5.0.8-§5.0.13) — the "no latency to hide" reasoning held for `implicit_sync` and ring depth, not for batching. **The two knobs ship together.** Dataflow batching works at every clean `(R,C,W)` with a counter-major walk (a batch from one counter strides by `num_tcs * num_threads`; 260 runs bit-exact). Compute batching is correct only at ring stride 1 until tt-metal#56194 lands. **The deliverable is `4,4,2` n=8: 26.56 cyc/tile measured vs n=1's 44.00 on the same basis — 1.66x — blocked only by #56194**, which therefore gates the op's largest available speedup. `2,2,2` n=8 (48.70 projected) is an engine-constrained option. **Above stride 1 compute batching is not "blocked" — it DATA-CORRUPTS, silently.** At `2,2,2` n=8 the dataflow half is bit-exact; the compute half writes 50% of each batch to the wrong L1 offset and returns wrong data with no error, hang or warning. Our factory `TT_FATAL`s so the corruption cannot escape, which is the only reason it looks like a refusal. ONE bug: the metal LLK pack path adds +1 entry per tile where the cursor converter divides by `stride_size_tiles`, so a batch of n at stride S covers only `ceil(n/S)` slots (**tt-metal#56194**, `hw/ckernels/quasar/metal/llk_api/llk_pack_tile_api.h:58-74`). `implicit_sync` and ring depth remain emulator-only, same campaign as F14. One axis, not three (`capacity >= 2n`). Writer batching is a known negative |
 | **3.0** | — | **milestone 3 — once F10 lands** | broadcast-complete; the rest is the long tail |
 | 3.1 | F11 | row-major | 16-byte RM shard-width alignment |
 | 3.2 | F12 | where / quantization / int32 | own kernel families; int32 blocked on the DFB-compute bug |

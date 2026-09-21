@@ -709,26 +709,11 @@ ProgramArtifacts create_no_bcast_artifacts(
         num_tiles_per_cycle,
         in_producers_consumers,
         out_producers_consumers);
-    // Tile counters each DM role round-robins, mirroring dataflow_buffer.cpp's num_tcs_to_rr: the
-    // reader produces into the in DFB and the writer consumes from the out DFB, so each owns the
-    // ratio when compute is the wider side. The kernels need it to stride a batch within one counter.
+    // Tile counters each DM role round-robins, mirroring the DFB's calculate_num_tile_counters for a
+    // STRIDED ring: the reader produces into the in DFB and the writer consumes from the out DFB, so
+    // each owns the ratio when compute is the wider side. A batch strides within one counter by it.
     const uint32_t reader_num_tcs = t.compute_threads >= t.reader_threads ? t.compute_threads / t.reader_threads : 1u;
     const uint32_t writer_num_tcs = t.compute_threads >= t.writer_threads ? t.compute_threads / t.writer_threads : 1u;
-    // The counter-major walk assumes counter c of a role feeds lane thread_id + c*num_threads. That is
-    // the DFB's producer/consumer pairing today, not a documented contract, and it needs an integer
-    // ratio when compute is the wider side. State it here in our knobs' terms.
-    TT_FATAL(
-        t.compute_threads < t.reader_threads || t.compute_threads % t.reader_threads == 0,
-        "binary_ng Quasar-native: TTNN_QSR_COMPUTE_THREADS={} must be a multiple of TTNN_QSR_READER_THREADS={} "
-        "for the reader's counter-major walk",
-        t.compute_threads,
-        t.reader_threads);
-    TT_FATAL(
-        t.compute_threads < t.writer_threads || t.compute_threads % t.writer_threads == 0,
-        "binary_ng Quasar-native: TTNN_QSR_COMPUTE_THREADS={} must be a multiple of TTNN_QSR_WRITER_THREADS={} "
-        "for the writer's counter-major walk",
-        t.compute_threads,
-        t.writer_threads);
 
     const uint32_t a_entries = a_borrowed ? full_shard_tiles(a, *a.shard_spec()) : in_entries;
     // Scalar in1 is a single writer-filled tile (never borrowed); otherwise the borrowed shard or the

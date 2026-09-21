@@ -14,6 +14,7 @@ from a cached index, so flipping the knob in-process would silently re-run the p
 process per state -- see the run commands in debug/run_targeted_matrix.sh.
 """
 
+import json
 import os
 import pathlib
 import subprocess
@@ -181,12 +182,15 @@ _NATIVE_ARMS = [(1, 1, 1), (4, 4, 2), (1, 4, 4), (4, 4, 1), (2, 4, 2)]
 # static, and the program cache resolves the factory from a cached index, so setting the env vars
 # mid-process changes nothing. Same constraint that makes this module gate on TTNN_QSR_NATIVE rather
 # than parametrize it. Routing is read after close_device() so the inspector has certainly flushed.
+#
+# The child is a fixed script. Its parameters arrive as data in the environment (ARM_RCW and
+# ARM_TILE_COUNTS, JSON), never spliced into the source.
 _ARM_SRC = """
-import os, pathlib, sys
+import json, os, pathlib, sys
 import torch, ttnn
 
-R, C, W = {rcw}
-TILE_COUNTS = {tile_counts}
+R, C, W = json.loads(os.environ["ARM_RCW"])
+TILE_COUNTS = json.loads(os.environ["ARM_TILE_COUNTS"])
 
 failures = []
 device = ttnn.open_device(device_id=0)
@@ -202,7 +206,7 @@ try:
         golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
         got = ttnn.to_torch(out)
         if not torch.equal(got.contiguous().view(torch.int16), golden.contiguous().view(torch.int16)):
-            failures.append("{{}} tiles: {{}} of {{}} elements differ".format(
+            failures.append("{} tiles: {} of {} elements differ".format(
                 tiles, int((got != golden).sum().item()), golden.numel()))
 finally:
     ttnn.close_device(device)
@@ -217,12 +221,33 @@ if not [s for s in sources if "kernels_qsr/" in s]:
     failures.append("bound no kernels_qsr sources")
 
 if failures:
-    print("FAIL R={{}} C={{}} W={{}}".format(R, C, W))
+    print("FAIL R={} C={} W={}".format(R, C, W))
     for f in failures:
         print("  " + f)
     sys.exit(1)
-print("OK R={{}} C={{}} W={{}} over {{}} shapes".format(R, C, W, len(TILE_COUNTS)))
+print("OK R={} C={} W={} over {} shapes".format(R, C, W, len(TILE_COUNTS)))
 """
+
+
+def _run_arm(rcw, tile_counts, knobs, timeout):
+    """Run one (R, C, W) arm of _ARM_SRC in its own process.
+
+    Every inherited TTNN_QSR_* variable is stripped first, so an arm's configuration is exactly the
+    thread counts plus `knobs`, whatever the calling shell has set.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("TTNN_QSR_")}
+    env.update(
+        {
+            "TTNN_QSR_NATIVE": "1",
+            "TTNN_QSR_READER_THREADS": str(rcw[0]),
+            "TTNN_QSR_COMPUTE_THREADS": str(rcw[1]),
+            "TTNN_QSR_WRITER_THREADS": str(rcw[2]),
+            "ARM_RCW": json.dumps(list(rcw)),
+            "ARM_TILE_COUNTS": json.dumps(list(tile_counts)),
+            **knobs,
+        }
+    )
+    return subprocess.run([sys.executable, "-c", _ARM_SRC], env=env, capture_output=True, text=True, timeout=timeout)
 
 
 def _add_bit_exact(device, tiles, seed):
@@ -291,15 +316,7 @@ def test_native_uneven_tile_counts_multithread(rcw):
 
     Requests no `device` fixture on purpose: each arm opens its own device inside its own process.
     """
-    env = {
-        **os.environ,
-        "TTNN_QSR_NATIVE": "1",
-        "TTNN_QSR_READER_THREADS": str(rcw[0]),
-        "TTNN_QSR_COMPUTE_THREADS": str(rcw[1]),
-        "TTNN_QSR_WRITER_THREADS": str(rcw[2]),
-    }
-    src = _ARM_SRC.format(rcw=repr(tuple(rcw)), tile_counts=repr(_RAGGED_TILE_COUNTS))
-    p = subprocess.run([sys.executable, "-c", src], env=env, capture_output=True, text=True, timeout=3600)
+    p = _run_arm(rcw, _RAGGED_TILE_COUNTS, knobs={}, timeout=3600)
     assert p.returncode == 0, f"arm R={rcw[0]} C={rcw[1]} W={rcw[2]} failed:\n{p.stdout}\n{p.stderr[-2000:]}"
 
 
@@ -333,19 +350,98 @@ def test_native_dm_batch_above_one_counter_is_bit_exact(rcw):
     afterwards, so the factory demands entries_per_thread >= 2n and entries_per_thread % n == 0.
 
     One process per arm, as above. The timeout is the failure detector for a broken pairing: a counter
-    asked for more tiles than it receives hangs rather than corrupts. TILES_PER_CYCLE is dropped from
-    the inherited env so a shell that set it cannot turn this into a compute-batching run.
+    asked for more tiles than it receives hangs rather than corrupts. The arm inherits no TTNN_QSR_*
+    knob, so a shell that set TILES_PER_CYCLE cannot turn this into a compute-batching run.
     """
-    env = {
-        **os.environ,
-        "TTNN_QSR_NATIVE": "1",
-        "TTNN_QSR_READER_THREADS": str(rcw[0]),
-        "TTNN_QSR_COMPUTE_THREADS": str(rcw[1]),
-        "TTNN_QSR_WRITER_THREADS": str(rcw[2]),
-        "TTNN_QSR_DM_BATCH": "8",
-        "TTNN_QSR_ENTRIES_PER_THREAD": "16",
-    }
-    env.pop("TTNN_QSR_TILES_PER_CYCLE", None)
-    src = _ARM_SRC.format(rcw=repr(tuple(rcw)), tile_counts=repr(_DM_BATCH_TILE_COUNTS))
-    p = subprocess.run([sys.executable, "-c", src], env=env, capture_output=True, text=True, timeout=600)
+    p = _run_arm(
+        rcw,
+        _DM_BATCH_TILE_COUNTS,
+        knobs={"TTNN_QSR_DM_BATCH": "8", "TTNN_QSR_ENTRIES_PER_THREAD": "16"},
+        timeout=600,
+    )
     assert p.returncode == 0, f"dm_batch=8 arm R={rcw[0]} C={rcw[1]} W={rcw[2]} failed:\n{p.stdout}\n{p.stderr[-2000:]}"
+
+
+# --- Compute batching --------------------------------------------------------------------------------
+#
+# TTNN_QSR_TILES_PER_CYCLE=8 batches eight tiles per tile_regs_acquire. The pack path spaces a batch by
+# one entry rather than by the ring stride, so the factory admits it only at ring stride 1 -- R = C = W
+# = 1 -- until the pack path applies the stride per tile. Per-cluster tile counts on the 32-cluster
+# grid: 1 runs a single short batch and no full one; 9 runs one full batch of 8 then a tail of 1; 64
+# runs eight full batches, wrapping the 16-deep ring three times, and no tail; 65 adds a tail of 1 that
+# starts exactly on a wrap boundary.
+_TILES_PER_CYCLE_TILE_COUNTS = [32, 288, 2048, 2080]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("dm_batch", [1, 8], ids=["compute-only", "both-knobs"])
+def test_native_tiles_per_cycle_is_bit_exact(dm_batch):
+    """Compute batching at 1,1,1 must stay bit-exact, alone and together with dataflow batching.
+
+    The compute kernel splits a thread's share into full chunks of num_tiles_per_cycle and one remainder
+    chunk; a truncating divide there once dropped the tail and hung. The tile counts above reach every
+    branch of that split. both-knobs is the configuration that measured 1.81x throughput at 1,1,1.
+    """
+    p = _run_arm(
+        (1, 1, 1),
+        _TILES_PER_CYCLE_TILE_COUNTS,
+        knobs={
+            "TTNN_QSR_TILES_PER_CYCLE": "8",
+            "TTNN_QSR_DM_BATCH": str(dm_batch),
+            "TTNN_QSR_ENTRIES_PER_THREAD": "16",
+        },
+        timeout=600,
+    )
+    assert p.returncode == 0, f"tiles_per_cycle=8 dm_batch={dm_batch} failed:\n{p.stdout}\n{p.stderr[-2000:]}"
+
+
+# Each batching guard, the knob values that trip it, and the text its TT_FATAL carries. A batch needs a
+# ring at least twice as deep (double buffering) and a depth that is a multiple of the batch (a batch
+# occupies consecutive slots and the ring wraps only after it). Compute batching above ring stride 1 is
+# refused until the pack path applies the stride per tile.
+_GUARD_ARMS = [
+    (
+        "tiles_per_cycle-depth",
+        (1, 1, 1),
+        {"TTNN_QSR_TILES_PER_CYCLE": "8", "TTNN_QSR_ENTRIES_PER_THREAD": "8"},
+        "TTNN_QSR_TILES_PER_CYCLE=8 needs TTNN_QSR_ENTRIES_PER_THREAD >= 16",
+    ),
+    (
+        "tiles_per_cycle-divides",
+        (1, 1, 1),
+        {"TTNN_QSR_TILES_PER_CYCLE": "8", "TTNN_QSR_ENTRIES_PER_THREAD": "20"},
+        "TTNN_QSR_TILES_PER_CYCLE=8 must divide TTNN_QSR_ENTRIES_PER_THREAD=20",
+    ),
+    (
+        "dm_batch-depth",
+        (1, 1, 1),
+        {"TTNN_QSR_DM_BATCH": "8", "TTNN_QSR_ENTRIES_PER_THREAD": "8"},
+        "TTNN_QSR_DM_BATCH=8 needs TTNN_QSR_ENTRIES_PER_THREAD >= 16",
+    ),
+    (
+        "dm_batch-divides",
+        (1, 1, 1),
+        {"TTNN_QSR_DM_BATCH": "8", "TTNN_QSR_ENTRIES_PER_THREAD": "20"},
+        "TTNN_QSR_DM_BATCH=8 must divide TTNN_QSR_ENTRIES_PER_THREAD=20",
+    ),
+    (
+        "tiles_per_cycle-stride",
+        (2, 2, 2),
+        {"TTNN_QSR_TILES_PER_CYCLE": "8", "TTNN_QSR_ENTRIES_PER_THREAD": "16"},
+        "requires stride 1 on EVERY DFB",
+    ),
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory not enabled (TTNN_QSR_NATIVE)")
+@pytest.mark.parametrize("arm", _GUARD_ARMS, ids=[a[0] for a in _GUARD_ARMS])
+def test_native_batching_guards_refuse(arm):
+    """A knob setting the factory cannot run must fail with its own message, not run and hang.
+
+    The message is asserted, not only a non-zero exit: an arm that died for another reason -- no
+    simulator, a build break -- would otherwise pass as a refusal.
+    """
+    _, rcw, knobs, message = arm
+    p = _run_arm(rcw, [32], knobs=knobs, timeout=300)
+    assert p.returncode != 0, f"{arm[0]}: the factory ran instead of refusing:\n{p.stdout}"
+    assert message in p.stdout + p.stderr, f"{arm[0]}: refused for another reason:\n{p.stdout}\n{p.stderr[-2000:]}"

@@ -30,10 +30,6 @@ void kernel_main() {
     const uint32_t dst_num_tiles = get_arg(args::dst_num_tiles);
 
     constexpr uint32_t dm_batch = get_arg(args::dm_batch);
-    // How many tile counters this thread round-robins: the DFB's num_tcs_to_rr for this role, mirrored
-    // by the factory.
-    // push_back rotates by exactly one, so a batch fills one counter and the next batch fills the next.
-    constexpr uint32_t num_tcs = get_arg(args::num_tcs);
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb::in0);
@@ -104,6 +100,10 @@ void kernel_main() {
             read_batch(k, 1, num_threads);
         }
     } else {
+        // Tile counters this thread round-robins: the factory mirrors the DFB's num_tcs_to_rr for this
+        // role. push_back rotates by exactly one, so a batch fills one counter and the next batch fills
+        // the next.
+        constexpr uint32_t num_tcs = get_arg(args::num_tcs);
         const uint32_t tile_step = num_tcs * num_threads;
         const uint32_t round_span = dm_batch * tile_step;
         // A batch that starts at or past full_limit has fewer than dm_batch tiles left in its counter,
@@ -118,10 +118,9 @@ void kernel_main() {
             for (uint32_t c = 0; c < num_tcs && first < dst_num_tiles; ++c, first += num_threads) {
                 uint32_t n = dm_batch;
                 if (first >= full_limit) {
-                    n = 1;
-                    for (uint32_t t = first + tile_step; t < dst_num_tiles && n < dm_batch; t += tile_step) {
-                        ++n;
-                    }
+                    // The tiles this counter has left: first, first + tile_step, ... below dst_num_tiles.
+                    // full_limit guarantees fewer than dm_batch of them, and the loop bound at least one.
+                    n = (dst_num_tiles - first + tile_step - 1) / tile_step;
                 }
                 read_batch(first, n, tile_step);
             }

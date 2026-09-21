@@ -29,8 +29,6 @@ void kernel_main() {
     const uint32_t dst_num_tiles = get_arg(args::dst_num_tiles);
 
     constexpr uint32_t dm_batch = get_arg(args::dm_batch);
-    // Tile counters this thread round-robins -- see the reader. pop_front rotates by exactly one.
-    constexpr uint32_t num_tcs = get_arg(args::num_tcs);
 
     Noc noc;
     DataflowBuffer dfb_out(dfb::out);
@@ -75,6 +73,8 @@ void kernel_main() {
             write_batch(k, 1, num_threads);
         }
     } else {
+        // Tile counters this thread round-robins -- see the reader. pop_front rotates by exactly one.
+        constexpr uint32_t num_tcs = get_arg(args::num_tcs);
         const uint32_t tile_step = num_tcs * num_threads;
         const uint32_t round_span = dm_batch * tile_step;
         // Only a batch at or past full_limit can be short, so only there is the count derived.
@@ -86,10 +86,8 @@ void kernel_main() {
             for (uint32_t c = 0; c < num_tcs && first < dst_num_tiles; ++c, first += num_threads) {
                 uint32_t n = dm_batch;
                 if (first >= full_limit) {
-                    n = 1;
-                    for (uint32_t t = first + tile_step; t < dst_num_tiles && n < dm_batch; t += tile_step) {
-                        ++n;
-                    }
+                    // The tiles this counter has left -- see the reader.
+                    n = (dst_num_tiles - first + tile_step - 1) / tile_step;
                 }
                 write_batch(first, n, tile_step);
             }
