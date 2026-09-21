@@ -41,15 +41,15 @@ namespace ckernel {
  * above-mentioned scaling factors to ensure that operations function as intended. Refer to ISA documentation for more details.
  * NOTE: For other valid ways of populating the `icb_scaler`, refer to the ISA documentation.
  *
- * Output tile layout (packer-zeroing contract): for all three values of `reduce_dim`, `reduce_init` programs the
- * packer's edge masks (`_llk_pack_reduce_mask_config_<reduce_dim, …>`) so that any output datum that is not part
- * of the reduction result is written to CB by the packer as zero. Specifically, for any tile packed into `ocb`
- * while this reduce_init's packer state is in effect:
- *   - `REDUCE_SCALAR`: the scalar result is at face-0 `[0, 0]`; every other datum in the tile is zero.
- *   - `REDUCE_ROW`:    each row's reduced value is at column 0 of that row; every other datum in the tile is zero.
- *   - `REDUCE_COL`:    each column's reduced value is at row 0 of that column; every other datum in the tile is zero.
- * A reset to the default packer mask happens via `reduce_uninit` (or by the next non-reduce init); until then this
- * contract holds for every pack into `ocb`.
+ * Output tile layout: for all three values of `reduce_dim`, `reduce_init` programs the packer's edge masks
+ * (`_llk_pack_reduce_mask_config_<reduce_type, reduce_dim, …>`) to replace datums outside the reduction result.
+ * MAX selects negative-infinity mode, except BFP outputs retain zero fill to protect their shared exponent.
+ * SUM and AVG select zero filling. The packed representation of the fill value depends on the output data
+ * format. For any tile packed into `ocb` while this state is in effect:
+ *   - `REDUCE_SCALAR`: the scalar result is at face-0 `[0, 0]`; every other datum is masked.
+ *   - `REDUCE_ROW`:    each row's reduced value is at column 0 of that row; every other datum is masked.
+ *   - `REDUCE_COL`:    each column's reduced value is at row 0 of that column; every other datum is masked.
+ * `reduce_uninit` restores the default pass-through masks.
  *
  * Return value: None
  *
@@ -79,7 +79,7 @@ ALWI void reduce_init(
 #endif
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(icb, icb_scaler)));
-    PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(ocb)));
+    PACK((llk_pack_reduce_mask_config<reduce_type, reduce_dim, PackMode::Default>(ocb)));
 }
 
 // clang-format off

@@ -28,21 +28,10 @@ namespace compute_kernel_lib {
 
 namespace detail {
 
-// The native ROW mask keeps column zero in every face. SFPU reductions may
-// leave partial sums in the right faces, so explicitly disable those packers
-// for wide tiles. A reduced output contains only its first column/row/scalar.
-template <ReduceDim dim, uint32_t output_dfb_id>
+// Select the reduced output geometry and pool-specific fill through the pack API.
+template <PoolType pool_type, ReduceDim dim, uint32_t output_dfb_id>
 ALWI void configure_reduced_output_mask() {
-    PACK((llk_pack_reduce_mask_config<dim, PackMode::Default>(output_dfb_id)));
-#if defined(UCK_CHLKC_PACK) && !defined(ARCH_QUASAR)
-    if constexpr (dim == ReduceDim::REDUCE_ROW && pack_tile_c_dim[output_dfb_id] > 16) {
-        ckernel::packer::pck_edge_offset_u edge = {.val = 0};
-        edge.f.tile_row_set_select_pack0 = 1;
-        edge.f.tile_row_set_select_pack2 = 1;
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
-        cfg_reg_rmw_tensix<PCK_EDGE_OFFSET_SEC0_mask_ADDR32, 0, 0xffffffff>(edge.val);
-    }
-#endif
+    PACK((llk_pack_reduce_mask_config<pool_type, dim, PackMode::Default>(output_dfb_id)));
 }
 
 // SFPU MAX fold
@@ -444,7 +433,7 @@ ALWI void reduce_accumulate_via_add(
     auto configure_output_mask = [&]() {
         if constexpr (within_tile == ReduceWithinTile::Collapse) {
             if (do_finalize) {
-                configure_reduced_output_mask<reduce_dim, output_dfb_id>();
+                configure_reduced_output_mask<PoolType::SUM, reduce_dim, output_dfb_id>();
             }
         }
     };
@@ -1154,7 +1143,7 @@ ALWI void reduce(
     }
     if constexpr (is_sfpu) {
         // Every pack in this call targets the same reduced output layout.
-        detail::configure_reduced_output_mask<reduce_dim, output_dfb_id>();
+        detail::configure_reduced_output_mask<reduce_type, reduce_dim, output_dfb_id>();
     }
     constexpr uint32_t onetile = 1;
 
