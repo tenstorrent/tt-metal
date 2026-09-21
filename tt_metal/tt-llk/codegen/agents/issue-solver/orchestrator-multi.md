@@ -12,8 +12,9 @@ Coordinate one fix for `TARGET_ARCHES_JSON`. Read and follow
 invalidation, and outcome rules are the shared contract. This file replaces
 only the single-architecture behavior identified below.
 
-Do not spawn the single-architecture orchestrator. Spawn each leaf agent
-directly.
+Spawn leaves directly using the compact delegation contract in `orchestrator.md`;
+do not spawn the single-architecture orchestrator. Leaves read mode and arches
+from state; each perf call still receives its selected architecture.
 
 ## Multi-Arch Invariants
 
@@ -58,9 +59,9 @@ by each question.
 
 ## Apply One Shared Fix
 
-Call `execute_step_advance_writer`, then spawn `issue-worker.md` once with
-`RUN_MODE=multi`. The plan must describe the shared contract once and separate
-only genuine architecture differences.
+Call `execute_step_advance_writer`, then spawn `issue-worker.md` once; it reads
+`RUN_MODE=multi` from state. The plan must describe the shared contract once
+and separate only genuine architecture differences.
 
 Handle `FIX_APPLIED`, `BLOCKED`, and `HYPOTHESIS_REFUTED` exactly as in
 `orchestrator.md`, including sealing explicit performance requirements before

@@ -47,11 +47,18 @@ temporary detached baseline worktree.
 ## Agent and Result Conventions
 
 - Spawn one agent at a time and wait for it.
-- Give every agent `WORKTREE_DIR`; give `perf-tester.md` the one architecture
-  it must measure. Agents resolve other inputs from state.
-- Expand prompt placeholders before spawning. The Agent tool does not expand
-  shell variables.
-- Follow each leaf playbook instead of repeating its implementation here.
+- Expand this delegation template before spawning:
+
+  ```text
+  Read and follow {WORKTREE_DIR}/tt_metal/tt-llk/codegen/agents/issue-solver/{role}.md.
+  WORKTREE_DIR={WORKTREE_DIR}
+  ```
+
+- The child reads its playbook, state (including verbatim issue text), and
+  artifacts. Do not pre-read its playbook or copy these inputs into the prompt.
+- Append only needed perf `TARGET_ARCH`, retry `FAILURE_CLASS`, evidence paths,
+  scoped questions, or explicit user/runner constraints unavailable in state/artifacts.
+- Do not turn model assumptions or prior-memory advice into hard rules.
 - Use the authoritative result for each stage:
 
   | Stage | Authoritative result |
