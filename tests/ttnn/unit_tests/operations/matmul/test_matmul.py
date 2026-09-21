@@ -4538,6 +4538,34 @@ def test_matmul_per_core_m_exceeds_mt_rejected(device, expect_error, config_kind
         ttnn.matmul(in0, in1, program_config=program_config)
 
 
+def test_matmul_2d_block_sharded_output_batch_rejected(device, expect_error):
+    """Reject BLOCK_SHARDED output when fuse_batch=False and B>1."""
+    torch.manual_seed(0)
+    batch, m, k, n = 2, 32, 32, 32
+    in0 = ttnn.from_torch(torch.randn(1, batch, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(1, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+        allowed_worker_cores=grid,
+    )
+    out_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (m, n), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    with expect_error(RuntimeError, r"Block-sharded output is incompatible with batch"):
+        ttnn.matmul(in0, in1, program_config=program_config, memory_config=out_mc)
+
+
 def _offset_cancellation_inputs(m, k, n, offset, seed=0):
     """Matrix A is a small random signal plus a large constant offset. Matrix B has each column that
     sums to zero, so the constant offset from A contributes nothing to A @ B, and the correct result
