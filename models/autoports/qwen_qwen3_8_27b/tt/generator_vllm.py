@@ -5,6 +5,7 @@
 import json
 import os
 import secrets
+import time
 from pathlib import Path
 
 import torch
@@ -55,6 +56,8 @@ class Qwen38ForCausalLM:
         self._sampling_key = None
         self._decode_bound = False
         self._last_device_sampling = None
+        self.prefill_diagnostics = os.getenv("QWEN_PREFILL_DIAGNOSTICS", "0") == "1"
+        self.prefill_startup_warmup = os.getenv("QWEN_PREFILL_STARTUP_WARMUP", "0") == "1"
 
     # vLLM inspects this protocol before selecting the TT loader. Execution is
     # through the TT plugin's prefill/decode APIs, never the GPU forward API.
@@ -198,6 +201,10 @@ class Qwen38ForCausalLM:
         empty_slots=None,
         **kwargs,
     ):
+        diagnostic = getattr(self, "prefill_diagnostics", False)
+        if diagnostic:
+            started = time.perf_counter()
+            counters_before = self.generator.counters.copy()
         self._cache(kv_cache)
         ends = torch.as_tensor(prompt_lens).reshape(-1).tolist()
         starts = [0] * len(ends) if start_pos is None else torch.as_tensor(start_pos).reshape(-1).tolist()
@@ -232,6 +239,22 @@ class Qwen38ForCausalLM:
                 )
             result = torch.cat([self.generator._host_logits(x).reshape(1, 1, -1) for x in outputs], dim=0)
         self._decode_bound = False
+        if diagnostic:
+            print(
+                "QWEN_PREFILL_DIAGNOSTIC",
+                json.dumps(
+                    dict(
+                        start=started,
+                        end=time.perf_counter(),
+                        starts=starts,
+                        ends=ends,
+                        slots=slots,
+                        device_sampling=device_sampling,
+                        counters=dict(self.generator.counters - counters_before),
+                    )
+                ),
+                flush=True,
+            )
         # HF declares M-RoPE; text-only positions have zero spatial offset.
         return result, torch.zeros(len(ends), dtype=torch.int64)
 
@@ -307,8 +330,57 @@ class Qwen38ForCausalLM:
         return ttnn.to_torch(tt_out).reshape(-1)[: self.batch_size].long().reshape(-1, 1)
 
     def warmup_model_prefill(self, **kwargs):
-        # The generator warms each new logical shape before creating its traces.
-        pass
+        # Optional deployment warmup, independent of any benchmark's request list.
+        # Compile the model's native stack chunk at every supported occupancy.
+        if (
+            not getattr(self, "prefill_startup_warmup", False)
+            or not self.generator.batched_prefill
+            or self.batch_size == 1
+            or getattr(self, "_prefill_startup_warmed", False)
+        ):
+            return
+        cache = kwargs["kv_cache"]
+        self._cache(cache)
+        chunk = min(4096, self.context // 32 * 32, (cache.num_pages // self.batch_size - 1) * 32)
+        if chunk < 32:
+            return
+        begin = time.perf_counter()
+        original_table = self.generator.page_host.clone()
+        pages = min(chunk // 32 + 1, original_table.shape[1])
+        table = torch.zeros_like(original_table)
+        table[:, :pages] = torch.arange(self.batch_size * pages, dtype=torch.int32).reshape(self.batch_size, pages)
+        self.generator._release_traces()
+        try:
+            for batch in range(1, self.batch_size + 1):
+                slots = list(range(batch))
+                self.generator.reset_recurrent_slots(slots)
+                outputs = self.generator.prefill_forward(
+                    torch.zeros(batch, chunk, dtype=torch.int64),
+                    page_table=table,
+                    kv_cache=cache,
+                    prompt_lens=[chunk] * batch,
+                    slots=slots,
+                )
+                del outputs
+            ttnn.synchronize_device(self.generator.mesh)
+        finally:
+            self.generator._release_traces()
+            self.generator.reset()
+            self.generator._refresh_table(original_table)
+            self._decode_bound = False
+        self._prefill_startup_warmed = True
+        print(
+            "QWEN_PREFILL_STARTUP_WARMUP",
+            json.dumps(
+                dict(
+                    chunk=chunk,
+                    occupancies=list(range(1, self.batch_size + 1)),
+                    seconds=time.perf_counter() - begin,
+                    cache_reset=True,
+                )
+            ),
+            flush=True,
+        )
 
     def warmup_model_decode(self, **kwargs):
         # Warmup/capture restores request state; first decode uses that same path.
