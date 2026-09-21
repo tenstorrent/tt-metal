@@ -33,5 +33,13 @@ static_assert(MEM_IERISC_FIRMWARE_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert(MEM_AERISC_MAILBOX_BASE % TT_ARCH_MAX_NOC_WRITE_ALIGNMENT == 0);
 static_assert(MEM_AERISC_ROUTING_TABLE_BASE % 16 == 0, "Eth routing table base must be 16-byte aligned");
 static_assert(MEM_IERISC_ROUTING_TABLE_BASE % 16 == 0, "Eth routing table base must be 16-byte aligned");
+// Idle-eth kernels are linked XIP right after their RISC's firmware (main.ld), so the kernel text budget must fit
+// inside the firmware region of BOTH idle ERISCs or a large kernel would run into the region that follows.
+static_assert(
+    MEM_IERISC_KERNEL_SIZE <= MEM_IERISC_FIRMWARE_SIZE,
+    "Idle-eth kernel text budget must fit the ERISC0 firmware region");
+static_assert(
+    MEM_IERISC_KERNEL_SIZE <= MEM_SUBORDINATE_IERISC_FIRMWARE_SIZE,
+    "Idle-eth kernel text budget must fit the ERISC1 firmware region");
 // This is where base firmware starts
 static_assert(MEM_ERISC_MAX_SIZE < 0x70000);
