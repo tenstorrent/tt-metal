@@ -103,20 +103,27 @@ bool is_demoted(const Tensor& input, uint32_t out_last_dim_elements, const Memor
         return true;
     }
 
-    // Measured on `perf_nightly`: wall-clock loses to native specifically on (BFLOAT16, L1) and
-    // (FLOAT32, DRAM) -- the same two combinations regress at every shape sampled in each dtype's
-    // stratum, and the *opposite* combination for the same dtype (BFLOAT16+DRAM, FLOAT32+L1) wins
-    // at the same shapes. `device_vs_native` does not track this split (it goes either way), so the
-    // cost is host/dispatch overhead, not the generated kernel; the transport's per-unit region
-    // width (region_stride, derived from old_stick_bytes and input_alignment in
-    // plan_reshape_rm_arbitrary_transport) is the piece that differs across this dtype/buffer-type
-    // pairing and is the plausible source, but no verify run has isolated it further than the
-    // regression's own boundary.
+    // Measured on `perf_nightly`: wall-clock loses to native specifically on (BFLOAT16, L1) -- the
+    // same combination regresses at every shape sampled in that dtype's stratum, and the opposite
+    // combination for the same dtype (BFLOAT16+DRAM) wins at the same shapes. `device_vs_native`
+    // does not track this split (it goes either way), so the cost is host/dispatch overhead, not
+    // the generated kernel; the transport's per-unit region width (region_stride, derived from
+    // old_stick_bytes and input_alignment in plan_reshape_rm_arbitrary_transport) is the piece that
+    // differs across this dtype/buffer-type pairing and is the plausible source, but no verify run
+    // has isolated it further than the regression's own boundary.
+    //
+    // A blanket (FLOAT32, DRAM) rule was tried here too, on the same reasoning as the BFLOAT16/L1
+    // one. It over-demoted: `routing.demoted_but_faster` on the following verify named
+    // codegen_reshape[40] and codegen_reshape[43] -- both FLOAT32+DRAM, both measurably faster than
+    // native under forced codegen -- so the dtype/buffer-type pairing alone does not predict the
+    // FLOAT32 regression the way it does for BFLOAT16. The one confirmed FLOAT32+DRAM regression in
+    // that measurement (codegen_reshape[38]) is not distinguished from the wins by dtype/buffer-type
+    // alone; the large-stick-count rule below already catches the other FLOAT32 regression in scope
+    // (codegen_reshape[47]). Removed here rather than narrowed further, since no verify run yet
+    // isolates what does distinguish 38 from 40/43.
     const bool bfloat16_on_l1 = input.dtype() == tt::tt_metal::DataType::BFLOAT16 &&
                                  output_mem_config.buffer_type() == tt::tt_metal::BufferType::L1;
-    const bool float32_on_dram = input.dtype() == tt::tt_metal::DataType::FLOAT32 &&
-                                  output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM;
-    if (bfloat16_on_l1 || float32_on_dram) {
+    if (bfloat16_on_l1) {
         return true;
     }
 
