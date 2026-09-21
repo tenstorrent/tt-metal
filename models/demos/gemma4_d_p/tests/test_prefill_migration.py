@@ -104,6 +104,12 @@ def test_prefill_migration(migration_environment, context_len, tmp_path):
     assert report["slot"] == 0 and report["tokens"] == context_len
     assert len(report["measurements"]) == 1640
     assert min(report["minima"].values()) >= GPU_PCC_THRESHOLD
+    metrics = report["error_metrics"]
+    print(f"\n{'Layer':>7} {'PCC':>12} {'RMSE':>12} {'Relative RMSE':>16}")
+    for entry in metrics["layers"]:
+        print(f"{entry['layer']:>7} {entry['pcc']:>12.6f} {entry['rmse']:>12.6f} {entry['relative_rmse']:>16.6f}")
+    overall = metrics["overall"]
+    print(f"{'Overall':>7} {overall['pcc']:>12.6f} {overall['rmse']:>12.6f} {overall['relative_rmse']:>16.6f}")
     if gate == "loopback":
         assert "[migration] WORKER_READY:" in (tmp_path / "runner.log").read_text()
         assert "verify bytes PASSED" in (tmp_path / "producer.log").read_text()
