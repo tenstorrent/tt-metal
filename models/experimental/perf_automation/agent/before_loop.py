@@ -328,6 +328,25 @@ def _split_explicit_perf_test(node: str, explicit_case: str | None) -> tuple[str
     return path, explicit_case or node_case
 
 
+def _relativize_to_model_root(path_str: str, model_root: Path) -> str:
+    """An explicit --perf-test path may be typed against a DIFFERENT checkout than this run's
+    worktree (the operator's own working copy, not the isolated /tmp tree discovery runs in) -- and
+    may be absolute either way. pipelines_from_manifest (run.py) always joins a pipeline's perf_test
+    onto model_rel with an unconditional f"{model_rel}/{perf_test}", expecting perf_test to already
+    be model-root-relative; handing it an absolute (or wrong-checkout-relative) path instead doubles
+    it into an unresolvable node id -- caught live: discovery reported the path built successfully,
+    then stage-mark injection / termination_check crashed on that doubled path one step later.
+
+    Reduce to the tail after the model dir's own name, which both checkouts share regardless of
+    where each one is rooted on disk."""
+    parts = Path(path_str).parts
+    name = model_root.name
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] == name:
+            return str(Path(*parts[i + 1 :])) if i + 1 < len(parts) else ""
+    return path_str
+
+
 # ---- the driver --------------------------------------------------------------
 
 
@@ -736,13 +755,15 @@ def before_loop(
         # pathmap shape generation would have, so every downstream reader (perf_rel/case here, and
         # pathmap["pipelines"]/["is_multimodal"] in run.py) sees an identical contract either way.
         _pt_path, _pt_case = _split_explicit_perf_test(config["perf_test"], config.get("case"))
+        _pt_rel = _relativize_to_model_root(_pt_path, model_root)
         pathmap["perf_test"] = {
-            "path": _pt_path,
+            "path": _pt_rel,
             "case": _pt_case,
             "note": "explicit --perf-test (auto-generation skipped)",
         }
         pathmap["perf_tests"] = [pathmap["perf_test"]]
-        pathmap["pipelines"] = [{"task": _task, "perf_test": config["perf_test"], "pcc_test": pcc_override["path"]}]
+        _pt_rel_node = f"{_pt_rel}::{_pt_case}" if _pt_case else _pt_rel
+        pathmap["pipelines"] = [{"task": _task, "perf_test": _pt_rel_node, "pcc_test": pcc_override["path"]}]
         pathmap["is_multimodal"] = False
         print(
             f"      perf test -> {config['perf_test']} (explicit --perf-test; auto-generation skipped)",

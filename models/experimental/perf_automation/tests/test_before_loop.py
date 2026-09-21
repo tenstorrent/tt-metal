@@ -191,16 +191,43 @@ def test_an_explicit_perf_test_with_no_case_suffix_still_resolves(tmp_path, mode
 def test_an_explicit_perf_test_still_populates_pipelines_and_multimodal(tmp_path, model_root, monkeypatch):
     """Downstream readers (run.py's pathmap["pipelines"]/["is_multimodal"]) must see the identical
     contract whether the perf test was generated or supplied explicitly -- these were previously
-    only ever set inside the generation branch."""
+    only ever set inside the generation branch. The stored value is model-root-relative (the tail
+    after the model dir's own name, "model" in this fixture), same as a generated perf_node always
+    was -- pipelines_from_manifest (run.py) unconditionally joins it onto model_rel."""
     from agent import perf_test_gen as _ptg
 
     monkeypatch.setattr(_ptg, "generate_perf_test", lambda *a, **k: (_ for _ in ()).throw(AssertionError("called")))
     result = _run(tmp_path, model_root, config_extra={"perf_test": "model/test_e2e.py::test_perf"})
     manifest = json.loads((Path(result["run_dir"]) / "manifest.json").read_text())
     assert manifest["pathmap"]["pipelines"] and manifest["pathmap"]["pipelines"][0]["perf_test"] == (
-        "model/test_e2e.py::test_perf"
+        "test_e2e.py::test_perf"
     )
     assert manifest["pathmap"]["is_multimodal"] is False
+
+
+def test_an_explicit_perf_test_from_a_different_checkout_does_not_double_concatenate(tmp_path, model_root, monkeypatch):
+    """The bug caught live on the nemotron-3-5-lightning-30b bringup run: an operator's --perf-test
+    was absolute in a DIFFERENT checkout than the isolated worktree discovery actually runs in.
+    pipelines_from_manifest (run.py) does f"{model_rel}/{p['perf_test']}" unconditionally, so an
+    absolute (or otherwise not-yet-relative) perf_test doubled into an unresolvable node id --
+    discovery reported success, then stage-mark injection crashed one step later on the doubled
+    path. Reproduced here with an absolute path under a DIFFERENT tmp root that happens to share
+    the model dir's own basename, exactly like the real incident (both checkouts named the model
+    dir the same thing, just rooted differently on disk)."""
+    from agent import perf_test_gen as _ptg
+
+    monkeypatch.setattr(_ptg, "generate_perf_test", lambda *a, **k: (_ for _ in ()).throw(AssertionError("called")))
+    other_checkout = tmp_path / "a_totally_different_checkout" / model_root.name
+    explicit = f"{other_checkout / 'test_e2e.py'}::test_perf"
+    result = _run(tmp_path, model_root, config_extra={"perf_test": explicit})
+    manifest = json.loads((Path(result["run_dir"]) / "manifest.json").read_text())
+    stored = manifest["pathmap"]["pipelines"][0]["perf_test"]
+    assert stored == "test_e2e.py::test_perf", stored
+    # Prove the actual downstream join (run.py's own function) no longer doubles the path.
+    from cc_optimize.run import pipelines_from_manifest
+
+    out = pipelines_from_manifest(manifest, model_rel=model_root.name)
+    assert out[0]["perf_test"] == f"{model_root.name}/test_e2e.py::test_perf"
 
 
 def test_before_loop_fatal_flag_stops_run(tmp_path, model_root):
