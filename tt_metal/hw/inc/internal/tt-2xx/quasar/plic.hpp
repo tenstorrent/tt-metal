@@ -14,6 +14,9 @@ namespace overlay::quasar {
 // threshold delivers every source with nonzero priority.
 constexpr uint32_t plic_threshold_allow_all = 0;
 
+// Source enables are packed one bit per source across a run of 32-bit words.
+constexpr uint32_t plic_bits_per_enable_word = 32;
+
 // Only DM0 takes PLIC interrupts, so every access below targets PLIC context 0.
 constexpr uint32_t plic_priority_register_address(uint32_t source) {
     return TT_CLUSTER_PLIC_REG_MAP_BASE_ADDR + source * static_cast<uint32_t>(sizeof(uint32_t));
@@ -32,8 +35,8 @@ inline uint32_t plic_claim() { return plic_read32(TT_CLUSTER_PLIC_CORE0_CLAIM_CO
 inline void plic_complete(uint32_t source) { plic_write32(TT_CLUSTER_PLIC_CORE0_CLAIM_COMPLETE_REG_ADDR, source); }
 
 inline void plic_enable_source(uint32_t source, bool enable) {
-    const uint32_t enable_bit = uint32_t{1} << (source % 32);
-    const uint32_t address = plic_enable_register_address(source / 32);
+    const uint32_t enable_bit = uint32_t{1} << (source % plic_bits_per_enable_word);
+    const uint32_t address = plic_enable_register_address(source / plic_bits_per_enable_word);
     const uint32_t current_value = plic_read32(address);
     plic_write32(address, enable ? (current_value | enable_bit) : (current_value & ~enable_bit));
 }
