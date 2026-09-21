@@ -503,13 +503,22 @@ def _render_summary():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _job_summary():
-    """Write the run's totals to the GitHub job summary. No-op off CI."""
+def _job_summary(request):
+    """Report the run's totals: to the GitHub job summary on CI, and to the terminal always."""
     yield
+    if not _COLLECTED:
+        return
+    summary = _render_summary()
+
     path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if path and _COLLECTED:
+    if path:
         with open(path, "a") as f:
-            f.write(_render_summary())
+            f.write(summary)
+
+    # Also to the terminal, so a local run gets the totals and a CI log shows what was published.
+    reporter = request.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter:
+        reporter.write_line(summary)
 
 
 @pytest.mark.parametrize("dtype", [d for d, _ in DTYPES], ids=[n for _, n in DTYPES])
