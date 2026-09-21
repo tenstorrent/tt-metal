@@ -7,14 +7,19 @@
 #include "kernels/high_bw_all_gather_metadata.hpp"
 #include "kernels/high_bw_all_gather_partition.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <iterator>
 #include <optional>
+#include <string_view>
 
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather {
 
@@ -34,8 +39,6 @@ struct PageGeometry {
 };
 
 enum class ReaderRtArg : std::size_t {
-    InputAddress,
-    OutputAddress,
     InitialStripe,
     StripeStep,
     NumIters,
@@ -49,25 +52,10 @@ enum class ReaderRtArg : std::size_t {
     ReadySemaphore,
     DataValidSemaphore,
     OutputChunksPerStripe,
-    // Metadata slot select only. Always present so the scalar and metadata forms share one
-    // runtime-argument layout; 0 and unread on the scalar path.
-    //   BatchIndexMetaAddress -- address of the 1-element uint32 slot-id (user id) tensor.
-    //   BatchSlotNumLayers / BatchSlotLayerIdx -- the recomposition terms, both re-patched every
-    //   dispatch. LayerIdx must be runtime: it varies per layer, and hashing it would give one program
-    //   per layer, each allocating two more global semaphores than L1_SMALL affords. NumLayers is
-    //   constant per cache and could have been compile-time; it stays runtime so the two travel as one
-    //   block with one patch site, and so a single cached program can serve caches of different depth
-    //   (a 78-layer KVPE cache and a 21-layer index cache) instead of forking per depth. Both are
-    //   constant within a captured op instance, so a capture may freeze them.
-    BatchIndexMetaAddress,
-    BatchSlotNumLayers,
-    BatchSlotLayerIdx,
     // Active-extent metadata path only. Always present so both forms share one layout.
-    //   GatheredPrefixMetaAddress -- address of the 1-element uint32 chunk-start tensor.
     //   SliceIdx / Link / Worker / IsForward / NumRecv -- this core's position in the schedule, which the
     //   on-device derivation needs and which the host otherwise folded into the values above. Per-core
     //   constants, so a capture may freeze them.
-    GatheredPrefixMetaAddress,
     SliceIdx,
     Link,
     Worker,
@@ -77,7 +65,6 @@ enum class ReaderRtArg : std::size_t {
 };
 
 enum class WriterRtArg : std::size_t {
-    OutputAddress,
     InitialStripe,
     StripeStep,
     NumIters,
@@ -93,10 +80,8 @@ enum class WriterRtArg : std::size_t {
     DataValidNocX,
     DataValidNocY,
     NumGranularSends,
-    DataValidGranularity,
     NeighborDeviceId,
     NeighborMeshId,
-    OutputChunksPerStripe,
     Count,
 };
 
@@ -258,6 +243,38 @@ bool can_use_output_bank_owned_schedule(
                geometry.num_input_pages, num_links, workers_per_direction, num_dram_banks);
 }
 
+CoreRangeSet resolve_available_worker_cores(
+    MeshDevice* mesh_device, const HighBwAllGatherParams& operation_attributes) {
+    TT_FATAL(
+        mesh_device->get_active_sub_device_manager_id() == operation_attributes.subdevice_manager_id,
+        "high_bw_all_gather active subdevice manager changed from {} to {} during operation dispatch",
+        operation_attributes.subdevice_manager_id,
+        mesh_device->get_active_sub_device_manager_id());
+    const auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    const auto subdevice_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    TT_FATAL(
+        subdevice_cores.contains(operation_attributes.resolved_worker_core_grid),
+        "high_bw_all_gather resolved worker grid {} must be fully contained in TENSIX subdevice {} cores {}",
+        operation_attributes.resolved_worker_core_grid,
+        subdevice_id,
+        subdevice_cores);
+    return operation_attributes.resolved_worker_core_grid;
+}
+
+void validate_semaphore_core_coverage(
+    const tt::tt_metal::GlobalSemaphore& semaphore,
+    const CoreRangeSet& required_cores,
+    std::string_view semaphore_name) {
+    const auto semaphore_attributes = semaphore.attribute_values();
+    const auto& semaphore_cores = std::get<0>(semaphore_attributes);
+    TT_FATAL(
+        semaphore_cores.contains(required_cores),
+        "high_bw_all_gather {} cores {} must cover all selected reader/writer cores {}",
+        semaphore_name,
+        semaphore_cores,
+        required_cores);
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 using namespace CMAKE_UNIQUE_NAMESPACE;
@@ -278,36 +295,111 @@ HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFact
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const HighBwAllGatherInputs& tensor_args,
     Tensor& output_tensor) {
+    // Resolve once on a program-cache miss, before allocating semaphores. The resulting routing
+    // is baked into the workload and reused until the program cache is cleared.
+    const auto& args = operation_attributes;
+    const auto mesh_shape = tensor_args.input_tensor.device()->shape();
+    std::array<tt::tt_fabric::Topology, 2> axis_topology{
+        tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
+    std::optional<uint32_t> resolved_num_links;
+    for (uint32_t active_axis = 0; active_axis < 2; ++active_axis) {
+        if (args.axis_num_devices[active_axis] <= 1) {
+            continue;
+        }
+        axis_topology[active_axis] =
+            ::ttnn::ccl::get_axis_topology(tensor_args.input_tensor, args.fabric_config, active_axis);
+        const auto discovered_num_links = static_cast<uint32_t>(
+            ttnn::operations::ccl::common::get_num_links(*tensor_args.input_tensor.device(), active_axis));
+        if (args.num_links.has_value()) {
+            TT_FATAL(
+                *args.num_links <= discovered_num_links,
+                "high_bw_all_gather requested {} links, but only {} usable links were discovered on cluster_axis {}",
+                *args.num_links,
+                discovered_num_links,
+                active_axis);
+        }
+        const uint32_t count = args.num_links.value_or(discovered_num_links);
+        resolved_num_links = resolved_num_links.has_value() ? std::min(*resolved_num_links, count) : count;
+    }
+    TT_FATAL(resolved_num_links.has_value(), "high_bw_all_gather found no active collective axis");
+    const auto axis = args.cluster_axis;
+    const auto topology = args.linearized_mesh_ring ? tt::tt_fabric::Topology::Ring : axis_topology[axis];
+    ttnn::operations::ccl::common::ResolvedMeshRoute mesh_route{
+        .plan = {
+            .cluster_axis = args.linearized_mesh_ring ? std::nullopt : std::optional<uint32_t>{axis},
+            .full_mesh = args.linearized_mesh_ring,
+            .orientation = ttnn::ccl::snake_ring::Orientation::Row,
+            .mesh_rows = mesh_shape[0],
+            .mesh_cols = mesh_shape[1],
+            .ring_size = args.num_devices,
+            .route_plan_hash = std::nullopt},
+        .topology = topology};
+    if (tt::tt_fabric::is_2d_fabric_config(args.fabric_config)) {
+        const auto resolved = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
+            tensor_args.input_tensor,
+            mesh_route.plan.cluster_axis,
+            *resolved_num_links,
+            axis_topology,
+            true,
+            "high_bw_all_gather",
+            /*allow_open_path=*/args.linearized_mesh_ring);
+        TT_FATAL(resolved.has_value(), "high_bw_all_gather requires a direct-neighbor line/ring");
+        mesh_route = *resolved;
+    } else {
+        TT_FATAL(
+            !args.linearized_mesh_ring &&
+                (topology == tt::tt_fabric::Topology::Linear || topology == tt::tt_fabric::Topology::Ring),
+            "high_bw_all_gather requires a direct-neighbor line/ring");
+    }
+
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    ttsl::SmallVector<std::array<uint32_t, 5>, 4> control_group_keys;
 
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
-    if (operation_attributes.sub_core_grid.has_value()) {
-        available_cores = available_cores.intersection(operation_attributes.sub_core_grid.value());
-    }
+    const auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    const auto available_cores = resolve_available_worker_cores(mesh_device, operation_attributes);
     ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
     // Keep the startup-readiness and relay/completion semaphores in L1_SMALL when the device reserves it.
     const bool has_l1_small = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL) > 0;
     auto sem_buffer_type = has_l1_small ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
-    if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
+    const bool uses_external_semaphores = operation_attributes.ready_semaphore.has_value();
+    if (!uses_external_semaphores && sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
         log_warning(
             tt::LogOp,
             "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
             "allocations. Configure an L1_SMALL region to mitigate this.");
     }
-    auto ready_sem = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    auto data_valid_sem =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
-    log_debug(tt::LogOp, "All devices are ready, starting program execution");
+    auto ready_sem = uses_external_semaphores ? *operation_attributes.ready_semaphore
+                                              : ttnn::global_semaphore::create_global_semaphore(
+                                                    mesh_device, available_cores, 0, sem_buffer_type);
+    auto data_valid_sem = uses_external_semaphores ? *operation_attributes.data_valid_semaphore
+                                                   : ttnn::global_semaphore::create_global_semaphore(
+                                                         mesh_device, available_cores, 0, sem_buffer_type);
+    if (!uses_external_semaphores) {
+        log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
+        tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
+        log_debug(tt::LogOp, "All devices are ready, starting program execution");
+    }
 
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program =
-            create_at(operation_attributes, coord, tensor_args, output_tensor, ready_sem, data_valid_sem);
+        auto cached_program = create_at(
+            operation_attributes, mesh_route, *resolved_num_links, coord, tensor_args, output_tensor, ready_sem, data_valid_sem);
+        const std::array<uint32_t, 5> control_group_key{
+            cached_program.shared_variables.num_links,
+            cached_program.shared_variables.workers_per_direction,
+            cached_program.shared_variables.num_dram_banks,
+            cached_program.shared_variables.output_bank_owned_schedule,
+            cached_program.shared_variables.ring_even_split};
+        auto* const group = std::find(control_group_keys.begin(), control_group_keys.end(), control_group_key);
+        if (group == control_group_keys.end()) {
+            cached_program.shared_variables.control_group = static_cast<uint32_t>(control_group_keys.size());
+            control_group_keys.push_back(control_group_key);
+        } else {
+            cached_program.shared_variables.control_group =
+                static_cast<uint32_t>(std::distance(control_group_keys.begin(), group));
+        }
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -317,6 +409,8 @@ HighBwAllGatherUnicastFactory::cached_mesh_workload_t HighBwAllGatherUnicastFact
 
 HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::create_at(
     const HighBwAllGatherParams& operation_attributes,
+    const ttnn::operations::ccl::common::ResolvedMeshRoute& mesh_route,
+    uint32_t num_links,
     const ttnn::MeshCoordinate& sender_device_coord,
     const HighBwAllGatherInputs& tensor_args,
     const Tensor& output_tensor,
@@ -338,15 +432,11 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     //   antipode       -- on a ring, the device N/2 hops away.
     ////////////////////////////////////////////////////////////////
 
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config);
-    TT_FATAL(
-        !fabric_is_2d || operation_attributes.neighbor_unicast_eligible,
-        "Fabric2D high_bw_all_gather neighbor unicast requires a host-proved direct physical line/ring");
-
+    const bool fabric_is_2d = tt::tt_fabric::is_2d_fabric_config(operation_attributes.fabric_config);
     const bool linearized_mesh_ring = operation_attributes.linearized_mesh_ring;
     const uint32_t axis = operation_attributes.cluster_axis;
-    const auto topology =
-        linearized_mesh_ring ? tt::tt_fabric::Topology::Ring : operation_attributes.axis_topology[axis];
+    const auto& mesh_ring_plan = mesh_route.plan;
+    const auto topology = mesh_route.topology;
     const bool is_ring = tt::tt_fabric::is_ring_or_torus(topology);
 
     const uint32_t num_devices = operation_attributes.num_devices;
@@ -365,20 +455,8 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         operation_attributes.mesh_rows,
         operation_attributes.mesh_cols,
         mesh_shape);
-    const ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan{
-        .cluster_axis = linearized_mesh_ring ? std::nullopt : std::optional<uint32_t>{axis},
-        .full_mesh = linearized_mesh_ring,
-        .orientation = operation_attributes.snake_ring_orientation,
-        .mesh_rows = linearized_mesh_ring ? operation_attributes.mesh_rows : mesh_shape[0],
-        .mesh_cols = linearized_mesh_ring ? operation_attributes.mesh_cols : mesh_shape[1],
-        .ring_size = num_devices,
-        .num_links = operation_attributes.num_links,
-        .topology = topology,
-        .fabric_config = operation_attributes.fabric_config,
-        .axis_topology = operation_attributes.axis_topology,
-        .route_plan_hash = operation_attributes.neighbor_route_plan_hash};
     const auto mesh_ring_position =
-        ttnn::operations::ccl::common::get_mesh_ring_position(input_tensor, sender_device_coord, mesh_ring_plan);
+        ttnn::operations::ccl::common::get_mesh_ring_position(input_tensor, sender_device_coord, mesh_ring_plan, topology);
     const uint32_t device_idx = mesh_ring_position.transport_rank;
     auto fwd_coord = mesh_ring_position.forward_coord;
     auto bwd_coord = mesh_ring_position.backward_coord;
@@ -415,7 +493,6 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     // Num worker cores per direction per link. >1 requires an additional fabric mux core to own the fabric
     // connection and multiplex traffic.
     // This is a major perf knob, below heuristic was determined from extensive test sweeps.
-    const uint32_t num_links = operation_attributes.num_links;
     // The metadata forms are runtime controls too: their values live in tensors the kernels read, so the
     // cached worker tier must likewise be sized from the MAXIMUM geometry rather than from whatever extent
     // happens to be active. Omitting them here would pick the tier from a possibly smaller page count
@@ -494,12 +571,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
 
     // A restricted sub-core grid may not fit the preferred count. Snap to a measured worker tier rather than
     // walking through unqualified intermediate counts; bank ownership is re-evaluated with the selected tier.
-    const auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto available_worker_cores =
-        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
-    if (operation_attributes.sub_core_grid.has_value()) {
-        available_worker_cores = available_worker_cores.intersection(operation_attributes.sub_core_grid.value());
-    }
+    const auto available_worker_cores = resolve_available_worker_cores(mesh_device, operation_attributes);
     const uint32_t preferred_workers_per_dir = workers_per_dir;
     const bool preferred_schedule_is_bank_owned = can_use_bank_owned(preferred_workers_per_dir);
     const auto worker_count_fits = [&](uint32_t count) {
@@ -593,6 +665,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     }
     const CoreRangeSet worker_core_range(worker_core_set);
     const CoreRangeSet mux_core_range(mux_core_set);
+    if (operation_attributes.ready_semaphore.has_value()) {
+        validate_semaphore_core_coverage(ready_sem, worker_core_range, "ready_semaphore");
+        validate_semaphore_core_coverage(data_valid_sem, worker_core_range, "data_valid_semaphore");
+    }
 
     // Fabric mux config
     constexpr uint8_t num_buffers_per_channel = 2;  // hardcoded since no observable impact on performance
@@ -751,7 +827,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         slice_step,              // one means contiguous slices; >1 owns one interleaved DRAM bank
         static_output_chunks_per_stripe,
         linearized_mesh_ring,  // translate snake ring indices back to row-major tensor stripe indices
-        static_cast<uint32_t>(operation_attributes.snake_ring_orientation),
+        static_cast<uint32_t>(mesh_ring_plan.orientation),
         operation_attributes.mesh_rows,
         operation_attributes.mesh_cols,
     };
@@ -857,7 +933,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         slice_step,              // one means scatter packets; >1 enables contiguous full packets
         static_output_chunks_per_stripe,
         linearized_mesh_ring,  // translate snake ring indices back to row-major tensor stripe indices
-        static_cast<uint32_t>(operation_attributes.snake_ring_orientation),
+        static_cast<uint32_t>(mesh_ring_plan.orientation),
         operation_attributes.mesh_rows,
         operation_attributes.mesh_cols,
     };
@@ -907,6 +983,23 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
     const uint32_t input_addr = input_tensor.buffer()->address();
     const uint32_t output_addr = output_tensor.buffer()->address();
+    // All workers in a kernel read the same tensor addresses; keep these per-dispatch
+    // values common instead of duplicating their patches across every worker core.
+    const uint32_t prefix_metadata_address =
+        extent_from_metadata ? tensor_args.gathered_prefix_tensor->buffer()->address() : 0u;
+    const uint32_t batch_metadata_address =
+        batch_index_from_metadata ? tensor_args.input_batch_index_tensor->buffer()->address() : 0u;
+    // Slot recomposition stays runtime so layers and cache depths share one cached program.
+    tt::tt_metal::SetCommonRuntimeArgs(
+        program,
+        reader_kernel_id,
+        {input_addr,
+         output_addr,
+         prefix_metadata_address,
+         batch_metadata_address,
+         operation_attributes.batch_slot_num_layers,
+         operation_attributes.batch_slot_layer_idx});
+    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, data_valid_granularity});
 
     // Mux runtime args: one fabric connection per active direction per link, to that direction's neighbor. The
     // direction's workers all feed this one connection.
@@ -992,8 +1085,6 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 const uint32_t total_chunks = sched.total_chunks;
 
                 std::vector<uint32_t> reader_rt_args(rt_arg_index(ReaderRtArg::Count));
-                reader_rt_args[rt_arg_index(ReaderRtArg::InputAddress)] = input_addr;
-                reader_rt_args[rt_arg_index(ReaderRtArg::OutputAddress)] = output_addr;
                 reader_rt_args[rt_arg_index(ReaderRtArg::InitialStripe)] = device_idx;
                 reader_rt_args[rt_arg_index(ReaderRtArg::StripeStep)] = stripe_step;
                 reader_rt_args[rt_arg_index(ReaderRtArg::NumIters)] = num_iters;
@@ -1009,14 +1100,6 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 reader_rt_args[rt_arg_index(ReaderRtArg::ReadySemaphore)] = ready_sem.address();
                 reader_rt_args[rt_arg_index(ReaderRtArg::DataValidSemaphore)] = data_valid_sem.address();
                 reader_rt_args[rt_arg_index(ReaderRtArg::OutputChunksPerStripe)] = output_chunks_per_stripe;
-                reader_rt_args[rt_arg_index(ReaderRtArg::BatchIndexMetaAddress)] =
-                    batch_index_from_metadata ? tensor_args.input_batch_index_tensor->buffer()->address() : 0u;
-                reader_rt_args[rt_arg_index(ReaderRtArg::BatchSlotNumLayers)] =
-                    operation_attributes.batch_slot_num_layers;
-                reader_rt_args[rt_arg_index(ReaderRtArg::BatchSlotLayerIdx)] =
-                    operation_attributes.batch_slot_layer_idx;
-                reader_rt_args[rt_arg_index(ReaderRtArg::GatheredPrefixMetaAddress)] =
-                    extent_from_metadata ? tensor_args.gathered_prefix_tensor->buffer()->address() : 0u;
                 reader_rt_args[rt_arg_index(ReaderRtArg::SliceIdx)] = slice_idx;
                 reader_rt_args[rt_arg_index(ReaderRtArg::Link)] = link;
                 reader_rt_args[rt_arg_index(ReaderRtArg::Worker)] = w;
@@ -1025,7 +1108,6 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
                 std::vector<uint32_t> writer_rt_args(rt_arg_index(WriterRtArg::Count));
-                writer_rt_args[rt_arg_index(WriterRtArg::OutputAddress)] = output_addr;
                 writer_rt_args[rt_arg_index(WriterRtArg::InitialStripe)] = device_idx;
                 writer_rt_args[rt_arg_index(WriterRtArg::StripeStep)] = stripe_step;
                 writer_rt_args[rt_arg_index(WriterRtArg::NumIters)] = num_iters;
@@ -1041,12 +1123,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
                 writer_rt_args[rt_arg_index(WriterRtArg::DataValidNocX)] = static_cast<uint32_t>(mirror_core.x);
                 writer_rt_args[rt_arg_index(WriterRtArg::DataValidNocY)] = static_cast<uint32_t>(mirror_core.y);
                 writer_rt_args[rt_arg_index(WriterRtArg::NumGranularSends)] = num_granular;
-                writer_rt_args[rt_arg_index(WriterRtArg::DataValidGranularity)] = data_valid_granularity;
                 writer_rt_args[rt_arg_index(WriterRtArg::NeighborDeviceId)] =
                     static_cast<uint32_t>(neighbor_node.chip_id);
                 writer_rt_args[rt_arg_index(WriterRtArg::NeighborMeshId)] =
                     static_cast<uint32_t>(*neighbor_node.mesh_id);
-                writer_rt_args[rt_arg_index(WriterRtArg::OutputChunksPerStripe)] = output_chunks_per_stripe;
                 if (num_iters > 0) {
                     if (use_mux) {
                         // Connect this worker to its channel (== worker index w) on the direction's mux.
@@ -1084,6 +1164,9 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
 
     shared_variables_t shared_variables{
         .worker_cores = worker_cores,
+        .worker_core_range = worker_core_range,
+        .receive_counts =
+            {is_ring ? num_devices / 2 : device_idx, is_ring ? num_devices / 2 : num_devices - 1 - device_idx},
         .reader_kernel_id = reader_kernel_id,
         .writer_kernel_id = writer_kernel_id,
         .ready_sem = ready_sem,
@@ -1098,7 +1181,18 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         .is_ring = is_ring,
         .ring_even_split = ring_even_split,
         .output_bank_owned_schedule = output_bank_owned_schedule,
+        .input_batch_index = operation_attributes.input_batch_index,
+        .gathered_dim_size = operation_attributes.gathered_dim_size,
     };
+
+    shared_variables.destinations.reserve(num_links * workers_per_dir);
+    for (uint32_t link = 0; link < num_links; ++link) {
+        for (uint32_t worker = 0; worker < workers_per_dir; ++worker) {
+            shared_variables.destinations.push_back(
+                {worker_cores[(link * 2) * workers_per_dir + worker],
+                 worker_cores[(link * 2 + 1) * workers_per_dir + worker]});
+        }
+    }
 
     return {std::move(program), std::move(shared_variables)};
 }
@@ -1113,67 +1207,102 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
     const bool has_runtime_controls =
         operation_attributes.input_batch_index.has_value() || operation_attributes.gathered_dim_size.has_value() ||
         tensor_args.has_batch_index_metadata() || tensor_args.has_gathered_prefix_metadata();
-    const auto page_geometry = has_runtime_controls ? derive_page_geometry(
-                                                          tensor_args.input_tensor,
-                                                          output_tensor,
-                                                          operation_attributes,
-                                                          tensor_args.has_batch_index_metadata(),
-                                                          tensor_args.has_gathered_prefix_metadata())
-                                                    : PageGeometry{};
+    // Addresses are invocation-wide, including freshly allocated metadata tensors.
+    const bool has_batch_metadata = tensor_args.has_batch_index_metadata();
+    const bool has_prefix_metadata = tensor_args.has_gathered_prefix_metadata();
+    const uint32_t batch_metadata_address =
+        has_batch_metadata ? tensor_args.input_batch_index_tensor->buffer()->address() : 0u;
+    const uint32_t prefix_metadata_address =
+        has_prefix_metadata ? tensor_args.gathered_prefix_tensor->buffer()->address() : 0u;
+    std::optional<PageGeometry> updated_page_geometry;
 
+    struct SliceControls {
+        uint32_t input_page_start;
+        uint32_t input_page_end;
+        uint32_t local_output_start;
+        uint32_t slice_count;
+        std::array<uint32_t, 2> final_start;
+        std::array<uint32_t, 2> final_count;
+    };
+    struct PreparedControlGroup {
+        ttsl::SmallVector<SliceControls, 32> slices;
+        uint32_t data_valid_granularity;
+    };
+    ttsl::SmallVector<std::optional<PreparedControlGroup>, 4> prepared_control_groups;
+
+    // Internal semaphore allocations remain fixed for the cached workload's lifetime. Refresh
+    // semaphore runtime slots when a caller supplies a different external pair.
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-        const uint32_t ready_addr = shared_vars.ready_sem.address();
-        const uint32_t data_valid_addr = shared_vars.data_valid_sem.address();
-
-        auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
-        auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
-        for (const auto& core : shared_vars.worker_cores) {
-            auto& reader_args = reader_args_by_core[core.x][core.y];
-            reader_args.at(rt_arg_index(ReaderRtArg::InputAddress)) = input_addr;
-            reader_args.at(rt_arg_index(ReaderRtArg::OutputAddress)) = output_addr;
-            reader_args.at(rt_arg_index(ReaderRtArg::ReadySemaphore)) = ready_addr;
-            reader_args.at(rt_arg_index(ReaderRtArg::DataValidSemaphore)) = data_valid_addr;
-            if (tensor_args.has_gathered_prefix_metadata()) {
-                reader_args.at(rt_arg_index(ReaderRtArg::GatheredPrefixMetaAddress)) =
-                    tensor_args.gathered_prefix_tensor->buffer()->address();
+        bool pair_changed = false;
+        if (operation_attributes.ready_semaphore.has_value()) {
+            pair_changed =
+                shared_vars.ready_sem.address() != operation_attributes.ready_semaphore->address() ||
+                shared_vars.data_valid_sem.address() != operation_attributes.data_valid_semaphore->address();
+            if (pair_changed) {
+                validate_semaphore_core_coverage(
+                    *operation_attributes.ready_semaphore, shared_vars.worker_core_range, "ready_semaphore");
+                validate_semaphore_core_coverage(
+                    *operation_attributes.data_valid_semaphore, shared_vars.worker_core_range, "data_valid_semaphore");
+                // Retain the current caller-owned handles for the lifetime of the cached workload and patch
+                // addresses below. External semaphore addresses are deliberately absent from the program hash.
+                shared_vars.ready_sem = *operation_attributes.ready_semaphore;
+                shared_vars.data_valid_sem = *operation_attributes.data_valid_semaphore;
             }
-            if (tensor_args.has_batch_index_metadata()) {
-                // The VALUE is read on-device; only the buffer address is host-side state, and an eager
-                // caller may hand over a freshly allocated metadata tensor per dispatch.
-                reader_args.at(rt_arg_index(ReaderRtArg::BatchIndexMetaAddress)) =
-                    tensor_args.input_batch_index_tensor->buffer()->address();
-                reader_args.at(rt_arg_index(ReaderRtArg::BatchSlotNumLayers)) =
-                    operation_attributes.batch_slot_num_layers;
-                reader_args.at(rt_arg_index(ReaderRtArg::BatchSlotLayerIdx)) =
-                    operation_attributes.batch_slot_layer_idx;
+        }
+        if (pair_changed) {
+            const uint32_t ready_addr = shared_vars.ready_sem.address();
+            const uint32_t data_valid_addr = shared_vars.data_valid_sem.address();
+            auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
+            auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
+            for (const auto& core : shared_vars.worker_cores) {
+                auto& reader_args = reader_args_by_core[core.x][core.y];
+                reader_args.at(rt_arg_index(ReaderRtArg::ReadySemaphore)) = ready_addr;
+                reader_args.at(rt_arg_index(ReaderRtArg::DataValidSemaphore)) = data_valid_addr;
+                auto& writer_args = writer_args_by_core[core.x][core.y];
+                writer_args.at(rt_arg_index(WriterRtArg::ReadySemaphore)) = ready_addr;
+                writer_args.at(rt_arg_index(WriterRtArg::DataValidSemaphore)) = data_valid_addr;
             }
-            auto& writer_args = writer_args_by_core[core.x][core.y];
-            writer_args.at(rt_arg_index(WriterRtArg::OutputAddress)) = output_addr;
-            writer_args.at(rt_arg_index(WriterRtArg::ReadySemaphore)) = ready_addr;
-            writer_args.at(rt_arg_index(WriterRtArg::DataValidSemaphore)) = data_valid_addr;
         }
 
-        if (!has_runtime_controls) {
+        auto& reader_common = GetCommonRuntimeArgs(program, shared_vars.reader_kernel_id);
+        reader_common.at(0) = input_addr;
+        reader_common.at(1) = output_addr;
+        reader_common.at(2) = prefix_metadata_address;
+        reader_common.at(3) = batch_metadata_address;
+        reader_common.at(4) = operation_attributes.batch_slot_num_layers;
+        reader_common.at(5) = operation_attributes.batch_slot_layer_idx;
+        auto& writer_common = GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id);
+        writer_common.at(0) = output_addr;
+
+        // Common addresses and metadata above must refresh even when the schedule is unchanged.
+        // Metadata-driven extents are derived on device; their host schedule stays at maximum capacity.
+        if (!has_runtime_controls || (shared_vars.input_batch_index == operation_attributes.input_batch_index &&
+                                      shared_vars.gathered_dim_size == operation_attributes.gathered_dim_size)) {
             continue;
         }
+        if (!updated_page_geometry.has_value()) {
+            updated_page_geometry = derive_page_geometry(
+                tensor_args.input_tensor, output_tensor, operation_attributes, has_batch_metadata, has_prefix_metadata);
+        }
+        const auto& page_geometry = *updated_page_geometry;
+        auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
 
-        // Patch only scalar runtime arguments: no program rebuild, worker re-selection, allocation, or
-        // tensor view/slice is involved on a cache hit. The compiled schedule may be bank-owned; in that
-        // case each worker keeps one output DRAM bank while the selected input base and active count vary.
-        const uint32_t total_slices = shared_vars.num_links * shared_vars.workers_per_direction;
-        const uint32_t data_valid_granularity =
-            derive_data_valid_granularity(page_geometry, operation_attributes.packet_size, total_slices);
-        const uint32_t slice_step = shared_vars.output_bank_owned_schedule ? shared_vars.num_dram_banks : 1;
-        for (uint32_t link = 0; link < shared_vars.num_links; ++link) {
-            for (uint32_t dir = 0; dir < 2; ++dir) {
-                const bool is_forward = dir == 0;
-                const uint32_t num_recv =
-                    shared_vars.is_ring
-                        ? shared_vars.num_devices / 2
-                        : (is_forward ? shared_vars.device_idx : shared_vars.num_devices - 1 - shared_vars.device_idx);
-                for (uint32_t w = 0; w < shared_vars.workers_per_direction; ++w) {
-                    const uint32_t slice_idx = link * shared_vars.workers_per_direction + w;
+        if (prepared_control_groups.size() <= shared_vars.control_group) {
+            prepared_control_groups.resize(shared_vars.control_group + 1);
+        }
+        auto& prepared = prepared_control_groups[shared_vars.control_group];
+        if (!prepared.has_value()) {
+            const uint32_t total_slices = shared_vars.num_links * shared_vars.workers_per_direction;
+            PreparedControlGroup controls{
+                .slices = {},
+                .data_valid_granularity =
+                    derive_data_valid_granularity(page_geometry, operation_attributes.packet_size, total_slices)};
+            controls.slices.reserve(total_slices);
+            const uint32_t slice_step = shared_vars.output_bank_owned_schedule ? shared_vars.num_dram_banks : 1;
+            for (uint32_t link = 0; link < shared_vars.num_links; ++link) {
+                for (uint32_t worker = 0; worker < shared_vars.workers_per_direction; ++worker) {
+                    const uint32_t slice_idx = link * shared_vars.workers_per_direction + worker;
                     const auto even_range =
                         partition::even_worker_page_range(page_geometry.num_input_pages, total_slices, slice_idx);
                     uint32_t input_page_start = even_range.input_page_start;
@@ -1185,7 +1314,7 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
                             shared_vars.workers_per_direction,
                             shared_vars.num_dram_banks,
                             link,
-                            w);
+                            worker);
                         input_page_start = bank_owned_slice.input_page_start;
                         worker_input_page_count = bank_owned_slice.page_count;
                     }
@@ -1205,41 +1334,57 @@ void HighBwAllGatherUnicastFactory::override_runtime_arguments(
                                   page_geometry.num_input_pages;
                     const uint32_t slice_count = local_output_end - local_output_start;
                     const uint32_t half = slice_count / 2;
-                    const uint32_t final_start =
-                        shared_vars.ring_even_split
-                            ? (is_forward ? local_output_start : local_output_start + half * slice_step)
-                            : local_output_start;
-                    const uint32_t final_count =
-                        shared_vars.ring_even_split ? (is_forward ? half : slice_count - half) : slice_count;
-                    const uint32_t total_chunks =
-                        num_recv * slice_count - (shared_vars.ring_even_split ? slice_count - final_count : 0);
-                    const auto& core =
-                        shared_vars.worker_cores[(link * 2 + dir) * shared_vars.workers_per_direction + w];
-
-                    auto& reader_args = reader_args_by_core[core.x][core.y];
-                    reader_args.at(rt_arg_index(ReaderRtArg::TotalChunks)) = total_chunks;
-                    reader_args.at(rt_arg_index(ReaderRtArg::SliceStart)) = local_output_start;
-                    reader_args.at(rt_arg_index(ReaderRtArg::SliceCount)) = slice_count;
-                    reader_args.at(rt_arg_index(ReaderRtArg::FinalStart)) = final_start;
-                    reader_args.at(rt_arg_index(ReaderRtArg::FinalCount)) = final_count;
-                    reader_args.at(rt_arg_index(ReaderRtArg::InputPageStart)) =
-                        page_geometry.input_page_base + input_page_start;
-                    reader_args.at(rt_arg_index(ReaderRtArg::InputPageEnd)) =
-                        page_geometry.input_page_base + input_page_end;
-                    reader_args.at(rt_arg_index(ReaderRtArg::OutputChunksPerStripe)) =
-                        page_geometry.output_chunks_per_stripe;
-
-                    auto& writer_args = writer_args_by_core[core.x][core.y];
-                    writer_args.at(rt_arg_index(WriterRtArg::SliceStart)) = local_output_start;
-                    writer_args.at(rt_arg_index(WriterRtArg::SliceCount)) = slice_count;
-                    writer_args.at(rt_arg_index(WriterRtArg::FinalStart)) = final_start;
-                    writer_args.at(rt_arg_index(WriterRtArg::FinalCount)) = final_count;
-                    writer_args.at(rt_arg_index(WriterRtArg::OutputChunksPerStripe)) =
-                        page_geometry.output_chunks_per_stripe;
-                    writer_args.at(rt_arg_index(WriterRtArg::DataValidGranularity)) = data_valid_granularity;
+                    controls.slices.push_back(
+                        {.input_page_start = page_geometry.input_page_base + input_page_start,
+                         .input_page_end = page_geometry.input_page_base + input_page_end,
+                         .local_output_start = local_output_start,
+                         .slice_count = slice_count,
+                         .final_start =
+                             {local_output_start,
+                              shared_vars.ring_even_split ? local_output_start + half * slice_step
+                                                          : local_output_start},
+                         .final_count = {
+                             shared_vars.ring_even_split ? half : slice_count,
+                             shared_vars.ring_even_split ? slice_count - half : slice_count}});
                 }
             }
+            prepared = std::move(controls);
         }
+        writer_common.at(1) = prepared->data_valid_granularity;
+        auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
+
+        TT_FATAL(
+            prepared->slices.size() == shared_vars.destinations.size(),
+            "high_bw_all_gather prepared {} slices for {} destinations",
+            prepared->slices.size(),
+            shared_vars.destinations.size());
+        for (size_t index = 0; index < prepared->slices.size(); ++index) {
+            const auto& slice = prepared->slices[index];
+            for (uint32_t dir = 0; dir < 2; ++dir) {
+                const uint32_t final_start = slice.final_start[dir];
+                const uint32_t final_count = slice.final_count[dir];
+                const uint32_t total_chunks = shared_vars.receive_counts[dir] * slice.slice_count -
+                                              (shared_vars.ring_even_split ? slice.slice_count - final_count : 0);
+                const auto& core = shared_vars.destinations[index][dir];
+
+                auto& reader_args = reader_args_by_core[core.x][core.y];
+                reader_args.at(rt_arg_index(ReaderRtArg::TotalChunks)) = total_chunks;
+                reader_args.at(rt_arg_index(ReaderRtArg::SliceStart)) = slice.local_output_start;
+                reader_args.at(rt_arg_index(ReaderRtArg::SliceCount)) = slice.slice_count;
+                reader_args.at(rt_arg_index(ReaderRtArg::FinalStart)) = final_start;
+                reader_args.at(rt_arg_index(ReaderRtArg::FinalCount)) = final_count;
+                reader_args.at(rt_arg_index(ReaderRtArg::InputPageStart)) = slice.input_page_start;
+                reader_args.at(rt_arg_index(ReaderRtArg::InputPageEnd)) = slice.input_page_end;
+
+                auto& writer_args = writer_args_by_core[core.x][core.y];
+                writer_args.at(rt_arg_index(WriterRtArg::SliceStart)) = slice.local_output_start;
+                writer_args.at(rt_arg_index(WriterRtArg::SliceCount)) = slice.slice_count;
+                writer_args.at(rt_arg_index(WriterRtArg::FinalStart)) = final_start;
+                writer_args.at(rt_arg_index(WriterRtArg::FinalCount)) = final_count;
+            }
+        }
+        shared_vars.input_batch_index = operation_attributes.input_batch_index;
+        shared_vars.gathered_dim_size = operation_attributes.gathered_dim_size;
     }
 }
 
