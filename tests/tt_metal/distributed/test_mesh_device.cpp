@@ -63,6 +63,29 @@ TEST(MeshDeviceInitTest, Init1x1Mesh) {
     });
 }
 
+// A 2x2 shape backed by a single physical device makes the MeshDeviceView constructor throw
+// "Shape and values size mismatch". That must surface as an exception rather than a segfault from
+// ~MeshDevice running on a null pimpl_, and the devices opened along the way must be released so a
+// subsequent create() still succeeds. Issue #51236.
+TEST(MeshDeviceInitTest, CreateWithMismatchedShapeThrowsWithoutCrashing) {
+    MeshDeviceConfig mismatched_config(MeshShape(2, 2), /*offset=*/std::nullopt, /*physical_device_ids=*/{0});
+
+    EXPECT_ANY_THROW({
+        auto mesh = MeshDevice::create(
+            mismatched_config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+    });
+
+    EXPECT_NO_THROW({
+        auto mesh = MeshDevice::create(
+            MeshDeviceConfig(MeshShape(1, 1)),
+            DEFAULT_L1_SMALL_SIZE,
+            DEFAULT_TRACE_REGION_SIZE,
+            1,
+            DispatchCoreType::WORKER);
+        mesh->close();
+    });
+}
+
 std::shared_ptr<MeshDevice> create_unit_mesh_for_close_tests() {
     return MeshDevice::create(
         MeshDeviceConfig(MeshShape(1, 1)),

@@ -494,12 +494,13 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
 
     const auto root_devices = scoped_devices->root_devices();
 
-    auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice());
-    mesh_device->pimpl_ = std::make_unique<MeshDeviceImpl>(
-        std::move(scoped_devices),
-        std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids),
-        std::shared_ptr<MeshDevice>(),
-        ctx);
+    // Build the view and the impl into locals first, so that a failure to construct either one never
+    // leaves behind a MeshDevice with a null `pimpl_`. `scoped_devices` is released by unwinding,
+    // which closes the devices it opened.
+    auto mesh_device_view = std::make_unique<MeshDeviceView>(mesh_shape, root_devices, fabric_node_ids);
+    auto mesh_device_impl = std::make_unique<MeshDeviceImpl>(
+        std::move(scoped_devices), std::move(mesh_device_view), std::shared_ptr<MeshDevice>(), ctx);
+    auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(mesh_device_impl)));
 
     mesh_device->pimpl_->initialize_impl(
         mesh_device.get(),
@@ -609,12 +610,11 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
 
     const auto root_devices = scoped_devices->root_devices();
 
-    auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice());
-    mesh_device->pimpl_ = std::make_unique<MeshDeviceImpl>(
-        std::move(scoped_devices),
-        std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids),
-        std::shared_ptr<MeshDevice>(),
-        ctx);
+    auto mesh_device_view =
+        std::make_unique<MeshDeviceView>(MeshShape(1, device_ids.size()), root_devices, fabric_node_ids);
+    auto mesh_device_impl = std::make_unique<MeshDeviceImpl>(
+        std::move(scoped_devices), std::move(mesh_device_view), std::shared_ptr<MeshDevice>(), ctx);
+    auto mesh_device = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(mesh_device_impl)));
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
     TT_FATAL(
@@ -752,12 +752,10 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         submesh_fabric_node_ids.push_back(view_->get_fabric_node_id(coord));
     }
 
-    auto submesh = std::shared_ptr<MeshDevice>(new MeshDevice());
-    submesh->pimpl_ = std::make_unique<MeshDeviceImpl>(
-        scoped_devices_,
-        std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids),
-        parent_mesh,
-        metal_context());
+    auto submesh_view = std::make_unique<MeshDeviceView>(submesh_shape, submesh_devices, submesh_fabric_node_ids);
+    auto submesh_impl =
+        std::make_unique<MeshDeviceImpl>(scoped_devices_, std::move(submesh_view), parent_mesh, metal_context());
+    auto submesh = std::shared_ptr<MeshDevice>(new MeshDevice(std::move(submesh_impl)));
 
     TT_FATAL(
         submesh->impl().get_context_id() == context_id_,
@@ -1986,7 +1984,9 @@ std::shared_ptr<distributed::MeshDevice> MeshDeviceImpl::get_mesh_device() {
     return nullptr;
 }
 
-MeshDevice::MeshDevice(MetalEnv& /*metal_env*/) {}
+MeshDevice::MeshDevice(std::unique_ptr<MeshDeviceImpl> impl) : pimpl_(std::move(impl)) {
+    TT_FATAL(pimpl_ != nullptr, "MeshDevice requires a non-null MeshDeviceImpl");
+}
 
 MeshDevice::~MeshDevice() {
     Inspector::mesh_device_destroyed(this->pimpl_.get());

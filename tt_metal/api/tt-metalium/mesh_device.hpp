@@ -74,14 +74,15 @@ using DeviceIds = std::vector<int>;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
     friend class MeshDeviceImpl;
-    friend class tt::tt_metal::MetalEnv;
 
 private:
-    MeshDevice() = default;
-    // [[Experimental]] Creates a MeshDevice that uses the given MetalEnv instance.
-    // This is used by MetalEnv::create_mesh_device and MetalEnv::create_unit_mesh_device.
-    explicit MeshDevice(MetalEnv& metal_env);
+    // Adopts a fully-constructed impl. This is the only way to create a MeshDevice, which guarantees
+    // `pimpl_` is non-null for the entire lifetime of the object: a MeshDeviceView / MeshDeviceImpl
+    // that fails to construct never produces a half-built MeshDevice whose destructor would then
+    // dereference a null `pimpl_`.
+    explicit MeshDevice(std::unique_ptr<MeshDeviceImpl> impl);
 
+    // Never null; see the constructor above.
     std::unique_ptr<MeshDeviceImpl> pimpl_;
 
 public:
