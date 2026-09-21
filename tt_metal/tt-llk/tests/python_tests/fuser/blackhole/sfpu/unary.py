@@ -4,10 +4,11 @@
 
 from typing import List
 
-import torch
 from fuser.base_sfpu import Sfpu
 from fuser.block_data import BlockData
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.sfpu.unary import unary_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
 from fuser.sfpu_node import SfpuNode
 from helpers.llk_params import (
@@ -17,12 +18,14 @@ from helpers.llk_params import (
 
 
 class UnarySfpu(Sfpu):
+    granularity = InvocationGranularity.TILE
+    golden_fn = staticmethod(unary_golden)
+
     def __init__(
         self,
         operation: MathOperation,
         approx_mode: ApproximationMode = ApproximationMode.No,
         iterations: int = 8,
-        dest_idx: int = 0,
         fill_const_value=5,
     ):
         if not operation in MathOperation.get_sfpu_unary_operations():
@@ -32,7 +35,6 @@ class UnarySfpu(Sfpu):
         self.iterations = iterations
         self.approx_mode = approx_mode
         self.operation = operation
-        self.dest_idx = dest_idx
         self.fill_const_value = fill_const_value
 
     def get_headers(self) -> List[str]:
@@ -43,19 +45,6 @@ class UnarySfpu(Sfpu):
             "llk_math_eltwise_unary_sfpu.h",
             "sfpu_operations.h",
         ]
-
-    def golden(
-        self,
-        tensor: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: SfpuNode,
-        batch_dims: tuple,
-        batch_tile_cnt: int,
-    ) -> torch.Tensor:
-        return self.unary_sfpu_golden(
-            tensor, config, operation, compute_unit, batch_dims
-        )
 
     def init(
         self,
@@ -90,7 +79,7 @@ class UnarySfpu(Sfpu):
             f"    test_utils::call_unary_sfpu_operation<"
             f"{dest_sync}, {dest_acc}, "
             f"{op}, {approx_mode}, {dest_acc}, {self.iterations}"
-            f">({self.dest_idx}, {config.sentinel.math_format}, {self.fill_const_value});\n"
+            f">({block.tile_id_dest}, {config.sentinel.sfpu_format}, {self.fill_const_value});\n"
         )
 
     def __str__(self) -> str:

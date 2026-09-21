@@ -44,23 +44,17 @@ class Operand:
     name: str
     dimensions: Tuple[int, int]
     data_format: DataFormat
-    tile_shape: TileShape = field(
-        default_factory=lambda: construct_tile_shape(
-            (DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM)
-        )
-    )
+    tile_shape: TileShape
     l1_address: Optional[int] = None
-    is_input: bool = False
     is_output: bool = False
-    sfpu: bool = True
     _raw_data: Optional[torch.Tensor] = None
     _master_golden: Optional[torch.Tensor] = None
     const_value: Optional[float] = None
     l1_golden: Optional[torch.Tensor] = None
-    tile_count: Optional[int] = None
-    tile_count_x: Optional[int] = None
-    tile_count_y: Optional[int] = None
-    tile_size: Optional[int] = None
+    tile_count: int = field(init=False)
+    tile_count_x: int = field(init=False)
+    tile_count_y: int = field(init=False)
+    tile_size: int = field(init=False)
     acc_atol: float = 0.0
     acc_rtol: float = 0.0
     acc_pcc: float = 1.0
@@ -297,9 +291,6 @@ class OperandRegistry:
             )
 
         return self.operands[name]
-
-    def get_all_inputs(self) -> list[Operand]:
-        return [op for op in self.operands.values() if op.is_input]
 
     def get_all_outputs(self) -> list[Operand]:
         return [op for op in self.operands.values() if op.is_output]

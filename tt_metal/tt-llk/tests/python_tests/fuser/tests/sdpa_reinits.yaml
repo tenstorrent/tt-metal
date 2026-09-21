@@ -28,6 +28,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "input_A"
         in1: "input_B"
         operation: "Matmul"
@@ -36,9 +37,11 @@ operations:
 
     pack:
       - output: "output1"
+        block_size: [32, 32]
         packer: "Packer"
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "input_A"
         in1: "input_B"
         operation: "ReduceBlockMax"
@@ -47,9 +50,11 @@ operations:
 
     pack:
       - output: "output2"
+        block_size: [32, 32]
         packer: "Packer"
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "input_A"
         in1: "input_B"
         operation: "Elwadd"
@@ -59,9 +64,11 @@ operations:
 
     pack:
       - output: "output3"
+        block_size: [32, 32]
         packer: "Packer"
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "input_A"
         in1: "input_B"
         operation: "Matmul"
@@ -69,4 +76,5 @@ operations:
         math_fidelity: "LoFi"
     pack:
       - output: "output4"
+        block_size: [32, 32]
         packer: "Packer"

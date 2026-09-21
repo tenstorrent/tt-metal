@@ -28,6 +28,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [16, 128]
         in0: "input_A"
         in1: "input_B"
         operation: "ReduceBlockMax"
@@ -35,5 +36,5 @@ operations:
         math_fidelity: "HiFi2"
     pack:
       - output: "reduce_block_max_tiny_out"
+        block_size: [16, 128]
         packer: "Packer"
-    block_size: [16, 128]

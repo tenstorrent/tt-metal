@@ -5,14 +5,17 @@
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.transpose_dest import unpack_transpose_dest_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
 
 from .unpack_a import UnpackerA
 
 
 class TransposeDestUnpacker(UnpackerA):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
+
+    golden_fn = staticmethod(unpack_transpose_dest_golden)
 
     def perf_set_valid(
         self,

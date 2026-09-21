@@ -17,6 +17,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [32, 128]
         in0: "input_A"
         in1: "input_B"
         operation: "Reduce"
@@ -25,7 +26,7 @@ operations:
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi2"
         enforce_fp32_accumulation: true
-    block_size: [32, 128]
     pack:
       - output: "reduce_col_out"
+        block_size: [32, 128]
         packer: "Packer"

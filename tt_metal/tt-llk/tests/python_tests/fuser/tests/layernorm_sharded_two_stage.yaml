@@ -1,0 +1,239 @@
+dest_acc: true
+skip_for_perf: true
+
+indexes:
+  tiles:
+    in0: {count: 8}
+    in1: {count: 8}
+    dest: [0]
+    out: {count: 8}
+  local_reduce:
+    in0: {count: 8}
+    in1: {count: 8, step: 0}
+    dest: [0]
+  first_stage:
+    in0: [4, 6, 5, 7]
+    in1: {count: 4, step: 0}
+    dest: [0, 0]
+  final_local:
+    in0: [0, 2, 1, 3]
+    in1: {count: 4, step: 0}
+    dest: [0, 0]
+  global_stats:
+    in0: {count: 2}
+    in1: {count: 2, step: 0}
+    dest: [0]
+    out: {count: 2}
+  column_broadcast:
+    in0: {count: 8}
+    in1: [0, 1, 0, 1, 0, 1, 0, 1]
+    dest: [0]
+    out: {count: 8}
+
+operands:
+  - {name: x, dims: [256, 32], format: Float16_b}
+  - {name: scaler, dims: [32, 32], format: Float16_b, const_value: 0.03125}
+  - {name: scaler_first, dims: [32, 32], format: Float16_b, const_value: 1.0}
+  - {name: scaler_global, dims: [32, 32], format: Float16_b, const_value: 0.25}
+  - {name: eps, dims: [32, 32], format: Float16_b, const_value: 1.0e-12}
+  - {name: ex_partial, dims: [256, 32], format: Float32}
+  - {name: ex_first, dims: [64, 32], format: Float32}
+  - {name: ex_global, dims: [64, 32], format: Float32}
+  - {name: xmm, dims: [256, 32], format: Float32}
+  - {name: xmm2, dims: [256, 32], format: Float32}
+  - {name: var_partial, dims: [256, 32], format: Float32}
+  - {name: var_first, dims: [64, 32], format: Float32}
+  - {name: var_global, dims: [64, 32], format: Float32}
+  - {name: ex2pe, dims: [64, 32], format: Float32}
+  - {name: output, dims: [256, 32], format: Float16_b}
+
+operations:
+  - math:
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_ROW
+        reduce_pool: AVG
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: x
+        in1: scaler
+        indexes: local_reduce
+    pack:
+      - output: ex_partial
+        packer: Packer
+        block_size: [32, 32]
+        indexes: tiles
+
+  - math:
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_ROW
+        reduce_pool: AVG
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: ex_partial
+        in1: scaler_first
+        indexes: first_stage
+    pack:
+      - output: ex_first
+        packer: Packer
+        block_size: [32, 32]
+        indexes: global_stats
+
+  - math:
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_ROW
+        reduce_pool: AVG
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: ex_partial
+        in1: scaler_global
+        indexes: final_local
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_ROW
+        reduce_pool: AVG
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: ex_first
+        in1: scaler_global
+        indexes: global_stats
+    pack:
+      - output: ex_global
+        packer: Packer
+        block_size: [32, 32]
+        indexes: global_stats
+
+  - math:
+      - type: Fpu
+        operation: Elwsub
+        unpacker: UnpackerAB
+        broadcast_type: COL
+        math_fidelity: LoFi
+        block_size: [32, 32]
+        in0: x
+        in1: ex_global
+        indexes: column_broadcast
+    pack:
+      - output: xmm
+        packer: Packer
+        block_size: [32, 32]
+        indexes: tiles
+
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: xmm
+        in1: xmm
+        indexes: tiles
+    pack:
+      - output: xmm2
+        packer: Packer
+        block_size: [32, 32]
+        indexes: tiles
+
+  - math:
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_ROW
+        reduce_pool: AVG
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: xmm2
+        in1: scaler
+        indexes: local_reduce
+    pack:
+      - output: var_partial
+        packer: Packer
+        block_size: [32, 32]
+        indexes: tiles
+
+  - math:
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_ROW
+        reduce_pool: AVG
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: var_partial
+        in1: scaler_first
+        indexes: first_stage
+    pack:
+      - output: var_first
+        packer: Packer
+        block_size: [32, 32]
+        indexes: global_stats
+
+  - math:
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_ROW
+        reduce_pool: AVG
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: var_partial
+        in1: scaler_global
+        indexes: final_local
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_ROW
+        reduce_pool: AVG
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: var_first
+        in1: scaler_global
+        indexes: global_stats
+    pack:
+      - output: var_global
+        packer: Packer
+        block_size: [32, 32]
+        indexes: global_stats
+
+  - math:
+      - type: Fpu
+        operation: Elwadd
+        unpacker: UnpackerAB
+        math_fidelity: LoFi
+        block_size: [32, 32]
+        in0: var_global
+        in1: eps
+        indexes: global_stats
+      - type: UnarySfpu
+        operation: Rsqrt
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {dest: [0]}
+    pack:
+      - output: ex2pe
+        packer: Packer
+        block_size: [32, 32]
+        indexes: global_stats
+
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        broadcast_type: COL
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: xmm
+        in1: ex2pe
+        indexes: column_broadcast
+    pack:
+      - output: output
+        packer: Packer
+        block_size: [32, 32]
+        indexes: tiles

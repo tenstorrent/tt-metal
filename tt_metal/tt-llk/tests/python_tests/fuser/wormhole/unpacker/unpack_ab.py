@@ -2,39 +2,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Tuple
+from typing import List
 
-import torch
 from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
+from fuser.golden.unpack.unpack_ab import unpack_ab_golden
+from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.tile_loop import LoopTileByTile, TileLoop
 from helpers.llk_params import BroadcastType
 
 
 class UnpackerAB(Unpacker):
-    loop: TileLoop = LoopTileByTile()
+    granularity = InvocationGranularity.TILE
+    golden_fn = staticmethod(unpack_ab_golden)
 
     def get_headers(self) -> List[str]:
         return [
             "llk_unpack_AB.h",
             "llk_unpack_common.h",
         ]
-
-    def golden(
-        self,
-        tensor_a: torch.Tensor,
-        tensor_b: torch.Tensor,
-        operation: L1Operation,
-        config: GlobalConfig,
-        compute_unit: FpuNode,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        tensor_b = self.broadcast_golden(tensor_b, config, operation, compute_unit)
-        tensor_a = self.transpose_golden(tensor_a, config, operation, compute_unit)
-
-        return tensor_a.flatten(), tensor_b.flatten()
 
     def perf_set_valid(
         self,
@@ -116,12 +104,8 @@ class UnpackerAB(Unpacker):
         broadcast_type = f"BroadcastType::{compute_unit.broadcast_type.value}"
         buffer_a = compute_unit.src_a.cpp_name
         buffer_b = compute_unit.src_b.cpp_name
-        tile_id_b = (
-            block.tile_id_global
-            if compute_unit.broadcast_tile is None
-            else compute_unit.broadcast_tile
-        )
-        return f"_llk_unpack_AB_<{broadcast_type}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{tile_id_b}]));\n"
+        tile_id_b = block.tile_id_src_b
+        return f"_llk_unpack_AB_<{broadcast_type}>(L1_ADDRESS({buffer_a}[{block.tile_id_src_a}]), L1_ADDRESS({buffer_b}[{tile_id_b}]));\n"
 
     def uninit(
         self,

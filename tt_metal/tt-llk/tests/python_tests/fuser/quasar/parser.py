@@ -83,7 +83,7 @@ _no_transpose_mismatch = reject(
 )
 
 _block_full_width = reject(
-    lambda s, a, b: s._block_size[1] != a.dimensions[1],
+    lambda s, a, b: s.block_size[1] != a.dimensions[1],
     "block width must be same as operand width",
 )
 
@@ -143,7 +143,7 @@ UNPACKER_MAP = {
         [IN0_REQUIRED, _broadcast_required, NO_TRANSPOSE, NO_UNPACK_TO_DEST],
     ),
     "UnpackReduceTilize": (
-        lambda s: UnpackReduceTilize(s.reduce_dim, s.reduce_pool),
+        lambda s: UnpackReduceTilize(s.reduce_pool),
         [
             IN0_REQUIRED,
             IN1_REQUIRED,

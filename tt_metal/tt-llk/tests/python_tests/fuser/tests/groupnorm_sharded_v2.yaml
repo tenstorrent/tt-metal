@@ -1,0 +1,265 @@
+dest_acc: true
+skip_for_perf: true
+
+indexes:
+  subblock:
+    in0: {count: 4}
+    in1: {count: 4}
+    dest: [0, 1]
+    out: {count: 4}
+  mask:
+    in0: {count: 4}
+    in1: [0, 1, 0, 1]
+    dest: [0, 1]
+    out: {count: 4}
+  scalar_broadcast:
+    in0: {count: 4}
+    in1: {count: 4, step: 0}
+    dest: [0, 1]
+    out: {count: 4}
+  # One acquire, h-outer/w-inner, four products accumulated in Dst[0], ONE pack.
+  sum_tiles:
+    in0: {count: 4}
+    in1: {count: 4, step: 0}
+    dest: [0, 0, 0, 0]
+  sum_squares:
+    in0: {count: 4}
+    in1: {count: 4}
+    dest: [0, 0, 0, 0]
+  scalar:
+    in0: [0]
+    in1: [0]
+    dest: [0]
+    out: [0]
+  copy_columns:
+    in0: [0, 2, 1, 3]
+    dest: [0]
+    out: [0, 2, 1, 3]
+  affine:
+    in0: {count: 4}
+    in1: [0, 1, 0, 1]
+    dest: [0]
+    out: {count: 4}
+
+operands:
+  - {name: x, dims: [64, 64], format: Float16_b}  # c_0
+  - {name: input_mask, dims: [32, 64], format: Float16_b, const_value: 1.0}  # c_7
+  - {name: ones, dims: [32, 32], format: Float16_b, const_value: 1.0}  # c_26
+  - {name: scaler, dims: [32, 32], format: Float16_b, const_value: 0.015625}  # c_2: 1/sqrt(64*64)
+  - {name: eps, dims: [32, 32], format: Float16_b, const_value: 1.0e-5}  # c_3
+  - {name: gamma, dims: [32, 64], format: Float32}  # c_5
+  - {name: beta, dims: [32, 64], format: Float32}  # c_6
+  - {name: masked, dims: [64, 64], format: Float16_b}  # c_13, version 0
+  - {name: sum_x, dims: [32, 32], format: Float16_b}  # c_17
+  - {name: mean, dims: [32, 32], format: Float16_b}  # c_8
+  - {name: centered, dims: [64, 64], format: Float16_b}  # c_13, version 1
+  - {name: centered_masked, dims: [64, 64], format: Float16_b}  # c_13, version 2
+  - {name: sum_squared, dims: [32, 32], format: Float16_b}  # c_17
+  - {name: variance, dims: [32, 32], format: Float16_b}  # c_8
+  - {name: rstd, dims: [32, 32], format: Float16_b}  # c_17
+  - {name: normalized, dims: [64, 64], format: Float16_b}  # c_13, version 3
+  - {name: copied, dims: [64, 64], format: Float16_b}  # c_16
+  - {name: gamma_out, dims: [64, 64], format: Float16_b}  # c_1
+  - {name: output, dims: [64, 64], format: Float16_b}  # c_16
+
+operations:
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        broadcast_type: ROW
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: x
+        in1: input_mask
+        indexes: mask
+    pack:
+      - output: masked
+        packer: Packer
+        block_size: [32, 32]
+        indexes: subblock
+
+  # Unlike groupnorm.cpp, reduce the tile-wise SUM, not every input tile.
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        math_fidelity: HiFi4
+        acc_to_dest: true
+        block_size: [32, 32]
+        in0: masked
+        in1: ones
+        indexes: sum_tiles
+    pack:
+      - output: sum_x
+        packer: Packer
+        block_size: [32, 32]
+        indexes: scalar
+
+  - math:
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_SCALAR
+        reduce_pool: SUM
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: sum_x
+        in1: scaler
+        indexes: scalar
+    pack:
+      - output: mean
+        packer: Packer
+        block_size: [32, 32]
+        indexes: scalar
+
+  # Each subblock pops/pushes c_13; the next row starts at the next absolute tile.
+  - math:
+      - type: Fpu
+        operation: Elwsub
+        unpacker: UnpackerAB
+        broadcast_type: SCALAR
+        math_fidelity: LoFi
+        block_size: [32, 32]
+        in0: masked
+        in1: mean
+        indexes: scalar_broadcast
+    pack:
+      - output: centered
+        packer: Packer
+        block_size: [32, 32]
+        indexes: subblock
+
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        broadcast_type: ROW
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: centered
+        in1: input_mask
+        indexes: mask
+    pack:
+      - output: centered_masked
+        packer: Packer
+        block_size: [32, 32]
+        indexes: subblock
+
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        math_fidelity: HiFi4
+        acc_to_dest: true
+        block_size: [32, 32]
+        in0: centered_masked
+        in1: centered_masked
+        indexes: sum_squares
+    pack:
+      - output: sum_squared
+        packer: Packer
+        block_size: [32, 32]
+        indexes: scalar
+
+  - math:
+      - type: Fpu
+        operation: Reduce
+        unpacker: ReduceUnpacker
+        reduce_dim: REDUCE_SCALAR
+        reduce_pool: SUM
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: sum_squared
+        in1: scaler
+        indexes: scalar
+    pack:
+      - output: variance
+        packer: Packer
+        block_size: [32, 32]
+        indexes: scalar
+
+  - math:
+      - type: Fpu
+        operation: Elwadd
+        unpacker: UnpackerAB
+        math_fidelity: LoFi
+        block_size: [32, 32]
+        in0: variance
+        in1: eps
+        indexes: scalar
+      - type: UnarySfpu
+        operation: Rsqrt
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {dest: [0]}
+    pack:
+      - output: rstd
+        packer: Packer
+        block_size: [32, 32]
+        indexes: scalar
+
+  # Reuse centered_masked, then w-outer/i-inner indexed copy into the output shard.
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        broadcast_type: SCALAR
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: centered_masked
+        in1: rstd
+        indexes: scalar_broadcast
+    pack:
+      - output: normalized
+        packer: Packer
+        block_size: [32, 32]
+        indexes: subblock
+
+  - math:
+      - type: Fpu
+        operation: Datacopy
+        unpacker: UnpackerA
+        math_fidelity: LoFi
+        block_size: [32, 32]
+        in0: normalized
+        indexes: copy_columns
+    pack:
+      - output: copied
+        packer: Packer
+        block_size: [32, 32]
+        indexes: copy_columns
+
+  # Affine runs only AFTER the entire batch/group loop, one tile per acquire.
+  - math:
+      - type: Fpu
+        operation: Elwmul
+        unpacker: UnpackerAB
+        broadcast_type: ROW
+        math_fidelity: HiFi4
+        block_size: [32, 32]
+        in0: copied
+        in1: gamma
+        indexes: affine
+    pack:
+      - output: gamma_out
+        packer: Packer
+        block_size: [32, 32]
+        indexes: affine
+
+  - math:
+      - type: Fpu
+        operation: Elwadd
+        unpacker: UnpackerAB
+        broadcast_type: ROW
+        math_fidelity: LoFi
+        block_size: [32, 32]
+        in0: gamma_out
+        in1: beta
+        indexes: affine
+    pack:
+      - output: output
+        packer: Packer
+        block_size: [32, 32]
+        indexes: affine

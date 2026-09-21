@@ -89,7 +89,7 @@ def _upk_to_dest_sem_init(config: "GlobalConfig", operation: "L1Operation") -> s
         return ""
     if not any(
         isinstance(node, FpuNode) and node.unpack_to_dest.value
-        for node in operation.math.math_nodes
+        for node in operation.math_nodes
     ):
         return ""
     return "_llk_sync_init_(semaphore::UNPACK_MATH, 1, 0);\n"
