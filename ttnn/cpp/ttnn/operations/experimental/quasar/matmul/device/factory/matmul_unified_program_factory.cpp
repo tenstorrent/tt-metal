@@ -225,9 +225,10 @@ UnifiedMatmulPlan plan_unified_matmul(
     plan.M_tiles = A_shape[-2] / TILE_HEIGHT;
     plan.K_tiles = A_shape[-1] / TILE_WIDTH;
     plan.N_tiles = B_shape[-1] / TILE_WIDTH;
-    plan.broadcast_B_over_batch = attributes.bcast_batch.value();
+    const bool B_has_one_batch = attributes.bcast_batch.value();  // the op sets bcast_batch iff batch_size(B) == 1
+    plan.B_batch_stride_tiles = B_has_one_batch ? 0 : plan.K_tiles * plan.N_tiles;
     TT_FATAL(
-        plan.broadcast_B_over_batch || get_batch_size(B_shape) == plan.batch_size,
+        B_has_one_batch || get_batch_size(B_shape) == plan.batch_size,
         "Batched B must match A's batch ({} vs {})",
         get_batch_size(B_shape),
         plan.batch_size);
@@ -579,7 +580,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"K_tiles", plan.K_tiles},
                 {"N_tiles", plan.N_tiles},
                 {"batch_size", plan.batch_size},
-                {"broadcast_B_over_batch", plan.broadcast_B_over_batch ? 1u : 0u},
+                {"B_batch_stride_tiles", plan.B_batch_stride_tiles},
                 {"C_slice_M_tiles", plan.C_slice_M_tiles},
                 {"C_slice_N_tiles", plan.C_slice_N_tiles},
                 {"K_chunk_tiles", plan.K_chunk_tiles},

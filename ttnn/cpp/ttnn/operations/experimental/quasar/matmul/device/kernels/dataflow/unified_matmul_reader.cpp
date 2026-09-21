@@ -41,7 +41,6 @@ void kernel_main() {
     constexpr uint32_t M_tiles = get_arg(args::M_tiles);
     constexpr uint32_t K_tiles = get_arg(args::K_tiles);
     constexpr uint32_t N_tiles = get_arg(args::N_tiles);
-    constexpr bool broadcast_B_over_batch = get_arg(args::broadcast_B_over_batch) != 0;
     constexpr uint32_t C_slice_M_tiles = get_arg(args::C_slice_M_tiles);
     constexpr uint32_t C_slice_N_tiles = get_arg(args::C_slice_N_tiles);
     constexpr uint32_t K_chunk_tiles = get_arg(args::K_chunk_tiles);
@@ -54,8 +53,9 @@ void kernel_main() {
 
     constexpr uint32_t A_slice_tiles = C_slice_M_tiles * K_chunk_tiles;
     constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_tiles;
-    constexpr uint32_t A_tiles_per_batch = M_tiles * K_tiles;
-    constexpr uint32_t B_tiles_per_batch = K_tiles * N_tiles;
+    constexpr uint32_t A_batch_stride_tiles = M_tiles * K_tiles;
+    // 0 when B is a single [K x N] that every batch of A multiplies, else K_tiles * N_tiles.
+    constexpr uint32_t B_batch_stride_tiles = get_arg(args::B_batch_stride_tiles);
 
     Noc noc;
     DataflowBuffer A_slice(dfb::A_slice);
@@ -83,8 +83,8 @@ void kernel_main() {
     const uint32_t B_slot_bytes = B_slice.get_entry_size();
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
-        const uint32_t A_batch_first_tile = batch * A_tiles_per_batch;
-        const uint32_t B_batch_first_tile = broadcast_B_over_batch ? 0 : batch * B_tiles_per_batch;
+        const uint32_t A_batch_first_tile = batch * A_batch_stride_tiles;
+        const uint32_t B_batch_first_tile = batch * B_batch_stride_tiles;
 
         uint32_t C_slice_first_M_tile = first_C_slice_M_tile;  // origin of the current C slice, in tiles
         uint32_t C_slice_first_N_tile = first_C_slice_N_tile;
