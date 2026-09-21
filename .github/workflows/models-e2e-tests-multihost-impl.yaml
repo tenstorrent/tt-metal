@@ -38,6 +38,12 @@ on:
         type: string
         default: ""
         description: "Discriminator for the AI summaries when the calling workflow is invoked more than once per run"
+      hang-detection-timeout:
+        required: false
+        type: number
+        default: 120
+        description: >-
+          Seconds without dispatch progress before tt-triage fires; 0 or less disables it.
 
 # Multihost-ci runner chart may need OIDC. Callers must grant id-token: write on the job that
 # `uses` this workflow (job-level permissions replace inherited defaults) and pass `secrets: inherit`.
@@ -66,6 +72,7 @@ jobs:
       # Shared NFS scratch for automapper launches (empty ttrun-cwd + ranklogs).
       PIPELINE_DIR: /ci/models-e2e-${{ github.run_id }}-${{ strategy.job-index }}
       TTRUN_CWD: /ci/models-e2e-${{ github.run_id }}-${{ strategy.job-index }}/ttrun-cwd
+      TRIAGE_OUTPUT_DIR: /ci/triage_output/${{ github.run_id }}-${{ github.run_attempt }}/models-e2e-${{ strategy.job-index }}
       TTRUN_PY: /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py
       # Forwarded to the mpirun ranks (PRTE_MCA_prte_fwd_environment) so gated HF models can be
       # downloaded. Requires the token's HF account to have accepted the model's license.
@@ -89,6 +96,10 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           extra-pip-packages: pytest==9.0.3 pytest-timeout==2.4.0
+          auto-triage: ${{ inputs.hang-detection-timeout > 0 }}
+          hang-detection-timeout: ${{ inputs.hang-detection-timeout }}
+          triage-job-info: "leg: ${{ matrix.test-group.name }} | sku: ${{ matrix.test-group.sku }}"
+          hang-report-test-id: "tests/pipeline_reorg/models_e2e_tests.py::${{ matrix.test-group.name }}"
           prefer-wheel-libs: ${{ inputs.prefer-wheel-libs }}
 
       - name: Create pipeline directory
@@ -163,10 +174,39 @@ jobs:
           api-url: ${{ secrets.TT_CHAT_URL }}
           job-name: ${{ matrix.test-group.name }}
 
+      # Hang report the triage hook wrote. Must precede the cleanup that removes it.
+      - name: ⬆️ Upload hang report
+        uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+          path: ${{ env.TRIAGE_OUTPUT_DIR }}/test_reports/
+
+      # Only uploaded on a hang. Named after the leg so the artifact maps to the job by eye.
+      - name: ⬆️ Upload triage output
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: triage_output_${{ matrix.test-group.name }} (attempt ${{ github.run_attempt }})
+          path: ${{ env.TRIAGE_OUTPUT_DIR }}/**
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Clean up shared staging dir
         if: always()
+        env:
+          TEST_NAME: ${{ matrix.test-group.name }}
         run: |
+          # Point the failed job at the artifact holding its triage dump.
+          if [ -n "$TRIAGE_OUTPUT_DIR" ] && [ -n "$(ls -A "$TRIAGE_OUTPUT_DIR" 2>/dev/null)" ]; then
+            hosts=$(ls "$TRIAGE_OUTPUT_DIR" | grep -v '^test_reports$' | tr '\n' ' ')
+            echo "::notice title=tt-triage::Hang triaged on ${hosts}— see artifact \"triage_output_$TEST_NAME (attempt ${{ github.run_attempt }})\""
+          fi
           rm -rf "$PIPELINE_DIR"
+          rm -rf "$TRIAGE_OUTPUT_DIR"
+          rmdir --ignore-fail-on-non-empty "$(dirname "$TRIAGE_OUTPUT_DIR")" 2>/dev/null || true
 
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}

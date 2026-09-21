@@ -3,8 +3,8 @@
 
 #include "affine_exclusive_scan_device_operation.hpp"
 
-#include <algorithm>
 #include <array>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 
@@ -22,6 +22,13 @@ AffineExclusiveScanOperation::program_factory_t AffineExclusiveScanOperation::se
 void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     constexpr std::string_view operation_name = "affine_exclusive_scan";
+    TT_FATAL(attrs.groups_per_head > 0, "affine_exclusive_scan: groups_per_head must be positive");
+    TT_FATAL(
+        attrs.local_rows > 0 && attrs.local_rows % tt::constants::TILE_HEIGHT == 0 &&
+            (attrs.local_rows / tt::constants::TILE_HEIGHT) % attrs.groups_per_head == 0,
+        "{}: local_rows must contain a positive whole number of 32-token chunks per group",
+        operation_name);
+    kda_factory_detail::check_actual_start(in.a, in.actual_start, operation_name);
     constexpr std::array accepted_summary_dtypes = {tt::tt_metal::DataType::FLOAT32, tt::tt_metal::DataType::BFLOAT16};
     kda_factory_detail::check_allocated_device_tensor(in.a, operation_name, "a");
     TT_FATAL(
@@ -51,7 +58,6 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     };
     check_input_memory_layout(in.a, "a");
     check_input_memory_layout(in.b, "b");
-    TT_FATAL(attrs.groups_per_head > 0, "affine_exclusive_scan: groups_per_head must be positive");
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
 
@@ -79,6 +85,24 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     TT_FATAL(
         state_shape[0] == attrs.batch_heads && state_shape[1] == attrs.key_dim && state_shape[2] == attrs.value_dim,
         "affine_exclusive_scan: initial_state shape must be [batch_heads, K, V]");
+    for (const auto& [tensor, name] :
+         {std::pair{&in.tail_a, "tail_a"},
+          std::pair{&in.tail_b, "tail_b"},
+          std::pair{&in.tail_entry_states, "tail_entry_states"}}) {
+        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
+        kda_factory_detail::check_layout(*tensor, tt::tt_metal::Layout::TILE, operation_name, name);
+        kda_factory_detail::check_same_device(in.a, *tensor, operation_name, name);
+    }
+    kda_factory_detail::check_matching_dtype(in.a, in.tail_a, operation_name, "a and tail_a");
+    kda_factory_detail::check_matching_dtype(in.b, in.tail_b, operation_name, "b and tail_b");
+    kda_factory_detail::check_dtype(
+        in.tail_entry_states, tt::tt_metal::DataType::FLOAT32, operation_name, "tail_entry_states");
+
+    TT_FATAL(in.tail_a.logical_shape() == a_shape, "affine_exclusive_scan: tail_a shape must match a");
+    TT_FATAL(in.tail_b.logical_shape() == b_shape, "affine_exclusive_scan: tail_b shape must match b");
+    TT_FATAL(
+        in.tail_entry_states.logical_shape() == state_shape,
+        "affine_exclusive_scan: tail_entry_states shape must match initial_state");
 
     constexpr uint32_t max_coordinate_table_workers = 128;
     const auto grid = in.a.device()->compute_with_storage_grid_size();
@@ -112,12 +136,15 @@ AffineExclusiveScanOperation::create_op_performance_model(
 
     const double key_dim = attrs.key_dim;
     const double value_dim = attrs.value_dim;
-    const double transitions = static_cast<double>(attrs.batch_heads) * (attrs.groups_per_head - 1.0);
+    const double reset_transitions = attrs.batch_heads;
+    const double transitions =
+        static_cast<double>(attrs.batch_heads) * (attrs.groups_per_head - 1.0) + reset_transitions;
     const KdaFpuWork work{
         .fpu_matrix_flops = transitions * 2.0 * key_dim * key_dim * value_dim,
         .fpu_add_ops = transitions * key_dim * value_dim,
     };
-    const std::array<const Tensor*, 3> inputs = {&in.a, &in.b, &in.initial_state};
+    std::vector<const Tensor*> inputs = {&in.a, &in.b, &in.initial_state};
+    inputs.insert(inputs.end(), {&in.tail_a, &in.tail_b, &in.tail_entry_states});
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
@@ -126,8 +153,14 @@ Tensor affine_exclusive_scan(
     const Tensor& b,
     const Tensor& state,
     uint32_t groups,
+    const Tensor& tail_a,
+    const Tensor& tail_b,
+    const Tensor& tail_entry_states,
     const tt::tt_metal::MemoryConfig& mem,
-    const DeviceComputeKernelConfig& cfg) {
+    const DeviceComputeKernelConfig& cfg,
+    const Tensor& actual_start,
+    uint32_t sequence_parallel_axis,
+    uint32_t local_rows) {
     // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
     // launcher divides by groups and indexes all three input shapes before dispatching validation.
     TT_FATAL(groups > 0, "affine_exclusive_scan: groups_per_head must be positive");
@@ -145,9 +178,18 @@ Tensor affine_exclusive_scan(
             .groups_per_head = groups,
             .key_dim = static_cast<uint32_t>(shape[1]),
             .value_dim = static_cast<uint32_t>(b.logical_shape()[2]),
+            .sequence_parallel_axis = sequence_parallel_axis,
+            .local_rows = local_rows,
             .output_mem_config = mem,
             .compute_kernel_config = cfg},
-        AffineExclusiveScanInputs{.a = a, .b = b, .initial_state = state});
+        AffineExclusiveScanInputs{
+            .a = a,
+            .b = b,
+            .initial_state = state,
+            .tail_a = tail_a,
+            .tail_b = tail_b,
+            .tail_entry_states = tail_entry_states,
+            .actual_start = actual_start});
     return outputs[0];
 }
 }  // namespace ttnn::experimental::prim

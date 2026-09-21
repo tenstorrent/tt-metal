@@ -44,6 +44,7 @@ def generate_bfloat16_bits(dtype=torch.bfloat16, include_spl_values=False):
 
 
 SMALLEST_NORMAL_BF16 = 2.0 ** (-126)
+MAX_BF16 = float(torch.finfo(torch.bfloat16).max)
 
 
 def flush_to_zero(tensor):
@@ -169,6 +170,15 @@ def generate_bfloat16_binary_grid(dtype=torch.bfloat16, include_spl_values=False
     return torch.tensor(bits, dtype=torch.uint16).view(torch.bfloat16).to(dtype)
 
 
+def pairwise_inputs(include_spl_values=False, include_zero=False, dtype=torch.bfloat16):
+    """Outer product of the 2048-value binary grid: A[i, j] = v[i], B[i, j] = v[j]."""
+    values = generate_bfloat16_binary_grid(
+        dtype=dtype, include_spl_values=include_spl_values, include_zero=include_zero
+    )
+    a, b = torch.meshgrid(values, values, indexing="ij")
+    return a.contiguous(), b.contiguous()
+
+
 def to_tt_tensor(
     input_tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
 ):
@@ -180,6 +190,34 @@ def to_tt_tensor(
         layout=layout,
         memory_config=memory_config,
     )
+
+
+def run_binary(device, ttnn_op, input_a, input_b, *, golden_kwargs=None, **op_kwargs):
+    """Run a tensor-tensor ttnn binary op and return ``(golden, result)``.
+
+    Ops whose ``__name__`` ends in ``_`` (``ttnn.add_``, ``ttnn.multiply_``, …)
+    are inplace: they write into lhs and the result is read back from that
+    tensor rather than the return value.
+
+    Inputs are uploaded as ``ttnn.bfloat16``. ``op_kwargs`` (e.g.
+    ``fast_and_approximate_mode``) are forwarded only to the device op.
+    Torch-valid golden arguments (e.g. isclose ``rtol``/``atol``) go in
+    ``golden_kwargs`` and are also passed to the device op.
+    """
+    tt_a = to_tt_tensor(input_a, device)
+    tt_b = to_tt_tensor(input_b, device)
+
+    golden_kwargs = golden_kwargs or {}
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden = golden_function(input_a, input_b, **golden_kwargs)
+
+    device_kwargs = {**golden_kwargs, **op_kwargs}
+    if ttnn_op.__name__.endswith("_"):
+        ttnn_op(tt_a, tt_b, **device_kwargs)
+        result = ttnn.to_torch(tt_a)
+    else:
+        result = ttnn.to_torch(ttnn_op(tt_a, tt_b, **device_kwargs))
+    return golden, result
 
 
 def float_to_bf16_bits(f: float) -> int:
