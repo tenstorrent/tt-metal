@@ -1,3 +1,17 @@
+"""DeepSeek-V4-Flash MoE: the routers, the shared expert and the routed experts.
+
+ttnn port of ``DeepseekV4SparseMoeBlock`` and the pieces it is built from -- the learned
+``DeepseekV4TopKRouter``, the frozen ``DeepseekV4HashRouter`` and the ``DeepseekV4MLP``
+shared expert -- from ``modular_deepseek_v4.py``. The routed FFN is not a per-expert host
+loop: it is one ``fused_experts`` device op that picks the hit experts on device.
+
+Letters (the package convention; activations here are rank 4 with ``S == 1``, weights rank 2):
+``B`` users decoded per step; ``T`` the token rows an activation's *shard* holds -- its
+HEIGHT_SHARDED shard height, 1 on the single-token decode path, and *not* the reference's
+``T`` (``B*S`` flattened tokens); ``D`` hidden_size; ``E`` num_local_experts; ``I``
+moe_intermediate_size; ``k`` num_experts_per_tok; ``K`` / ``N`` matmul in/out features.
+"""
+
 from typing import NamedTuple, Optional
 
 import ttnn
@@ -20,53 +34,27 @@ from .layers import Linear, LinearDecode, _core_grid_contains
 from .system_config import active_system_config
 from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
-# ---------------------------------------------------------------------------- #
-# DeepSeek-V4-Flash Mixture-of-Experts (prefill)
-#
-# ttnn port of ``DeepseekV4SparseMoeBlock`` (and its ``DeepseekV4TopKRouter`` /
-# ``DeepseekV4Experts`` / ``DeepseekV4MLP`` shared expert) from
-# ``modular_deepseek_v4.py``. Scope is the standard top-k routed MoE block (the
-# ``mlp_layer_types == "moe"`` path); the static ``hash_moe`` router is out of
-# scope here (it only swaps the *which-experts* selection for a frozen
-# ``tid2eid[input_ids]`` lookup, leaving the expert / shared-expert compute
-# identical).
-#
-# Layout conventions, matching the reference:
-#   B = batch, S = seq length, T = B*S flattened tokens, H = hidden_size,
-#   E = num routed experts, I = moe_intermediate_size, k = num_experts_per_tok.
-#
-# The reference dispatches each token to its top-k experts and loops over the
-# *hit* experts. We instead run a *dense* batched compute: every expert is
-# evaluated for every token, then masked by the per-token routing weight (0 for
-# unselected experts) and summed across the expert axis. This is the standard
-# small-mesh ttnn MoE shape (cf. ``models/demos/gpt_oss``); it is mathematically
-# identical to the gather/scatter reference because unselected experts get a
-# routing weight of exactly 0.
-# ---------------------------------------------------------------------------- #
-
 
 class SparseRouting(NamedTuple):
     """A routing decision in the form ``fused_experts`` consumes it.
 
-    Exactly one of ``ranking`` / ``indices`` says *which* experts were selected, and both
-    are handed to the op untouched -- it does the normalize/scale itself. Widening this
-    into a dense ``[1,1,T,E]`` weight row (scatter a one-hot mask, mask the scores, sum,
-    divide, scale, relayout -- nine device ops) only to have the op's first kernel scan
-    those E columns straight back down to k values is pure round-tripping.
+    Exactly one of ``ranking`` / ``indices`` says *which* experts were selected, and both are
+    handed to the op untouched -- it does the normalize/scale itself. Widening this into a dense
+    ``[1,1,T,E]`` weight row (scatter a one-hot mask, mask the scores, sum, divide, scale,
+    relayout -- nine device ops) would only have the op's first kernel scan those E columns
+    straight back down to k values.
 
-    ``scores``: ``[1,1,T,E]`` bf16, the *unbiased* per-expert scores -- the values that
-    become the weights. TILE, or (T == 1) ROW_MAJOR.
+    ``scores``: ``[1,1,T,E]`` bf16, the *unbiased* per-expert scores -- the values that become
+    the weights. TILE, or (``T == 1``) ROW_MAJOR, the stick a hub-mode gate emits.
 
     ``ranking``: ``[1,1,T,E]`` bf16, the row to rank on -- normally
-    ``scores + e_score_correction_bias``. The expert op top-k's it on device, on the
-    leader core that already reads the row for the weights, so the router needs neither a
-    ``ttnn.topk`` launch nor a DRAM round-trip of its id output. This is what the learned
-    router fills in.
+    ``scores + e_score_correction_bias``. Filled by the learned router: the expert op top-k's it
+    on device, on the leader core that already reads the row for the weights, so the router needs
+    neither a ``ttnn.topk`` launch nor a DRAM round-trip of its id output.
 
-    ``indices``: ``[1,1,T,k]`` TILE, the already-chosen ids (bf16, since that is the only
-    dtype ``ttnn.embedding`` gathers), which the op reads instead of ranking. This is what
-    the hash router fills in, whose selection is a frozen table lookup rather than a
-    top-k.
+    ``indices``: ``[1,1,T,k]`` TILE, the already-chosen ids (bf16, the only dtype
+    ``ttnn.embedding`` gathers), which the op reads instead of ranking. Filled by the hash router,
+    whose selection is a frozen table lookup rather than a top-k.
     """
 
     scores: ttnn.Tensor
@@ -74,28 +62,24 @@ class SparseRouting(NamedTuple):
     ranking: Optional[ttnn.Tensor] = None
 
 
-# Guards the per-token renormalize against an all-zero score row. Configured by
-# ``moe.routing_eps`` in the system profile.
-
-
 class DeepSeekV4MLP(DeepSeekV4Module):
     """Dense SwiGLU MLP (matches ``DeepseekV4MLP`` / ``LlamaMLP``).
 
-    Used as the always-on *shared expert*: ``down(silu(gate(x)) * up(x))`` with
-    no clamp (the routed experts clamp; the shared expert does not).
+    Used as the always-on *shared expert*: ``down(silu(gate(x)) * up(x))`` with no clamp
+    (the routed experts clamp; the shared expert does not).
 
-    ``use_prefetcher=True`` runs the three projections as :class:`LinearDecode`. All
-    three are full-width so they can consume a ROW_MAJOR HEIGHT_SHARDED replica of
-    the tokens (the decode all-gather). Gate and up sit on q_a's 32-core ring and
-    emit ROW_MAJOR WIDTH_SHARDED ``[T, I]`` (64 columns per core), which is the
-    K-sharding down wants of its activation. Down stays on the shared 64-core decode
-    GCB. Under TP, gate and up cannot join that 32-core ring (``N = I/TP`` is only 8
-    cores) and a private GCB on those cores collides with ``fused_hyperconnection``
-    static CBs, so they use the transient DRAM->L1 copy. That path is decode shaped:
-    it width-shards the tokens over one tile-row, which caps it at the 32 rows a tile
-    holds, so a prefill-width input has to use the default ``ttnn.linear`` path. It
-    also needs ``config``, to check the fixed weight layouts against the shapes this
-    model wants.
+    ``use_prefetcher=True`` runs the three projections as :class:`LinearDecode`. Gate and up are
+    full-width (hub mode) on q_a's 32-core ring and consume a ROW_MAJOR HEIGHT_SHARDED replica of
+    the tokens (the decode all-gather); they emit ROW_MAJOR WIDTH_SHARDED ``[T, I]`` (64 columns
+    per core), which is the K-sharding down wants of its activation. Down stays on the shared
+    64-core decode GCB.
+
+    Under TP, gate and up cannot join that 32-core ring (``N = I/TP`` is only 8 cores) and a
+    private GCB on those cores collides with ``fused_hyperconnection`` static CBs, so they take a
+    transient DRAM->L1 copy instead -- that cut is live at TP4. The copy path is decode shaped: it
+    width-shards the token rows over one tile row, which caps it at the 32 rows a tile holds, so a
+    wider input cannot use it. ``config`` is needed either way, to check the fixed weight layouts
+    against the shapes this model wants.
     """
 
     def __init__(
@@ -110,12 +94,21 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         prefetch_buffers: Optional[dict] = None,
         tp_size: int = 1,
     ):
+        """Build the shared expert's three projections.
+
+        ``weights`` holds the checkpoint's ``<prefix>.gate_proj`` / ``up_proj`` / ``down_proj``
+        ``.weight`` torch tensors ``[I, D]`` / ``[I, D]`` / ``[D, I]`` (``[I/TP, D]`` and
+        ``[D, I/TP]`` per rank under TP). ``use_prefetcher=False`` builds them as plain
+        :class:`Linear` weights; otherwise as :class:`LinearDecode`, where ``prefetch_buffers``
+        must be the mapping shared by every layer on the device -- a fresh dict per layer would
+        build a GCB per layer and overflow the DRISC senders' state zone.
+        """
         cache = _as_cache(cache)
         self.device = device
         self.use_prefetcher = use_prefetcher
         self.tp_size = tp_size
-        # After transpose, gate/up are ``[H, I]`` (column-parallel: shard N) and down
-        # is ``[I, H]`` (row-parallel: shard K).
+        # After the transpose the weights are matmul-shaped: gate/up ``[D, I]``
+        # (column-parallel: shard N) and down ``[I, D]`` (row-parallel: shard K).
         gate_up_mapper = ttnn.ShardTensorToMesh(device, dim=1) if tp_size > 1 else None
         down_mapper = ttnn.ShardTensorToMesh(device, dim=0) if tp_size > 1 else None
         tp_tag = f".tp{tp_size}" if tp_size > 1 else ""
@@ -216,13 +209,14 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         )
 
     def prefetch_weights(self):
-        """Stage the three projection weights ahead of the :meth:`forward` that uses them.
+        """Stage the three ``[D, I]`` / ``[D, I]`` / ``[I, D]`` projection weights ahead of the
+        :meth:`forward` that uses them.
 
-        Queued gate, up, then down. Gate/up stream through q_a's 32-receiver FIFO
-        (after q_a and CSA); down uses the shared 64-core GCB. Under TP, gate/up are
-        DRAM->L1 copies. Queue order on each ring still has to match :meth:`forward`.
-        The attention block's weights precede down on the shared buffer, since
-        attention runs first in the decoder layer.
+        Queued gate, up, then down: gate/up stream through q_a's 32-receiver FIFO (queued after
+        q_a and CSA), down through the shared 64-core GCB. Under TP, gate/up are DRAM->L1 copies.
+        Queue order on each ring has to match consume order, here and against the attention block
+        (whose weights precede down on the shared buffer, because attention runs first in the
+        decoder layer).
         """
         if not self.use_prefetcher:
             return
@@ -231,12 +225,12 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         self.down_proj.fetch_weights()
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """``x`` ``[1, 1, T, H]`` (tokens packed onto the row axis) -> ``[1, 1, T, H]``.
+        """``x`` ``[1, 1, T, D]`` -> ``[1, 1, T, D]`` in the same layout.
 
-        The packed form is what ``matmul_decode`` needs on the prefetched path -- it reads the
-        row axis as the tokens and a leading rank-4 batch as separate matmuls, so per-user rows
-        would decode as T one-token matmuls -- and it is what the caller already built for the
-        router, so nothing is reshaped here.
+        ``T`` is the packed-token count the matmul sees -- the shard height of the replica, one row
+        per user of the step -- which is the form ``matmul_decode`` needs on the prefetched path
+        and the form the caller already built for the router, so nothing is reshaped here. A
+        per-user leading rank-4 batch would instead decode as one matmul per user.
         """
         if isinstance(self.gate_proj, LinearDecode) and self.gate_proj.use_rm_hs:
             if not self.gate_proj._is_replicated_rm_hs(x):
@@ -251,7 +245,13 @@ class DeepSeekV4MLP(DeepSeekV4Module):
 
 
 def _router_gate_activation(gate, x_flat: ttnn.Tensor) -> ttnn.Tensor:
-    """Match ``x_flat`` to a ``LinearDecode`` gate's ``use_rm_hs`` contract."""
+    """Match ``x_flat`` ``[1,1,T,D]`` to a ``LinearDecode`` gate's ``use_rm_hs`` contract.
+
+    Returned as-is when it is already a ROW_MAJOR HEIGHT_SHARDED replica covering the gate's B
+    cores, otherwise replicated onto them (:meth:`LinearDecode.to_replicated_rm_hs_activation`);
+    a ``use_rm_hs=False`` gate gets tiled WIDTH_SHARDED A instead, and a plain :class:`Linear`
+    gate is handed ``x_flat`` untouched.
+    """
     if not isinstance(gate, LinearDecode):
         return x_flat
     if gate.use_rm_hs:
@@ -273,14 +273,14 @@ def _make_router_gate(
     prefetch_buffers: Optional[dict] = None,
     weight_dtype: ttnn.DataType = ttnn.bfloat16,
 ):
-    """The learned ``[H, E]`` router projection, as :class:`Linear` or :class:`LinearDecode`.
+    """The learned ``[D, E]`` router projection, as :class:`Linear` or :class:`LinearDecode`.
 
-    Prefill keeps ``ttnn.linear``. Decode runs ``matmul_decode`` in hub mode: the gate is
-    full-width on 8 cores (``n_blocks=8``, one output tile per core), so it consumes the
-    decode all-gather replica (ROW_MAJOR HEIGHT_SHARDED A) where it sits instead of
-    unreplicating it through DRAM and re-sharding it -- that round trip was four extra
-    device ops per step. The 8-receiver cut cannot join the shared 64-receiver ring or
-    ``HC_FN_GCB``, so it streams through :data:`ROUTER_GATE_GCB`.
+    ``use_prefetcher=False`` (the env-gated MTP stack) keeps ``ttnn.linear``. Decode runs
+    ``matmul_decode`` in hub mode: the gate is full-width on 8 cores (``n_blocks=8``, one output
+    tile per core), so it consumes the decode all-gather replica (ROW_MAJOR HEIGHT_SHARDED A)
+    where it sits instead of unreplicating it through DRAM and re-sharding it -- that round trip
+    was four extra device ops per step. The 8-receiver cut cannot join the shared 64-receiver ring
+    or ``HC_FN_GCB``, so it streams through :data:`ROUTER_GATE_GCB`.
     """
     if not use_prefetcher:
         return Linear(weights["gate.weight"], device, cache.file("gate"))
@@ -316,15 +316,13 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
     """ttnn port of ``DeepseekV4TopKRouter``.
 
     ``sqrtsoftplus`` of the gate logits gives per-expert scores; the bias-corrected row
-    ``scores + e_score_correction_bias`` *is* the routing decision this module emits, and
-    the top-k is taken inside ``fused_experts`` (see :class:`SparseRouting`). That removes
-    a ``ttnn.topk`` -- and the DRAM round-trip of its id output -- from every step, and the
-    op ranks on the row it has to read anyway for the weights, on the same core that
-    broadcasts the winners.
+    ``scores + e_score_correction_bias`` *is* the routing decision this module emits, and the
+    top-k is taken inside ``fused_experts`` (see :class:`SparseRouting`). That removes a
+    ``ttnn.topk`` -- and the DRAM round-trip of its id output -- from every step: the op ranks on
+    the row it has to read anyway for the weights, on the core that broadcasts the winners.
 
-    The renormalize-and-scale tail the reference applies to the selected scores happens
-    inside ``fused_experts``, on the k values per token it already has to read, rather
-    than here across a dense E-wide row.
+    The reference's renormalize-and-scale tail likewise runs inside ``fused_experts``, on the k
+    values per token it already reads, rather than here across a dense E-wide row.
     """
 
     def __init__(
@@ -337,11 +335,16 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
         prefetch_buffers: Optional[dict] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
     ):
+        """``weights["gate.weight"]`` is the checkpoint's ``[E, D]`` projection and
+        ``weights["gate.e_score_correction_bias"]`` the ``[E]`` bias, loaded as a
+        ``[1,1,1,E]`` ROW_MAJOR row -- the layout the ROW_MAJOR score row it is added to uses.
+        ``use_prefetcher`` / ``prefetch_buffers`` select and feed the :class:`LinearDecode` gate
+        of :func:`_make_router_gate`.
+        """
         self.device = device
         self.num_experts = config.num_local_experts
-        # The top-k itself is applied inside ``fused_experts`` now (on the ranking row this
-        # module emits); kept here because it is the router's k and the hash router exposes
-        # the same attribute.
+        # The top-k is applied inside ``fused_experts`` now, on the row this module emits; the
+        # attribute stays because it is the router's k (and the hash router exposes the same one).
         self.top_k = config.num_experts_per_tok
         self.routed_scaling_factor = config.routed_scaling_factor
         cache = _as_cache(cache)
@@ -365,56 +368,57 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
         )
 
     def prefetch_weights(self):
-        """Stage the gate weight ahead of the decode that reads it.
+        """Stage the ``[D, E]`` gate weight ahead of the decode that reads it.
 
-        The gate streams through :data:`ROUTER_GATE_GCB` (hub mode needs a full-width
-        cut on 8 receivers), so this queues that ring rather than copying DRAM->L1.
+        The gate streams through :data:`ROUTER_GATE_GCB` (hub mode needs a full-width cut on 8
+        receivers), so this queues that ring rather than copying DRAM->L1.
         """
         if isinstance(self.gate, LinearDecode):
             self.gate.fetch_weights()
 
     def _scores(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
-        """Per-expert ``sqrtsoftplus`` gate scores ``[1,1,T,E]``."""
+        """Per-expert ``sqrtsoftplus`` gate scores ``[1,1,T,E]``.
+
+        ROW_MAJOR and one row per core on a hub-mode (``use_rm_hs``) gate -- the stick the fused
+        expert op reads directly, so nothing tilizes it -- and TILE on the ``ttnn.linear`` path.
+        """
         x = _router_gate_activation(self.gate, x_flat)
         return ttnn.sqrt(ttnn.softplus(self.gate(x)))
 
     def forward(self, x_flat: ttnn.Tensor) -> SparseRouting:
-        """``x_flat`` is ``[1, 1, T, H]``; returns the ranking row and the score row.
+        """``x_flat`` ``[1,1,T,D]`` ROW_MAJOR -> the ``[1,1,T,E]`` score and ranking rows.
 
-        Trace-safe as it stands, so prefill and the captured decode share this one path:
-        every op here allocates its own output and nothing is host-initialised.
+        Trace-safe as it stands, so prefill and the captured decode share this one path: every op
+        allocates its own output and nothing is host-initialised.
         """
         assert x_flat.layout == ttnn.ROW_MAJOR_LAYOUT, "x_flat must be in row-major layout"
         scores = self._scores(x_flat)  # [1, 1, T, E]
 
-        # Ranked on the bias-corrected scores, weighted by the uncorrected ones -- which is
-        # why both rows travel to the expert op instead of just the winners' values. The op
-        # top-k's `biased` on device and gathers `scores` at the winners, so there is no
-        # ttnn.topk here and no id tensor to round-trip through DRAM.
+        # Ranked on the bias-corrected scores, weighted by the uncorrected ones -- which is why
+        # both rows travel to the expert op instead of just the winners' values. The op top-k's
+        # `biased` on device and gathers `scores` at the winners, so there is no ttnn.topk here
+        # and no id tensor to round-trip through DRAM.
         biased = ttnn.add(scores, self.e_score_correction_bias)
         _profile(self.device)
         return SparseRouting(scores=scores, ranking=biased)
 
 
 class DeepSeekV4HashRouter(DeepSeekV4Module):
-    """ttnn port of ``DeepseekV4HashRouter`` (the first ``num_hash_layers`` MoE
-    layers, paper §2.1).
+    """ttnn port of ``DeepseekV4HashRouter`` (the first ``num_hash_layers`` MoE layers,
+    paper §2.1).
 
-    Expert *selection* is a frozen ``tid2eid[input_ids]`` lookup — a fixed
-    token-id -> expert-id table — rather than a learned top-k argmax. The learned
-    gate still produces the per-expert ``sqrtsoftplus`` scores that weight the
-    selected experts; only the *which-experts* decision is static. The output is the
-    same :class:`SparseRouting` contract the learned router emits -- it fills
-    ``indices`` from the table lookup where the learned router fills ``ranking`` -- so
-    both feed the expert compute through one contract.
+    Expert *selection* is a frozen ``tid2eid[input_ids]`` lookup -- a fixed token-id -> expert-id
+    table -- rather than a learned top-k argmax; the learned gate still produces the per-expert
+    ``sqrtsoftplus`` scores that weight the selected experts. The output is the same
+    :class:`SparseRouting` contract the learned router emits -- ``indices`` from the table lookup
+    where that one fills ``ranking`` -- so both feed the expert compute through one contract.
 
-    The selection is gathered *fully on device* by embedding the token id in the frozen
-    ``tid2eid`` table, which is already the ``[vocab, k]`` list of expert ids the sparse
-    contract wants — no host-side scatter and no per-step host->device copy. It is held as
-    bfloat16 because that is the only dtype :func:`ttnn.embedding` gathers from; every
-    expert id is exact there (E <= 256), and ``fused_experts`` reads bf16-encoded ids
-    directly. The table is ``[vocab, k]`` (1.5 MB at a 128k vocab), not a
-    ``[vocab, E]`` one-hot (64 MB).
+    The selection is gathered *fully on device* by embedding the token id in the frozen table,
+    which is already the ``[V, k]`` list of expert ids the sparse contract wants: no host-side
+    scatter and no per-step host->device copy. The table is held as bfloat16 because that is the
+    only dtype :func:`ttnn.embedding` gathers from; every expert id is exact there (E <= 256 is
+    asserted) and ``fused_experts`` reads bf16-encoded ids directly. It is ``[V, k]`` (1.5 MB at a
+    128k vocab), not a ``[V, E]`` one-hot (64 MB).
     """
 
     def __init__(
@@ -427,6 +431,11 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
         prefetch_buffers: Optional[dict] = None,
         weight_dtype: ttnn.DataType = ttnn.bfloat16,
     ):
+        """``weights["gate.tid2eid"]`` is the frozen ``[V, k]`` int64 token-id -> expert-id table,
+        uploaded as the bf16 ROW_MAJOR device tensor ``eid_table`` (host-side only, so it is
+        always read, cache or not). The learned gate and the ``[E]`` correction bias are built
+        exactly as in :class:`DeepSeekV4TopKRouter`.
+        """
         self.device = device
         self.num_experts = config.num_local_experts
         self.top_k = config.num_experts_per_tok
@@ -441,8 +450,6 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
             prefetch_buffers=prefetch_buffers,
             weight_dtype=weight_dtype,
         )
-        # tid2eid [vocab, top_k]: frozen token-id -> expert-id table (host-side,
-        # no tile cache) -- always materialise.
         tid = weights["gate.tid2eid"]
         tid = tid() if callable(tid) else tid
         self.tid2eid = tid.long()
@@ -455,35 +462,44 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
         )
 
     def prefetch_weights(self):
-        """Stage the gate weight ahead of the decode that reads it.
+        """Stage the ``[D, E]`` gate weight ahead of the decode that reads it.
 
-        The gate streams through :data:`ROUTER_GATE_GCB` (hub mode needs a full-width
-        cut on 8 receivers), so this queues that ring rather than copying DRAM->L1.
+        The gate streams through :data:`ROUTER_GATE_GCB` (hub mode needs a full-width cut on 8
+        receivers), so this queues that ring rather than copying DRAM->L1.
         """
         if isinstance(self.gate, LinearDecode):
             self.gate.fetch_weights()
 
     def _scores(self, x_flat: ttnn.Tensor) -> ttnn.Tensor:
-        """Per-expert ``sqrtsoftplus`` gate scores (shared head of both routing paths).
+        """Per-expert ``sqrtsoftplus`` gate scores ``[1,1,T,E]`` (shared head of both paths).
 
-        ROW_MAJOR and one row per core, the stick a hub-mode gate emits; the fused-expert
-        op reads that form directly (see ``fused_experts_device_operation.cpp``), so
-        nothing tilizes it on this path.
+        ROW_MAJOR and one row per core, the stick a hub-mode gate emits; the fused-expert op
+        reads that form directly (see ``fused_experts_device_operation.cpp``), so nothing tilizes
+        it on this path.
         """
         return ttnn.sqrt(ttnn.softplus(self.gate(_router_gate_activation(self.gate, x_flat))))
 
     def _select(self, token_in: ttnn.Tensor, t: int) -> ttnn.Tensor:
-        """Gather the ``[1,1,T,k]`` selected expert ids for on-device token ids ``[1,T]``."""
+        """Gather the selected expert ids for on-device token ids.
+
+        ``token_in`` ``[1,B]`` -> ``[1,1,t,k]`` bf16 TILE, ``t`` being the row count
+        :meth:`forward_static` derived.
+        """
         ids = ttnn.embedding(token_in, self.eid_table, layout=ttnn.TILE_LAYOUT)  # [1, T, k] bf16
         return ttnn.reshape(ids, [1, 1, t, self.top_k])
 
     def forward_static(self, x_flat: ttnn.Tensor, token_in: ttnn.Tensor) -> SparseRouting:
-        """Trace-safe, fully on-device hash routing: ``token_in`` ``[1,T]`` are the
-        (persistent, on-device) token ids, one per user of a batched step.
+        """Trace-safe, fully on-device hash routing.
+
+        ``token_in`` ``[1,B]`` are the persistent on-device token ids, one per user of the step,
+        and ``x_flat`` ``[1,1,T,D]`` the routed activation; the returned :class:`SparseRouting`
+        carries the ``[1,1,T,E]`` scores and the ``[1,1,T,k]`` table-looked-up ids. ``T`` is 1 for
+        a ROW_MAJOR HEIGHT_SHARDED (replica) activation -- a replica holds one token row per core
+        -- and ``x_flat.shape[2]`` otherwise.
 
         The only entry point. A caller holding host ids uploads them itself (see
-        :meth:`DeepSeekV4DecoderLayer.decode`), which keeps the host copy out of
-        anything a trace captures.
+        :meth:`DeepSeekV4DecoderLayer.decode`), which keeps the host copy out of anything a trace
+        captures.
         """
         if (
             x_flat.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -497,16 +513,16 @@ class DeepSeekV4HashRouter(DeepSeekV4Module):
 
 
 # --------------------------------------------------------------------------- #
-# fused_experts (single-op decode path)
+# fused_experts (the routed-expert path)
 #
-# ``ttnn.experimental.deepseek.moe.fused_experts`` runs the whole routed-expert
-# FFN (gate_up + SwiGLU + down + routing-weighted accumulation) for one token in
-# a single device op. Weights are DRAM ND-sharded 64 ways (one shard per original
-# 8x8 core); H must be exactly ``_FUSED_HIDDEN`` (64 * 2 * 32). With 6 selected
-# experts the op runs on a 12x8 (96-core) grid, 16 cores per expert. It is
-# decode-native (``T == 1``). The weights must be DRAM ND-sharded with one shard
-# per original compute core (see below), a layout distinct from the plain matmul
-# weights used by the prefill loop, so the decode path keeps its own copy.
+# ``ttnn.experimental.deepseek.moe.fused_experts`` runs the whole routed-expert FFN
+# (gate_up + SwiGLU + down + routing-weighted accumulation) in a single device op,
+# selecting the hit experts on device from the router's ranking row or its ids. The
+# op is decode-native -- one token row, ``T == 1`` -- and prefill replays that per
+# token. Its weights are DRAM ND-sharded, one shard per original 8x8 compute core,
+# and its hidden size is exactly :func:`_fused_hidden` (64 * 2 * 32 == 4096 on the
+# default 64-core grid). With 6 selected experts the op runs on a 12x8 (96-core)
+# grid, 16 cores per expert.
 # --------------------------------------------------------------------------- #
 # The tile is a hardware invariant, unlike the core count and bank count, which are
 # ``moe.fused_num_cores`` / ``moe.fused_dram_banks`` in the system profile.
@@ -521,17 +537,18 @@ _FUSED_SERIAL_GRID_X = 8
 
 
 def _fused_hidden(num_cores: int) -> int:
-    """The only hidden size the op accepts: each of ``num_cores`` cores owns exactly
-    2 output tiles of the H row (4096 on a 64-core grid)."""
+    """The only hidden size (``D``) the op accepts: each of ``num_cores`` cores owns
+    exactly 2 output tiles of the hidden row (4096 on the 64-core grid)."""
     return num_cores * 2 * _FUSED_TILE
 
 
 def _fused_compute_core_range_set(top_k: int, device) -> ttnn.CoreRangeSet:
-    """Cores ``fused_experts`` occupies for ``top_k`` selected experts.
+    """Cores ``fused_experts`` occupies for ``top_k`` selected experts, as a ``CoreRangeSet``.
 
-    The replica ``all_gather_for_matmul`` multicasts has to cover every one of these:
-    the op aliases ``cb_input`` over each core's shard and will not broadcast a row
-    that is already supposed to be local.
+    The ``[(0,0) .. (11,7)]`` rectangle (12x8, one expert per 2x8 column pair) on the 6-expert
+    path, ``[(0,0) .. (7,7)]`` otherwise. The replica ``all_gather_for_matmul`` multicasts has to
+    cover every one of these: the op aliases ``cb_input`` over each core's shard and will not
+    broadcast a row that is already supposed to be local.
     """
     grid = device.compute_with_storage_grid_size()
     parallel = top_k == _FUSED_PARALLEL_EXPERTS and grid.x >= _FUSED_PARALLEL_GRID_X and grid.y >= _FUSED_GRID_Y
@@ -540,12 +557,12 @@ def _fused_compute_core_range_set(top_k: int, device) -> ttnn.CoreRangeSet:
 
 
 def _swiglu_cols_per_core(intermediate: int, num_cores: Optional[int] = None) -> int:
-    """SwiGLU output columns in each DRAM shard, i.e. the I dim spread over shards.
+    """SwiGLU output columns in each DRAM shard, i.e. the ``I`` dim spread over shards.
 
-    One 32-column I-tile per shard at I == 2048, and still one tile when TP slices I
-    below 2048, so gate_up stays DRAM-busy on every NoC port. Mirrors
-    ``swiglu_tiles_per_shard_for`` in the program factory. On the 6-expert path those
-    shards are spread across the 16 cores of each expert group (4 shards/core at
+    One 32-column I-tile per shard at I == 2048, and still one tile when TP slices I below 2048,
+    so gate_up stays DRAM-busy on every NoC port (rather than a few cores covering all of I while
+    the rest idle). Mirrors ``swiglu_tiles_per_shard_for`` in the program factory. On the 6-expert
+    path those shards are spread across the 16 cores of each expert group (4 shards/core at
     I=2048, 1 at I=512).
     """
     if num_cores is None:
@@ -555,7 +572,7 @@ def _swiglu_cols_per_core(intermediate: int, num_cores: Optional[int] = None) ->
 
 
 def _tp_cluster_axis(device: ttnn.MeshDevice) -> int:
-    """Mesh axis that holds the TP group. A 1xN submesh shards along axis 1."""
+    """Mesh axis that holds the TP group: 1 for a 1xN submesh, else 0."""
     shape = tuple(device.shape)
     if len(shape) == 2 and shape[1] > 1:
         return 1
@@ -563,10 +580,10 @@ def _tp_cluster_axis(device: ttnn.MeshDevice) -> int:
 
 
 def _pack_gate_up_for_tp(gate_up: torch.Tensor, tp_size: int) -> torch.Tensor:
-    """Reorder ``[2I, H]`` so rank ``r`` owns ``cat(gate[r], up[r])`` along dim 0.
+    """Reorder a host ``[2I, D]`` gate_up so rank ``r`` owns ``cat(gate[r], up[r])`` along dim 0.
 
-    Naive sharding of ``[gate | up]`` would split mid-gate on later ranks. After this
-    pack, ``ShardTensorToMesh(dim=0)`` gives each chip ``[2 * I/tp, H]``.
+    Naive sharding of ``[gate | up]`` would split mid-gate on later ranks. After this pack,
+    ``ShardTensorToMesh(dim=0)`` gives each chip ``[2 * I/TP, D]``.
     """
     two_i, hidden = gate_up.shape
     intermediate = two_i // 2
@@ -581,11 +598,11 @@ def _pack_gate_up_for_tp(gate_up: torch.Tensor, tp_size: int) -> torch.Tensor:
 
 
 def _interleave_gate_up_tp(gate_up: torch.Tensor, tp_size: int, swiglu_cols: int) -> torch.Tensor:
-    """Per-rank ``fused_experts`` interleave of a packed ``[2I, H]`` gate_up.
+    """``[2I, D]`` host gate_up -> the block-interleaved, per-rank-major ``[D, 2I]`` weight.
 
-    Each rank's ``[H, 2*I_local]`` is interleaved independently (the op only sees
-    ``I_local``), then concatenated on the column axis so ``ShardTensorToMesh(dim=1)``
-    yields one rank's interleaved weight.
+    Each rank's ``[D, 2*I_local]`` is interleaved independently (the op only ever sees
+    ``I_local`` -- see :func:`_interleave_gate_up`), then the ranks are concatenated on the column
+    axis so ``ShardTensorToMesh(dim=1)`` yields exactly one rank's interleaved weight.
     """
     packed = _pack_gate_up_for_tp(gate_up, tp_size)
     two_i, _ = packed.shape
@@ -598,7 +615,11 @@ def _interleave_gate_up_tp(gate_up: torch.Tensor, tp_size: int, swiglu_cols: int
 
 
 def _tp_all_reduce(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
-    """Sum TP partials (row-parallel down-proj) back to a replicated ``[... H]``."""
+    """Sum the TP partials (row-parallel down-proj) back to a replicated ``[..., D]``.
+
+    ``tensor`` is the DRAM-interleaved ``[1,1,T,D]`` partial from the fused expert op; the result
+    is the same shape, replicated across the TP axis (ring all-reduce, both links).
+    """
     return ttnn.all_reduce(
         tensor,
         cluster_axis=_tp_cluster_axis(device),
@@ -608,12 +629,11 @@ def _tp_all_reduce(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
 
 
 def _interleave_gate_up(w: torch.Tensor, block: int) -> torch.Tensor:
-    """Permute a ``[K, 2I]`` gate_up weight into per-core ``[gate_block | up_block]``
-    order so each ``[K, 2*block]`` DRAM shard holds a core's gate columns followed
-    by its paired up columns (what ``fused_experts`` reads in a single NoC read).
+    """Permute a host ``[D, 2I]`` gate_up weight into per-core ``[gate_block | up_block]`` order.
 
-    ``gate = w[:, :I]``, ``up = w[:, I:]``; output column ``c*2*block + h*block + t``
-    maps to ``w[:, h*I + c*block + t]``.
+    Each ``[D, 2*block]`` DRAM shard then holds a core's gate columns followed by its paired up
+    columns, which is what ``fused_experts`` reads in a single NoC read. ``gate = w[:, :I]``,
+    ``up = w[:, I:]``; output column ``c*2*block + h*block + t`` maps to ``w[:, h*I + c*block + t]``.
     """
     k, two_i = w.shape
     intermediate = two_i // 2
@@ -622,8 +642,14 @@ def _interleave_gate_up(w: torch.Tensor, block: int) -> torch.Tensor:
 
 
 def _fused_nd_dram_config(rows: int, cols: int, shard_width: int, dram_banks: int) -> ttnn.MemoryConfig:
-    """DRAM ND-shard config: ``rows x shard_width`` shards round-robined over the
-    DRAM banks (one shard per compute core), as ``fused_experts`` expects."""
+    """DRAM ND-shard config with one ``[rows, shard_width]`` shard per compute core.
+
+    Used for the ``fused_experts`` weights: gate_up ``[D, 2*swiglu_cols]`` per core, down
+    ``[I, D/num_cores]``. The shards are distributed ``ROUND_ROBIN_1D`` over ``dram_banks``
+    (shard ``p`` sits on bank ``p % dram_banks``), and the op fetches each core's slice by its
+    row-major index, so the shard order has to be the core order -- which is what
+    ``_interleave_gate_up`` records into the host weight.
+    """
     assert cols % shard_width == 0, f"last dim {cols} must divide into shards of {shard_width}"
     dram_core_range_set = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, 0)) for bank in range(dram_banks)]
@@ -648,12 +674,14 @@ def _load_fused_weight(
     dtype: ttnn.DataType = ttnn.bfloat4_b,
     mesh_mapper=None,
 ) -> ttnn.Tensor:
-    """Load a ``fused_experts`` weight as a DRAM ND-sharded tensor.
+    """Load a ``fused_experts`` weight as a DRAM ND-sharded TILE tensor.
 
-    The tile cache cannot round-trip an ND-shard memory config (a cache *hit*
-    reloads the tensor with its plain serialized spec), so the (interleaved)
-    weight is cached in standard interleaved DRAM under its own cache entry and
-    then resharded to the ND-shard layout on device.
+    ``tensor`` is the host (interleaved or transposed) weight -- ``[D, 2I]`` gate_up, ``[I, D]``
+    down -- or ``None`` on a verified cache hit, and ``nd_config`` the ND-shard spec from
+    :func:`_fused_nd_dram_config`. The tile cache cannot round-trip an ND-shard memory config (a
+    cache *hit* reloads the tensor with its plain serialized spec), so the weight is cached in
+    standard interleaved DRAM under its own cache entry and resharded to the ND-shard layout on
+    device.
     """
     sharded = ttnn.as_tensor(
         tensor,
@@ -670,30 +698,28 @@ def _load_fused_weight(
 class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
     """Routed-experts compute via the single-op ``fused_experts`` kernel.
 
-    The whole routed-expert FFN for one token (gate_up + SwiGLU + down +
-    routing-weighted accumulation) runs in a single ``fused_experts`` device op.
-    The op is hard-wired to the real V4-Flash sizes -- down weights 64-way
-    sharded along H (each shard 2 output tiles), so ``H`` must be exactly
-    ``_FUSED_HIDDEN`` (``64 * 2 * 32 == 4096``). Gate_up is one I-tile per
-    DRAM shard, so a TP-sliced ``I`` (e.g. 512) yields fewer, still-full
-    16-core groups rather than idle cores. With 6 selected experts compute
-    uses a 12x8 grid (16 cores per expert).
-    Both prefill and decode go through the op: it is natively single-token
-    (``T == 1``), so **prefill is computed by decode** -- the model replays this
-    path once per token.
+    The whole routed-expert FFN for one token (gate_up + SwiGLU + down + routing-weighted
+    accumulation) runs in a single ``fused_experts`` device op, which picks the hit experts on
+    device from the router's row or ids. The op is hard-wired to the real V4-Flash sizes: down
+    weights are sharded 64 ways along the hidden dim (2 output tiles each), so ``D`` must be
+    exactly :func:`_fused_hidden` (``64 * 2 * 32 == 4096``), and gate_up is one I-tile per DRAM
+    shard, so a TP-sliced ``I`` (e.g. 512) yields fewer, still-full 16-core groups rather than
+    idle cores. With 6 selected experts compute uses a 12x8 grid (16 cores per expert).
 
-    Every expert is kept resident on device as DRAM ND-sharded weights (one shard
-    per compute core), in low precision (``BFloat4_b`` by default; ~3.5 GB for the
-    256 experts, a natural match for the MXFP4 checkpoint). At init it pulls each
-    expert's dequantized weights from the host ``provider`` once, permutes the
-    gate_up into the op's interleaved per-core layout, and uploads the ND-sharded
-    tensors; ``forward`` then runs purely on device with no per-step host
-    transfers beyond reading the (tiny) routing weights to pick the hit experts.
+    The op is natively single-token (``T == 1``), so **prefill is computed by decode**: the model
+    replays this path once per token, and :meth:`forward` asserts the shard height is 1.
 
-    ``provider(expert_idx) -> (gate_up [2I, H], down [H, I])`` returns host
-    torch tensors (the HF packed layout: ``gate_up`` is ``cat([w_gate, w_up])``).
-    Experts with zero total routing weight are skipped (matching the reference's
-    ``hit`` set), so only the experts some token actually selected are computed.
+    Every expert is kept resident on device as DRAM ND-sharded weights (one shard per compute
+    core) in low precision (``BFloat4_b`` by default; ~3.5 GB for the 256 experts, a natural match
+    for the MXFP4 checkpoint). :meth:`__init__` pulls each expert's dequantized weights from the
+    host ``provider`` once, permutes the gate_up into the op's interleaved per-core layout and
+    uploads the ND-sharded tensors; :meth:`forward` then runs purely on device, with no per-step
+    host transfer at all.
+
+    ``provider(expert_idx) -> (gate_up [2I, D], down [D, I])`` returns host torch tensors (the HF
+    packed layout: ``gate_up`` is ``cat([w_gate, w_up])``). Experts with zero total routing weight
+    are skipped by the op (matching the reference's ``hit`` set), so only the experts some token
+    actually selected are fetched and computed.
     """
 
     def __init__(
@@ -706,6 +732,17 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         system_config=None,
         tp_size: int = 1,
     ):
+        """Upload every expert once, as the op's DRAM ND-sharded weights.
+
+        ``provider(e)`` is called only where the cache misses; a hit skips it (and its dequant)
+        entirely. Gate_up lands as ``[D, 2*swiglu_cols]``-per-core interleaved shards, down as
+        ``[I, D/num_cores]`` per core. Under TP the gate_up shards N (so the op runs the rank's
+        ``I/TP`` slice) and down shards K, whose partials
+        :class:`DeepSeekV4SparseMoeBlock` all-reduces. ``system_config`` supplies the op geometry
+        (``moe.fused_num_cores`` / ``fused_dram_banks``), the L1 expert block size and
+        ``routing_eps``; ``dtype`` defaults to the profile's weight dtype, and an explicit one
+        wins. Raises if the config is not the fused layout this op is hard-wired to.
+        """
         # The system profile supplies the fused-op geometry, the L1 expert block size
         # and the default weight precision; an explicit ``dtype`` still wins.
         sys_cfg = system_config or active_system_config()
@@ -734,7 +771,7 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         self.routed_scaling_factor = config.routed_scaling_factor
         cache = _as_cache(cache)
 
-        # ``fused_experts`` is hard-wired to the real V4-Flash sizes: ``H == 4096``
+        # ``fused_experts`` is hard-wired to the real V4-Flash sizes: ``D == 4096``
         # on the 64-core grid and ``I`` a multiple of the per-core SwiGLU column slice.
         # There is no fallback path -- this class is for that config only.
         fused_hidden = _fused_hidden(num_cores)
@@ -748,12 +785,11 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         gate_up_nd = _fused_nd_dram_config(self.hidden, 2 * self.intermediate, 2 * swiglu_cols, dram_banks)
         down_nd = _fused_nd_dram_config(self.intermediate, self.hidden, self.hidden // num_cores, dram_banks)
 
-        # Upload every expert once as the op's DRAM ND-sharded weights (gate_up
-        # interleaved per core, down ND-sharded), stored in low precision. With
-        # caching enabled and a hit, the provider (and its expensive dequant) is
-        # skipped entirely; the ND-shard layout can't round-trip the tile cache,
-        # so the interleaved weight is cached in standard DRAM and resharded on
-        # device (see :func:`_load_fused_weight`).
+        # Upload every expert once as the op's DRAM ND-sharded weights (gate_up interleaved
+        # per core, down ND-sharded) in low precision. With caching enabled and a hit, the
+        # provider (and its expensive dequant) is skipped entirely; the ND-shard layout can't
+        # round-trip the tile cache, so the interleaved weight is cached in standard DRAM and
+        # resharded on device (see :func:`_load_fused_weight`).
         gate_up_mapper = ttnn.ShardTensorToMesh(device, dim=1) if self.tp_size > 1 else None
         down_mapper = ttnn.ShardTensorToMesh(device, dim=0) if self.tp_size > 1 else None
         tp_tag = f".tp{self.tp_size}" if self.tp_size > 1 else ""
@@ -766,8 +802,8 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             if cache.require_cache and need_torch:
                 raise RuntimeError(f"weight cache miss for routed expert {e} (gate_up/down) with require_cache=True")
             gate_up_w, down_w = provider(e) if need_torch else (None, None)
-            # Provider gives gate_up [2I, H] / down [H, I]; transpose to matmul-ready
-            # [H, 2I] / [I, H] (memoized so each is materialized at most once).
+            # The provider gives gate_up [2I, D] / down [D, I]; transpose to the matmul-ready
+            # [D, 2I] / [I, D] (memoized, so each source is materialized at most once).
             if self.tp_size > 1:
                 gu_il = _materialize(
                     (
@@ -809,7 +845,8 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             )
 
     def core_grid(self) -> ttnn.CoreRangeSet:
-        """Compute cores the fused_experts op occupies for this layer's ``top_k``.
+        """Compute cores the fused_experts op occupies for this layer's ``top_k``, as the
+        ``[(0,0) .. (11,7)]`` rectangle at ``top_k == 6`` (else ``[(0,0) .. (7,7)]``).
 
         ``all_gather_for_matmul`` has to multicast onto (at least) this set so every
         compute core already holds the activation replica.
@@ -817,21 +854,28 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         return self._core_grid
 
     def _run_fused(self, x_tok: ttnn.Tensor, routing: SparseRouting) -> ttnn.Tensor:
-        """Run ``fused_experts`` for one token. ``x_tok`` is ``[1,1,1,H]`` (TILE) and
-        ``routing`` that token's routing decision; returns ``[1,1,1,H]``.
+        """Run ``fused_experts`` for one token row; returns ``[1,1,1,D]``.
 
-        ``num_experts`` is always ``top_k``: one token selects at most that many distinct
+        ``x_tok`` is the single-token activation the op accepts -- ROW_MAJOR interleaved
+        ``[1,1,1,D]``, or the ROW_MAJOR HEIGHT_SHARDED L1 replica (``[1,1,cores,D]`` with shard
+        ``[1,D]``) that ``all_gather_for_matmul`` produces and ``matmul_decode`` consumes in place
+        -- and ``routing`` is that token's decision, with ``scores`` ``[1,1,1,E]`` and either
+        ``ranking`` ``[1,1,1,E]`` or ``indices`` ``[1,1,1,k]``. Each routing tensor is then moved
+        to DRAM interleaved, leaving its layout untouched.
+
+        ``num_experts`` is always ``top_k``: one token row selects at most that many distinct
         experts, so the op's program -- and any trace holding it -- is the same every step.
 
-        Both tensors go in exactly as the router produced them. When the router hands over
-        a ``ranking`` row (the learned router) the op finds the top-k itself; when it hands
-        over ``indices`` (the hash router's table lookup) the op reads those instead. Either
-        way the op applies the normalize-and-scale tail itself.
+        Both routing tensors go in exactly as the router produced them. A ``ranking`` row (the
+        learned router) makes the op find the top-k itself; ``indices`` (the hash router's table
+        lookup) makes it read those instead. Either way the op applies the normalize-and-scale tail
+        itself, and ``routing_eps`` (``moe.routing_eps``) is the epsilon added to each token's
+        score sum before dividing, which guards the renormalize against an all-zero score row.
 
         ``experts_block_size`` (``moe.experts_block_size``) is how many experts' SwiGLU
-        activations are resident at once. It sizes the op's dominant per-core CB, so it is
-        the knob to turn when the op's static CBs collide with the L1 buffers live at the
-        call; the cost is one extra chip-wide gather/broadcast barrier per block.
+        activations are resident at once. It sizes the op's dominant per-core CB, so it is the knob
+        to turn when the op's static CBs collide with the L1 buffers live at the call; the cost is
+        one extra chip-wide gather/broadcast barrier per block.
         """
         scores = ttnn.to_memory_config(routing.scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = None
@@ -854,18 +898,18 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             routed_scaling_factor=self.routed_scaling_factor,
             routing_eps=self.routing_eps,
             experts_block_size=self.experts_block_size,
-        )  # [1, 1, H]
+        )  # [1, 1, D]
         return ttnn.reshape(out, [1, 1, 1, self.hidden])
 
     def forward(self, x_flat: ttnn.Tensor, routing: SparseRouting) -> ttnn.Tensor:
-        """``x_flat`` ``[1,1,T,H]`` plus the router's decision; returns ``[1,1,T,H]``.
+        """``x_flat`` ``[1,1,T,D]`` plus the token's routing decision -> ``[1,1,1,D]``.
 
-        Trace-safe: nothing is read back to host. ``T`` is the activation's *shard
-        height*, not the token axis of the gathered tensor: the decode all-gather
-        replicates one token row onto every core of the destination grid, so ``T`` is
-        1 while ``x_flat.shape[2]`` is that grid's core count. ``T`` is fixed at
-        capture time, so a captured trace stays a flat op sequence and prefill goes
-        through the same path.
+        Trace-safe: nothing is read back to host. ``T`` is the activation's *shard height*, not the
+        token axis of the gathered tensor: the decode all-gather replicates the token row onto
+        every core of the destination grid, so ``T`` is 1 while ``x_flat.shape[2]`` is that grid's
+        core count. ``T`` is fixed at capture time, so a captured trace stays a flat op sequence
+        and prefill goes through the same path. (The assert is the op's own requirement: its
+        ROW_MAJOR input is one token row, so a batched MoE is not implemented.)
         """
         mem = x_flat.memory_config()
         if (
@@ -905,12 +949,17 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         prefetch_buffers: Optional[dict] = None,
         tp_size: int = 1,
     ):
+        """``gate`` may be injected (a :class:`DeepSeekV4HashRouter` for the first
+        ``num_hash_layers`` MoE layers); otherwise this builds the learned
+        :class:`DeepSeekV4TopKRouter` from ``weights``. ``experts`` is always injected -- the
+        routed compute is a :class:`DeepSeekV4PreloadedExperts` holding every expert (256 here)
+        resident on device in BFloat4_b, so it has nothing of its own to prefetch. The shared
+        expert is built from ``weights["shared_experts.*"]``.
+        """
         self.device = device
         self.hidden = config.hidden_size
         self.tp_size = tp_size
         cache = _as_cache(cache)
-        # ``gate`` may be injected (e.g. a :class:`DeepSeekV4HashRouter` for the
-        # first ``num_hash_layers`` layers); otherwise the learned top-k router.
         self.gate = (
             gate
             if gate is not None
@@ -925,10 +974,7 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             )
         )
         self.is_hash = isinstance(self.gate, DeepSeekV4HashRouter)
-        # The routed-expert compute (a :class:`DeepSeekV4PreloadedExperts` keeping
-        # all 256 experts resident on device in BFloat4_b) is always injected.
         self.experts = experts
-        # Only the shared expert is prefetched: the routed experts are already resident.
         self.shared_experts = DeepSeekV4MLP(
             weights,
             "shared_experts",
@@ -942,33 +988,36 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         )
 
     def prefetch_weights(self):
-        """Stage the router gate then the shared expert ahead of the decode that uses them.
+        """Stage the ``[D, E]`` router gate, then the shared expert's ``[D, I]`` gate/up and
+        ``[I, D]`` down, ahead of the decode that uses them.
 
-        The gate is staged first: it queues on its private 8-receiver ring
-        (:data:`ROUTER_GATE_GCB`). Shared-expert gate/up then queue on q_a's
-        32-receiver FIFO (after q_a / CSA); down queues on the shared decode GCB after
-        o_b. Queue order on each ring has to match consume order.
+        The gate goes first: it queues on its private 8-receiver ring (:data:`ROUTER_GATE_GCB`).
+        Shared-expert gate/up then queue on q_a's 32-receiver FIFO (after q_a / CSA) and down on
+        the shared decode GCB after o_b. Queue order on each ring has to match consume order.
         """
         self.gate.prefetch_weights()
         self.shared_experts.prefetch_weights()
 
     def decode_static(self, hidden: ttnn.Tensor, hash_token: ttnn.Tensor | None = None) -> ttnn.Tensor:
-        """Trace-safe token-batched MoE. ``hidden`` ``[B, 1, 1, H]`` -> same.
+        """Trace-safe MoE. ``hidden`` ``[B, 1, 1, D]`` -> the same shape.
 
-        The one entry point for this block (decode *and* prefill): the model prefill
-        replays the decoder layer's decode path one token at a time.
+        The one entry point for this block (decode *and* prefill): the model prefill replays the
+        decoder layer's decode path one token at a time, so ``B`` is the step's batch and the
+        routed path gets a single token row (``T == 1``; see
+        :meth:`DeepSeekV4PreloadedExperts.forward`).
 
-        The ``B`` token rows are flattened onto the token axis, which is the layout the
-        router and the expert compute already work in -- so the shared expert and the gate
-        see one wider matmul while the routed experts, which each row sends somewhere
-        different, stay one op per row. A prefill caller therefore hands over
-        ``[T, 1, 1, H]`` (one row per token, in order) and reshapes back.
+        ``hidden`` is flattened to ``[1, 1, B, D]`` -- the token-per-row layout the router and the
+        shared expert work in -- then the activation is multicast onto the fused-expert compute
+        cores (12x8 at ``top_k == 6``) as a ROW_MAJOR HEIGHT_SHARDED replica, which
+        ``fused_experts`` and the shared expert's :class:`LinearDecode` projections both consume in
+        place (its B grid is inside that rectangle). The shared expert therefore sees one wider
+        matmul while the routed experts run one op on the token row.
 
-        Routing stays entirely on device: the learned top-k router is already
-        host-sync-free, and hash layers gather their selected expert ids on device from
-        the persistent ``hash_token`` ``[1,B]`` device token ids (see
-        :meth:`DeepSeekV4HashRouter.forward_static`). The routed FFN runs through the
-        no-host-readback fused-experts path.
+        Routing stays entirely on device: the learned top-k router is already host-sync-free, and
+        hash layers gather their selected expert ids on device from the persistent ``hash_token``
+        ``[1,B]`` device token ids (see :meth:`DeepSeekV4HashRouter.forward_static`). The routed
+        FFN runs through the no-host-readback fused-experts path, and under TP the row-parallel
+        down partials are all-reduced back to a replicated ``[1,1,B,D]`` before the reshape back.
         """
         b, h = hidden.shape[0], hidden.shape[-1]
         x_flat = ttnn.reshape(hidden, [1, 1, b, h])
@@ -981,10 +1030,9 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             and _core_grid_contains(mem.shard_spec.grid, dest)
         )
         if not already_replica:
-            # ``all_gather_for_matmul`` only accepts L1 WIDTH/HEIGHT_SHARDED. Decode
-            # RMSNorm already leaves that; a DRAM PCC tensor with T==1 is width-sharded
-            # first. Prefill T>1 stays interleaved: fused_experts loops tokens, and
-            # LinearDecode asserts the activation already matches ``use_rm_hs``.
+            # ``all_gather_for_matmul`` only accepts L1 WIDTH/HEIGHT_SHARDED. Decode RMSNorm
+            # already leaves that; an interleaved tensor is width-sharded over one tile row
+            # first, and h must be tile-aligned for that.
             if not x_flat.is_sharded():
                 x_flat = ttnn.to_memory_config(x_flat, width_sharded_l1_config(1, h, self.device))
                 x_flat = ttnn.experimental.deepseek.all_gather_for_matmul(x_flat, dest)
@@ -996,10 +1044,8 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             routing = self.gate.forward_static(x_flat, hash_token)
         else:
             routing = self.gate(x_flat)
-        # Replica onto the fused_experts compute cores (12x8 at top_k == 6). Shared-expert
-        # LinearDecode reuses it: its B grid is a subset of that rectangle.
-        routed = self.experts.decode_static(x_flat, routing)  # [1, 1, B, H]
-        shared = self.shared_experts(x_flat)  # [1, 1, B, H]
+        routed = self.experts.decode_static(x_flat, routing)  # [1, 1, 1, D]
+        shared = self.shared_experts(x_flat)  # [1, 1, B, D]
         combined = ttnn.add(routed, shared)
         combined = ttnn.to_memory_config(combined, ttnn.DRAM_MEMORY_CONFIG)
         if self.tp_size > 1:

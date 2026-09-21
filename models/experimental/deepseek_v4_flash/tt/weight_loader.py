@@ -133,6 +133,13 @@ class DeepseekV4WeightLoader:
     """Index-driven, lazy reader over the V4-Flash safetensors shards."""
 
     def __init__(self, model_dir: str | Path):
+        """Index ``model_dir``: ``tensor name -> shard Path`` for every tensor in the
+        checkpoint.
+
+        Reads ``model.safetensors.index.json`` when it ships, else scans the shards with
+        ``safe_open`` (a slower one-time cost). Raises ``FileNotFoundError`` for a directory
+        with no tensors.
+        """
         self.snapshot_dir = resolve_snapshot_dir(Path(model_dir))
         index_path = self.snapshot_dir / INDEX_FILENAME
         if index_path.is_file():
@@ -157,14 +164,18 @@ class DeepseekV4WeightLoader:
     # Discovery
     # ------------------------------------------------------------------ #
     def keys(self) -> Iterable[str]:
-        """All tensor names that appear in the checkpoint."""
+        """All checkpoint-side tensor names (native names, not HF ones) that appear in the
+        checkpoint -- one per weight, e.g. ``layers.0.attn.wq_b.weight``."""
         return self._name_to_shard.keys()
 
     def has(self, name: str, *, translate: bool = True) -> bool:
+        """Whether ``name`` is in the checkpoint; ``translate`` maps it from HF form
+        (:func:`hf_to_checkpoint_name`) first."""
         ckpt_name = hf_to_checkpoint_name(name) if translate else name
         return ckpt_name in self._name_to_shard
 
     def shard_of(self, name: str, *, translate: bool = True) -> Path:
+        """The shard file holding ``name``; ``KeyError`` if the checkpoint has no such tensor."""
         ckpt_name = hf_to_checkpoint_name(name) if translate else name
         try:
             return self._name_to_shard[ckpt_name]
@@ -188,7 +199,8 @@ class DeepseekV4WeightLoader:
     # Tensor access
     # ------------------------------------------------------------------ #
     def get_tensor(self, name: str, *, translate: bool = True) -> torch.Tensor:
-        """Return the named tensor as a ``torch.Tensor``.
+        """Return the named tensor as a ``torch.Tensor``, in the checkpoint's own shape
+        (``[V, D]`` for the embedding, ``[K, N]`` for a projection, ...) and dtype.
 
         Only the requested tensor is read from disk; the rest of the shard
         stays memory-mapped.
@@ -204,9 +216,10 @@ class DeepseekV4WeightLoader:
 
         V4-Flash ships its MoE / projection weights as e4m3 fp8 with a
         per-block ue8m0 scale stored under the same prefix with ``.scale``
-        instead of ``.weight``. Non-quantized tensors (embed, norms, biases,
-        position_bias, etc.) have no companion scale and this returns
-        ``None`` for them.
+        instead of ``.weight``, so a ``[R, C]`` weight has a ``[ceil(R/128), ceil(C/128)]``
+        scale (one power-of-two exponent per ``128x128`` block, see :mod:`.quant`).
+        Non-quantized tensors (embed, norms, biases, position_bias, etc.) have no companion
+        scale and this returns ``None`` for them.
         """
         ckpt_name = hf_to_checkpoint_name(name) if translate else name
         if not ckpt_name.endswith(".weight"):
@@ -217,7 +230,8 @@ class DeepseekV4WeightLoader:
         return self.get_tensor(scale_name, translate=False)
 
     def get_meta(self, name: str, *, translate: bool = True) -> tuple[str, tuple[int, ...]]:
-        """Return ``(dtype_str, shape)`` for ``name`` without loading data."""
+        """Return ``(dtype_str, shape)`` -- e.g. ``("F8_E4M3", [4096, 1024])`` for a ``[K, N]``
+        projection -- for ``name``, read off the shard's tensor slice without loading data."""
         shard = self.shard_of(name, translate=translate)
         handle = self._open_shard(str(shard))
         ckpt_name = hf_to_checkpoint_name(name) if translate else name
