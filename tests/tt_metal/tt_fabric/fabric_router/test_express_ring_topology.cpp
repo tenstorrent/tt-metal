@@ -49,7 +49,9 @@ struct Hop {
 };
 
 std::string fixture_path(const std::string& fixture) {
-    return (std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    EXPECT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    return (std::filesystem::path(tt_metal_home == nullptr ? "" : tt_metal_home) /
             "tests/tt_metal/tt_fabric/custom_mesh_descriptors" / fixture)
         .string();
 }
@@ -222,6 +224,36 @@ TEST(AxisRouteTopologyTest, Rings32x4) {
     EXPECT_TRUE(topo.cyclic_non_ring_hops().empty()) << "unprotected dependency cycle on the two-family fixture";
 }
 
+TEST(AxisRouteTopologyTest, Rings4x32Dim1MatchesTransposed32x4) {
+    const auto dim0 = derive("express_links_32x4_mesh_graph_descriptor.textproto");
+    const auto dim1 = derive("express_links_4x32_mesh_graph_descriptor.textproto");
+
+    EXPECT_EQ(dim0.axis_dim, 0);
+    EXPECT_EQ(dim1.axis_dim, 1);
+    EXPECT_EQ(dim1.axis_len, dim0.axis_len);
+    EXPECT_EQ(dim1.wraps, dim0.wraps);
+    EXPECT_EQ(dim1.domain_of, dim0.domain_of);
+    EXPECT_EQ(dim1.leaf_run_of, dim0.leaf_run_of);
+    EXPECT_EQ(dim1.leaf_index_of, dim0.leaf_index_of);
+    ASSERT_EQ(dim1.leaf_runs.size(), dim0.leaf_runs.size());
+    for (std::size_t i = 0; i < dim0.leaf_runs.size(); ++i) {
+        EXPECT_EQ(dim1.leaf_runs[i].rows, dim0.leaf_runs[i].rows);
+        EXPECT_EQ(dim1.leaf_runs[i].anchor_before, dim0.leaf_runs[i].anchor_before);
+        EXPECT_EQ(dim1.leaf_runs[i].anchor_after, dim0.leaf_runs[i].anchor_after);
+    }
+    EXPECT_EQ(dim1.forward_cycle, dim0.forward_cycle);
+    EXPECT_EQ(dim1.pos_in_domain, dim0.pos_in_domain);
+    EXPECT_EQ(dim1.continue_src_domain, dim0.continue_src_domain);
+    EXPECT_EQ(dim1.crossovers, dim0.crossovers);
+    for (int src = 0; src < dim0.axis_len; ++src) {
+        for (int dst = 0; dst < dim0.axis_len; ++dst) {
+            if (src != dst) {
+                EXPECT_EQ(dim1.next_row(src, dst), dim0.next_row(src, dst));
+            }
+        }
+    }
+}
+
 using tt::tt_fabric::fabric_router_tests::ControlPlaneFixture;
 using tt::tt_fabric::fabric_router_tests::write_temp_descriptor;
 
@@ -334,6 +366,23 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     EXPECT_ANY_THROW(derive_express_ring_topology(mesh_graph, MeshId{0}));
 }
 
+TEST(AxisRouteTopologyTest, ExpressLinksOnMultipleAxesAreRejected) {
+    const auto path = write_temp_descriptor("express_links_multiple_axes.textproto", R"(
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [4, 4] dim_types: [RING, RING] }
+  host_topology   { dims: [1, 1] }
+  channels { count: 2 policy: RELAXED }
+  express_links { dim_idx: 0  pattern { start: 0  step: 4 } }
+  express_links { dim_idx: 1  pattern { start: 0  step: 4 } }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)");
+    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path);
+    EXPECT_ANY_THROW(derive_express_ring_topology(mesh_graph, MeshId{0}));
+}
+
 // A single wide pattern on the 32-row RING axis: each block skips six interior rows, so leaves form
 // runs of six rather than pairs. Exercises entering and leaving a long run one row at a time: each
 // hop must land on a physically adjacent row.
@@ -384,10 +433,9 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 // flow-control answer comes from the topology token (see
 // FabricContext::need_deadlock_avoidance_support's fallthrough), not from these predicates.
 TEST(AxisRouteTopologyTest, NoExpressTopologyYieldsNoRingState) {
-    const auto path = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-                      "tests/tt_metal/tt_fabric/custom_mesh_descriptors" /
-                      "bh_galaxy_single_4x4_subtorus_topology_mesh_graph_descriptor.textproto";
-    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path.string());
+    MeshGraph mesh_graph(
+        tt::tt_metal::ClusterType::BLACKHOLE_GALAXY,
+        fixture_path("bh_galaxy_single_4x4_subtorus_topology_mesh_graph_descriptor.textproto"));
     EXPECT_FALSE(derive_express_ring_topology(mesh_graph, MeshId{0}).has_value());
 }
 
