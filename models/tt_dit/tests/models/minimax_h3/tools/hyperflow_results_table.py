@@ -31,7 +31,9 @@ def load(directory: Path) -> list[dict]:
 
 def table(records: list[dict]) -> str:
     stages = [s for s in STAGE_ORDER if any(s in r["timings_s"] for r in records)]
-    header = ["Mode", "Clip", "Frames", "Canvas", "Fwd", "Padded", *stages, "Total", "s / video s", "CLIP"]
+    # Node is a column, not a footnote: two boxes can sweep into one directory, and a table that
+    # silently mixes them reads as one machine.
+    header = ["Mode", "Clip", "Frames", "Canvas", "Fwd", "Padded", *stages, "Total", "s / video s", "CLIP", "Node"]
     lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
     for r in records:
         row = [
@@ -45,6 +47,7 @@ def table(records: list[dict]) -> str:
             f"{r['total_compute_s']:.1f}",
             f"{r['s_per_video_second']:.1f}",
             f"{r['clip']['mean']:.2f}",
+            r.get("node", "?"),
         ]
         lines.append("| " + " | ".join(row) + " |")
     return "\n".join(lines)
