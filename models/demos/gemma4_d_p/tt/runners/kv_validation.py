@@ -14,7 +14,7 @@ from safetensors import safe_open
 
 import ttnn
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_kv_reference, sliding_kv_indices
-from models.demos.gemma4_d_p.tt.runners.adapter import Gemma4ServiceConfig
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4ServiceConfig
 from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import CONFIG_NAMES
 
 PREPARED_GPU_TRACE_LAYOUT = "gemma4_kv_heads_v1"

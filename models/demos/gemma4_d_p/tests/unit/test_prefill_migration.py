@@ -12,7 +12,7 @@ from safetensors.torch import save_file
 import ttnn
 from models.demos.common.prefill.runners import migration_driver, prefill_producer
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache, SlidingRingKVCache
-from models.demos.gemma4_d_p.tt.runners.adapter import Gemma4PrefillAdapter, Gemma4ServiceConfig
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, Gemma4ServiceConfig
 from models.demos.gemma4_d_p.tt.runners.kv_caches import Gemma4KvCaches
 from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import build_kv_chunk_address_table
 from models.demos.gemma4_d_p.tt.runners.kv_validation import (
