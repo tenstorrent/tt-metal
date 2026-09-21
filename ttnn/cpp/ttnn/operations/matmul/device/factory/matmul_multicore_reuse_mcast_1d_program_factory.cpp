@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,13 +30,7 @@ using namespace tt;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-using tt::tt_metal::CBDescriptor;
-using tt::tt_metal::CBFormatDescriptor;
-using tt::tt_metal::ComputeConfigDescriptor;
-using tt::tt_metal::DataMovementConfigDescriptor;
-using tt::tt_metal::KernelDescriptor;
 using tt::tt_metal::MeshTensor;
-using tt::tt_metal::ProgramDescriptor;
 
 using tt::tt_metal::KernelBuildOptLevel;
 using tt::tt_metal::experimental::AddRuntimeArgsForNode;
@@ -3654,6 +3648,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     if (has_in0_relay_dfb) {
         dataflow_buffers.push_back(std::move(in0_relay_dfb_spec));
     }
+
+    TT_FATAL(
+        dataflow_buffers.front().unique_id == IN0_DFB && dataflow_buffers.size() == (has_in0_relay_dfb ? 2u : 1u),
+        "in0{} must be the first DataflowBufferSpec(s) declared, so that each starts at its own "
+        "allocator's base and the two share an L1 offset; got {} spec(s) with '{}' first",
+        has_in0_relay_dfb ? " and its multicast relay" : "",
+        dataflow_buffers.size(),
+        dataflow_buffers.front().unique_id.get());
 
     // in1
     dataflow_buffers.push_back(DataflowBufferSpec{
