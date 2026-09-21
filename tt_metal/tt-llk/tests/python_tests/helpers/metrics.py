@@ -1,12 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Performance metrics from the LLK test counter dump.
-
-The metric formulas live in the shared tt-llk package tt_llk_perf.metrics (tools/python; the
-Tracy tool uses the same module). This file adapts the counters.py DataFrame to its CounterView,
-computes per (zone, run) metrics, and aggregates/exports them to CSV.
+"""Metrics from the LLK counter dump: adapts the counters.py DataFrame to tt_llk_perf.metrics (the formulas shared
+with the Tracy tool), then aggregates per (zone, run) and exports to CSV.
 """
 
 import pandas as pd
@@ -54,7 +50,6 @@ class _DfCounterView:
 
 
 def _compute_single(df: pd.DataFrame) -> dict:
-    """Compute derived metrics for one (zone, run) slice via the shared formula module."""
     if df.empty:
         return {}
     return _mc.compute_metrics(_DfCounterView(df))
@@ -93,9 +88,6 @@ def compute_metrics(df: pd.DataFrame) -> list[dict]:
     return results
 
 
-# Export
-
-
 def export_metrics(
     computed: list[dict],
     run_type_name: str,
@@ -132,7 +124,6 @@ def export_metrics(
         marker_name = zone_to_marker.get(zone, zone)
         row = {MARKER: marker_name}
 
-        # Export both metric families: bounded percentages and unbounded ratios.
         def _exportable(key: str) -> bool:
             return key.endswith("_pct") or key.endswith("_ratio")
 
@@ -141,10 +132,8 @@ def export_metrics(
             for col in metrics_df.columns:
                 if not _exportable(col):
                     continue
-                # Always emit the column. A metric whose denominator counted nothing (srcB metrics on a
-                # kernel that never writes srcB) is None on every run; leaving its column out made the
-                # column set depend on the variant, and the report schema check then rejected the whole
-                # file once one worker had seen both kinds of variant.
+                # Always emit the column (NaN if under 2 runs had a value). A metric whose denominator never counts is
+                # None on every run; dropping its column made the column set vary by variant and fail the schema check.
                 values = metrics_df[col].dropna()
                 enough = len(values) >= 2
                 row[metric_column(run_type_name, stat_column(col, MEAN))] = (
@@ -162,9 +151,6 @@ def export_metrics(
         rows.append(row)
 
     return pd.DataFrame(rows)
-
-
-# Counter CSV Export
 
 
 def export_counters(

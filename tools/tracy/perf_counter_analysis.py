@@ -27,7 +27,7 @@ DeviceOpsDict = Dict[int, List[OpDict]]
 
 
 class _TracyCounterView:
-    """CounterView over one (op, core)'s Tracy rows; cycles() answers per counter, else per bank."""
+    """CounterView over the Tracy rows of one (op, core); cycles() answers per counter, else per bank."""
 
     _BANK_REF = {
         "FPU": ("FPU_COUNTER", "SFPU_COUNTER", "MATH_COUNTER"),
@@ -101,7 +101,7 @@ def compute_metrics_per_op(perf_counter_df, device_arch=""):
 COUNTER_TYPE_NAMES = counter_type_names()
 
 
-# Columns derive from METRIC_LABELS; three utilizations keep their legacy "Avg ... on full grid" name.
+# Legacy column names kept for existing consumers; every other column derives from METRIC_LABELS.
 _LEGACY_AVG_GRID_COLUMNS = {
     "SFPU Util": "Avg SFPU util on full grid (%)",
     "FPU Util": "Avg FPU util on full grid (%)",
@@ -112,7 +112,6 @@ RATIO_LABELS = _mc.RATIO_LABELS
 
 
 def _metric_suffix(label):
-    """Display unit for a metric's columns: ' (ratio)' for the unbounded ratio family, else ' (%)'."""
     return " (ratio)" if label in RATIO_LABELS else " (%)"
 
 
@@ -124,7 +123,7 @@ def _build_perf_counter_csv_headers():
         headers.append(f"{label} Median{suffix}")
         headers.append(f"{label} Max{suffix}")
         headers.append(f"{label} Avg{suffix}")
-    # Grid-wide averages over the kernel duration (all cores, idle ones included); only a host+device run can fill them.
+    # Grid-wide averages over the kernel duration (idle cores included); only a host+device run can fill them.
     headers.extend(_LEGACY_AVG_GRID_COLUMNS.values())
     return headers
 
@@ -289,8 +288,8 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
     for op, metrics in per_op.items():
         for key, stats in metrics.items():
             label = _mc.METRIC_LABELS.get(key, key)
-            # A metric with no value anywhere gets no column: the two-pass merge finds the second
-            # pass's metrics by their absence from the first pass's CSV.
+            # A metric with no value anywhere gets no column: the L1 two-pass merge in process_model_log finds the
+            # pass 2 metrics by their absence from the pass 1 ops CSV.
             for stat in ("min", "median", "max", "avg"):
                 if stats[stat] is not None:
                     per_op_stats.setdefault(label, {"min": {}, "median": {}, "max": {}, "avg": {}})[stat][op] = stats[

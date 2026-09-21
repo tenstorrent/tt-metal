@@ -10,8 +10,8 @@
 
 #include "perf_counters/types.h"
 
-// Wormhole select tables, one per bank (the L1 bank once per mux position). Every select drives a live RTL
-// wire; tied-off and aliased selects are left out on purpose. Include through perf_counters/inventory.h.
+// Wormhole select tables. Every select drives a live RTL wire; tied-off and aliased selects are left out on purpose.
+// Include through perf_counters/inventory.h, which picks the arch.
 
 namespace llk::perf
 {
@@ -59,7 +59,7 @@ inline constexpr std::array<Entry, 14> pack_counters = {
      {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
      {PerfCounterType::MATH_NOT_SCOREBOARD_STALLED, 272}}};
 
-// L1 bank 0 (MUX_CTRL[4] = 0): unpacker, TDMA bundles, ring0 NOC; port 1 = unpacker#1/ECC/pack1.
+// L1 bank 0 (MUX_CTRL[4] = 0)
 inline constexpr std::array<Entry, 16> l1_0_counters = {
     {{PerfCounterType::L1_0_UNPACKER_0, 0},
      {PerfCounterType::L1_0_UNPACKER_1_ECC_PACK1, 1},
@@ -79,7 +79,7 @@ inline constexpr std::array<Entry, 16> l1_0_counters = {
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_0_GRANT, 262},
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_1_GRANT, 263}}};
 
-// L1 bank 1 (MUX_CTRL[4] = 1): TDMA packer 2, ext unpacker, ring1 NOC.
+// L1 bank 1 (MUX_CTRL[4] = 1)
 inline constexpr std::array<Entry, 16> l1_1_counters = {
     {{PerfCounterType::L1_1_TDMA_PACKER_2, 0},
      {PerfCounterType::L1_1_EXT_UNPACKER_1, 1},
@@ -99,7 +99,6 @@ inline constexpr std::array<Entry, 16> l1_1_counters = {
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_0_GRANT, 262},
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_1_GRANT, 263}}};
 
-// WH: 1-bit L1 mux at MUX_CTRL[4], values 0-1
 inline constexpr std::uint32_t L1_MUX_MASK = 0x1 << 4;
 
 // BH-only mux positions; empty tables keep table_for() arch-agnostic.
@@ -108,7 +107,7 @@ inline constexpr std::array<Entry, 0> l1_3_counters = {};
 inline constexpr std::array<Entry, 0> l1_4_counters = {};
 inline constexpr std::array<Entry, 0> l1_5_counters = {};
 
-// WH INSTRN_THREAD: sel gaps at 9-11, replicated stall conditions at 27/30/33/36.
+// Selects 9-11 are unused; the stall conditions at 27/30/33/36 are replicated in hardware, so the copies are skipped.
 inline constexpr std::array<Entry, 59> instrn_counters = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},

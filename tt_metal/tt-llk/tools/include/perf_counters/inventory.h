@@ -39,8 +39,6 @@ constexpr Table as_table(const std::array<Entry, N>& entries)
 
 } // namespace detail
 
-// The select table of one bank. The L1 bank has one table per mux position; positions the hardware does
-// not decode return an empty table.
 constexpr Table table_for(Bank bank, std::uint8_t l1_mux = 0)
 {
     switch (bank)
