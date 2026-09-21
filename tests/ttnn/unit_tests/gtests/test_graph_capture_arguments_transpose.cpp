@@ -216,11 +216,13 @@ TEST_F(
     TransposeImplicitOutputConfigReindexesNdShardShapeForAsymmetricNonNativeShardedFallback) {
     // Asymmetric shard/tensor shape (unlike the 64x64 case above) so that a bug in
     // adjust_nd_shard_spec_for_transpose (e.g. forgetting to swap the last two shard_shape entries
-    // for a WH transpose) would show up as a shape mismatch instead of trivially passing.
-    // 2 shards along H (32/16) x 2 shards along W (64/32) = 4 shards; grid must fit all of them.
+    // for a WH transpose) would show up as a shape mismatch instead of trivially passing. Both
+    // shard extents must stay tile-aligned (multiples of 32) since the tensor is TILE layout.
+    // 2 shards along H (64/32) x 2 shards along W (128/64) = 4 shards; DRAM shard grids are 1D
+    // (bank_id == logical x-coordinate), so all shard cores must stay on row y == 0.
     auto tt_input = create_device_tensor(
         make_nd_sharded_dram_tensor_spec(
-            ttnn::Shape({1, 1, 32, 64}), ttnn::Shape({1, 1, 16, 32}), tt::tt_metal::CoreCoord{1, 1}),
+            ttnn::Shape({1, 1, 64, 128}), ttnn::Shape({1, 1, 32, 64}), tt::tt_metal::CoreCoord{3, 0}),
         device_);
 
     ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
@@ -233,15 +235,24 @@ TEST_F(
     });
     ASSERT_NE(it, operations.end()) << "TransposeDeviceOperation not found";
     EXPECT_TRUE(has_nd_provenance(it->arguments[0])) << it->arguments[0];
-    // Pre-transpose shard_shape was [1, 1, 16, 32]; a WH transpose must swap the last two entries.
-    EXPECT_TRUE(it->arguments[0].find("Shape([1, 1, 32, 16])") != std::string::npos) << it->arguments[0];
+    // operation_attributes.output_mem_config is the *implicit* config built in transpose.cpp's
+    // fallback, which intentionally mirrors the input's nd_shard_spec verbatim (unswapped) —
+    // reindexing for the specific transpose dim only happens later, in
+    // TransposeDeviceOperation::derive_effective_output_memory_config(), when synthesizing the
+    // *final* output spec below. So this still shows the pre-transpose shard_shape.
+    EXPECT_TRUE(it->arguments[0].find("\"shard_shape\":[1, 1, 32, 64]") != std::string::npos) << it->arguments[0];
 
     auto create_tensor_it = find_create_device_tensor(operations);
     ASSERT_NE(create_tensor_it, operations.end()) << "create_device_tensor operation not found";
-    EXPECT_EQ(create_tensor_it->arguments[0], "Shape([1, 1, 64, 32])");
+    EXPECT_EQ(create_tensor_it->arguments[0], "Shape([1, 1, 128, 64])");
     EXPECT_EQ(create_tensor_it->arguments[2], "Layout::TILE");
     ASSERT_EQ(create_tensor_it->arguments.size(), 5);
     EXPECT_TRUE(has_nd_provenance(create_tensor_it->arguments[4])) << create_tensor_it->arguments[4];
+    // The final synthesized shard geometry must have the last two shard_shape entries swapped
+    // relative to the pre-transpose [1, 1, 32, 64] — this is what actually exercises
+    // adjust_nd_shard_spec_for_transpose.
+    EXPECT_TRUE(create_tensor_it->arguments[4].find("\"shard_shape\":[1, 1, 64, 32]") != std::string::npos)
+        << create_tensor_it->arguments[4];
 }
 
 }  // namespace
