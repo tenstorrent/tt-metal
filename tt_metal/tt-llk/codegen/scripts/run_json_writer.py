@@ -751,7 +751,15 @@ def _candidate_patch_digest(worktree: Path, base: str) -> str:
             delete=False,
         ) as temporary:
             temporary_index = temporary.name
-            temporary.write(Path(index).read_bytes())
+            with open(index, "rb") as source_index:
+                index_stat = os.fstat(source_index.fileno())
+                temporary.write(source_index.read())
+        # Git uses the index timestamp to detect potentially racy-clean entries.
+        # A fresh timestamp can hide same-size edits behind cached file stats.
+        os.utime(
+            temporary_index,
+            ns=(index_stat.st_atime_ns, index_stat.st_mtime_ns),
+        )
         env = {**os.environ, "GIT_INDEX_FILE": temporary_index}
         subprocess.run(
             ["git", "-C", str(worktree), "add", "-A", "--", "."],

@@ -1794,6 +1794,80 @@ def test_candidate_patch_digest_is_identical_from_llk_subdir_and_repo_root(tmp_p
     assert "tt-llk-local-patch-v1" not in run_test_source
 
 
+def test_candidate_patch_digest_rehashes_racy_same_size_binary(
+    tmp_path, reviewed_candidate, monkeypatch
+):
+    import importlib.util
+
+    wt, logs, git, review, result = reviewed_candidate
+    git("config", "core.trustctime", "false")
+    fixed_ns = 1_700_000_000_000_000_000
+    binary = wt / "binary.dat"
+    binary.write_bytes(b"\x00old")
+    os.utime(binary, ns=(fixed_ns, fixed_ns))
+    git("add", "-A")
+    git("commit", "-qm", "binary base")
+    base = git("rev-parse", "HEAD")
+    index = wt / ".git/index"
+    os.utime(index, ns=(fixed_ns, fixed_ns))
+    original_index = index.read_bytes()
+    binary.write_bytes(b"\x00new")
+    os.utime(binary, ns=(fixed_ns, fixed_ns))
+
+    # Deterministic control: newer copied-index mtime defeats Git's racy-clean
+    # protection and reuses the old blob despite the changed binary bytes.
+    naive_index = tmp_path / "naive-index"
+    naive_index.write_bytes(original_index)
+    os.utime(naive_index, ns=(fixed_ns + 10**10, fixed_ns + 10**10))
+    env = {**os.environ, "GIT_INDEX_FILE": str(naive_index)}
+    subprocess.run(["git", "-C", str(wt), "add", "-A"], env=env, check=True)
+    assert (
+        subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(wt),
+                "diff",
+                "--cached",
+                "--binary",
+                "--full-index",
+                base,
+            ],
+            env=env,
+        )
+        == b""
+    )
+
+    spec = importlib.util.spec_from_file_location("racy_index_writer", SCRIPT)
+    writer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(writer)
+    real_run = subprocess.run
+    captured = []
+
+    def capture_diff(*args, **kwargs):
+        process = real_run(*args, **kwargs)
+        if "--binary" in args[0]:
+            captured.append(process.stdout)
+        return process
+
+    monkeypatch.setattr(writer.subprocess, "run", capture_diff)
+    digest = writer._candidate_patch_digest(wt, base)
+    assert len(captured) == 1
+    patch = captured[0]
+    assert b"GIT binary patch" in patch
+    assert digest == hashlib.sha256(patch).hexdigest()
+    assert index.read_bytes() == original_index
+    assert index.stat().st_mtime_ns == fixed_ns
+    assert not list((wt / ".git").glob(".candidate-index-*"))
+
+    # Check actual reconstructed bytes, not just agreement between two hashes.
+    replay = tmp_path / "replay"
+    git("worktree", "add", "--detach", "-q", str(replay), base)
+    subprocess.run(["git", "-C", str(replay), "apply", "-"], input=patch, check=True)
+    assert (replay / "binary.dat").read_bytes() == b"\x00new"
+    assert binary.read_bytes() == b"\x00new"
+
+
 def test_run_test_isolates_artifacts_by_owner_and_full_source_content(tmp_path):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
