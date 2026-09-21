@@ -416,8 +416,8 @@ class OptimizedDecoder(LightweightModule):
             M_block_size=1 if x.shape[1] == 1 else self.policy.get("minimal_m", 4),
             K_block_size=self.policy.get("minimal_k", 8),
             N_block_size=self.policy.get("minimal_n", 8),
-            subblock_h=1,
-            subblock_w=4,
+            subblock_h=self.policy.get("minimal_subblock_h", 1),
+            subblock_w=self.policy.get("minimal_subblock_w", 4),
             compute_with_storage_grid_size=(grid.x, grid.y),
         )
         return ttnn.experimental.minimal_matmul(
