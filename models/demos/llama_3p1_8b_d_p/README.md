@@ -53,13 +53,29 @@ python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/model/test_prefill_book_to
 ```
 
 The CI registration in `tests/pipeline_reorg/blaze_models_prefill_tests.yaml`
-runs CPU reference checks first in the components/decoder allocation, followed
-by separate full 2K accuracy and book 2K/4K jobs. CPU checks use `--noconftest`
-so collection does not load device fixtures. Shared CPU helpers are in
-`tests/utils.py`; TTNN helpers are in `tests/device_utils.py` and
-`tests/model/device_utils.py`. CI retains compact per-layer PCC reports in its
-prefill summaries. Set `LLAMA_PREFILL_EVIDENCE_DIR` to a fresh directory to retain full
-accuracy reports; the native-input test creates one directory per prompt/dtype.
+runs CPU reference checks first in the components/decoder allocation, plus a
+separate book 2K/4K job. Select `llama31` in the Blaze Models Prefill tests workflow
+to run both jobs. CPU checks use `--noconftest` so collection does not load device
+fixtures. Shared CPU helpers are in `tests/utils.py`; TTNN helpers are in
+`tests/device_utils.py` and `tests/model/device_utils.py`.
+
+### Full 2K accuracy: required local validation
+
+The approximately 33-minute full-model/all-layer accuracy suite is temporarily
+omitted from CI. Before pushing changes to model execution, numerical policy,
+reference calculations, or these accuracy tests, run both
+`test_prefill_model_vs_ref.py` and `test_prefill_native_input_accuracy.py` with the
+commands above. Keep all 11 cases and their existing thresholds. Record the
+results and tested commit in the PR; a green CI run alone does not establish full
+2K KV accuracy. Documentation-only and CI-selection changes do not require a
+repeat device run.
+
+Set `LLAMA_PREFILL_EVIDENCE_DIR` to a fresh directory to retain accuracy reports;
+the native-input test creates one directory per prompt/dtype. Set
+`PREFILL_SUMMARIES` to also retain compact per-layer PCC summaries.
+
+**Before project completion:** restore the full 2K accuracy CI job and obtain a
+passing run on the final integrated revision.
 
 ## Accuracy contract
 
