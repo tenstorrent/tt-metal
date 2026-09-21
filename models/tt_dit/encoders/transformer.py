@@ -575,6 +575,7 @@ class TransformerEncoder(Module):
         deepstack_embeds: Sequence[ttnn.Tensor] = (),
         max_length: int,
         cache_length: int | None = None,
+        prefill_length: int | None = None,
         eos_tokens: int | Sequence[int] | None,
         top_k: int | None = None,
         top_p: float = 1,
@@ -599,6 +600,8 @@ class TransformerEncoder(Module):
             max_length: Length of the prompt and the generated tokens together.
             cache_length: Length the k/v cache and the decode trace are sized for, `max_length`
                 when omitted. A fixed value keeps one trace across calls of different lengths.
+            prefill_length: Length the prompt is padded to on the right for the prefill, so that
+                prompts of different lengths share one set of compiled prefill kernels.
             eos_tokens: Ids that end a sequence; generation stops once every sequence has ended.
             top_k: Number of most likely tokens to sample among, or all of them when omitted.
             top_p: Probability mass of the most likely tokens to sample among.
@@ -636,6 +639,21 @@ class TransformerEncoder(Module):
         padded_seq_len = _padded_sequence_length(cache_length - 1)
         padded_seq_len = -(-padded_seq_len // WORKAROUND_MIN_DECODE_CHUNK_SIZE) * WORKAROUND_MIN_DECODE_CHUNK_SIZE
 
+        if prefill_length is None:
+            prefill_length = input_length
+        elif not input_length <= prefill_length <= padded_seq_len:
+            msg = (
+                f"prefill_length {prefill_length} must be between the prompt length {input_length} and {padded_seq_len}"
+            )
+            raise ValueError(msg)
+
+        padding = prefill_length - input_length
+        prefill_tokens = torch.nn.functional.pad(tokens, [0, padding])
+        if positions is not None:
+            positions = torch.nn.functional.pad(positions, [0, padding])
+        if vision_mask is not None:
+            vision_mask = torch.nn.functional.pad(vision_mask, [0, padding])
+
         if mask is not None:
             assert mask.shape == tokens.shape
             mask = torch.nn.functional.pad(mask, [0, padded_seq_len - input_length], value=1)
@@ -670,7 +688,7 @@ class TransformerEncoder(Module):
                 cache=cache,
             )
 
-        tt_input_tokens = tensor.from_torch(tokens, dtype=ttnn.uint32, device=device)
+        tt_input_tokens = tensor.from_torch(prefill_tokens, dtype=ttnn.uint32, device=device)
         tt_positions = (
             tensor.from_torch(positions.float(), dtype=ttnn.float32, device=device) if positions is not None else None
         )
@@ -706,14 +724,14 @@ class TransformerEncoder(Module):
             if prev_pos == 0:
                 if tt_positions is None:
                     cos, sin = self._get_pos_embeds(start=0, sequence_length=padded_seq_len)
-                    pos_embeds = (cos[:, :pos], sin[:, :pos])
+                    pos_embeds = (cos[:, :prefill_length], sin[:, :prefill_length])
                 else:
                     pos_embeds = None
 
                 # The prefill is currently not traced as the performance gain is small.
                 x = self.forward(
                     tokens=tt_input_tokens,
-                    mask=mask[:, :pos] if mask is not None else None,
+                    mask=mask[:, :prefill_length] if mask is not None else None,
                     positions=tt_positions,
                     pos_embeds=pos_embeds,
                     cache=cache,
@@ -722,6 +740,8 @@ class TransformerEncoder(Module):
                     deepstack_embeds=deepstack_embeds,
                     skip_final_linear=True,
                 )
+                # The prefill advanced the cache past its padding
+                cache.advance(pos - prefill_length)
                 step_output = self._last_token_logits(x, index=pos - 1)
             else:
                 step_output = decode_step(
