@@ -31,12 +31,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--length", type=int, default=4096)
+    parser.add_argument("--chunk-size", type=int, help="Match serving prefill chunks rather than one whole-prompt call")
     parser.add_argument("--debug-sync", action="store_true")
     parser.add_argument("--tp2-ring", action="store_true")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.batch % 2 or args.length % 32:
         parser.error("Batch must be even and length tile-aligned")
+    if args.chunk_size and (args.chunk_size % 32 or args.length % args.chunk_size):
+        parser.error("Chunk size must be tile-aligned and divide prompt length")
     torch.set_num_threads(8)
     torch.manual_seed(23)
     config = AutoConfig.from_pretrained(checkpoint_path(), local_files_only=True).text_config
@@ -49,13 +52,22 @@ def main():
     configure_fabric()
     root = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=134217728)
     report = dict(
-        batch=args.batch, length=args.length, layers=[0, 3], debug_sync=args.debug_sync, tp2_ring=args.tp2_ring, rows=[]
+        batch=args.batch,
+        length=args.length,
+        chunk_size=args.chunk_size,
+        layers=[0, 3],
+        debug_sync=args.debug_sync,
+        tp2_ring=args.tp2_ring,
+        rows=[],
     )
     references = {}
+    child_meshes = []
     try:
         for mode in ("tp4", "tp2dp2"):
             print("TP2_STAGE", mode, "create_meshes", flush=True)
             meshes = [root] if mode == "tp4" else root.create_submeshes(ttnn.MeshShape(1, 2))
+            if mode == "tp2dp2":
+                child_meshes = meshes
             groups = []
             local_batch = args.batch // len(meshes)
             for group_id, mesh in enumerate(meshes):
@@ -174,12 +186,24 @@ def main():
                 begin = time.perf_counter()
                 outputs = []
                 for group in groups:
-                    output = group["x"]
-                    for layer, state in zip(group["layers"], group["states"]):
-                        output = layer.prefill_sharded_forward(
-                            output, state=state, page_table=group["table"], cos=group["cos"], sin=group["sin"]
-                        )
-                    outputs.append(output)
+                    chunks = []
+                    chunk_size = args.chunk_size or args.length
+                    for start in range(0, args.length, chunk_size):
+                        end = start + chunk_size
+                        output = group["x"] if chunk_size == args.length else group["x"][:, start:end, :]
+                        chunk_cos = group["cos"] if chunk_size == args.length else group["cos"][:, start:end, :]
+                        chunk_sin = group["sin"] if chunk_size == args.length else group["sin"][:, start:end, :]
+                        for layer, state in zip(group["layers"], group["states"]):
+                            output = layer.prefill_sharded_forward(
+                                output,
+                                state=state,
+                                page_table=group["table"],
+                                cos=chunk_cos,
+                                sin=chunk_sin,
+                                start_pos=start,
+                            )
+                        chunks.append(output)
+                    outputs.append(chunks[0] if len(chunks) == 1 else ttnn.concat(chunks, dim=1))
                 sync()
                 prefill = time.perf_counter() - begin
                 samples = [
@@ -231,7 +255,10 @@ def main():
             if mode == "tp2dp2":
                 for mesh in meshes:
                     ttnn.close_mesh_device(mesh)
+                child_meshes = []
     finally:
+        for mesh in child_meshes:
+            ttnn.close_mesh_device(mesh)
         ttnn.close_mesh_device(root)
 
 
