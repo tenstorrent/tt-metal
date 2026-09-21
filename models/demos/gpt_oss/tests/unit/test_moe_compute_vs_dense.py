@@ -183,6 +183,15 @@ def test_moe_compute_vs_dense(mesh_device, device_params, reset_seeds):
         f"| tokens below 0.95: {len(bad)}/{num_tokens} {bad[:16]}"
     )
     logger.info(f"rows of bad tokens: {sorted({t // tokens_per_device for t in bad})}")
+    # The demo's divergent users cluster by within-device token index mod 8 (the Blackhole matmul
+    # ring size), so report the per-token agreement bucketed that way -- a ring-position defect
+    # shows up here as one or two buckets far below the rest.
+    by_mod = {}
+    for t in range(num_tokens):
+        by_mod.setdefault((t % tokens_per_device) % 8, []).append(per_tok[t])
+    logger.info(
+        "per-token cosine by (token_idx %% 8): " + " ".join(f"{m}:{min(v):.4f}" for m, v in sorted(by_mod.items()))
+    )
 
     # Row symmetry: with correlated inputs, token t and token t+tokens_per_device are the SAME
     # token on a different mesh row, so a correct flow must return identical vectors for them.
