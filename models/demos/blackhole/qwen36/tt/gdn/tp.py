@@ -2319,8 +2319,32 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
+        # Same CCL tuning forward_decode's out-projection all-reduce takes. This call passed none,
+        # so it ran on tt_all_reduce's 10/2 defaults while decode ran on decode_ccl_tuning's (1, 2)
+        # -- the two were reducing the same [1,1,32,5120] shape under different configs.
+        #
+        # KEEP EXPECTATIONS LOW. decode_ccl_tuning measured cps=10 -> 1 at -13.7% on this exact
+        # reduce-scatter, and an eager profile of a verify GDN layer put collectives at 27.4% of it,
+        # which together suggest a few percent. MEASURED END TO END it is worth ~nothing:
+        #     ISL 128, K=7, clean runs (no QWEN36_SPEC_TIMING -- its per-phase fences cost ~4 tok/s)
+        #     without: 47.48 / 47.27 tok/s      with: 47.58 / 47.59      -> +0.4%, near the noise floor
+        # Kept because it is free and it stops verify and decode reducing under different configs,
+        # not because it is a speedup.
+        #
+        # WHY THE 27.4% WAS MISLEADING: ops inside the trace cannot be profiled eagerly without
+        # multi-second host gaps between them (the profiler's mid-run dumps), so every collective in
+        # that report was timed on a cold fabric. The SAME [32,640]->[32,5120] AllGather measures
+        # ~105 us there and ~50 us in a warm tight loop. Size collective work off a warm measurement.
+        _dt = tpc.decode_ccl_tuning(self.args)
         o_red = tt_all_reduce(
-            partial, self.mesh, self.tt_ccl, cluster_axis=0, dim=3, topology=self.args.ccl_topology(), memory_config=mc
+            partial,
+            self.mesh,
+            self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            topology=self.args.ccl_topology(),
+            memory_config=mc,
+            **({"chunks_per_sync": _dt[0], "num_workers_per_link": _dt[1]} if _dt else {}),
         )
         ttnn.deallocate(qkv_all)
         ttnn.deallocate(a_all)
