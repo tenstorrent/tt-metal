@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <vector>
 #include "tt_metal/fabric/fabric_router_builder.hpp"
+#include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
@@ -92,21 +93,6 @@ private:
     std::vector<RouterConnectionPair> get_router_connection_pairs() const;
 
     /**
-     * Configure local connections between routers on this device.
-     *
-     * Generic connection establishment: iterates through all routers and
-     * establishes connections to local targets based on their connection mappings.
-     * Each router's mapping determines which local routers to connect to.
-     *
-     * Handles variable router configurations (e.g., 2-4 mesh routers on edge devices).
-     *
-     * Called by connect_routers() after inter-device connections are established.
-     */
-    void configure_local_connections(
-        const std::map<FabricRouterBuilder*, std::map<RoutingDirection, FabricRouterBuilder*>>&
-            routers_by_direction_map);
-
-    /**
      * Compile kernels for directions that have no router/eth channel.
      *
      * In UDM mode, edge devices (e.g., corner of a mesh) don't have neighbors
@@ -136,6 +122,11 @@ private:
     std::unordered_map<RoutingDirection, std::vector<chan_id_t>> channels_by_direction_;
     std::unordered_map<RoutingDirection, FabricNodeId> chip_neighbors_;
     std::unordered_set<chan_id_t> dispatch_links_;
+
+    // The per-chip facts threaded into every per-router build: edge capabilities classified once
+    // at discovery, ring predicates bound once in the constructor. Only peer-chip facts are live
+    // ControlPlane queries downstream.
+    ChipRoutingFacts chip_facts_;
 
     // Master router channel (first in map)
     chan_id_t master_router_chan_ = 0;
