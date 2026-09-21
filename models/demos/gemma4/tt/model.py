@@ -1032,12 +1032,6 @@ class Gemma4Model:
             # without it there is no reliable unpadded count here, so the
             # expand-gather path only activates when it's present.
             expand_gather = _rope_expand_gather_enabled() and position_idx_cache is not None
-            print(
-                f"[GEMMA4_ROPE_EXPAND_GATHER DIAG] env={os.environ.get('GEMMA4_ROPE_EXPAND_GATHER')!r} "
-                f"flag_enabled={_rope_expand_gather_enabled()} position_idx_cache_given={position_idx_cache is not None} "
-                f"=> expand_gather={expand_gather}",
-                flush=True,
-            )
             tp = self.mesh_config.tp if self.mesh_config is not None else 1
             for lt in used_types:
                 if lt not in self.rope_caches_2d:
@@ -2350,6 +2344,16 @@ class Gemma4Model:
         )
         if batched and hidden_states is not sliced:
             hidden_states.deallocate(True)
+        # Batched vLLM consumption receives PRE-norm hidden states (the
+        # batch_size>1 early-return in __call__ returns before self.norm.forward
+        # runs, matching _apply_norm_and_lm_head's own contract -- see that
+        # function's docstring). The single-user traced-prefill path is
+        # unaffected: _prefill_trace_mode already applies norm inside the trace
+        # before this function is ever called, so norming again here would be a
+        # double-norm for that path. Only the tile actually consumed downstream
+        # is normed (matches _apply_norm_and_lm_head's cost profile).
+        if batched and sliced.shape[-1] == self.hidden_size:
+            sliced = self.norm.forward(sliced)
         if sliced.shape[-1] == self.hidden_size:
             logits = self._apply_lm_head(sliced, is_decode=False, allow_sharded=allow_sharded)
             if batched and logits is not sliced:

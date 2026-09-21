@@ -264,11 +264,12 @@ def default_ccl_topology(mesh_device=None, is_moe: bool = False):
 
     n = mesh_device.get_num_devices() if mesh_device is not None else 0
     if n:
-        if n >= 8 and (is_blackhole() or not is_moe):
-            return ttnn.Topology.Ring
-        model = os.environ.get("HF_MODEL", "").lower()
-        if n >= 8 and (not is_moe) and "31b" in model:
-            return ttnn.Topology.Ring
+        if n >= 8 and not is_moe:
+            if is_blackhole():
+                return ttnn.Topology.Ring
+            model = os.environ.get("HF_MODEL", "").lower()
+            if "31b" in model:
+                return ttnn.Topology.Ring
         return ttnn.Topology.Linear
 
     try:
