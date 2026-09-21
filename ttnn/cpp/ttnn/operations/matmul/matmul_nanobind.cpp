@@ -1234,7 +1234,20 @@ void py_module(nb::module_& mod) {
             "compute_program_hash",
             &ttnn::prim::MatmulDeviceOperation::compute_descriptor_program_hash,
             nb::arg("operation_attributes"),
-            nb::arg("tensor_args"));
+            nb::arg("tensor_args"))
+        // prim::matmul with optional bias; ttnn.linear post-processes when in1 is batched
+        .def_static(
+            "invoke",
+            [](const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const std::optional<ttnn::Tensor>& bias,
+               const ttnn::prim::MatmulParams& attributes) {
+                return ttnn::prim::matmul(input_tensor_a, input_tensor_b, bias, std::nullopt, attributes);
+            },
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::arg("bias") = nb::none(),
+            nb::arg("attributes"));
 
     // Bind MatmulMultiCoreReuseMcast1DProgramFactory for descriptor creation
     nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory>(mod, "MatmulMultiCoreReuseMcast1DProgramFactory")
