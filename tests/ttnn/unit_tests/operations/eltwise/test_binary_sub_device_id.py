@@ -298,8 +298,8 @@ def test_binary_inplace_with_sub_device_id(device, op_fn):
         tt_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         tt_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-        result = op_fn(tt_a, tt_b, sub_device_id=ttnn.SubDeviceId(0))
-        result_torch = ttnn.to_torch(result)
+        op_fn(tt_a, tt_b, sub_device_id=ttnn.SubDeviceId(0))
+        result_torch = ttnn.to_torch(tt_a)
 
         if op_fn == ttnn.add_:
             expected = torch_a + torch_b
