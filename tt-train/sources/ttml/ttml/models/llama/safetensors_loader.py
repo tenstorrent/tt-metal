@@ -155,6 +155,15 @@ def _to_bf16_4d(arr: np.ndarray) -> np.ndarray:
     return arr.reshape(1, 1, *arr.shape).astype(ml_dtypes.bfloat16, order="C", copy=False)
 
 
+def _host_array(rule: _Rule, checkpoint: _Checkpoint, shape: tuple[int, int], shard_dim: int | None, mesh_size: int):
+    """*rule*'s sources as one bf16 array of *shape*, laid out over *mesh_size* ranks."""
+    blocks = [checkpoint[name].astype(ml_dtypes.bfloat16, copy=False) for name in rule.sources]
+    if rule.transform:
+        blocks = rule.transform(*blocks)
+    host = _assemble(blocks, shard_dim, mesh_size, rule.param)
+    return _fit(host, shape, rule.source_shape, rule.param)
+
+
 @dataclass(frozen=True)
 class _TpAxis:
     mesh: ttml.Mesh
@@ -351,13 +360,8 @@ def load_from_safetensors(
 
         for rule in rules:
             param = parameters[rule.param]
-            blocks = [checkpoint[name] for name in rule.sources]
-            if rule.transform:
-                blocks = rule.transform(*blocks)
             shard_dim = _sharded_dim(param, tp, rule.param)
-            host = _assemble(blocks, shard_dim, mesh_size, rule.param)
-            host = _fit(host, _global_shape(param, shard_dim, mesh_size), rule.source_shape, rule.param)
-
+            host = _host_array(rule, checkpoint, _global_shape(param, shard_dim, mesh_size), shard_dim, mesh_size)
             mapper = tp.mesh.axis_mapper("tp", tdim=shard_dim) if tp and shard_dim is not None else None
             param.assign(
                 ttml.autograd.Tensor.from_numpy(
