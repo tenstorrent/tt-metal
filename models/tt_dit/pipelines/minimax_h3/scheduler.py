@@ -24,6 +24,18 @@ from __future__ import annotations
 import torch
 
 
+def shift_sigmas(sigmas: torch.Tensor, shift: float) -> torch.Tensor:
+    """The exponential shift ``s * sigma / (1 + (s - 1) * sigma)``, mapping 0 to 0 and 1 to 1.
+
+    Module-level because a caller handing :meth:`MiniMaxH3Scheduler.set_timesteps` an explicit grid
+    has to shift it itself -- that path takes its grid verbatim -- and a second copy of this formula
+    is a silent-wrong-schedule bug waiting to happen.
+    """
+    if shift <= 0:
+        raise ValueError(f"shift must be positive, got {shift}")
+    return shift * sigmas / (1 + (shift - 1) * sigmas)
+
+
 class MiniMaxH3Scheduler:
     """Rectified-flow Euler scheduler (``eta = 0``) with an exponential sigma shift."""
 
@@ -73,10 +85,9 @@ class MiniMaxH3Scheduler:
             # The rectified-flow sigma range is fixed at [1.0, 0.0], and the shift
             # maps 0 to exactly 0 so the terminal point survives it.
             base = torch.linspace(1.0, 0.0, int(num_inference_steps), dtype=torch.float32)
-            sigmas = self._shift * base / (1 + (self._shift - 1) * base)
             # The shift compresses the grid near sigma = 1; collapse the float32
             # collisions that creates rather than stepping with ratio == 1.
-            sigmas = torch.unique_consecutive(sigmas)
+            sigmas = torch.unique_consecutive(shift_sigmas(base, self._shift))
         else:
             sigmas = torch.as_tensor(sigmas, dtype=torch.float32).flatten().cpu()
             if sigmas.numel() < 2 or not bool((sigmas[1:] < sigmas[:-1]).all()) or sigmas[-1].item() != 0.0:

@@ -82,10 +82,11 @@ from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import bf16_tensor, from_torch, local_device_to_torch
-from .adaln_precompute import MiniMaxH3AdalnLoraFold, precompute_adaln_table, request_step_timesteps
+from .adaln_precompute import MiniMaxH3AdalnLoraFold, MiniMaxH3TwoTime, precompute_adaln_table, request_step_levels
 from .conditioning import MINIMAX_H3_PIXEL_MEAN as _MINIMAX_H3_PIXEL_MEAN
 from .conditioning import MINIMAX_H3_PIXEL_STD as _MINIMAX_H3_PIXEL_STD
 from .conditioning import encode_keyframes, keyframe_condition_noise
+from .hyperflow_minimax_h3 import MiniMaxH3HyperFlow
 from .packing import (
     MINIMAX_H3_AUDIO_CHANNELS,
     MINIMAX_H3_AUDIO_LATENTS_PER_SECOND,
@@ -99,7 +100,7 @@ from .packing import (
     audio_latent_num_frames,
     build_packed_sequence,
     build_rope_tables,
-    build_row_timesteps,
+    build_row_levels,
     patchify_video_latents,
     prepare_keyframe_image,
     resolve_canvas_size,
@@ -132,6 +133,11 @@ MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
 # Read from the two scheduler_config.json files, which hold nothing else.
 VIDEO_SHIFT = 12.0
 AUDIO_SHIFT = 3.0
+
+# Bumped whenever the on-disk AdaLN table's field layout changes. A file written by another format
+# unpickles into a dataclass whose fields have moved, so it would modulate from whatever survived
+# rather than fail -- exactly the silence the cache key exists to prevent.
+_ADALN_TABLE_FORMAT = "levels-v2"
 
 
 _AUDIO_T_FACTOR_ENV = "MINIMAX_H3_AUDIO_T_FACTOR"
@@ -321,8 +327,11 @@ class MiniMaxH3Pipeline:
         self.lora_path = None if lora_path is None else Path(lora_path)
         self.lora_strength = float(lora_strength)
         self._lora_entries: list | None = None
+        self._lora_metadata: dict[str, str] = {}
         self._lora_digest: str | None = None
         self._lora_report = None
+        self._hyperflow: MiniMaxH3HyperFlow | None = None
+        self._hyperflow_parsed = False
         # Only consult the preset for what the caller left unset, so an untuned shape with every
         # parallel setting supplied runs rather than raising -- the escape hatch `create_pipeline`
         # documents. `coresident` is residency rather than parallelism and has a safe default, so it
@@ -423,7 +432,7 @@ class MiniMaxH3Pipeline:
         self._audio_decoder = None
         self._audio_encoder = None
         self._adaln_cache = None
-        self._adaln_cache_steps: int | None = None
+        self._adaln_cache_schedule: str | None = None
         self._resident: str | None = None
         # The last call's (label, seconds) rows, as LTXPipeline exposes them, so a test can assert on
         # or report the breakdown without re-timing anything.
@@ -1061,20 +1070,72 @@ class MiniMaxH3Pipeline:
         return f"lora={self._lora_digest}@{self.lora_strength:g}"
 
     def _lora_adapter_entries(self) -> list:
-        """Parse the adapter once; both halves are read from this."""
+        """Parse the adapter once; every half is read from this."""
         if self._lora_entries is None:
             entries, stats = parse_adapter(self.lora_path)
             logger.info(f"adapter {self.lora_path.name}: {stats}")
             self._lora_entries = entries
+            self._lora_metadata = dict(stats.metadata)
         return self._lora_entries
 
+    @property
+    def hyperflow(self) -> MiniMaxH3HyperFlow | None:
+        """The adapter's sampling contract, or None when it publishes none (or there is no adapter).
+
+        Read once and memoized because it decides the step count, and a contract that appeared
+        halfway through a request would leave the AdaLN table built for a different schedule than
+        the loop runs.
+        """
+        if not self._hyperflow_parsed:
+            if self.lora_path is not None:
+                self._lora_adapter_entries()
+            self._hyperflow = MiniMaxH3HyperFlow.from_adapter_metadata(
+                self._lora_metadata, video_shift=VIDEO_SHIFT, audio_shift=AUDIO_SHIFT
+            )
+            if self._hyperflow is not None:
+                self._hyperflow.assert_supports_task(self.task)
+                logger.info(
+                    f"adapter samples its own schedule: {self._hyperflow.num_forwards} forwards, "
+                    f"gate {self._hyperflow.gate:g} ({self._hyperflow.identity()})"
+                )
+            self._hyperflow_parsed = True
+        return self._hyperflow
+
+    def _adaln_host_entries(self) -> list:
+        """The adapter's host half: entries whose target never becomes a device parameter."""
+        return [entry for entry in self._lora_adapter_entries() if is_host_path(entry.path)]
+
     def _adaln_lora_fold(self):
-        """The adapter's host half, or None when there is no adapter."""
+        """The base half of the fold, or None when there is no adapter.
+
+        The endpoint embedder's entries are held back for `_adaln_two_time`: they target a module
+        the checkpoint does not have, and folding them onto `time_embedder` here would adapt the
+        base embedder with the endpoint's delta on top of its own.
+        """
         if self.lora_path is None:
             return None
-        host = [entry for entry in self._lora_adapter_entries() if is_host_path(entry.path)]
+        host = [
+            entry
+            for entry in self._adaln_host_entries()
+            if not entry.path.startswith(MiniMaxH3AdalnLoraFold.ENDPOINT_PREFIX)
+        ]
         logger.info(f"folding {len(host)} AdaLN adapter entries into the precomputed table")
         return MiniMaxH3AdalnLoraFold(host, strength=self.lora_strength)
+
+    def _adaln_two_time(self) -> MiniMaxH3TwoTime | None:
+        """The interval-conditioning half of the adapter, or None without a sampling contract."""
+        contract = self.hyperflow
+        if contract is None:
+            return None
+        fold = MiniMaxH3AdalnLoraFold.endpoint(self._adaln_host_entries(), strength=self.lora_strength)
+        if not fold.targets():
+            msg = (
+                f"adapter claims a two-time contract (gate {contract.gate:g}) but carries no "
+                f"`{MiniMaxH3AdalnLoraFold.ENDPOINT_PREFIX}*` tensors; the endpoint of every step "
+                "would be embedded with the unadapted base weights"
+            )
+            raise ValueError(msg)
+        return MiniMaxH3TwoTime(gate=contract.gate, weight_hook=fold)
 
     def _apply_lora(self, model: MiniMaxH3Transformer3DModel) -> None:
         """Bind the adapter's device half onto a freshly loaded transformer.
@@ -1104,16 +1165,30 @@ class MiniMaxH3Pipeline:
         )
         logger.info(f"{self._lora_report.summary()} over {promoted} promoted linears in {time.time() - t0:.1f}s")
 
-    def _adaln_cache_path(self, num_inference_steps: int) -> Path:
+    @staticmethod
+    def _schedule_identity(scheduler: MiniMaxH3Scheduler, audio_scheduler: MiniMaxH3Scheduler) -> str:
+        """A cache-key term for the exact grids a table's rows were projected from.
+
+        The grids rather than the step count and the two shifts they were derived from: an adapter
+        may publish its own grid, and then the step count no longer determines it.
+        """
+        grids = ";".join(
+            ",".join(f"{sigma:.9g}" for sigma in schedule.sigmas.tolist()) for schedule in (scheduler, audio_scheduler)
+        )
+        return f"sigmas=[{grids}]"
+
+    def _adaln_cache_path(self, schedule_identity: str) -> Path:
         """Disk location for a built table.
 
         The key must cover **everything the rows depend on**, because a stale hit is silent: it
         modulates every block slightly wrong at every step, in the same direction, and nothing
-        downstream can notice. That is the schedule (step count and both per-modality shifts), the
-        conditioning floor, the model geometry, and the checkpoint itself.
+        downstream can notice. That is the schedule (both per-modality sigma grids), the
+        conditioning floor, the interval conditioning, the model geometry, and the checkpoint
+        itself.
         """
         cache_dir = Path(os.environ.get("TT_DIT_CACHE_DIR") or Path.home() / ".cache/tt-dit") / "minimax-h3-adaln"
         cache_dir.mkdir(parents=True, exist_ok=True)
+        contract = self.hyperflow
         key = "|".join(
             str(part)
             for part in (
@@ -1121,9 +1196,10 @@ class MiniMaxH3Pipeline:
                 # The partition: the two share a repository and a config, so without it
                 # they hash to one file and a ref2va run modulates with t2va's weights.
                 self.transformer_subfolder,
-                num_inference_steps,
-                VIDEO_SHIFT,
-                AUDIO_SHIFT,
+                _ADALN_TABLE_FORMAT,
+                schedule_identity,
+                # The gate and the endpoint grid change every row without changing any other term.
+                "two_time=none" if contract is None else contract.identity(),
                 MINIMAX_H3_KEYFRAME_NOISE_AUG,
                 # ref2va carries a fourth level (the audio conditioning t = 1.0), so its table
                 # has more rows per step than t2va's and the two must not share a file.
@@ -1138,29 +1214,68 @@ class MiniMaxH3Pipeline:
         )
         return cache_dir / f"{hashlib.sha256(key.encode()).hexdigest()[:32]}.adaln.pt"
 
-    def _prepare_adaln_cache(self, num_inference_steps: int):
+    _DEFAULT_NUM_INFERENCE_STEPS = 50
+
+    def _build_schedulers(self, num_inference_steps: int | None) -> tuple[MiniMaxH3Scheduler, MiniMaxH3Scheduler, int]:
+        """Both modalities' schedulers, and the grid-point count the request actually runs.
+
+        An adapter that publishes a sampling contract owns the grid: it was distilled on one, and
+        any other is a different problem than the weights solve. `num_inference_steps` is then a
+        cross-check rather than an input -- a caller asking for another count is refused instead of
+        being served a schedule the weights never saw. Without a contract it is the input it always
+        was, defaulting to Diffusers' 50 points.
+        """
+        contract = self.hyperflow
+        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
+        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
+        if contract is None:
+            steps = self._DEFAULT_NUM_INFERENCE_STEPS if num_inference_steps is None else int(num_inference_steps)
+            scheduler.set_timesteps(steps)
+            audio_scheduler.set_timesteps(steps)
+            return scheduler, audio_scheduler, steps
+
+        contract.assert_forwards(num_inference_steps)
+        # The shift is applied to the adapter's grid on host: `set_timesteps(sigmas=...)` takes a
+        # grid verbatim, which is the only way to install one the scheduler would not have built.
+        scheduler.set_timesteps(sigmas=contract.modality_sigmas(VIDEO_SHIFT))
+        audio_scheduler.set_timesteps(sigmas=contract.modality_sigmas(AUDIO_SHIFT))
+        return scheduler, audio_scheduler, contract.num_grid_points
+
+    def _prepare_adaln_cache(self, scheduler: MiniMaxH3Scheduler, audio_scheduler: MiniMaxH3Scheduler):
         """Host-build (or load) the modulation table for this schedule and upload it.
 
         A prepare, so it belongs outside every timed row: the build reads the checkpoint's AdaLN
         weights on host and is paid once per (checkpoint, schedule).
+
+        Takes the request's own schedulers rather than rebuilding a pair from a step count. The
+        table is addressed by matching a row's level *by value* against what the loop computes from
+        these same objects, so reading both from one source is what makes the match exact instead of
+        exact-in-practice.
         """
-        if self._adaln_cache is not None and self._adaln_cache_steps == num_inference_steps:
+        identity = self._schedule_identity(scheduler, audio_scheduler)
+        if self._adaln_cache is not None and self._adaln_cache_schedule == identity:
             return self._adaln_cache
 
-        video = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
-        video.set_timesteps(num_inference_steps)
-        audio.set_timesteps(num_inference_steps)
-        step_timesteps = request_step_timesteps(
-            video.sigmas,
-            audio.sigmas,
+        contract = self.hyperflow
+        endpoints = (
+            {}
+            if contract is None
+            else {
+                "video_endpoints": contract.endpoints(scheduler.sigmas),
+                "audio_endpoints": contract.endpoints(audio_scheduler.sigmas),
+            }
+        )
+        step_levels = request_step_levels(
+            scheduler.sigmas,
+            audio_scheduler.sigmas,
             MINIMAX_H3_KEYFRAME_NOISE_AUG,
             # A fourth level for ref2va only: reference soundtrack rows run at a literal
             # t = 1.0. t2va and fl2va have no audio conditioning rows and keep three.
             audio_condition_timestep=MINIMAX_H3_AUDIO_CONDITION_TIMESTEP if self.task == "ref2va" else None,
+            **endpoints,
         )
 
-        path = self._adaln_cache_path(num_inference_steps)
+        path = self._adaln_cache_path(identity)
         # Unanimous even though both branches are host-only: a rank reading a half-written table
         # diverges numerically and silently.
         if self._ranks_agree(path.is_file()):
@@ -1168,21 +1283,25 @@ class MiniMaxH3Pipeline:
             table = torch.load(path, weights_only=False)
         else:
             logger.info(
-                f"building the AdaLN table on host for {len(step_timesteps)} forwards from "
+                f"building the AdaLN table on host for {len(step_levels)} forwards from "
                 f"{self.transformer_subfolder}/ (reads the checkpoint)"
             )
             t0 = time.time()
             fold = self._adaln_lora_fold()
+            two_time = self._adaln_two_time()
             table = precompute_adaln_table(
                 self.weights_dir / self.transformer_subfolder,
-                step_timesteps,
+                step_levels,
                 num_layers=self.transformer_config["num_layers"],
                 hidden_size=self.transformer_config["hidden_size"],
                 freq_dim=self.transformer_config["freq_dim"],
                 weight_hook=fold,
+                two_time=two_time,
             )
-            if fold is not None:
-                unapplied = fold.unapplied()
+            # Both folds, not just the base one: the endpoint fold is the half with no device
+            # counterpart to fail later, so an unrecognised spelling there is invisible after this.
+            for folded in (fold, None if two_time is None else two_time.weight_hook):
+                unapplied = [] if folded is None else folded.unapplied()
                 if unapplied:
                     msg = (
                         f"{len(unapplied)} AdaLN adapter target(s) matched no checkpoint key "
@@ -1211,8 +1330,8 @@ class MiniMaxH3Pipeline:
             num_layers=self.transformer_config["num_layers"],
             hidden_size=self.transformer_config["hidden_size"],
         )
-        self._adaln_cache.assert_covers(len(step_timesteps))
-        self._adaln_cache_steps = num_inference_steps
+        self._adaln_cache.assert_covers(len(step_levels))
+        self._adaln_cache_schedule = identity
         self._adaln_table = table
         return self._adaln_cache
 
@@ -1526,10 +1645,14 @@ class MiniMaxH3Pipeline:
         aspect_ratio: tuple[float, float] = (16, 9),
         height: int | None = None,
         width: int | None = None,
-        num_inference_steps: int = 50,
+        num_inference_steps: int | None = None,
         seed: int = 0,
     ) -> MiniMaxH3Output:
         """`image` and/or `last_image` select `fl2va`; `references` selects `ref2va`; neither `t2va`.
+
+        `num_inference_steps` counts sigma *grid points*, so it drives one fewer model evaluation.
+        `None` defers to the loaded adapter's own grid, or to Diffusers' 50 points without one; an
+        adapter that publishes a grid refuses any other count. See `_build_schedulers`.
 
         Note that `fl2va` at a given seed does **not** reproduce `t2va` at that seed, even with a
         keyframe that contributes nothing: the conditioning noise is the first draw off the request
@@ -1588,6 +1711,11 @@ class MiniMaxH3Pipeline:
         # follow it. So a lone `last_image` is stretched. That is the reference's behaviour and it looks
         # like a bug until you see the `last`-only case pass.
         keyframes = [prepare_keyframe_image(k, height, width, stretch=(i == 0)) for i, k in enumerate(sources)]
+        # Both schedules. Built here rather than after the layout because the keyframe step below needs
+        # `scale_noise`, which takes its `t` at face value and works before `set_timesteps` -- but they
+        # are set up fully so there is only one place that decides the schedule.
+        scheduler, audio_scheduler, num_inference_steps = self._build_schedulers(num_inference_steps)
+
         task = "t2va" if not keyframes else ("fl2va" if image is not None else "fl2va_last_frame")
         logger.info(
             f"{task} {width}x{height}, {num_frames} frames ({num_frames / MINIMAX_H3_FPS:.2f} s), "
@@ -1601,14 +1729,6 @@ class MiniMaxH3Pipeline:
         t_encode = time.time() - t0
         timings.append(("Encoder", t_encode))
         logger.info(f"Encoding: {t_encode:.1f}s")
-
-        # Both schedules. Built here rather than after the layout because the keyframe step below needs
-        # `scale_noise`, which takes its `t` at face value and works before `set_timesteps` -- but they
-        # are set up fully so there is only one place that decides the schedule.
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
 
         # All noise for the request, off one generator, in the reference's draw order: conditioning
         # first, then video, then audio. The reference spreads these across two blocks -- the keyframe
@@ -1695,7 +1815,7 @@ class MiniMaxH3Pipeline:
         aspect_ratio: tuple[float, float],
         height: int | None,
         width: int | None,
-        num_inference_steps: int,
+        num_inference_steps: int | None,
         seed: int,
         timings: list[tuple[str, float]],
     ) -> MiniMaxH3Output:
@@ -1724,6 +1844,7 @@ class MiniMaxH3Pipeline:
         num_audio_latents = audio_latent_num_frames(num_frames)
         num_latent_frames = video_latent_num_frames(num_frames)
         kinds = "+".join(reference.kind + ("(+audio)" if reference.has_audio else "") for reference in prepared)
+        scheduler, audio_scheduler, num_inference_steps = self._build_schedulers(num_inference_steps)
         logger.info(
             f"ref2va {width}x{height}, {num_frames} frames ({num_frames / MINIMAX_H3_FPS:.2f} s), "
             f"{num_latent_frames} latent frames, {num_audio_latents} audio latents, "
@@ -1736,11 +1857,6 @@ class MiniMaxH3Pipeline:
         t_encode = time.time() - t0
         timings.append(("Encoder", t_encode))
         logger.info(f"Encoding: {t_encode:.1f}s")
-
-        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
-        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
 
         # 3. Reference VAE encode. Before the layout, because it is what resolves the geometry the
         # layout is built from -- and before the DiT exists, so the encoders get an uncontended
@@ -1872,7 +1988,7 @@ class MiniMaxH3Pipeline:
         # The weight load is a prepare, so it sits outside the timed row -- and so is the AdaLN table
         # build, which is paid once per (checkpoint, schedule).
         transformer = self._prepare_transformer()
-        adaln_cache = self._prepare_adaln_cache(num_inference_steps)
+        adaln_cache = self._prepare_adaln_cache(scheduler, audio_scheduler)
         vsa_geometry = None
         if self.vsa_config is not None and not self.vsa_config.bypass:
             vsa_geometry = self._prepare_vsa(transformer, layout, num_latent_frames, latent_height, latent_width)
@@ -1939,7 +2055,7 @@ class MiniMaxH3Pipeline:
         height: int | None = None,
         width: int | None = None,
         aspect_ratio: tuple[float, float] = (16, 9),
-        num_inference_steps: int = 50,
+        num_inference_steps: int | None = None,
     ) -> None:
         """Compile and allocate everything a real call needs, so the next call measures compute only.
 
@@ -1963,7 +2079,8 @@ class MiniMaxH3Pipeline:
             task = "ref2va"
         else:
             task = "t2va" if image is None and last_image is None else "fl2va"
-        logger.info(f"warmup ({task}): {num_frames}f, {num_inference_steps} steps, prompt {len(prompt)} chars")
+        # No step count here: the call below resolves it against the adapter's own grid and logs it.
+        logger.info(f"warmup ({task}): {num_frames}f, prompt {len(prompt)} chars")
         self(
             prompt,
             image=image,
@@ -2066,6 +2183,12 @@ class MiniMaxH3Pipeline:
 
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
+        # Read off the same schedulers the AdaLN table was built from, so the levels the loop asks
+        # for and the levels the table holds are the same float32 values rather than two
+        # computations that agree.
+        contract = self.hyperflow
+        video_endpoints = None if contract is None else contract.endpoints(scheduler.sigmas)
+        audio_endpoints = None if contract is None else contract.endpoints(audio_scheduler.sigmas)
 
         # Trace the per-step forward where the preset asks for it, as Wan does on the quad only. At
         # SP=32 a step is dominated by dispatching 50 blocks from host across four MPI ranks rather
@@ -2097,26 +2220,34 @@ class MiniMaxH3Pipeline:
             t_step = time.time()
             # Per-row noise levels, reduced to the (distinct timesteps, per-row index) pair the
             # model addresses its AdaLN table through.
-            unique, row_index = build_row_timesteps(
+            unique, row_index = build_row_levels(
                 layout,
                 float(t),
                 float(audio_timesteps[i]),
                 max(float(t), MINIMAX_H3_KEYFRAME_NOISE_AUG),
                 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP,
+                video_endpoint=None if video_endpoints is None else float(video_endpoints[i]),
+                audio_endpoint=None if audio_endpoints is None else float(audio_endpoints[i]),
             )
             # `tt_cond` is hoisted above the loop; only the generated rows change per step.
             tt_video = bf16_tensor(video_rows[num_cond:].unsqueeze(0).unsqueeze(0), device=self.mesh_device)
             tt_audio = bf16_tensor(audio_rows[num_cond_audio:].unsqueeze(0).unsqueeze(0), device=self.mesh_device)
             # Replicated, fp32 so the sinusoid is computed in fp32, and shaped [1, 1, T, 1] so it
             # broadcasts against the frequency factor.
-            tt_timestep = from_torch(unique.reshape(1, 1, -1, 1), device=self.mesh_device, dtype=ttnn.float32)
-            # `build_row_timesteps` numbers levels in its own order; the table numbers them in
-            # `step_timesteps(step)` order. Match by **value** rather than assuming the two agree:
+            # The `t` column only: the device embedder this feeds is the single-time one, and it
+            # runs only when the AdaLN table is absent -- a two-time schedule requires the table.
+            tt_timestep = from_torch(unique[:, 0].reshape(1, 1, -1, 1), device=self.mesh_device, dtype=ttnn.float32)
+            # `build_row_levels` numbers levels in its own order; the table numbers them in
+            # `step_levels(step)` order. Match by **value** rather than assuming the two agree:
             # the level count varies per step (the conditioning floor collides with the video level
             # early in the schedule and separates later), so positional correspondence is not
-            # guaranteed. Rows are then absolute, which is what the resident table is indexed by.
-            levels = self._adaln_table.step_timesteps(i)
-            position = torch.tensor([int((levels == value).nonzero()[0, 0]) for value in unique], dtype=row_index.dtype)
+            # guaranteed. Matching is over the whole `(t, r)` pair, so two modalities that meet at
+            # one `t` while aiming at different endpoints stay distinct. Rows are then absolute,
+            # which is what the resident table is indexed by.
+            levels = self._adaln_table.step_levels(i)
+            position = torch.tensor(
+                [int((levels == level).all(dim=-1).nonzero()[0, 0]) for level in unique], dtype=row_index.dtype
+            )
             step_row_index = adaln_cache.step_offset(i) + position[row_index]
 
             tt_adaln = self._row_indices(

@@ -37,7 +37,7 @@ trajectory rather than averaging out.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -140,15 +140,17 @@ class MiniMaxH3AdalnTable:
     """Precomputed AdaLN modulation for every step of one request.
 
     Rows are grouped by denoise step. ``step_offsets[i]`` is where step ``i``'s
-    timesteps begin in :attr:`timesteps`, so a row at step ``i`` with local
-    timestep index ``m`` and modality tag ``tag`` lives at
+    levels begin in :attr:`levels`, so a row at step ``i`` with local
+    level index ``m`` and modality tag ``tag`` lives at
     ``(step_offsets[i] + m) * modality_num + tag`` along ``block_params``' second
     axis. ``param`` is ordered per :data:`MINIMAX_H3_ADALN_PARAM_NAMES`.
     ``final_shift`` / ``final_scale`` are indexed by ``step_offsets[i] + m``
     alone -- the final layer has one modality.
     """
 
-    timesteps: torch.Tensor
+    levels: torch.Tensor
+    """``[total_levels, 2]``: the ``(t, r)`` pair each row was modulated for."""
+
     step_offsets: torch.Tensor
     block_params: torch.Tensor
     final_shift: torch.Tensor
@@ -169,21 +171,21 @@ class MiniMaxH3AdalnTable:
     def nbytes(self) -> int:
         return sum(t.numel() * t.element_size() for t in (self.block_params, self.final_shift, self.final_scale))
 
-    def step_timesteps(self, step: int) -> torch.Tensor:
-        """The sorted distinct timesteps of one step, as the reference builds them."""
-        return self.timesteps[int(self.step_offsets[step]) : int(self.step_offsets[step + 1])]
+    def step_levels(self, step: int) -> torch.Tensor:
+        """The sorted distinct ``(t, r)`` levels of one step, as ``[num_levels, 2]``."""
+        return self.levels[int(self.step_offsets[step]) : int(self.step_offsets[step + 1])]
 
     def step_rows(self, step: int, timestep_indices: torch.Tensor) -> torch.Tensor:
         """Map a step's local ``timestep_indices`` to rows in :attr:`final_shift`.
 
-        ``timestep_indices`` is what ``build_row_timesteps`` returns, so this is
+        ``timestep_indices`` is what ``build_row_levels`` returns, so this is
         the only translation a caller needs.
         """
         offset = int(self.step_offsets[step])
         span = int(self.step_offsets[step + 1]) - offset
         indices = timestep_indices.reshape(-1)
         if int(indices.numel()) and int(indices.max()) >= span:
-            raise ValueError(f"timestep index {int(indices.max())} exceeds step {step}'s {span} timesteps")
+            raise ValueError(f"level index {int(indices.max())} exceeds step {step}'s {span} levels")
         return offset + indices
 
     def adaln_indices(self, step: int, timestep_indices: torch.Tensor, token_tags: torch.Tensor) -> torch.Tensor:
@@ -196,13 +198,20 @@ class MiniMaxH3AdalnTable:
         return rows * MINIMAX_H3_MODALITY_NUM + token_tags.clamp(min=0).reshape(-1)
 
 
-def request_step_timesteps(
+def request_step_levels(
     video_sigmas: torch.Tensor,
     audio_sigmas: torch.Tensor,
     condition_noise_aug: float | None = None,
     audio_condition_timestep: float | None = None,
+    video_endpoints: torch.Tensor | None = None,
+    audio_endpoints: torch.Tensor | None = None,
 ) -> list[torch.Tensor]:
-    """The sorted distinct timesteps of each denoise step.
+    """The sorted distinct ``(t, r)`` levels of each denoise step, as ``[num_levels, 2]``.
+
+    ``t`` is the noise level a row is conditioned on; ``r`` is the endpoint the step integrates
+    towards. A single-time schedule leaves the endpoints out and gets ``r == t`` everywhere, which
+    makes the blend in :func:`blend_two_time` collapse and the table identical to a one-axis build.
+    A two-time adapter passes ``r_i = 1 - sigma_{i+1}`` and is conditioned on the interval instead.
 
     Both modalities step their own schedule inside one forward and video conditioning
     rows sit at ``max(video_t, noise_aug)``, so a step carries two or three levels.
@@ -214,7 +223,14 @@ def request_step_timesteps(
     conditioning rows -- so their tables are unchanged, and the pipeline's table cache
     key already separates the two partitions.
 
-    A missing level fails loudly: the table is addressed by matching a row's timestep
+    Conditioning rows are anchors -- they have nowhere to go -- so their interval is empty and
+    ``r == t`` there whatever the generated rows do.
+
+    Levels are distinct over the **pair**, never over ``t`` alone: the two modalities shift the same
+    grid by different amounts and can land on one ``t`` while aiming at different ``r``, and merging
+    those rows would modulate one modality with the other's interval.
+
+    A missing level fails loudly: the table is addressed by matching a row's level
     *by value*, so a level it does not carry raises ``IndexError`` in the caller's lookup
     rather than silently modulating with a neighbouring row.
     """
@@ -222,26 +238,73 @@ def request_step_timesteps(
     audio = 1.0 - audio_sigmas[:-1].to(torch.float32)
     if video.numel() != audio.numel():
         raise ValueError(f"video and audio schedules must have equal length, got {video.numel()} and {audio.numel()}")
+    video_r = video if video_endpoints is None else video_endpoints.to(torch.float32).flatten()
+    audio_r = audio if audio_endpoints is None else audio_endpoints.to(torch.float32).flatten()
+    if video_r.numel() != video.numel() or audio_r.numel() != audio.numel():
+        raise ValueError(
+            f"endpoints must carry one value per forward, got {video_r.numel()} video and "
+            f"{audio_r.numel()} audio against {video.numel()} forwards"
+        )
 
     steps = []
     for index in range(int(video.numel())):
-        levels = [video[index], audio[index]]
+        pairs = [(video[index], video_r[index]), (audio[index], audio_r[index])]
         if condition_noise_aug is not None:
-            levels.append(torch.clamp(video[index], min=float(condition_noise_aug)))
+            pinned = torch.clamp(video[index], min=float(condition_noise_aug))
+            pairs.append((pinned, pinned))
         if audio_condition_timestep is not None:
-            levels.append(torch.tensor(float(audio_condition_timestep), dtype=video.dtype))
-        steps.append(torch.unique(torch.stack(levels), sorted=True))
+            clean = torch.tensor(float(audio_condition_timestep), dtype=video.dtype)
+            pairs.append((clean, clean))
+        stacked = torch.stack([torch.stack(pair) for pair in pairs])
+        steps.append(torch.unique(stacked, dim=0, sorted=True))
     return steps
+
+
+@dataclass(frozen=True)
+class MiniMaxH3TwoTime:
+    """Interval conditioning: how to embed a level's endpoint and how far to blend towards it.
+
+    ``gate`` and the endpoint embedder's own adapter half are published together in the adapter's
+    safetensors header, so this travels as one object rather than as two parameters that can be
+    passed inconsistently. ``weight_hook`` folds the endpoint adapter onto the *unadapted*
+    ``time_embedder`` weights -- the endpoint embedder is a copy of the base one taken before any
+    adapter is injected, so the two halves must not see each other's delta.
+    """
+
+    gate: float
+    weight_hook: Callable[[str, torch.Tensor], torch.Tensor] | None = None
+
+
+def blend_two_time(
+    levels: torch.Tensor,
+    base_weights: Sequence[torch.Tensor],
+    endpoint_weights: Sequence[torch.Tensor] | None,
+    gate: float,
+    freq_dim: int = 256,
+) -> torch.Tensor:
+    """``temb`` for one step's ``[num_levels, 2]`` levels: ``emb_t + gate * (emb_r - emb_t)``.
+
+    ``gate == 0`` returns ``emb_t`` before any arithmetic on ``emb_r``, so a single-time schedule
+    reproduces the one-axis build bit for bit rather than to within a rounding of zero. Both
+    embeddings run at the level count the reference uses -- see the module docstring on why
+    ``time_embedder``'s batch size is load-bearing.
+    """
+    t_emb = time_embedding(levels[:, 0], *base_weights, freq_dim=freq_dim)
+    if gate == 0.0:
+        return t_emb
+    r_emb = time_embedding(levels[:, 1], *(endpoint_weights or base_weights), freq_dim=freq_dim)
+    return t_emb + gate * (r_emb - t_emb)
 
 
 def precompute_adaln_table(
     checkpoint_dir: str | Path,
-    step_timesteps: list[torch.Tensor],
+    step_levels: list[torch.Tensor],
     num_layers: int = 50,
     hidden_size: int = 5376,
     freq_dim: int = 256,
     device: torch.device | str = "cpu",
     weight_hook: Callable[[str, torch.Tensor], torch.Tensor] | None = None,
+    two_time: MiniMaxH3TwoTime | None = None,
 ) -> MiniMaxH3AdalnTable:
     """Build the modulation table, reading each block's projection once.
 
@@ -258,6 +321,11 @@ def precompute_adaln_table(
     resident at a time -- that reading the whole 26 GB to patch it would destroy. Anything it
     changes must also change :meth:`MiniMaxH3Pipeline._adaln_cache_path`'s key, or a later run
     silently loads the unadapted table.
+
+    ``two_time`` turns the levels' second column from decoration into conditioning -- see
+    :func:`blend_two_time`. It reads ``time_embedder`` a second time to build the endpoint
+    embedder, which is four small tensors and the only weight this whole builder reads twice.
+    Like ``weight_hook`` it changes every row of the table and must reach the cache key.
     """
     from safetensors import safe_open
 
@@ -292,13 +360,13 @@ def precompute_adaln_table(
             for key in handle.keys():
                 location[key] = shard
 
-        def get(key: str) -> torch.Tensor:
+        def get(key: str, hook: Callable | None = None) -> torch.Tensor:
             if key not in location:
                 raise KeyError(f"{key} not present in {checkpoint_dir}")
             tensor = handles[location[key]].get_tensor(key)
-            return tensor if weight_hook is None else weight_hook(key, tensor)
+            return tensor if hook is None else hook(key, tensor)
 
-        def get_any(*candidates: str) -> torch.Tensor:
+        def get_any(*candidates: str, hook: Callable | None = None) -> torch.Tensor:
             """First candidate key that exists.
 
             The two checkpoint layouts name every AdaLN surface differently: the original MiniMax
@@ -309,18 +377,20 @@ def precompute_adaln_table(
             """
             for candidate in candidates:
                 if candidate in location:
-                    return get(candidate)
+                    return get(candidate, hook)
             raise KeyError(f"none of {candidates} present in {checkpoint_dir}")
 
-        proj_in_weight = get_any("time_embedder.proj_in.weight", "time_embedder.linear_1.weight").to(device)
-        proj_in_bias = get_any("time_embedder.proj_in.bias", "time_embedder.linear_1.bias").to(device)
-        proj_out_weight = get_any("time_embedder.proj_out.weight", "time_embedder.linear_2.weight").to(device)
-        proj_out_bias = get_any("time_embedder.proj_out.bias", "time_embedder.linear_2.bias").to(device)
+        def time_embedder_weights(hook: Callable | None) -> list[torch.Tensor]:
+            return [get_any(*candidates, hook=hook).to(device) for candidates in _TIME_EMBEDDER_KEYS]
+
+        base_weights = time_embedder_weights(weight_hook)
+        # `None` hook rather than `weight_hook`: the endpoint embedder is a copy of the base one
+        # taken before the adapter is injected, so it carries only its own delta.
+        endpoint_weights = None if two_time is None else time_embedder_weights(two_time.weight_hook)
+        gate = 0.0 if two_time is None else float(two_time.gate)
         step_temb = [
-            time_embedding(
-                levels.to(device), proj_in_weight, proj_in_bias, proj_out_weight, proj_out_bias, freq_dim=freq_dim
-            )
-            for levels in step_timesteps
+            blend_two_time(levels.to(device), base_weights, endpoint_weights, gate, freq_dim=freq_dim)
+            for levels in step_levels
         ]
 
         block_params = None
@@ -347,16 +417,25 @@ def precompute_adaln_table(
             del handle
         handles.clear()
 
-    counts = torch.tensor([int(levels.numel()) for levels in step_timesteps], dtype=torch.long)
+    counts = torch.tensor([int(levels.shape[0]) for levels in step_levels], dtype=torch.long)
     step_offsets = torch.cat([torch.zeros(1, dtype=torch.long), counts.cumsum(0)])
     return MiniMaxH3AdalnTable(
-        timesteps=torch.cat([levels.to(torch.float32) for levels in step_timesteps]).to(device),
+        levels=torch.cat([levels.to(torch.float32) for levels in step_levels]).to(device),
         step_offsets=step_offsets,
         block_params=block_params,
         final_shift=shift,
         final_scale=scale,
     )
 
+
+# The original MiniMax release and the diffusers conversion name `time_embedder`'s two linears
+# differently; `get_any` resolves whichever the snapshot carries.
+_TIME_EMBEDDER_KEYS: tuple[tuple[str, str], ...] = (
+    ("time_embedder.proj_in.weight", "time_embedder.linear_1.weight"),
+    ("time_embedder.proj_in.bias", "time_embedder.linear_1.bias"),
+    ("time_embedder.proj_out.weight", "time_embedder.linear_2.weight"),
+    ("time_embedder.proj_out.bias", "time_embedder.linear_2.bias"),
+)
 
 # The two checkpoint layouts name every AdaLN surface differently, and an adapter is published
 # against the diffusers one. Both spellings map to the same fold entry so a hook built from one
@@ -379,13 +458,45 @@ class MiniMaxH3AdalnLoraFold:
     :meth:`unapplied` exists because the failure mode here is silence: a spelling this fold does not
     recognise produces a perfectly valid table built from unadapted weights, and every downstream
     check passes. Assert it is empty.
+
+    :meth:`endpoint` builds the second fold a two-time adapter needs -- see
+    :class:`MiniMaxH3TwoTime`.
     """
+
+    #: A two-time adapter names its endpoint embedder's modules under this prefix. They target no
+    #: module of the base transformer: the endpoint embedder is a copy of ``time_embedder``, so the
+    #: adapter addresses it by a name the checkpoint has never heard of.
+    ENDPOINT_PREFIX = "endpoint_time_embedder."
+
+    @classmethod
+    def endpoint(cls, entries: Sequence[AdapterEntry], *, strength: float = 1.0) -> MiniMaxH3AdalnLoraFold:
+        """The fold for a two-time adapter's endpoint embedder, over the base ``time_embedder`` keys.
+
+        Only ``endpoint_time_embedder.*`` entries are kept: the endpoint embedder replaces nothing
+        but ``time_embedder``, so an ``adaln_proj`` or ``norm_out`` delta belongs to the base fold
+        alone and folding it here too would apply it twice along the blend.
+        """
+        renamed = [
+            replace(entry, path=f"time_embedder.{entry.path[len(cls.ENDPOINT_PREFIX) :]}")
+            for entry in entries
+            if entry.path.startswith(cls.ENDPOINT_PREFIX)
+        ]
+        return cls(renamed, strength=strength)
 
     def __init__(self, entries: Sequence[AdapterEntry], *, strength: float = 1.0) -> None:
         self._strength = float(strength)
         self._deltas: dict[str, torch.Tensor] = {}
+        # One entry per adapter tensor, holding every spelling it answers to, diffusers first. Kept
+        # alongside `_deltas` because that map is keyed by spelling and so counts aliases twice.
+        self._groups: list[tuple[str, ...]] = []
         self._seen: set[str] = set()
         for entry in entries:
+            if entry.path.startswith(self.ENDPOINT_PREFIX):
+                msg = (
+                    f"{entry.path}: the endpoint embedder is not a checkpoint module; build its fold "
+                    "with `MiniMaxH3AdalnLoraFold.endpoint`"
+                )
+                raise ValueError(msg)
             suffix = "bias" if entry.kind == "diff_b" else "weight"
             if entry.kind == "lora":
                 delta = entry.B.to(torch.float32) @ entry.A.to(torch.float32)
@@ -394,8 +505,10 @@ class MiniMaxH3AdalnLoraFold:
             else:
                 msg = f"{entry.path}: {entry.kind} has no meaning for a host-folded AdaLN weight"
                 raise ValueError(msg)
-            for name in self._aliases(entry.path):
-                self._deltas[f"{name}.{suffix}"] = delta
+            keys = tuple(f"{name}.{suffix}" for name in self._aliases(entry.path))
+            self._groups.append(keys)
+            for key in keys:
+                self._deltas[key] = delta
 
     @staticmethod
     def _aliases(path: str) -> tuple[str, ...]:
@@ -420,10 +533,15 @@ class MiniMaxH3AdalnLoraFold:
         # load-bearing for `time_embedder`.
         return (tensor.to(torch.float32) + self._strength * delta).to(tensor.dtype)
 
+    def targets(self) -> list[str]:
+        """Checkpoint keys this fold would change, one per adapter entry, in the diffusers spelling."""
+        return sorted(keys[0] for keys in self._groups)
+
     def unapplied(self) -> list[str]:
-        """Fold entries no checkpoint key ever matched. Non-empty means part of the adapter is lost."""
-        # Aliases double every entry; report the diffusers spelling only.
-        return sorted(
-            {key for key in self._deltas if key not in self._seen}
-            & {key for key in self._deltas if not key.startswith(("blocks.", "final_layer.", "time_embedder.proj_"))}
-        )
+        """Fold entries no checkpoint key ever matched. Non-empty means part of the adapter is lost.
+
+        An entry counts as applied when *any* of its spellings was seen. A snapshot carries one
+        layout or the other, never both, so asking for the diffusers spelling specifically would
+        report every entry of an original-release checkpoint as lost.
+        """
+        return sorted(keys[0] for keys in self._groups if not any(key in self._seen for key in keys))

@@ -207,6 +207,35 @@ Artifacts land in `~/h3_t2va_artifacts`: `t2va.mp4` muxed, `t2va_silent.mp4`, `t
 The tier-6 quality gates (CLIP, VBench) always run; each skips only when its dependency is missing
 (`open_clip` not installed, no `~/vbench_env` interpreter).
 
+## Running a distillation adapter
+
+`lora_path` (or `MINIMAX_H3_LORA_PATH`) applies an adapter on device after the base weights load, so
+the 62 GB weight cache stays adapter-independent. The ~40% of the checkpoint that never reaches the
+device -- `adaln_proj`, `time_embedder`, `norm_out.linear` -- is folded into the AdaLN table as it is
+built instead; `pipelines/minimax_h3/adaln_precompute.MiniMaxH3AdalnLoraFold` is that half, and the
+pipeline asserts every one of its entries matched a checkpoint key.
+
+```bash
+export MINIMAX_H3_LORA_PATH=/path/to/adapter.safetensors
+scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_pipeline_lora_minimax_h3.py
+```
+
+An adapter may also publish its **own sampling contract** in its safetensors header -- a fixed sigma
+grid, and interval `(t, r)` conditioning with a blend gate. Then the step count is a property of the
+weights rather than a request parameter: `num_inference_steps` is refused unless it equals the grid's,
+and every step is conditioned on the interval it integrates instead of on the point it starts from.
+Because `time_embedder` is host-side under `precomputed_adaln`, that is entirely a change to the table
+build -- no device-side model change and no effect on tracing or VSA. See
+`pipelines/minimax_h3/hyperflow_minimax_h3.py` for the header format.
+
+```bash
+export MINIMAX_H3_HYPERFLOW_LORA_PATH=/path/to/two_time_adapter.safetensors
+scripts/run_safe_pytest.sh models/tt_dit/tests/models/minimax_h3/test_pipeline_hyperflow_minimax_h3.py
+```
+
+Both tests record CLIP and VBench rather than gating on them: those bars are calibrated against the
+49-forward base model, and a few-forward student has no reason to reproduce them.
+
 ## Running `fl2va` end to end
 
 Same command shape, plus a keyframe. `image=` is `fl2va`, `last_image=` is `fl2va_last_frame`, and

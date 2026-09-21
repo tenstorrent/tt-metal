@@ -18,7 +18,13 @@ Getting this wrong is not a crash; it silently swaps which heads receive which d
 50 of the 362 low-rank pairs, plus six dense deltas -- therefore have no parameter to bind to and
 are handed back for the AdaLN precompute to fold in. ``norm_out.norm`` is a real device parameter
 and is deliberately *not* on this list.
+
+**A two-time adapter's endpoint embedder is not a module at all.** It adapts a copy of
+``time_embedder`` that the base transformer never builds, on either host or device, so its tensors
+route nowhere and are host-folded for the same reason -- see
+``pipelines/minimax_h3/hyperflow_minimax_h3``.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -33,8 +39,12 @@ if TYPE_CHECKING:
 QKV_MEMBERS = ("to_q", "to_k", "to_v")
 
 # Adapter-path prefixes the precomputed-AdaLN build resolves on host instead of on device.
+# ``endpoint_time_embedder`` is named in full rather than left to the ``time_embedder.`` substring
+# that already covers it: a two-time adapter's endpoint embedder is not a module of the base
+# transformer at all, and that is worth reading here rather than inferring.
 MINIMAX_H3_HOST_PATHS = (
     "time_embedder.",
+    "endpoint_time_embedder.",
     "norm_out.linear",
     "adaln_proj.",
 )

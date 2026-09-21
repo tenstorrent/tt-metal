@@ -157,15 +157,16 @@ def test_keyframe_anchor_times():
 
 
 @pytest.mark.parametrize("case", [BRINGUP, CANONICAL], ids=lambda c: c[0])
-def test_row_timesteps_pin_condition_rows(case):
+def test_row_levels_pin_condition_rows(case):
     _, latent_height, latent_width, num_frames, anchors = case
     layout = _layout(latent_height, latent_width, num_frames, anchors)
     # expectations round through fp32: 0.7 is not representable
     video_t, audio_t, cond_t = torch.tensor([0.7, 0.5, p.MINIMAX_H3_KEYFRAME_NOISE_AUG], dtype=torch.float32).tolist()
-    timesteps, indices = p.build_row_timesteps(layout, video_t, audio_t, cond_t, cond_t)
+    levels, indices = p.build_row_levels(layout, video_t, audio_t, cond_t, cond_t)
 
-    assert timesteps.tolist() == sorted({video_t, audio_t, cond_t})
-    resolved = timesteps[indices]
+    assert levels[:, 0].tolist() == sorted({video_t, audio_t, cond_t})
+    assert torch.equal(levels[:, 0], levels[:, 1])
+    resolved = levels[indices, 0]
     condition_rows = layout.video_indices[: layout.num_condition_video_rows]
     target_rows = layout.video_indices[layout.num_condition_video_rows :]
 
@@ -176,10 +177,28 @@ def test_row_timesteps_pin_condition_rows(case):
 
 
 @pytest.mark.parametrize("case", [BRINGUP, CANONICAL], ids=lambda c: c[0])
+def test_row_levels_leave_pinned_rows_at_an_empty_interval(case):
+    """An anchor has nowhere to go, so an endpoint given for the generated rows must not reach it."""
+    _, latent_height, latent_width, num_frames, anchors = case
+    layout = _layout(latent_height, latent_width, num_frames, anchors)
+    cond_t = p.MINIMAX_H3_KEYFRAME_NOISE_AUG
+    levels, indices = p.build_row_levels(layout, 0.5, 0.25, cond_t, cond_t, video_endpoint=0.75, audio_endpoint=0.625)
+    resolved = levels[indices]
+
+    condition_rows = layout.video_indices[: layout.num_condition_video_rows]
+    target_rows = layout.video_indices[layout.num_condition_video_rows :]
+    assert (resolved[condition_rows, 0] == resolved[condition_rows, 1]).all()
+    assert (resolved[target_rows, 1] == 0.75).all()
+    assert (resolved[layout.audio_indices, 1] == 0.625).all()
+    # Text rows never reach an output head and follow video, endpoint included.
+    assert (resolved[layout.text_indices, 1] == 0.75).all()
+
+
+@pytest.mark.parametrize("case", [BRINGUP, CANONICAL], ids=lambda c: c[0])
 def test_adaln_index_ranges_round_trip(case):
     _, latent_height, latent_width, num_frames, anchors = case
     layout = _layout(latent_height, latent_width, num_frames, anchors)
-    _, indices = p.build_row_timesteps(layout, 0.7, 0.5, 0.999, 0.999)
+    _, indices = p.build_row_levels(layout, 0.7, 0.5, 0.999, 0.999)
     table_rows = p.adaln_indices(layout.token_tags, indices)
 
     runs = p.adaln_index_ranges(table_rows)
@@ -193,7 +212,7 @@ def test_adaln_index_ranges_round_trip(case):
 def test_adaln_index_ranges_are_shard_local():
     _, latent_height, latent_width, num_frames, anchors = CANONICAL
     layout = _layout(latent_height, latent_width, num_frames, anchors)
-    _, indices = p.build_row_timesteps(layout, 0.7, 0.5, 0.999, 0.999)
+    _, indices = p.build_row_levels(layout, 0.7, 0.5, 0.999, 0.999)
     table_rows = p.adaln_indices(layout.token_tags, indices)
 
     sp_factor = 8

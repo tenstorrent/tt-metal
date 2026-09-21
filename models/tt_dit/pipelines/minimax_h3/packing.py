@@ -354,25 +354,46 @@ def build_rope_tables(
     return freqs.cos(), freqs.sin()
 
 
-def build_row_timesteps(
+def build_row_levels(
     layout: MiniMaxH3PackedSequence,
     video_timestep: float,
     audio_timestep: float,
     condition_video_timestep: float,
     condition_audio_timestep: float,
+    *,
+    video_endpoint: float | None = None,
+    audio_endpoint: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Per-row timesteps, reduced to the transformer's ``(timesteps, indices)`` pair.
+    """Per-row ``(t, r)`` levels, reduced to the transformer's ``(levels, indices)`` pair.
 
     One forward serves rows at different noise levels: generated video and audio
     step their own schedules while conditioning rows stay pinned at their
     noise-augmentation level. Text rows never reach an output head and inherit
     the video timestep.
+
+    ``r`` is the endpoint the step integrates towards. It defaults to ``t``, which is the
+    single-time schedule and makes the returned levels a two-column copy of one axis; a two-time
+    adapter passes the generated rows' endpoints and leaves the pinned rows alone, since an anchor
+    has nowhere to go. Reduction is over the **pair** -- two rows at one ``t`` aiming at different
+    ``r`` are different levels, and merging them would hand one modality the other's interval.
     """
-    row_timesteps = torch.full((layout.sequence_length,), video_timestep, dtype=torch.float32)
-    row_timesteps[layout.video_indices[: layout.num_condition_video_rows]] = condition_video_timestep
-    row_timesteps[layout.audio_indices[layout.num_condition_audio_rows :]] = audio_timestep
-    row_timesteps[layout.audio_indices[: layout.num_condition_audio_rows]] = condition_audio_timestep
-    return torch.unique(row_timesteps, sorted=True, return_inverse=True)
+    rows = layout.sequence_length
+    t = torch.full((rows,), video_timestep, dtype=torch.float32)
+    r = torch.full((rows,), video_timestep if video_endpoint is None else video_endpoint, dtype=torch.float32)
+
+    condition_video = layout.video_indices[: layout.num_condition_video_rows]
+    t[condition_video] = condition_video_timestep
+    r[condition_video] = condition_video_timestep
+
+    generated_audio = layout.audio_indices[layout.num_condition_audio_rows :]
+    t[generated_audio] = audio_timestep
+    r[generated_audio] = audio_timestep if audio_endpoint is None else audio_endpoint
+
+    condition_audio = layout.audio_indices[: layout.num_condition_audio_rows]
+    t[condition_audio] = condition_audio_timestep
+    r[condition_audio] = condition_audio_timestep
+
+    return torch.unique(torch.stack((t, r), dim=-1), dim=0, sorted=True, return_inverse=True)
 
 
 def adaln_indices(token_tags: torch.Tensor, timestep_indices: torch.Tensor) -> torch.Tensor:
