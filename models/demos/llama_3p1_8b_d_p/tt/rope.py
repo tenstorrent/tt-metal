@@ -200,16 +200,6 @@ def apply_indexed_rope(
 
     import ttnn
 
-    # Keep rotation arithmetic in FP32: BF16 destination rounding can amplify Q/K errors
-    # through attention on repeated-token inputs. Tables, rotated outputs, and cache dtypes
-    # retain their configured storage formats.
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        tensor.device().arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
     return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
         tensor,
         rope_tables[0],
@@ -217,5 +207,4 @@ def apply_indexed_rope(
         transformation_mat,
         kv_actual_global=kv_actual_global,
         cluster_axis=sp_axis,
-        compute_kernel_config=compute_kernel_config,
     )
