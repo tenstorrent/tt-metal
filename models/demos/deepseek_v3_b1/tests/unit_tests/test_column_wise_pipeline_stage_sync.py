@@ -14,7 +14,7 @@ import ttnn
 from models.common.utility_functions import skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.micro_ops.column_wise_pipeline_stage_sync.op import ColumnWisePipelineStageSync
 
-NUM_DEVICES = 8
+NUM_DEVICES_4x2 = 4 * 2
 
 
 @skip_for_wormhole_b0("This test is for blackhole")
@@ -29,7 +29,7 @@ NUM_DEVICES = 8
     [({"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X})],
     indirect=["device_params"],
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES)
+@pytest.mark.requires_num_devices(NUM_DEVICES_4x2)
 def test_column_wise_pipeline_stage_sync_2d(
     bh_2d_mesh_device,
     entry_device_mesh_col,

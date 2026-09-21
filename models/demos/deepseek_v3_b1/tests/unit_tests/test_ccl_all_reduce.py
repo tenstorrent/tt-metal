@@ -38,7 +38,7 @@ ENV_MAX_PAYLOAD_SIZE = "CCL_ALL_REDUCE_MAX_PAYLOAD_SIZE_BYTES"
 ALL_REDUCE_OUTPUT_WIDTH = 2048
 ALL_REDUCE_OUTPUT_SHAPE = [1, ALL_REDUCE_OUTPUT_WIDTH]
 ALL_REDUCE_INPUT_SHARD_SHAPE = (1, ALL_REDUCE_OUTPUT_WIDTH)
-NUM_DEVICES = 2
+NUM_DEVICES_2x1 = 2 * 1
 
 
 def _get_intermediate_shape(input_shard_shape: tuple[int, int]) -> list[int]:
@@ -187,7 +187,7 @@ def build_all_reduce_test_inputs(
     "num_devices, output_shape, input_shard_shape, tensor_mem_layout",
     [
         (
-            NUM_DEVICES,
+            NUM_DEVICES_2x1,
             ALL_REDUCE_OUTPUT_SHAPE,
             ALL_REDUCE_INPUT_SHARD_SHAPE,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -211,7 +211,7 @@ def build_all_reduce_test_inputs(
     indirect=True,
 )
 @pytest.mark.parametrize("fuse_residual_add", [True])
-@pytest.mark.requires_num_devices(NUM_DEVICES)
+@pytest.mark.requires_num_devices(NUM_DEVICES_2x1)
 def test_ccl_all_reduce(
     bh_2d_mesh_device,
     num_devices,
@@ -302,7 +302,7 @@ def test_ccl_all_reduce(
     "num_devices, output_shape, input_shard_shape, tensor_mem_layout",
     [
         (
-            NUM_DEVICES,
+            NUM_DEVICES_2x1,
             ALL_REDUCE_OUTPUT_SHAPE,
             ALL_REDUCE_INPUT_SHARD_SHAPE,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -326,7 +326,7 @@ def test_ccl_all_reduce(
     ],
     indirect=True,
 )
-@pytest.mark.requires_num_devices(NUM_DEVICES)
+@pytest.mark.requires_num_devices(NUM_DEVICES_2x1)
 def test_ccl_all_reduce_chunk_and_link_matrix(
     bh_2d_mesh_device,
     num_devices,
