@@ -21,9 +21,7 @@ NUM_INFERENCE_STEPS = 30
 NUM_MEASURED_RUNS = 8
 CFG_SCALE = 5.0
 
-# The fixture the bria_fibo perf test measured, kept identical: prompt length drives encoder cost
-# and the transformer's context bucket, so a shared prompt is what makes the numbers comparable.
-_JSON_PROMPT_PATH = Path(__file__).parent / "fibo_vlm_prompt.json"
+PROMPT = "A red bicycle leaning against a stone wall at sunset."
 
 _DEVICE_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_1D,
@@ -45,22 +43,21 @@ _DEVICE_PARAMS = {
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
-def test_fibo_pipeline_perf_breakdown_json(
+def test_fibo_pipeline_perf_breakdown(
     *,
     mesh_device: ttnn.MeshDevice,
     model_location_generator,
 ) -> None:
-    """Time each stage of a structured-JSON-prompt generation, then log medians over the runs.
+    """Time each stage of a text-prompt generation, VLM included, then log medians over the runs.
 
     Production settings: traced, CFG on at gs=5.0, so two transformer forwards per step.
     """
-    prompt = _JSON_PROMPT_PATH.read_text().strip()
-
     pipeline = FiboPipeline.create_pipeline(
         mesh_device=mesh_device,
         height=HEIGHT,
         width=WIDTH,
         checkpoint_name=model_location_generator("briaai/FIBO"),
+        vlm_checkpoint_name=model_location_generator("briaai/FIBO-vlm"),
     )
     profiler = BenchmarkProfiler()
 
@@ -72,7 +69,7 @@ def test_fibo_pipeline_perf_breakdown_json(
         phase = "untimed" if iteration < untimed else f"measured {iteration - untimed + 1}/{NUM_MEASURED_RUNS}"
         logger.info(f"perf run {iteration + 1}/{untimed + NUM_MEASURED_RUNS} ({phase})...")
         images = pipeline(
-            prompts=[prompt],
+            prompts=[PROMPT],
             num_inference_steps=NUM_INFERENCE_STEPS,
             seed=0,
             cfg_scale=CFG_SCALE,
@@ -83,23 +80,25 @@ def test_fibo_pipeline_perf_breakdown_json(
     totals = []
     for iteration in range(untimed, untimed + NUM_MEASURED_RUNS):
         total = profiler.get_duration("total", iteration)
+        vlm = profiler.get_duration("vlm", iteration)
         encoder = profiler.get_duration("encoder", iteration)
         denoising = profiler.get_duration("denoising", iteration)
         vae = profiler.get_duration("vae", iteration)
         totals.append(total)
-        # The pipeline brackets three sections; "prepare" is the span between the encoder and the
+        # The pipeline brackets four sections; "prepare" is the span between the encoder and the
         # denoising loop: scheduler setup, latent sampling, the RoPE build and the prompt upload.
         runs.append(
             {
+                "vlm": vlm,
                 "encoder": encoder,
-                "prepare": total - encoder - denoising - vae,
+                "prepare": total - vlm - encoder - denoising - vae,
                 "denoising": denoising,
                 "vae": vae,
             }
         )
 
     # Saved before the asserts, so a degenerate frame still lands on disk to be looked at.
-    out_path = Path.cwd() / f"fibo_perf_json_{WIDTH}x{HEIGHT}_{NUM_INFERENCE_STEPS}steps.png"
+    out_path = Path.cwd() / f"fibo_perf_{WIDTH}x{HEIGHT}_{NUM_INFERENCE_STEPS}steps.png"
     images[0].save(out_path)
     logger.info(f"saved last image -> {out_path}")
 
@@ -120,7 +119,7 @@ def test_fibo_pipeline_perf_breakdown_json(
     median_sum = sum(median.values())
 
     lines = [
-        f"\nFIBO perf breakdown [json] — {WIDTH}x{HEIGHT}, {NUM_INFERENCE_STEPS} steps, gs={CFG_SCALE} "
+        f"\nFIBO perf breakdown — {WIDTH}x{HEIGHT}, {NUM_INFERENCE_STEPS} steps, gs={CFG_SCALE} "
         f"[CFG on (2 fwd/step), traced], median of {NUM_MEASURED_RUNS} runs (after {untimed} untimed)"
     ]
     for stage in median:

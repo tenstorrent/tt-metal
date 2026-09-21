@@ -22,6 +22,7 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, submesh_shape
 from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.fibo.text_encoder import TextEncoder
+from models.tt_dit.pipelines.fibo.vlm import Vlm
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.solvers import EulerSolver
 from models.tt_dit.utils.mesh import reshape_device
@@ -34,8 +35,13 @@ if TYPE_CHECKING:
 
     from PIL import Image
 
+    from models.tt_dit.parallel.config import ParallelFactor
+
 _VAE_SCALE_FACTOR = 16
 _DEFAULT_CHECKPOINT = "briaai/FIBO"
+_DEFAULT_VLM_CHECKPOINT = "briaai/FIBO-vlm"
+_VLM_PROMPT_LENGTH = 1024
+_VLM_CACHE_LENGTH = 4096  # Prompt and generated JSON together
 
 # Rules of thumb for the encoder parallelism below, from sweeping the text encoder over every
 # mesh shape from one to eight devices on a T3K:
@@ -73,6 +79,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
         "vae_tp_axis": None,
         "vae_h_axis": 0,
         "vae_w_axis": 1,
+        "vlm_tp": (4, 0),
         "num_links": 1,
         "sequence_lengths": (1024, 2048),
     },
@@ -88,6 +95,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "vae_tp_axis": None,
         "vae_h_axis": 0,
         "vae_w_axis": None,
+        "vlm_tp": (2, 0),
         "num_links": 2,
         "sequence_lengths": (1024, 1536, 3072),
     },
@@ -100,6 +108,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "vae_tp_axis": None,
         "vae_h_axis": 0,
         "vae_w_axis": 1,
+        "vlm_tp": (4, 0),
         "num_links": 2,
         "sequence_lengths": (1024, 1536, 3072),
     },
@@ -125,6 +134,7 @@ class FiboPipelineConfig:
     dit_parallel_config: DiTParallelConfig
     encoder_parallel_config: EncoderParallelConfig
     vae_parallel_config: Flux2VaeParallelConfig
+    vlm_parallel_config: EncoderParallelConfig
 
     use_torch_text_encoder: bool
     use_torch_vae_decoder: bool
@@ -135,6 +145,7 @@ class FiboPipelineConfig:
     sequence_lengths: tuple[int, ...]
 
     checkpoint_name: str
+    vlm_checkpoint_name: str | None  # None leaves the VLM out
 
     @classmethod
     def default(
@@ -146,6 +157,7 @@ class FiboPipelineConfig:
         dit_parallel_config: DiTParallelConfig | None = None,
         encoder_parallel_config: EncoderParallelConfig | None = None,
         vae_parallel_config: Flux2VaeParallelConfig | None = None,
+        vlm_parallel_config: EncoderParallelConfig | None = None,
         use_torch_text_encoder: bool = False,
         use_torch_vae_decoder: bool = False,
         height: int = 1024,
@@ -153,6 +165,7 @@ class FiboPipelineConfig:
         cfg_enabled: bool = True,
         sequence_lengths: Sequence[int] | None = None,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        vlm_checkpoint_name: str | None = _DEFAULT_VLM_CHECKPOINT,
     ) -> FiboPipelineConfig:
         """Build a fully populated config, picking parallelism defaults from ``mesh_shape``."""
         preset_dict = _PRESETS_BH if ttnn.device.is_blackhole() else _PRESETS_WH
@@ -175,6 +188,7 @@ class FiboPipelineConfig:
                 h_axis=preset["vae_h_axis"],
                 w_axis=preset["vae_w_axis"],
             ),
+            vlm_parallel_config=vlm_parallel_config or EncoderParallelConfig.from_tuple(preset["vlm_tp"]),
             use_torch_text_encoder=use_torch_text_encoder,
             use_torch_vae_decoder=use_torch_vae_decoder,
             height=height,
@@ -182,6 +196,7 @@ class FiboPipelineConfig:
             cfg_enabled=cfg_enabled,
             sequence_lengths=tuple(sequence_lengths) if sequence_lengths is not None else preset["sequence_lengths"],
             checkpoint_name=checkpoint_name,
+            vlm_checkpoint_name=vlm_checkpoint_name,
         )
 
 
@@ -195,10 +210,13 @@ class FiboPipeline(PipelineAPIMixin):
         height: int = 1024,
         cfg_enabled: bool = True,
         checkpoint_name: str = _DEFAULT_CHECKPOINT,
+        vlm_checkpoint_name: str | None = _DEFAULT_VLM_CHECKPOINT,
     ) -> FiboPipeline:
+        """``vlm_checkpoint_name=None`` leaves the VLM out, for structured prompts only."""
         config = FiboPipelineConfig.default(
             mesh_shape=mesh_device.shape,
             checkpoint_name=checkpoint_name,
+            vlm_checkpoint_name=vlm_checkpoint_name,
             width=width,
             height=height,
             cfg_enabled=cfg_enabled,
@@ -210,6 +228,7 @@ class FiboPipeline(PipelineAPIMixin):
         self._sp_axis = config.dit_parallel_config.sequence_parallel.mesh_axis
         self._encoder_tp = config.encoder_parallel_config.tensor_parallel
         self._encoder_sp = config.encoder_parallel_config.sequence_parallel
+        self._vlm_tp = config.vlm_parallel_config.tensor_parallel
         self._height = config.height
         self._width = config.width
         self._cfg_enabled = config.cfg_enabled
@@ -263,14 +282,37 @@ class FiboPipeline(PipelineAPIMixin):
         )
         self._vae.reload_weights()
 
+        # On the last submesh: under CFG parallelism it holds only the transformer, and without
+        # there is just the one.
+        self._vlm: Vlm | None = None
+        if config.vlm_checkpoint_name is not None:
+            with self._reshape_vlm():
+                logger.info("creating VLM...")
+                self._vlm = Vlm(
+                    checkpoint_name=config.vlm_checkpoint_name,
+                    device=self._devices[-1],
+                    ccl_manager=self._ccl_managers[-1],
+                    parallel_config=config.vlm_parallel_config,
+                    prompt_length=_VLM_PROMPT_LENGTH,
+                    cache_length=_VLM_CACHE_LENGTH,
+                )
+
         self._synchronize_devices()
 
         logger.info("pipeline allocation run...")
         # compile OPs and allocate persistent buffers
+        self._warm_up_vlm(traced=False)
         self._generate_each_length(traced=False)
 
         logger.info("pipeline capture run...")
+        self._warm_up_vlm(traced=True)
         self._generate_each_length(traced=True)
+
+    def _warm_up_vlm(self, *, traced: bool) -> None:
+        if self._vlm is None:
+            return
+        with self._reshape_vlm():
+            self._vlm.warm_up(traced=traced)
 
     def _generate_each_length(self, *, traced: bool) -> None:
         for length in sorted(self._sequence_lengths, reverse=True):
@@ -279,19 +321,16 @@ class FiboPipeline(PipelineAPIMixin):
                 prompts=[prompt],
                 negative_prompts=[prompt],
                 num_inference_steps=2,
+                use_vlm=False,
                 traced=traced,
                 cfg_scale=2 if self._cfg_enabled else 1,
             )
 
     def _reshape_encoder(self) -> AbstractContextManager[None]:
-        device = self._devices[0]
-        tp = self._encoder_tp
+        return _reshape_for_tp(self._devices[0], self._encoder_tp)
 
-        shape = list(device.shape)
-        shape[tp.mesh_axis] = tp.factor
-        shape[1 - tp.mesh_axis] = device.shape.mesh_size() // tp.factor
-
-        return reshape_device(self._devices[0], ttnn.MeshShape(*shape))
+    def _reshape_vlm(self) -> AbstractContextManager[None]:
+        return _reshape_for_tp(self._devices[-1], self._vlm_tp)
 
     def __call__(
         self,
@@ -302,19 +341,31 @@ class FiboPipeline(PipelineAPIMixin):
         seed: int = 0,
         num_images_per_prompt: int = 1,
         cfg_scale: float = 5.0,
+        use_vlm: bool = True,
         traced: bool = True,
         vae_traced: bool | None = None,
         encoder_traced: bool | None = None,
+        vlm_traced: bool | None = None,
         on_event: PipelineEventCallback | None = None,
     ) -> list[Image.Image]:
+        """Generates one image per prompt.
+
+        ``prompts`` are natural-language prompts the VLM writes FIBO's structured JSON prompts from,
+        or without ``use_vlm`` the structured prompts themselves.
+        """
         prompt_count = len(prompts)
 
         if cfg_scale > 1 and not self._cfg_enabled:
             msg = "cfg_scale > 1 requires CFG to be enabled"
             raise ValueError(msg)
 
+        if use_vlm and self._vlm is None:
+            msg = "use_vlm requires the pipeline to be created with a VLM checkpoint"
+            raise ValueError(msg)
+
         vae_traced = vae_traced if vae_traced is not None else traced
         encoder_traced = encoder_traced if encoder_traced is not None else traced
+        vlm_traced = vlm_traced if vlm_traced is not None else traced
         on_event = on_event if on_event is not None else null_callback
         negative_prompts = negative_prompts if negative_prompts is not None else [""] * prompt_count
 
@@ -326,6 +377,14 @@ class FiboPipeline(PipelineAPIMixin):
         latents_sequence_length = latents_height * latents_width
 
         on_event(SectionStart("total"))
+
+        if use_vlm:
+            logger.info("generating structured prompts...")
+            on_event(SectionStart("vlm"))
+            with self._reshape_vlm():
+                prompts = [self._vlm.generate(prompt, seed=seed, traced=vlm_traced) for prompt in prompts]
+            self._synchronize_devices()  # for time profiling
+            on_event(SectionEnd("vlm"))
 
         logger.info("encoding prompts...")
         on_event(SectionStart("encoder"))
@@ -544,6 +603,15 @@ class FiboPipeline(PipelineAPIMixin):
     def _synchronize_devices(self) -> None:
         for d in self._devices:
             ttnn.synchronize_device(d)
+
+
+def _reshape_for_tp(device: ttnn.MeshDevice, tp: ParallelFactor) -> AbstractContextManager[None]:
+    """Reshapes ``device`` to have ``tp.factor`` devices along ``tp.mesh_axis`` while active."""
+    shape = list(device.shape)
+    shape[tp.mesh_axis] = tp.factor
+    shape[1 - tp.mesh_axis] = device.shape.mesh_size() // tp.factor
+
+    return reshape_device(device, ttnn.MeshShape(*shape))
 
 
 def _calculate_shift(image_seq_len: int, scheduler: FlowMatchEulerDiscreteScheduler) -> float:
