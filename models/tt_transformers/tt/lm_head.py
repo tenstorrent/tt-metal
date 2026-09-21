@@ -75,6 +75,15 @@ class LMHead(LightweightModule):
         # on-device slice path in _update_output_weights_dram_sharded stays
         # tile-aligned).
         max_columns_per_device_dram_sharded = 2 * max_columns_per_device_dram_sharded
+        # Fold the remaining 2 DRAM-sharded launches into 1: one matmul over the
+        # whole per-device vocab slice. The split boundary must stay a multiple
+        # of TILE_SIZE * dram_cores so every weight chunk keeps a tile-aligned
+        # DRAM shard width per bank (create_dram_sharded_mem_config pads to that
+        # granularity, and the DRAM-sharded factory requires
+        # in1_shard_width_tiles % num_workers_per_dram_bank == 0); taking the
+        # whole slice at once keeps the width exactly what the single-split
+        # weight config already pads to, so no new alignment is introduced.
+        max_columns_per_device_dram_sharded = max(max_columns_per_device_dram_sharded, size_per_device)
         num_splits_dram_sharded = math.ceil(size_per_device / max_columns_per_device_dram_sharded)
         self.split_sizes_dram_sharded = [min(size_per_device, max_columns_per_device_dram_sharded)] * (
             num_splits_dram_sharded - 1
