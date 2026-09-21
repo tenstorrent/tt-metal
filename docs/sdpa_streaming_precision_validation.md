@@ -1,8 +1,64 @@
-# PR 1 foundation and shared-buffer validation
+# PR 1 foundation and streaming-primitive validation
 
 Date: 2026-09-21. This validates the compatibility resolver and the first shared
 streaming helper extraction. D/C/B/E device implementations and the public recipe
 API remain pending. The frozen research evidence is unchanged.
+
+## FP32 recurrent-state extraction
+
+The next staged change adds `streaming/fp32_state.hpp` and
+`streaming/fp32_state_sfpu.hpp`. These isolate the C/D state rescale, L1 add,
+reciprocal, final normalization, and single-tile pack configuration. They are
+not yet called by the production attention entrypoint. No recipe dispatch,
+data-movement kernel, block size, or input-buffer depth is changed.
+
+The arithmetic comes from the frozen snapshot's
+`experiments/sdpa-l2/compute-sprint-v3/fp32/early_guard.hpp` and its
+`hybrid-mixed-v1/candidate/.../ckernel_sfpu_sdpa.h` dependency. Important retained
+contracts are full FP32 unpack-to-destination, multiplication rounded before
+the L1 addition, batched-unpack zero-flag clearing, an identity path with no
+correction-buffer access, and the two-iteration reciprocal. The extraction
+replaces the research runtime identity branch with compile-time specializations
+and makes pack-cache ownership explicit. The surrounding fused C/D loop and
+its specialized exponential/subtraction schedules remain to be integrated.
+
+`test_sdpa_fp32_state.py` uses the existing generic-op descriptor interface and
+stock unary reader/writer. Its 11 cases pass on Blackhole P100, both normally
+and with Watcher/device assertions. Each invocation runs 12 records (forcing
+CB wraparound) and two actual trace replays. Rescale tests additionally retain
+the first buffers while launching changed data at fresh addresses and verify
+that the program-cache count does not grow.
+
+The final rebuilt-tree check passed all 22 device tests (11 state plus 11
+legacy compatibility) under Watcher, followed by all 13 policy/resolver host
+tests. Incremental build/install and clang-format/Black checks also passed.
+
+| Primitive check | Observed error against independent host reference |
+| --- | --- |
+| Rescale then add, 1/2/3 tiles, and first-column denominator | Exact FP32 match |
+| Identity add, 2/4 tiles, and first-column denominator | Exact FP32 match |
+| Normalization to FP32, widths 1/4 | Relative L2 5.53–5.60e-8; max absolute error 5.96e-8 |
+| Normalization to BF16, widths 1/4 | Relative L2 0.1633–0.1646% |
+
+Inputs include cancellation, tiny updates, large finite common modes, and
+identity/nonidentity corrections. Normalization uses positive finite sums;
+zero/nonfinite denominator behavior is preserved in code but is not qualified
+by these tests. FP32 output is a diagnostic of the primitive, not a new public
+recipe/output contract. These are component tests against host arithmetic,
+not a differential run of the complete frozen attention kernel, and do not
+establish end-to-end accuracy or performance parity.
+
+Reproduce with the environment below and:
+
+```bash
+bash scripts/run_safe_pytest.sh --dev \
+  tests/ttnn/unit_tests/operations/sdpa/test_sdpa_fp32_state.py
+```
+
+Raw logs and XML are `sdpa-pr1-fp32-state{,-watcher}.{log,xml}` in the same
+external artifact locations listed below. Device JIT caches are separate
+`sdpa-pr1-fp32-state-jit` and `sdpa-pr1-fp32-state-watcher` directories under
+`/localdev/cglagovich`.
 
 ## Environment and recovery
 

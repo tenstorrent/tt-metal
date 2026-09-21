@@ -2,8 +2,9 @@
 
 Status: recipe/evidence freeze, clean branch setup, and internal numerical-policy
 and compatibility-resolver foundation implemented and built on the new base.
-The first shared streaming-buffer helpers are extracted and device-checked.
-New numerical recipes are not yet ported or qualified. No new public recipe
+Shared streaming-buffer helpers and the C/D FP32 recurrent-state primitives
+are extracted and device-checked. Complete numerical recipes are not yet ported
+or qualified. No new public recipe
 interface or dispatch is enabled. Public enum/helper names below are intentionally
 not prescribed until the interface implementation is reviewed.
 
