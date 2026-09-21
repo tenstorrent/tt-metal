@@ -252,6 +252,7 @@ def test_deepseek_v3_mla_flash_mla_trace_mode(
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
         exp_approx_mode=False,
+        max_cores_per_head_batch=4,
     )
 
     # Compute kernel config
