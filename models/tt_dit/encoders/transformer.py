@@ -72,6 +72,7 @@ class TransformerEncoderConfig:
     attn_qk_norm: bool = False
     final_norm: bool = True
     final_linear: bool = True
+    attn_qkv_dtype: ttnn.DataType = LINEAR_DTYPE
 
 
 class TransformerEncoder(Module):
@@ -148,6 +149,7 @@ class TransformerEncoder(Module):
                 attn_qkv_bias=config.attn_qkv_bias,
                 attn_out_bias=config.attn_out_bias,
                 attn_qk_norm=config.attn_qk_norm,
+                attn_qkv_dtype=config.attn_qkv_dtype,
                 cache_id=i,
                 ctx=ctx,
             )
@@ -802,6 +804,7 @@ class TransformerEncoderLayer(Module):
         attn_qkv_bias: bool,
         attn_out_bias: bool,
         attn_qk_norm: bool,
+        attn_qkv_dtype: ttnn.DataType,
         cache_id: Hashable,
         ctx: TransformerContext,
     ) -> None:
@@ -815,6 +818,7 @@ class TransformerEncoderLayer(Module):
             qkv_bias=attn_qkv_bias,
             out_bias=attn_out_bias,
             qk_norm=attn_qk_norm,
+            qkv_dtype=attn_qkv_dtype,
             norm_eps=norm_eps,
             cache_id=cache_id,
             ctx=ctx,
@@ -862,6 +866,7 @@ class Attention(Module):
         qkv_bias: bool,
         out_bias: bool,
         qk_norm: bool,
+        qkv_dtype: ttnn.DataType,
         norm_eps: float,
         cache_id: Hashable,
         ctx: TransformerContext,
@@ -887,7 +892,7 @@ class Attention(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_axis,
             ccl_manager=ctx.ccl_manager,
-            dtype=LINEAR_DTYPE,
+            dtype=qkv_dtype,
         )
         self.o_proj = ColParallelLinear(
             padded_heads * head_size,

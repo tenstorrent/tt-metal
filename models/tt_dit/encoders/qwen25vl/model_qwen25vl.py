@@ -44,6 +44,8 @@ class Qwen25VlEncoder(TransformerEncoder):
             # Qwen2.5 carries a QKV bias, which Qwen3 drops.
             attn_qkv_bias=True,
             attn_out_bias=False,
+            # At bfloat8 the QKV projection alone costs the prompt embeddings two points of PCC.
+            attn_qkv_dtype=ttnn.bfloat16,
             rope_config=RopeConfig(theta=rope_theta),
         )
 
@@ -116,7 +118,7 @@ class Qwen25VlCheckpoint:
             parallel_config=parallel_config,
             mesh_shape=tuple(device.shape),
             mesh_device=device,
-            dtype=WEIGHT_CACHE_DTYPE,
+            dtype=f"{WEIGHT_CACHE_DTYPE}_qkv16",
         )
 
     def _load_state_dict(self) -> dict[str, torch.Tensor]:
