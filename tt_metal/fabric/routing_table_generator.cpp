@@ -158,35 +158,35 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
             for (ChipId dst_chip_id = 0; dst_chip_id < this->intra_mesh_table_[mesh_id_val].size(); dst_chip_id++) {
                 auto src_mesh_coord = mesh_graph.chip_to_coordinate(mesh_id, src_chip_id);
                 auto dst_mesh_coord = mesh_graph.chip_to_coordinate(mesh_id, dst_chip_id);
-                // X first routing, traverse rows first
+                const auto route_on_axis = [&](int axis,
+                                               ChipId target_chip_id,
+                                               RoutingDirection forward,
+                                               RoutingDirection reverse) {
+                    const auto* rings = this->express_rings_[mesh_id_val].get();
+                    if (rings != nullptr && rings->axis_dim == axis) {
+                        const int next_coord = rings->next_row(
+                            static_cast<int>(src_mesh_coord[axis]), static_cast<int>(dst_mesh_coord[axis]));
+                        auto next_mesh_coord = src_mesh_coord;
+                        next_mesh_coord[axis] = static_cast<std::uint32_t>(next_coord);
+                        const auto next_chip = mesh_graph.coordinate_to_chip(mesh_id, next_mesh_coord);
+                        return intra_mesh_connectivity[mesh_id_val][src_chip_id].at(next_chip).port_direction;
+                    }
+                    return get_shorter_direction_on_row_or_col(
+                        mesh_id_val, src_chip_id, target_chip_id, forward, reverse);
+                };
+                // Preserve dimension order: dim 0 (N/S) completes before dim 1 (E/W).
                 if (src_mesh_coord[0] != dst_mesh_coord[0]) {
-                    // If source and destination are in different rows, we need to move in the X direction first
                     // Move North or South
                     MeshCoordinate target_coord_on_column(dst_mesh_coord[0], src_mesh_coord[1]);
                     auto target_chip_id = mesh_graph.coordinate_to_chip(mesh_id, target_coord_on_column);
-                    // A express-link mesh takes its next hop from the ring decomposition, which carries
-                    // the leaf, orientation and cross-ring policy; every other mesh uses the base
-                    // dimension-order policy unchanged. This is the only place express links alter routing.
-                    RoutingDirection direction = RoutingDirection::NONE;
-                    if (const auto* rings = this->express_rings_[mesh_id_val].get(); rings != nullptr) {
-                        const int next_row = rings->next_row(
-                            static_cast<int>(src_mesh_coord[0]), static_cast<int>(dst_mesh_coord[0]));
-                        const auto next_chip = mesh_graph.coordinate_to_chip(
-                            mesh_id, MeshCoordinate(static_cast<std::uint32_t>(next_row), src_mesh_coord[1]));
-                        direction = intra_mesh_connectivity[mesh_id_val][src_chip_id].at(next_chip).port_direction;
-                    } else {
-                        direction = get_shorter_direction_on_row_or_col(
-                            mesh_id_val, src_chip_id, target_chip_id, RoutingDirection::N, RoutingDirection::S);
-                    }
-                    this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = direction;
+                    this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = route_on_axis(
+                        0, target_chip_id, RoutingDirection::N, RoutingDirection::S);
                     // TODO: today we are not updating the weight of the edge, should we use weight to balance
                     //  routing traffic?
                     //  intra_mesh_connectivity[mesh_id][src_chip_id][next_chip_id].weight += 1;
                 } else if (src_mesh_coord[1] != dst_mesh_coord[1]) {
-                    // Move East or West. The E/W axis carries no chords, so it always uses the base
-                    // policy -- identical to main.
-                    auto direction = get_shorter_direction_on_row_or_col(
-                        mesh_id_val, src_chip_id, dst_chip_id, RoutingDirection::E, RoutingDirection::W);
+                    auto direction =
+                        route_on_axis(1, dst_chip_id, RoutingDirection::E, RoutingDirection::W);
                     this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = direction;
                     // intra_mesh_connectivity[mesh_id][src_chip_id][next_chip_id].weight += 1;
                 } else {
@@ -224,8 +224,14 @@ void RoutingTableGenerator::validate_express_ring_routes(
         }
         return -1;
     };
-    const auto is_axis_dir = [](RoutingDirection dir) {
-        return dir == RoutingDirection::N || dir == RoutingDirection::S || dir == RoutingDirection::Z;
+    const auto hop_axis = [&](RoutingDirection dir) {
+        if (dir == RoutingDirection::N || dir == RoutingDirection::S) {
+            return 0;
+        }
+        if (dir == RoutingDirection::E || dir == RoutingDirection::W) {
+            return 1;
+        }
+        return dir == RoutingDirection::Z ? rings->axis_dim : -1;
     };
     // An axis hop is legal only as a ring edge, a crossover, or a leaf-run/anchor edge.
     const auto axis_hop_permitted = [&](int from_row, int to_row) {
@@ -250,7 +256,7 @@ void RoutingTableGenerator::validate_express_ring_routes(
             std::fill(visited.begin(), visited.end(), false);
             int cur = src;
             int hops = 0;
-            bool in_x_phase = false;
+            int routing_phase = 0;
             bool axis_landed = false;
             while (cur != dst) {
                 TT_FATAL(!visited[cur], "Mesh M{} route {}->{} revisits chip {}", mesh_id_val, src, dst, cur);
@@ -271,15 +277,24 @@ void RoutingTableGenerator::validate_express_ring_routes(
                     src,
                     dst,
                     cur);
-                if (!is_axis_dir(dir)) {
-                    in_x_phase = true;
-                } else {
-                    TT_FATAL(
-                        !in_x_phase,
-                        "Mesh M{} route {}->{} returns to the express axis after leaving it",
-                        mesh_id_val,
-                        src,
-                        dst);
+                const int current_axis = hop_axis(dir);
+                TT_FATAL(
+                    current_axis >= 0,
+                    "Mesh M{} route {}->{} has invalid direction at chip {}",
+                    mesh_id_val,
+                    src,
+                    dst,
+                    cur);
+                TT_FATAL(
+                    current_axis >= routing_phase,
+                    "Mesh M{} route {}->{} returns from dim {} to dim {}",
+                    mesh_id_val,
+                    src,
+                    dst,
+                    routing_phase,
+                    current_axis);
+                routing_phase = current_axis;
+                if (current_axis == rings->axis_dim) {
                     TT_FATAL(
                         !axis_landed,
                         "Mesh M{} route {}->{} continues on the express axis after a terminal landing",

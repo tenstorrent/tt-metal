@@ -2671,4 +2671,55 @@ TEST(MeshGraphDescriptorTests, ExpressLinks32x4) {
     EXPECT_EQ(z_directed, 96) << "expected exactly 48 bidirectional express edges (96 directed Z entries)";
 }
 
+// The 32x4 fixture transposed to 4x32, with the express patterns moved from dim 0 to dim 1.
+TEST(MeshGraphDescriptorTests, ExpressLinks4x32Dim1) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/express_links_4x32_mesh_graph_descriptor.textproto";
+
+    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
+    const auto& intra = mesh_graph.get_intra_mesh_connectivity();
+    ASSERT_EQ(intra.size(), 1u);
+    const auto& m0 = intra[0];
+    ASSERT_EQ(m0.size(), 128u);
+
+    // dim 1 (32 columns, RING). chip = row*32 + col. These are the same blocks as the
+    // 32x4 fixture; only the varying coordinate and linear indexing have changed.
+    const std::vector<std::pair<int, int>> col_blocks = {
+        {2, 5},
+        {6, 9},
+        {10, 13},
+        {14, 17},
+        {18, 21},
+        {22, 25},
+        {26, 29},
+        {30, 1},
+        {0, 7},
+        {8, 15},
+        {16, 23},
+        {24, 31}};
+    for (const auto& [ca, cb] : col_blocks) {
+        for (int row = 0; row < 4; ++row) {
+            const int a = row * 32 + ca;
+            const int b = row * 32 + cb;
+            EXPECT_EQ(m0[a].count(b), 1u) << "missing express edge " << a << " -> " << b;
+            EXPECT_EQ(m0[b].count(a), 1u) << "missing reverse express edge " << b << " -> " << a;
+            if (m0[a].contains(b) && m0[b].contains(a)) {
+                EXPECT_EQ(m0[a].at(b).port_direction, tt::tt_fabric::RoutingDirection::Z);
+                EXPECT_EQ(m0[b].at(a).port_direction, tt::tt_fabric::RoutingDirection::Z);
+            }
+        }
+    }
+
+    int z_directed = 0;
+    for (const auto& edges_by_destination : m0) {
+        for (const auto& [_, edge] : edges_by_destination) {
+            z_directed += edge.port_direction == tt::tt_fabric::RoutingDirection::Z ? 1 : 0;
+        }
+    }
+    EXPECT_EQ(z_directed, 96) << "expected exactly 48 bidirectional express edges (96 directed Z entries)";
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests
