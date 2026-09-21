@@ -825,7 +825,7 @@ def test_deepseek_perf(
         logger.info(f"Decode iter: {i} success")
 
 
-# Guard test for #56769. 
+# Guard test for #56769.
 @pytest.mark.parametrize(
     "device_params",
     [
