@@ -163,7 +163,7 @@ class _TpAxis:
 
 
 def _tp_axis() -> _TpAxis | None:
-    """None without a mesh or a 'tp' axis: the single-device case, where nothing is sharded."""
+    """None without a mesh or a 'tp' axis: nothing is then sharded over 'tp'."""
     mesh = ttml.maybe_mesh()
     if mesh is None or not mesh.has_axis("tp"):
         return None
@@ -171,14 +171,14 @@ def _tp_axis() -> _TpAxis | None:
 
 
 def _sharded_dim(param, tp: _TpAxis | None, subject: str) -> int | None:
-    """Which tensor dim *param* shards over 'tp', or ``None`` if replicated."""
-    if tp is None:
-        return None
+    """Which tensor dim *param* shards over 'tp', or ``None`` if replicated. A shard over any other
+    axis raises."""
     placements = ttml.Sharding.from_tensor(param).placements
+    tp_index = tp.index if tp else None
     for axis, placement in enumerate(placements):
-        if isinstance(placement, ttnn.PlacementShard) and axis != tp.index:
+        if isinstance(placement, ttnn.PlacementShard) and axis != tp_index:
             raise RuntimeError(f"{subject}: sharded over mesh axis {axis}; this loader places weights over 'tp' only.")
-    if tp.index >= len(placements):  # a fully replicated tensor flattens to a single Replicate
+    if tp is None or tp.index >= len(placements):  # a fully replicated tensor flattens to a single Replicate
         return None
     placement = placements[tp.index]
     if not isinstance(placement, ttnn.PlacementShard):

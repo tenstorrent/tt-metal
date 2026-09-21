@@ -28,6 +28,7 @@ from ttml.models.llama.safetensors_loader import (
     _fit,
     _pad_to,
     _rules,
+    _sharded_dim,
     _to_bf16_4d,
     _tp_axis,
     _unpermute_proj_rows,
@@ -178,6 +179,13 @@ class TestPlacementWithoutTensorParallelism:
     def test_has_no_tp_axis(self, monkeypatch, mesh):
         monkeypatch.setattr(ttml, "maybe_mesh", lambda: mesh)
         assert _tp_axis() is None
+
+    def test_rejects_a_shard_over_another_axis(self, monkeypatch, expect_error):
+        """Assigning the whole tensor to a dp-sharded parameter would silently undo the sharding."""
+        sharded = SimpleNamespace(placements=[ttnn.PlacementShard(ROW_DIM)])
+        monkeypatch.setattr(ttml.Sharding, "from_tensor", lambda _: sharded)
+        with expect_error(RuntimeError, "Llama/fc/weight: sharded over mesh axis 0"):
+            _sharded_dim(object(), None, "Llama/fc/weight")
 
 
 class TestHelpers:
