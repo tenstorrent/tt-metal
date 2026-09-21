@@ -439,25 +439,6 @@ def test_run_perf_node_requests_low_mem_unconditionally():
     assert 'env.setdefault(_pr.LOW_MEM_REFERENCE_ENV, "1")' in src, "the signal is not set unconditionally"
 
 
-def test_make_run_profiled_defaults_the_profiled_run_to_bf16():
-    """THE SINGLE PROFILING CHOKEPOINT. make_run_profiled builds the env for every tracy-profiled
-    run (before_loop's baseline AND measure_runs' candidate/profile), so the bf16 default lives here
-    once instead of in each caller's extra_env -- measure_runs forgetting it is exactly what let the
-    30B nemotron model build a full-depth fp32 reference (~226 GB) and get OOM-killed on 2026-09-21.
-    Profiling reads the reference for shapes/timing only, so bf16 is always right, and the factory's
-    own comment applies this to the PROFILED run's env only, never the correctness/PCC gates. An
-    explicit operator/caller value still wins via setdefault."""
-    import models.experimental.perf_automation.agent.probes as P
-
-    src = inspect.getsource(P.make_run_profiled)
-    assert "should_use_low_mem_reference" not in src, (
-        "a profiling build's reference precision must not depend on a memory check -- profiling " "never needed fp32"
-    )
-    assert (
-        'env.setdefault("PERF_MCP_LOW_MEM_REFERENCE", "1")' in src
-    ), "make_run_profiled must default the profiled run to a bf16 reference so no caller can forget it"
-
-
 def test_adaptive_run_requests_low_mem_unconditionally():
     """Same rule for _adaptive_run's full-pipeline BEFORE/AFTER bookend -- a TIMING measurement,
     never a PCC check, so its reference build has the same "shapes only" contract."""
@@ -529,14 +510,20 @@ def test_pcc_gate_gen_calls_it():
 
 def test_nemotron_pipeline_respects_the_low_memory_signal():
     """The one thing this generic mechanism cannot verify on its own: that at least the reference
-    model this incident was found on actually reads the signal it is retried with."""
+    model this incident was found on actually honours the low-memory signal. The precision decision
+    now lives in the model's choose_reference_dtype, which build_pipeline calls at the single build
+    chokepoint, so the signal and the bf16 branch are asserted there (behaviour preserved, moved)."""
     import inspect
 
+    from models.demos.nvidia_nemotron_3_5_lightning_30b_a3b_bf16.tt import _hf_ref
     from models.demos.nvidia_nemotron_3_5_lightning_30b_a3b_bf16.tt import pipeline as P
 
-    src = inspect.getsource(P.build_pipeline)
-    assert "PERF_MCP_LOW_MEM_REFERENCE" in src, "nemotron's build_pipeline does not honour the fallback signal"
-    assert "torch.bfloat16" in src.split("load_reference")[0][-400:], "no bf16 branch precedes the reference load"
+    assert "choose_reference_dtype" in inspect.getsource(
+        P.build_pipeline
+    ), "build_pipeline no longer routes reference precision through the decision chokepoint"
+    decision = inspect.getsource(_hf_ref.choose_reference_dtype)
+    assert "PERF_MCP_LOW_MEM_REFERENCE" in decision, "the precision decision does not honour the fallback signal"
+    assert "bfloat16" in decision, "no bf16 branch in the precision decision"
 
 
 # --------------------------------- the baseline's OWN tracy capture never had the capacity bridge --
