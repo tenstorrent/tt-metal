@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Accessors for the cluster's RISC-V platform-level interrupt controller (PLIC). It gates many
+// interrupt sources onto one machine-external line per core context. A context enables the sources
+// it wants and sets its threshold below their priority; the handler claims the highest-priority
+// pending source and writes that id back to complete it.
+
 #pragma once
 
 #include <cstdint>
