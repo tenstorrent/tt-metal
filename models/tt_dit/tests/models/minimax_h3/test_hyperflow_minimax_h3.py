@@ -131,6 +131,20 @@ def test_tasks_default_to_every_task(expect_error):
         _contract(tasks=json.dumps(["t2va", "fl2va"])).assert_supports_task("ref2va")
 
 
+def test_subfolders_default_to_every_partition(expect_error):
+    # The two gates are independent: `ref2va` prompting is a different claim than carrying deltas
+    # for the `transformer_ref/` weights, and an adapter may list one without the other.
+    _contract().assert_supports_subfolder("transformer_ref")
+    both = json.dumps(["transformer", "transformer_ref"])
+    _contract(compatible_subfolders=both).assert_supports_subfolder("transformer_ref")
+    with expect_error(ValueError, "transformer_ref"):
+        _contract(compatible_subfolders=json.dumps(["transformer"])).assert_supports_subfolder("transformer_ref")
+    # A task list is not a partition list; listing ref2va does not license transformer_ref.
+    with expect_error(ValueError, "transformer_ref"):
+        contract = _contract(tasks=json.dumps(["ref2va"]), compatible_subfolders=json.dumps(["transformer"]))
+        contract.assert_supports_subfolder("transformer_ref")
+
+
 @pytest.mark.parametrize("shift", [VIDEO_SHIFT, AUDIO_SHIFT])
 def test_the_grid_is_shifted_with_the_schedulers_own_formula(shift):
     contract = _contract()

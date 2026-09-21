@@ -1094,6 +1094,7 @@ class MiniMaxH3Pipeline:
             )
             if self._hyperflow is not None:
                 self._hyperflow.assert_supports_task(self.task)
+                self._hyperflow.assert_supports_subfolder(self.transformer_subfolder)
                 logger.info(
                     f"adapter samples its own schedule: {self._hyperflow.num_forwards} forwards, "
                     f"gate {self._hyperflow.gate:g} ({self._hyperflow.identity()})"

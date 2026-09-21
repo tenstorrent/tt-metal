@@ -75,6 +75,7 @@ class MiniMaxH3HyperFlow:
     video_shift: float
     audio_shift: float
     tasks: tuple[str, ...] = ()
+    subfolders: tuple[str, ...] = ()
 
     @classmethod
     def from_adapter_metadata(
@@ -112,6 +113,9 @@ class MiniMaxH3HyperFlow:
             video_shift=float(metadata.get("hyperflow_video_shift", video_shift)),
             audio_shift=float(metadata.get("hyperflow_audio_shift", audio_shift)),
             tasks=tuple(json.loads(metadata["tasks"])) if "tasks" in metadata else (),
+            subfolders=(
+                tuple(json.loads(metadata["compatible_subfolders"])) if "compatible_subfolders" in metadata else ()
+            ),
         )
         contract.assert_shifts(video_shift=video_shift, audio_shift=audio_shift)
         return contract
@@ -144,6 +148,17 @@ class MiniMaxH3HyperFlow:
         """Refuse a task the adapter does not list. An empty list claims every task."""
         if self.tasks and task not in self.tasks:
             msg = f"adapter supports {list(self.tasks)}, not {task!r}"
+            raise ValueError(msg)
+
+    def assert_supports_subfolder(self, subfolder: str) -> None:
+        """Refuse a checkpoint partition the adapter does not list. An empty list claims every one.
+
+        ``task`` and partition are not the same gate: an adapter may be distilled for ``ref2va``
+        prompting yet carry deltas only for the ``transformer/`` weights, and ranks that never saw
+        ``transformer_ref/`` produce video rather than an error when added to it.
+        """
+        if self.subfolders and subfolder not in self.subfolders:
+            msg = f"adapter is compatible with {list(self.subfolders)}, not {subfolder!r}"
             raise ValueError(msg)
 
     def assert_forwards(self, num_inference_steps: int | None) -> None:
