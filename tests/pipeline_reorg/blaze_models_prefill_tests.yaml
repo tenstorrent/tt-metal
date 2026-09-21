@@ -1444,7 +1444,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 10
+      timeout: 5
       tier: 2
       release_ready: false
   owner_id: U053W15B6JF # Djordje Ivanovic
@@ -1459,7 +1459,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=16
-      python3 -m pytest -v models/demos/llama_3p1_8b_d_p/tests/unit \
+      python3 -m pytest --timeout=600 -v models/demos/llama_3p1_8b_d_p/tests/unit \
         --ignore=models/demos/llama_3p1_8b_d_p/tests/unit/test_rope.py \
         --ignore=models/demos/llama_3p1_8b_d_p/tests/unit/test_prefill_host.py \
         --ignore=models/demos/llama_3p1_8b_d_p/tests/unit/test_prefill_capacity_host.py \
@@ -1470,7 +1470,7 @@
   test_group: module
   skus:
     bh_sc1:
-      timeout: 60
+      timeout: 20
       tier: 2
       release_ready: false
   owner_id: U053W15B6JF # Djordje Ivanovic
@@ -1485,7 +1485,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=16
-      python3 -m pytest -v \
+      python3 -m pytest --timeout=1200 -v \
         models/demos/llama_3p1_8b_d_p/tests/full_model/test_prefill_model_vs_ref.py \
         models/demos/llama_3p1_8b_d_p/tests/full_model/test_prefill_native_input_accuracy.py
     '
@@ -1509,14 +1509,14 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=16
-      python3 -m pytest -v models/demos/llama_3p1_8b_d_p/tests/full_model/test_prefill_book_top5.py
+      python3 -m pytest --timeout=600 -v models/demos/llama_3p1_8b_d_p/tests/full_model/test_prefill_book_top5.py
     '
   test_type: llama31_prefill_book_top5
   test_tags: [llama31, transformer]
   test_group: module
   skus:
     bh_sc1:
-      timeout: 45
+      timeout: 15
       tier: 2
       release_ready: false
   owner_id: U053W15B6JF # Djordje Ivanovic
