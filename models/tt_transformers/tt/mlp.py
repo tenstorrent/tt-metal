@@ -198,6 +198,18 @@ class MLP(LightweightModule):
             )
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
+        if (
+            mode == Mode.DECODE
+            and isinstance(pc_3, ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig)
+            and pc_3.num_workers_per_dram_bank == 1
+        ):
+            pc_3 = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=pc_3.in0_block_w,
+                per_core_M=pc_3.per_core_M,
+                per_core_N=pc_3.per_core_N,
+                fused_activation=pc_3.fused_activation,
+                num_workers_per_dram_bank=2,
+            )
 
         use_tg_decode_no_prefetch = TG and mode == Mode.DECODE and self.prefetcher is None
         if use_tg_decode_no_prefetch:
