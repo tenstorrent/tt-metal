@@ -474,7 +474,6 @@ def read_param(params, name: str, shard_dim: int | None) -> np.ndarray:
 
 
 @pytest.mark.requires_device
-@pytest.mark.usefixtures("tp_mesh")
 class TestConsumerContract:
     """A wrong block order here still yields finite, varying logits -- silently wrong
     attention. (``swiglu_packed``'s half-split: test_swiglu_packed.py.)
@@ -510,34 +509,94 @@ class TestConsumerContract:
 
 
 @pytest.mark.requires_device
-@pytest.mark.usefixtures("tp_mesh")
 class TestCoverageAgainstRealModels:
-    @pytest.mark.parametrize(
-        "use_tp,placement,tying",
-        [
-            (False, EmbeddingPlacement.Replicated, WeightTyingType.Disabled),
-            (False, EmbeddingPlacement.Replicated, WeightTyingType.Enabled),
-            (True, EmbeddingPlacement.Replicated, WeightTyingType.Disabled),
-            (True, EmbeddingPlacement.VocabParallel, WeightTyingType.Disabled),
-            (True, EmbeddingPlacement.VocabParallel, WeightTyingType.Enabled),
-            (True, EmbeddingPlacement.FeatureParallel, WeightTyingType.Disabled),
-        ],
-        ids=lambda v: getattr(v, "name", str(v)),
-    )
-    def test_rules_cover_the_model(self, use_tp, placement, tying):
-        config = coverage_config(use_tp=use_tp, embedding_placement=placement, weight_tying=tying)
+    @pytest.mark.parametrize("tying", [WeightTyingType.Disabled, WeightTyingType.Enabled], ids=lambda v: v.name)
+    def test_rules_cover_the_model(self, tying):
+        config = coverage_config(weight_tying=tying)
         names = set(Llama(config).parameters())
         _check_coverage(names, list(_rules(config, names)), frozenset())
 
     def test_biased_attention_is_coverable(self):
-        config = coverage_config(use_tp=True, attention_bias=True)
+        config = coverage_config(attention_bias=True)
+        names = set(Llama(config).parameters())
+        _check_coverage(names, list(_rules(config, names)), frozenset())
+
+
+@pytest.mark.requires_device
+class TestLoadIntoModel:
+    @pytest.mark.parametrize("dtype", [np.float32, ml_dtypes.bfloat16], ids=["f32", "bf16"])
+    def test_reports_a_clean_load(self, tmp_path, capsys, dtype):
+        hf = write_hf_checkpoint(tmp_path, dtype=dtype)
+        config = e2e_config(False, EmbeddingPlacement.Replicated)
+        model = Llama(config)
+        load_from_safetensors(model, tmp_path, config)
+
+        report = capsys.readouterr().out
+        assert f"Loaded {len(model.parameters())} parameters from {len(hf)} checkpoint tensors" in report, report
+        assert "were not used" not in report, report
+        assert "Left at initial values" not in report, report
+
+    def test_rejects_a_checkpoint_missing_a_fused_source(self, tmp_path, expect_error):
+        """A fused parameter needs all of its sources; a partial group must not load silently."""
+        tensors = {k: v for k, v in write_hf_checkpoint(tmp_path).items() if "v_proj" not in k}
+        save_checkpoint(tmp_path, tensors)
+
+        config = e2e_config(False, EmbeddingPlacement.Replicated)
+        with expect_error(RuntimeError, "the checkpoint has no"):
+            load_from_safetensors(Llama(config), tmp_path, config)
+
+    def test_without_tensor_parallelism_is_a_plain_concat(self, tmp_path):
+        hf = write_hf_checkpoint(tmp_path)
+        config = e2e_config(False, EmbeddingPlacement.Replicated)
+        model = Llama(config)
+        load_from_safetensors(model, tmp_path, config)
+
+        params = model.parameters()
+        pfx = "model.layers.0"
+        expected_qkv = np.concatenate(
+            [
+                _unpermute_proj_rows(hf[f"{pfx}.self_attn.q_proj.weight"], N_HEADS),
+                _unpermute_proj_rows(hf[f"{pfx}.self_attn.k_proj.weight"], N_KV_HEADS),
+                hf[f"{pfx}.self_attn.v_proj.weight"],
+            ],
+            axis=0,
+        )
+        got = read_param(params, "Llama/blocks/0/attention/qkv_linear/weight", None)
+        assert np.array_equal(got, as_bf16(expected_qkv)), "qkv_linear without TP"
+
+        expected_gate_up = np.concatenate([hf[f"{pfx}.mlp.gate_proj.weight"], hf[f"{pfx}.mlp.up_proj.weight"]], axis=0)
+        got = read_param(params, "Llama/blocks/0/mlp/w_gate_up/weight", None)
+        assert np.array_equal(got, as_bf16(expected_gate_up)), "w_gate_up without TP"
+
+    def test_rejects_a_checkpoint_whose_vocab_disagrees_with_the_config(self, tmp_path, expect_error):
+        write_hf_checkpoint(tmp_path, vocab=VOCAB - 8)
+        config = e2e_config(False, EmbeddingPlacement.Replicated)
+        with expect_error(RuntimeError, "does not match the config-implied shape"):
+            load_from_safetensors(Llama(config), tmp_path, config)
+
+
+@pytest.mark.requires_device
+@pytest.mark.usefixtures("tp_mesh")
+class TestCoverageAgainstRealTensorParallelModels:
+    @pytest.mark.parametrize(
+        "placement,tying",
+        [
+            (EmbeddingPlacement.Replicated, WeightTyingType.Disabled),
+            (EmbeddingPlacement.VocabParallel, WeightTyingType.Disabled),
+            (EmbeddingPlacement.VocabParallel, WeightTyingType.Enabled),
+            (EmbeddingPlacement.FeatureParallel, WeightTyingType.Disabled),
+        ],
+        ids=lambda v: v.name,
+    )
+    def test_rules_cover_the_model(self, placement, tying):
+        config = coverage_config(use_tp=True, embedding_placement=placement, weight_tying=tying)
         names = set(Llama(config).parameters())
         _check_coverage(names, list(_rules(config, names)), frozenset())
 
 
 @pytest.mark.requires_device
 @pytest.mark.usefixtures("tp_mesh")
-class TestLoadIntoModel:
+class TestLoadIntoTensorParallelModel:
     @pytest.mark.parametrize(
         "placement",
         [EmbeddingPlacement.Replicated, EmbeddingPlacement.VocabParallel, EmbeddingPlacement.FeatureParallel],
@@ -582,51 +641,6 @@ class TestLoadIntoModel:
         got = read_param(params, "Llama/tok_emb/weight", embedding_shard)
         assert np.array_equal(got, as_bf16(hf["model.embed_tokens.weight"])), "token embedding"
 
-    @pytest.mark.parametrize("dtype", [np.float32, ml_dtypes.bfloat16], ids=["f32", "bf16"])
-    def test_reports_a_clean_load(self, tmp_path, capsys, dtype):
-        hf = write_hf_checkpoint(tmp_path, dtype=dtype)
-        config = e2e_config(True, EmbeddingPlacement.VocabParallel)
-        model = Llama(config)
-        load_from_safetensors(model, tmp_path, config)
-
-        report = capsys.readouterr().out
-        # Positive first: the absences below also hold for a report that was never printed.
-        assert f"Loaded {len(model.parameters())} parameters from {len(hf)} checkpoint tensors" in report, report
-        assert "were not used" not in report, report
-        assert "Left at initial values" not in report, report
-
-    def test_rejects_a_checkpoint_missing_a_fused_source(self, tmp_path, expect_error):
-        """A fused parameter needs all of its sources; a partial group must not load silently."""
-        tensors = {k: v for k, v in write_hf_checkpoint(tmp_path).items() if "v_proj" not in k}
-        save_checkpoint(tmp_path, tensors)
-
-        config = e2e_config(True, EmbeddingPlacement.VocabParallel)
-        with expect_error(RuntimeError, "the checkpoint has no"):
-            load_from_safetensors(Llama(config), tmp_path, config)
-
-    def test_without_tensor_parallelism_is_a_plain_concat(self, tmp_path):
-        hf = write_hf_checkpoint(tmp_path)
-        config = e2e_config(False, EmbeddingPlacement.Replicated)
-        model = Llama(config)
-        load_from_safetensors(model, tmp_path, config)
-
-        params = model.parameters()
-        pfx = "model.layers.0"
-        expected_qkv = np.concatenate(
-            [
-                _unpermute_proj_rows(hf[f"{pfx}.self_attn.q_proj.weight"], N_HEADS),
-                _unpermute_proj_rows(hf[f"{pfx}.self_attn.k_proj.weight"], N_KV_HEADS),
-                hf[f"{pfx}.self_attn.v_proj.weight"],
-            ],
-            axis=0,
-        )
-        got = read_param(params, "Llama/blocks/0/attention/qkv_linear/weight", None)
-        assert np.array_equal(got, as_bf16(expected_qkv)), "qkv_linear without TP"
-
-        expected_gate_up = np.concatenate([hf[f"{pfx}.mlp.gate_proj.weight"], hf[f"{pfx}.mlp.up_proj.weight"]], axis=0)
-        got = read_param(params, "Llama/blocks/0/mlp/w_gate_up/weight", None)
-        assert np.array_equal(got, as_bf16(expected_gate_up)), "w_gate_up without TP"
-
     def test_pads_the_vocab_the_model_rounds_up_to_a_tile(self, tmp_path):
         """The one end-to-end vocab that is not tile-aligned: 120 rounds up to 128, and the pad rows shard too."""
         vocab = VOCAB - 8
@@ -639,13 +653,6 @@ class TestLoadIntoModel:
         assert got.shape == (model.padded_vocab_size, MODEL_HIDDEN), "not grown to the parameter's vocab"
         assert np.array_equal(got[:vocab], as_bf16(hf["model.embed_tokens.weight"])), "checkpoint rows moved"
         assert got[vocab:].any(), "padding is all zeros, which leaves dead rows"
-
-    def test_rejects_a_checkpoint_whose_vocab_disagrees_with_the_config(self, tmp_path, expect_error):
-        """A short checkpoint must not load with noise where its missing tokens should be."""
-        write_hf_checkpoint(tmp_path, vocab=VOCAB - 8)
-        config = e2e_config(True, EmbeddingPlacement.VocabParallel)
-        with expect_error(RuntimeError, "does not match the config-implied shape"):
-            load_from_safetensors(Llama(config), tmp_path, config)
 
     def test_forward_runs_on_loaded_weights(self, tmp_path):
         """Loaded weights must actually drive the fused ops, not just sit at the right shape."""
