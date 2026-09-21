@@ -36,6 +36,7 @@ Run:
         models/demos/gemma4/demo/dflash_fused_decoder_demo.py -k 1x8 -s
 """
 
+import collections
 import math
 import os
 import time
@@ -113,6 +114,40 @@ PREFILL_CHUNK_SIZE = 2048
 # prompt -- see the dflash_capture_taps docstring in tt/model.py. The
 # MAX_SEQ_LEN <= PREFILL_CHUNK_SIZE gate below auto-falls-back to eager for that case.
 GEMMA4_DFLASH_PREFILL_TRACE = os.environ.get("GEMMA4_DFLASH_PREFILL_TRACE", "1") == "1"
+
+# Adaptive fallback: some workloads (open-ended/conversational prompts) have
+# genuinely low draft/target agreement regardless of block_size -- DFlash's
+# per-iteration overhead (drafter forward + verify pass) then costs more than
+# it recovers, measured net *below* plain autoregressive decode (e.g. 0.94-
+# 0.97x on an MT-Bench-style prompt). Detect this early and drop to plain
+# decode for the rest of the session instead of paying that tax for the whole
+# generation. One-way (no re-enabling DFlash mid-session) -- simplest policy,
+# no oscillation risk; a workload whose predictability genuinely improves
+# later in a very long generation is the tradeoff accepted for that
+# simplicity. Off entirely if GEMMA4_DFLASH_FALLBACK=0.
+GEMMA4_DFLASH_FALLBACK = os.environ.get("GEMMA4_DFLASH_FALLBACK", "1") == "1"
+GEMMA4_DFLASH_FALLBACK_WINDOW = int(os.environ.get("GEMMA4_DFLASH_FALLBACK_WINDOW", 10))
+# Mean accepted-drafts/iter (bonus token excluded) below this over the trailing
+# window means DFlash is committing barely more than the bonus token alone --
+# i.e. paying for a block draft + verify pass to get what plain decode would
+# have gotten anyway. Calibrated against the measured MT-Bench regression
+# (mean accepted ~1.13-1.26 there) vs. healthy workloads (>=2.46 at the
+# worst-measured code/math/extraction bucket) -- see README's block-size and
+# ISL sweep tables.
+GEMMA4_DFLASH_FALLBACK_THRESHOLD = float(os.environ.get("GEMMA4_DFLASH_FALLBACK_THRESHOLD", 1.0))
+# Switching costs a one-time trace-compile tax (~1.5s, measured) for the plain-
+# decode path's first traced call. That's only worth paying if enough budget
+# remains afterward to earn it back: DFlash's own *sustained* full-session
+# regression on MT-Bench-style prompts is mild in steady state (~46.4ms/tok vs.
+# baseline's ~43.4ms/tok, a ~3ms/tok gap) even though the rolling-window
+# acceptance that triggers detection looks much worse locally -- the trigger
+# condition is a local dip, not necessarily the whole remaining session's rate.
+# Break-even: ~1500ms / 3ms-per-token =~ 500 tokens. Below that remaining
+# budget, switching is a net loss (measured: forcing it anyway on a 256-token
+# MT-Bench session, with only ~186 tokens left at detection, dropped 0.94-0.97x
+# to 0.85x -- worse than just letting DFlash finish). Conservative margin (500
+# -> 512) rather than cutting it exactly at the measured break-even.
+GEMMA4_DFLASH_FALLBACK_MIN_REMAINING = int(os.environ.get("GEMMA4_DFLASH_FALLBACK_MIN_REMAINING", 512))
 
 
 def _dflash_default_snapshot():
@@ -349,6 +384,7 @@ def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
     else:
         model0.dflash_capture_taps(drafter.target_layer_ids, keep_last=12)
         try:
+            t_pf0 = time.perf_counter()
             generator.prefill_forward_text(
                 in_pt,
                 page_table=page_table,
@@ -357,9 +393,22 @@ def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
                 enable_trace=False,
                 warmup_prefill=False,
             )
+            logger.info(f"[prefill-eager] call: {time.perf_counter() - t_pf0:.3f}s")
         finally:
             taps = model0.pop_dflash_taps()
             model0.dflash_capture_taps(None)
+
+    # NOT pre-warming the plain-decode fallback trace here (tried it): capturing
+    # it before DFlash's own fused trace exists reserves L1 circular-buffer space
+    # that DFlash's own capture then can't fit into --
+    # "Statically allocated circular buffers in program 772 clash with L1
+    # buffers... L1 buffer allocated at 1121536 and static circular buffer
+    # region ends at 1266912" -- a hard TT_THROW, not a soft perf hit. Fixing
+    # that would mean re-tuning L1 reservations for two simultaneously-live
+    # traces (same class of work as this file's own l1_small_size history) --
+    # out of scope here. The fallback (below) still captures its trace lazily
+    # on first use instead, paying a one-time compile tax only in the sessions
+    # that actually need it.
 
     # Fused decoder bootstrap (Gemma4DFlashForCausalLM._spec_bootstrap): one-time
     # drafter ctx ingest + fused-trace compile/capture.
@@ -381,6 +430,10 @@ def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
     iters = 0
     first = True
     hit_eos = False
+    fell_back = False
+    fallback_iter = None
+    fallback_eval_enabled = True
+    accept_history = collections.deque(maxlen=GEMMA4_DFLASH_FALLBACK_WINDOW)
     t_dec0 = time.perf_counter()
     while len(committed) < max_new:
         accepted, bonus, _produced = dec.step(first=first)
@@ -392,10 +445,116 @@ def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
         if eos_set & set(toks):
             hit_eos = True
             break
-    wall = time.perf_counter() - t_dec0
+        if GEMMA4_DFLASH_FALLBACK and fallback_eval_enabled:
+            accept_history.append(len(accepted))
+            if len(accept_history) == accept_history.maxlen:
+                mean_accept = sum(accept_history) / len(accept_history)
+                if mean_accept < GEMMA4_DFLASH_FALLBACK_THRESHOLD:
+                    remaining = max_new - len(committed)
+                    if remaining >= GEMMA4_DFLASH_FALLBACK_MIN_REMAINING:
+                        fell_back = True
+                        fallback_iter = iters
+                        logger.warning(
+                            f"Adaptive fallback: mean accepted-drafts/iter over last "
+                            f"{accept_history.maxlen} iterations = {mean_accept:.2f} < "
+                            f"{GEMMA4_DFLASH_FALLBACK_THRESHOLD} -- DFlash isn't paying for its own "
+                            f"overhead on this prompt. Switching to plain autoregressive decode for "
+                            f"the remaining {remaining} tokens."
+                        )
+                        break
+                    else:
+                        # Acceptance has collapsed, but too little budget remains to
+                        # earn back the one-time switch-trace-compile cost (see
+                        # GEMMA4_DFLASH_FALLBACK_MIN_REMAINING's derivation above) --
+                        # switching would make this session slower, not faster.
+                        # Stay on DFlash and stop re-evaluating (remaining budget only
+                        # shrinks from here, so this verdict can't flip later in the
+                        # same session).
+                        fallback_eval_enabled = False
+                        logger.info(
+                            f"Adaptive fallback: mean accepted-drafts/iter over last "
+                            f"{accept_history.maxlen} iterations = {mean_accept:.2f} < "
+                            f"{GEMMA4_DFLASH_FALLBACK_THRESHOLD}, but only {remaining} tokens remain "
+                            f"(< {GEMMA4_DFLASH_FALLBACK_MIN_REMAINING} needed to amortize the switch "
+                            f"cost) -- staying on DFlash for the rest of this session."
+                        )
+    dflash_iters = iters
+    dflash_committed = len(committed)
+    dflash_wall = time.perf_counter() - t_dec0
 
+    fallback_wall = 0.0
+    if fell_back and not hit_eos and len(committed) < max_new:
+        from models.demos.gemma4.demo.sampling_utils import build_device_sampling_params, model_can_sample_on_device
+
+        # DFlash's fused trace leaves its tap-capture hook armed on model0 (still
+        # copying hidden_states into the block-sized tap buffers every forward
+        # call, for its own steady-state use) -- plain decode's single-token
+        # hidden_states shape doesn't match those buffers and TT_FATALs in
+        # Gemma4Model.__call__'s ttnn.copy otherwise. Same call the demo already
+        # uses to release the hook after prefill (see above); needed again here
+        # since DFlashFusedDecoder re-arms it for the steady-state loop.
+        model0.dflash_capture_taps(None)
+
+        can_sample = model_can_sample_on_device(model0)
+        device_sampling_params = build_device_sampling_params({"temperature": 0}, can_sample=can_sample)
+        # dec.anchor / dec.start are exactly the last-committed-token / next-write-
+        # position bookkeeping DFlashFusedDecoder itself uses (see .step()) --
+        # continuing plain decode from here needs no other handoff state: the
+        # target's own KV cache (kv_layers, the same tensors as tt_kv_cache) already
+        # holds real, verified K/V up to dec.start from DFlash's own verify passes.
+        out_tok = torch.tensor([[dec.anchor]], dtype=torch.long)
+        current_pos = torch.tensor([dec.start], dtype=torch.long)
+        t_fb0 = time.perf_counter()
+        # One-step-of-slack async pipelining (mirrors text_demo_v2.run_demo_text's
+        # decode loop) -- a fully synchronous submit-then-read loop here measured
+        # ~7 tok/s (host-dispatch-bound, no overlap between device execution and
+        # host readback) vs. baseline's ~23 tok/s, which would make the fallback
+        # itself the bottleneck. out_tok/current_pos are NOT updated from the
+        # readback below: once the decode trace is captured, Gemma4 tracks its own
+        # sampled-token/position feedback in trace-persistent device buffers and
+        # ignores the host values on replay (see device_tracks_decode_on_device in
+        # sampling_utils.py) -- same as text_demo_v2's own pipelined branch.
+        pending = []
+        while len(committed) < max_new:
+            decode_out = generator.decode_forward(
+                out_tok,
+                current_pos,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                sampling_params=device_sampling_params,
+                enable_trace=True,
+                read_from_device=False,
+            )
+            pending.append(generator.read_decode_output(decode_out, async_read=True))
+            current_pos = current_pos + 1
+            if len(pending) > 1:
+                host_out, read_events = pending.pop(0)
+                for event in read_events:
+                    ttnn.event_synchronize(event)
+                toks, _ = generator.process_decode_output_host(host_out, is_tokens=True)
+                next_tok = int(toks.reshape(-1)[0])
+                committed.append(next_tok)
+                if next_tok in eos_set:
+                    hit_eos = True
+                    break
+        # Drain the one in-flight read left over from the one-step-of-slack loop.
+        if not hit_eos and pending and len(committed) < max_new:
+            host_out, read_events = pending.pop(0)
+            for event in read_events:
+                ttnn.event_synchronize(event)
+            toks, _ = generator.process_decode_output_host(host_out, is_tokens=True)
+            next_tok = int(toks.reshape(-1)[0])
+            committed.append(next_tok)
+            if next_tok in eos_set:
+                hit_eos = True
+        fallback_wall = time.perf_counter() - t_fb0
+
+    wall = dflash_wall + fallback_wall
     tps = len(committed) / wall if wall > 0 else float("nan")
-    avg_accept = (len(committed) - iters) / iters if iters else float("nan")  # bonus token excluded per iter
+    # bonus token excluded per iter -- only over the DFlash portion; fallback
+    # tokens are plain autoregressive, "accepted/iter" doesn't apply to them.
+    avg_accept = (dflash_committed - dflash_iters) / dflash_iters if dflash_iters else float("nan")
+    fallback_committed = len(committed) - dflash_committed
     text = tokenizer.decode(committed)
 
     logger.info("=" * 70)
@@ -403,7 +562,14 @@ def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
     logger.info(text)
     logger.info("=" * 70)
     logger.info(
-        f"{len(committed)} tokens in {iters} dFlash iterations, {wall:.2f}s "
-        f"-> {tps:.1f} tok/s  |  mean accepted-drafts/iter: {avg_accept:.2f}  |  hit_eos={hit_eos}"
+        f"{len(committed)} tokens total ({dflash_committed} via {dflash_iters} dFlash iterations"
+        f"{f' + {fallback_committed} via plain decode' if fell_back else ''}), {wall:.2f}s "
+        f"-> {tps:.1f} tok/s overall  |  mean accepted-drafts/iter (DFlash phase): {avg_accept:.2f}  |  "
+        f"hit_eos={hit_eos}"
     )
+    if fell_back:
+        logger.info(
+            f"Adaptive fallback triggered at iteration {fallback_iter} "
+            f"({dflash_wall:.2f}s DFlash + {fallback_wall:.2f}s plain decode)"
+        )
     logger.info("=" * 70)
