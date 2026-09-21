@@ -4,6 +4,10 @@
 """TTNN Chronos stubs."""
 
 from models.experimental.chronos_forecast.tt.model import TtChronos
+from models.experimental.chronos_forecast.tt.residual_block import (
+    TtResidualBlock,
+    TtResidualBlockWeights,
+)
 from models.experimental.chronos_forecast.tt.model_preprocessing import (
     Chronos2PackedInputs,
     Chronos2PatchedInputs,
@@ -24,6 +28,8 @@ __all__ = [
     "Chronos2PackedInputs",
     "Chronos2PatchedInputs",
     "TtChronos",
+    "TtResidualBlock",
+    "TtResidualBlockWeights",
     "encode_categorical_covariate",
     "instance_norm",
     "instance_norm_inverse",
