@@ -17,6 +17,7 @@ flow here is ``all_to_all_dispatch_metadata -> moe_compute -> sum over k -> all_
 with no separate ``selective_reduce_combine`` and no score multiply.
 """
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -24,6 +25,7 @@ from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, eff
 from ttnn.operations.ccl import MoEActivationFunction
 
 import ttnn
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 # gen_expert_mapping lives in the moe_compute test suite, which is where the op's expert->device
 # mapping contract is maintained; experts_throughput/config.py already imports it the same way.
@@ -95,32 +97,12 @@ def _split_gate_up(state_dict, num_experts, K, N):
     return w0, w1, w2, b0, b1, b2
 
 
-def create_moe_compute_config(
-    mesh_device,
-    config: ThroughputExpertConfig,
-    state_dict,
-    tokens_per_device: int,
-    num_links: int,
-    cluster_axis: int = 0,
-    topology: ttnn.Topology = ttnn.Topology.Linear,
-) -> MoeComputeConfig:
-    """Build the weights, buffers and core placement moe_compute needs for one decoder layer."""
+def _build_packed_weights(mesh_device, config, state_dict, K, N, E, ring_devices, mesh_cols, experts_per_cluster):
+    """Upload the per-device raw experts, run the op's on-device packers, quantize to bfloat4_b.
 
-    K = config.hidden_size
-    N = config.intermediate_size
-    E = config.num_experts_per_device
-    k_sel = config.num_experts_per_tok
-    ring_devices = mesh_device.shape[cluster_axis]
-    total_devices = mesh_device.get_num_devices()
-    mesh_cols = total_devices // ring_devices
-    experts_per_cluster = config.num_experts // mesh_cols
-    total_tokens = tokens_per_device * ring_devices
-    compute_grid = mesh_device.compute_with_storage_grid_size()
-
-    # --- weights -----------------------------------------------------------------
-    # moe_compute ships its own packers, so we only have to get the raw per-device experts
-    # onto the right device; prepare_* does the interleave/pad/reorder on device and
-    # quantize_weights_via_host does the bfloat4_b conversion.
+    Returns host tensors so they can be cached and re-landed under the kernel's DRAM-sharded
+    memory config on later runs.
+    """
     w0_all, w1_all, w2_all, b0_all, b1_all, b2_all = _split_gate_up(state_dict, config.num_experts, K, N)
 
     def _shard_raw(t_all):
@@ -142,12 +124,65 @@ def create_moe_compute_config(
     for t in (tt_w0_raw, tt_w1_raw, tt_w2_raw, tt_b0_raw, tt_b1_raw, tt_b2_raw):
         ttnn.deallocate(t)
 
-    # memory_config=None keeps the quantized result on host; the kernel wants a specific
-    # DRAM-sharded layout, which the op itself derives via get_weight_mem_configs.
+    # memory_config=None keeps the quantized result on host.
     w0_w1_host = ttnn.experimental.quantize_weights_via_host(tt_w0_w1_prepped, dtype=ttnn.bfloat4_b, memory_config=None)
     w2_host = ttnn.experimental.quantize_weights_via_host(tt_w2_prepped, dtype=ttnn.bfloat4_b, memory_config=None)
     ttnn.deallocate(tt_w0_w1_prepped)
     ttnn.deallocate(tt_w2_prepped)
+    return w0_w1_host, w2_host
+
+
+def create_moe_compute_config(
+    mesh_device,
+    config: ThroughputExpertConfig,
+    state_dict,
+    tokens_per_device: int,
+    num_links: int,
+    cluster_axis: int = 0,
+    topology: ttnn.Topology = ttnn.Topology.Linear,
+    tensor_cache_path: str = None,
+) -> MoeComputeConfig:
+    """Build the weights, buffers and core placement moe_compute needs for one decoder layer."""
+
+    K = config.hidden_size
+    N = config.intermediate_size
+    E = config.num_experts_per_device
+    k_sel = config.num_experts_per_tok
+    ring_devices = mesh_device.shape[cluster_axis]
+    total_devices = mesh_device.get_num_devices()
+    mesh_cols = total_devices // ring_devices
+    experts_per_cluster = config.num_experts // mesh_cols
+    total_tokens = tokens_per_device * ring_devices
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+
+    # --- weights -----------------------------------------------------------------
+    # moe_compute ships its own packers, so we only have to get the raw per-device experts
+    # onto the right device; prepare_* does the interleave/pad/reorder on device and
+    # quantize_weights_via_host does the bfloat4_b conversion.
+    # The packed weights are expensive to build (upload -> on-device prepare -> host
+    # quantize, per layer), and a warm run has no state_dict at all when the demo is invoked
+    # with --skip-model-load. Cache the packed host tensors and reload them when present.
+    w0_w1_cache = get_cache_file_name(tensor_cache_path, "moe_compute_w0_w1.tensorbin")
+    w2_cache = get_cache_file_name(tensor_cache_path, "moe_compute_w2.tensorbin")
+    have_cache = bool(w0_w1_cache) and os.path.exists(w0_w1_cache) and os.path.exists(w2_cache)
+
+    if have_cache:
+        w0_w1_host = ttnn.load_tensor(w0_w1_cache)
+        w2_host = ttnn.load_tensor(w2_cache)
+    else:
+        if not state_dict:
+            raise RuntimeError(
+                f"moe_compute weights are not cached at {w0_w1_cache} and no state_dict was "
+                "provided. Re-run once with weights loaded (drop --skip-model-load, or set "
+                "GPT_OSS_FORCE_MODEL_LOAD=1) to build the cache."
+            )
+        w0_w1_host, w2_host = _build_packed_weights(
+            mesh_device, config, state_dict, K, N, E, ring_devices, mesh_cols, experts_per_cluster
+        )
+        if w0_w1_cache:
+            os.makedirs(os.path.dirname(w0_w1_cache), exist_ok=True)
+            ttnn.dump_tensor(w0_w1_cache, w0_w1_host)
+            ttnn.dump_tensor(w2_cache, w2_host)
 
     weight_mem_configs = ttnn.experimental.get_weight_mem_configs(
         mesh_device,
@@ -293,7 +328,12 @@ def moe_compute_decode_forward(
     """
     cluster_axis = mc_config.cluster_axis
     k_sel = config.num_experts_per_tok
-    tokens_per_device = mc_config.tokens_per_device
+    # Derive the token count from the actual input rather than the config: callers hand this
+    # [1, 1, tokens, H] or [1, tokens, 1, H], and the unit tests exercise token counts that do
+    # not always equal max_local_batch_size. (fused_decode derives it the same way.)
+    input_shape = hidden_states.shape
+    tokens_per_device = input_shape[0] * input_shape[2]
+    total_tokens = tokens_per_device * mesh_device.shape[cluster_axis]
 
     # all_to_all_dispatch_metadata needs ROW_MAJOR L1 for all three inputs.
     def _rm_l1(t):
@@ -303,8 +343,22 @@ def moe_compute_decode_forward(
             t = ttnn.clone(t, memory_config=ttnn.L1_MEMORY_CONFIG)
         return t
 
+    # all_to_all_dispatch_metadata consumes BFLOAT16 activations. The decoder hands the MLP
+    # bfloat8_b, and because the first call in a process may have populated the program cache
+    # with a bfloat16 program, a later bfloat8_b call can slip past validation and be read as
+    # bfloat16 -- silently, as wrong values rather than an error. Measured: bf16 input gives
+    # experts PCC 0.983, bfloat8_b gives 0.726. Convert explicitly.
+    if hidden_states.dtype != ttnn.bfloat16:
+        hidden_states = ttnn.typecast(hidden_states, dtype=ttnn.bfloat16)
     hidden_states = _rm_l1(hidden_states)
     hidden_states = ttnn.reshape(hidden_states, (tokens_per_device, 1, 1, config.hidden_size))
+    # all_to_all_dispatch_metadata requires UINT16 indices. The fused Wormhole router emits
+    # those natively, but Blackhole runs the generic linear+topk router, whose ttnn.topk
+    # indices are a wider integer type -- feeding those straight through reads as garbage
+    # expert ids. The dense path normalises the same way (experts/decode.py).
+    if topk_expert_indices.dtype != ttnn.uint16:
+        topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint32)
+        topk_expert_indices = ttnn.typecast(topk_expert_indices, dtype=ttnn.uint16)
     tt_indices = ttnn.reshape(_rm_l1(topk_expert_indices), (tokens_per_device, 1, 1, k_sel))
     tt_scores = ttnn.reshape(_rm_l1(topk_expert_scores), (tokens_per_device, 1, 1, k_sel))
     # Keep a copy of the pre-dispatch scores: the combine output is unweighted.
@@ -323,8 +377,11 @@ def moe_compute_decode_forward(
     )
     ttnn.deallocate(hidden_states)
 
-    combine_output_zeroed = ttnn.moreh_full(
-        shape=mc_config.combine_output.shape,
+    # The combine accumulates into its output tensor, so it must start zeroed on every call --
+    # reusing a persistent buffer leaves the previous step's partial sums in place. (The
+    # moe_gpt path zeroes the same way.)
+    combine_out = ttnn.moreh_full(
+        shape=list(mc_config.combine_output.shape),
         fill_value=0,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -347,7 +404,7 @@ def moe_compute_decode_forward(
         topology=mc_config.topology,
         num_links=mc_config.num_links,
         mux_core_range_set=mc_config.mux_core_range_set,
-        optional_output_tensor=combine_output_zeroed,
+        optional_output_tensor=combine_out,
         optional_cross_device_semaphore=mc_config.combine_semaphore,
         activation_type=MoEActivationFunction.SWIGLU,
     )
