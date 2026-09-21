@@ -20,6 +20,7 @@ operand ranges and its golden, and a table keeps those visible side by side inst
 over hundreds of near-identical bodies.
 """
 
+import collections
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Sequence
@@ -428,10 +429,96 @@ def _golden_for(spec, torch_operands, device):
     return list(result)[: spec.outputs] if isinstance(result, (list, tuple)) else [result]
 
 
+@dataclass
+class _Stats:
+    """One case's tally, for the job summary."""
+
+    op: str
+    dtype: str
+    bit_compares: int = 0  # output tensors compared across runs: (RUNS - 1) * outputs
+    bit_matches: int = 0
+    golden_compares: int = 0  # output tensors compared against torch: outputs
+    golden_matches: int = 0
+    # Pessimistic by default and only cleared once the case completes, so a case that raises
+    # somewhere else -- building operands, the op call, the golden -- is not tallied as a pass.
+    failed: Optional[str] = "error"
+
+
+_COLLECTED: list = []
+
+
+def _dtype_name(dtype):
+    return str(dtype).rsplit(".", 1)[-1]
+
+
+def _pct(part, whole):
+    return f"{100.0 * part / whole:.1f}%" if whole else "n/a"
+
+
+def _render_summary():
+    """The job summary markdown for everything collected so far."""
+    ops = len({s.op for s in _COLLECTED})
+    dtypes = sorted({s.dtype for s in _COLLECTED})
+    bit_compares = sum(s.bit_compares for s in _COLLECTED)
+    bit_matches = sum(s.bit_matches for s in _COLLECTED)
+    golden_compares = sum(s.golden_compares for s in _COLLECTED)
+    golden_matches = sum(s.golden_matches for s in _COLLECTED)
+    failures = [s for s in _COLLECTED if s.failed]
+
+    lines = [
+        "## Eltwise determinism and correctness",
+        "",
+        f"`{','.join(dtypes)}` &middot; `{'x'.join(str(d) for d in DEFAULT_SHAPE)}` "
+        f"&middot; `{os.environ.get('ELTWISE_DETERMINISM_MEMORY', 'dram')}` &middot; **{RUNS} runs** per configuration",
+        "",
+        "| | Count | Match |",
+        "|---|---:|---:|",
+        f"| Ops | {ops} | |",
+        f"| Configurations (op x dtype) | {len(_COLLECTED)} | {_pct(len(_COLLECTED) - len(failures), len(_COLLECTED))} |",
+        f"| Outputs compared across runs | {bit_compares} | {_pct(bit_matches, bit_compares)} bit-identical |",
+        f"| Outputs compared to golden | {golden_compares} | {_pct(golden_matches, golden_compares)} within PCC |",
+        "",
+    ]
+
+    if not failures:
+        lines.append("All outputs bit-identical across runs and matching the golden.")
+    else:
+        counts = collections.Counter(s.failed for s in failures)
+        reasons = {
+            "determinism": "not reproducible across runs",
+            "golden": "disagreeing with the golden",
+            "error": "raised before completing the check",
+        }
+        lines += [
+            f"### {len(failures)} failing configuration(s)",
+            "",
+            ", ".join(f"{counts[k]} {reasons[k]}" for k in reasons if counts[k]) + ".",
+            "",
+            "| Op | Dtype | Failed |",
+            "|---|---|---|",
+        ]
+        lines += [f"| `{s.op}` | {s.dtype} | {s.failed} |" for s in failures]
+
+    return "\n".join(lines) + "\n"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _job_summary():
+    """Write the run's totals to the GitHub job summary. No-op off CI."""
+    yield
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if path and _COLLECTED:
+        with open(path, "a") as f:
+            f.write(_render_summary())
+
+
 @pytest.mark.parametrize("dtype", [d for d, _ in DTYPES], ids=[n for _, n in DTYPES])
 @pytest.mark.parametrize("spec", ALL_OPS, ids=lambda s: s.name)
 def test_eltwise_deterministic_and_correct(device, spec, dtype):
     """Every run bit-identical to the first, and the first correct against the golden."""
+    stats = _Stats(op=spec.name, dtype=_dtype_name(dtype))
+    _COLLECTED.append(stats)
+
     torch_operands, ttnn_operands = _build_operands(spec, dtype, device)
 
     runs = []
@@ -441,23 +528,40 @@ def test_eltwise_deterministic_and_correct(device, spec, dtype):
         last = result
 
     # Determinism. Compared as bytes, so a NaN payload or signed-zero change is a difference.
+    # Every pair is compared before failing, so the summary reports how much of the output
+    # diverged rather than stopping at the first byte.
+    divergences = []
     for run_index in range(1, RUNS):
         for out_index, (first, later) in enumerate(zip(runs[0], runs[run_index])):
-            if not torch.equal(first, later):
+            stats.bit_compares += 1
+            if torch.equal(first, later):
+                stats.bit_matches += 1
+            else:
                 differing = int((first != later).sum())
-                pytest.fail(
-                    f"{spec.name} ({dtype}) is not deterministic: run {run_index + 1} of {RUNS} "
-                    f"differs from run 1 in output {out_index} at {differing} bytes, on identical inputs"
+                divergences.append(
+                    f"run {run_index + 1} of {RUNS} differs from run 1 in output {out_index} at {differing} bytes"
                 )
+    if divergences:
+        stats.failed = "determinism"
+        pytest.fail(f"{spec.name} ({dtype}) is not deterministic on identical inputs: " + "; ".join(divergences))
 
     # Correctness. Determinism alone would also hold for an op that is consistently wrong.
     expected = _golden_for(spec, torch_operands, device)
     actual = _outputs_of(last, spec.outputs)
+    mismatches = []
     for out_index, (want, got) in enumerate(zip(expected, actual)):
         got_torch = ttnn.to_torch(got)
-        if want.dtype == torch.bool or got_torch.dtype == torch.bool:
-            assert torch.equal(
-                got_torch.to(torch.float32), want.to(torch.float32)
-            ), f"{spec.name} ({dtype}) output {out_index} does not match the golden"
-        else:
-            assert_with_pcc(want, got_torch, spec.pcc)
+        stats.golden_compares += 1
+        try:
+            if want.dtype == torch.bool or got_torch.dtype == torch.bool:
+                assert torch.equal(got_torch.to(torch.float32), want.to(torch.float32)), "differs from the golden"
+            else:
+                assert_with_pcc(want, got_torch, spec.pcc)
+            stats.golden_matches += 1
+        except AssertionError as exc:
+            mismatches.append(f"output {out_index}: {exc}")
+    if mismatches:
+        stats.failed = "golden"
+        pytest.fail(f"{spec.name} ({dtype}) does not match the golden: " + "; ".join(mismatches))
+
+    stats.failed = None

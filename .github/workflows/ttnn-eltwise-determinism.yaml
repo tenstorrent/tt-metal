@@ -134,6 +134,9 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      # The test writes the job summary itself, via GITHUB_STEP_SUMMARY, because the counts worth
+      # reporting -- how many output tensors were compared and how many matched -- are per-output
+      # and so are not recoverable from the junit XML, which only records pass/fail per case.
       - name: Run eltwise determinism and correctness
         run: |
           pytest tests/ttnn/unit_tests/operations/eltwise/test_eltwise_determinism.py \
