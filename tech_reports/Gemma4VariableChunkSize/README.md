@@ -1,5 +1,14 @@
 # Gemma4 prefill: per-request chunk width — investigated, measured, not pursued
 
+> **The PoC code was dropped from this branch on 2026-09-21.**
+> `tt/chunk_buckets.py`, `tt/variable_chunk_prefill.py`, `tests/test_variable_chunk_prefill.py`
+> and `tests/unit/test_chunk_buckets.py` no longer exist here, and the `model.py` / `common.py`
+> hooks went with them. The conclusion below is why: it is a no-ship, and the multi-width build
+> carried a live correctness bug (PCC 0.869 at a width it shares with a single-width build)
+> that produced three retracted perf claims before it was identified. This writeup is kept as
+> the record; the code is recoverable from the pre-rewrite history if anyone needs it.
+> **File paths referenced further down therefore point at files that are no longer present.**
+
 Measured on a BH Galaxy, mesh 8x4 (CP8/TP4). Gemma4-31B: 60 layers = 50 sliding + 10 full
 attention, sliding window 1024.
 
