@@ -108,14 +108,17 @@ def test_kda_construction_passes_global_and_local_geometry(monkeypatch, sp_axis,
     assert kwargs["program_config"].recurrence.summary_group_chunks == (10 if sp_axis == 0 else 20)
 
 
-@pytest.mark.parametrize("host_start,use_metadata", [(None, False), (672, False), (0, True)])
-def test_kda_forward_uses_live_metadata_or_eager_position(monkeypatch, host_start, use_metadata):
+@pytest.mark.parametrize(
+    "host_start,host_end,use_metadata",
+    [(None, None, False), (672, None, False), (672, 704, False), (0, 32, False), (0, 1024, True)],
+)
+def test_kda_forward_uses_live_metadata_or_eager_position(monkeypatch, host_start, host_end, use_metadata):
     kda = create_autospec(ttKDA, instance=True)
     kda.device = object()
-    output, new_state, scalar = object(), object(), object()
+    output, new_state, scalar, end_scalar = object(), object(), object(), object()
     kda.forward.return_value = output, new_state
     states = Mock()
-    from_torch = Mock(return_value=scalar)
+    from_torch = Mock(side_effect=[scalar, end_scalar])
     mapper = object()
     deallocate = Mock()
     monkeypatch.setattr(ttnn, "from_torch", from_torch)
@@ -125,22 +128,34 @@ def test_kda_forward_uses_live_metadata_or_eager_position(monkeypatch, host_star
     monkeypatch.setattr(ttnn, "squeeze", lambda tensor, **kwargs: tensor)
     monkeypatch.setattr(ttnn, "unsqueeze", lambda tensor, **kwargs: tensor)
     attention = TtK3KdaAttention(kda, 1, 1, 1, ttnn.Topology.Linear, states)
-    metadata = (object(), scalar, object()) if use_metadata else None
+    metadata = (object(), scalar, end_scalar) if use_metadata else None
     hidden = object()
     assert (
-        attention.forward(hidden, K3AttnContext(actual_start=host_start, cache_user_id=2, metadata=metadata)) is output
+        attention.forward(
+            hidden, K3AttnContext(actual_start=host_start, actual_end=host_end, cache_user_id=2, metadata=metadata)
+        )
+        is output
     )
     states.read.assert_called_once_with(1, 2)
-    kda.forward.assert_called_once_with(hidden, states.read.return_value, actual_start=scalar)
+    kda.forward.assert_called_once_with(
+        hidden,
+        states.read.return_value,
+        actual_start=scalar,
+        actual_end=end_scalar if use_metadata or host_end is not None else None,
+    )
     states.commit.assert_called_once_with(1, new_state, 2)
     if use_metadata:
         from_torch.assert_not_called()
-        assert all(call.args != (scalar,) for call in deallocate.call_args_list)
+        assert all(call.args not in ((scalar,), (end_scalar,)) for call in deallocate.call_args_list)
     else:
-        from_torch.assert_called_once()
+        assert from_torch.call_count == (1 if host_end is None else 2)
         assert torch.equal(
-            from_torch.call_args.args[0], torch.tensor([0 if host_start is None else host_start], dtype=torch.int64)
+            from_torch.call_args_list[0].args[0],
+            torch.tensor([0 if host_start is None else host_start], dtype=torch.int64),
         )
+        if host_end is not None:
+            assert torch.equal(from_torch.call_args_list[1].args[0], torch.tensor([host_end], dtype=torch.int64))
+            assert any(call.args == (end_scalar,) for call in deallocate.call_args_list)
         assert from_torch.call_args.kwargs == {
             "dtype": ttnn.uint32,
             "layout": ttnn.ROW_MAJOR_LAYOUT,
@@ -149,3 +164,28 @@ def test_kda_forward_uses_live_metadata_or_eager_position(monkeypatch, host_star
             "mesh_mapper": mapper,
         }
         assert any(call.args == (scalar,) for call in deallocate.call_args_list)
+
+
+@pytest.mark.parametrize("start,end", [(1, 64), (0, 33), (-32, 32), (32, 32), (64, 32)])
+def test_kda_rejects_invalid_host_bounds_before_device_work(monkeypatch, expect_error, start, end):
+    gather = Mock()
+    monkeypatch.setattr(ttnn, "all_gather", gather)
+    attention = TtK3KdaAttention(Mock(), 1, 1, 1, ttnn.Topology.Linear, Mock())
+    with expect_error(ValueError, "K3 KDA"):
+        attention.forward(object(), K3AttnContext(actual_start=start, actual_end=end))
+    gather.assert_not_called()
+
+
+def test_runtime_rejects_unaligned_end_before_reset_or_replay(monkeypatch, expect_error):
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
+
+    runtime = object.__new__(TtKimiK3Runtime)
+    runtime.model = SimpleNamespace(kda_states=Mock())
+    parent_forward = create_autospec(TtPrefillRuntime.prefill_chunk)
+    monkeypatch.setattr(TtPrefillRuntime, "prefill_chunk", parent_forward)
+    # Positional arguments exercise the same binding used by the runner.
+    with expect_error(ValueError, "32-token aligned"):
+        runtime.prefill_chunk(object(), object(), 0, 0, 33)
+    runtime.model.kda_states.reset.assert_not_called()
+    parent_forward.assert_not_called()
