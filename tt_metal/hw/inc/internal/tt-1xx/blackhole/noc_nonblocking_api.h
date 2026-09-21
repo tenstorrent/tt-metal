@@ -486,14 +486,21 @@ inline __attribute__((always_inline)) void noc_cmd_buf_clear_ret_addr_mid(uint32
 // MID, so a stale value left behind by a PCIe batch would silently misroute an on-chip transaction, and a missing
 // one would send a PCIe transaction to an on-chip core. Both read as a correct address in every other register.
 // ASSERT leaves its operand unevaluated in a release build, so the register read costs nothing there.
+// Both sides are masked because callers using the separate-coordinate issuers program MID with the full high
+// word of a 64-bit address, while an addr packed WH-style only carries routing in the masked bits. Comparing
+// unmasked would fail on an address above 2^36 that was programmed correctly.
 inline __attribute__((always_inline)) void noc_assert_targ_addr_mid_matches(
     uint32_t noc, uint32_t cmd_buf, uint64_t addr) {
-    ASSERT(NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_MID) == ((uint32_t)(addr >> 32) & NOC_PCIE_MASK));
+    ASSERT(
+        (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_MID) & NOC_PCIE_MASK) ==
+        ((uint32_t)(addr >> 32) & NOC_PCIE_MASK));
 }
 
 inline __attribute__((always_inline)) void noc_assert_ret_addr_mid_matches(
     uint32_t noc, uint32_t cmd_buf, uint64_t addr) {
-    ASSERT(NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_MID) == ((uint32_t)(addr >> 32) & NOC_PCIE_MASK));
+    ASSERT(
+        (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_MID) & NOC_PCIE_MASK) ==
+        ((uint32_t)(addr >> 32) & NOC_PCIE_MASK));
 }
 
 // Debug only: asserts that no PCIe batch is open on cmd_buf. Used by the paths that overwrite
