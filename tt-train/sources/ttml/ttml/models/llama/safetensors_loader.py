@@ -264,12 +264,20 @@ def _check_coverage(parameter_names: set[str], rules: Sequence[_Rule], checkpoin
     """
     feeders = Counter(rule.param for rule in rules)
     targets = set(feeders)
-    checkpoint_has_biases = any(name.endswith(".bias") for name in checkpoint_names)
-    exempt = set() if checkpoint_has_biases else _biases(parameter_names)
-    uncovered = sorted(parameter_names - targets - exempt)
+    by_param = {rule.param: rule for rule in rules}
+
+    def checkpoint_ships(bias: str) -> bool:
+        """True if the checkpoint has a ``.bias`` beside a source of the sibling weight rule."""
+        weight = by_param.get(bias.removesuffix("/bias") + "/weight")
+        sources = weight.sources if weight else ()
+        return any(source.removesuffix(".weight") + ".bias" in checkpoint_names for source in sources)
+
+    biases = _biases(parameter_names)
+    shipped_biases = sorted(bias for bias in biases if checkpoint_ships(bias))
+    uncovered = sorted(parameter_names - targets - biases)
     unknown = sorted(targets - parameter_names)
     contested = sorted(name for name, count in feeders.items() if count > 1)
-    if not uncovered and not unknown and not contested:
+    if not uncovered and not unknown and not contested and not shipped_biases:
         return
 
     def line(label: str, name: str) -> str:
@@ -278,11 +286,16 @@ def _check_coverage(parameter_names: set[str], rules: Sequence[_Rule], checkpoin
     detail = "".join(line("no rule feeds", name) for name in uncovered)
     detail += "".join(line("no such parameter", name) for name in unknown)
     detail += "".join(line(f"fed by {feeders[name]} rules", name) for name in contested)
-    raise RuntimeError(
-        f"the loader and this Llama disagree about its parameters:{detail}\n"
-        f"Update _rules() in {Path(__file__).name} to match the model; a weight_tying mismatch between "
-        f"the LlamaConfig and the model also lands here."
-    )
+    detail += "".join(line("bias shipped for", name) for name in shipped_biases)
+    hints = []
+    if uncovered or unknown or contested:
+        hints.append(
+            f"Update _rules() in {Path(__file__).name} to match the model; a weight_tying mismatch between "
+            f"the LlamaConfig and the model also lands here."
+        )
+    if shipped_biases:
+        hints.append("This loader leaves biases at their init values and cannot load the ones this checkpoint ships.")
+    raise RuntimeError(f"the loader and this Llama disagree about its parameters:{detail}\n" + "\n".join(hints))
 
 
 def _check_sources(rules: Sequence[_Rule], checkpoint_names: frozenset[str]) -> None:

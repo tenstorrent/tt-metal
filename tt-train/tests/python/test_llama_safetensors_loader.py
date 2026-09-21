@@ -367,12 +367,16 @@ class TestCoverage:
         }
         _check_coverage(names, list(_rules(config, names)), frozenset())
 
-    def test_biases_the_checkpoint_ships_need_a_rule(self, expect_error):
-        """The exemption holds only while the checkpoint carries none."""
+    def test_rejects_a_checkpoint_that_ships_a_bias_the_model_has(self, expect_error):
         config = coverage_config(attention_bias=True)
         names = param_names(_PER_LAYER_FUSED) | {"Llama/blocks/0/attention/qkv_linear/bias"}
-        with expect_error(RuntimeError, "no rule feeds       Llama/blocks/0/attention/qkv_linear/bias"):
+        with expect_error(RuntimeError, "bias shipped for    Llama/blocks/0/attention/qkv_linear/bias"):
             _check_coverage(names, list(_rules(config, names)), frozenset({"layers.0.self_attn.q_proj.bias"}))
+
+    def test_a_bias_for_another_linear_keeps_the_exemption(self):
+        config = coverage_config(attention_bias=True)
+        names = param_names(_PER_LAYER_FUSED) | {"Llama/blocks/0/attention/qkv_linear/bias"}
+        _check_coverage(names, list(_rules(config, names)), frozenset({"lm_head.bias"}))
 
     def test_rejects_two_rules_for_one_parameter(self, expect_error):
         """A set of targets would hide the duplicate, and the load loop would assign the parameter twice."""
