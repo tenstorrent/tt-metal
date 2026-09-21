@@ -1658,3 +1658,100 @@ def test_indexer_score_ring4_fused_valid_end_varies_on_a_warm_program():
         logger.info("ring4 valid_end: in-place rewrites tracked on a warm program, no recompiles")
     finally:
         _close_ring4_ccl(parent, submesh, stall_group)
+
+
+def _vend_host_u32(submesh, value: int):
+    """Host-side 1-element uint32, for copy_host_to_device_tensor between trace replays."""
+    return ttnn.from_torch(
+        torch.tensor([[[[value]]]], dtype=torch.int64),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+    )
+
+
+def test_indexer_score_ring4_fused_valid_end_varies_across_trace_replays():
+    """A CAPTURED program must serve a different real end on every replay.
+
+    This is the production shape: a traced multi-chunk prefill captures once and replays per chunk, and
+    each chunk rewrites actual_end in place at the address the capture baked in. If the bound were read
+    at capture time -- a host runtime arg, or a compile-time flag -- every replay would reuse chunk 0's
+    end and the scored window would be wrong for the rest of the request, with nothing failing.
+
+    The untraced run at each bound is the oracle. Comparison is over the WRITTEN prefix only: past its
+    bound the op does not write the output, so those columns keep whatever the buffer held and a
+    full-tensor compare there reports differences that are not results.
+    """
+    heads = 16
+    tight = _VEND_PADDED_END - 32 * 40
+    bounds = (tight, tight + 17, _VEND_PADDED_END)
+
+    submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl(trace_region_size=1 << 20)
+    trace_id = None
+    capture_ended = False
+    try:
+        # Real tokens stop at the tightest bound, so a looser bound admits stale tail and the replays are
+        # genuinely distinguishable rather than all landing on the same scores.
+        q_dev, w_dev, k_local, k_gathered = _vend_inputs(submesh, heads, _vend_ceil32(tight))
+        chunk_start_tensor = _replicated_u32(submesh, _VEND_CHUNK_START)
+
+        def dispatch(vend_tensor):
+            """The op call itself -- returns the DEVICE tensor, which a capture needs."""
+            return ttnn.experimental.ring_indexer_score_dsa(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                ccl_semaphores,
+                cluster_axis=SP_AXIS,
+                topology=ttnn.Topology.Linear,
+                num_links=1,
+                ag_sub_device_id=subdevice_id,
+                block_cyclic_sp_axis=SP_AXIS,
+                block_cyclic_chunk_local=QB_SQ,
+                program_config=glx_config(heads),
+                chunk_start_idx_tensor=chunk_start_tensor,
+                valid_end_tensor=vend_tensor,
+            )
+
+        def compose(out):
+            return ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=2))
+
+        # Untraced oracles, one per bound, each with its own tensor.
+        references = {}
+        for valid_end in bounds:
+            out = dispatch(_replicated_u32(submesh, valid_end))
+            ttnn.synchronize_device(submesh, sub_device_ids=stall_group)
+            references[valid_end] = compose(out)
+
+        # The buffer the capture will bake in, plus a host-side value per bound to rewrite it with.
+        vend_tensor = _replicated_u32(submesh, bounds[0])
+        host_values = {valid_end: _vend_host_u32(submesh, valid_end) for valid_end in bounds}
+
+        dispatch(vend_tensor)  # warm the program before capturing
+        ttnn.synchronize_device(submesh, sub_device_ids=stall_group)
+
+        trace_id = ttnn.begin_trace_capture(submesh, cq_id=0)
+        traced_output = dispatch(vend_tensor)
+        ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
+        capture_ended = True
+
+        # Replay each bound, and revisit them in reverse so the bound both shrinks and grows.
+        for valid_end in list(bounds) + list(bounds)[::-1]:
+            ttnn.copy_host_to_device_tensor(host_values[valid_end], vend_tensor)
+            ttnn.execute_trace(submesh, trace_id, cq_id=0, blocking=True)
+            prefix = min(_VEND_PADDED_END, _vend_ceil32(valid_end))
+            actual = compose(traced_output)
+            assert torch.equal(actual[:, :, :, :prefix], references[valid_end][:, :, :, :prefix]), (
+                f"trace replay with valid_end={valid_end} (ceil32 -> {prefix}) did not match the untraced "
+                "run at the same bound -- the captured program is not re-reading actual_end per replay"
+            )
+            logger.info(f"ring4 valid_end trace replay: valid_end={valid_end} matched its untraced oracle")
+    finally:
+        if trace_id is not None:
+            try:
+                if not capture_ended:
+                    ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
+            finally:
+                ttnn.release_trace(submesh, trace_id)
+        _close_ring4_ccl(parent, submesh, stall_group)
