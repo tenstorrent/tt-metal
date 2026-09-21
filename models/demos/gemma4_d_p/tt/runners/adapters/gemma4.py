@@ -29,7 +29,6 @@ def validate_params(params):
         "sp_axis": 0,
         "tp_axis": 1,
         "use_trace": True,
-        "tp_shard_kv": False,
         "dflash_enabled": False,
     }
     for name, value in expected.items():

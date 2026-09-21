@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 
-from models.demos.gemma4_d_p.tt.runners.adapter import Gemma4PrefillAdapter, Gemma4ServiceConfig
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, Gemma4ServiceConfig
 
 BOOK_IDS = (135, 2600, 1184, 996, 1023, 1399)
 

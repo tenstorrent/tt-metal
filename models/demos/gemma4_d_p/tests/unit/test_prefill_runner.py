@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
-from models.demos.gemma4_d_p.tt.runners.adapter import Gemma4PrefillAdapter, validate_params
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, validate_params
 from models.demos.gemma4_d_p.tt.runners.prefill_producer import iter_chunks, wait_for_layers
 from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
 
