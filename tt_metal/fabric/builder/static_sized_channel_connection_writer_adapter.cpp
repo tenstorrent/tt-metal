@@ -94,23 +94,36 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::get_packed_downstream_sender
     return packed_sender_channel_ids;
 }
 
-DownstreamSlotManifestInfo StaticSizedChannelConnectionWriterAdapter::get_downstream_slot_manifest_info(
-    uint32_t vc_idx, size_t compact_idx) const {
+std::vector<ManifestDownstreamEdge> StaticSizedChannelConnectionWriterAdapter::build_manifest_downstream_edges(
+    uint32_t vc_idx) const {
     TT_FATAL(
-        vc_idx < downstream_edms_connected_by_vc_mask.size() && compact_idx < builder_config::max_downstream_edms,
-        "Downstream manifest slot out of range: vc {} compact {}",
-        vc_idx,
-        compact_idx);
-    TT_FATAL(
-        (downstream_edms_connected_by_vc_mask.at(vc_idx) & (1U << compact_idx)) != 0,
-        "Downstream manifest slot not connected: vc {} compact {}",
-        vc_idx,
-        compact_idx);
-    const auto direction = downstream_edm_direction_by_vc_slot.at(vc_idx).at(compact_idx);
-    TT_FATAL(direction.has_value(), "Downstream manifest slot has no recorded direction: vc {} compact {}", vc_idx, compact_idx);
-    // 1D topologies records no sender channel id, rather its always going to be sender channel 1.
-    const auto sender_channel = downstream_sender_channel_ids.at(vc_idx).at(compact_idx).value_or(1);
-    return DownstreamSlotManifestInfo{.direction = *direction, .sender_channel = static_cast<uint32_t>(sender_channel)};
+        vc_idx < downstream_edms_connected_by_vc_mask.size(),
+        "Downstream edge query out of range: vc {}",
+        vc_idx);
+    std::vector<ManifestDownstreamEdge> edges;
+    const uint32_t mask = downstream_edms_connected_by_vc_mask.at(vc_idx);
+    // EDGE_1..EDGE_4 are compact slots 0..3
+    for (size_t compact = 0; compact < 4; ++compact) {
+        // Unused connection
+        if ((mask & (1U << compact)) == 0) {
+            continue;
+        }
+        const auto direction = downstream_edm_direction_by_vc_slot.at(vc_idx).at(compact);
+        TT_FATAL(
+            direction.has_value(),
+            "Downstream edge has no recorded direction: vc {} compact {}",
+            vc_idx,
+            compact);
+        // 1D topologies record no sender channel id, but forwarded traffic always lands in sender channel 1
+        const auto sender_channel = downstream_sender_channel_ids.at(vc_idx).at(compact).value_or(1);
+        edges.push_back(ManifestDownstreamEdge{
+            .edge = static_cast<uint32_t>(compact) + 1,
+            .direction = *direction,
+            .sender_channel = static_cast<uint32_t>(sender_channel),
+        });
+    }
+
+    return edges;
 }
 
 void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(

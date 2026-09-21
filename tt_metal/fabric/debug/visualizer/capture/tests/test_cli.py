@@ -17,7 +17,7 @@ from tt_metal.fabric.debug.visualizer.capture.tests.test_peek import (
     fixture_manifest,
 )
 
-SCHEMA_PATH = Path(__file__).parents[2] / "schema" / "fabric_debug_snapshot_schema.json"
+SCHEMA_PATH = Path(__file__).parents[2] / "schema" / "fabric_snapshot_schema.json"
 
 
 class CliTest(unittest.TestCase):

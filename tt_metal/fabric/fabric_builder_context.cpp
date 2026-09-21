@@ -216,7 +216,7 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     }
     master_router_chans_.resize(num_devices_, UNINITIALIZED_MASTER_ROUTER_CHAN);
     num_initialized_routers_.resize(num_devices_, UNINITIALIZED_ROUTERS);
-    router_debug_instances_.resize(num_devices_);
+    manifest_router_instances_.resize(num_devices_);
 }
 
 std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_config(
@@ -295,38 +295,38 @@ chan_id_t FabricBuilderContext::get_fabric_master_router_chan(ChipId chip_id) co
     return master_router_chans_[chip_id];
 }
 
-void FabricBuilderContext::publish_router_debug_instances(
-    ChipId chip_id, std::vector<FabricRouterDebugInstance>&& instances) {
+void FabricBuilderContext::publish_manifest_router_instances(
+    ChipId chip_id, std::vector<ManifestRouterInstance>&& instances) {
     TT_FATAL(chip_id < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
     TT_FATAL(
-        !router_debug_instances_[chip_id].has_value(),
-        "Error, tried to publish router debug instances again for device {}",
+        !manifest_router_instances_[chip_id].has_value(),
+        "Error, tried to publish manifest router instances again for device {}",
         chip_id);
     TT_FATAL(
         num_initialized_routers_[chip_id] != UNINITIALIZED_ROUTERS,
-        "Cannot publish router debug instances before router count for device {}",
+        "Cannot publish manifest router instances before router count for device {}",
         chip_id);
     TT_FATAL(
         instances.size() == num_initialized_routers_[chip_id],
-        "Device {} built {} routers but published {} router debug instances",
+        "Device {} built {} routers but published {} manifest router instances",
         chip_id,
         num_initialized_routers_[chip_id],
         instances.size());
-    router_debug_instances_[chip_id] = std::move(instances);
+    manifest_router_instances_[chip_id] = std::move(instances);
 }
 
-const std::vector<FabricRouterDebugInstance>& FabricBuilderContext::get_router_debug_instances(ChipId chip_id) const {
+const std::vector<ManifestRouterInstance>& FabricBuilderContext::get_manifest_router_instances(ChipId chip_id) const {
     TT_FATAL(chip_id < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
     TT_FATAL(
-        router_debug_instances_[chip_id].has_value(),
-        "Error, querying router debug instances for an unknown device {}",
+        manifest_router_instances_[chip_id].has_value(),
+        "Error, querying manifest router instances for an unknown device {}",
         chip_id);
-    return *router_debug_instances_[chip_id];
+    return *manifest_router_instances_[chip_id];
 }
 
-bool FabricBuilderContext::has_router_debug_instances(ChipId chip_id) const {
+bool FabricBuilderContext::has_manifest_router_instances(ChipId chip_id) const {
     TT_FATAL(chip_id < num_devices_, "Device ID {} exceeds maximum supported devices {}", chip_id, num_devices_);
-    return router_debug_instances_[chip_id].has_value();
+    return manifest_router_instances_[chip_id].has_value();
 }
 
 std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear() const {

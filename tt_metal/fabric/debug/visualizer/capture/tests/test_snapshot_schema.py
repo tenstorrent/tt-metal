@@ -13,17 +13,17 @@ from tt_metal.fabric.debug.visualizer.capture.snapshot import owner_alive
 
 
 SCHEMA_PATH = (
-    Path(__file__).parents[2] / "schema" / "fabric_debug_snapshot_schema.json"
+    Path(__file__).parents[2] / "schema" / "fabric_snapshot_schema.json"
 )
 
 
 def snapshot() -> dict:
     return {
         "snapshot_version": 1,
-        "kind": "fabric_debug_snapshot",
+        "kind": "fabric_snapshot",
         "captured_at": "2026-09-14T22:00:00Z",
         "manifest": {
-            "path": "generated/fabric/fabric_debug_manifest_rank_1_of_2.json",
+            "path": "generated/fabric/fabric_manifest_rank_1_of_2.json",
             "manifest_version": 1,
             "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "run": {
@@ -42,7 +42,7 @@ def snapshot() -> dict:
             "argv": ["capture", "--manifest", "manifest.json"],
         },
         "raw": {
-            "file": "fabric_debug_snapshot_rank_1_of_2.bin",
+            "file": "fabric_snapshot_rank_1_of_2.bin",
             "size": 1024,
             "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         },

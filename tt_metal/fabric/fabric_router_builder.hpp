@@ -9,7 +9,7 @@
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // FabricNodeId
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
 #include <hostdevcommon/fabric_common.h>                                // chan_id_t
-#include "tt_metal/fabric/builder/fabric_router_debug_layout.hpp"
+#include "tt_metal/fabric/builder/fabric_manifest_router_instance.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"  // ChipRoutingFacts
 
 namespace tt::tt_metal {
@@ -144,7 +144,7 @@ public:
      * Snapshot the finalized host-side router allocation before this transient builder is destroyed.
      * This should only be called after create_kernel(), when connection wiring and per-RISC compile-time arguments are final.
      */
-    virtual FabricRouterDebugInstance build_debug_instance() const = 0;
+    virtual ManifestRouterInstance make_manifest_router_instance() const = 0;
 
 protected:
     // Protected constructor - only derived classes can construct

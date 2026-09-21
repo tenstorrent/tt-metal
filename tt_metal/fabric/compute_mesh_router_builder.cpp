@@ -968,8 +968,8 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         eth_chan == ctx.master_router_chan);
 }
 
-// Collect all the compile-time arguments for each RISC core, and use them to build and return a FabricRouterDebugInstance.
-FabricRouterDebugInstance ComputeMeshRouterBuilder::build_debug_instance() const {
+// Collect all the compile-time arguments for each RISC core, and use them to build and return a ManifestRouterInstance.
+ManifestRouterInstance ComputeMeshRouterBuilder::make_manifest_router_instance() const {
     std::vector<std::unordered_map<std::string, uint32_t>> named_ct_args_per_risc;
     named_ct_args_per_risc.reserve(get_configured_risc_count());
 
@@ -982,7 +982,7 @@ FabricRouterDebugInstance ComputeMeshRouterBuilder::build_debug_instance() const
         tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_builder_context();
 
     // Build the debug instance.
-    return build_router_debug_instance(
+    return build_manifest_router_instance(
         *erisc_builder_, builder_context.get_stream_assignment(local_node_.mesh_id), named_ct_args_per_risc, location_);
 }
 

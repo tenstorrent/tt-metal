@@ -1,4 +1,4 @@
-const DECODED_KIND = "fabric_debug_decoded";
+const DECODED_KIND = "fabric_snapshot_decoded";
 const DECODED_VERSION = 1;
 
 export class LoadError extends Error {
@@ -147,7 +147,7 @@ export async function loadDecodedFromFileList(fileList) {
     }
     if (!decoded || !decodedFile) {
       throw new LoadError(
-        `No fabric_debug_decoded JSON in that folder${lastError ? `: ${lastError.message}` : ""}`,
+        `No fabric_snapshot_decoded JSON in that folder${lastError ? `: ${lastError.message}` : ""}`,
       );
     }
   }

@@ -40,7 +40,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
     builder.connect_routers();
     builder.compile_ancillary_kernels();
     builder.create_kernels();
-    builder.publish_debug_instances();
+    builder.build_and_publish_manifest_router_instances();
 
     // Compile the program
     fabric_program_ptr->impl().compile(device, tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());

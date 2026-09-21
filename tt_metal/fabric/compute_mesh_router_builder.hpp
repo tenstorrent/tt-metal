@@ -61,7 +61,7 @@ public:
     void compile_ancillary_kernels(tt::tt_metal::Program& program) override;
 
     void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) override;
-    FabricRouterDebugInstance build_debug_instance() const override;
+    ManifestRouterInstance make_manifest_router_instance() const override;
 
     // ============ Compute-Mesh Specific Methods ============
 

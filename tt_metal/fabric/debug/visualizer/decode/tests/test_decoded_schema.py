@@ -13,7 +13,7 @@ from tt_metal.fabric.debug.visualizer.decode.inputs import discover_inputs
 from tt_metal.fabric.debug.visualizer.decode.output import build_decoded
 from tt_metal.fabric.debug.visualizer.decode.tests.fixtures import write_input
 
-SCHEMA_PATH = Path(__file__).parents[2] / "schema" / "fabric_debug_decoded_schema.json"
+SCHEMA_PATH = Path(__file__).parents[2] / "schema" / "fabric_snapshot_decoded_schema.json"
 
 
 class DecodedSchemaTest(unittest.TestCase):

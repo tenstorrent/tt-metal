@@ -81,7 +81,7 @@ def _run_key(run: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _validate_snapshot(path: Path, snapshot: dict[str, Any]) -> None:
-    if snapshot.get("kind") != "fabric_debug_snapshot":
+    if snapshot.get("kind") != "fabric_snapshot":
         raise DecodeError(f"{path} is not a fabric debug snapshot")
     if snapshot.get("snapshot_version") != 1:
         raise DecodeError(f"{path} has unsupported snapshot_version {snapshot.get('snapshot_version')!r}")
@@ -126,12 +126,12 @@ def discover_inputs(
     for path in _json_paths(paths):
         value = _json_object(path)
         kind = value.get("kind")
-        if kind == "fabric_debug_manifest":
+        if kind == "fabric_manifest":
             try:
                 manifests.append(ManifestArtifact(path, load_manifest(path)))
             except ManifestError as error:
                 raise DecodeError(str(error)) from error
-        elif kind == "fabric_debug_snapshot":
+        elif kind == "fabric_snapshot":
             _validate_snapshot(path, value)
             snapshots.append((path, value))
 

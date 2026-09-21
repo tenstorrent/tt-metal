@@ -309,7 +309,7 @@ void FabricFirmwareInitializer::init(
         log_info(tt::LogMetal, "Initializing Fabric");
 
         // Remove the stale fabric debug manifest, if one exists
-        const auto manifest_path = tt_fabric::fabric_debug_manifest_path(rtoptions_);
+        const auto manifest_path = tt_fabric::fabric_manifest_path(rtoptions_);
         try {
             if (std::filesystem::remove(manifest_path)) {
                 log_debug(tt::LogFabric, "Removed stale fabric debug manifest: {}", manifest_path.string());
@@ -359,9 +359,9 @@ void FabricFirmwareInitializer::configure() {
         wait_for_fabric_router_sync(get_fabric_router_sync_timeout_ms());
 
         // Serialize and write the fabric debug manifest to disk
-        const auto manifest_path = tt_fabric::fabric_debug_manifest_path(rtoptions_);
+        const auto manifest_path = tt_fabric::fabric_manifest_path(rtoptions_);
         try {
-            tt_fabric::serialize_fabric_debug_manifest_to_file(control_plane_, manifest_path);
+            tt_fabric::serialize_fabric_manifest_to_file(control_plane_, manifest_path);
         } catch (const std::exception& e) { // don't prevent fabric from running if manifest export fails as its purely a debug tool
             log_warning(
                 tt::LogFabric, "Failed to export fabric debug manifest {}: {}", manifest_path.string(), e.what());

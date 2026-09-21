@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/tenstorrent/tt-metal/tt_metal/fabric/debug/visualizer/schema/fabric_debug_decoded_schema.json",
-  "title": "Decoded fabric debug state",
+  "$id": "https://github.com/tenstorrent/tt-metal/tt_metal/fabric/debug/visualizer/schema/fabric_snapshot_decoded_schema.json",
+  "title": "Decoded fabric snapshot",
   "description": "Offline, merged interpretation consumed by the static viewer.",
   "type": "object",
   "required": [
@@ -19,7 +19,7 @@
   ],
   "properties": {
     "decoded_version": { "type": "integer", "const": 1 },
-    "kind": { "type": "string", "const": "fabric_debug_decoded" },
+    "kind": { "type": "string", "const": "fabric_snapshot_decoded" },
     "generated_at": { "type": "string", "format": "date-time" },
     "inputs": {
       "type": "array",

@@ -8,7 +8,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
-#include "tt_metal/fabric/builder/fabric_router_debug_layout.hpp"
+#include "tt_metal/fabric/builder/fabric_manifest_router_instance.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include <vector>
@@ -147,9 +147,9 @@ public:
     chan_id_t get_fabric_master_router_chan(ChipId chip_id) const;
 
     // Finalized per-router layouts copied out of the transient builders before they are destroyed.
-    void publish_router_debug_instances(ChipId chip_id, std::vector<FabricRouterDebugInstance>&& instances);
-    const std::vector<FabricRouterDebugInstance>& get_router_debug_instances(ChipId chip_id) const;
-    bool has_router_debug_instances(ChipId chip_id) const;
+    void publish_manifest_router_instances(ChipId chip_id, std::vector<ManifestRouterInstance>&& instances);
+    const std::vector<ManifestRouterInstance>& get_manifest_router_instances(ChipId chip_id) const;
+    bool has_manifest_router_instances(ChipId chip_id) const;
 
     // ============ Router Address Info ============
     std::vector<size_t> get_fabric_router_addresses_to_clear() const;
@@ -221,7 +221,7 @@ private:
     static constexpr uint32_t UNINITIALIZED_ROUTERS = std::numeric_limits<uint32_t>::max();
     std::vector<chan_id_t> master_router_chans_;
     std::vector<uint32_t> num_initialized_routers_;
-    std::vector<std::optional<std::vector<FabricRouterDebugInstance>>> router_debug_instances_;
+    std::vector<std::optional<std::vector<ManifestRouterInstance>>> manifest_router_instances_;
 
     // Helper to create EDM config with given options
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(

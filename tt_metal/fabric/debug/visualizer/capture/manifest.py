@@ -177,8 +177,8 @@ def _required(mapping: dict[str, Any], key: str, location: str) -> Any:
 
 def _validate_header(data: dict[str, Any]) -> None:
     kind = _required(data, "kind", "manifest")
-    if kind != "fabric_debug_manifest":
-        raise ManifestError(f"manifest.kind must be 'fabric_debug_manifest', got {kind!r}")
+    if kind != "fabric_manifest":
+        raise ManifestError(f"manifest.kind must be 'fabric_manifest', got {kind!r}")
 
     version = _required(data, "manifest_version", "manifest")
     if version != SUPPORTED_MANIFEST_VERSION:

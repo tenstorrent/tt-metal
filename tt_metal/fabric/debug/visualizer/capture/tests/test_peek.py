@@ -16,7 +16,7 @@ from tt_metal.fabric.debug.visualizer.capture.snapshot import build_snapshot
 from tt_metal.fabric.debug.visualizer.capture.tests.test_manifest import required_blocks
 
 
-SCHEMA_PATH = Path(__file__).parents[2] / "schema" / "fabric_debug_snapshot_schema.json"
+SCHEMA_PATH = Path(__file__).parents[2] / "schema" / "fabric_snapshot_schema.json"
 
 
 class FakeLoc:
@@ -51,7 +51,7 @@ class FakeContext:
 def fixture_manifest():
     data = {
         "manifest_version": 1,
-        "kind": "fabric_debug_manifest",
+        "kind": "fabric_manifest",
         "run": {
             "arch": "WORMHOLE_B0",
             "fabric_config": "FABRIC_2D",

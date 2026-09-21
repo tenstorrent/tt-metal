@@ -168,7 +168,7 @@ def build_decoded(
     enums.setdefault("ConnectionState", {name: raw for raw, name in CONNECTION_STATE.items()})
     decoded = {
         "decoded_version": DECODED_VERSION,
-        "kind": "fabric_debug_decoded",
+        "kind": "fabric_snapshot_decoded",
         "generated_at": generated_at or utc_timestamp(),
         "inputs": [_input_description(item) for item in inputs],
         "raw_files": _raw_files(inputs),

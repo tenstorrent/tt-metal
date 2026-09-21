@@ -9,7 +9,7 @@ from pathlib import Path
 import jsonschema
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures"
-SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schema" / "fabric_debug_decoded_schema.json"
+SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schema" / "fabric_snapshot_decoded_schema.json"
 INDEX_NAMES = {
     "line_1d.json",
     "mesh_2d.json",

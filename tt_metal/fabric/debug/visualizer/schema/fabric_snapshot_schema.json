@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/tenstorrent/tt-metal/tt_metal/fabric/debug/visualizer/schema/fabric_debug_snapshot_schema.json",
-  "title": "Fabric debug snapshot",
+  "$id": "https://github.com/tenstorrent/tt-metal/tt_metal/fabric/debug/visualizer/schema/fabric_snapshot_schema.json",
+  "title": "Fabric snapshot",
   "description": "Live fabric-router values captured by ttexalens on one host.",
   "type": "object",
   "required": ["snapshot_version", "kind", "captured_at", "manifest", "provenance", "raw", "samples"],
@@ -13,7 +13,7 @@
     },
     "kind": {
       "type": "string",
-      "const": "fabric_debug_snapshot"
+      "const": "fabric_snapshot"
     },
     "captured_at": {
       "description": "Time at which creation of this snapshot file began.",

@@ -144,7 +144,7 @@ void check_layout_structure(const nlohmann::json& layout, uint32_t unreserved_ba
 // Compare the generated fabric manifest with the live fabric state.
 void check_manifest_matches_live_fabric(FabricConfig expected_config) {
     auto& metal_context = tt::tt_metal::MetalContext::instance();
-    const auto manifest_path = fabric_debug_manifest_path(metal_context.rtoptions());
+    const auto manifest_path = fabric_manifest_path(metal_context.rtoptions());
     ASSERT_TRUE(std::filesystem::exists(manifest_path)) << manifest_path;
     for (const auto& entry : std::filesystem::directory_iterator(manifest_path.parent_path())) {
         EXPECT_TRUE(entry.path().string().find(".tmp.") == std::string::npos) << entry.path();
@@ -154,8 +154,8 @@ void check_manifest_matches_live_fabric(FabricConfig expected_config) {
     ASSERT_TRUE(manifest_stream.is_open());
     const nlohmann::json manifest = nlohmann::json::parse(manifest_stream);
 
-    ASSERT_EQ(manifest.at("manifest_version"), FABRIC_DEBUG_MANIFEST_VERSION);
-    ASSERT_EQ(manifest.at("kind"), "fabric_debug_manifest");
+    ASSERT_EQ(manifest.at("manifest_version"), FABRIC_MANIFEST_VERSION);
+    ASSERT_EQ(manifest.at("kind"), "fabric_manifest");
     ASSERT_TRUE(manifest.contains("run"));
     ASSERT_TRUE(manifest.contains("hal"));
     ASSERT_TRUE(manifest.contains("heartbeat"));
@@ -275,8 +275,8 @@ void check_manifest_matches_live_fabric(FabricConfig expected_config) {
                 chip.at("asic_id"), fmt::format("0x{:016x}", *control_plane.get_asic_id_from_fabric_node_id(node)));
             EXPECT_EQ(chip.at("master_router_chan"), builder_context.get_fabric_master_router_chan(*physical_chip_id));
             EXPECT_EQ(chip.at("routers").size(), builder_context.get_num_fabric_initialized_routers(*physical_chip_id));
-            ASSERT_TRUE(builder_context.has_router_debug_instances(*physical_chip_id));
-            const auto& published_instances = builder_context.get_router_debug_instances(*physical_chip_id);
+            ASSERT_TRUE(builder_context.has_manifest_router_instances(*physical_chip_id));
+            const auto& published_instances = builder_context.get_manifest_router_instances(*physical_chip_id);
             const auto live_routers = control_plane.get_active_fabric_eth_channels(node);
             std::set<uint32_t> manifest_channels;
             for (const auto& router : chip.at("routers")) {
@@ -294,7 +294,7 @@ void check_manifest_matches_live_fabric(FabricConfig expected_config) {
                 }
 
                 const auto published =
-                    std::ranges::find(published_instances, eth_chan, &FabricRouterDebugInstance::eth_chan);
+                    std::ranges::find(published_instances, eth_chan, &ManifestRouterInstance::eth_chan);
                 ASSERT_NE(published, published_instances.end());
                 const auto& instance = router.at("instance");
                 EXPECT_EQ(instance.at("num_active_eriscs"), published->num_active_eriscs);
@@ -319,17 +319,16 @@ void check_manifest_matches_live_fabric(FabricConfig expected_config) {
                     }
                 }
 
-                const auto expected_edges_json =
-                    [](const std::vector<FabricRouterDebugInstance::DownstreamEdgeInfo>& edges) {
-                        nlohmann::json entries = nlohmann::json::array();
-                        for (const auto& edge : edges) {
-                            entries.push_back(
-                                {{"edge", edge.edge},
-                                 {"direction", edge.direction},
-                                 {"sender_channel", edge.sender_channel}});
-                        }
-                        return entries;
-                    };
+                const auto expected_edges_json = [](const std::vector<ManifestDownstreamEdge>& edges) {
+                    nlohmann::json entries = nlohmann::json::array();
+                    for (const auto& edge : edges) {
+                        entries.push_back(
+                            {{"edge", edge.edge},
+                             {"direction", direction_to_str(edge.direction)},
+                             {"sender_channel", edge.sender_channel}});
+                    }
+                    return entries;
+                };
                 EXPECT_EQ(instance.at("downstream_edges_vc0"), expected_edges_json(published->downstream_edges_vc0));
                 EXPECT_EQ(instance.at("downstream_edges_vc1"), expected_edges_json(published->downstream_edges_vc1));
                 for (const auto& key : {"downstream_edges_vc0", "downstream_edges_vc1"}) {
@@ -405,8 +404,8 @@ void check_manifest_matches_live_fabric(FabricConfig expected_config) {
 
 }  // namespace
 
-TEST_F(Fabric1DFixture, DebugManifestMatchesLiveFabric) { check_manifest_matches_live_fabric(FabricConfig::FABRIC_1D); }
+TEST_F(Fabric1DFixture, ManifestMatchesLiveFabric) { check_manifest_matches_live_fabric(FabricConfig::FABRIC_1D); }
 
-TEST_F(Fabric2DFixture, DebugManifestMatchesLiveFabric) { check_manifest_matches_live_fabric(FabricConfig::FABRIC_2D); }
+TEST_F(Fabric2DFixture, ManifestMatchesLiveFabric) { check_manifest_matches_live_fabric(FabricConfig::FABRIC_2D); }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

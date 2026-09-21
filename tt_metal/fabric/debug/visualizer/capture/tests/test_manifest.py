@@ -161,7 +161,7 @@ def chip(
 def manifest(chips: list[dict]) -> dict:
     data = {
         "manifest_version": 1,
-        "kind": "fabric_debug_manifest",
+        "kind": "fabric_manifest",
         "run": {
             "arch": "WORMHOLE_B0",
             "fabric_config": "FABRIC_2D",

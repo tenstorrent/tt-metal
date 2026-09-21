@@ -291,14 +291,14 @@ void FabricBuilder::create_kernels() {
     }
 }
 
-void FabricBuilder::publish_debug_instances() {
-    std::vector<FabricRouterDebugInstance> debug_instances;
+void FabricBuilder::build_and_publish_manifest_router_instances() {
+    std::vector<ManifestRouterInstance> debug_instances;
     debug_instances.reserve(routers_.size());
     for (const auto& [eth_chan, router_builder] : routers_) {
-        debug_instances.push_back(router_builder->build_debug_instance());
+        debug_instances.push_back(router_builder->make_manifest_router_instance());
     }
-    std::ranges::sort(debug_instances, {}, &FabricRouterDebugInstance::eth_chan);
-    builder_context_.publish_router_debug_instances(device_->id(), std::move(debug_instances));
+    std::ranges::sort(debug_instances, {}, &ManifestRouterInstance::eth_chan);
+    builder_context_.publish_manifest_router_instances(device_->id(), std::move(debug_instances));
 }
 
 }  // namespace tt::tt_fabric

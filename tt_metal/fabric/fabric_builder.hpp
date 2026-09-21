@@ -69,7 +69,7 @@ public:
     /**
      * Snapshot each router's finalized host-side allocation and publish it on FabricBuilderContext.
      */
-    void publish_debug_instances();
+    void build_and_publish_manifest_router_instances();
 
     /**
      * Check if any routers were created.

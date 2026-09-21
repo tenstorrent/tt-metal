@@ -22,17 +22,20 @@ namespace tt::tt_fabric {
 class FabricEriscDatamoverBuilder;
 struct RouterLocation;
 
-// Different types of underlying locations that a FabricRouterDebugRegion can be backed by.
-enum class DebugRegionBacking : uint8_t { GROUP, UNRESERVED_L1, FIXED_L1, STREAM_REG };
+// Storage that backs a ManifestRouterRegion.
+// Group can be thought of as the root node for a tree of regions, where
+// the child nodes are the actual regions with addresses and the root simply
+// acts as a container for the child nodes.
+enum class ManifestRegionBacking : uint8_t { GROUP, UNRESERVED_L1, FIXED_L1, STREAM_REG };
 
-// Writers that can write to a particular FabricRouterDebugRegion.
-enum class DebugRegionWriter : uint8_t { NONE, ERISC0, ERISC1, ANY_ERISC, HOST, PEER, WORKER };
+// Who writes a ManifestRouterRegion.
+enum class ManifestRegionWriter : uint8_t { NONE, ERISC0, ERISC1, ANY_ERISC, HOST, PEER, WORKER };
 
-// A particular region of memory in the fabric router that has some purpose (ie. routing table, stream registers, etc).
-struct FabricRouterDebugRegion {
+// One capturable slice of a router, ie. an L1 range, a fixed HAL region, a stream register, or a grouping node.
+struct ManifestRouterRegion {
     std::string id;
     std::string parent;
-    DebugRegionBacking backing = DebugRegionBacking::GROUP;
+    ManifestRegionBacking backing = ManifestRegionBacking::GROUP;
     uint32_t address = 0;
     uint32_t size = 0;
     std::optional<uint32_t> count;
@@ -40,23 +43,34 @@ struct FabricRouterDebugRegion {
     std::optional<uint32_t> stream_id;
     bool allocated = true;
     bool enabled = true;
-    DebugRegionWriter writer = DebugRegionWriter::NONE;
+    ManifestRegionWriter writer = ManifestRegionWriter::NONE;
     std::string schema;
     std::vector<std::string> overlaps;
 
-    bool operator==(const FabricRouterDebugRegion&) const = default;
+    bool operator==(const ManifestRouterRegion&) const = default;
 };
 
-// A collection of FabricRouterDebugRegions that describe the layout of a fabric router.
-struct FabricRouterDebugLayout {
-    std::vector<FabricRouterDebugRegion> regions;
+// One downstream connection, from a receiver channel to a sender channel, on a VC.
+struct ManifestDownstreamEdge {
+    // The 1-based compact slot (EDGE_1..EDGE_4).
+    uint32_t edge = 0;
+    eth_chan_directions direction = eth_chan_directions::EAST;
+    uint32_t sender_channel = 0;
+};
 
-    bool operator==(const FabricRouterDebugLayout&) const = default;
+// "E" / "W" / "N" / "S" / "Z" for a manifest direction.
+std::string direction_to_str(eth_chan_directions direction);
+
+// A collection of ManifestRouterRegions that describe the regions of a fabric router.
+struct ManifestRouterRegionLayout {
+    std::vector<ManifestRouterRegion> regions;
+
+    bool operator==(const ManifestRouterRegionLayout&) const = default;
 };
 
 // Information about a particular fabric router instance, detailing reserved memory regions, virtual channnel
 // layout, and other relevant information.
-struct FabricRouterDebugInstance {
+struct ManifestRouterInstance {
     FabricNodeId local_node = FabricNodeId(MeshId{0}, 0);
     uint32_t eth_chan = 0;
     FabricNodeId peer_node = FabricNodeId(MeshId{0}, 0);
@@ -72,20 +86,15 @@ struct FabricRouterDebugInstance {
     bool first_level_ack_vc0 = false;
     uint32_t downstream_edm_mask_vc0 = 0;
     uint32_t downstream_edm_mask_vc1 = 0;
-    struct DownstreamEdgeInfo {
-        uint32_t edge = 0;
-        std::string direction;
-        uint32_t sender_channel = 0;
-    };
-    std::vector<DownstreamEdgeInfo> downstream_edges_vc0;
-    std::vector<DownstreamEdgeInfo> downstream_edges_vc1;
+    std::vector<ManifestDownstreamEdge> downstream_edges_vc0;
+    std::vector<ManifestDownstreamEdge> downstream_edges_vc1;
     bool has_tensix_extension = false;
     bool udm_mode = false;
-    FabricRouterDebugLayout layout;
+    ManifestRouterRegionLayout layout;
 };
 
-// Build a FabricRouterDebugInstance for a particular fabric router instance.
-FabricRouterDebugInstance build_router_debug_instance(
+// Build a ManifestRouterInstance from a finalized router builder.
+ManifestRouterInstance build_manifest_router_instance(
     const FabricEriscDatamoverBuilder& builder,
     const StreamAssignment& streams,
     const std::vector<std::unordered_map<std::string, uint32_t>>& named_ct_args_per_risc,

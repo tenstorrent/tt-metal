@@ -83,7 +83,7 @@ std::string enum_name(E value) {
 
 // (mesh, chip, channel) is the stable identity for a fabric router. The debug snapshot artifact keys its
 // live values on the same triple, so the viewer can join a snapshot onto a manifest.
-nlohmann::ordered_json fabric_debug_endpoint_json(const FabricNodeId& node, chan_id_t chan) {
+nlohmann::ordered_json manifest_endpoint_json(const FabricNodeId& node, chan_id_t chan) {
     nlohmann::ordered_json endpoint;
     endpoint["mesh_id"] = *node.mesh_id;
     endpoint["chip_id"] = node.chip_id;
@@ -115,7 +115,7 @@ json enum_table() {
 }
 
 // Returns a JSON object with the base address and size of the specified L1 memory region.
-json l1_region(const tt::tt_metal::Hal& hal, tt::tt_metal::HalL1MemAddrType addr_type) {
+json hal_l1_region_json(const tt::tt_metal::Hal& hal, tt::tt_metal::HalL1MemAddrType addr_type) {
     json region;
     region["base"] = hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, addr_type);
     region["size"] = hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, addr_type);
@@ -123,7 +123,7 @@ json l1_region(const tt::tt_metal::Hal& hal, tt::tt_metal::HalL1MemAddrType addr
 }
 
 // Returns a JSON object with the base address and size of the specified FabricRouterDiagnosticBufferMap region.
-json diagnostic_region(const FabricRouterDiagnosticBufferMap::BufferRegion& region) {
+json diagnostic_region_json(const FabricRouterDiagnosticBufferMap::BufferRegion& region) {
     json out;
     out["base"] = region.l1_address;
     out["size"] = region.size_bytes;
@@ -131,7 +131,7 @@ json diagnostic_region(const FabricRouterDiagnosticBufferMap::BufferRegion& regi
 }
 
 // Returns a JSON object with the "run" information for the fabric instance.
-json make_run_block(const ControlPlane& control_plane, const tt::Cluster& cluster) {
+json make_run_json(const ControlPlane& control_plane, const tt::Cluster& cluster) {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const FabricType fabric_type = get_fabric_type(control_plane.get_fabric_config(), cluster.is_ubb_galaxy());
     json run;
@@ -154,22 +154,22 @@ json make_run_block(const ControlPlane& control_plane, const tt::Cluster& cluste
 }
 
 // Returns a JSON object with the hal block information.
-json make_hal_block(const tt::tt_metal::Hal& hal) {
+json make_hal_json(const tt::tt_metal::Hal& hal) {
     using tt::tt_metal::HalL1MemAddrType;
     json hal_block;
-    hal_block["unreserved"] = l1_region(hal, HalL1MemAddrType::UNRESERVED);
-    hal_block["go_msg"] = l1_region(hal, HalL1MemAddrType::GO_MSG);
-    hal_block["launch"] = l1_region(hal, HalL1MemAddrType::LAUNCH);
-    hal_block["fabric_telemetry"] = l1_region(hal, HalL1MemAddrType::FABRIC_TELEMETRY);
-    hal_block["routing_table"] = l1_region(hal, HalL1MemAddrType::ROUTING_TABLE);
-    hal_block["router_state"] = l1_region(hal, HalL1MemAddrType::ROUTER_STATE);
-    hal_block["router_command"] = l1_region(hal, HalL1MemAddrType::ROUTER_COMMAND);
-    hal_block["eth_fw_mailbox"] = l1_region(hal, HalL1MemAddrType::ETH_FW_MAILBOX);
+    hal_block["unreserved"] = hal_l1_region_json(hal, HalL1MemAddrType::UNRESERVED);
+    hal_block["go_msg"] = hal_l1_region_json(hal, HalL1MemAddrType::GO_MSG);
+    hal_block["launch"] = hal_l1_region_json(hal, HalL1MemAddrType::LAUNCH);
+    hal_block["fabric_telemetry"] = hal_l1_region_json(hal, HalL1MemAddrType::FABRIC_TELEMETRY);
+    hal_block["routing_table"] = hal_l1_region_json(hal, HalL1MemAddrType::ROUTING_TABLE);
+    hal_block["router_state"] = hal_l1_region_json(hal, HalL1MemAddrType::ROUTER_STATE);
+    hal_block["router_command"] = hal_l1_region_json(hal, HalL1MemAddrType::ROUTER_COMMAND);
+    hal_block["eth_fw_mailbox"] = hal_l1_region_json(hal, HalL1MemAddrType::ETH_FW_MAILBOX);
     return hal_block;
 }
 
 // Returns a JSON object with the heartbeat block information.
-json make_heartbeat_block(tt::ARCH arch) {
+json make_heartbeat_json(tt::ARCH arch) {
     json heartbeat;
     heartbeat["address"] = arch == tt::ARCH::BLACKHOLE ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE
                                                        : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE;
@@ -180,7 +180,7 @@ json make_heartbeat_block(tt::ARCH arch) {
 }
 
 // Returns a JSON object with the fabric context block information.
-json make_fabric_context_block(const FabricContext& fabric_context) {
+json make_fabric_context_json(const FabricContext& fabric_context) {
     json block;
     block["topology"] = enum_name(fabric_context.get_fabric_topology());
     block["is_2d_routing"] = fabric_context.is_2D_routing_enabled();
@@ -198,7 +198,7 @@ json make_fabric_context_block(const FabricContext& fabric_context) {
 }
 
 // Returns a JSON object with the router template block information.
-json make_router_template_block(const FabricBuilderContext& builder_context) {
+json make_router_template_json(const FabricBuilderContext& builder_context) {
     const auto& router_config = builder_context.get_fabric_router_config();
     const auto diagnostics = builder_context.get_telemetry_and_metadata_buffer_map();
     json block;
@@ -210,9 +210,9 @@ json make_router_template_block(const FabricBuilderContext& builder_context) {
     block["unused_config_handshake_address"] = router_config.handshake_addr;
     block["edm_channel_ack_addr"] = router_config.edm_channel_ack_addr;
     json diagnostics_json;
-    diagnostics_json["perf_telemetry"] = diagnostic_region(diagnostics.perf_telemetry);
-    diagnostics_json["code_profiling"] = diagnostic_region(diagnostics.code_profiling);
-    diagnostics_json["trimming"] = diagnostic_region(diagnostics.channel_trimming_capture);
+    diagnostics_json["perf_telemetry"] = diagnostic_region_json(diagnostics.perf_telemetry);
+    diagnostics_json["code_profiling"] = diagnostic_region_json(diagnostics.code_profiling);
+    diagnostics_json["trimming"] = diagnostic_region_json(diagnostics.channel_trimming_capture);
     block["diagnostics"] = std::move(diagnostics_json);
     json addresses_to_clear = json::array();
     for (const auto address : builder_context.get_fabric_router_addresses_to_clear()) {
@@ -224,7 +224,7 @@ json make_router_template_block(const FabricBuilderContext& builder_context) {
 }
 
 // Returns a JSON object with the stream register assignment block information.
-json make_stream_assignment_block(const ControlPlane& control_plane, const FabricBuilderContext& builder_context) {
+json make_stream_assignment_json(const ControlPlane& control_plane, const FabricBuilderContext& builder_context) {
     json assignment = json::object();
     auto local_mesh_ids = control_plane.get_local_mesh_id_bindings();
     std::sort(
@@ -240,7 +240,7 @@ json make_stream_assignment_block(const ControlPlane& control_plane, const Fabri
 }
 
 // Returns a JSON object with the enum values for the fabric instance.
-json make_enums_block() {
+json make_enums_json() {
     json enums;
     // EDMStatus values are sparse 32-bit magic constants; enchantum cannot reflect them.
     json edm_status;
@@ -269,35 +269,35 @@ json make_enums_block() {
     return enums;
 }
 
-std::string debug_region_backing_name(DebugRegionBacking backing) {
+std::string manifest_region_backing_to_str(ManifestRegionBacking backing) {
     switch (backing) {
-        case DebugRegionBacking::GROUP: return "group";
-        case DebugRegionBacking::UNRESERVED_L1: return "unreserved_l1";
-        case DebugRegionBacking::FIXED_L1: return "fixed_l1";
-        case DebugRegionBacking::STREAM_REG: return "stream_reg";
+        case ManifestRegionBacking::GROUP: return "group";
+        case ManifestRegionBacking::UNRESERVED_L1: return "unreserved_l1";
+        case ManifestRegionBacking::FIXED_L1: return "fixed_l1";
+        case ManifestRegionBacking::STREAM_REG: return "stream_reg";
     }
-    TT_THROW("Unknown debug region backing {}", static_cast<uint32_t>(backing));
+    TT_THROW("Unknown manifest region backing {}", static_cast<uint32_t>(backing));
 }
 
-std::string debug_region_writer_name(DebugRegionWriter writer) {
+std::string manifest_region_writer_to_str(ManifestRegionWriter writer) {
     switch (writer) {
-        case DebugRegionWriter::NONE: return "none";
-        case DebugRegionWriter::ERISC0: return "erisc0";
-        case DebugRegionWriter::ERISC1: return "erisc1";
-        case DebugRegionWriter::ANY_ERISC: return "any_erisc";
-        case DebugRegionWriter::HOST: return "host";
-        case DebugRegionWriter::PEER: return "peer";
-        case DebugRegionWriter::WORKER: return "worker";
+        case ManifestRegionWriter::NONE: return "none";
+        case ManifestRegionWriter::ERISC0: return "erisc0";
+        case ManifestRegionWriter::ERISC1: return "erisc1";
+        case ManifestRegionWriter::ANY_ERISC: return "any_erisc";
+        case ManifestRegionWriter::HOST: return "host";
+        case ManifestRegionWriter::PEER: return "peer";
+        case ManifestRegionWriter::WORKER: return "worker";
     }
-    TT_THROW("Unknown debug region writer {}", static_cast<uint32_t>(writer));
+    TT_THROW("Unknown manifest region writer {}", static_cast<uint32_t>(writer));
 }
 
-json make_debug_region_json(const FabricRouterDebugRegion& region) {
+json make_manifest_router_region_json(const ManifestRouterRegion& region) {
     json out;
     out["id"] = region.id;
     out["parent"] = region.parent;
-    out["backing"] = debug_region_backing_name(region.backing);
-    if (region.backing == DebugRegionBacking::UNRESERVED_L1 || region.backing == DebugRegionBacking::FIXED_L1) {
+    out["backing"] = manifest_region_backing_to_str(region.backing);
+    if (region.backing == ManifestRegionBacking::UNRESERVED_L1 || region.backing == ManifestRegionBacking::FIXED_L1) {
         out["address"] = region.address;
         out["size"] = region.size;
     }
@@ -312,7 +312,7 @@ json make_debug_region_json(const FabricRouterDebugRegion& region) {
     }
     out["allocated"] = region.allocated;
     out["enabled"] = region.enabled;
-    out["writer"] = debug_region_writer_name(region.writer);
+    out["writer"] = manifest_region_writer_to_str(region.writer);
     if (!region.schema.empty()) {
         out["schema"] = region.schema;
     }
@@ -322,10 +322,10 @@ json make_debug_region_json(const FabricRouterDebugRegion& region) {
     return out;
 }
 
-json make_debug_layout_json(const FabricRouterDebugLayout& layout) {
+json make_manifest_router_region_layout_json(const ManifestRouterRegionLayout& layout) {
     json regions = json::array();
     for (const auto& region : layout.regions) {
-        regions.push_back(make_debug_region_json(region));
+        regions.push_back(make_manifest_router_region_json(region));
     }
     json out;
     out["regions"] = std::move(regions);
@@ -341,17 +341,17 @@ uint64_t fnv1a64(std::string_view value) {
     return hash;
 }
 
-using RouterDebugBindingKey = std::pair<ChipId, chan_id_t>;
+using ManifestRouterBindingKey = std::pair<ChipId, chan_id_t>;
 
-struct RouterDebugManifestData {
+struct ManifestLayoutIndex {
     json layouts = json::object();
-    std::map<RouterDebugBindingKey, std::string> layout_ids;
-    std::map<RouterDebugBindingKey, const FabricRouterDebugInstance*> instances;
+    std::map<ManifestRouterBindingKey, std::string> layout_ids;
+    std::map<ManifestRouterBindingKey, const ManifestRouterInstance*> instances;
 };
 
-RouterDebugManifestData make_router_debug_manifest_data(
+ManifestLayoutIndex build_manifest_layout_index(
     const ControlPlane& control_plane, const FabricBuilderContext& builder_context) {
-    RouterDebugManifestData data;
+    ManifestLayoutIndex data;
     std::map<std::string, std::string> canonical_to_id;
     std::map<std::string, std::string> id_to_canonical;
 
@@ -361,23 +361,23 @@ RouterDebugManifestData make_router_debug_manifest_data(
         for (const auto& [_, fabric_chip_id] : control_plane.get_mesh_graph().get_chip_ids(mesh_id)) {
             const FabricNodeId node(mesh_id, fabric_chip_id);
             const auto physical_chip_id = control_plane.try_get_physical_chip_id_from_fabric_node_id(node);
-            if (!physical_chip_id.has_value() || !builder_context.has_router_debug_instances(*physical_chip_id)) {
+            if (!physical_chip_id.has_value() || !builder_context.has_manifest_router_instances(*physical_chip_id)) {
                 continue;
             }
-            for (const auto& instance : builder_context.get_router_debug_instances(*physical_chip_id)) {
+            for (const auto& instance : builder_context.get_manifest_router_instances(*physical_chip_id)) {
                 TT_FATAL(
                     instance.local_node == node,
-                    "Debug instance for {} was published under {}",
+                    "Manifest router instance for {} was published under {}",
                     instance.local_node,
                     node);
-                const RouterDebugBindingKey key{*physical_chip_id, instance.eth_chan};
+                const ManifestRouterBindingKey key{*physical_chip_id, instance.eth_chan};
                 TT_FATAL(
                     data.instances.emplace(key, &instance).second,
-                    "Duplicate debug instance for chip {} channel {}",
+                    "Duplicate manifest router instance for chip {} channel {}",
                     *physical_chip_id,
                     instance.eth_chan);
 
-                const json layout = make_debug_layout_json(instance.layout);
+                const json layout = make_manifest_router_region_layout_json(instance.layout);
                 const std::string canonical = layout.dump();
                 auto canonical_it = canonical_to_id.find(canonical);
                 std::string layout_id;
@@ -386,7 +386,7 @@ RouterDebugManifestData make_router_debug_manifest_data(
                     const auto [collision_it, inserted] = id_to_canonical.emplace(layout_id, canonical);
                     TT_FATAL(
                         inserted || collision_it->second == canonical,
-                        "Fabric debug layout hash collision for {}",
+                        "Fabric manifest layout hash collision for {}",
                         layout_id);
                     canonical_to_id.emplace(canonical, layout_id);
                     data.layouts[layout_id] = layout;
@@ -406,10 +406,10 @@ RouterDebugManifestData make_router_debug_manifest_data(
     return data;
 }
 
-json make_debug_instance_json(
-    const FabricRouterDebugInstance& instance, const std::optional<std::pair<FabricNodeId, chan_id_t>>& peer) {
+json make_manifest_router_instance_json(
+    const ManifestRouterInstance& instance, const std::optional<std::pair<FabricNodeId, chan_id_t>>& peer) {
     json out;
-    out["peer"] = peer.has_value() ? fabric_debug_endpoint_json(peer->first, peer->second) : json(nullptr);
+    out["peer"] = peer.has_value() ? manifest_endpoint_json(peer->first, peer->second) : json(nullptr);
     out["is_inter_mesh"] = instance.is_inter_mesh;
     out["is_dispatch_link"] = instance.is_dispatch_link;
     out["num_active_eriscs"] = instance.num_active_eriscs;
@@ -428,11 +428,13 @@ json make_debug_instance_json(
     out["first_level_ack_vc0"] = instance.first_level_ack_vc0;
     out["downstream_edm_mask_vc0"] = instance.downstream_edm_mask_vc0;
     out["downstream_edm_mask_vc1"] = instance.downstream_edm_mask_vc1;
-    const auto downstream_edges_json = [](const std::vector<FabricRouterDebugInstance::DownstreamEdgeInfo>& edges) {
+    const auto downstream_edges_json = [](const std::vector<ManifestDownstreamEdge>& edges) {
         json entries = json::array();
         for (const auto& edge : edges) {
             entries.push_back(
-                {{"edge", edge.edge}, {"direction", edge.direction}, {"sender_channel", edge.sender_channel}});
+                {{"edge", edge.edge},
+                 {"direction", direction_to_str(edge.direction)},
+                 {"sender_channel", edge.sender_channel}});
         }
         return entries;
     };
@@ -893,15 +895,15 @@ void serialize_intermesh_port_assignment_to_file(
     log_debug(tt::LogFabric, "Serialized inter-mesh port assignment to file: {}", output_file_path.string());
 }
 
-std::filesystem::path fabric_debug_manifest_path(const tt::llrt::RunTimeOptions& rtoptions) {
+std::filesystem::path fabric_manifest_path(const tt::llrt::RunTimeOptions& rtoptions) {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const int rank = *distributed_context->rank();
     const int world_size = *distributed_context->size();
     return std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
-           ("fabric_debug_manifest_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".json");
+           ("fabric_manifest_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".json");
 }
 
-void serialize_fabric_debug_manifest_to_file(
+void serialize_fabric_manifest_to_file(
     const ControlPlane& control_plane, const std::filesystem::path& output_file_path) {
     using json = nlohmann::ordered_json;
 
@@ -911,22 +913,22 @@ void serialize_fabric_debug_manifest_to_file(
     const FabricType fabric_type = get_fabric_type(fabric_config, cluster.is_ubb_galaxy());
     const auto& fabric_context = control_plane.get_fabric_context();
     TT_FATAL(
-        fabric_context.has_builder_context(), "fabric debug manifest must be serialized after routers are compiled");
+        fabric_context.has_builder_context(), "fabric manifest must be serialized after routers are compiled");
     const auto& builder_context = fabric_context.get_builder_context();
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const auto debug_manifest_data = make_router_debug_manifest_data(control_plane, builder_context);
+    const auto layout_index = build_manifest_layout_index(control_plane, builder_context);
 
     json manifest;
-    manifest["manifest_version"] = FABRIC_DEBUG_MANIFEST_VERSION;
-    manifest["kind"] = "fabric_debug_manifest";
-    manifest["run"] = make_run_block(control_plane, cluster);
-    manifest["hal"] = make_hal_block(hal);
-    manifest["heartbeat"] = make_heartbeat_block(cluster.arch());
-    manifest["fabric_context"] = make_fabric_context_block(fabric_context);
-    manifest["router_template"] = make_router_template_block(builder_context);
-    manifest["stream_assignment"] = make_stream_assignment_block(control_plane, builder_context);
-    manifest["enums"] = make_enums_block();
-    manifest["layouts"] = debug_manifest_data.layouts;
+    manifest["manifest_version"] = FABRIC_MANIFEST_VERSION;
+    manifest["kind"] = "fabric_manifest";
+    manifest["run"] = make_run_json(control_plane, cluster);
+    manifest["hal"] = make_hal_json(hal);
+    manifest["heartbeat"] = make_heartbeat_json(cluster.arch());
+    manifest["fabric_context"] = make_fabric_context_json(fabric_context);
+    manifest["router_template"] = make_router_template_json(builder_context);
+    manifest["stream_assignment"] = make_stream_assignment_json(control_plane, builder_context);
+    manifest["enums"] = make_enums_json();
+    manifest["layouts"] = layout_index.layouts;
 
     // Chips and their routers describe what to peek; links describe what to draw. Both key on
     // (mesh, chip, channel) so a snapshot can be joined onto either.
@@ -1014,22 +1016,21 @@ void serialize_fabric_debug_manifest_to_file(
                     const auto virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
                         *physical_chip_id, tt::tt_metal::CoreCoord(logical_core.x, logical_core.y), CoreType::ETH);
                     router["virtual_core"] = json::array({virtual_core.x, virtual_core.y});
-                    const RouterDebugBindingKey debug_key{*physical_chip_id, chan};
-                    const auto layout_it = debug_manifest_data.layout_ids.find(debug_key);
-                    const auto instance_it = debug_manifest_data.instances.find(debug_key);
+                    const ManifestRouterBindingKey binding_key{*physical_chip_id, chan};
+                    const auto layout_it = layout_index.layout_ids.find(binding_key);
+                    const auto instance_it = layout_index.instances.find(binding_key);
                     TT_FATAL(
-                        layout_it != debug_manifest_data.layout_ids.end() &&
-                            instance_it != debug_manifest_data.instances.end(),
-                        "No finalized debug layout for active fabric router {} channel {}",
+                        layout_it != layout_index.layout_ids.end() && instance_it != layout_index.instances.end(),
+                        "No finalized manifest layout for active fabric router {} channel {}",
                         node,
                         chan);
                     TT_FATAL(
                         !peer.has_value() || instance_it->second->peer_node == peer->first,
-                        "Debug instance peer disagrees with ControlPlane for {} channel {}",
+                        "Manifest router instance peer disagrees with ControlPlane for {} channel {}",
                         node,
                         chan);
                     router["layout_id"] = layout_it->second;
-                    router["instance"] = make_debug_instance_json(*instance_it->second, peer);
+                    router["instance"] = make_manifest_router_instance_json(*instance_it->second, peer);
                     routers.push_back(std::move(router));
 
                     // Wrap edges are resolved here rather than inferred by the viewer: a link wraps when its
@@ -1050,9 +1051,9 @@ void serialize_fabric_debug_manifest_to_file(
                     }
 
                     json link;
-                    link["src"] = fabric_debug_endpoint_json(node, chan);
+                    link["src"] = manifest_endpoint_json(node, chan);
                     link["dst"] =
-                        peer.has_value() ? fabric_debug_endpoint_json(peer->first, peer->second) : json(nullptr);
+                        peer.has_value() ? manifest_endpoint_json(peer->first, peer->second) : json(nullptr);
                     link["direction"] = enum_name(direction);
                     link["routing_plane"] = routing_plane;
                     link["link_class"] = link_class;
@@ -1087,7 +1088,7 @@ void serialize_fabric_debug_manifest_to_file(
         throw;
     }
 
-    log_debug(tt::LogFabric, "Serialized fabric debug manifest to file: {}", output_file_path.string());
+    log_debug(tt::LogFabric, "Serialized fabric manifest to file: {}", output_file_path.string());
 }
 
 }  // namespace tt::tt_fabric

@@ -334,7 +334,7 @@ def write_input(
     }
     snapshot = {
         "snapshot_version": 1,
-        "kind": "fabric_debug_snapshot",
+        "kind": "fabric_snapshot",
         "captured_at": "2026-09-15T00:00:00Z",
         "manifest": {
             "path": "ignored.json",
