@@ -231,7 +231,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # the caller's intent is visible and a future refactor that drops the model-side override stays correct).
         kv_dtype = ttnn.bfloat8_b if os.environ.get("QWEN_SDPA_BF8", "0") == "1" else ttnn.bfloat16
         kv = model.allocate_kv_caches(shape, kv_dtype, batch_size=batch_size)
-        _log_device_memory(model.mesh_device, f"after KV pool ({int(shape[0])} blocks x {int(shape[2])} tokens, B={batch_size})")
+        _log_device_memory(
+            model.mesh_device, f"after KV pool ({int(shape[0])} blocks x {int(shape[2])} tokens, B={batch_size})"
+        )
         if traced and int(model._pad_kv_block) != int(kv_cache_shape[0]):
             # QWEN36_PREFILL_BUCKET_PAD_BLOCK pointed inside the scheduler's pool (0..num_blocks-1): refuse to serve.
             raise RuntimeError(

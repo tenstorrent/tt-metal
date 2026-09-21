@@ -774,7 +774,10 @@ class TPGatedDeltaNet:
             Cc = C // n_chunks
             Wj = W1d.reshape(nd, C, 1, K)[:, j * Cc : (j + 1) * Cc].reshape(nd * Cc, 1, K).contiguous()
             w = ttnn.from_torch(
-                Wj, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0)
+                Wj,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
             )
             self._conv1d_wchunk[(j, n_chunks)] = w
         return w
@@ -809,7 +812,11 @@ class TPGatedDeltaNet:
         Cc = C // n_chunks
         outs = []
         for j in range(n_chunks):
-            xj = xin if n_chunks == 1 else ttnn.slice(xin, (0, 0, 0, j * Cc), (Bc, Lin, 1, (j + 1) * Cc), memory_config=_dram)
+            xj = (
+                xin
+                if n_chunks == 1
+                else ttnn.slice(xin, (0, 0, 0, j * Cc), (Bc, Lin, 1, (j + 1) * Cc), memory_config=_dram)
+            )
             # Prepare conv weight once per shape (warmup); avoids host reprocess + keeps replay device-only.
             wprep = self._conv1d_wprep.get((Bc, Lin, j))
             if wprep is None:
