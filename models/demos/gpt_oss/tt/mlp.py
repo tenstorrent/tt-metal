@@ -80,6 +80,7 @@ class MLP:
                     state_dict=experts_state_dict,
                     tokens_per_device=tokens_per_device,
                     num_links=ccl_manager.num_links,
+                    tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts_moe_compute"),
                 )
 
             fused_config = None
