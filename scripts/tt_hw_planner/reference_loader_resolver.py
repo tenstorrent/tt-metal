@@ -192,7 +192,18 @@ def build_prompt(model_id: str, demo_dir: Path, failure_text: str) -> str:
         f"TTS/vocoder checkpoint) OR import the repo's trust_remote_code modeling module, then "
         f"instantiate its native nn.Module with the REAL weights the repo ships. This is the correct "
         f"path for config-less custom architectures.\n"
-        f"  5. ONLY if real weights are truly unusable: build the module from AutoConfig with random "
+        f"  5. COVER THE WHOLE CHECKPOINT, and look OUTSIDE the repo when nothing in it does. Tiers "
+        f"1-4 all search the model's OWN code -- its transformers class, its package, its "
+        f"trust_remote_code module. A checkpoint can ship weights for a submodel whose code lives "
+        f"nowhere in the repo and nowhere in transformers, while a third-party inference engine, a "
+        f"quantised port or a community reimplementation already implements that exact architecture. "
+        f"Enumerate the checkpoint's top-level tensor groups FIRST, and if the loader you are about "
+        f"to write cannot reach one of them, SEARCH THE WEB for an implementation of this "
+        f"architecture before settling: name the groups you cannot cover and look for any public "
+        f"code that does. Port from what you find. A reference covering part of a checkpoint is a "
+        f"silent failure -- every component built from it passes while the rest of the model is "
+        f"never ported at all.\n"
+        f"  6. ONLY if real weights are truly unusable: build the module from AutoConfig with random "
         f"weights (valid for per-component structural PCC, since the ttnn port reads the same module). "
         f"If and ONLY if you take this path, set `{_RANDOM_WEIGHTS_FLAG} = True` at module level, so "
         f"the run can report that PCC was scored against structure and not against the real weights. "
@@ -950,6 +961,12 @@ def resolve(
         "Bash",
         "Glob",
         "Grep",
+        # AN ARCHITECTURE'S CODE NEED NOT LIVE WHERE ITS WEIGHTS DO. Without these the resolver can
+        # only see the HF repo's own file list, so a checkpoint whose submodel is implemented in a
+        # serving framework or a community port reads as "no reference exists" -- and the fallback
+        # it settles for covers part of the model while every component built on it passes.
+        "WebSearch",
+        "WebFetch",
         "--output-format",
         "text",
     ]

@@ -693,3 +693,31 @@ def test_an_unreadable_checkpoint_is_unverified_not_undriven(tmp_path: Path) -> 
 def test_no_checkpoint_on_disk_is_unverified(tmp_path: Path) -> None:
     out = checkpoint_coverage(str(tmp_path / "nothing-here"), _module_with(_big(4096)))
     assert out["status"] == "unverified", out
+
+
+# --------------------------------------------------------------------------------------------
+# Looking outside the repo. Tiers 1-4 all search the model's OWN code, so a checkpoint shipping
+# weights for a submodel implemented only in a third-party engine reads as "no reference exists".
+# mistralai/Voxtral-4B-TTS-2603: its flow-matching sampler and codec decoder are implemented in
+# vLLM-Omni and ported from there by at least two public projects, while the resolver -- which can
+# only see the HF file list -- settled for a text-only sibling covering 70% of the checkpoint.
+
+
+def test_the_prompt_tells_the_resolver_to_cover_the_whole_checkpoint(tmp_path: Path) -> None:
+    from scripts.tt_hw_planner.reference_loader_resolver import build_prompt
+
+    text = build_prompt("some-org/some-model", tmp_path, "AutoConfig raised Unrecognized model")
+    low = text.lower()
+    assert "top-level tensor groups" in low, "the resolver is never told to enumerate the checkpoint"
+    assert "search the web" in low, "the resolver is never told to look outside the repo"
+    assert "covering part of a checkpoint" in low, "the partial-reference failure is never named"
+
+
+def test_the_resolver_is_given_tools_that_can_reach_outside_the_repo() -> None:
+    """A tier that says 'search' is inert unless the agent can actually search."""
+    import inspect
+
+    from scripts.tt_hw_planner import reference_loader_resolver as rlr
+
+    src = inspect.getsource(rlr.resolve) if hasattr(rlr, "resolve") else inspect.getsource(rlr)
+    assert '"WebSearch"' in src and '"WebFetch"' in src, "no tool can reach past the HF file list"
