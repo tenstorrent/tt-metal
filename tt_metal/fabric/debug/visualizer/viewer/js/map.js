@@ -39,6 +39,7 @@ export class FabricMap {
     this.drillChipKey = null;
     this.viewBox = { x: 0, y: 0, w: 400, h: 300 };
     this.drag = null;
+    this.suppressClick = false;
     this.svg = null;
     this.root.replaceChildren();
   }
@@ -88,7 +89,7 @@ export class FabricMap {
     }
     const box = this.viewBox;
     const nextW = Math.max(40, box.w * factor);
-    const nextH = Math.max(40, box.h * factor);
+    const nextH = nextW * (box.h / box.w);
     const cx = origin ? origin.x : box.x + box.w / 2;
     const cy = origin ? origin.y : box.y + box.h / 2;
     this.viewBox = {
@@ -98,6 +99,19 @@ export class FabricMap {
       h: nextH,
     };
     this.svg?.setAttribute("viewBox", viewBoxString(this.viewBox));
+  }
+
+  panByScreen(dx, dy) {
+    const ctm = this.svg?.getScreenCTM();
+    if (!ctm || !ctm.a || !ctm.d) {
+      return;
+    }
+    this.viewBox = {
+      ...this.viewBox,
+      x: this.viewBox.x - dx / ctm.a,
+      y: this.viewBox.y - dy / ctm.d,
+    };
+    this.svg.setAttribute("viewBox", viewBoxString(this.viewBox));
   }
 
   drillToChip(chipKey) {
@@ -295,15 +309,16 @@ export class FabricMap {
 
     svgNode.append(wraps, straights, chipLayer, portLayer);
     svgNode.addEventListener("wheel", (event) => {
-      if (!event.ctrlKey && !event.metaKey) {
+      event.preventDefault();
+      if (event.ctrlKey || event.metaKey) {
+        const point = this.pointerToSvg(event);
+        this.zoom(event.deltaY < 0 ? 0.9 : 1.1, point);
         return;
       }
-      event.preventDefault();
-      const point = this.pointerToSvg(event);
-      this.zoom(event.deltaY < 0 ? 0.9 : 1.1, point);
+      this.panByScreen(-event.deltaX, -event.deltaY);
     }, { passive: false });
     svgNode.addEventListener("pointerdown", (event) => {
-      if (event.target !== svgNode) {
+      if (event.button !== 0) {
         return;
       }
       this.drag = {
@@ -311,25 +326,50 @@ export class FabricMap {
         clientY: event.clientY,
         box: { ...this.viewBox },
         pointer: event.pointerId,
+        moved: false,
       };
-      svgNode.setPointerCapture(event.pointerId);
     });
     svgNode.addEventListener("pointermove", (event) => {
       if (!this.drag || event.pointerId !== this.drag.pointer) {
         return;
       }
-      const scaleX = this.drag.box.w / Math.max(1, svgNode.clientWidth);
-      const scaleY = this.drag.box.h / Math.max(1, svgNode.clientHeight);
+      const dx = event.clientX - this.drag.clientX;
+      const dy = event.clientY - this.drag.clientY;
+      if (!this.drag.moved && dx * dx + dy * dy < 64) {
+        return;
+      }
+      if (!this.drag.moved) {
+        this.drag.moved = true;
+        svgNode.setPointerCapture(event.pointerId);
+      }
+      const ctm = svgNode.getScreenCTM();
+      if (!ctm || !ctm.a || !ctm.d) {
+        return;
+      }
       this.viewBox = {
         ...this.drag.box,
-        x: this.drag.box.x - (event.clientX - this.drag.clientX) * scaleX,
-        y: this.drag.box.y - (event.clientY - this.drag.clientY) * scaleY,
+        x: this.drag.box.x - dx / ctm.a,
+        y: this.drag.box.y - dy / ctm.d,
       };
       svgNode.setAttribute("viewBox", viewBoxString(this.viewBox));
     });
-    svgNode.addEventListener("pointerup", () => {
+    svgNode.addEventListener("pointerup", (event) => {
+      if (this.drag?.moved) {
+        this.suppressClick = true;
+      }
+      if (this.drag?.moved && svgNode.hasPointerCapture?.(event.pointerId)) {
+        svgNode.releasePointerCapture(event.pointerId);
+      }
       this.drag = null;
     });
+    svgNode.addEventListener("click", (event) => {
+      if (!this.suppressClick) {
+        return;
+      }
+      event.stopPropagation();
+      event.preventDefault();
+      this.suppressClick = false;
+    }, true);
     this.svg = svgNode;
     this.root.replaceChildren(svgNode);
   }
