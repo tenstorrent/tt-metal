@@ -177,3 +177,61 @@ tt-perf-report --start-signpost gemma4-layer-local-chunk7-start  \
 **On core counts:** they are in the tables and meaningful for LayerNorm (8 / 16 / 32 cores at
 chunk 2048 / 4096 / 8192 = `(chunk/CP)/32` exactly — the defect, visible directly) and for the
 matmuls (84 vs 96). They are **not** meaningful for the SDPA, which always reads 114.
+
+## Why the `Cores` column is not occupancy — with the evidence
+
+This matters because the `Cores` column is the first thing anyone reads off these tables, and
+for the op that dominates the prefix term it is **actively misleading**.
+
+**The SDPA's cost varies 50x while `Cores` never moves.** Same op, all six cells in
+[`per_op/`](per_op/):
+
+| cell | Device Time | `Cores` |
+|---|---|---|
+| `c2048_floor_global` | 0.189 ms | **114** |
+| `c4096_floor_global` | 0.356 ms | **114** |
+| `c8192_floor_global` | 1.314 ms | **114** |
+| `c2048_deep_global` | 4.249 ms | **114** |
+| `c4096_deep_global` | 4.410 ms | **114** |
+| `c8192_deep_global` | 9.426 ms | **114** |
+
+A column that reads an identical 114 while the op ranges over **0.189 → 9.426 ms** is reporting
+the *grid it was given*, not the work it did. Meanwhile the real occupancy nearly doubles across
+those widths and the column cannot show it:
+
+| chunk | work units | grid passes | useful |
+|---|---|---|---|
+| 2048 | 32 | 1 | **29.1%** |
+| 4096 | 64 | 1 | 58.2% |
+| 8192 | 128 | 2 | 58.2% |
+
+**The source says why explicitly.**
+`ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp:834`:
+
+> *"A core with no Q chunks (`global_q_start == global_q_end`) is **NOT dead**: in the GQA /
+> shared-K row-wide multicast path it runs padded handshake iterations
+> (`loop_q_count = *_max_q_per_core`) so the injector's mcast rectangle never targets a silent
+> worker."*
+
+So every core in the rectangle is genuinely dispatched to and genuinely reports in — they just
+have no Q chunk to work on. The profiler counts them because they ran. Occupancy has to come
+from the factory's own work-unit math (`all_heads_num_q_chunks = B * NH * num_q_chunks`,
+`max_q_per_core = div_up(all_heads_num_q_chunks, num_cores)`, same file, line 1306).
+
+**By contrast `Cores` IS informative for LayerNorm** — and this is the useful half of the story:
+
+| cell | Device Time | `Cores` |
+|---|---|---|
+| `c2048_floor_local` | 0.462 ms | **64,32,8** |
+| `c4096_floor_local` | 0.468 ms | **120,64,16** |
+| `c8192_floor_local` | 0.523 ms | **120,32** |
+
+The small entry is the hidden-width norm, and it reads **8 / 16 / 32** — exactly
+`(chunk/CP)/32`, one core per row-tile. Here the column moves, it matches the row-parallel
+decomposition, and the op's time barely moves because so few cores are doing it. That is a
+defect you can read straight off the table, and it is the one this branch's norm-sharding
+commit fixes (8 → 16 cores at chunk 2048, 4.36x on the op).
+
+**Rule of thumb:** trust `Cores` when it *varies* with the shape in a way the op's
+decomposition predicts. Distrust it when it is pinned to the grid size — that means idle cores
+are being counted, and you need the op's work-unit math instead.
