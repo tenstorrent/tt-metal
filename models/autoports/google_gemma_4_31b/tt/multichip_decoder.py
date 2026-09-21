@@ -268,24 +268,28 @@ PREFILL_REDUCE_ROW_BUCKET = int(os.environ.get("GEMMA4_PREFILL_REDUCE_ROW_BUCKET
 #   lofi   : run the explicit-config prefill projections at LoFi instead of the heuristic's
 #            HiFi2 (requires ``matmul``). Worth a further ~110 ms per 4K prefill but costs
 #            ~2.5 points of teacher-forced next-token accuracy at 4096 tokens; gate on evals.
-PREFILL_OPTS = {key: False for key in ("matmul", "lofi", "gelu", "scalar", "sdpa8", "concat")}
+#   mmfp32 : with ``matmul``, accumulate the explicit-config projections in FP32 destination
+#            registers (no packer L1 accumulation of BF16 partial sums across the K blocks,
+#            subblocks capped at 4 tiles). Trades some matmul speed for the baseline's precision.
+PREFILL_OPTS = {key: False for key in ("matmul", "lofi", "mmfp32", "gelu", "scalar", "sdpa8", "concat")}
 _PREFILL_MATMUL_COMPUTE: dict = {}
 
 
 def prefill_matmul_compute_config(mesh_device, lofi_config):
-    """LoFi (the decode policy config) when ``lofi`` is set, else HiFi2 with the same packer settings."""
-    if PREFILL_OPTS["lofi"]:
+    """LoFi (the decode policy config) when ``lofi`` is set, else HiFi2; ``mmfp32`` selects FP32 accumulation."""
+    fp32 = PREFILL_OPTS["mmfp32"]
+    if PREFILL_OPTS["lofi"] and not fp32:
         return lofi_config
-    arch = mesh_device.arch()
-    if arch not in _PREFILL_MATMUL_COMPUTE:
-        _PREFILL_MATMUL_COMPUTE[arch] = ttnn.init_device_compute_kernel_config(
-            arch,
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+    key = (mesh_device.arch(), PREFILL_OPTS["lofi"], fp32)
+    if key not in _PREFILL_MATMUL_COMPUTE:
+        _PREFILL_MATMUL_COMPUTE[key] = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi if PREFILL_OPTS["lofi"] else ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
+            fp32_dest_acc_en=fp32,
+            packer_l1_acc=not fp32,
         )
-    return _PREFILL_MATMUL_COMPUTE[arch]
+    return _PREFILL_MATMUL_COMPUTE[key]
 
 
 for _flag in os.environ.get("GEMMA4_PREFILL_OPTS", "").split(","):
@@ -309,10 +313,16 @@ _PREFILL_SDPA_COMPUTE: dict = {}
 
 
 def _prefill_matmul_cb_bytes(per_core_m: int, per_core_n: int, block: int, weight_dtype) -> int:
-    """Double-buffered in0/in1 blocks plus BF16 output and packer intermediate."""
+    """Double-buffered in0/in1 blocks plus the BF16 output and the K-loop intermediate.
+
+    With ``mmfp32`` the intermediate holds FP32 tiles, which at 4096 rows (13 output tiles per
+    core row) no longer fits next to the input blocks: the caller then falls back to the
+    heuristic matmul instead of raising a circular-buffer clash.
+    """
     in0 = 2 * per_core_m * block * _TILE_BYTES[ttnn.bfloat16]
     in1 = 2 * block * per_core_n * _TILE_BYTES.get(weight_dtype, 2048)
-    out = 2 * per_core_m * per_core_n * _TILE_BYTES[ttnn.bfloat16]
+    interm = _TILE_BYTES[ttnn.float32] if PREFILL_OPTS["mmfp32"] else _TILE_BYTES[ttnn.bfloat16]
+    out = per_core_m * per_core_n * (_TILE_BYTES[ttnn.bfloat16] + interm)
     return in0 + in1 + out
 
 
@@ -332,9 +342,12 @@ def prefill_matmul_program_config(
         raise ValueError(f"prefill matmul {name}: K={k} and N={n} must be tile multiples")
     gy = min(gy, m_tiles)
     per_core_m, per_core_n = math.ceil(m_tiles / gy), math.ceil(n_tiles / gx)
-    sub_w = max(i for i in range(1, min(per_core_n, 8) + 1) if per_core_n % i == 0)
+    max_sub = 4 if PREFILL_OPTS["mmfp32"] else 8  # an FP32 destination holds half the tiles
+    sub_w = max(i for i in range(1, min(per_core_n, max_sub) + 1) if per_core_n % i == 0)
     sub_h = (
-        1 if sub_w < per_core_n else max(i for i in range(1, min(per_core_m, 8 // sub_w) + 1) if per_core_m % i == 0)
+        1
+        if sub_w < per_core_n
+        else max(i for i in range(1, min(per_core_m, max_sub // sub_w) + 1) if per_core_m % i == 0)
     )
     cap = PREFILL_MATMUL_CAPS[name]
     block = None
