@@ -80,16 +80,36 @@ _VALUE_METRICS = frozenset(
     }
 )
 
-# Firmware reports a counter it cannot read as all ones in the field's width.
-# Only the 32- and 64-bit widths are listed: 255 and 65535 are values a busy
-# link genuinely reaches. float64 rounds the 64-bit marker up to 2**64.
-_UNREADABLE_VALUES = frozenset({0xFFFFFFFF, 0xFFFFFFFFFFFFFFFF, float(0xFFFFFFFFFFFFFFFF)})
+# Firmware reports a field it cannot read as all ones, so the marker is the
+# field's own width and has to be matched per metric: EthernetMetrics in
+# physical_system_descriptor.hpp makes the retrain and CRC counters uint32 and
+# the codeword counters uint64. Matching the wrong one discards live data, since
+# a uint64 counter reaches 0xFFFFFFFF legitimately. By the same rule the narrow
+# markers are absent: 255 and 65535 are counts a busy link genuinely reaches.
+_U32_UNREADABLE = frozenset({0xFFFFFFFF})
+# float64 cannot represent the 64-bit marker and rounds it up by one, so both
+# forms are listed; whether a sample arrives as int or float is the parser's call.
+_U64_UNREADABLE = frozenset({0xFFFFFFFFFFFFFFFF, float(0xFFFFFFFFFFFFFFFF)})
+
+_UNREADABLE_VALUES = {
+    # Not a width, but no clock reaches 0xFFFFFFFF MHz, so the marker is safe.
+    "tt_ai_clock_mhz": _U32_UNREADABLE,
+    "tt_ethernet_corrected_codeword_count": _U64_UNREADABLE,
+    "tt_ethernet_crc_error_count": _U32_UNREADABLE,
+    "tt_ethernet_retrain_count": _U32_UNREADABLE,
+    "tt_ethernet_uncorrected_codeword_count": _U64_UNREADABLE,
+}
 
 
-def _split_unreadable(samples: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Partition samples into ones the chip could report and ones it could not."""
-    readable = [s for s in samples if s["value"] not in _UNREADABLE_VALUES]
-    unreadable = [s for s in samples if s["value"] in _UNREADABLE_VALUES]
+def _split_unreadable(name: str, samples: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Partition samples into ones the chip could report and ones it could not.
+
+    A metric with no marker of its own keeps every sample, so a new one is
+    reported as collected until its width is added above.
+    """
+    markers = _UNREADABLE_VALUES.get(name, frozenset())
+    readable = [s for s in samples if s["value"] not in markers]
+    unreadable = [s for s in samples if s["value"] in markers]
     return readable, unreadable
 
 
@@ -151,7 +171,7 @@ def format_prometheus_metrics(metrics: dict[str, list[dict]]) -> str:
                     lines.append(f"    DOWN: {_sample_ident(s['labels'])}")
 
         elif name in _COUNTER_METRICS:
-            readable, unreadable = _split_unreadable(samples)
+            readable, unreadable = _split_unreadable(name, samples)
             if unreadable:
                 lines.append(f"    unreadable={len(unreadable)} (excluded from total)")
                 for s in unreadable:
@@ -207,7 +227,7 @@ def aggregate_telemetry_for_csv(metrics: dict[str, list[dict]] | None) -> dict:
     unreadable: list[dict] = []
 
     def _values(name: str) -> list[float]:
-        readable, dropped = _split_unreadable(metrics.get(name, []))
+        readable, dropped = _split_unreadable(name, metrics.get(name, []))
         unreadable.extend(dropped)
         return [s["value"] for s in readable]
 
