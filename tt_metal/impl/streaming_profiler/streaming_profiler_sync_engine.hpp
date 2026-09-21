@@ -100,10 +100,11 @@ public:
     uint64_t points = 0;                         // points and closes received
     uint64_t transitions = 0;                    // segments after the first
 
-    // A point of the open segment's line, or the segment's close. An older point than the newest is superseded.
-    void add_point(uint64_t refclk, uint64_t wall, uint32_t k8, uint32_t n, bool close, uint32_t resid8 = 0) {
+    // A point of the open segment's line, or the segment's close, its wall in eighths of a tick. An older point than
+    // the newest is superseded.
+    void add_point(uint64_t refclk, uint64_t wall8, uint32_t k8, uint32_t n, bool close, uint32_t resid8 = 0) {
         points++;
-        const double r = static_cast<double>(refclk), w = static_cast<double>(wall);
+        const double r = static_cast<double>(refclk), w = static_cast<double>(wall8) / 8.0;
         const double resid = resid8 / 8.0;
         max_resid_ticks = std::max(max_resid_ticks, resid);
         resid_warn_points += resid > kResidWarnTicks;

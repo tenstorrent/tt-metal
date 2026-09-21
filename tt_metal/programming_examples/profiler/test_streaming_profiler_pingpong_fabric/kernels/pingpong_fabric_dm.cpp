@@ -32,12 +32,17 @@ void kernel_main() {
     auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(i);
     conn.open();
 
+    volatile tt_l1_ptr uint32_t* flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flag_addr);
     auto* hdr = PacketHeaderPool::allocate_header();
-    fabric_set_unicast_route((HybridMeshPacketHeader*)hdr, static_cast<uint16_t>(dst_chip), static_cast<uint16_t>(dst_mesh));
+    if (!fabric_set_unicast_route(
+            (HybridMeshPacketHeader*)hdr, static_cast<uint16_t>(dst_chip), static_cast<uint16_t>(dst_mesh))) {
+        flag[1] = 0xDEAD0000u | dst_chip;  // no route: the host reads it as a round it gave up on
+        conn.close();
+        return;
+    }
     hdr->to_noc_unicast_atomic_inc(
         NocUnicastAtomicIncCommandHeader{safe_get_noc_addr(peer_x, peer_y, flag_addr, 0), 1});
 
-    volatile tt_l1_ptr uint32_t* flag = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(flag_addr);
     auto wait = [&](uint32_t r) {
         for (uint32_t polls = 0;; polls++) {
             invalidate_l1_cache();

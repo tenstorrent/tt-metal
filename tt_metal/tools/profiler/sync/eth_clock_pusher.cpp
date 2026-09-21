@@ -77,9 +77,9 @@ namespace eth_ptp = tt::tt_metal::eth_ptp;
 // between DVFS steps (every run longer than 50 ms measured sits on its multiple to <0.005 ppm). So over one rate the
 // wall clock is a line whose slope is known once k8 is, and whose only free parameter is the phase of the refclk's
 // increment against the wall ticks -- the intercept. This core measures both, and the host receives POINTS of the
-// line, never samples to fit: a point is (refclk r, the line's wall at r), tagged with k8 and the sample count
-// behind it; a new k8, or a CLOSE point, starts the next segment, and two consecutive segments meet where their
-// lines cross.
+// line, never samples to fit: a point is (refclk r, the line's wall at r in eighths of a tick), tagged with k8 and
+// the sample count behind it; a new k8, or a CLOSE point, starts the next segment, and two consecutive segments meet
+// where their lines cross.
 //
 // A sample brackets one wall-clock read between two refclk reads and counts only when the refclk changed inside
 // the bracket. The three loads pipeline, so the bracket is a couple of AICLK cycles wide (measured: the counter
@@ -123,12 +123,13 @@ inline void write(uint32_t kind, uint32_t role, uint32_t round, uint64_t value, 
 
 namespace model {
 constexpr uint32_t kRingSamples = 128;  // raw samples kept, ~5 us apart: ~600 us deep
-constexpr uint32_t kConfirm = 4;           // consecutive off-line samples that make a step
-constexpr int64_t kOffTicks = 4;           // off the line by this much is off: a 1/8 step gets there in 0.7 us
-// The intercept follows the samples: once this many are behind the line it moves by 1/2^kEmaShift of each residue,
-// so a frequency a few ppm off the k8 grid, which would walk the residues to kOffTicks in milliseconds and force a
-// re-lock, walks the intercept instead (12 ppm lags it by ~2 wall ticks) and the points stay on the true line.
-constexpr uint32_t kEmaShift = 6;
+constexpr uint32_t kConfirm = 4;        // consecutive off-line samples that make a step
+constexpr int64_t kOffTicks = 4;        // off the line by this much is off: a 1/8 step gets there in 0.7 us
+// The intercept follows the samples: once this many are behind the line it moves by 1/2^kEmaShift of each residue
+// (the mean is kept scaled by 2^kEmaShift so sub-tick residues are not lost to the shift), so the phase's wander and
+// a frequency a few ppm off the k8 grid walk the intercept instead of the residues, and the points stay on the true
+// line. Eight samples is ~40 us: the samples' own scatter averages to a tenth of a tick.
+constexpr uint32_t kEmaShift = 3;
 constexpr uint32_t kAcqTicks = 4096;       // refclk after a departure before the first lock test (82 us)
 constexpr uint32_t kWinTicks = 4096;       // the window that must lie on one line to lock its slope (~16 samples)
 constexpr uint32_t kWinSpreadTicks = 8;    // one line's samples spread less than this; a glide inside bends more
@@ -140,8 +141,8 @@ constexpr uint32_t kLastDoublingN = 4096;  // points at every doubling of the co
 // then bends through the glide instead of bridging it with one chord (whose error is the frequency change times the
 // seam length over eight -- hundreds of us for a 7% ramp over 30 ms). A slow ramp costs a point every ~80 us, a
 // fast one a point a sample while it lasts.
-constexpr int64_t kRawEpsTicks = 3;        // 2.2 ns
-constexpr uint32_t kCountMax = 1u << 22;   // the residue sum stops here, and it stays in 32 bits
+constexpr int64_t kRawEpsTicks = 3;       // 2.2 ns
+constexpr uint32_t kCountMax = 1u << 22;  // the residue sum stops here, and it stays in 32 bits
 // A point lies this far behind the newest sample (164 us): a departure is confirmed within ~25 us of samples, and
 // a sweep can hold sampling for ~100 us, so no point ever lands on a step the model has not yet seen.
 constexpr uint32_t kPointLagTicks = 8192;
@@ -160,7 +161,8 @@ struct Model {
     uint64_t ra = 0, wa = 0;  // anchor: the line passes 8*wa + c8 eighths at ra
     int32_t sum = 0;          // residues 8*(w - wa) - k8*(r - ra) summed over the counted samples
     uint32_t n = 0;
-    int32_t c8 = 0;          // sum / n, refreshed at each doubling of n
+    int32_t c8 = 0;          // the residues' running mean: sum / n until 2^kEmaShift samples, then ema >> kEmaShift
+    int32_t ema = 0;         // that mean times 2^kEmaShift
     uint64_t r_last_on = 0;  // newest sample on the line
     uint32_t off = 0;        // consecutive samples off the line
     uint64_t r_dep = 0;      // the first of them
@@ -191,20 +193,20 @@ inline int64_t line_w8(const Model& m, uint64_t r) {
     return 8 * static_cast<int64_t>(m.wa) + m.c8 + static_cast<int64_t>(m.k8) * static_cast<int64_t>(r - m.ra);
 }
 
-// A point of the line at refclk r, never before the segment's own start: the host keeps segments disjoint in refclk.
+// A point of the line at refclk r, in eighths of a tick, never before the segment's own start: the host keeps
+// segments disjoint in refclk.
 inline void write_point(Model& m, uint64_t r, uint32_t role) {
     r = r > m.r_lock ? r : m.r_lock;
     m.r_last_point = r;
-    const uint64_t w = static_cast<uint64_t>((line_w8(m, r) + 4) >> 3);
     const uint32_t n = m.n < kCountMax ? m.n : kCountMax - 1;
-    sync::write(kp::kSyncKindLocal, role, m.k8 | (n << 8), r, w, m.max_d8);
+    sync::write(kp::kSyncKindLocal, role, m.k8 | (n << 8), r, static_cast<uint64_t>(line_w8(m, r)), m.max_d8);
     m.max_d8 = 0;
 }
 
-// A sample as a point: k8 0 tells the host it is an instant of the wall clock, on no line.
+// A sample as a point, in eighths of a tick: k8 0 tells the host it is an instant of the wall clock, on no line.
 inline void write_raw_point(Model& m, uint64_t r, uint64_t w) {
     m.r_last_point = r;
-    sync::write(kp::kSyncKindLocal, kp::kSyncLocalPoint, 0, r, w, 8u * static_cast<uint32_t>(kRawEpsTicks));
+    sync::write(kp::kSyncKindLocal, kp::kSyncLocalPoint, 0, r, w << 3, 8u * static_cast<uint32_t>(kRawEpsTicks));
 }
 // One acquisition sample: the seam's first becomes a point and the anchor; then the cone narrows with each sample,
 // and the sample that empties it makes the previous one the next point and anchor.
@@ -297,6 +299,7 @@ __attribute__((noinline)) bool try_lock(Model& m, uint64_t r_now) {
     m.n = cnt;
     m.sum = sum;
     m.c8 = sum / static_cast<int32_t>(cnt);
+    m.ema = m.c8 << kEmaShift;
     m.r_last_on = r_now;
     m.off = 0;
     return true;
@@ -340,7 +343,8 @@ inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w
     const uint32_t ad = static_cast<uint32_t>(d < 0 ? -d : d);
     m.max_d8 = ad > m.max_d8 ? ad : m.max_d8;
     if (m.n >= (1u << kEmaShift)) {
-        m.c8 += static_cast<int32_t>(d >> kEmaShift);
+        m.ema += static_cast<int32_t>(e) - (m.ema >> kEmaShift);
+        m.c8 = (m.ema + (1 << (kEmaShift - 1))) >> kEmaShift;
     }
     if (m.n < kCountMax) {
         m.sum += static_cast<int32_t>(e);
@@ -348,6 +352,7 @@ inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w
         if ((m.n & (m.n - 1)) == 0) {
             if (m.n <= (1u << kEmaShift)) {
                 m.c8 = m.sum / static_cast<int32_t>(m.n);
+                m.ema = m.c8 << kEmaShift;
             }
             if (m.n >= kFirstPointN && m.n <= kLastDoublingN) {
                 write_point(m, r - kPointLagTicks, kp::kSyncLocalPoint);
@@ -398,7 +403,6 @@ inline void ship(SocketSenderInterface& s, uint32_t bytes) {
     noc_async_writes_flushed();
     socket_notify_receiver(s);
 }
-
 
 // Places one lane's run [start, start+take) from `ring` (its L1 image, already local) into the frame at `off`,
 // in the shape the decoder expects for (start, take). Returns the new offset.

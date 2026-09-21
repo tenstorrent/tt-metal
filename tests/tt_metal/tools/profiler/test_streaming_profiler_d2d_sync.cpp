@@ -141,7 +141,13 @@ int main() {
     constexpr uint32_t kK8Fast = 216, kK8Slow = 215;  // 27.0 and 26.875 wall ticks per refclk tick, in eighths
     const auto point = [&](int c, double tau, uint32_t k8, uint32_t n, bool close) {
         sync.on_clock(sample(
-            static_cast<uint32_t>(c), 0, kLocal, k8 | (n << 8), close ? kClose : kPoint, refclk(c, tau), wall(c, tau)));
+            static_cast<uint32_t>(c),
+            0,
+            kLocal,
+            k8 | (n << 8),
+            close ? kClose : kPoint,
+            refclk(c, tau),
+            8.0 * wall(c, tau)));  // a local point's wall travels in eighths of a tick
     };
     bool switched = false;
     for (int k = 0; k < 1000; k++) {
