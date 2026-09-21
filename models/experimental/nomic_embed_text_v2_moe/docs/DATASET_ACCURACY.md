@@ -1,10 +1,9 @@
 # Nomic Embed Text v2 MoE: accuracy on real datasets
 
 Retrieval accuracy of the TTNN port against the vendored PyTorch reference on two public
-datasets, where every other correctness gate in this port uses random token ids or synthetic
-activations. Random ids are drawn uniformly from a 250k vocabulary and are semantically
-meaningless, so they say nothing about how the port behaves on the text it will actually see,
-and nothing at all about retrieval quality, which is what the model is for.
+datasets. Every other gate in this port uses random token ids or synthetic activations; ids
+drawn uniformly from a 250k vocabulary are semantically meaningless, so they say nothing about
+real text and nothing at all about retrieval quality, which is what the model is for.
 
 Measured on a Blackhole p300c, grid 11x10, bfloat16 activations and weights with HiFi4 and
 fp32 destination accumulation, weights read from the pinned checkpoint. One run, 2026-09-18.
@@ -17,10 +16,10 @@ fp32 destination accumulation, weights read from the pinned checkpoint. One run,
 | [`mteb/XQuADRetrieval`](https://huggingface.co/datasets/mteb/XQuADRetrieval) | validation | 12 languages, 6 scripts, 240 passages and ~1185 queries each |
 
 SciFact is one of the 15 BEIR subsets Nomic report in the paper, so its absolute number is
-comparable to published work. XQuAD is the same SQuAD content translated into every language,
-which is the reason to prefer it over MIRACL for a port check: content is held fixed, so a
-per-language difference is attributable to the language rather than to how hard that language's
-questions happen to be. MIRACL's per-language query sets are independent and confound the two.
+comparable to published work. XQuAD is the same SQuAD content translated into every
+language, which is why it beats MIRACL for a port check: content is held fixed, so a
+per-language difference is attributable to the language rather than to question difficulty.
+MIRACL's per-language query sets are independent and confound the two.
 
 Both sides were driven through identical tokenization and pooling, with the trained task
 prefixes applied (`search_document:` for passages, `search_query:` for queries). Texts were
@@ -52,9 +51,8 @@ nDCG@10 delta: worst -0.0042, best +0.0008, mean -0.0011, positive on 2 of 13 sp
 Robustness: no hangs, no non-finite values, and every embedding norm within [0.9950, 1.0047]
 across all 45124 encodes. No board reset was needed at any point.
 
-Two languages score marginally above the reference. A port cannot be better than its oracle, so
-that is the useful part of the signal: the deltas are noise around zero rather than a
-one-directional loss.
+Two languages score above the reference. A port cannot beat its oracle, so that is the useful
+part of the signal: the deltas are noise around zero, not a one-directional loss.
 
 ## 3. The per-row cosine tolerance does not hold on real data
 
@@ -69,12 +67,11 @@ So it is a tail, not a shift, and the nDCG column shows it costs nothing: the sp
 worst tail (xquad-hi, 1.50e-01) loses 0.0011 nDCG, while the split with the largest nDCG loss
 (scifact, -0.0042) has a milder tail than four others. Rows drift without reordering results.
 
-That test's own docstring puts `1 - cosine` at 9.1e-05 to 7.6e-03 on the inputs it uses. Those
-are tens of rows; this is 22562. Widening the sample moves the extreme, which is what happened
-here, not a regression. A fixed per-row 0.01 assert would fail immediately on this data and
-should not be used as a merge gate for it. Gate on the mean or a high quantile together with the
-nDCG delta, and report the worst case rather than asserting it. This run captured only mean and
-max, so a quantile has to be measured before a number can be set.
+That test's docstring puts `1 - cosine` at 9.1e-05 to 7.6e-03 over tens of rows; this is 22562,
+and widening the sample moves the extreme. That is sampling, not regression. A fixed per-row
+0.01 assert would fail immediately here and should not gate this data: gate on the mean or a
+high quantile alongside the nDCG delta, and report the worst case rather than asserting it.
+This run captured only mean and max, so a quantile has to be measured before setting one.
 
 ## 4. Short sequences are not the worst case here
 
@@ -94,15 +91,14 @@ Aggregated by text length across all 13 splits, real data does not order that wa
 The shortest bucket holds under 0.01 across 14138 texts, the 33-64 bucket is the worst at
 1.50e-01 across 413, and the fully packed 512-token sequences are the best behaved of all.
 
-The two measurements are not identical: that figure is a per-shape pooled cosine over random-id
-draws at a fixed `B x S`, this is per-text over real inputs batched by length. But the recorded
-ordering should not be relied on for real text as written, and the fully packed case being
-cleanest suggests the tail tracks padding and batch composition rather than length.
+The two are not the same measurement: that figure is a per-shape pooled cosine over random-id
+draws at fixed `B x S`, this is per-text over real inputs batched by length. Still, the recorded
+ordering does not hold for real text, and the fully packed case being cleanest suggests the tail
+tracks padding and batch composition rather than length.
 
 ## 5. Reproducing
 
-These numbers come from a standalone harness rather than from the test suite, since none of them
-are asserted. The procedure:
+From a standalone harness rather than the test suite, since none of these are asserted:
 
 - load the configs above through `datasets`, with `{lang}-corpus`, `{lang}-queries` and
   `{lang}-qrels` for XQuAD (split `validation`) and `corpus`, `queries`, `default` for SciFact
@@ -110,7 +106,7 @@ are asserted. The procedure:
 - encode with `reference.embedding.encode` and `tt.model.encode`, same texts, same prefixes
 - score nDCG@10 against the qrels on both sides, and compare the embeddings row by row
 
-Cost, for anyone budgeting a rerun: the reference side is the constraint at roughly 11 texts/s
-on this 16-core host with no GPU, so about 35 minutes for its 22562 encodes. The device side is
-several minutes. Caching the reference embeddings, which are deterministic at a pinned revision,
-would make every rerun after the first device-only.
+Rerun cost: the reference side is the constraint at roughly 11 texts/s on this 16-core host
+with no GPU, about 35 minutes for its 22562 encodes; the device side is several minutes. The
+reference embeddings are deterministic at a pinned revision, so caching them makes every rerun
+after the first device-only.

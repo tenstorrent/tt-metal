@@ -18,10 +18,10 @@ arithmetically identical and reduces to two broadcast-batch matmuls, a multiply 
 The (1, E, T, F) intermediate is the port's peak transient, about 50 MB at T=1024 in bfloat16,
 and it scales with batch times sequence length rather than sequence length alone.
 
-T above is the whole batch's token count, so it is the one axis here that grows without bound,
-and past one output tile row per core the broadcast-batch matmul deadlocks in ttnn. The
-pipeline is therefore run in passes over the token axis and the results concatenated; see the
-constant below.
+T is the whole batch's token count, the one axis here that grows without bound, and past one
+output tile row per core the w1 matmul deadlocks in ttnn; w2 is safe, its in0_B being E rather
+than 1. The pipeline therefore runs in passes over the token axis, which also caps that
+transient at one pass. See MAX_TILE_ROWS_PER_CORE.
 """
 
 from __future__ import annotations
@@ -31,38 +31,32 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.nomic_embed_text_v2_moe.tt.common import pack_expert_weights, to_device
 
-# ttnn.matmul deadlocks, rather than raising, once a broadcast-batch matmul needs more than one
-# output tile row per core. Keeping per_core_M at 1 is what this constant enforces.
+# ttnn.matmul deadlocks, rather than raising, when a broadcast-batch matmul (in0_B == 1,
+# in1_B > 1) runs with num_blocks_h_dim * num_blocks_w_dim > 1. The in0 reuse path in
+# reader_bmm_tile_layout_in0_sender_padding.cpp replays num_blocks_inner_dim blocks per extra
+# batch, dropping the h_dim * w_dim factor that bmm_large_block_zm_fused_bias_activation.cpp
+# applies when consuming, so the reader under-produces and every core waits forever in
+# cb_wait_front on in0. per_core_M stepping to 2 is what splits out_block_w and exposes it.
 #
-# The bug is upstream, on the path an (in0_B == 1, in1_B > 1) matmul is auto-routed to.
-# reader_bmm_tile_layout_in0_sender_padding.cpp keeps in0 resident in L1 across weight batches
-# and replays it by pushing num_blocks_inner_dim blocks per extra batch, while
-# bmm_large_block_zm_fused_bias_activation.cpp consumes
-# num_blocks_h_dim * num_blocks_w_dim * num_blocks_inner_dim of them per batch. The two agree
-# only while both of those outer counts are 1; otherwise the reader under-produces and every
-# core blocks forever in cb_wait_front on in0. per_core_M stepping to 2 pushes the L1 estimate
-# over budget, which halves out_block_w and makes num_blocks_w_dim 2, which exposes it.
-#
-# Measured on this p300c, grid 11x10 = 110 cores, no program config and no core grid passed,
-# which is what this port does: (1, 1, T, 768) x (1, E, 768, 3072) returns in under a second up
-# to T = 3520 (110 tiles, per_core_M 1) and never returns at T = 3552 (111 tiles, per_core_M 2).
-# The boundary is exactly 110/111 for every E > 1 tried (2, 4, 8, 16); E = 1, which is not the
-# reuse path, is unaffected at T = 4096. Total output volume is not the bound: E=16 at 104 tiles
-# is 159744 output tiles and passes, E=4 at 128 tiles is 49152 and hangs. Nor is it the
-# requested core_grid: an explicit 8x8 still passes at 110 tiles and hangs at 111.
-#
-# The failure is a hang, not an exception, and it leaves the board needing tt-smi -r, so this is
-# a limit to stay under rather than one to probe. B*S over 3520 is reachable in ordinary use,
-# B=7 at S=512 being the smallest case.
+# Holding per_core_M at 1 is the only caller-side avoidance: the reuse path is the sole legal
+# route for this shape, so switching it off by sharding or a fused activation makes the matmul
+# raise instead.
 MAX_TILE_ROWS_PER_CORE = 1
 
-# 110 tiles is where the boundary was measured, and it did not move with the requested core grid:
-# an explicit 8x8 passed at 110 and hung at 111, same as the full 11x10. So the limit is a
-# property of the silicon here, not of the grid, and deriving it from the core count alone would
-# raise it on a wider board rather than keep it. A 13x10 Blackhole, which this repo also targets,
-# would derive 130 rows and send a 128-tile matmul down the single-pass branch: a hung board, not
-# a failed assert. The grid still bounds it from below, since a narrower one cannot place 110
-# rows one per core, so take the smaller of the two.
+# Measured on p300c, grid 11x10, no program config passed: (1, 1, T, 768) x (1, E, 768, 3072)
+# returns in under a second at T = 3520 (110 tiles) and never returns at T = 3552 (111), for
+# every E > 1 tried (2, 4, 8, 16); E = 1 is unaffected at T = 4096. Neither output volume nor
+# the requested core_grid moves it: E=16 at 104 tiles is 159744 output tiles and passes, E=4 at
+# 128 tiles is 49152 and hangs, and an explicit 8x8 still breaks at 111.
+#
+# The bound is joint in M and N, since what must stay 1 is h_dim * w_dim: at M = 32 tiles,
+# N = 3072 passes and N = 4096 hangs. 110 is measured against this checkpoint's 768 and 3072,
+# which test_the_pass_size_keeps_one_output_tile_row_per_core pins.
+#
+# Applied as min(grid cores, this), never derived from the grid alone: a 13x10 Blackhole would
+# derive 130 rows and send a 128-tile matmul down the single-pass branch, hanging the board
+# rather than failing an assert. B*S over 3520 is reachable in ordinary use, B=7 at S=512 being
+# the smallest case, and recovery needs tt-smi -r.
 MAX_TILE_ROWS_MEASURED_SAFE = 110
 
 

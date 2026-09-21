@@ -100,37 +100,33 @@ def test_the_expert_reduce_covers_every_token(device, config, reference, tt_expe
     assert (got.abs().sum(dim=-1) > 0).all()
 
 
-def test_the_pass_size_keeps_one_output_tile_row_per_core(device, tt_config, tt_experts):
-    """The derived pass size has to hold per_core_M at 1, which is what avoids the matmul hang.
+def test_the_pass_size_keeps_one_output_tile_row_per_core(device, config, tt_config, tt_experts):
+    """The pass size has to hold per_core_M at 1, which is what avoids the matmul hang.
 
-    ttnn.matmul deadlocks on this module's broadcast-batch operands once per_core_M steps to 2;
-    see the constant in tt/experts.py for the mechanism and the measured 110/111 tile boundary.
-    A regression here is a hung board rather than a failed assert, so the derivation is pinned
-    directly instead of being probed.
-
-    The measured cap is pinned alongside the per-core rule because the boundary did not move with
-    the requested core grid. Asserting the core count alone would pass on this 11x10 board and
-    silently raise the limit on a wider one, which is the shape of a hang rather than a failure.
+    A regression here hangs the board rather than failing an assert, so the derivation is pinned
+    rather than probed; tt/experts.py carries the mechanism. The 110-tile cap is pinned apart
+    from the per-core rule because the boundary did not move with the requested core grid, so
+    deriving from the core count alone would silently raise the limit on a wider board. The
+    operand widths are pinned because what must stay 1 is h_dim * w_dim, making the bound joint
+    in M and N: at 32 tile rows, N=3072 passes and N=4096 hangs.
     """
     cores = tt_config.core_grid.x * tt_config.core_grid.y
 
     assert tt_experts.max_tokens_per_pass == min(cores, MAX_TILE_ROWS_MEASURED_SAFE) * ttnn.TILE_SIZE
     assert tt_experts.max_tokens_per_pass <= MAX_TILE_ROWS_MEASURED_SAFE * ttnn.TILE_SIZE
     assert MAX_TILE_ROWS_PER_CORE == 1
+    assert (config.hidden_size, config.intermediate_size) == (768, 3072)
 
 
 @pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
 def test_chunking_the_token_axis_does_not_change_the_answer(device, config, reference, tt_experts, batch, seqlen):
     """Splitting the token axis has to be exact, not merely close.
 
-    Every pass runs the same weights over a disjoint slice of tokens, and the shared bias is
-    added once to the assembled result, so the split is arithmetically a no-op. Forcing a small
-    pass size on a shape that would otherwise fit in one is the only way to compare the two
-    paths on the same input: the shapes that chunk for real cannot be run unchunked, because
-    that is precisely the geometry that hangs.
-
-    Asserted bit-exact. The tile-aligned sizes and the ones that are not are both covered, and
-    the smallest forces a pass boundary inside a sequence.
+    Each pass runs the same weights over a disjoint slice and the shared bias is added once to
+    the assembled result, so the split is arithmetically a no-op. Forcing a small pass size on a
+    shape that fits in one is the only way to compare both paths on the same input: the shapes
+    that chunk for real cannot be run unchunked, that being the geometry that hangs. The pass
+    sizes cover tile-aligned and unaligned, and the smallest puts a boundary inside a sequence.
     """
     tokens = batch * seqlen
     x = flatten_tokens(to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device))
