@@ -4,6 +4,7 @@
 
 import hashlib
 import inspect
+import copy
 import json
 import math
 import os
@@ -3823,32 +3824,67 @@ class ModelArgs:
     # where `device_name` exists -- same discipline as every other measured knob
     # (LM-head fidelity, DECODE_CCL_TUNING, the working shards, the reader table):
     # a policy only ships to the SKU whose accuracy gate and ruler validated it.
+    # Groups whose OpGroup is decode-scoped by name, so overlaying them cannot reach prefill.
     _MEASURED_DECODE_FIDELITY = {
         # Isolated DRAM-sharded sweeps at the real per-device decode shapes put LoFi well
-        # ahead of HiFi2 at identical weight dtype: QKV 31.7 -> 27.5 us,
-        # WO 19.6 -> 16.9 us, FF2 56.0 -> 49.9 us. Prefill fidelity is untouched.
+        # ahead of HiFi2 at identical weight dtype: QKV 31.7 -> 27.5 us, WO 19.6 -> 16.9 us.
         ("Llama-3.1-8B", "P150x4"): {
             OpGroup.LI_QKV_DECODE: MathFidelitySetting.LOFI,
             OpGroup.LI_O_DECODE: MathFidelitySetting.LOFI,
-            OpGroup.LI_FF2: MathFidelitySetting.LOFI,
         },
     }
+    # FF2 is deliberately NOT in the table above. OpGroup.LI_FF2 is shared by prefill and
+    # decode (mlp.py reads it once for both modes), so overlaying it there would silently
+    # lower prefill fidelity too - which only decode evidence supports. It is applied
+    # through get_mlp_ff2_compute_kernel_config(), which is mode-aware.
+    # Measured: FF2 32x3584x4096 decode 56.0 -> 49.9 us.
+    _MEASURED_DECODE_FF2_FIDELITY = {
+        ("Llama-3.1-8B", "P150x4"): MathFidelitySetting.LOFI,
+    }
+
+    def _measured_fidelity_applies(self):
+        """True when this run is the SKU/level the decode fidelity overlay was measured on.
+
+        Only the `performance` level: `accuracy` mode is a correctness reference and must
+        not be silently sped up.
+        """
+        return getattr(self.optimizations, "__name__", None) == "performance"
 
     def _apply_measured_decode_fidelity(self):
-        """Overlay the SKU-measured decode fidelity onto the selected optimization level.
+        """Overlay the SKU-measured, decode-scoped fidelity onto the optimization level.
 
-        Only applies to the `performance` level: `accuracy` mode is a correctness
-        reference and must not be silently sped up. See
-        bringup/artifacts/tt_transformers/optimized_decode/work_log.md.
+        See bringup/artifacts/tt_transformers/optimized_decode/work_log.md.
         """
         overrides = self._MEASURED_DECODE_FIDELITY.get((self.base_model_name, self.device_name))
-        if not overrides or getattr(self.optimizations, "__name__", None) != "performance":
+        if not overrides or not self._measured_fidelity_applies():
             return
-        for decoder_id, conf in self.optimizations.decoder_optimizations.items():
-            conf.op_fidelity_settings.update(overrides)
+        # Copy before mutating: the caller owns the DecodersPrecision object and may reuse it
+        # for another ModelArgs (a different SKU, or performance then accuracy).
+        for decoder_id, conf in list(self.optimizations.decoder_optimizations.items()):
+            replacement = copy.copy(conf)
+            replacement._opt_settings = {
+                "TensorPrecision": dict(conf.tensor_dtype_settings),
+                "OpFidelity": {**conf.op_fidelity_settings, **overrides},
+            }
+            self.optimizations.decoder_optimizations[decoder_id] = replacement
         logger.info(
             f"Applied measured decode fidelity for {self.base_model_name} on {self.device_name}: "
             + ", ".join(f"{op.value}={setting.value}" for op, setting in overrides.items())
+        )
+
+    def get_mlp_ff2_compute_kernel_config(self, mode: Mode, decoder_id: int):
+        """Math fidelity for the MLP down-projection, per mode.
+
+        OpGroup.LI_FF2 is shared by prefill and decode, so the decode-measured LoFi policy
+        is applied here rather than in the DecodersPrecision overlay; prefill keeps whatever
+        the selected optimization level chose.
+        """
+        if mode == Mode.DECODE and self._measured_fidelity_applies():
+            setting = self._MEASURED_DECODE_FF2_FIDELITY.get((self.base_model_name, self.device_name))
+            if setting is not None:
+                return self.decoders_optimizations.math_fidelity_config(setting, self)
+        return self.decoders_optimizations.get_math_fidelity(
+            decoder_id=decoder_id, op=OpGroup.LI_FF2, configuration=self
         )
 
     # Blackhole DRAM-bank reader counts per decode projection role, by validated SKU.
@@ -5122,6 +5158,20 @@ class DecodersPrecision:
             MathFidelitySetting.HIFI4_FP32: configuration.compute_kernel_config_hifi4_fp32,
         }
         return math_fidelity_setting_lookup[self.decoder_optimizations[decoder_id].op_fidelity_settings[op]]
+
+    @staticmethod
+    def math_fidelity_config(setting: MathFidelitySetting, configuration):
+        """Resolve a MathFidelitySetting to the model's compute kernel config."""
+        return {
+            MathFidelitySetting.LOFI: configuration.compute_kernel_config_lofi,
+            MathFidelitySetting.HIFI2: configuration.compute_kernel_config_hifi2,
+            MathFidelitySetting.HIFI2_NA: configuration.compute_kernel_config_hifi2_na,
+            MathFidelitySetting.HIFI2_FP16: configuration.compute_kernel_config_hifi2_fp16,
+            MathFidelitySetting.HIFI2_NOL1ACC: configuration.compute_kernel_config_hifi2_nol1acc,
+            MathFidelitySetting.HIFI4: configuration.compute_kernel_config_hifi4,
+            MathFidelitySetting.HIFI4_FP16: configuration.compute_kernel_config_hifi4_fp16,
+            MathFidelitySetting.HIFI4_FP32: configuration.compute_kernel_config_hifi4_fp32,
+        }[setting]
 
     def _update_full_name(self):
         self._full_name = " | ".join(

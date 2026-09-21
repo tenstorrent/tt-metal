@@ -309,7 +309,18 @@ class MLP(LightweightModule):
         # P150x4 for 32x3584 bf16 x bf16 -> bfp8, mul plus the following reshard:
         #   mul on the 16-core FF1/FF3 grid 13.6 us | mul L1-interleaved 9.3 us
         # (mul on 56 cores is 6.1 us but needs a 2.9 us reshard back, for 9.4 us total).
-        reshard_w2_in = mode == Mode.DECODE and not TG and self.prefetcher is None
+        # SKU-gated like every other measured knob in this path: the 13.6 -> 9.3 us win was
+        # measured on P150x4 against the 16-core FF1/FF3 output grid this SKU uses. On a SKU
+        # whose FF1/FF3 output grid already equals the FF2 input grid the following
+        # to_memory_config is a no-op today, and forcing an interleaved mul output would turn
+        # it into a real reshard, so other SKUs keep the pinned output.
+        reshard_w2_in = (
+            mode == Mode.DECODE
+            and not TG
+            and self.prefetcher is None
+            and self.args.base_model_name == "Llama-3.1-8B"
+            and self.args.device_name == "P150x4"
+        )
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
@@ -345,9 +356,9 @@ class MLP(LightweightModule):
             if mode == Mode.DECODE:
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
-        li_ff2_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
-        )
+        # Mode-aware: OpGroup.LI_FF2 is shared by prefill and decode, and the SKU-measured
+        # LoFi policy is decode-only evidence.
+        li_ff2_compute_kernel_cfg = self.args.get_mlp_ff2_compute_kernel_config(mode, layer_num)
 
         if seq_len > 128 and mode != Mode.DECODE:
             w2_out = ttnn.experimental.minimal_matmul(
