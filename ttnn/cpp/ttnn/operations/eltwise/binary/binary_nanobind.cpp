@@ -61,6 +61,9 @@ constexpr auto kFloatAndInt32Dtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, 
 constexpr auto kFloatAndInt32UInt32Dtypes =
     "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295])";
 constexpr auto kFloatOnlyDtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32";
+// NEXTAFTER steps one ULP of the destination format, which a block-float tile packed against a
+// shared exponent cannot represent: the step rounds away and the op returns its input.
+constexpr auto kUlpStepFloatDtypes = "BFLOAT16, FLOAT32";
 constexpr auto kBitwiseShiftDtypes = "INT32, UINT16 (range: [0, 65535]), UINT32 (range: [0, 4294967295])";
 constexpr auto kLogicalRightShiftDtypes = "INT32, UINT32 (range: [0, 4294967295])";
 constexpr auto kMultiplyInplaceDtypes =
@@ -2395,7 +2398,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{output\_tensor}_i = \begin{cases} \mathrm{next\_float}(\mathrm{input\_tensor\_a}_i, \mathrm{input\_tensor\_b}_i), & \text{if } \mathrm{input\_tensor\_a}_i \neq \mathrm{input\_tensor\_b}_i \\ \mathrm{input\_tensor\_a}_i, & \text{if } \mathrm{input\_tensor\_a}_i = \mathrm{input\_tensor\_b}_i \end{cases}
         )doc",
         &ttnn::nextafter,
-        detail::kFloatOnlyDtypes);
+        detail::kUlpStepFloatDtypes,
+        detail::kSameDtypeRequiredFootnote);
 
     detail::bind_binary_unary_max_operation<"minimum">(
         mod,

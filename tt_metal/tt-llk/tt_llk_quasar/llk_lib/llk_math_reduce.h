@@ -378,9 +378,9 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
         0,
         [tensor_shape]
         {
-            // Set up a dest addr to output temp results into, has to be less than 64 (to not write into next tile)
+            // Set up a dest addr to output temp results into, has to be less than 16 (to not write into next tile)
             // but also has to be greater than 0 (where results are expected)
-            constexpr std::uint32_t scratch_dst_addr = 16;
+            constexpr std::uint32_t scratch_dst_addr = 8;
 
             // Pool all faces together (default 4 faces), this will generate 1x16 row of result at dst index scratch_dst_addr
             // No src/dest counters are incremented
@@ -498,10 +498,20 @@ inline void _llk_math_reduce_addrmod_(const TensorShape& tensor_shape)
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
  * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
+ * @note PoolType::MIN is rejected here. Nothing reduces without this init, so that closes the whole
+ *       FPU path to it.
  */
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, bool EN_32BIT_DEST, ckernel::MathFidelity MATH_FIDELITY_TYPE, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_init_(const TensorShape tensor_shape)
 {
+    // There is no min-pool instruction - the FPU has GMPOOL (max) and GAPOOL (average/sum) - so MIN
+    // would not fail here, it would quietly average, and the unpacker would pad with zero where a
+    // min reduce needs +inf. PoolType::MIN exists for the SFPU reduce, which implements it.
+    static_assert(
+        POOL_TYPE != PoolType::MIN,
+        "The FPU reduce has no MIN: the hardware provides GMPOOL (max) and GAPOOL (average) only. "
+        "Use the SFPU reduce instead (ckernel_sfpu_reduce.h::calculate_reduce).");
+
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     _llk_math_reduce_addrmod_<REDUCE_DIMENSION, MATH_FIDELITY_TYPE>(tensor_shape);
 

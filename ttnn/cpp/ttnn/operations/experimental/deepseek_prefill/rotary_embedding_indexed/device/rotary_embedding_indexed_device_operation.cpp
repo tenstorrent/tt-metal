@@ -733,8 +733,13 @@ void RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::override_runtim
         run_args.kernel_run_args = {reader_run};
     }
 
+    // All stamped programs declare identical tensor specs and runtime schemas; only my_sp_coord
+    // differs. Validate this update once, then refresh every program's bindings without repeating
+    // the same spec/name checks. Validation still runs on every invocation, including fresh metadata.
+    bool validated = false;
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        UpdateProgramRunArgs(program, run_args);
+        UpdateProgramRunArgs(program, run_args, /*skip_validation=*/validated);
+        validated = true;
     }
 }
 

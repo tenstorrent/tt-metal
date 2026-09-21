@@ -22,6 +22,12 @@ namespace tt::tt_fabric {
 // Reuse the capture data structure for import overrides so export and import are consistent.
 using ChannelTrimmingOverrides =
     FabricDatapathUsageL1Results<true, builder_config::MAX_NUM_VCS, builder_config::num_max_sender_channels>;
+static_assert(
+    builder_config::num_max_sender_channels <= sizeof(uint16_t) * 8,
+    "Channel trimming sender masks must cover every flattened sender channel");
+static_assert(
+    builder_config::MAX_NUM_VCS <= sizeof(uint16_t) * 8,
+    "Channel trimming receiver masks must cover every virtual channel");
 
 struct Vc0TrimFastPathInfo {
     bool terminal_or_source_only = false;
