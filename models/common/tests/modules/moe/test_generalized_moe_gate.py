@@ -55,7 +55,10 @@ def _generalized_golden(
 # logit_scale only matters on the raw-logit softmax path (see input gen): 1.0 = small/realistic regime,
 # 100.0 = past the bf16 exp ceiling (overflow stress). Other paths ignore it and run once (scale 1.0).
 @pytest.mark.parametrize("logit_scale", [1.0, 100.0])
-def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, output_softmax, logit_scale):
+@pytest.mark.parametrize("interleaved_input", [False, True], ids=["sharded_in", "tile_rows_in"])
+def test_generalized_moe_gate(
+    device, batch_size, enable_sigmoid, seed, topk, output_softmax, logit_scale, interleaved_input
+):
     """Test the generalized MoE gate C++ op on a 32x32 tile against the golden reference (top-`topk`,
     linear-normalize or softmax-over-selected)."""
     raw_logit_softmax = output_softmax and not enable_sigmoid  # the only path logit_scale affects
@@ -118,16 +121,24 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
     )
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
 
-    # Input values — sharded on a single core per batch.
+    # Input values: sharded on a single core per batch, or the natural [tokens, 256] tile rows.
     reshaped_input = torch.reshape(torch_input, reshaped_input_shape)
-    ttnn_input = ttnn.from_torch(
-        reshaped_input,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=input_mem_config,
-        tile=input_tile,
-    )
+    if interleaved_input:
+        ttnn_input = ttnn.from_torch(
+            torch.reshape(torch_input, (1, 1, batch_size, 256)),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+    else:
+        ttnn_input = ttnn.from_torch(
+            reshaped_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=input_mem_config,
+            tile=input_tile,
+        )
 
     # Bias is transposed before upload (the kernel expects the transposed layout).
     reshaped_bias = torch.transpose(torch.reshape(torch_bias, reshaped_input_shape), -2, -1)

@@ -546,11 +546,15 @@ class TTMoEGate:
         out = ttnn.slice(self.tt_output, [0, 0, 0], [batch_per_iter, 32, 32], memory_config=mem_out)
         out_idx = ttnn.slice(self.tt_output_indices, [0, 0, 0], [batch_per_iter, 32, 32], memory_config=mem_out)
 
+        # The single block generalized op gathers each token's row straight from the logits tile layout;
+        # the combine and the deepseek op still take the (bpi, 16, 16) face repack on one core per token.
+        direct_input = self.num_blocks == 1 and self.n_group != 8
         weights_chunks, indices_chunks = [], []
         for start in range(0, total_batch + padding, batch_per_iter):
             cur = logits[:, :, start : start + batch_per_iter, :]
-            cur = ttnn.reshape(cur, reshaped_shape)  # (bpi,16,16) or (bpi,num_blocks,16,16) for combine
-            cur = ttnn.to_memory_config(cur, memory_config=mem_in)  # height-shard: one token/core
+            if not direct_input:
+                cur = ttnn.reshape(cur, reshaped_shape)  # (bpi,16,16) or (bpi,num_blocks,16,16) for combine
+                cur = ttnn.to_memory_config(cur, memory_config=mem_in)  # height-shard: one token/core
 
             if self.n_group == 8:
                 # deepseek grouped top-8 (sigmoid + bias); no top-k / output-softmax knobs. Call the C++ op
@@ -580,7 +584,8 @@ class TTMoEGate:
                 )
             weights_chunks.append(ttnn.to_memory_config(w, memory_config=ttnn.L1_MEMORY_CONFIG))
             indices_chunks.append(ttnn.to_memory_config(idx, memory_config=ttnn.L1_MEMORY_CONFIG))
-            ttnn.deallocate(cur)
+            if not direct_input:
+                ttnn.deallocate(cur)
         ttnn.deallocate(logits)
 
         weights = weights_chunks[0] if num_iters == 1 else ttnn.concat(weights_chunks, dim=0)
