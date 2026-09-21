@@ -333,6 +333,12 @@ void validate_valid_end_metadata(const operation_attributes_t& attrs, const tens
     // COMPILE-TIME args while the hash records only presence, so the address space must not vary.
     TT_FATAL(m.memory_config().buffer_type() == BufferType::DRAM, "indexer_score: valid_end_tensor must be in DRAM");
 }
+
+void validate_metadata_mode(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    validate_chunk_start_metadata(attrs, t);
+    validate_valid_end_metadata(attrs, t);
+}
+
 // Structural checks for the trace-safe cache-slot tensor. Mirrors validate_chunk_start_metadata: the
 // value is read on-device, so only the container and the recomposition terms can be checked here.
 void validate_cache_slot_metadata(const operation_attributes_t& attrs, const tensor_args_t& t) {
@@ -483,8 +489,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
     validate_runtime_values(attrs, tensor_args);
     validate_chunk_start(attrs, tensor_args);
     validate_fused_runtime_values(attrs, tensor_args);
-    validate_chunk_start_metadata(attrs, tensor_args);
-    validate_valid_end_metadata(attrs, tensor_args);
+    validate_metadata_mode(attrs, tensor_args);
     validate_cache_slot_metadata(attrs, tensor_args);
 }
 
@@ -518,8 +523,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     validate_runtime_values(attrs, tensor_args);
     validate_block_cyclic(attrs, tensor_args);
     validate_fused_runtime_values(attrs, tensor_args);
-    validate_chunk_start_metadata(attrs, tensor_args);
-    validate_valid_end_metadata(attrs, tensor_args);
+    validate_metadata_mode(attrs, tensor_args);
     validate_cache_slot_metadata(attrs, tensor_args);
 
     // Fused ring: k is the [B,1,T,D] gathered buffer (validated above); additionally require the per-chip LOCAL

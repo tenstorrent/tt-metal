@@ -1430,3 +1430,231 @@ def test_indexer_score_ring4_fused_rejects_head_streaming(expect_error):
             )
     finally:
         _close_ring4_ccl(parent, submesh, stall_group)
+
+
+def _vend_ceil32(x: int) -> int:
+    return ((x + 31) // 32) * 32
+
+
+def _replicated_u32(submesh, value: int):
+    return ttnn.from_torch(
+        torch.tensor([[[[value]]]], dtype=torch.int64),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
+        device=submesh,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+_VEND_CHUNK_START = QB_HISTORY
+_VEND_PADDED_END = QB_HISTORY + RING * QB_SQ  # what the reader derives with no bound
+_VEND_STALE = 8.0  # the tail value; distinct from the seeded keys so its influence is unmistakable
+
+
+def _vend_inputs(submesh, heads, real_end):
+    """Fused inputs whose key cache is REAL in [0, real_end) and stale past it."""
+    q_g, k_g, w_g = _global_inputs(heads, CHUNK_GLOBAL, T, seed=42)
+    k_g[:, :, real_end:, :] = _VEND_STALE
+    return _fused_dev_inputs(submesh, q_g, w_g, _to_slab(k_g, RING, CHUNK_GLOBAL))
+
+
+def _vend_runner(submesh, ccl_semaphores, subdevice_id, stall_group, heads, dev):
+    q_dev, w_dev, k_local, k_gathered = dev
+
+    def run(**kwargs):
+        out = ttnn.experimental.ring_indexer_score_dsa(
+            q_dev,
+            k_gathered,
+            w_dev,
+            k_local,
+            ccl_semaphores,
+            cluster_axis=SP_AXIS,
+            topology=ttnn.Topology.Linear,
+            num_links=1,
+            ag_sub_device_id=subdevice_id,
+            block_cyclic_sp_axis=SP_AXIS,
+            block_cyclic_chunk_local=QB_SQ,
+            program_config=glx_config(heads),
+            **kwargs,
+        )
+        ttnn.synchronize_device(submesh, sub_device_ids=stall_group)
+        return ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=2))
+
+    return run
+
+
+# `back` is how far below the padded end the real tokens stop; `off` makes the end non-32-aligned.
+_VEND_CASES = [
+    ("aligned", 0, 32 * 40),
+    ("unaligned_1", 1, 32 * 40),  # one past a boundary -> rounds up to the same tile
+    ("unaligned_31", 31, 32 * 40),  # one short of the next -> same rounded bound
+    ("noop", 0, 0),  # real end == padded end: the cap must not bite
+]
+
+
+@pytest.mark.parametrize("case_id,off,back", _VEND_CASES, ids=[c[0] for c in _VEND_CASES])
+def test_indexer_score_ring4_fused_valid_end_matches_scalar_bound(case_id, off, back):
+    """valid_end must reproduce the SCALAR kv_len bound exactly: min(padded_end, ceil32(valid_end)).
+
+    Both ops derive their extent from the same metadata word, so a disagreement here is what makes a
+    looser score with a tighter top-k drop real keys (or the reverse rank a stale tail). Non-32-aligned
+    ends are the interesting ones: the reader rounds UP to the 32-row write grid, matching write_k's
+    clamp and the scalar path's own rounding.
+    """
+    heads = 16
+    valid_end = _VEND_PADDED_END - back + off
+    expected_kv_len = min(_VEND_PADDED_END, _vend_ceil32(valid_end))
+
+    submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
+    try:
+        dev = _vend_inputs(submesh, heads, expected_kv_len)
+        run = _vend_runner(submesh, ccl_semaphores, subdevice_id, stall_group, heads, dev)
+
+        scalar = run(chunk_start_idx=_VEND_CHUNK_START, kv_len=expected_kv_len)
+        bounded = run(
+            chunk_start_idx_tensor=_replicated_u32(submesh, _VEND_CHUNK_START),
+            valid_end_tensor=_replicated_u32(submesh, valid_end),
+        )
+        # Compare the VALID PREFIX only, as test_indexer_score_ring4_fused_runtime_kv_len does. Past the
+        # bound the two paths legitimately differ: the scalar kv_len also bounds the all-gather, so the
+        # stale tail is never delivered, while the metadata path caps the derived extent on-device with
+        # the tail already gathered. The claim under test is that the REAL keys score identically.
+        assert torch.equal(bounded[:, :, :, :expected_kv_len], scalar[:, :, :, :expected_kv_len]), (
+            f"{case_id}: valid_end={valid_end} (ceil32 -> {_vend_ceil32(valid_end)}) did not reproduce the "
+            f"scalar bound kv_len={expected_kv_len} over the valid prefix"
+        )
+        logger.info(f"ring4 valid_end {case_id}: valid_end={valid_end} matched scalar kv_len={expected_kv_len}")
+    finally:
+        _close_ring4_ccl(parent, submesh, stall_group)
+
+
+def test_indexer_score_ring4_fused_valid_end_excludes_stale_tail():
+    """The bound must change the scored result, and ONLY past ceil32(valid_end).
+
+    This is the negative control the parity cases cannot provide: without it they would pass on a build
+    that ignored valid_end entirely. Two things are asserted -- that the bounded and unbounded runs
+    differ at all (the bound reached the reader), and that every difference sits at a column >= the
+    bound (it narrowed the extent rather than perturbing real keys).
+    """
+    heads = 16
+    valid_end = _VEND_PADDED_END - 32 * 40
+    bound = _vend_ceil32(valid_end)
+
+    submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
+    try:
+        dev = _vend_inputs(submesh, heads, bound)
+        run = _vend_runner(submesh, ccl_semaphores, subdevice_id, stall_group, heads, dev)
+        chunk_start_tensor = _replicated_u32(submesh, _VEND_CHUNK_START)
+
+        unbounded = run(chunk_start_idx_tensor=chunk_start_tensor)
+        bounded = run(chunk_start_idx_tensor=chunk_start_tensor, valid_end_tensor=_replicated_u32(submesh, valid_end))
+        assert not torch.equal(unbounded, bounded), (
+            f"a bound at {valid_end} (ceil32 -> {bound}) left the scores unchanged over a cache whose tail "
+            "is stale -- the bound never reached the reader"
+        )
+        differing = (unbounded != bounded).nonzero()
+        min_col = int(differing[:, -1].min())
+        assert min_col >= bound, (
+            f"the bound changed a score at column {min_col}, below its own bound {bound} -- it must only "
+            "narrow the extent, never perturb a real key"
+        )
+        logger.info(f"ring4 valid_end: bound {bound} changed only columns >= {min_col}")
+    finally:
+        _close_ring4_ccl(parent, submesh, stall_group)
+
+
+def test_indexer_score_ring4_fused_valid_end_omitted_is_unchanged():
+    """Omitting valid_end_tensor must leave the metadata path exactly as it was.
+
+    The bound is opt-in: absent, its common-arg slot is 0 and the reader skips the cap. A bound AT the
+    padded end must therefore be indistinguishable from omitting it -- the cap must not bite early.
+    """
+    heads = 16
+    submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
+    try:
+        dev = _vend_inputs(submesh, heads, _VEND_PADDED_END)
+        run = _vend_runner(submesh, ccl_semaphores, subdevice_id, stall_group, heads, dev)
+        chunk_start_tensor = _replicated_u32(submesh, _VEND_CHUNK_START)
+
+        without = run(chunk_start_idx_tensor=chunk_start_tensor)
+        with_noop = run(
+            chunk_start_idx_tensor=chunk_start_tensor,
+            valid_end_tensor=_replicated_u32(submesh, _VEND_PADDED_END),
+        )
+        assert torch.equal(with_noop, without), (
+            f"a valid_end at the padded end ({_VEND_PADDED_END}) changed the result -- the cap is biting "
+            "when it should be inert, so omitting the tensor is not equivalent to an unbounded run"
+        )
+        logger.info("ring4 valid_end: omitted == bound-at-padded-end")
+    finally:
+        _close_ring4_ccl(parent, submesh, stall_group)
+
+
+def test_indexer_score_ring4_fused_valid_end_varies_on_a_warm_program():
+    """One program must serve DIFFERENT real ends at a FIXED chunk start: the value is read on-device.
+
+    This is what makes the bound trace-safe and what a traced multi-chunk prefill depends on -- each
+    replay carries its own actual_end while the captured program stays put. A value baked in at build
+    time (a host runtime arg, or a compile-time flag) would return the first bound forever, so the
+    in-place rewrite and the program-cache-entry assertion are both load-bearing.
+
+    Re-dispatching a warm program with a rewritten buffer is the same invariant a trace replay relies
+    on; this suite has no trace harness (only the perf file captures), so it is asserted in that form.
+    The rewrite uses ttnn.copy, which is what tt_prefill_runtime._metadata_from_msg does per chunk.
+
+    This caught a real bug: valid_end used to land in cb_meta_derived, the page the chunk_start read had
+    just filled, and the second read at that address did not refetch -- so the bound silently kept its
+    previous value whenever only the tensor's CONTENTS changed. It now has its own CB page base.
+    """
+    heads = 16
+    tight = _VEND_PADDED_END - 32 * 40
+    bounds = (tight, tight + 17, _VEND_PADDED_END)
+
+    submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
+    try:
+        # Real tokens stop at the TIGHTEST bound, so every looser bound admits more of the stale tail and
+        # the three results are genuinely distinguishable.
+        dev = _vend_inputs(submesh, heads, _vend_ceil32(tight))
+        run = _vend_runner(submesh, ccl_semaphores, subdevice_id, stall_group, heads, dev)
+        chunk_start_tensor = _replicated_u32(submesh, _VEND_CHUNK_START)
+        vend_tensor = _replicated_u32(submesh, _VEND_PADDED_END)
+
+        # Take the scalar oracles FIRST: the scalar path is a different program, so dispatching it inside
+        # the loop would add a cache entry and trip the no-recompile assertion on the oracle itself.
+        scalars = {
+            b: run(chunk_start_idx=_VEND_CHUNK_START, kv_len=min(_VEND_PADDED_END, _vend_ceil32(b))) for b in bounds
+        }
+
+        run(chunk_start_idx_tensor=chunk_start_tensor, valid_end_tensor=vend_tensor)  # warm the score program
+        # Warm the COPY program too before snapshotting: ttnn.copy is itself an op with its own cache
+        # entry, so counting before its first use would attribute that compile to the score op below.
+        ttnn.copy(_replicated_u32(submesh, _VEND_PADDED_END), vend_tensor)
+        run(chunk_start_idx_tensor=chunk_start_tensor, valid_end_tensor=vend_tensor)
+        entries_after_first = submesh.num_program_cache_entries()
+
+        for valid_end in bounds:
+            # ttnn.copy, NOT copy_host_to_device_tensor: this is the runner's own mechanism. The traced
+            # path refreshes its metadata with an on-device ttnn.copy into pre-allocated 1-element
+            # buffers (tt_prefill_runtime._metadata_from_msg) precisely so the captured address stays
+            # fixed, so the test has to rewrite the same way to reproduce what production does.
+            ttnn.copy(_replicated_u32(submesh, valid_end), vend_tensor)
+            got = run(chunk_start_idx_tensor=chunk_start_tensor, valid_end_tensor=vend_tensor)
+            prefix = min(_VEND_PADDED_END, _vend_ceil32(valid_end))
+            assert torch.equal(got[:, :, :, :prefix], scalars[valid_end][:, :, :, :prefix]), (
+                f"after rewriting valid_end to {valid_end} on a warm program, the metadata path did not "
+                f"reproduce the scalar bound over the valid prefix -- the value is not being re-read on-device"
+            )
+            assert submesh.num_program_cache_entries() == entries_after_first, (
+                f"rewriting valid_end to {valid_end} recompiled -- the VALUE must not enter the program "
+                "hash, or one captured program cannot serve every chunk"
+            )
+
+        # No "the two bounds must differ" check here, deliberately. Past its bound the op does not WRITE
+        # the output, so those columns keep whatever the buffer already held: after a bound shrinks, the
+        # previous run's values are still sitting in the tail, and a full-tensor compare reports "nothing
+        # changed" even though the bound applied perfectly. The per-bound scalar-oracle assertion above is
+        # the real evidence -- it is checked over the written region, where a stale value cannot hide.
+        logger.info("ring4 valid_end: in-place rewrites tracked on a warm program, no recompiles")
+    finally:
+        _close_ring4_ccl(parent, submesh, stall_group)

@@ -178,8 +178,10 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         // derivation) and the offset is baked in as a compile arg, so both must be hashed. The per-chunk
         // VALUE never enters the key -- that is what lets one captured program serve every chunk.
         tensor_args.has_valid_length_metadata(),
-        // Presence only: supplying the real end adds an accessor + a guard to the reader, while the VALUE
-        // stays dynamic so one captured program serves both partial and full chunks.
+        // Presence only, and still required even though the reader no longer carries a valid_end flag: the
+        // accessor compile args are built from this tensor's buffer (the input is the placeholder when
+        // absent), so presence still changes the binary. The VALUE stays dynamic -- and so now does the
+        // bound's on/off, read from the common arg -- so one captured program serves partial and full chunks.
         tensor_args.has_valid_end_metadata(),
         attrs.valid_length_offset,
         attrs.k,

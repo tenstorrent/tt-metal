@@ -227,9 +227,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     reader_compile_args.push_back(has_meta ? cb_meta : 0u);
     reader_compile_args.push_back(has_meta ? operation_attributes.valid_length_offset : 0u);
     interleaved_accessor_args(has_meta ? *tensor_args.valid_length_tensor : input).append_to(reader_compile_args);
-    // Real-token-end block, same fixed-width discipline: flag then accessor (placeholder when absent).
+    // Real-token-end block: accessor only (placeholder when absent). No presence flag -- metadata mode is
+    // one flag now, and the kernel reads presence from the common arg's VALUE (0 = uncapped).
     const bool has_vend = tensor_args.has_valid_end_metadata();
-    reader_compile_args.push_back(has_vend ? 1u : 0u);
     interleaved_accessor_args(has_vend ? *tensor_args.valid_end_tensor : input).append_to(reader_compile_args);
 
     auto reader_kernel = tt::tt_metal::CreateKernel(
