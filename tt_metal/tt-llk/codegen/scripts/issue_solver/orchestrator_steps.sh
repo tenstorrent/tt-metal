@@ -796,16 +796,17 @@ PY
 
 # ===========================================================================
 # Step 1 — refine PERF_GOAL from the analyzer's perf_intent line (optimize →
-# improve, maintain → no_regress). No-op if the line is absent.
+# improve, maintain → no_regress, measure → measure). No-op if the line is absent.
 # ===========================================================================
 execute_step_refine_perf_goal() {
     local _L; _L="$(_LOG)"
     local num pi; num="$(sg ISSUE_NUMBER)"
-    pi="$(grep -ioE 'perf_intent:[[:space:]]*(optimize|maintain)' \
-        "codegen/artifacts/issue_${num}_analysis.md" 2>/dev/null | head -1 | grep -ioE 'optimize|maintain')"
+    pi="$(grep -ioE 'perf_intent:[[:space:]]*(optimize|maintain|measure)' \
+        "codegen/artifacts/issue_${num}_analysis.md" 2>/dev/null | head -1 | grep -ioE 'optimize|maintain|measure')"
     case "$pi" in
         optimize) ss PERF_GOAL improve ;;
         maintain) ss PERF_GOAL no_regress ;;
+        measure) ss PERF_GOAL measure ;;
     esac
     echo "PERF_GOAL=$(sg PERF_GOAL)"
 }

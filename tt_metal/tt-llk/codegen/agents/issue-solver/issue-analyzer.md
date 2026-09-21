@@ -82,7 +82,9 @@ runs; otherwise use `TARGET_ARCH`.
    These styles describe how to inspect code; neither permits dropping distinct
    requirements from a multi-part issue.
 4. Set `perf_intent` to `optimize` only when the issue explicitly requires a
-   speedup; otherwise use `maintain`.
+   speedup; use `measure` when the requested deliverable is benchmark infrastructure
+   or establishing measurements without a required speedup. Otherwise use `maintain`.
+   Measurement intent still requires functional correctness and actual cycle evidence.
 5. Determine `fix_layer` from `.claude/references/metal-integration.md`:
 
    | Value | Scope |
@@ -214,7 +216,7 @@ arch_scope:
 ## Category
 category: compile_error|test_failure|runtime_error|missing_impl|porting_gap|perf_issue|cleanup_refactor|test_harness|unknown
 llk_area: unpack|math|pack|SFPU|sync/reconfig|test_harness|metal_integration|runtime_integration
-perf_intent: optimize|maintain
+perf_intent: optimize|maintain|measure
 scope_style: sweep|targeted
 
 ## Verification

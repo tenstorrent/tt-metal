@@ -1192,7 +1192,7 @@ def _required_measurements(item: dict) -> list[str]:
         values = json.loads(raw)
     except ValueError as exc:
         raise ValueError("required_measurements must be a JSON string array") from exc
-    allowed = {"cycle_comparison", "repeatability"}
+    allowed = {"cycle_comparison", "cycle_measurement", "repeatability"}
     if (
         not isinstance(values, list)
         or not values
@@ -1394,7 +1394,7 @@ def _validate_required_manifest(doc: dict[str, Any]) -> dict[str, Any]:
         not isinstance(doc, dict)
         or set(doc) != fields
         or doc.get("schema") != "tt.issue-solver.required-verification"
-        or doc.get("version") != 1
+        or doc.get("version") not in (1, 2)
         or doc.get("manifest_id")
         != _canonical_digest(
             {key: value for key, value in doc.items() if key != "manifest_id"}
@@ -1440,7 +1440,10 @@ def _validate_required_manifest(doc: dict[str, Any]) -> dict[str, Any]:
     }
     identities = set()
     for requirement in doc["requirements"]:
-        if not isinstance(requirement, dict) or set(requirement) != requirement_fields:
+        if not isinstance(requirement, dict) or set(requirement) not in (
+            requirement_fields,
+            requirement_fields | {"measurement_contract"},
+        ):
             raise ValueError("required-verification requirement schema is invalid")
         identity = requirement["requirement_id"]
         if not isinstance(identity, str) or not identity or identity in identities:
@@ -1472,12 +1475,29 @@ def _validate_required_manifest(doc: dict[str, Any]) -> dict[str, Any]:
         if (
             not isinstance(measurements, list)
             or any(
-                value not in {"cycle_comparison", "repeatability"}
+                not isinstance(value, str)
+                or value
+                not in {"cycle_comparison", "cycle_measurement", "repeatability"}
                 for value in measurements
             )
             or len(set(measurements)) != len(measurements)
         ):
             raise ValueError("required-verification measurements are invalid")
+        if "cycle_measurement" in measurements:
+            if (
+                doc["version"] != 2
+                or requirement["suite"] != "perf"
+                or requirement["backend"] != "silicon"
+                or "cycle_comparison" in measurements
+            ):
+                raise ValueError(
+                    "cycle_measurement requires a v2 silicon perf leaf without comparison"
+                )
+            from perf_eval import validate_measurement_contract
+
+            validate_measurement_contract(requirement.get("measurement_contract"))
+        elif "measurement_contract" in requirement:
+            raise ValueError("measurement_contract requires cycle_measurement")
     if not isinstance(doc["waivers"], list):
         raise ValueError("required-verification waivers must be an array")
     waiver_fields = {
@@ -1810,7 +1830,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
             measurements = _required_measurements(item) or ["cycle_comparison"]
             if deterministic and "repeatability" not in measurements:
                 measurements.append("repeatability")
-            add_requirement(
+            requirement = add_requirement(
                 arch,
                 "perf",
                 backend,
@@ -1819,6 +1839,21 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
                 max([*repetitions, _requirement_count(item, "minimum_executed")]),
                 measurements,
             )
+            if "cycle_measurement" in measurements:
+                if _markdown_scalar(analysis, "perf_intent") != "measure":
+                    raise ValueError(
+                        "cycle_measurement requires predeclared perf_intent: measure"
+                    )
+                try:
+                    requirement["measurement_contract"] = json.loads(
+                        item.get("measurement_contract", "")
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        "measurement_contract must be a JSON object"
+                    ) from exc
+            elif item.get("measurement_contract"):
+                raise ValueError("measurement_contract requires cycle_measurement")
 
     if not args.performance_only and verify_required == "yes":
         uncovered = set(arches) - {r["architecture"] for r in requirements}
@@ -1862,6 +1897,28 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
             )
         if not args.supersedes_reason:
             raise ValueError("a superseding manifest requires --supersedes-reason")
+        for prior in previous["requirements"]:
+            matches = [
+                r
+                for r in requirements
+                if all(r[k] == prior[k] for k in ("architecture", "suite", "selector"))
+            ]
+            if "cycle_measurement" in prior["required_measurements"] and (
+                len(matches) != 1
+                or matches[0].get("measurement_contract")
+                != prior["measurement_contract"]
+                or "cycle_measurement" not in matches[0]["required_measurements"]
+            ):
+                raise ValueError(
+                    "cannot remove or change a predeclared measurement contract"
+                )
+            if matches and (
+                "cycle_comparison" in prior["required_measurements"]
+                and "cycle_measurement" in matches[0]["required_measurements"]
+            ):
+                raise ValueError(
+                    "cannot downgrade a sealed comparison to measurement-only"
+                )
 
     def apply_waiver_policies(
         policies: list[dict[str, Any]], policy_sha256: str, policy_path: str
@@ -1999,7 +2056,12 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
     revision = int(previous["revision"]) + 1 if previous else 1
     doc = {
         "schema": "tt.issue-solver.required-verification",
-        "version": 1,
+        "version": (
+            2
+            if any("measurement_contract" in r for r in requirements)
+            or (previous and previous["version"] == 2)
+            else 1
+        ),
         "manifest_id": "0" * 64,
         "run_id": args.run_id,
         "attempt_id": f"attempt-{revision:03d}",
@@ -2982,6 +3044,40 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
                     classification = "coverage_error"
                     reasons.append(f"required_measurement_missing:{measurement}")
                     continue
+                if measurement == "cycle_measurement":
+                    try:
+                        from perf_eval import _read_csv, evaluate_measurement
+
+                        paths = []
+                        for prefix in ("current", "raw_current"):
+                            path = Path(perf[f"{prefix}_source"]).resolve()
+                            if (
+                                not path.is_relative_to(log_dir.resolve())
+                                or not path.is_file()
+                            ):
+                                raise ValueError(
+                                    "measurement artifact must belong to this run"
+                                )
+                            if (
+                                hashlib.sha256(path.read_bytes()).hexdigest()
+                                != perf[f"{prefix}_sha256"]
+                            ):
+                                raise ValueError("measurement artifact digest mismatch")
+                            paths.append(path)
+                        checked = evaluate_measurement(
+                            _read_csv(paths[0], strict=True),
+                            _read_csv(paths[1], strict=True),
+                            requirement["measurement_contract"],
+                        )
+                        if (
+                            perf.get("goal") != "measure"
+                            or perf.get("verdict") != "measured"
+                            or checked["exit_code"] != 0
+                        ):
+                            raise ValueError("measurement contract was not satisfied")
+                    except (KeyError, TypeError, ValueError, OSError):
+                        classification = "coverage_error"
+                        reasons.append("cycle_measurement_contract_not_met")
                 if measurement == "repeatability" and (
                     isinstance(evidence.get("executions"), bool)
                     or not isinstance(evidence.get("executions"), int)

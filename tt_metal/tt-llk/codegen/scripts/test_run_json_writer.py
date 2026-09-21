@@ -4528,3 +4528,188 @@ def test_cleanup_removes_only_owned_attempt(tmp_path, invalid):
     assert git("rev-parse", "--verify", "llk_code_gen/issue-5-v1")
     if invalid == "foreign_repo":
         assert foreign_wt.exists()
+
+
+def _measurement_plan():
+    contract = {
+        "primary_metric": "mean(L1_TO_L1)",
+        "marker": "TILE_LOOP",
+        "normalization": "loop_factor*tile_cnt",
+        "variants": [
+            {
+                "mathop": "copy",
+                "marker": "TILE_LOOP",
+                "loop_factor": "16",
+                "tile_cnt": "8",
+            }
+        ],
+    }
+    analysis = """## Scope
+arch_scope:
+  blackhole: in_scope
+perf_intent: measure
+## Verification
+fix_layer: llk_lib
+verification_required: yes
+verifiable_in_llk_suite: yes
+llk_coverage: existing
+"""
+    plan = (
+        """## Test Strategy
+reproduction_tests:
+- arch: blackhole
+  test: test_reduce.py
+regression_tests:
+- arch: blackhole
+  test: perf_reduce.py
+  required_measurements: ["cycle_measurement"]
+  measurement_contract: """
+        + json.dumps(contract)
+        + "\n"
+    )
+    return analysis, plan, contract
+
+
+def test_measurement_intent_seals_v2_and_cannot_reinterpret_v1(tmp_path):
+    analysis, plan, contract = _measurement_plan()
+    _, output = _required_manifest(tmp_path, analysis, plan)
+    manifest = json.loads(output.read_text())
+    assert manifest["version"] == 2
+    assert manifest["requirements"][-1]["measurement_contract"] == contract
+    manifest["version"] = 1
+    manifest["manifest_id"] = _content_id(manifest, {"manifest_id"})
+    output.write_text(json.dumps(manifest))
+    with pytest.raises(subprocess.CalledProcessError):
+        _reduce(tmp_path, output)
+
+
+@pytest.mark.parametrize("intent", ["maintain", "optimize", ""])
+def test_measurement_intent_cannot_be_inferred_or_replace_comparison(tmp_path, intent):
+    analysis, plan, _ = _measurement_plan()
+    analysis = analysis.replace("perf_intent: measure", f"perf_intent: {intent}")
+    proc, _ = _required_manifest(tmp_path, analysis, plan, check=False)
+    assert proc.returncode != 0
+    assert "predeclared perf_intent" in proc.stderr
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        None,
+        "wrong_variant",
+        "normalization",
+        "missing_raw",
+        "modified_artifact",
+        "outside_run",
+        "wrong_goal",
+        "fake_flag",
+    ],
+)
+def test_measurement_reducer_rechecks_exact_artifacts_not_model_flags(tmp_path, defect):
+    _, _, contract = _measurement_plan()
+    requirement = _requirement(
+        suite="perf",
+        selector={"test": "perf_reduce.py", "test_id": None, "k": None},
+        required_measurements=["cycle_measurement"],
+        measurement_contract=contract,
+    )
+    manifest, path = _reducer_manifest(tmp_path, [requirement])
+    manifest["version"] = 2
+    manifest["manifest_id"] = _content_id(manifest, {"manifest_id"})
+    path.write_text(json.dumps(manifest))
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    receipt = _sealed_result(manifest, requirement)
+    (results / "perf.json").write_text(json.dumps(receipt))
+    header = "mathop,marker,loop_factor,tile_cnt,mean(L1_TO_L1)\n"
+    current = tmp_path / "current.post.csv"
+    raw = tmp_path / "current.csv"
+    current.write_text(header + "copy,TILE_LOOP,16,8,2.5\n")
+    raw.write_text(header + "copy,TILE_LOOP,16,8,320\n")
+    output = tmp_path / "perf_result.json"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT.parent / "perf_eval.py"),
+            "--goal",
+            "measure",
+            "--current",
+            str(current),
+            "--raw-current",
+            str(raw),
+            "--required-manifest",
+            str(path),
+            "--requirement-id",
+            requirement["requirement_id"],
+            "--json-out",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    perf = json.loads(output.read_text())
+    assert perf["verdict"] == "measured"
+    assert "delta_pct_median" not in perf and "baseline_source" not in perf
+    perf.update(outcome="PERF_OK", patch_sha256=receipt["provenance"]["patch_sha256"])
+    if defect == "wrong_variant":
+        current.write_text(header + "other,TILE_LOOP,16,8,2.5\n")
+        perf["current_sha256"] = hashlib.sha256(current.read_bytes()).hexdigest()
+    elif defect == "normalization":
+        current.write_text(header + "copy,TILE_LOOP,16,8,320\n")
+        perf["current_sha256"] = hashlib.sha256(current.read_bytes()).hexdigest()
+    elif defect == "missing_raw":
+        raw.unlink()
+    elif defect == "modified_artifact":
+        current.write_text(header + "copy,TILE_LOOP,16,8,3\n")
+    elif defect == "outside_run":
+        perf["current_source"] = str(tmp_path.parent / "outside.csv")
+    elif defect == "wrong_goal":
+        perf["goal"] = "improve"
+    elif defect == "fake_flag":
+        perf["measurements"]["cycle_measurement"]["measured"] = False
+    output.write_text(json.dumps(perf))
+    _reduce(tmp_path, path, perf_result=output)
+    reduced = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduced["classification"] == (
+        "success" if defect is None else "coverage_error"
+    )
+    assert bool(reduced["success_token"]) == (defect is None)
+
+
+def test_sealed_comparison_cannot_be_downgraded_to_measurement(tmp_path):
+    analysis, plan, _ = _measurement_plan()
+    comparison_plan = "\n".join(
+        line
+        for line in plan.replace(
+            '"cycle_measurement"', '"cycle_comparison"'
+        ).splitlines()
+        if "measurement_contract:" not in line
+    )
+    _required_manifest(
+        tmp_path,
+        analysis.replace("perf_intent: measure", "perf_intent: optimize"),
+        comparison_plan,
+    )
+    proc, _ = _required_manifest(
+        tmp_path, analysis, plan, "--supersedes-reason", "no baseline", check=False
+    )
+    assert proc.returncode != 0
+    assert "cannot downgrade a sealed comparison" in proc.stderr
+
+
+@pytest.mark.parametrize("change", ["variant", "remove", "selector"])
+def test_measurement_contract_cannot_shrink_or_change_after_execution(tmp_path, change):
+    analysis, plan, _ = _measurement_plan()
+    _required_manifest(tmp_path, analysis, plan)
+    if change == "variant":
+        plan = plan.replace('"tile_cnt": "8"', '"tile_cnt": "4"')
+    elif change == "remove":
+        plan = plan[: plan.index("regression_tests:")]
+    else:
+        plan = plan.replace("test: perf_reduce.py", "test: perf_reduce.py::test_reduce")
+    proc, _ = _required_manifest(
+        tmp_path, analysis, plan, "--supersedes-reason", "observed output", check=False
+    )
+    assert proc.returncode != 0
+    assert "cannot remove or change a predeclared measurement contract" in proc.stderr

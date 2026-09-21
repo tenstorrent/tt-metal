@@ -472,3 +472,119 @@ def test_cli_incomplete_coverage_is_exit_two_and_reports_counts(tmp_path):
     saved = json.loads(out.read_text())
     assert saved["verdict"] == "no_baseline"
     assert saved["reason_code"] == "incomplete_baseline_coverage"
+
+
+def _measurement_fixture():
+    keys = {
+        "mathop": "datacopy",
+        "marker": "TILE_LOOP",
+        "tile_cnt": "8",
+        "loop_factor": "16",
+    }
+    contract = {
+        "primary_metric": "mean(L1_TO_L1)",
+        "marker": "TILE_LOOP",
+        "normalization": "loop_factor*tile_cnt",
+        "variants": [keys],
+    }
+    return (
+        contract,
+        [{**keys, "mean(L1_TO_L1)": "2.5"}],
+        [{**keys, "mean(L1_TO_L1)": "320"}],
+    )
+
+
+def test_measurement_only_checks_raw_normalization_without_claiming_speedup():
+    contract, current, raw = _measurement_fixture()
+    result = perf_eval.evaluate_measurement(current, raw, contract)
+    assert result["exit_code"] == 0
+    assert result["verdict"] == "measured"
+    assert result["goal"] == "measure"
+    assert result["units"] == "cycles_per_tile"
+    assert result["variants"][0]["current_cycles"] == 2.5
+    assert not any("baseline" in key or "delta" in key for key in result)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing",
+        "extra",
+        "duplicate",
+        "cross_variant",
+        "raw_missing",
+        "raw_duplicate",
+        "raw_cross_variant",
+        "unnormalized",
+        "zero",
+        "negative",
+        "nan",
+        "infinity",
+        "missing_metric",
+        "schema",
+    ],
+)
+def test_measurement_only_rejects_incomplete_or_invalid_evidence(defect):
+    contract, current, raw = _measurement_fixture()
+    if defect == "missing":
+        current = []
+    elif defect == "extra":
+        current.append({**current[0], "mathop": "other"})
+    elif defect == "duplicate":
+        current.append(dict(current[0]))
+    elif defect == "cross_variant":
+        current[0]["tile_cnt"] = "4"
+    elif defect == "raw_missing":
+        raw = []
+    elif defect == "raw_duplicate":
+        raw.append(dict(raw[0]))
+    elif defect == "raw_cross_variant":
+        raw[0]["mathop"] = "other"
+    elif defect == "unnormalized":
+        current[0]["mean(L1_TO_L1)"] = "320"
+    elif defect in {"zero", "negative", "nan", "infinity"}:
+        current[0]["mean(L1_TO_L1)"] = {
+            "zero": "0",
+            "negative": "-1",
+            "nan": "NaN",
+            "infinity": "inf",
+        }[defect]
+    elif defect == "missing_metric":
+        del current[0]["mean(L1_TO_L1)"]
+    elif defect == "schema":
+        current[0]["unplanned"] = "1"
+    result = perf_eval.evaluate_measurement(current, raw, contract)
+    assert result["exit_code"] == 2
+    assert result["measured"] is False
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("normalization", "none"),
+        ("marker", "KERNEL"),
+        ("variants", []),
+        ("primary_metric", "mean(FAKE)"),
+    ],
+)
+def test_measurement_contract_rejects_unspecified_coverage_or_units(field, value):
+    contract, _, _ = _measurement_fixture()
+    contract[field] = value
+    with pytest.raises(ValueError):
+        perf_eval.validate_measurement_contract(contract)
+
+
+def test_measurement_ignores_counter_metrics_but_keeps_configuration_keys():
+    contract, current, raw = _measurement_fixture()
+    current[0]["L1_TO_L1_mean(fpu_utilization_pct)"] = "50"
+    raw[0]["L1_TO_L1_mean(fpu_utilization_pct)"] = "50"
+    assert perf_eval.evaluate_measurement(current, raw, contract)["exit_code"] == 0
+    current[0]["data_format"] = "Float32"
+    assert perf_eval.evaluate_measurement(current, raw, contract)["exit_code"] == 2
+
+
+def test_measurement_csv_rejects_duplicate_headers(tmp_path):
+    path = tmp_path / "ambiguous.csv"
+    path.write_text("marker,mean(L1_TO_L1),mean(L1_TO_L1)\nTILE_LOOP,1,2\n")
+    with pytest.raises(ValueError, match="duplicate headers"):
+        perf_eval._read_csv(path, strict=True)

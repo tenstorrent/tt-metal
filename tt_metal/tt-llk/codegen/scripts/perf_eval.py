@@ -13,6 +13,15 @@ returns an **intent-aware** verdict:
 
   - goal=no_regress (bug fixes / features): a fix must NOT get slower.
   - goal=improve    (optimization issues):  a fix SHOULD get faster.
+  - goal=measure    (benchmark infrastructure): exact planned current measurements,
+    without a baseline or any speedup/no-regression claim. Requires a sealed v2
+    cycle_measurement leaf via --required-manifest/--requirement-id, plus raw CSV
+    via --raw-current. Every planned TILE_LOOP variant must have positive finite
+    cycles and post cycles must equal raw/(loop_factor*tile_cnt). No op filtering.
+
+Legacy v1 manifests/comparisons retain their contract. New measurement leaves
+require a v2-aware solver and dispatcher/executor with raw CSV publication; do
+not resume them with old consumers or silently convert existing comparisons.
 
 It is schema-agnostic: every perf module has a different set of parameter
 columns, so the variant key is "all columns that are not a metric column"
@@ -34,17 +43,19 @@ The perf tests' run-to-run noise is ~0.5% (per the perf team), so deltas within
 Stdlib-only (no pandas) so the unit tests stay dependency-free.
 
 Exit codes (consumed by the perf-tester agent):
-  0  goal met        (no_regress: not slower; improve: faster)
+  0  goal met        (no_regress: not slower; improve: faster; measure: measured)
   1  perf miss        (no_regress: regressed; improve: regressed or not improved)
-  2  not comparable   (no baseline, or no matching variants)
+  2  missing/invalid evidence (comparison baseline, coverage or measurements)
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
+import re
 import statistics
 import sys
 from pathlib import Path
@@ -62,13 +73,23 @@ CONTEXT_METRICS = (
 SUPPORTED_PRIMARY_METRICS = (PRIMARY_METRIC, *CONTEXT_METRICS)
 
 
-def _read_csv(path: Path) -> list[dict[str, str]]:
+def _read_csv(path: Path, *, strict: bool = False) -> list[dict[str, str]]:
     if not path or not path.exists():
         return []
     text = path.read_text().strip()
     if not text:
         return []
-    return list(csv.DictReader(text.splitlines()))
+    reader = csv.DictReader(text.splitlines())
+    rows = list(reader)
+    if strict and (
+        not reader.fieldnames
+        or len(set(reader.fieldnames)) != len(reader.fieldnames)
+        or any(
+            None in row or any(value is None for value in row.values()) for row in rows
+        )
+    ):
+        raise ValueError("measurement CSV has duplicate headers or malformed rows")
+    return rows
 
 
 def _key_columns(fieldnames: list[str]) -> list[str]:
@@ -113,6 +134,122 @@ def _index_by_key(
         key = tuple(r.get(c, "") for c in key_cols)
         index[key] = r
     return index
+
+
+def _measurement_key_columns(fieldnames: list[str]) -> list[str]:
+    # Perf export_metrics prefixes percentage metrics with the run type; they
+    # are measurements, not configuration keys, and are not tile-normalized.
+    return [
+        key
+        for key in _key_columns(fieldnames)
+        if not re.match(r"^[A-Z0-9_]+_(?:mean|std)\(", key)
+    ]
+
+
+def validate_measurement_contract(contract: Any) -> None:
+    """Validate a predeclared current-only benchmark, never infer its coverage."""
+    if (
+        not isinstance(contract, dict)
+        or set(contract) != {"primary_metric", "marker", "normalization", "variants"}
+        or contract["primary_metric"] not in SUPPORTED_PRIMARY_METRICS
+        or contract["marker"] != "TILE_LOOP"
+        or contract["normalization"] != "loop_factor*tile_cnt"
+    ):
+        raise ValueError("invalid measurement_contract schema/metric/normalization")
+    variants = contract["variants"]
+    if not isinstance(variants, list) or not variants:
+        raise ValueError("measurement_contract requires exact nonempty variants")
+    keys = None
+    seen = set()
+    for variant in variants:
+        if (
+            not isinstance(variant, dict)
+            or not {"marker", "loop_factor", "tile_cnt"}.issubset(variant)
+            or any(
+                not isinstance(k, str) or not isinstance(v, str) or not v
+                for k, v in variant.items()
+            )
+            or set(_measurement_key_columns(list(variant))) != set(variant)
+            or variant["marker"] != "TILE_LOOP"
+        ):
+            raise ValueError(
+                "measurement_contract variants must contain exact CSV keys"
+            )
+        for field in ("loop_factor", "tile_cnt"):
+            value = _to_float(variant[field])
+            if value is None or value <= 0 or not value.is_integer():
+                raise ValueError(
+                    f"measurement_contract {field} must be a positive integer"
+                )
+        if keys is not None and set(variant) != keys:
+            raise ValueError("measurement_contract variant schemas differ")
+        keys = set(variant)
+        identity = tuple(sorted(variant.items()))
+        if identity in seen:
+            raise ValueError("measurement_contract contains duplicate variants")
+        seen.add(identity)
+
+
+def evaluate_measurement(current_rows, raw_rows, contract) -> dict[str, Any]:
+    """Validate exact coverage and raw-to-per-tile normalization, without a baseline."""
+    validate_measurement_contract(contract)
+    result = {
+        "goal": "measure",
+        "measured": False,
+        "verdict": "not_measured",
+        "primary_metric": contract["primary_metric"],
+        "marker": "TILE_LOOP",
+        "units": "cycles_per_tile",
+        "exit_code": 2,
+    }
+    keys = sorted(contract["variants"][0])
+    expected = {tuple(variant[k] for k in keys) for variant in contract["variants"]}
+    metric = contract["primary_metric"]
+    indexed = []
+    for label, rows in (("current", current_rows), ("raw", raw_rows)):
+        selected = [row for row in rows if row.get("marker") == "TILE_LOOP"]
+        index = {}
+        for row in selected:
+            if (
+                set(_measurement_key_columns(list(row))) != set(keys)
+                or metric not in row
+            ):
+                return {**result, "reason": f"{label}_measurement_schema_mismatch"}
+            key = tuple(row[k] for k in keys)
+            value = _to_float(row[metric])
+            if key in index:
+                return {**result, "reason": f"{label}_duplicate_measurement_variant"}
+            if value is None or value <= 0:
+                return {**result, "reason": f"{label}_invalid_measurement_cycles"}
+            index[key] = value
+        if set(index) != expected:
+            return {**result, "reason": f"{label}_measurement_coverage_mismatch"}
+        indexed.append(index)
+    current, raw = indexed
+    variants = []
+    for variant in contract["variants"]:
+        key = tuple(variant[k] for k in keys)
+        divisor = float(variant["loop_factor"]) * float(variant["tile_cnt"])
+        normalized = raw[key] / divisor
+        if (
+            not math.isfinite(divisor)
+            or not math.isfinite(normalized)
+            or normalized <= 0
+            or not math.isclose(current[key], normalized, rel_tol=1e-9, abs_tol=0.0)
+        ):
+            return {**result, "reason": "measurement_normalization_mismatch"}
+        variants.append(
+            {"key": variant, "current_cycles": current[key], "raw_cycles": raw[key]}
+        )
+    return {
+        **result,
+        "measured": True,
+        "verdict": "measured",
+        "exit_code": 0,
+        "variants_measured": len(variants),
+        "variants": variants,
+        "measurements": {"cycle_measurement": {"measured": True}},
+    }
 
 
 def evaluate(
@@ -449,7 +586,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--test", default=None, help="Perf test module name (for the report)"
     )
-    p.add_argument("--goal", choices=["improve", "no_regress"], default="no_regress")
+    p.add_argument(
+        "--goal", choices=["improve", "no_regress", "measure"], default="no_regress"
+    )
+    p.add_argument(
+        "--raw-current", help="Raw CSV before loop/tile normalization (measure only)"
+    )
+    p.add_argument(
+        "--required-manifest", help="Sealed verification manifest (measure only)"
+    )
+    p.add_argument("--requirement-id", help="Exact measurement leaf in the manifest")
     p.add_argument(
         "--primary-metric",
         choices=SUPPORTED_PRIMARY_METRICS,
@@ -481,19 +627,80 @@ def main(argv: list[str] | None = None) -> int:
         if not math.isfinite(value) or value < 0:
             p.error(f"--{name.replace('_', '-')} must be finite and non-negative")
 
-    current_rows = _read_csv(Path(args.current))
+    try:
+        current_rows = _read_csv(Path(args.current), strict=args.goal == "measure")
+    except ValueError as exc:
+        p.error(str(exc))
     baseline_rows = _read_csv(Path(args.baseline)) if args.baseline else []
 
-    result = evaluate(
-        current_rows,
-        baseline_rows,
-        op=args.op,
-        goal=args.goal,
-        noise_pct=args.noise_pct,
-        regress_pct=args.regress_pct,
-        improve_pct=args.improve_pct,
-        primary_metric=args.primary_metric,
-    )
+    if args.goal == "measure":
+        if (
+            not all((args.raw_current, args.required_manifest, args.requirement_id))
+            or args.baseline
+            or args.op
+        ):
+            p.error(
+                "measure requires --raw-current, --required-manifest, --requirement-id and forbids baseline/op filtering"
+            )
+        # Reuse the sealer's strict schema/identity validation, including v2 fields.
+        from run_json_writer import _load_required_manifest
+
+        manifest = _load_required_manifest(Path(args.required_manifest))
+        leaves = [
+            r
+            for r in manifest["requirements"]
+            if r["requirement_id"] == args.requirement_id
+        ]
+        if (
+            len(leaves) != 1
+            or "cycle_measurement" not in leaves[0]["required_measurements"]
+        ):
+            p.error("requirement is not a sealed current-only measurement")
+        leaf = leaves[0]
+        if args.test and args.test != leaf["selector"]["test"]:
+            p.error("test does not match sealed measurement selector")
+        try:
+            raw_rows = _read_csv(Path(args.raw_current), strict=True)
+        except ValueError as exc:
+            p.error(str(exc))
+        result = evaluate_measurement(
+            current_rows, raw_rows, leaf["measurement_contract"]
+        )
+        result.update(
+            {
+                "test": leaf["selector"]["test"],
+                "arch": leaf["architecture"],
+                "run_id": manifest["run_id"],
+                "attempt_id": manifest["attempt_id"],
+                "requirement_id": leaf["requirement_id"],
+                "base_commit": manifest["expected_base_sha"],
+                "current_source": str(Path(args.current).resolve()),
+                "raw_current_source": str(Path(args.raw_current).resolve()),
+                "current_sha256": (
+                    hashlib.sha256(Path(args.current).read_bytes()).hexdigest()
+                    if Path(args.current).is_file()
+                    else None
+                ),
+                "raw_current_sha256": (
+                    hashlib.sha256(Path(args.raw_current).read_bytes()).hexdigest()
+                    if Path(args.raw_current).is_file()
+                    else None
+                ),
+            }
+        )
+    else:
+        if args.raw_current or args.required_manifest or args.requirement_id:
+            p.error("measurement contract arguments require --goal measure")
+        result = evaluate(
+            current_rows,
+            baseline_rows,
+            op=args.op,
+            goal=args.goal,
+            noise_pct=args.noise_pct,
+            regress_pct=args.regress_pct,
+            improve_pct=args.improve_pct,
+            primary_metric=args.primary_metric,
+        )
     if args.test:
         result["test"] = args.test
     if args.baseline:

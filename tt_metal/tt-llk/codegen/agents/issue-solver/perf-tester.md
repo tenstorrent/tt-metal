@@ -18,6 +18,7 @@ The goal comes from the analyzer's issue intent:
 
 - `PERF_GOAL=no_regress`: a bug fix or feature must not get slower.
 - `PERF_GOAL=improve`: an optimization should get faster.
+- `PERF_GOAL=measure`: a sealed `cycle_measurement` leaf establishes current cycles; it makes no speedup claim.
 
 ## Core Rules
 
@@ -54,6 +55,9 @@ Read `REQUIRED_VERIFICATION_MANIFEST` and
 `REQUIRED_VERIFICATION_ATTEMPT_ID` as well. When it contains a `suite=perf`
 leaf for `TARGET_ARCH`, require exactly one and take `PERF_TEST`, its optional
 `-k` filter, minimum execution count, and required measurements from that leaf.
+Use `PERF_GOAL=measure` only when that leaf requires `cycle_measurement`; a
+comparison leaf retains `improve`/`no_regress` (use `no_regress` if the run-level
+intent is `measure`). Never downgrade a comparison because its baseline is absent.
 Export its run, attempt, and requirement IDs as `CODEGEN_RUN_ID`,
 `CODEGEN_ATTEMPT_ID`, and `CODEGEN_REQUIREMENT_ID` for every local or queued
 invocation. With no perf leaf, run the applicability and coverage checks below
@@ -67,7 +71,7 @@ When `run.json.solver_plugins` configures `tt-review-skills`, explicitly read
 `<path>/skills/llk-perf-audit-review/SKILL.md` for LLK performance changes and
 `tt-perf-claim-review/SKILL.md` when evaluating a speedup claim. Use them to
 interpret the sealed experiment and disassembly, not to expand the test suite.
-This role's same-board comparison and JSON result remain authoritative. Record
+This role's sealed measurement/comparison contract and JSON result remain authoritative. Record
 which skills informed the measurement in the existing self-log.
 
 Optional environment:
@@ -88,9 +92,9 @@ Every result includes:
 {
   "measured": false,
   "outcome": "PERF_NOT_APPLICABLE|PERF_ENV_ERROR|PERF_PLAN_ERROR|PERF_TEST_FAILED|PERF_OK|PERF_REGRESSED|PERF_NOT_IMPROVED",
-  "verdict": "not_measured|neutral|improved|regressed|not_improved",
+  "verdict": "not_measured|measured|neutral|improved|regressed|not_improved",
   "arch": "blackhole|wormhole",
-  "goal": "no_regress|improve",
+  "goal": "no_regress|improve|measure",
   "test": "perf_<module>.py or null",
   "filter": "pytest -k expression or null",
   "base_commit": "<sha>",
@@ -171,7 +175,7 @@ path. Otherwise return `PERF_PLAN_ERROR` with the uncovered scope when a leaf
 is sealed or measurement was explicitly requested; return `PERF_NOT_APPLICABLE`
 with the coverage evidence for an optional check with no suitable selector.
 
-Before dispatch or reading result CSVs, read the fix plan's `Performance Metric`
+For comparison leaves, before dispatch or reading result CSVs, read the fix plan's `Performance Metric`
 entry for this architecture and selector. Verify its metric against the test's
 declared `PerfConfig.run_types` in candidate and baseline source. Keep
 `mean(L1_TO_L1)` whenever supplied; an isolate-only module may use only its
@@ -182,12 +186,14 @@ in the existing agent log before measurements. Missing or contradictory
 preselection is `PERF_PLAN_ERROR`; return it for the worker to correct.
 Set `PERF_PRIMARY_METRIC` to that exact `mean(...)` value and retain it on
 retries. Select from source and the plan, never from CSV deltas. This is an
-instruction-enforced contract; do not add fields to the current strict manifest.
+instruction-enforced contract for comparison leaves. A v2 `cycle_measurement`
+leaf instead supplies its exact metric and expected CSV variants in the sealed
+`measurement_contract`; use those values without narrowing the CSV by `PERF_OP`.
 
 ## Measurement Paths
 
-Run the fixed tree first. Cache the baseline within this run so perf-recovery
-retries only remeasure the current tree.
+Run the fixed tree first. For comparison goals, cache the baseline within this run
+so perf-recovery retries only remeasure the current tree.
 
 ```bash
 LLK_ROOT="$WORKTREE_DIR/tt_metal/tt-llk"
@@ -197,6 +203,7 @@ BASE_SHORT="${BASE_COMMIT:0:12}"
 ATTEMPT="$(date -u +%Y%m%dT%H%M%SZ)"
 
 CURRENT="$LOG_DIR/perf_current_${TARGET_ARCH}_${PERF_MODULE}.post.csv"
+RAW_CURRENT="$LOG_DIR/perf_current_${TARGET_ARCH}_${PERF_MODULE}.csv"
 BASELINE="$LOG_DIR/perf_baseline_${TARGET_ARCH}_${BASE_SHORT}_${PERF_MODULE}.post.csv"
 CURRENT_LOG_DIR="$LOG_DIR/perf_runs/${TARGET_ARCH}/current_${ATTEMPT}"
 BASELINE_LOG_DIR="$LOG_DIR/perf_runs/${TARGET_ARCH}/baseline_${BASE_SHORT}"
@@ -232,6 +239,7 @@ run_perf_queued() {  # $1=tt-metal tree, $2=destination CSV, $3=log, $4=current|
     --session "${HW_TEST_SESSION:-issue-${ISSUE_NUMBER}}-perf-${TARGET_ARCH}-${role}" \
     --timeout 1800 --artifact-out "$destination")
   [ -n "$PERF_K" ] && args+=(--k "$PERF_K")
+  [ "$role" = current ] && [ "$PERF_GOAL" = measure ] && args+=(--raw-artifact-out "$RAW_CURRENT")
   if [ "$role" = current ] &&
      [ "${CODEGEN_RUNNER_POOL:-prod}" = audit ] &&
      [ -n "${CODEGEN_REQUIREMENT_ID:-}" ]; then
@@ -281,6 +289,7 @@ On direct silicon, the expected CSV is relative to the tree being measured:
 CURRENT_SOURCE="$LLK_ROOT/perf_data/${PERF_MODULE}/${PERF_MODULE}.post.csv"
 mkdir -p "$CURRENT_LOG_DIR"
 rm -f -- "$CURRENT_SOURCE"
+[ "$PERF_GOAL" = measure ] && rm -f -- "${CURRENT_SOURCE%.post.csv}.csv"
 
 set +e
 run_perf_local "$LLK_ROOT" "$CURRENT_LOG_DIR" current
@@ -301,12 +310,38 @@ CURRENT_EXIT=$?
 set -e
 ```
 
-Classify exits 3, 4, and unknown exits immediately. For exits 1, 2, or 5,
+For `PERF_GOAL=measure`, use the current-only section below for outcome attribution.
+For comparison goals, classify exits 3, 4, and unknown exits immediately. For exits 1, 2, or 5,
 preserve the evidence and continue only to run or consult the baseline for
 attribution; do not evaluate CSVs. On direct exit zero, require
 `CURRENT_SOURCE` to be non-empty and copy it to `CURRENT`. On queued exit zero,
 require `CURRENT` to be non-empty; the dispatch command copies only the artifact
 produced by that job. A missing result in either path is `PERF_ENV_ERROR`.
+
+## Current-only Measurement
+
+Only for a sealed `cycle_measurement` leaf, skip baseline creation and comparison.
+Require successful current execution and both fresh raw/post CSVs. For direct
+silicon copy `${CURRENT_SOURCE%.post.csv}.csv` to `RAW_CURRENT`; queued dispatch
+copies it from the same job using `--raw-artifact-out`. Missing raw data is
+`PERF_ENV_ERROR`, never permission to use stale data. A current test failure
+remains `PERF_TEST_FAILED` (or the structured infrastructure classification);
+without a baseline, do not claim it was introduced by the patch.
+
+```bash
+python "$LLK_ROOT/codegen/scripts/perf_eval.py" --goal measure \
+  --current "$CURRENT" --raw-current "$RAW_CURRENT" \
+  --required-manifest "$(sg REQUIRED_VERIFICATION_MANIFEST)" \
+  --requirement-id "$CODEGEN_REQUIREMENT_ID" --json-out "$LOG_DIR/perf_result.json"
+```
+
+Exit 0 / verdict `measured` maps to `PERF_OK`; exit 2 means required evidence is
+incomplete or invalid (`PERF_ENV_ERROR`). Retain the evaluator's paths, hashes,
+units, variants and identity; add the actual receipt patch digest, outcome and
+queue job ID. The reducer rechecks exact coverage and raw/(loop_factor*tile_cnt)
+normalization. Honor any sealed repeatability obligation separately. Do not add
+baseline deltas or characterize this result as improved or regression-free.
+Return this result without entering the baseline/comparison sections below.
 
 ## Measure the Baseline Safely
 

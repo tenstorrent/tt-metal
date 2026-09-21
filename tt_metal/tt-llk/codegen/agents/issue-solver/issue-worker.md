@@ -315,7 +315,7 @@ regression_tests:
   coverage: existing|added
   minimum_selected: 1
   minimum_executed: 1  # use the real repeat count for statistical/perf checks
-  required_measurements: []|["cycle_comparison"]|["cycle_comparison", "repeatability"]
+  required_measurements: []|["cycle_comparison"]|["cycle_measurement"]|["cycle_comparison", "repeatability"]
 compile_only_ok: true|false  # true only when verification_required is no
 why_compile_only_ok: ...
 
@@ -344,19 +344,31 @@ a coverage reference. Select once before sealing; the perf tester executes
 that leaf. If no performance test covers the change, record why. Do not add waivers to the plan after observing
 a failure.
 
-For each perf leaf, declare its metric in `Performance Metric` before sealing
+For each comparison perf leaf, declare its metric in `Performance Metric` before sealing
 or measuring. Use `mean(L1_TO_L1)` whenever the selected test supplies it.
 For an isolate-only test, choose only a declared isolate that measures the
 affected operation; state that limited scope. For example, the existing
 `perf_sfpu_reduce_row_max.py` declares only `MATH_ISOLATE`. Select from test
 source, never from favorable CSV deltas. Keep the declaration on retries;
 a necessary correction requires a documented plan change, not a result waiver.
-This preselection is enforced by the instructions; the current versioned
-verification manifest does not encode the metric. Keep it outside Test Strategy.
+Comparison metric preselection is enforced by these instructions and stays outside
+Test Strategy. Measurement-only leaves instead seal their metric in the v2
+`measurement_contract` below.
 
 `HYPOTHESIS_REFUTED` changes the result marker, not the plan schema. Before
 returning it, keep every Plan Artifact section above, including an executable
-Test Strategy. When `perf_intent: optimize`, include an exact `perf_*.py`
+Test Strategy. For `perf_intent: measure`, seal an exact perf selector with
+`required_measurements: ["cycle_measurement"]` and a one-line JSON
+`measurement_contract` on that list item. Declare `primary_metric` from the test's
+run types, `marker: "TILE_LOOP"`, `normalization: "loop_factor*tile_cnt"`, and
+`variants`: every expected non-metric CSV key dictionary (string values, including
+`marker`, `loop_factor`, `tile_cnt`). Derive variants from the planned parameter
+matrix before execution; do not shrink them to match observed output. Retain
+functional goldens; do not replace a required comparison with measurement-only.
+Repeatability may accompany measurement. A sealed measurement contract cannot
+be removed or changed on a retry.
+This verifies current measurements, not a speedup; no baseline is required.
+When `perf_intent: optimize`, include an exact `perf_*.py`
 regression selector for every in-scope architecture (or one `arch: all` entry)
 with `required_measurements: ["cycle_comparison"]`; do not replace that selector
 with suggested commands, alternatives, brackets, ellipses, or prose.
