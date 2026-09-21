@@ -36,6 +36,85 @@ PCC_O = 0.99999
 PCC_STATE = 0.99999
 
 
+def test_gated_delta_rule_ops_have_registered_golden_functions():
+    assert callable(ttnn.get_golden_function(ttnn.transformer.chunk_gated_delta_rule))
+    assert callable(ttnn.get_golden_function(ttnn.transformer.gated_delta_attn_seq))
+
+
+def test_chunk_gated_delta_rule_golden_head_major_output():
+    torch.manual_seed(0)
+    q = torch.randn(1, 4, 1, 2)
+    k = torch.randn(1, 4, 1, 2)
+    v = torch.randn(1, 4, 1, 3)
+    g = -torch.rand(1, 4, 1)
+    beta = torch.sigmoid(torch.randn(1, 4, 1))
+    golden = ttnn.get_golden_function(ttnn.transformer.chunk_gated_delta_rule)
+
+    token_major, final_state = golden(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        chunk_size=2,
+        output_final_state=True,
+    )
+    head_major, head_major_state = golden(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        chunk_size=2,
+        output_final_state=True,
+        output_head_major=True,
+    )
+
+    expected_head_major = token_major.permute(0, 2, 1, 3).reshape(1, 4, 3)
+    torch.testing.assert_close(head_major, expected_head_major)
+    torch.testing.assert_close(head_major_state, final_state)
+
+
+def test_gated_delta_attn_seq_golden_matches_documented_scan():
+    torch.manual_seed(1)
+    batch_heads, num_chunks, chunk_size, key_dim, value_dim = 1, 2, 4, 3, 2
+    strict_lower = torch.tril(torch.randn(batch_heads, num_chunks, chunk_size, chunk_size), diagonal=-1)
+    L_unit = strict_lower + torch.eye(chunk_size).reshape(1, 1, chunk_size, chunk_size)
+    v_beta_sc = torch.randn(batch_heads, num_chunks, chunk_size, value_dim)
+    k_bd_sc = torch.randn(batch_heads, num_chunks, chunk_size, key_dim)
+    intra_attn = torch.randn(batch_heads, num_chunks, chunk_size, chunk_size)
+    q_decay = torch.randn(batch_heads, num_chunks, chunk_size, key_dim)
+    k_decay_t = torch.randn(batch_heads, num_chunks, key_dim, chunk_size)
+    dl_exp = torch.rand(batch_heads, num_chunks, 1, 1)
+    L_inv = torch.empty(batch_heads, num_chunks, chunk_size, 32)
+    initial_state = torch.randn(batch_heads, key_dim, value_dim)
+
+    expected_outputs = []
+    expected_state = initial_state.clone()
+    for chunk in range(num_chunks):
+        v_cor = torch.linalg.solve_triangular(L_unit[:, chunk], v_beta_sc[:, chunk], upper=False, unitriangular=False)
+        k_cum = torch.linalg.solve_triangular(L_unit[:, chunk], k_bd_sc[:, chunk], upper=False, unitriangular=False)
+        v_new = v_cor - k_cum @ expected_state
+        expected_outputs.append(q_decay[:, chunk] @ expected_state + intra_attn[:, chunk] @ v_new)
+        expected_state = expected_state * dl_exp[:, chunk] + k_decay_t[:, chunk] @ v_new
+
+    golden = ttnn.get_golden_function(ttnn.transformer.gated_delta_attn_seq)
+    actual_output, actual_state = golden(
+        L_unit,
+        v_beta_sc,
+        k_bd_sc,
+        intra_attn,
+        q_decay,
+        k_decay_t,
+        dl_exp,
+        L_inv,
+        initial_state=initial_state,
+    )
+
+    torch.testing.assert_close(actual_output, torch.stack(expected_outputs, dim=1))
+    torch.testing.assert_close(actual_state, expected_state)
+
+
 def _const_tiles(device, chunk_size=CHUNK):
     """The op's constant tiles (mirrors qwen36 fused_chunk.build_fused_const_tiles).
 

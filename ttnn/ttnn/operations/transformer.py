@@ -5,6 +5,25 @@
 from typing import Optional
 
 import ttnn
+from ttnn.operations.transformer_golden import (
+    chunk_gated_delta_rule_golden,
+    chunked_flash_mla_prefill_golden,
+    chunked_scaled_dot_product_attention_golden,
+    exp_ring_joint_scaled_dot_product_attention_golden,
+    flash_mla_prefill_golden,
+    flash_multi_latent_attention_decode_golden,
+    gated_delta_attn_seq_golden,
+    joint_scaled_dot_product_attention_golden,
+    paged_flash_multi_latent_attention_decode_golden,
+    paged_scaled_dot_product_attention_decode_golden,
+    ring_distributed_scaled_dot_product_attention_golden,
+    ring_joint_scaled_dot_product_attention_golden,
+    ring_mla_golden,
+    scaled_dot_product_attention_decode_golden,
+    scaled_dot_product_attention_golden,
+    sparse_sdpa_golden,
+    sparse_sdpa_msa_golden,
+)
 
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
 PagedCacheGeometryOverride = ttnn._ttnn.operations.transformer.PagedCacheGeometryOverride
@@ -131,6 +150,75 @@ def _golden_function(x, cos_cached, sin_cached, token_idx, **_):
 
 
 ttnn.attach_golden_function(ttnn.experimental.rotary_embedding, golden_function=_golden_function)
+
+ttnn.attach_golden_function(
+    ttnn.transformer.chunk_gated_delta_rule,
+    golden_function=chunk_gated_delta_rule_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.chunked_flash_mla_prefill,
+    golden_function=chunked_flash_mla_prefill_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.chunked_scaled_dot_product_attention,
+    golden_function=chunked_scaled_dot_product_attention_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.exp_ring_joint_scaled_dot_product_attention,
+    golden_function=exp_ring_joint_scaled_dot_product_attention_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.flash_mla_prefill,
+    golden_function=flash_mla_prefill_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.flash_multi_latent_attention_decode,
+    golden_function=flash_multi_latent_attention_decode_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.gated_delta_attn_seq,
+    golden_function=gated_delta_attn_seq_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.joint_scaled_dot_product_attention,
+    golden_function=joint_scaled_dot_product_attention_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.paged_flash_multi_latent_attention_decode,
+    golden_function=paged_flash_multi_latent_attention_decode_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.paged_scaled_dot_product_attention_decode,
+    golden_function=paged_scaled_dot_product_attention_decode_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.ring_distributed_scaled_dot_product_attention,
+    golden_function=ring_distributed_scaled_dot_product_attention_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.ring_joint_scaled_dot_product_attention,
+    golden_function=ring_joint_scaled_dot_product_attention_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.ring_mla,
+    golden_function=ring_mla_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.scaled_dot_product_attention,
+    golden_function=scaled_dot_product_attention_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.scaled_dot_product_attention_decode,
+    golden_function=scaled_dot_product_attention_decode_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.sparse_sdpa,
+    golden_function=sparse_sdpa_golden,
+)
+ttnn.attach_golden_function(
+    ttnn.transformer.sparse_sdpa_msa,
+    golden_function=sparse_sdpa_msa_golden,
+)
 
 
 __all__ = []
