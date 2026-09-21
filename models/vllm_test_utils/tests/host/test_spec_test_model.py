@@ -833,9 +833,7 @@ def test_the_fixed_prefill_follows_the_same_rule_as_the_decode(monkeypatch):
     model = _fixed_model(monkeypatch)
     prompt = torch.tensor([[11, 12, 13, 14]], dtype=torch.int32)
 
-    logits = model.prefill_forward(
-        tokens=prompt, prompt_lens=torch.tensor([4]), start_pos=torch.tensor([0])
-    )
+    logits = model.prefill_forward(tokens=prompt, prompt_lens=torch.tensor([4]), start_pos=torch.tensor([0]))
 
     chosen = int(logits.reshape(1, -1).argmax(dim=-1))
     assert chosen == int(model._fixed_choice(torch.tensor([[14]]), torch.tensor([[3]]))[0, 0])
