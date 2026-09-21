@@ -13,7 +13,8 @@ Named runtime arguments (args::)
   source_read_size_bytes, read_start_page, read_end_page, write_start_page, write_start_offset, nop
 
 Resource bindings
-  scratch::in0, scratch::in1 -- source staging (src0) / dest staging (src1) L1 regions
+  scratch::in0, scratch::in1 -- source / dest staging L1 regions (bound to src0/src1 on the
+                               reader instance, src2/src3 on the writer instance)
   tensor::src, tensor::dst -- input / output tensors (base addresses auto-injected)
 */
 #include <stdint.h>
