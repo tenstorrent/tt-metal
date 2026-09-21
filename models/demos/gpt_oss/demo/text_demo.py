@@ -25,7 +25,6 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import is_blackhole
 from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
 
 # Import GPT-OSS components using our refactored patterns
@@ -481,11 +480,6 @@ def test_gpt_oss_demo(
         elif max_seq_len > 64 * 1024 and not is_seqlen_sweep:
             # Seqlen sweep uses actual_max_seq_len (capped at 64k) for execution; skip only non-sweep tests
             pytest.skip(f"Long context demo with >64k tokens skipped for mesh shape {mesh_shape} due to OOM.")
-    if is_blackhole() and batch_size > 1:
-        pytest.skip(
-            f"Batch size {batch_size} demo skipped on Blackhole: throughput experts are not supported, "
-            "only batch=1 low-latency experts run on this arch."
-        )
     if long_context_mode:
         assert batch_size >= mesh_shape[0], "Long-context mode requires batch_size >= number of mesh rows"
     if os.environ.get("CI", None) and not run_in_ci:

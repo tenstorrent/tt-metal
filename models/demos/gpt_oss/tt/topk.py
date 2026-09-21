@@ -13,7 +13,7 @@ transformation followed by top-k selection to assign tokens to experts.
 import torch
 
 import ttnn
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.gpt_oss.utils.general_utils import fused_moe_kernels_supported_on_arch, get_cache_file_name
 
 
 def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_config=None):
@@ -69,9 +69,18 @@ class TopKRouter:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Keep compute_config=None for linear (known quality-safe default)
-        # Custom compute configs were previously found to cause quality degradation
-        self.compute_config = None
+        # Router logits feed a top-k + softmax, so small logit errors get amplified into
+        # the expert weights. The default matmul fidelity leaves router-weight PCC around
+        # 0.926 (below the 0.945 gate) on the non-fused path; HiFi4 with fp32 accumulation
+        # recovers it. Wormhole 120B takes the fused router instead, so this affects the
+        # non-fused path only (Blackhole, and 20B everywhere).
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
         # Cache softmax compute config (same as what topk_router creates per-call)
         self.softmax_compute_config = ttnn.init_device_compute_kernel_config(
@@ -84,8 +93,11 @@ class TopKRouter:
 
         # Fused op support: matmul + topk + softmax in one kernel
         # The fused kernel uses 4 groups of 3 cores, one per N-tile (32 experts
-        # each), so it requires exactly 128 experts. Enable automatically when possible.
-        self.use_fused_op = self.num_experts == 128
+        # each), so it requires exactly 128 experts. Those 12 cores are the
+        # DRAM-bank-aligned workers, and topk_router_gpt TT_FATALs below 12 of them
+        # -- Blackhole only exposes 8 DRAM banks, so the fused router is Wormhole-only
+        # and Blackhole takes the generic linear+topk path below.
+        self.use_fused_op = self.num_experts == 128 and fused_moe_kernels_supported_on_arch()
         self._fused_bias = None
         # Keep the original unsharded bias for fused op initialization
         # (ttnn.as_tensor shards self.bias across the mesh, but the fused op

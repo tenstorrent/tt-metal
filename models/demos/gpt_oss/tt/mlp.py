@@ -6,7 +6,7 @@ MoE MLP: Router + Experts with minimal abstraction
 """
 import ttnn
 from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
-from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
+from models.demos.gpt_oss.utils.general_utils import fused_moe_kernels_supported_on_arch, get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
 from .experts import ExpertConfig, Experts
@@ -62,9 +62,14 @@ class MLP:
                 num_devices=mesh_device.get_num_devices(),
             )
 
-            # Create fused MoE config if requested
+            # Create fused MoE config if the arch supports the fused kernels.
+            # On Blackhole (8 DRAM banks vs Wormhole's 12) moe_gpt's K-split table does
+            # not cover the full hidden dim, so fused_config stays None and
+            # ThroughputExperts.forward_decode falls back to the dense flow
+            # (all_to_all_dispatch -> matmul -> all_to_all_combine), which is
+            # numerically equivalent. See fused_moe_kernels_supported_on_arch().
             fused_config = None
-            if use_throughput_experts:
+            if fused_moe_kernels_supported_on_arch():
                 fused_config = create_fused_moe_gpt_config(
                     mesh_device=mesh_device,
                     config=throughput_expert_config,
