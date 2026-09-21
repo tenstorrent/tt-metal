@@ -43,13 +43,13 @@ from loguru import logger
 
 from .attention import (
     _StaticLayerCache,
-    _scatter_window_rows,
     build_static_layer_cache,
     decode_sdpa_bounds,
     host_decode_mask,
     int32_pos_tensor,
     make_rope_table,
 )
+from .attention_csa import _scatter_window_rows
 from .decode_prefetch import make_decode_prefetch_buffers
 from .paged_cache import (
     PagedCacheFull,

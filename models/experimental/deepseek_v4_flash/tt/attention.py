@@ -23,7 +23,7 @@ from .layers import (
 )
 from .paged_cache import PagedLayerView
 from .system_config import active_system_config
-from .weight_cache import WeightCache, _as_cache, _load_weight, _materialize
+from .weight_cache import WeightCache, _as_cache, _load_weight
 
 
 def _decode_activation(layer: LinearDecode, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -99,13 +99,19 @@ def _decode_activation(layer: LinearDecode, x: ttnn.Tensor) -> ttnn.Tensor:
 # full prefill over them: no rolling-window / overlap / entry-count bookkeeping.
 #
 # That pool costs ``O(max_seq)`` rather than ``O(pos)``, so it runs only on the steps
-# where it can change. A compressor emits an entry every ``compress_rate`` tokens and the
-# additive block-bias exposes entries ``w < (pos+1)//compress_rate`` -- constant across
-# the ``compress_rate`` steps between two window closures -- so pooling at each closure
-# and reusing the result in between is bit-identical to pooling every step, at
-# ``1/compress_rate`` of the cost. The pooled entries live in the persistent ``combined``
-# cache below; callers drive the schedule via the ``pool`` flag (see
-# ``DeepSeekV4Model._compressor_pool_due``).
+# where it can change: a compressor emits an entry every ``compress_rate`` tokens and the
+# additive block-bias exposes entries ``w < (pos+1)//compress_rate``, constant across the
+# steps between two window closures. Pooling at each closure and reusing the result in
+# between is therefore bit-identical to pooling every step, at ``1/compress_rate`` of the
+# cost; callers drive the schedule via the ``pool`` flag (see
+# ``DeepSeekV4Model._compressor_pool_due``). The pooled entries live in the persistent
+# ``combined`` cache below.
+#
+# The compressors themselves -- CSA's Ca/Cb overlap and HCA's single-window pooling, with
+# the window-buffer writers they need -- live in :mod:`.attention_csa` and
+# :mod:`.attention_hca`; this module keeps everything they share (the cache class, the
+# packed-row / one-row-per-user layouts, RoPE, the in-place cache writers, the SDPA bounds
+# and the block itself) and dispatches to them through :func:`_compressor_class`.
 #
 # Cache updates follow the GPT-OSS / tt-transformers paged-KV pattern (see the
 # traced-decode banner below); the eager path uses the same buffers and ops but builds
@@ -218,7 +224,7 @@ def build_static_layer_cache(
         The width split ``csa_pool_window`` consumes: ``width // 32`` cores, one
         32-column shard each (32 cores at CSA ``2*Dh == 1024``). Rows sit on dim 0
         (user-major packed ``B*cr``) so ``paged_update_cache`` can write a decode
-        token as a linear row (see :func:`_update_window_at`).
+        token as a linear row (see :func:`~.attention_csa._update_window_at`).
         """
         height = batch * rows
         cfg = width_sharded_l1_config(height, width, device, tile_height=1)
@@ -600,417 +606,25 @@ def _update_cache_at(
         )
 
 
-def _scatter_window_rows(cache: ttnn.Tensor, rows: ttnn.Tensor, index: ttnn.Tensor) -> None:
-    """In-place ``cache[index[i]] = rows[i]`` on a packed CSA window buffer.
+def _compressor_class(layer_type: str):
+    """The compressor class for ``layer_type``, or ``None`` for a sliding-only layer.
 
-    ``cache`` is ROW_MAJOR L1 WIDTH_SHARDED ``[B*cr, 1, 1, F]``, ``rows`` an
-    INTERLEAVED ``[n, 1, 1, F]`` and ``index`` an INT32 ROW_MAJOR ``[n]``.
-    ``paged_update_cache`` cannot target a width-sharded L1 cache, so the scatter
-    goes through ``indexed_fill``, which needs ``dim == 0`` to take its shard-local
-    path -- at any other dim it falls back to a generic path that is documented as
-    wrong for a sharded destination. ``indexed_fill`` returns a fresh tensor, so
-    the result is copied back into the persistent buffer.
+    The two compressors live in :mod:`.attention_csa` / :mod:`.attention_hca`, which import this
+    module's shared decode helpers (``_decode_activation``, ``_one_row_per_user``,
+    ``_apply_rope``, ``_update_cache_at``, ``_compressor_projections``, ...). A module-level
+    import here would therefore be a cycle, so it is deferred to this call: by the time a model
+    is built every one of those helpers exists, whichever of the three modules was imported
+    first.
     """
-    written = ttnn.indexed_fill(index, cache, rows, memory_config=cache.memory_config(), dim=0)
-    ttnn.copy(written, cache)
-    ttnn.deallocate(written)
+    if layer_type == "compressed_sparse_attention":
+        from .attention_csa import DeepSeekV4CSACompressor
 
+        return DeepSeekV4CSACompressor
+    if layer_type == "heavily_compressed_attention":
+        from .attention_hca import DeepSeekV4HCACompressor
 
-def _update_window_at(cache: ttnn.Tensor, row: ttnn.Tensor, index: ttnn.Tensor) -> None:
-    """Write ``row`` ``[1, B, 1, F]`` into a CSA window at the packed rows ``index``.
-
-    CSA windows are user-major: user ``u``'s token ``t`` sits at row ``u*cr + t``, so
-    ``index`` carries one row per user. Projections arrive as packed ``[1, 1, B, F]``
-    and are spread to height-sharded ``[1, B, 1, F]`` for ``paged_update_cache``.
-    """
-    packed = _one_row_per_user(row)
-    ttnn.experimental.paged_update_cache(cache, packed, update_idxs_tensor=index)
-    if packed is not row:
-        ttnn.deallocate(packed)
-
-
-def _rm_width_sharded(tensor: ttnn.Tensor, height: int, width: int) -> ttnn.Tensor:
-    """ROW_MAJOR WIDTH_SHARDED ``[1, 1, height, width]`` in L1 (1-high faces)."""
-    if list(tensor.shape) != [1, 1, height, width]:
-        tensor = ttnn.reshape(tensor, [1, 1, height, width])
-    if tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
-        tensor = ttnn.to_layout(ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG), ttnn.ROW_MAJOR_LAYOUT)
-    cfg = width_sharded_l1_config(height, width, tensor.device(), tile_height=1)
-    if tensor.memory_config() != cfg:
-        tensor = ttnn.to_memory_config(tensor, cfg)
-    return tensor
-
-
-def _softmax_weighted_sum(kv: ttnn.Tensor, gate: ttnn.Tensor, window_axis: int) -> ttnn.Tensor:
-    """``sum_w softmax(gate, axis=w) * kv`` over the window axis: ``[..., W, Dh]`` -> ``[..., Dh]``.
-
-    Shared compressor pooling (``DeepseekV4*Compressor``): the gate logits are
-    softmaxed over the per-window token axis and used to convex-combine the kv
-    rows into one compressed entry per window. The reduced axis is dropped
-    (``ttnn.sum`` defaults to ``keepdim=False``), so HCA's ``[B, 1, cr, Dh]``
-    window comes back ``[B, 1, Dh]``.
-    """
-    weights = ttnn.softmax(gate, dim=window_axis)
-    return ttnn.sum(ttnn.multiply(kv, weights), dim=window_axis)
-
-
-def _retire_window(prev: ttnn.Tensor, current: ttnn.Tensor) -> None:
-    """Copy the just-closed window buffer ``current`` into ``prev``, in place.
-
-    CSA windows are the same ROW_MAJOR L1 WIDTH_SHARDED ``[B*cr, 1, 1, 2*Dh]`` spec, so a
-    device copy is a whole-buffer write into the persistent ``prev`` address. TILE DRAM
-    windows (unused by CSA) still go through ``fill_cache``, which writes a single batch
-    index per call.
-    """
-    if current.is_sharded():
-        ttnn.copy(current, prev)
-        return
-    users, heads, rows, width = current.shape
-    if users == 1:
-        ttnn.fill_cache(prev, current, 0)
-        return
-    for user in range(users):
-        one = ttnn.slice(current, [user, 0, 0, 0], [user + 1, heads, rows, width])
-        ttnn.fill_cache(prev, one, user)
-        ttnn.deallocate(one)
-
-
-class DeepSeekV4HCACompressor:
-    """Heavily-Compressed-Attention compressor (decode, running KV cache).
-
-    Compresses every complete window of ``compress_rate`` (m'=128) source tokens
-    into a single softmax-gated KV entry, then RoPEs that entry at its window's
-    absolute position and appends it to the compressed region of the layer's
-    combined KV buffer (see :class:`_StaticLayerCache`). Only the window currently
-    being filled is buffered, so a step costs ``O(compress_rate)``.
-    """
-
-    def __init__(
-        self,
-        config,
-        weights: dict,
-        device,
-        rot,
-        rope_dim: int,
-        cache: Optional[WeightCache] = None,
-        weight_dtype: ttnn.DataType = ttnn.bfloat16,
-        use_prefetcher: bool = False,
-        num_prefetch_pages: Optional[int] = None,
-        prefetch_buffers: Optional[dict] = None,
-    ):
-        """Build the compressor's projections, norm and position bias from ``weights``.
-
-        ``weights`` holds the ``compressor.kv_proj`` / ``gate_proj`` weights ``[D, Dh]``
-        (DRAM ND-sharded under the prefetcher), ``compressor.kv_norm``, and
-        ``compressor.position_bias``, reshaped here to ``[1, 1, compress_rate, Dh]`` --
-        indexed by a token's offset *within* its window. ``rot`` is the shared
-        ``[Rd, Rd]`` rotate matrix.
-        """
-        self.device = device
-        self.rope_dim = rope_dim
-        self.rot = rot
-        self.eps = config.rms_norm_eps
-        self.head_dim = config.head_dim
-        self.compress_rate = config.compress_rates["heavily_compressed_attention"]
-        cache = _as_cache(cache)
-        if num_prefetch_pages is None:
-            num_prefetch_pages = active_system_config().prefetcher.num_prefetch_pages
-        self.kv_proj, self.gate_proj = _compressor_projections(
-            "heavily_compressed_attention",
-            config,
-            weights,
-            device,
-            cache,
-            weight_dtype,
-            use_prefetcher,
-            num_prefetch_pages,
-            prefetch_buffers,
-        )
-        self.kv_norm = DeepSeekV4RMSNorm(
-            weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm"), sharded=True
-        )
-        # position_bias: [compress_rate, head_dim] -> broadcast over [B, n_win].
-        pb = _materialize(weights["compressor.position_bias"], cache.file("compressor.position_bias"), ttnn.bfloat16)
-        self.position_bias = _load_weight(
-            pb.reshape(1, 1, self.compress_rate, self.head_dim) if pb is not None else None,
-            device,
-            cache_file_name=cache.file("compressor.position_bias"),
-        )
-
-    def prefetch_weights(self):
-        """Stage the two projection weights ahead of the :meth:`decode_static` that uses them.
-
-        Queued kv before gate, the order :meth:`_project` pops them off their shared GCB;
-        both stay DRAM ND-sharded ``[D, Dh]``, the prefetcher pushing their pages into the
-        matmul's in1 buffer.
-        """
-        self.kv_proj.fetch_weights()
-        self.gate_proj.fetch_weights()
-
-    def _project(self, tokens: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """``tokens`` ``[1, 1, B, D]`` -> per-token ``(kv, gate)`` ``[1, 1, B, Dh]`` each.
-
-        ``LinearDecode`` leaves its result width-sharded over the cores it reduced onto, while
-        the callers reshape these and reshard them height-wise for the cache write, so hand
-        back the DRAM-interleaved form they expect (as ``_o_proj`` does for o_b_proj).
-        """
-        return (
-            ttnn.to_memory_config(self.kv_proj(_decode_activation(self.kv_proj, tokens)), ttnn.DRAM_MEMORY_CONFIG),
-            ttnn.to_memory_config(self.gate_proj(_decode_activation(self.gate_proj, tokens)), ttnn.DRAM_MEMORY_CONFIG),
-        )
-
-    def _pool_window(
-        self, win_kv: ttnn.Tensor, win_gate: ttnn.Tensor, cos_row: ttnn.Tensor, sin_row: ttnn.Tensor
-    ) -> ttnn.Tensor:
-        """Pool each user's closed window ``[B, 1, compress_rate, Dh]`` into that window's
-        single compressed entry, returned as ``[1, B, 1, Dh]`` (RoPE'd at ``cos_row`` /
-        ``sin_row``, the window's own position) ready for the cache write.
-
-        The buffer shape doubles as the ``[B, n_win, compress_rate, Dh]`` the pool wants with
-        ``n_win == 1``, so ``position_bias`` (indexed by a token's offset *within* its window)
-        broadcasts over both users and windows unchanged.
-        """
-        users = win_kv.shape[0]
-        gate = ttnn.add(win_gate, self.position_bias)
-        compressed = _softmax_weighted_sum(win_kv, gate, window_axis=2)
-        # Back onto packed rows for the norm + RoPE, which are per-token arithmetic.
-        compressed = ttnn.reshape(compressed, [1, 1, users, self.head_dim])
-        compressed = self.kv_norm(compressed)
-        compressed = _apply_rope(compressed, cos_row, sin_row, self.rot, self.rope_dim)
-        return _one_row_per_user(compressed)
-
-    def decode_static(
-        self,
-        tokens: ttnn.Tensor,
-        cos_row: ttnn.Tensor,
-        sin_row: ttnn.Tensor,
-        scache: "_StaticLayerCache",
-        combined_cache: ttnn.Tensor | None,
-        win_slot: ttnn.Tensor,
-        win_row: ttnn.Tensor | None = None,
-        pool: bool = True,
-        paged: PagedLayerView | None = None,
-    ) -> None:
-        """Trace-safe decode: write each user's token projection in place at ``win_slot``
-        (``pos % compress_rate``) into the one-window ``[B, 1, compress_rate, Dh]``
-        buffers, and -- on the step that closes the window -- pool just that window
-        and append its single entry at row ``win_row`` of the layer's KV axis
-        (``combined_cache``, or ``paged``'s block pool).
-
-        ``tokens`` is the block's packed-row hidden ``[1, 1, B, D]``, already gathered
-        onto the decode activation grid when the caller used :meth:`DeepSeekV4Attention.decode_static`;
-        ``cos_row`` / ``sin_row`` are the closing window's RoPE row ``[1, 1, 1, Rd]`` and
-        ``win_slot`` / ``win_row`` INT32 ``[B]`` row-index vectors, ``win_row`` read only
-        when ``pool``.
-
-        ``pool`` is set by the caller only on the steps that close a window, so the
-        cost per step is ``O(compress_rate)`` rather than ``O(max_seq)``: in between,
-        the KV axis already holds exactly the entries the block-bias exposes
-        (see the module header).
-        """
-        _signpost("HCA_START")
-        users = _packed_users(tokens)
-        kv, gate = self._project(tokens)  # [1, 1, B, Dh]
-        kv = _one_row_per_user(ttnn.reshape(kv, [1, 1, users, self.head_dim]))
-        gate = _one_row_per_user(ttnn.reshape(gate, [1, 1, users, self.head_dim]))
-        _update_cache_at(scache.win_kv, kv, win_slot)
-        _update_cache_at(scache.win_gate, gate, win_slot)
-        if pool and (combined_cache is not None or paged is not None):
-            pooled = self._pool_window(scache.win_kv, scache.win_gate, cos_row, sin_row)
-            _update_cache_at(combined_cache, pooled, win_row, paged=paged)
-            ttnn.deallocate(pooled)
-        _signpost("HCA_END")
-
-
-class DeepSeekV4CSACompressor:
-    """Compressed-Sparse-Attention compressor (decode, running KV cache).
-
-    Like HCA but with the two-series Ca/Cb overlap scheme: each token projects to
-    ``2*Dh`` (Ca = its contribution to the *next* window, Cb = to the *current*
-    window). Compressed entry ``w`` pools window ``w-1``'s Ca slice with window
-    ``w``'s Cb slice over a width-``2*compress_rate`` window. Window 0's Ca half
-    is zero-kv / ``-inf``-gate (softmax weight 0), since there is no prior window.
-
-    The CSA Lightning Indexer only affects *which* compressed entries each query
-    may see (the ``block_bias``); for ``seq_len <= index_topk * compress_rate``
-    its top-k selects every entry, so the block_bias reduces to plain causal
-    masking over windows, which the caller builds on host. The compressed KV
-    values themselves (this module's output) do not depend on the indexer.
-    """
-
-    def __init__(
-        self,
-        config,
-        weights: dict,
-        device,
-        rot,
-        rope_dim: int,
-        cache: Optional[WeightCache] = None,
-        weight_dtype: ttnn.DataType = ttnn.bfloat16,
-        use_prefetcher: bool = False,
-        num_prefetch_pages: Optional[int] = None,
-        prefetch_buffers: Optional[dict] = None,
-    ):
-        """Build the compressor's projections, norm and position bias from ``weights``.
-
-        As :meth:`DeepSeekV4HCACompressor.__init__`, except that the kv/gate weights are
-        ``[D, 2*Dh]`` (the Ca/Cb pair) and ``compressor.position_bias`` is reshaped to
-        ``[1, 1, compress_rate, 2*Dh]`` and kept ROW_MAJOR L1 WIDTH_SHARDED for the fused
-        pool. The shared ``[Rd, Rd]`` rotate matrix is passed in.
-        """
-        self.device = device
-        self.rope_dim = rope_dim
-        self.rot = rot
-        self.eps = config.rms_norm_eps
-        self.head_dim = config.head_dim
-        self.compress_rate = config.compress_rates["compressed_sparse_attention"]
-        cache = _as_cache(cache)
-        if num_prefetch_pages is None:
-            num_prefetch_pages = active_system_config().prefetcher.num_prefetch_pages
-        self.kv_proj, self.gate_proj = _compressor_projections(
-            "compressed_sparse_attention",
-            config,
-            weights,
-            device,
-            cache,
-            weight_dtype,
-            use_prefetcher,
-            num_prefetch_pages,
-            prefetch_buffers,
-        )
-        self.kv_norm = DeepSeekV4RMSNorm(
-            weights["compressor.kv_norm.weight"], self.eps, device, cache.file("compressor.kv_norm"), sharded=True
-        )
-        pb = _materialize(weights["compressor.position_bias"], cache.file("compressor.position_bias"), ttnn.bfloat16)
-        self.position_bias = _load_weight(
-            pb.reshape(1, 1, self.compress_rate, 2 * self.head_dim) if pb is not None else None,
-            device,
-            cache_file_name=cache.file("compressor.position_bias"),
-        )
-        if self.position_bias is not None:
-            self.position_bias = _rm_width_sharded(self.position_bias, self.compress_rate, 2 * self.head_dim)
-        # Per-user row offsets into the packed window buffer, built on first use and
-        # then reused (see :meth:`_win_index`). Batch 1 needs none: user 0's row is
-        # the window slot itself.
-        self._win_offsets: ttnn.Tensor | None = None
-
-    def _win_index(self, win_slot: ttnn.Tensor, users: int) -> ttnn.Tensor:
-        """Packed window rows ``u*compress_rate + pos % compress_rate`` for each user.
-
-        ``win_slot`` is the ``[B]`` slot vector the caller already built. Above batch 1
-        the user offsets are added on device, from a vector allocated on the first call
-        -- eagerly, since the traced path compiles each step before capturing it, and a
-        host-to-device write inside a capture is rejected.
-        """
-        if users == 1:
-            return win_slot
-        if self._win_offsets is None:
-            self._win_offsets = ttnn.from_torch(
-                torch.arange(users, dtype=torch.int32) * self.compress_rate,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-            )
-        return ttnn.add(win_slot, self._win_offsets)
-
-    def prefetch_weights(self):
-        """Stage the two projection weights ahead of the :meth:`decode_static` that uses them.
-
-        Queued kv before gate, the order :meth:`_project` pops them off their shared GCB
-        (q_a's 32-receiver ring); both stay DRAM ND-sharded ``[D, 2*Dh]``.
-        """
-        self.kv_proj.fetch_weights()
-        self.gate_proj.fetch_weights()
-
-    def _project(self, tokens: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """``tokens`` ``[1, 1, B, D]`` -> per-token ``(kv, gate)`` ``[1, 1, B, 2*Dh]`` each.
-
-        Returned in whatever layout ``LinearDecode`` leaves them in -- unlike HCA's, they
-        are not moved to DRAM here, because :func:`_update_window_at` reshapes and
-        reshards them for the width-sharded window buffer anyway.
-        """
-        return (
-            self.kv_proj(_decode_activation(self.kv_proj, tokens)),
-            self.gate_proj(_decode_activation(self.gate_proj, tokens)),
-        )
-
-    def _pool_window(
-        self,
-        prev_kv: ttnn.Tensor,
-        prev_gate: ttnn.Tensor,
-        win_kv: ttnn.Tensor,
-        win_gate: ttnn.Tensor,
-        cos_row: ttnn.Tensor,
-        sin_row: ttnn.Tensor,
-    ) -> ttnn.Tensor:
-        """Pool each user's closing window ``w`` into its single compressed entry,
-        returned as ``[1, B, 1, Dh]`` ready for the cache write.
-
-        ``win_*`` / ``prev_*`` are the persistent ROW_MAJOR L1 WIDTH_SHARDED
-        ``[B*compress_rate, 1, 1, 2*Dh]`` buffers allocated by
-        :func:`build_static_layer_cache`. The fused op consumes them in place.
-        On the very first window ``prev_gate`` is still ``_MASK_NEG``, which
-        gives the absent Ca half softmax weight 0.
-        """
-        compressed = ttnn.experimental.deepseek.csa_pool_window(
-            prev_kv, prev_gate, win_kv, win_gate, self.position_bias
-        )
-        _profile(self.device)
-        compressed = self.kv_norm(compressed)
-        compressed = _apply_rope(compressed, cos_row, sin_row, self.rot, self.rope_dim)
-        return _one_row_per_user(compressed)
-
-    def decode_static(
-        self,
-        tokens: ttnn.Tensor,
-        cos_row: ttnn.Tensor,
-        sin_row: ttnn.Tensor,
-        scache: "_StaticLayerCache",
-        combined_cache: ttnn.Tensor | None,
-        win_slot: ttnn.Tensor,
-        win_row: ttnn.Tensor | None = None,
-        pool: bool = True,
-        paged: PagedLayerView | None = None,
-    ) -> None:
-        """Trace-safe decode: write each user's ``2*Dh`` token projection in place at
-        ``win_slot`` into the one-window ROW_MAJOR L1 WIDTH_SHARDED
-        ``[B*cr, 1, 1, 2*Dh]`` buffers, and -- on the step that closes the window -- pool
-        just that window (Ca/Cb overlap against the retained previous window) and append
-        its single entry at row ``win_row`` of the layer's KV axis (``combined_cache``,
-        or ``paged``'s pool).
-
-        ``tokens`` is the block's packed-row hidden ``[1, 1, B, D]``, already gathered onto
-        the decode activation grid when the caller used
-        :meth:`DeepSeekV4Attention.decode_static`; ``cos_row`` / ``sin_row`` are the closing
-        window's RoPE row ``[1, 1, 1, Rd]`` and ``win_slot`` / ``win_row`` INT32 ``[B]``
-        row-index vectors.
-
-        After pooling, the closing window becomes the ``prev_*`` the *next* window
-        will overlap with. See :meth:`DeepSeekV4HCACompressor.decode_static`.
-        """
-        _signpost("CSA_START")
-        users = _packed_users(tokens)
-        kv, gate = self._project(tokens)  # [1, 1, B, 2*Dh]
-        win_index = self._win_index(win_slot, users)
-        _update_window_at(scache.win_kv, kv, win_index)
-        _update_window_at(scache.win_gate, gate, win_index)
-        if pool and (combined_cache is not None or paged is not None):
-            pooled = self._pool_window(
-                scache.prev_kv, scache.prev_gate, scache.win_kv, scache.win_gate, cos_row, sin_row
-            )
-            _update_cache_at(combined_cache, pooled, win_row, paged=paged)
-            ttnn.deallocate(pooled)
-            _retire_window(scache.prev_kv, scache.win_kv)
-            _retire_window(scache.prev_gate, scache.win_gate)
-        if win_index is not win_slot:
-            ttnn.deallocate(win_index)
-        _signpost("CSA_END")
-
-
-_COMPRESSORS = {
-    "compressed_sparse_attention": DeepSeekV4CSACompressor,
-    "heavily_compressed_attention": DeepSeekV4HCACompressor,
-}
+        return DeepSeekV4HCACompressor
+    return None
 
 
 def _compressor_projections(
@@ -1380,7 +994,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
 
         # The rotate-half matrix must stay precise (a bf4 rotation would corrupt RoPE).
         self.rot = _load_weight(_interleaved_rotate_matrix(self.rope_dim), device, cache_file_name=cache.file("rot"))
-        compressor_cls = _COMPRESSORS.get(self.layer_type)
+        compressor_cls = _compressor_class(self.layer_type)
         print(f"Attn with {compressor_cls} compressor at layer {self.layer_idx}. {self.layer_type}")
         self.compressor = (
             compressor_cls(
