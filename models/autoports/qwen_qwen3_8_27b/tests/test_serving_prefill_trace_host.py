@@ -122,6 +122,23 @@ class ServingPrefillTraceTests(unittest.TestCase):
         self.assertIs(self.events[2][1], self.owned)
         self.assertEqual(self.gen.counters["prefill_sampling_eager_calls"], 1)
 
+    def test_opt_in_groups_equal_prompts_before_sampling(self):
+        self.gen.batched_prefill = True
+        calls = []
+
+        def public(tokens, **kwargs):
+            calls.append((tokens.clone(), kwargs))
+            return [FakeLogits() for _ in kwargs["slots"]]
+
+        self.gen.prefill_forward = public
+        self.request(ends=(64, 64), starts=(32, 32), slots=(1, 2))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(tuple(calls[0][0].shape), (2, 32))
+        self.assertEqual(calls[0][1]["prompt_lens"], [32, 32])
+        self.assertEqual(calls[0][1]["start_pos"], [32, 32])
+        self.assertEqual(calls[0][1]["slots"], [1, 2])
+        self.assertEqual(sum(event[0] == "sample" for event in self.events), 1)
+
     def test_warm_sampling_replays_the_prefill_sampler_nonblocking(self):
         self.gen.prefill_sample_trace = "prefill-sampler"
         self.gen.sample_trace = "decode-sampler"

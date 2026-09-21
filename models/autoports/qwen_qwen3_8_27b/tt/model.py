@@ -291,6 +291,39 @@ class QwenModel:
             x = x[:, length - 1 : length, :]
         return self.logits(x, decode=not all_logits)
 
+    def prefill_batch(self, tokens, *, cache, page_table, length, start_pos, slots):
+        """Experimental equal-length, page-aligned prefill over consecutive slots."""
+        batch = len(slots)
+        if batch < 2 or slots != list(range(slots[0], slots[0] + batch)):
+            raise ValueError("Batched prefill requires consecutive slots")
+        if slots[0] < 0 or slots[-1] >= cache.batch_size or start_pos % 32:
+            raise ValueError("Invalid slots or unaligned batched prefix")
+        if length < 1 or start_pos < 0 or start_pos + length > cache.capacity:
+            raise ValueError("Batched prefill exceeds cache capacity")
+        first, end = slots[0], slots[-1] + 1
+        x = self.embed(tokens, batch=batch, length=length)
+        positions = self.upload(
+            torch.arange(start_pos, start_pos + length, dtype=torch.int32).repeat(batch, 1),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        cc, ss = self.rope(positions, batch=batch, length=length)
+        table = page_table[first:end, :]
+        for layer, state in zip(self.layers, cache.layers):
+            local = state
+            if layer.kind == "linear_attention" and batch != cache.batch_size:
+                local = DecoderState(conv=state.conv[first:end], recurrent=state.recurrent[first:end])
+            x = layer.prefill_forward(x, state=local, start_pos=start_pos, page_table=table, cos=cc, sin=ss)
+            if local is not state:
+                for name in ("conv", "recurrent"):
+                    before = getattr(state, name)
+                    pieces = ([before[:first]] if first else []) + [getattr(local, name)]
+                    if end < cache.batch_size:
+                        pieces.append(before[end:])
+                    ttnn.copy(ttnn.concat(pieces, dim=0), before)
+        # Preserve the proven B1 head and independently owned public outputs.
+        return [self.logits(x[row : row + 1, length - 1 : length, :], decode=True) for row in range(batch)]
+
     def decode(self, tokens, positions, *, cache, page_table, rope_indices=None, active_slots=None):
         b = cache.batch_size
         ids = ttnn.reshape(tokens, [1, 32])[:, :b]

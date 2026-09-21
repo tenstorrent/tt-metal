@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Serving state and canonical split sampling for the TP4 Qwen text model."""
 
+import os
 import time
 from collections import Counter
 from types import SimpleNamespace
@@ -27,6 +28,7 @@ class QwenGenerator(Generator):
         self.model, self.mesh = model, model.mesh
         self.tokenizer = AutoTokenizer.from_pretrained(model.snapshot, local_files_only=True)
         self.host_sampling = host_sampling
+        self.batched_prefill = os.getenv("QWEN_BATCHED_PREFILL", "0") == "1"
         self.seed = 0
         args = SimpleNamespace(
             vocab_size=model.config.vocab_size,
@@ -239,7 +241,24 @@ class QwenGenerator(Generator):
     def _prepare_serving_prefill_sampling(self, tokens, *, page_table, kv_cache, ends, starts, slots):
         """Copy packed logits into cache-bound storage; return no device temporaries."""
         outputs = []
-        for row, (start, end, slot) in enumerate(zip(starts, ends, slots)):
+        grouped = (
+            getattr(self, "batched_prefill", False)
+            and len(ends) > 1
+            and len(set(starts)) == 1
+            and len(set(ends)) == 1
+            and starts[0] % 32 == 0
+            and slots == list(range(slots[0], slots[0] + len(slots)))
+        )
+        if grouped:
+            outputs = self.prefill_forward(
+                tokens[:, starts[0] : ends[0]],
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=[ends[0] - starts[0]] * len(ends),
+                start_pos=starts,
+                slots=slots,
+            )
+        for row, (start, end, slot) in enumerate(zip(starts, ends, slots)) if not grouped else []:
             outputs.extend(
                 self.prefill_forward(
                     tokens[row : row + 1, start:end],
@@ -358,12 +377,37 @@ class QwenGenerator(Generator):
             (kv_cache.batch_size, tuple(page_table.shape), slot, start, length, return_all_logits)
             for slot, start, length in zip(slots, starts, prompt_lens)
         }
+        if getattr(self, "batched_prefill", False) and len(slots) > 1:
+            signatures.add(("batched", tuple(slots), tuple(starts), tuple(prompt_lens), return_all_logits))
         # New prefill programs own persistent buffers. Compile them before a
         # decode trace reserves scratch addresses; known shapes reuse the trace.
         if not signatures.issubset(self.prefill_signatures):
             self._release_traces()
         self._refresh_table(page_table)
         table = self.page_table
+        if (
+            getattr(self, "batched_prefill", False)
+            and len(slots) > 1
+            and not return_all_logits
+            and len(set(starts)) == 1
+            and len(set(prompt_lens)) == 1
+            and starts[0] % 32 == 0
+            and slots == list(range(slots[0], slots[0] + len(slots)))
+        ):
+            length, start = prompt_lens[0], starts[0]
+            if not 1 <= length <= tokens.shape[-1] or start < 0 or start + length > kv_cache.capacity:
+                raise ValueError("Invalid batched prompt length or prefix")
+            for offset in range(0, length, 4096):
+                count = min(4096, length - offset)
+                ids = self.model.upload(
+                    tokens[:, offset : offset + count].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+                results = self.model.prefill_batch(
+                    ids, cache=kv_cache, page_table=table, length=count, start_pos=start + offset, slots=slots
+                )
+            self.prefill_signatures.update(signatures)
+            self.counters["batched_prefill_calls"] += 1
+            return results
         results = []
         for row, (slot, length, start) in enumerate(zip(slots, prompt_lens, starts)):
             if not 0 <= slot < kv_cache.batch_size or not 1 <= length <= tokens.shape[-1]:

@@ -22,6 +22,8 @@ def main():
     parser.add_argument("--steps", type=int, default=32)
     parser.add_argument("--context", type=int)
     parser.add_argument("--pool-tokens", type=int)
+    parser.add_argument("--distinct-prompts", action="store_true")
+    parser.add_argument("--compare-prefill", action="store_true", help="Compare serial and grouped prefill in one load")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     lengths = list(map(int, args.lengths.split(",")))
@@ -56,7 +58,14 @@ def main():
         )
         for length in lengths:
             tokens = (torch.arange(length).remainder(256) + 100).repeat(args.batch, 1)
-            for repeat in range(2):
+            if args.distinct_prompts:
+                tokens += torch.arange(args.batch).reshape(-1, 1) * 13
+            for trial in range(4 if args.compare_prefill else 2):
+                repeat = trial % 2
+                if args.compare_prefill and repeat == 0:
+                    generator._release_traces()
+                    generator.prefill_signatures.clear()
+                    generator.batched_prefill = trial >= 2
                 ttnn.synchronize_device(mesh)
                 begin = time.perf_counter()
                 decoded, _ = adapter.prefill_forward(
@@ -84,6 +93,7 @@ def main():
                     times.append(time.perf_counter() - begin)
                     outputs.append(decoded.reshape(-1).tolist())
                 row = dict(
+                    batched_prefill=generator.batched_prefill,
                     length=length,
                     repeat=repeat,
                     prefill_s=prefill,
