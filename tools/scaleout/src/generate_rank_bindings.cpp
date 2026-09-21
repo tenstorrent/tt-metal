@@ -47,44 +47,9 @@ using namespace tt::tt_metal::experimental::tt_fabric;
 using namespace tt::tt_fabric;
 
 namespace {
-struct MeshGraphAndLocalMeshId {
-    const MeshGraph* graph = nullptr;
-    MeshId local_mesh_id{0};
+struct TopologyMappingParts {
+    std::vector<TopologyMappingResult> parts;
 };
-
-struct TopologyMappingWithLocalMaps {
-    TopologyMappingResult mapping;
-    std::vector<std::map<MeshId, MeshId>> per_part_local_to_global_mesh_ids;
-};
-
-// Resolves a logical global MeshId (after merge) to the owning MeshGraph and MGD-local mesh id using the same
-// per-part local -> global maps as \p merge_logical_multi_mesh_adjacency_graphs (out-parameter).
-std::optional<MeshGraphAndLocalMeshId> resolve_mesh_graph_for_global_mesh_id(
-    const std::vector<MeshGraph>& mesh_graphs,
-    MeshId global_mesh_id,
-    const std::vector<std::map<MeshId, MeshId>>& per_part_local_to_global_mesh_ids) {
-    if (per_part_local_to_global_mesh_ids.empty()) {
-        for (const auto& g : mesh_graphs) {
-            for (const auto& mid : g.get_all_mesh_ids()) {
-                if (mid == global_mesh_id) {
-                    return MeshGraphAndLocalMeshId{&g, global_mesh_id};
-                }
-            }
-        }
-        return std::nullopt;
-    }
-    const std::size_t n = std::min(mesh_graphs.size(), per_part_local_to_global_mesh_ids.size());
-    for (std::size_t i = 0; i < n; ++i) {
-        const auto& local_to_global = per_part_local_to_global_mesh_ids[i];
-        for (MeshId local : mesh_graphs[i].get_all_mesh_ids()) {
-            auto it = local_to_global.find(local);
-            if (it != local_to_global.end() && it->second == global_mesh_id) {
-                return MeshGraphAndLocalMeshId{&mesh_graphs[i], local};
-            }
-        }
-    }
-    return std::nullopt;
-}
 
 // OpenMPI rankfile `slot` counts per physical host. After merging several MGD extracts, each extract used its own
 // per-host counter; reassign slots in global MPI rank order so consecutive global ranks on the same host get
@@ -170,11 +135,11 @@ MultiMeshSolutionEnumerator make_topology_mapping_enumerator(
         config.hostname_to_asics[desc.host_name].insert(asic_id);
     }
 
-    // Local-space pinnings only. The enumerator remaps them to global MeshIds for intra-mesh.
-    std::vector<std::optional<PinningsByMesh>> per_mgd_pinnings(mesh_graph_descriptors.size());
+    std::vector<MultiMeshMappingPart> parts(mesh_graph_descriptors.size());
     const int world_size =
         static_cast<int>(*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size());
     for (std::size_t mgi = 0; mgi < mesh_graph_descriptors.size(); ++mgi) {
+        parts[mgi].mesh_graph_descriptor = &mesh_graph_descriptors[mgi];
         PinningsByMesh local_pins = mesh_graph_descriptors[mgi].get_pinnings();
         if (cluster.is_ubb_galaxy()) {
             for (const auto& mesh_id : mesh_graphs[mgi].get_all_mesh_ids()) {
@@ -188,7 +153,17 @@ MultiMeshSolutionEnumerator make_topology_mapping_enumerator(
             }
         }
         if (!local_pins.empty()) {
-            per_mgd_pinnings[mgi] = std::move(local_pins);
+            parts[mgi].pinnings = std::move(local_pins);
+        }
+        for (const auto& mesh_id_local : mesh_graphs[mgi].get_all_mesh_ids()) {
+            const auto& chip_ids = mesh_graphs[mgi].get_chip_ids(mesh_id_local);
+            for (const auto& [coord, chip_id] : chip_ids) {
+                FabricNodeId fabric_node_id(mesh_id_local, chip_id);
+                auto mesh_host_rank = mesh_graphs[mgi].get_host_rank_for_chip(mesh_id_local, chip_id);
+                if (mesh_host_rank.has_value()) {
+                    parts[mgi].fabric_node_id_to_mesh_rank[mesh_id_local][fabric_node_id] = mesh_host_rank.value();
+                }
+            }
         }
     }
 
@@ -219,53 +194,8 @@ MultiMeshSolutionEnumerator make_topology_mapping_enumerator(
         log_info(tt::LogFabric, "Inter-mesh validation mode: STRICT");
     }
 
-    // Host ranks keyed in the enumerator's MeshId space: identity for one MGD, consecutive globals
-    // when merging several (same numbering merge_logical_multi_mesh_adjacency_graphs uses).
-    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
-    std::uint32_t next_global = 0;
-    const bool merge_mesh_ids = mesh_graphs.size() > 1;
-    for (const auto& mesh_graph : mesh_graphs) {
-        std::set<MeshId> local_ids;
-        for (const auto& mesh_id_local : mesh_graph.get_all_mesh_ids()) {
-            local_ids.insert(mesh_id_local);
-        }
-        std::map<MeshId, MeshId> local_to_global;
-        std::uint32_t j = 0;
-        for (MeshId local : local_ids) {
-            local_to_global[local] = merge_mesh_ids ? MeshId{next_global + j} : local;
-            ++j;
-        }
-        next_global += static_cast<std::uint32_t>(local_ids.size());
-        for (const auto& mesh_id_local : mesh_graph.get_all_mesh_ids()) {
-            const MeshId mesh_id_global = local_to_global.at(mesh_id_local);
-            const auto& chip_ids = mesh_graph.get_chip_ids(mesh_id_local);
-            for (const auto& [coord, chip_id] : chip_ids) {
-                FabricNodeId fabric_node_id(mesh_id_global, chip_id);
-                auto mesh_host_rank = mesh_graph.get_host_rank_for_chip(mesh_id_local, chip_id);
-                if (mesh_host_rank.has_value()) {
-                    fabric_node_id_to_mesh_rank[mesh_id_global][fabric_node_id] = mesh_host_rank.value();
-                }
-            }
-        }
-    }
-
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank = {};
-
     log_info(tt::LogFabric, "Building topology mapping enumerator ({} MGD(s))...", mesh_graph_descriptors.size());
-    std::vector<const MeshGraphDescriptor*> descriptor_ptrs;
-    descriptor_ptrs.reserve(mesh_graph_descriptors.size());
-    for (const MeshGraphDescriptor& mgd : mesh_graph_descriptors) {
-        descriptor_ptrs.push_back(&mgd);
-    }
-    return MultiMeshSolutionEnumerator(
-        psd,
-        pgd,
-        descriptor_ptrs,
-        config,
-        unique_shapes,
-        per_mgd_pinnings,
-        asic_id_to_mesh_rank,
-        fabric_node_id_to_mesh_rank);
+    return MultiMeshSolutionEnumerator(psd, pgd, parts, config, unique_shapes);
 }
 
 /**
@@ -276,9 +206,9 @@ MultiMeshSolutionEnumerator make_topology_mapping_enumerator(
  *                                in length and order (one path per descriptor for `MeshGraph` host ranks).
  * @param mgd_paths_in_order      Const reference to paths parallel to `mesh_graph_descriptors`.
  *
- * @return Mapping result plus per-MGD local -> global mesh id maps (same order as descriptors / `MeshGraph`s).
+ * @return One local-mesh-id mapping per input MGD. Empty parts means no seating was found.
  */
-TopologyMappingWithLocalMaps run_topology_mapping(
+TopologyMappingParts run_topology_mapping(
     const PhysicalSystemDescriptor& psd,
     const PhysicalGroupingDescriptor& pgd,
     const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
@@ -286,14 +216,8 @@ TopologyMappingWithLocalMaps run_topology_mapping(
     log_info(tt::LogFabric, "Running topology mapping with mesh graph rank bindings...");
     MultiMeshSolutionEnumerator enumerator =
         make_topology_mapping_enumerator(psd, pgd, mesh_graph_descriptors, mgd_paths_in_order, /*unique_shapes=*/false);
-    TopologyMappingWithLocalMaps out;
-    if (auto solution = enumerator.next(); solution.has_value()) {
-        out.mapping = std::move(*solution);
-    } else {
-        out.mapping.success = false;
-        out.mapping.error_message = "map_multi_mesh_to_physical: no valid placement+intra-mesh mapping found";
-    }
-    out.per_part_local_to_global_mesh_ids = enumerator.per_part_local_to_global_mesh_ids();
+    TopologyMappingParts out;
+    out.parts = enumerator.next();
     return out;
 }
 
@@ -313,38 +237,10 @@ TopologyMappingWithLocalMaps run_topology_mapping(
  * Assigns contiguous ranks 0..N-1 and per-hostname slot indices for the rankfile (`binding.rank` is sequential
  * within this output). `binding.mesh_host_rank` always reflects the MGD/MeshGraph value for `(local mesh id, chip)`.
  *
- * @param per_part_local_to_global_mesh_ids  Selects the mesh-id namespace of the output. When non-empty (exactly one
- * entry: the MGD partition's local -> global map), `RankBindingConfig::mesh_id` is the **local** mesh id from that map
- * and only fabric nodes whose global logical mesh id is a value in it are included; this also requires
- * `mesh_graphs.size() == 1`. When empty, no partition is selected: every fabric node is included and `mesh_id` is the
- * merged/global logical mesh id. Single-MGD callers may use either form, since local and global ids coincide there.
+ * `mapping_result` already uses this MeshGraph's local MeshIds.
  */
 std::vector<RankBindingConfig> extract_rank_bindings(
-    const PhysicalSystemDescriptor& psd,
-    const TopologyMappingResult& mapping_result,
-    const std::vector<MeshGraph>& mesh_graphs,
-    const std::vector<std::map<MeshId, MeshId>>& per_part_local_to_global_mesh_ids) {
-    if (mesh_graphs.empty()) {
-        throw std::invalid_argument("extract_rank_bindings: at least one MeshGraph is required");
-    }
-    // The mode is derived from the map rather than taken as a separate flag, so "local mesh ids without a
-    // local-to-global map" -- which would unconditionally throw below -- is not expressible by a caller.
-    const bool emit_local_mesh_ids_for_mgd_partition = !per_part_local_to_global_mesh_ids.empty();
-    if (emit_local_mesh_ids_for_mgd_partition &&
-        (mesh_graphs.size() != 1 || per_part_local_to_global_mesh_ids.size() != 1)) {
-        throw std::invalid_argument(
-            "extract_rank_bindings: local mesh id mode requires exactly one MeshGraph and one local-to-global map");
-    }
-
-    // In local mode this doubles as the partition membership test: its keys are exactly the global mesh ids owned
-    // by this MGD partition.
-    std::unordered_map<MeshId, MeshId> global_to_local_mesh_for_output;
-    if (emit_local_mesh_ids_for_mgd_partition) {
-        for (const auto& [loc, glob] : per_part_local_to_global_mesh_ids[0]) {
-            global_to_local_mesh_for_output[glob] = loc;
-        }
-    }
-
+    const PhysicalSystemDescriptor& psd, const TopologyMappingResult& mapping_result, const MeshGraph& mesh_graph) {
     struct AsicGrouping {
         std::vector<AsicID> asic_ids;
         std::vector<tt::ChipId> chip_ids;
@@ -354,34 +250,18 @@ std::vector<RankBindingConfig> extract_rank_bindings(
     // mesh_id -> hostname -> mesh_host_rank -> AsicGrouping
     std::map<int, std::map<std::string, std::map<int, AsicGrouping>>> mesh_host_asics;
 
-    // Iterate through fabric_node_to_asic mapping
     for (const auto& [fabric_node_id, asic_id] : mapping_result.fabric_node_to_asic) {
-        MeshId mesh_id_global = fabric_node_id.mesh_id;
-        if (emit_local_mesh_ids_for_mgd_partition && !global_to_local_mesh_for_output.contains(mesh_id_global)) {
-            continue;
-        }
+        const MeshId mesh_id_local = fabric_node_id.mesh_id;
         tt::ChipId chip_id_from_fabric_node = static_cast<tt::ChipId>(fabric_node_id.chip_id);
 
-        std::optional<MeshGraphAndLocalMeshId> resolved =
-            resolve_mesh_graph_for_global_mesh_id(mesh_graphs, mesh_id_global, per_part_local_to_global_mesh_ids);
-        if (!resolved.has_value() || resolved->graph == nullptr) {
-            log_error(
-                tt::LogFabric,
-                "No MeshGraph / local mesh for global logical mesh_id {} (check per-MGD local-to-global mesh id map).",
-                *mesh_id_global);
-            continue;
-        }
-        const MeshGraph* mesh_graph = resolved->graph;
-        const MeshId mesh_id_local = resolved->local_mesh_id;
-
         std::optional<MeshHostRankId> mesh_host_rank =
-            mesh_graph->get_host_rank_for_chip(mesh_id_local, chip_id_from_fabric_node);
+            mesh_graph.get_host_rank_for_chip(mesh_id_local, chip_id_from_fabric_node);
 
         if (!mesh_host_rank.has_value()) {
             log_error(
                 tt::LogFabric,
-                "No mesh host rank found for mesh_id (global) {} and chip_id {}",
-                *mesh_id_global,
+                "No mesh host rank found for mesh_id {} and chip_id {}",
+                *mesh_id_local,
                 chip_id_from_fabric_node);
             continue;
         }
@@ -389,9 +269,7 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         std::string hostname = psd.get_host_name_for_asic(asic_id);
         tt::ChipId chip_id = psd.get_umd_unique_id(asic_id);
 
-        const MeshId mesh_id_for_binding =
-            emit_local_mesh_ids_for_mgd_partition ? global_to_local_mesh_for_output.at(mesh_id_global) : mesh_id_global;
-        int mesh_id_int = static_cast<int>(*mesh_id_for_binding);
+        int mesh_id_int = static_cast<int>(*mesh_id_local);
         const int mesh_host_rank_int = static_cast<int>(*mesh_host_rank.value());
         auto& bucket = mesh_host_asics[mesh_id_int][hostname][mesh_host_rank_int];
         bucket.asic_ids.push_back(asic_id);
@@ -822,8 +700,6 @@ int main(int argc, char** argv) {
                 // from the live SAT session; this loop is the only extra work for --all-solutions.
                 MultiMeshSolutionEnumerator enumerator =
                     make_topology_mapping_enumerator(psd, pgd, mgds, mgd_paths_in_order, unique_shapes);
-                const std::vector<std::map<MeshId, MeshId>> per_part_local_to_global_mesh_ids =
-                    enumerator.per_part_local_to_global_mesh_ids();
 
                 std::vector<SolutionIndexEntry> index_entries;
 
@@ -851,14 +727,14 @@ int main(int argc, char** argv) {
                         cap_reached = true;
                         break;
                     }
-                    std::optional<TopologyMappingResult> solution = enumerator.next();
-                    if (!solution.has_value()) {
+                    const std::vector<TopologyMappingResult> parts = enumerator.next();
+                    if (parts.empty()) {
                         break;  // enumeration exhausted (genuine UNSAT -- no budget give-up)
                     }
                     ++emitted;
 
-                    std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(
-                        psd, *solution, mesh_graphs_for_extract, per_part_local_to_global_mesh_ids);
+                    std::vector<RankBindingConfig> rank_bindings =
+                        extract_rank_bindings(psd, parts.front(), mesh_graphs_for_extract.front());
 
                     const std::set<std::string> hosts = solution_host_set(rank_bindings);
                     if (args.distinct_host_sets && !seen_host_sets.insert(hosts).second) {
@@ -946,10 +822,14 @@ int main(int argc, char** argv) {
                 // Stage: Run topology mapping
                 log_info(tt::LogFabric, "Stage: Running topology mapping...");
 
-                TopologyMappingWithLocalMaps topology = run_topology_mapping(psd, pgd, mgds, mgd_paths_in_order);
+                TopologyMappingParts topology = run_topology_mapping(psd, pgd, mgds, mgd_paths_in_order);
 
-                if (!topology.mapping.success) {
-                    log_error(tt::LogFabric, "Topology mapping failed: {}", topology.mapping.error_message);
+                if (topology.parts.empty() || !topology.parts.front().success) {
+                    log_error(
+                        tt::LogFabric,
+                        "Topology mapping failed: {}",
+                        topology.parts.empty() ? "no valid placement+intra-mesh mapping found"
+                                               : topology.parts.front().error_message);
                     return 1;
                 }
                 log_info(tt::LogFabric, "Topology mapping complete");
@@ -985,16 +865,18 @@ int main(int argc, char** argv) {
                 }
 
                 std::vector<RankBindingConfig> merged_global_rank_bindings;
-                merged_global_rank_bindings.reserve(topology.mapping.fabric_node_to_asic.size());
                 std::vector<std::pair<int, std::string>> rank_bindings_mapping_entries;
                 int global_rank_base = 0;
 
                 for (size_t mgi = 0; mgi < mesh_graphs_for_extract.size(); ++mgi) {
                     const int subctx_id = subcontext_ids_in_order[mgi];
-                    std::vector<MeshGraph> one_graph = {mesh_graphs_for_extract[mgi]};
-                    std::vector<std::map<MeshId, MeshId>> one_map = {topology.per_part_local_to_global_mesh_ids[mgi]};
+                    if (mgi >= topology.parts.size()) {
+                        log_error(
+                            tt::LogFabric, "Sub-context {}: no local mapping part from the enumerator", subctx_id);
+                        return 1;
+                    }
                     std::vector<RankBindingConfig> rank_bindings =
-                        extract_rank_bindings(psd, topology.mapping, one_graph, one_map);
+                        extract_rank_bindings(psd, topology.parts[mgi], mesh_graphs_for_extract[mgi]);
 
                     if (rank_bindings.empty()) {
                         if (multi_mgd) {

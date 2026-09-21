@@ -1781,7 +1781,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     ASSERT_TRUE(valid_groupings.contains("MESH")) << "2x4 MGD should match a MESH grouping in this PGD";
     ASSERT_TRUE(valid_groupings.at("MESH").contains("M0"));
     ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty());
-    const auto sat_placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto sat_placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(sat_placements.size(), 1u) << "SAT joint placement should seat the 2x4 mesh on the SP4 mock";
     EXPECT_EQ(sat_placements.front().placement.asics.size(), 8u) << "2x4 seating covers 8 ASICs";
 
@@ -2530,7 +2530,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
     EXPECT_FALSE(committed.mgd_fallback.has_value());
     EXPECT_FALSE(pgd.get_mgd_placement_fallbacks_for_mgd(mgd, psd).at("MESH").at("M0").empty());
 
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "SAT joint placement should seat the single 4x4 mesh";
     EXPECT_EQ(placements.front().placement.asics.size(), 16u) << "the 4x4 seating should cover 16 ASICs";
     EXPECT_EQ(count_distinct_hosts_for_asics(psd, placements.front().placement.asics), 1u)
@@ -3257,6 +3257,15 @@ std::vector<std::set<uint64_t>> mapped_footprints(const utils::TopologyMappingRe
     return footprints;
 }
 
+std::vector<std::set<uint64_t>> mapped_footprints(const std::vector<utils::TopologyMappingResult>& mappings) {
+    std::vector<std::set<uint64_t>> footprints;
+    for (const auto& mapping : mappings) {
+        auto part = mapped_footprints(mapping);
+        footprints.insert(footprints.end(), part.begin(), part.end());
+    }
+    return footprints;
+}
+
 std::size_t channels_between(
     const tt::tt_metal::PhysicalSystemDescriptor& psd,
     const std::set<uint64_t>& left,
@@ -3472,7 +3481,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 2u) << "both meshes should be placed on the 4-chip line";
 
     // place and map
@@ -3572,7 +3581,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
 
     // Placement fails, so there is no physical graph to build and nothing to map.
     EXPECT_TRUE(placements.empty()) << "no link joins the two pairs, so the seam cannot be satisfied";
@@ -3654,7 +3663,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 2u) << "both meshes should be placed when nothing forces them to touch";
 
     // place and map
@@ -3813,7 +3822,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
 
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 4u) << "all four meshes should be placed on the 6-chip ring";
 
     // place and map
@@ -3942,7 +3951,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
 
     // Placement fails, so there is no physical graph to build and nothing to map.
     EXPECT_TRUE(placements.empty()) << "the ring cannot close on a line, so no placement is valid";
@@ -4145,7 +4154,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 4u) << "all four meshes should be placed on the 10 chips";
 
     // place and map
@@ -4361,7 +4370,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 4u) << "the hub and all three spokes should be placed";
 
     // place and map
@@ -4541,10 +4550,10 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     EXPECT_EQ(meshes.at("mgd1_M0").front().adjacency_graph.get_nodes().size(), 1u)
         << "the second descriptor's M0 is a single chip, despite sharing the name";
 
-    const std::vector<const MeshGraphDescriptor*> descriptors{&mgds[0], &mgds[1]};
+    const std::vector<utils::MultiMeshMappingPart> parts{{&mgds[0]}, {&mgds[1]}};
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
-    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, descriptors, config);
+    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, parts, config);
 
     // The binding has to agree with the placement, mesh for mesh: A's 1x2 is the only two-chip mesh
     // in either descriptor, and the seam pulls its 1x1 to 102.
@@ -4703,12 +4712,14 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
         std::vector<std::string>(6, "host0"),
         std::vector<MockLink>{{0, 1, 2}, {1, 2, 4}, {2, 3, 1}, {3, 4, 3}, {4, 5, 2}});
 
-    const std::vector<const MeshGraphDescriptor*> descriptors{&mgds[0], &mgds[1]};
+    const std::vector<utils::MultiMeshMappingPart> parts{{&mgds[0]}, {&mgds[1]}};
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
     config.inter_mesh_validation_mode = ::tt::tt_fabric::ConnectionValidationMode::STRICT;
-    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, descriptors, config);
-    ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
+    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, parts, config);
+    ASSERT_FALSE(mapping.empty()) << "the two-level solve should succeed, but no local mapping was returned";
+    ASSERT_TRUE(mapping.front().success) << "the two-level solve should succeed, but failed with: "
+                                         << mapping.front().error_message;
 
     const auto footprints = mapped_footprints(mapping);
     ASSERT_EQ(footprints.size(), 4u);
@@ -4809,7 +4820,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 2u) << "both meshes should be placed";
     EXPECT_THAT(
         footprints_of(placements),
@@ -4903,7 +4914,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     ASSERT_FALSE(valid_groupings.at("MESH").empty()) << "the shapes themselves are placeable; only the seam is not";
 
     // place
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     EXPECT_TRUE(placements.empty())
         << "no link carries the 8 channels a STRICT seam requires, so there should be no placement at all";
 }
@@ -4990,7 +5001,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 2u)
         << "a RELAXED count is a preference, so an unmeetable one should not stop the meshes being placed";
     EXPECT_THAT(
@@ -5121,12 +5132,13 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 
     utils::TopologyMappingConfig config;
     EXPECT_ANY_THROW(utils::map_multi_mesh_to_physical(
-        psd, pgd, std::vector<const MeshGraphDescriptor*>{&mgds[0], &mgds[1]}, config))
+        psd, pgd, std::vector<utils::MultiMeshMappingPart>{{&mgds[0]}, {&mgds[1]}}, config))
         << "a RELAXED descriptor and a STRICT one cannot be merged into one topology";
 }
 
-// A descriptor with no inter-mesh connections defaults to STRICT, so it conflicts with a RELAXED sibling.
-TEST(AdjacencyGuidedPlacement, DescriptorWithoutInterMeshConnectionsDefaultsToStrictPolicy) {
+// A descriptor with no inter-mesh connections reports STRICT, but that is unspecified: merge must
+// not treat it as a conflict with a sibling that does specify RELAXED.
+TEST(AdjacencyGuidedPlacement, DescriptorWithoutInterMeshConnectionsDoesNotForceStrictOnMerge) {
     MeshGraphDescriptor relaxed{std::string(R"delimiter(
 # Two single-chip meshes whose seam asks for 4 channels as a preference: satisfiable on the 3-chip
 # machine, but only on 101-102.
@@ -5181,7 +5193,9 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
 
     EXPECT_FALSE(single.is_inter_mesh_policy_relaxed()) << "no inter-mesh connections defaults to STRICT";
+    EXPECT_FALSE(single.is_inter_mesh_policy_specified());
     EXPECT_TRUE(relaxed.is_inter_mesh_policy_relaxed());
+    EXPECT_TRUE(relaxed.is_inter_mesh_policy_specified());
 
     PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
 groupings {
@@ -5202,9 +5216,11 @@ groupings {
 )delimiter")};
     auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), line_edges(4));
     utils::TopologyMappingConfig config;
-    EXPECT_ANY_THROW(
-        utils::map_multi_mesh_to_physical(psd, pgd, std::vector<const MeshGraphDescriptor*>{&relaxed, &single}, config))
-        << "STRICT default and RELAXED cannot be merged into one topology";
+    const auto mapping = utils::map_multi_mesh_to_physical(
+        psd, pgd, std::vector<utils::MultiMeshMappingPart>{{&relaxed}, {&single}}, config);
+    ASSERT_FALSE(mapping.empty()) << "unspecified inter-mesh policy must not conflict with a RELAXED sibling";
+    EXPECT_TRUE(mapping.front().success) << "unspecified inter-mesh policy must not conflict with a RELAXED sibling: "
+                                         << mapping.front().error_message;
 }
 
 TEST(AdjacencyGuidedPlacement, PgdGroupingThatPlacesIsCommittedDirectly) {
@@ -5282,7 +5298,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     EXPECT_THAT(grouping_graph.get_neighbors(1u), ::testing::ElementsAre(0u));
 
     // place, and build the flat ASIC adjacency
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u);
 
     // place and map
@@ -5363,7 +5379,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     EXPECT_FALSE(pgd.get_mgd_placement_fallbacks_for_mgd(mgd, psd).at("MESH").at("M0").empty());
 
     // place, and build the flat ASIC adjacency
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "the single mesh should place";
     EXPECT_FALSE(placements.front().placement.mesh_node_to_asic_position.empty())
         << "the PGD grouping carries pinning and must win; an empty map means the MGD fallback was used";
@@ -5465,7 +5481,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     EXPECT_EQ(placements.size(), 2u)
         << "one instance can take the pinned pair and the other the MGD grouping, so both should place";
 
@@ -5569,7 +5585,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     PlacementSolveStats stats;
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, &stats, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, &stats, {}).next();
     ASSERT_EQ(placements.size(), 2u) << stats.to_string();
     EXPECT_THAT(
         footprints_of(placements),
@@ -5650,7 +5666,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     PlacementSolveStats stats;
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, &stats, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, &stats, {}).next();
     EXPECT_TRUE(placements.empty()) << "no link joins the two pairs, so the seam cannot be satisfied";
     EXPECT_TRUE(stats.master_solve_attempted) << stats.to_string();
     EXPECT_FALSE(stats.master_solve_success) << stats.to_string();
@@ -5734,7 +5750,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     PlacementSolveStats stats;
-    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, &stats, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, &stats, {}).next();
     ASSERT_EQ(placements.size(), 2u) << stats.to_string();
     EXPECT_THAT(
         footprints_of(placements),
@@ -5762,7 +5778,7 @@ TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, StrainManyMeshesPlacesInO
         ASSERT_TRUE(valid_groupings.contains("MESH")) << label;
 
         PlacementSolveStats stats;
-        const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, &stats, {}).next();
+        const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, &stats, {}).next();
 
         const std::size_t expected_meshes = fabric_rows * fabric_cols;
         EXPECT_EQ(placements.size(), expected_meshes) << label << "\n" << stats.to_string();
@@ -5954,8 +5970,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     // Placement. The split is encoded as constraints inside
     // enumerate_distinct_placements_for_grouping.
-    const auto placements =
-        SatPlacementEnumerationSession(pgd, mgd, without_mgd_fallback(valid_groupings, "M0"), psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -6082,8 +6097,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     // Placement. The split is encoded as constraints inside
     // enumerate_distinct_placements_for_grouping.
-    const auto placements =
-        SatPlacementEnumerationSession(pgd, mgd, without_mgd_fallback(valid_groupings, "M0"), psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -6313,8 +6327,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     // Placement. The split is encoded as constraints inside
     // enumerate_distinct_placements_for_grouping.
-    const auto placements =
-        SatPlacementEnumerationSession(pgd, mgd, without_mgd_fallback(valid_groupings, "M0"), psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -6526,8 +6539,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     // Placement. The split is encoded as constraints inside
     // enumerate_distinct_placements_for_grouping.
-    const auto placements =
-        SatPlacementEnumerationSession(pgd, mgd, without_mgd_fallback(valid_groupings, "M0"), psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -6865,8 +6877,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     // Placement. The split is encoded as constraints inside
     // enumerate_distinct_placements_for_grouping.
-    const auto placements =
-        SatPlacementEnumerationSession(pgd, mgd, without_mgd_fallback(valid_groupings, "M0"), psd, nullptr, {}).next();
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;

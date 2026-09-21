@@ -158,6 +158,18 @@ public:
         tt::ARCH arch,
         std::uint32_t num_connections_per_direction);
 
+    // Combine descriptors into one MGD 1.0 proto (backwards_compatible validation must pass):
+    // one FABRIC graph, 2D meshes, no express links. Mesh/switch ids are remumbered globally;
+    // several descriptors prefix names `mgd{i}_`. Parts that specify an inter-mesh channel
+    // policy must all agree; unspecified parts do not force STRICT. Seams stay the disjoint
+    // union of each part (no new edges between descriptors; graph_topology is rejected because
+    // ALL_TO_ALL/RING would span every merged mesh). One descriptor is cloned as-is (identity
+    // ids). per_part_local_to_global_mesh_ids[i] maps descriptor i's local MeshId to the merged
+    // id; callers decode seating/mapping with that table.
+    static MeshGraphDescriptor merge(
+        const std::vector<const MeshGraphDescriptor*>& descriptors,
+        std::vector<std::map<MeshId, MeshId>>* per_part_local_to_global_mesh_ids = nullptr);
+
     ~MeshGraphDescriptor();
 
     // Debugging/inspection
@@ -257,6 +269,10 @@ public:
     // none. Defaults to STRICT when the descriptor states none (mirrors MeshGraph::is_inter_mesh_policy_relaxed).
     bool is_inter_mesh_policy_relaxed() const;
 
+    // True when a FABRIC connection or top-level graph_topology.channels set the policy. If false, merge
+    // and multi-MGD rank binding must not treat this descriptor as STRICT.
+    bool is_inter_mesh_policy_specified() const;
+
     // The device and host grid an instance's descriptor declares. Graph instances, and descriptors with
     // no device_topology, come back with empty dims. Switches declare no host topology.
     DeclaredTopology get_declared_topology(GlobalNodeId instance_id) const;
@@ -339,6 +355,7 @@ private:
     std::map<MeshId, std::vector<AsicPinningGroup>> pinnings_;
     std::unordered_map<MeshId, bool> intra_mesh_relaxed_policy_;
     bool inter_mesh_relaxed_policy_ = false;
+    bool inter_mesh_policy_specified_ = false;
 
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(

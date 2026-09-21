@@ -220,10 +220,6 @@ struct LogicalMultiMeshGraph {
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
     const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor);
 
-LogicalMultiMeshGraph merge_logical_multi_mesh_adjacency_graphs(
-    const std::vector<LogicalMultiMeshGraph>& logical_multi_mesh_graphs,
-    std::vector<std::map<MeshId, MeshId>>* per_part_local_to_global_mesh_ids = nullptr);
-
 PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
 
@@ -282,26 +278,33 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
-TopologyMappingResult map_multi_mesh_to_physical(
+// One input MGD plus that descriptor's local-space pinnings and host ranks. The enumerator
+// merges these and remaps MeshIds internally; callers never see merged/global ids.
+struct MultiMeshMappingPart {
+    const ::tt::tt_fabric::MeshGraphDescriptor* mesh_graph_descriptor = nullptr;
+    std::optional<PinningsByMesh> pinnings;
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+};
+
+// One TopologyMappingResult per input part, using that descriptor's local MeshIds. Empty means
+// no valid placement+intra-mesh mapping was found.
+std::vector<TopologyMappingResult> map_multi_mesh_to_physical(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
-    const std::vector<const ::tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors,
-    const TopologyMappingConfig& config,
-    const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings = {},
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
-    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+    const std::vector<MultiMeshMappingPart>& parts,
+    const TopologyMappingConfig& config);
 
 /**
  * @brief Pull-based enumerator: SAT seating, then a PhysicalMultiMeshGraph built for that seating,
  *        then identity intra-mesh.
  *
  *   MultiMeshSolutionEnumerator e(psd, pgd, mgd, config);
- *   while (auto solution = e.next()) { ... }
+ *   while (auto parts = e.next(); !parts.empty()) { ... }
  *
- * Each next() takes one seating from SatPlacementEnumerationSession (MeshIds kept), builds the
- * physical graph from that seating, and completes fabric-node → ASIC on the identity mapping.
- * If intra-mesh fails against a seated candidate, that (mesh, footprint) is forbidden and the next
- * seating is tried.
+ * Each next() takes one seating, completes identity intra-mesh, and returns one TopologyMappingResult
+ * per input MGD with that descriptor's local MeshIds. An empty vector means placement is exhausted.
+ * Callers do not see merged/global MeshIds.
  *
  * Lifetime: the PSD, PGD, and MeshGraphDescriptor(s) passed to the constructor must outlive
  * the enumerator.
@@ -321,12 +324,9 @@ public:
     MultiMeshSolutionEnumerator(
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
-        const std::vector<const ::tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors,
+        const std::vector<MultiMeshMappingPart>& parts,
         const TopologyMappingConfig& config,
-        bool unique_shapes = false,
-        const std::vector<std::optional<PinningsByMesh>>& per_mgd_pinnings = {},
-        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
-        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+        bool unique_shapes = false);
 
     MultiMeshSolutionEnumerator(const MultiMeshSolutionEnumerator&) = delete;
     MultiMeshSolutionEnumerator& operator=(const MultiMeshSolutionEnumerator&) = delete;
@@ -335,15 +335,11 @@ public:
     ~MultiMeshSolutionEnumerator();
 
     /**
-     * @brief Next seating whose identity intra-mesh completed, or nullopt when placement is exhausted.
+     * @brief Next seating as one local-mesh-id result per input MGD, or empty when placement is exhausted.
      */
-    std::optional<TopologyMappingResult> next();
+    std::vector<TopologyMappingResult> next();
 
     std::size_t solutions_returned() const { return emitted_; }
-
-    const std::vector<std::map<MeshId, MeshId>>& per_part_local_to_global_mesh_ids() const {
-        return per_part_local_to_global_mesh_ids_;
-    }
 
 private:
     const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor_ = nullptr;

@@ -424,23 +424,9 @@ public:
     SatPlacementEnumerationSession(
         const PhysicalGroupingDescriptor& physical_grouping_descriptor,
         const MeshGraphDescriptor& mesh_graph_descriptor,
-        const ValidGroupingsMap& valid_groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         PlacementSolveStats* stats,
         const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
-        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
-        bool unique_shapes = false);
-
-    // Already-merged logical graph and per-mesh groupings (global MeshIds). Used when
-    // MultiMeshSolutionEnumerator has remapped several MGDs into one seating.
-    SatPlacementEnumerationSession(
-        const tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& logical,
-        std::map<MeshId, std::vector<GroupingInfo>> groupings_by_mesh,
-        std::map<MeshId, GroupingInfo> mgd_fallback_by_mesh,
-        std::map<MeshId, ConnectionValidationMode> sat_intra_mesh_mode_by_mesh,
-        bool relaxed_inter_mesh_policy,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        PlacementSolveStats* stats,
         const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
         bool unique_shapes = false);
 

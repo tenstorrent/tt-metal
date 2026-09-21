@@ -2718,7 +2718,6 @@ constexpr std::size_t kMaxGrowthCycles = 4;
 SatPlacementEnumerationSession::SatPlacementEnumerationSession(
     const PhysicalGroupingDescriptor& physical_grouping_descriptor,
     const MeshGraphDescriptor& mesh_graph_descriptor,
-    const ValidGroupingsMap& valid_groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     PlacementSolveStats* stats,
     const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings,
@@ -2728,6 +2727,8 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
     unique_shapes_ = unique_shapes;
     using tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph;
 
+    const ValidGroupingsMap valid_groupings = physical_grouping_descriptor.get_valid_groupings_for_mgd(
+        mesh_graph_descriptor, physical_system_descriptor, pinnings, /*require_placement=*/false);
     const auto mesh_it = valid_groupings.find("MESH");
     if (mesh_it == valid_groupings.end() || mesh_it->second.empty()) {
         return;
@@ -2779,30 +2780,6 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
                                                                         : ConnectionValidationMode::STRICT);
     }
     relaxed_inter_mesh_policy_ = mesh_graph_descriptor.is_inter_mesh_policy_relaxed();
-    finish_init(asic_id_to_mesh_rank);
-}
-
-SatPlacementEnumerationSession::SatPlacementEnumerationSession(
-    const tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& logical,
-    std::map<MeshId, std::vector<GroupingInfo>> groupings_by_mesh,
-    std::map<MeshId, GroupingInfo> mgd_fallback_by_mesh,
-    std::map<MeshId, ConnectionValidationMode> sat_intra_mesh_mode_by_mesh,
-    bool relaxed_inter_mesh_policy,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    PlacementSolveStats* stats,
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
-    bool unique_shapes) :
-    physical_system_descriptor_(&physical_system_descriptor),
-    stats_(stats),
-    mesh_level_graph_(logical.mesh_level_graph_),
-    global_mesh_groupings_(std::move(groupings_by_mesh)),
-    mgd_fallback_by_mesh_(std::move(mgd_fallback_by_mesh)),
-    sat_intra_mesh_mode_by_mesh_(std::move(sat_intra_mesh_mode_by_mesh)),
-    relaxed_inter_mesh_policy_(relaxed_inter_mesh_policy) {
-    unique_shapes_ = unique_shapes;
-    if (logical.mesh_adjacency_graphs_.empty() || global_mesh_groupings_.empty()) {
-        return;
-    }
     finish_init(asic_id_to_mesh_rank);
 }
 
