@@ -82,8 +82,21 @@ tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bo
 
 // Streaming compute (v2) handles every SDPA variant. With fp32 DEST accumulation it keeps the scores, the output
 // accumulator and the row sums in fp32, so it is only taken when those buffers fit in L1 next to the K/V slots.
-bool can_use_streaming_compute(bool fp32_dest_acc_en, uint32_t fp32_intermediate_bytes, uint32_t l1_budget_bytes) {
-    return !fp32_dest_acc_en || fp32_intermediate_bytes <= l1_budget_bytes;
+// The fp32 rescale costs a fixed amount per K chunk step; below 256x256 chunks it is not amortized and the
+// legacy kernel is faster, so small chunks with fp32 DEST stay on the legacy kernel.
+constexpr uint32_t kFp32StreamingMinChunkTiles = 8;
+
+bool can_use_streaming_compute(
+    bool fp32_dest_acc_en,
+    uint32_t q_chunk_tiles,
+    uint32_t k_chunk_tiles,
+    uint32_t fp32_intermediate_bytes,
+    uint32_t l1_budget_bytes) {
+    if (!fp32_dest_acc_en) {
+        return true;
+    }
+    return q_chunk_tiles >= kFp32StreamingMinChunkTiles && k_chunk_tiles >= kFp32StreamingMinChunkTiles &&
+           fp32_intermediate_bytes <= l1_budget_bytes;
 }
 
 uint32_t lightweight_mask_tile_count(bool is_causal, bool has_sliding_window, bool has_k_partial_mask) {
@@ -711,7 +724,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t l1_budget_bytes =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const bool use_streaming_compute =
-        can_use_streaming_compute(fp32_dest_acc_en, fp32_streaming_bytes, l1_budget_bytes);
+        can_use_streaming_compute(fp32_dest_acc_en, Sq_chunk_t, Sk_chunk_t, fp32_streaming_bytes, l1_budget_bytes);
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
