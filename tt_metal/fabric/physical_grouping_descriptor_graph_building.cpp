@@ -604,10 +604,10 @@ tt::tt_fabric::AdjacencyGraph<GroupingChipId> add_torus_wrap_edges(
     };
 
     if (mesh.node_grid_dims.size() >= 2) {
-        if (!ring_dims.empty() && ring_dims[0] && is_genuine_torus_axis(mesh.node_grid_dims[0])) {
+        if (!ring_dims.empty() && ring_dims[0] && tt::tt_fabric::is_genuine_torus_axis(mesh.node_grid_dims[0])) {
             connect_opposite_edges(CardinalDirection::North, CardinalDirection::South);
         }
-        if (ring_dims.size() > 1 && ring_dims[1] && is_genuine_torus_axis(mesh.node_grid_dims[1])) {
+        if (ring_dims.size() > 1 && ring_dims[1] && tt::tt_fabric::is_genuine_torus_axis(mesh.node_grid_dims[1])) {
             connect_opposite_edges(CardinalDirection::West, CardinalDirection::East);
         }
     }
@@ -1040,8 +1040,9 @@ std::vector<tt::tt_fabric::GroupingInfo> flattened_mesh_to_topology_variants(
                                            : mesh.graph.get_nodes().size();
     const bool can_add_torus_wrap = node_grid_dims.size() >= 2 && mesh.graph.get_nodes().size() == expected_node_count;
     // Size-1 and size-2 axes are ordinary mesh links; only dims > 2 can carry a distinct torus wrap.
-    const bool wrap_x = can_add_torus_wrap && is_genuine_torus_axis(node_grid_dims[0]);
-    const bool wrap_y = can_add_torus_wrap && node_grid_dims.size() > 1 && is_genuine_torus_axis(node_grid_dims[1]);
+    const bool wrap_x = can_add_torus_wrap && tt::tt_fabric::is_genuine_torus_axis(node_grid_dims[0]);
+    const bool wrap_y =
+        can_add_torus_wrap && node_grid_dims.size() > 1 && tt::tt_fabric::is_genuine_torus_axis(node_grid_dims[1]);
 
     std::vector<TopologyVariantSpec> variant_specs;
     variant_specs.reserve(4);
