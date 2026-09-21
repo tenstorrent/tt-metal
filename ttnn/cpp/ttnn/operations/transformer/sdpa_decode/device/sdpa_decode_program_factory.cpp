@@ -833,6 +833,18 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     reader_desc.core_ranges = core_grid;
     reader_desc.compile_time_args = std::move(reader_compile_time_args_common);
     reader_desc.config = ReaderConfigDescriptor{};
+    // A Blackhole DRAM endpoint accepts one read request per ~16 cycles per NoC, so K/V pages under 2 KB (bfp8,
+    // bfp4) cannot fill the channel from one NoC. The reader then takes V on the second NoC, which puts both data
+    // movement kernels in dynamic NoC mode.
+    const bool split_kv_noc = device->arch() == tt::ARCH::BLACKHOLE && input_tensor_k.buffer()->is_dram() &&
+                              k_tile_size < 2048 && v_tile_size < 2048;
+    if (split_kv_noc) {
+        reader_desc.defines = {{"SPLIT_KV_NOC", "1"}};
+        reader_desc.config = DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .noc_mode = NOC_MODE::DM_DYNAMIC_NOC};
+    }
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source = kernel_path + "dataflow/writer_decode_all.cpp";
@@ -840,6 +852,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = std::move(writer_compile_time_args_common);
     writer_desc.config = WriterConfigDescriptor{};
+    if (split_kv_noc) {
+        writer_desc.config = DataMovementConfigDescriptor{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .noc_mode = NOC_MODE::DM_DYNAMIC_NOC};
+    }
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = kernel_path + "compute/sdpa_flash_decode.cpp";
