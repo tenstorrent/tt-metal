@@ -232,7 +232,7 @@ jobs:
         with:
           log-file: generated/test_logs/tt-check.log
           run: |
-            uv pip install --no-deps tt-check==0.1.2
+            uv pip install --upgrade --no-deps tt-check
             tt-check --json
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
