@@ -121,6 +121,18 @@ times fidelity phases against the 5.4 TFLOP/s per core that the matrix
 engine does at LoFi). Prefer the tallest `Bt` whose core count fits (next
 section).
 
+### The exponential (2026-09-21)
+
+The pack thread's exponential is eleven SFPU steps a tile: a degree-3
+polynomial for the fraction (9.5e-5 relative, under the 19 bits `P^T` is
+read back at) and a one-instruction clamp at the bias in place of the
+compare-and-mask pair, so no constant register is borrowed from the
+compiler any more. It came from the forward's speed-up round; here it
+changed nothing measurable (the exponential runs under the FPU's work), and
+the gradients' errors are the same within the 19-bit noise. The ring's
+shifts are `ring_shift_fused` (its README), which took the backward step
+of the 20/10 shape from 37 to 33 ms.
+
 ### `mask_type`
 
 `Causal` for the diagonal block of a sequence (or the whole sequence on one
