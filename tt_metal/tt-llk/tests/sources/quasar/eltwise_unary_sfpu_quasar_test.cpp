@@ -133,25 +133,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        if constexpr (unpack_to_dest)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
-        }
-        else
-        {
-            const bool int8_math_into_int32_dest =
-                is_fp32_dest_acc_en && (src_format == DataFormat::Int8 || src_format == DataFormat::UInt8) && sfpu_in_format == DataFormat::Int32;
-            if (int8_math_into_int32_dest)
-            {
-                // ALU_ACC_CTRL_INT8_math_enabled is only for Int8/UInt8 math
-                // accumulating into the Int32 Dest through the ELWADD datacopy.
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(src_format, src_format);
-            }
-            else
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
-            }
-        }
+
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
 
         if constexpr (!unpack_to_dest)
         {

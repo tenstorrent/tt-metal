@@ -96,15 +96,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // int-fill / float-fill split (int32 for int fills, otherwise is_fp32_dest_acc_en).
     DataFormat math_format = static_cast<DataFormat>(formats.math);
     const bool is_int_fill = is_int_fill_format(static_cast<DataFormat>(formats.unpack_A_src));
-
-    if (is_int_fill)
-    {
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-    }
-    else
-    {
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(math_format, math_format);
-    }
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
 
     _llk_math_eltwise_sfpu_init_();
 
