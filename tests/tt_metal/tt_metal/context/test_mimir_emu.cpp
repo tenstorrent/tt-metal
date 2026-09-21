@@ -163,10 +163,16 @@ void read_mimir_gddr(
 }
 
 bool emu_server_configured() {
-    return std::getenv("TT_METAL_EMU_SERVER") != nullptr && std::getenv("TT_METAL_EMU_SOC_DESC") != nullptr;
+    const bool emu = std::getenv("TT_METAL_EMU_SERVER") != nullptr && std::getenv("TT_METAL_EMU_SOC_DESC") != nullptr;
+    const bool jtag = std::getenv("TT_METAL_GRENDEL_JTAG_SERVER") != nullptr &&
+                      std::getenv("TT_METAL_GRENDEL_JTAG_SOC_DESC") != nullptr;
+    return emu || jtag;
 }
 
 bool sival_bringup() {
+    if (std::getenv("TT_METAL_GRENDEL_JTAG_SERVER") != nullptr) {
+        return true;
+    }
     const char* bringup = std::getenv("TT_METAL_EMU_BRINGUP");
     return bringup != nullptr && std::string_view(bringup) == "sival";
 }
