@@ -317,12 +317,6 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     compute_ct.push_back(f32_bits(1e-6f));
     compute.compile_time_args = compute_ct;
     compute.config = compute_cfg();
-    // Ct >= 2 (chunk_size 64, test-only): the shape branches the header keeps for Ct==2 push the
-    // prep program to the 70 KB kernel-config limit (70752 > 70656 B measured on QB2 at O2), so
-    // build that variant for size. Ct==1 (production) stays at the default O2 — identical code.
-    if (Ct > 1) {
-        compute.opt_level = KernelBuildOptLevel::Os;
-    }
     compute.runtime_args.reserve(n_used);
 
     auto* q_buf = in.q.buffer();
