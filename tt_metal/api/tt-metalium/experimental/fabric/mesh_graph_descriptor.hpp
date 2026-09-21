@@ -18,6 +18,8 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <umd/device/types/arch.hpp>
 
 // Forward declaration
 namespace tt::tt_fabric {
@@ -145,6 +147,16 @@ public:
     // backwards_compatible will enable all checks related to MGD 1.0. This will limit the functionality of MGD 2.0
     explicit MeshGraphDescriptor(const std::string& text_proto, bool backwards_compatible = false);
     explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path, bool backwards_compatible = false);
+    // Programmatic construction from a populated proto (no textproto parse).
+    explicit MeshGraphDescriptor(std::shared_ptr<proto::MeshGraphDescriptor> proto, bool backwards_compatible = false);
+
+    // Programmatic single-mesh descriptor (protobuf API, not a textproto string).
+    static MeshGraphDescriptor generate_mesh_graph_descriptor_of_shape(
+        tt::tt_metal::distributed::MeshShape mesh_shape,
+        FabricType fabric_type,
+        FabricReliabilityMode reliability_mode,
+        tt::ARCH arch,
+        std::uint32_t num_connections_per_direction);
 
     ~MeshGraphDescriptor();
 

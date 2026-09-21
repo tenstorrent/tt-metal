@@ -112,12 +112,18 @@ void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name, 
     summary_ss << "Degree histogram: " << degree_hist_str << std::endl;
     log_trace(tt::LogFabric, "{}", summary_ss.str());
 
-    // Print node details based on mode
+    // Print node details based on mode. Pointer nodes print as their converted dense id.
+    std::map<NodeId, std::size_t> node_ids;
+    for (std::size_t i = 0; i < nodes_cache_.size(); ++i) {
+        node_ids.emplace(nodes_cache_[i], i);
+    }
     std::stringstream nodes_ss;
     for (const auto& node : nodes_cache_) {
         const auto& neighbors = get_neighbors(node);
         std::set<NodeId> unique_neighbors(neighbors.begin(), neighbors.end());
-        nodes_ss << fmt::format("  Node {} (degree {}): ", node, unique_neighbors.size());
+        const std::size_t id = node_ids.at(node);
+        nodes_ss << fmt::format(
+            "  Node {} (degree {}): ", detail::format_graph_node(node, id), unique_neighbors.size());
         if (neighbors.empty()) {
             nodes_ss << "no neighbors";
         } else {
@@ -127,7 +133,7 @@ void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name, 
                     nodes_ss << ", ";
                 }
                 first = false;
-                nodes_ss << fmt::format("{}", neighbor);
+                nodes_ss << fmt::format("{}", detail::format_graph_node(neighbor, node_ids.at(neighbor)));
             }
         }
         nodes_ss << std::endl;
@@ -649,7 +655,7 @@ void MappingConstraints<TargetNode, GlobalNode>::print_mapping_constraint_maps(
         detail_ss << "  (no explicit required sets — targets without entries are unrestricted)" << std::endl;
     } else {
         for (const auto& [target, globals] : valid_mappings_) {
-            detail_ss << fmt::format("  Target {} (|valid|={}): ", target, globals.size());
+            detail_ss << fmt::format("  Target {} (|valid|={}): ", detail::format_graph_node(target, 0), globals.size());
             if (globals.empty()) {
                 detail_ss << "(empty)";
             } else {
@@ -659,7 +665,7 @@ void MappingConstraints<TargetNode, GlobalNode>::print_mapping_constraint_maps(
                         detail_ss << ", ";
                     }
                     first = false;
-                    detail_ss << fmt::format("{}", g);
+                    detail_ss << fmt::format("{}", detail::format_graph_node(g, 0));
                 }
             }
             detail_ss << std::endl;
@@ -671,7 +677,8 @@ void MappingConstraints<TargetNode, GlobalNode>::print_mapping_constraint_maps(
         detail_ss << "  (none)" << std::endl;
     } else {
         for (const auto& [target, globals] : preferred_mappings_) {
-            detail_ss << fmt::format("  Target {} (|preferred|={}): ", target, globals.size());
+            detail_ss << fmt::format(
+                "  Target {} (|preferred|={}): ", detail::format_graph_node(target, 0), globals.size());
             if (globals.empty()) {
                 detail_ss << "(empty)";
             } else {
@@ -681,7 +688,7 @@ void MappingConstraints<TargetNode, GlobalNode>::print_mapping_constraint_maps(
                         detail_ss << ", ";
                     }
                     first = false;
-                    detail_ss << fmt::format("{}", g);
+                    detail_ss << fmt::format("{}", detail::format_graph_node(g, 0));
                 }
             }
             detail_ss << std::endl;
@@ -693,7 +700,8 @@ void MappingConstraints<TargetNode, GlobalNode>::print_mapping_constraint_maps(
         detail_ss << "  (none)" << std::endl;
     } else {
         for (const auto& [t, g] : forbidden_pairs_) {
-            detail_ss << fmt::format("  ({}, {})", t, g) << std::endl;
+            detail_ss << fmt::format("  ({}, {})", detail::format_graph_node(t, 0), detail::format_graph_node(g, 0))
+                      << std::endl;
         }
     }
 
@@ -722,7 +730,7 @@ void MappingConstraints<TargetNode, GlobalNode>::print_mapping_constraint_maps(
                     detail_ss << ", ";
                 }
                 first = false;
-                detail_ss << fmt::format("{}", t);
+                detail_ss << fmt::format("{}", detail::format_graph_node(t, 0));
             }
             detail_ss << std::endl;
             if (gi < same_rank_global_groups_.size()) {
@@ -733,7 +741,7 @@ void MappingConstraints<TargetNode, GlobalNode>::print_mapping_constraint_maps(
                         detail_ss << ", ";
                     }
                     first = false;
-                    detail_ss << fmt::format("{}", g);
+                    detail_ss << fmt::format("{}", detail::format_graph_node(g, 0));
                 }
                 detail_ss << std::endl;
             }
@@ -1935,23 +1943,12 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
 
             // Log warning if constraint nodes are missing from the graph
             if (!missing_nodes.empty()) {
-                std::stringstream missing_nodes_str;
-                bool first = true;
-                for (const auto& node : missing_nodes) {
-                    if (!first) {
-                        missing_nodes_str << ", ";
-                    }
-                    first = false;
-                    missing_nodes_str << fmt::format("{}", node);
-                }
-
                 log_debug(
                     tt::LogFabric,
                     "Topology solver: {} constraint node(s) for target node {} are not present in the global graph. "
-                    "These nodes will be ignored. Missing nodes: {}",
+                    "These nodes will be ignored.",
                     missing_nodes.size(),
-                    i,
-                    missing_nodes_str.str());
+                    i);
 
                 // Warn if all constraint nodes are missing (empty restricted_indices)
                 if (restricted_indices.empty()) {
@@ -1985,23 +1982,12 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
 
             // Log warning if preferred constraint nodes are missing from the graph
             if (!missing_nodes.empty()) {
-                std::stringstream missing_nodes_str;
-                bool first = true;
-                for (const auto& node : missing_nodes) {
-                    if (!first) {
-                        missing_nodes_str << ", ";
-                    }
-                    first = false;
-                    missing_nodes_str << fmt::format("{}", node);
-                }
-
                 log_debug(
                     tt::LogFabric,
                     "Topology solver: {} preferred constraint node(s) for target node {} are not present in the global "
-                    "graph. These nodes will be ignored. Missing nodes: {}",
+                    "graph. These nodes will be ignored.",
                     missing_nodes.size(),
-                    i,
-                    missing_nodes_str.str());
+                    i);
             }
 
             preferred_global_indices[i] = std::move(preferred_indices);
@@ -2100,7 +2086,7 @@ void ConstraintIndexData<TargetNode, GlobalNode>::print_resolved_mapping_constra
     std::stringstream detail_ss;
     detail_ss << "\n--- Per-target valid / forbidden / preferred (resolved to global nodes) ---" << std::endl;
     for (size_t i = 0; i < graph_data.n_target; ++i) {
-        const auto& tnode = graph_data.target_nodes[i];
+        const auto& tnode = graph_data.printable_target(i);
         detail_ss << fmt::format("  Target {} [idx={}]: ", tnode, i);
 
         detail_ss << "valid=";
@@ -2113,7 +2099,7 @@ void ConstraintIndexData<TargetNode, GlobalNode>::print_resolved_mapping_constra
                         detail_ss << ", ";
                     }
                     first = false;
-                    detail_ss << fmt::format("{}[{}]", graph_data.global_nodes[gi], gi);
+                    detail_ss << fmt::format("{}[{}]", graph_data.printable_global(gi), gi);
                 }
             }
             detail_ss << "}";
@@ -2131,7 +2117,7 @@ void ConstraintIndexData<TargetNode, GlobalNode>::print_resolved_mapping_constra
                         detail_ss << ", ";
                     }
                     first = false;
-                    detail_ss << fmt::format("{}[{}]", graph_data.global_nodes[gi], gi);
+                    detail_ss << fmt::format("{}[{}]", graph_data.printable_global(gi), gi);
                 }
             }
             detail_ss << "}";
@@ -2149,7 +2135,7 @@ void ConstraintIndexData<TargetNode, GlobalNode>::print_resolved_mapping_constra
                         detail_ss << ", ";
                     }
                     first = false;
-                    detail_ss << fmt::format("{}[{}]", graph_data.global_nodes[gi], gi);
+                    detail_ss << fmt::format("{}[{}]", graph_data.printable_global(gi), gi);
                 }
             }
             detail_ss << "}";
@@ -2181,9 +2167,9 @@ void ConstraintIndexData<TargetNode, GlobalNode>::print_resolved_mapping_constra
                 if (ti < graph_data.n_target && gi < graph_data.n_global) {
                     detail_ss << fmt::format(
                         "    ({}, {}) -> ({}, {})\n",
-                        graph_data.target_nodes[ti],
+                        graph_data.printable_target(ti),
                         ti,
-                        graph_data.global_nodes[gi],
+                        graph_data.printable_global(gi),
                         gi);
                 }
                 shown++;
@@ -2208,7 +2194,7 @@ void ConstraintIndexData<TargetNode, GlobalNode>::print_resolved_mapping_constra
             size_t gid = (i < target_to_group.size()) ? target_to_group[i] : SIZE_MAX;
             detail_ss << fmt::format(
                 "  Target {} [idx={}]: same_rank_group_id={}\n",
-                graph_data.target_nodes[i],
+                graph_data.printable_target(i),
                 i,
                 gid == SIZE_MAX ? std::string("none") : std::to_string(gid));
         }
@@ -2223,7 +2209,7 @@ void ConstraintIndexData<TargetNode, GlobalNode>::print_resolved_mapping_constra
                     detail_ss << ", ";
                 }
                 first = false;
-                detail_ss << fmt::format("{}[{}]", graph_data.global_nodes[gi], gi);
+                detail_ss << fmt::format("{}[{}]", graph_data.printable_global(gi), gi);
             }
             detail_ss << std::endl;
         }
@@ -2825,7 +2811,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
             std::string error_msg = fmt::format(
                 "Cannot place target node {} in global graph: no valid candidates found. "
                 "Remaining: {} target nodes to place, {} unused nodes in global graph",
-                graph_data.target_nodes[selection.target_idx],
+                graph_data.printable_target(selection.target_idx),
                 remaining_targets,
                 remaining_global);
             // Suppress verbose debug messages in quiet mode to avoid spam
@@ -3009,8 +2995,8 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::find_first_mapping(
                     }
                 }
                 std::string error_msg;
-                const auto& target_node = graph_data.target_nodes[i];
-                const auto& required_global = graph_data.global_nodes[global_idx];
+                const auto& target_node = graph_data.printable_target(i);
+                const auto& required_global = graph_data.printable_global(global_idx);
                 if (conflicting_target_idx != SIZE_MAX) {
                     error_msg = fmt::format(
                         "Pre-assignment conflict: target node {} must map to global node {} (required constraint), "
@@ -3018,7 +3004,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::find_first_mapping(
                         "Multiple target nodes cannot map to the same global node.",
                         target_node,
                         required_global,
-                        graph_data.target_nodes[conflicting_target_idx],
+                        graph_data.printable_target(conflicting_target_idx),
                         required_global);
                 } else {
                     error_msg = fmt::format(
@@ -3047,19 +3033,19 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::find_first_mapping(
                         graph_data.global_adj_idx[global_idx].end(),
                         neighbor_global_idx);
                     if (!edge_exists) {
-                        const auto& target_node = graph_data.target_nodes[i];
-                        const auto& required_global = graph_data.global_nodes[global_idx];
+                        const auto& target_node = graph_data.printable_target(i);
+                        const auto& required_global = graph_data.printable_global(global_idx);
                         std::string error_msg = fmt::format(
                             "Pre-assignment conflict: target node {} must map to global node {} (required constraint), "
                             "but target node {} (adjacent to {}) is already mapped to global node {}, "
                             "and global nodes {} and {} are not adjacent. This violates graph isomorphism requirements.",
                             target_node,
                             required_global,
-                            graph_data.target_nodes[neighbor],
+                            graph_data.printable_target(neighbor),
                             target_node,
-                            graph_data.global_nodes[neighbor_global_idx],
+                            graph_data.printable_global(neighbor_global_idx),
                             required_global,
-                            graph_data.global_nodes[neighbor_global_idx]);
+                            graph_data.printable_global(neighbor_global_idx));
                         if (quiet_mode) {
                             log_debug(tt::LogFabric, "{}", error_msg);
                         } else {
@@ -3125,8 +3111,8 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::find_first_mapping(
                             "Strict mode validation failed: target graph edge from node {} to {} requires {} channels, "
                             "but physical graph edges have at most {} channels. "
                             "Strict mode requires sufficient channel capacity for all edges.",
-                            graph_data.target_nodes[i],
-                            graph_data.target_nodes[neighbor],
+                            graph_data.printable_target(i),
+                            graph_data.printable_target(neighbor),
                             required,
                             max_available);
                         if (quiet_mode) {
@@ -3598,8 +3584,6 @@ void MappingValidator<TargetNode, GlobalNode>::validate_connection_counts(
         }
 
         size_t global_idx = static_cast<size_t>(mapping[i]);
-        const TargetNode& target_node = graph_data.target_nodes[i];
-        const GlobalNode& global_node = graph_data.global_nodes[global_idx];
 
         // Check all neighbors of this target node
         for (size_t neighbor : graph_data.target_adj_idx[i]) {
@@ -3608,8 +3592,6 @@ void MappingValidator<TargetNode, GlobalNode>::validate_connection_counts(
             }
 
             size_t neighbor_global_idx = static_cast<size_t>(mapping[neighbor]);
-            const TargetNode& neighbor_target = graph_data.target_nodes[neighbor];
-            const GlobalNode& neighbor_global = graph_data.global_nodes[neighbor_global_idx];
 
             // Get required channel count
             size_t required = graph_data.target_conn_count[i].at(neighbor);
@@ -3623,10 +3605,10 @@ void MappingValidator<TargetNode, GlobalNode>::validate_connection_counts(
                         "Strict mode validation failed: target graph edge from node {} to {} exists, "
                         "but physical edge from {} to {} does not exist in global graph. "
                         "This indicates a mapping inconsistency.",
-                        target_node,
-                        neighbor_target,
-                        global_node,
-                        neighbor_global);
+                        graph_data.printable_target(i),
+                        graph_data.printable_target(neighbor),
+                        graph_data.printable_global(global_idx),
+                        graph_data.printable_global(neighbor_global_idx));
                     if (quiet_mode) {
                         log_debug(tt::LogFabric, "{}", error_msg);
                     } else {
@@ -3646,11 +3628,11 @@ void MappingValidator<TargetNode, GlobalNode>::validate_connection_counts(
                         "Strict mode validation failed: target graph edge from node {} to {} requires {} channels, "
                         "but physical edge from {} to {} only has {} channels. "
                         "Strict mode requires sufficient channel capacity for all edges.",
-                        target_node,
-                        neighbor_target,
+                        graph_data.printable_target(i),
+                        graph_data.printable_target(neighbor),
                         required,
-                        global_node,
-                        neighbor_global,
+                        graph_data.printable_global(global_idx),
+                        graph_data.printable_global(neighbor_global_idx),
                         actual);
                     if (quiet_mode) {
                         log_debug(tt::LogFabric, "{}", error_msg);
@@ -3663,11 +3645,11 @@ void MappingValidator<TargetNode, GlobalNode>::validate_connection_counts(
                         "Relaxed mode: target graph edge from node {} to {} requires {} channels, "
                         "but physical edge from {} to {} only has {} channels. "
                         "Mapping will proceed but may have insufficient bandwidth.",
-                        target_node,
-                        neighbor_target,
+                        graph_data.printable_target(i),
+                        graph_data.printable_target(neighbor),
                         required,
-                        global_node,
-                        neighbor_global,
+                        graph_data.printable_global(global_idx),
+                        graph_data.printable_global(neighbor_global_idx),
                         actual);
                     if (!quiet_mode) {
                         log_info(tt::LogFabric, "{}", warning_msg);
@@ -3710,7 +3692,7 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
             if (!unmapped_list.empty()) {
                 unmapped_list += ", ";
             }
-            unmapped_list += fmt::format("{}", graph_data.target_nodes[idx]);
+            unmapped_list += fmt::format("{}", graph_data.printable_target(idx));
         }
         std::string error_msg = fmt::format(
             "Mapping validation failed: {} target node(s) are not mapped to any global node: {}",
@@ -3755,13 +3737,13 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
                 if (!conflicting_targets.empty()) {
                     conflicting_targets += ", ";
                 }
-                conflicting_targets += fmt::format("{}", graph_data.target_nodes[target_idx]);
+                conflicting_targets += fmt::format("{}", graph_data.printable_target(target_idx));
             }
             std::string error_msg = fmt::format(
                 "Mapping validation failed: {} target node(s) map to the same global node {}: {}. "
                 "Each global node can only be mapped to one target node.",
                 target_indices.size(),
-                graph_data.global_nodes[global_idx],
+                graph_data.printable_global(global_idx),
                 conflicting_targets);
             if (quiet_mode) {
                 log_debug(tt::LogFabric, "{}", error_msg);
@@ -3778,14 +3760,10 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
     // Validate that all edges exist in the global graph
     for (size_t i = 0; i < mapping.size(); ++i) {
         size_t global_idx = static_cast<size_t>(mapping[i]);
-        const TargetNode& target_node = graph_data.target_nodes[i];
-        const GlobalNode& global_node = graph_data.global_nodes[global_idx];
 
         // Check all neighbors
         for (size_t neighbor : graph_data.target_adj_idx[i]) {
             size_t neighbor_global_idx = static_cast<size_t>(mapping[neighbor]);
-            const TargetNode& neighbor_target = graph_data.target_nodes[neighbor];
-            const GlobalNode& neighbor_global = graph_data.global_nodes[neighbor_global_idx];
 
             // Check if edge exists in global graph
             bool edge_exists = std::binary_search(
@@ -3798,10 +3776,10 @@ bool MappingValidator<TargetNode, GlobalNode>::validate_mapping(
                     "Mapping validation failed: target graph has edge from node {} to {}, "
                     "but global graph does not have corresponding edge from {} to {}. "
                     "This indicates the mapping violates graph isomorphism requirements.",
-                    target_node,
-                    neighbor_target,
-                    global_node,
-                    neighbor_global);
+                    graph_data.printable_target(i),
+                    graph_data.printable_target(neighbor),
+                    graph_data.printable_global(global_idx),
+                    graph_data.printable_global(neighbor_global_idx));
                 if (quiet_mode) {
                     log_debug(tt::LogFabric, "{}", error_msg);
                 } else {
@@ -3849,11 +3827,11 @@ void MappingValidator<TargetNode, GlobalNode>::print_mapping(
     for (size_t i = 0; i < mapping.size(); ++i) {
         if (mapping[i] != -1) {
             size_t global_idx = static_cast<size_t>(mapping[i]);
-            ss << "  Target node " << graph_data.target_nodes[i] << " -> Global node "
+            ss << "  Target node " << graph_data.printable_target(i) << " -> Global node "
                << graph_data.global_nodes[global_idx] << std::endl;
             mapped_count++;
         } else {
-            ss << "  Target node " << graph_data.target_nodes[i] << " -> UNMAPPED" << std::endl;
+            ss << "  Target node " << graph_data.printable_target(i) << " -> UNMAPPED" << std::endl;
         }
     }
     ss << "Total mapped: " << mapped_count << " of " << mapping.size() << " target nodes" << std::endl;

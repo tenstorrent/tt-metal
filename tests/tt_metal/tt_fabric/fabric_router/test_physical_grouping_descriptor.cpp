@@ -1780,7 +1780,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty());
     const auto sat_placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
     ASSERT_EQ(sat_placements.size(), 1u) << "SAT joint placement should seat the 2x4 mesh on the SP4 mock";
-    EXPECT_EQ(sat_placements.front().asics.size(), 8u) << "2x4 seating covers 8 ASICs";
+    EXPECT_EQ(sat_placements.front().placement.asics.size(), 8u) << "2x4 seating covers 8 ASICs";
 
     // Test SUPERPOD level grouping - should fail during mesh building (all_to_all connection type)
     auto superpod_groupings = pgd.get_groupings_by_name("superpods");
@@ -2529,10 +2529,10 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
 
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
     ASSERT_EQ(placements.size(), 1u) << "SAT joint placement should seat the single 4x4 mesh";
-    EXPECT_EQ(placements.front().asics.size(), 16u) << "the 4x4 seating should cover 16 ASICs";
-    EXPECT_EQ(count_distinct_hosts_for_asics(psd, placements.front().asics), 1u)
+    EXPECT_EQ(placements.front().placement.asics.size(), 16u) << "the 4x4 seating should cover 16 ASICs";
+    EXPECT_EQ(count_distinct_hosts_for_asics(psd, placements.front().placement.asics), 1u)
         << "host_topology [1,1] should land on a single host";
-    EXPECT_EQ(placements.front().mesh_node_to_asic_position.size(), 16u)
+    EXPECT_EQ(placements.front().placement.mesh_node_to_asic_position.size(), 16u)
         << "Composed pinning should cover all 16 logical chips";
 }
 
@@ -3184,30 +3184,21 @@ namespace utils = tt::tt_metal::experimental::tt_fabric;
 // The tests below call the production functions for each stage directly, one at a time, so every
 // stage is visible at the call site and can be asserted on:
 //
-//   build pgd -> get valid groupings -> build logical_multi_mesh_adjacency_graph
-//             -> place / build flat_adjacency_map_from_psd
-//             -> build hierarchical_from_flat_graph -> map_multi_mesh_to_physical
+//   build pgd -> get valid groupings -> place -> map_multi_mesh_to_physical
 //
-// Two things are worth knowing when reading them:
-//
-//   build_hierarchical_from_flat_graph splits the flat ASIC graph by placed footprint and links two
-//   meshes when a real ethernet connection crosses between them. Meshes are keyed by placement
-//   index, matching the mesh id ordering placement returns, and any PGD pinning a placement carries
-//   is preserved.
-//
-//   map_multi_mesh_to_physical is given disable_rank_bindings because these fixtures are
-//   single-host and rank constraints are not what is under test; connectivity is left RELAXED,
-//   matching the default the mapper documents.
+// map_multi_mesh_to_physical is given disable_rank_bindings because these fixtures are
+// single-host and rank constraints are not what is under test; connectivity is left RELAXED,
+// matching the default the mapper documents.
 
 // ----- reading the results ----------------------------------------------------------------------
 
 // The ASICs each placement claims, one sorted set per mesh, ordered by mesh id.
-std::vector<std::set<uint64_t>> footprints_of(const std::vector<PsdPlacement>& placements) {
+std::vector<std::set<uint64_t>> footprints_of(const AssignedMeshes& placements) {
     std::vector<std::set<uint64_t>> footprints;
     footprints.reserve(placements.size());
-    for (const auto& placement : placements) {
+    for (const auto& placed : placements) {
         std::set<uint64_t> asics;
-        for (const auto& asic : placement.asics) {
+        for (const auto& asic : placed.placement.asics) {
             asics.insert(*asic);
         }
         footprints.push_back(std::move(asics));
@@ -3232,13 +3223,20 @@ std::vector<std::set<uint64_t>> mapped_footprints(const utils::TopologyMappingRe
 }
 
 std::size_t channels_between(
-    const AdjacencyGraph<tt::tt_metal::AsicID>& flat_graph,
+    const tt::tt_metal::PhysicalSystemDescriptor& psd,
     const std::set<uint64_t>& left,
     const std::set<uint64_t>& right) {
     std::size_t channels = 0;
-    for (uint64_t chip : left) {
-        for (const auto& neighbor : flat_graph.get_neighbors(tt::tt_metal::AsicID{chip})) {
-            channels += static_cast<std::size_t>(right.count(*neighbor));
+    for (const auto& host_name : psd.get_all_hostnames()) {
+        for (const auto& [src_asic_id, asic_connections] : psd.get_asic_topology(host_name)) {
+            if (!left.contains(*src_asic_id)) {
+                continue;
+            }
+            for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+                if (right.contains(*dst_asic_id)) {
+                    channels += eth_connections.size();
+                }
+            }
         }
     }
     return channels;
@@ -3439,21 +3437,14 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
-    // build logical
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-
-    // place, and build the flat ASIC adjacency the physical graph is derived from
+    // place
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
     ASSERT_EQ(placements.size(), 2u) << "both meshes should be placed on the 4-chip line";
-
-    // build physical
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
 
     // place and map
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
-    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, mgd, config);
     ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
     EXPECT_THAT(
         mapped_footprints(mapping),
@@ -3547,10 +3538,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
-    // build logical
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-
-    // place, and build the flat ASIC adjacency the physical graph is derived from
+    // place
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
 
     // Placement fails, so there is no physical graph to build and nothing to map.
@@ -3633,21 +3621,14 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
-    // build logical
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-
-    // place, and build the flat ASIC adjacency the physical graph is derived from
+    // place
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
     ASSERT_EQ(placements.size(), 2u) << "both meshes should be placed when nothing forces them to touch";
-
-    // build physical
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
 
     // place and map
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
-    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, mgd, config);
     ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
     EXPECT_THAT(
         mapped_footprints(mapping),
@@ -3798,21 +3779,14 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
-    // build logical
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
 
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
     ASSERT_EQ(placements.size(), 4u) << "all four meshes should be placed on the 6-chip ring";
 
-    // build physical
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-
     // place and map
-    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, mgd, config);
     ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
     EXPECT_EQ(mapping.fabric_node_to_asic.size(), 6u) << "every logical fabric node should be bound to an ASIC";
 
@@ -3937,10 +3911,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
-    // build logical
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-
-    // place, and build the flat ASIC adjacency the physical graph is derived from
+    // place
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
 
     // Placement fails, so there is no physical graph to build and nothing to map.
@@ -4141,21 +4112,14 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
-    // build logical
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-
-    // place, and build the flat ASIC adjacency the physical graph is derived from
+    // place
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
     ASSERT_EQ(placements.size(), 4u) << "all four meshes should be placed on the 10 chips";
-
-    // build physical
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
 
     // place and map
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
-    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, mgd, config);
     ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
     EXPECT_EQ(mapping.fabric_node_to_asic.size(), 10u) << "every logical fabric node should be bound to an ASIC";
 
@@ -4351,21 +4315,14 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
-    // build logical
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-
-    // place, and build the flat ASIC adjacency the physical graph is derived from
+    // place
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
     ASSERT_EQ(placements.size(), 4u) << "the hub and all three spokes should be placed";
-
-    // build physical
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
 
     // place and map
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
-    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, mgd, config);
     ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
     EXPECT_EQ(mapping.fabric_node_to_asic.size(), 10u) << "the hub's 4 chips plus the spokes' 3, 2 and 1";
 
@@ -4539,20 +4496,9 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     EXPECT_EQ(meshes.at("mgd1_M0").front().adjacency_graph.get_nodes().size(), 1u)
         << "the second descriptor's M0 is a single chip, despite sharing the name";
 
-    // build logical
-    // One merged logical graph over both descriptors, with mesh ids renumbered so that the first
-    // descriptor's meshes come first. That renumbering is the order the placements come back in.
-    std::vector<utils::LogicalMultiMeshGraph> parts;
-    parts.reserve(mgds.size());
-    for (const auto& mgd : mgds) {
-        parts.push_back(utils::build_logical_multi_mesh_adjacency_graph(mgd));
-    }
-    const auto logical = utils::merge_logical_multi_mesh_adjacency_graphs(parts);
-
-    // place, and build the flat ASIC adjacency the physical graph is derived from
+    // place
     const std::vector<const MeshGraphDescriptor*> descriptors{&mgds[0], &mgds[1]};
     const auto placements = pgd.solve_adjacency_guided_placement(descriptors, valid_groupings, psd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
     ASSERT_EQ(placements.size(), 4u) << "two meshes from each descriptor";
 
     const auto placed = footprints_of(placements);
@@ -4565,15 +4511,10 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
         ::testing::UnorderedElementsAre(std::set<uint64_t>({103}), std::set<uint64_t>({104})))
         << "and the second descriptor's take the right, in either order";
 
-    // build physical
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-
     // place and map
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
-    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
-    ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
-    EXPECT_EQ(mapping.fabric_node_to_asic.size(), 5u) << "all five chips are bound, three of them A's and two B's";
+    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, descriptors, config);
 
     // The binding has to agree with the placement, mesh for mesh: A's 1x2 is the only two-chip mesh
     // in either descriptor, and the seam pulls its 1x1 to 102.
@@ -4734,18 +4675,9 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgds(mgds, psd);
 
-    // build logical
-    std::vector<utils::LogicalMultiMeshGraph> parts;
-    parts.reserve(mgds.size());
-    for (const auto& mgd : mgds) {
-        parts.push_back(utils::build_logical_multi_mesh_adjacency_graph(mgd));
-    }
-    const auto logical = utils::merge_logical_multi_mesh_adjacency_graphs(parts);
-
-    // place, and build the flat ASIC adjacency the physical graph is derived from
+    // place
     const std::vector<const MeshGraphDescriptor*> descriptors{&mgds[0], &mgds[1]};
     const auto placements = pgd.solve_adjacency_guided_placement(descriptors, valid_groupings, psd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
     ASSERT_EQ(placements.size(), 4u) << "two meshes from each descriptor";
     ASSERT_THAT(
         footprints_of(placements),
@@ -4756,19 +4688,16 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
             std::set<uint64_t>({104, 105})))
         << "placement should seat each descriptor on the side whose link is wide enough for its seam";
 
-    // build physical
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-
     // place and map
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
     config.inter_mesh_validation_mode = ::tt::tt_fabric::ConnectionValidationMode::STRICT;
-    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, descriptors, config);
     ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
 
     const auto footprints = mapped_footprints(mapping);
     ASSERT_EQ(footprints.size(), 4u);
-    EXPECT_EQ(channels_between(flat_graph, footprints[0], footprints[1]), 4u)
+    EXPECT_EQ(channels_between(psd, footprints[0], footprints[1]), 4u)
         << "the first descriptor requires 4 channels, so the physical seam its two meshes were bound to "
            "must carry that many";
     EXPECT_EQ(chips_in({footprints[0], footprints[1]}), std::set<uint64_t>({100, 101, 102}))
@@ -4865,25 +4794,18 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
-    // build logical
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-
-    // place, and build the flat ASIC adjacency the physical graph is derived from
+    // place
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
     ASSERT_EQ(placements.size(), 2u) << "both meshes should be placed";
     EXPECT_THAT(
         footprints_of(placements),
         ::testing::UnorderedElementsAre(std::set<uint64_t>({101}), std::set<uint64_t>({102})))
         << "the 4-channel link is the only seam wide enough, so the 2-channel pair should be left alone";
 
-    // build physical
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-
     // place and map
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
-    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, mgd, config);
     ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
     EXPECT_EQ(chips_in(mapped_footprints(mapping)), std::set<uint64_t>({101, 102}));
 }
@@ -5055,12 +4977,8 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
-    // build logical
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-
-    // place, and build the flat ASIC adjacency the physical graph is derived from
+    // place
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
     ASSERT_EQ(placements.size(), 2u)
         << "a RELAXED count is a preference, so an unmeetable one should not stop the meshes being placed";
     EXPECT_THAT(
@@ -5068,13 +4986,10 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
         ::testing::UnorderedElementsAre(std::set<uint64_t>({101}), std::set<uint64_t>({102})))
         << "and the preference should still steer them onto the widest seam available";
 
-    // build physical
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-
     // place and map
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
-    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, mgd, config);
     EXPECT_TRUE(mapping.success) << "the mapper accepts a short seam under RELAXED, so mapping should succeed: "
                                  << mapping.error_message;
 }
@@ -5195,10 +5110,6 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 
     EXPECT_ANY_THROW(utils::validate_shared_inter_mesh_policy({&mgds[0], &mgds[1]}))
         << "a RELAXED descriptor and a STRICT one cannot be merged into one topology";
-
-    // And the multi-MGD build applies it on its own, so a caller cannot reach the merge by not asking.
-    EXPECT_ANY_THROW(utils::build_physical_multi_mesh_adjacency_graph(psd, pgd, mgds))
-        << "the vector overload should reject the pair before it does any work";
 }
 
 // A descriptor with no inter-mesh connections defaults to STRICT, so it conflicts with a RELAXED sibling.
@@ -5337,21 +5248,14 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     EXPECT_THAT(grouping_graph.get_neighbors(0u), ::testing::ElementsAre(1u));
     EXPECT_THAT(grouping_graph.get_neighbors(1u), ::testing::ElementsAre(0u));
 
-    // build logical
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-
     // place, and build the flat ASIC adjacency
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
     ASSERT_EQ(placements.size(), 1u);
-
-    // build physical
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
 
     // place and map
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
-    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, mgd, config);
     ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
     EXPECT_THAT(
         mapped_footprints(mapping),
@@ -5426,25 +5330,18 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
         << "get_valid_groupings_for_mgd must list PGD commits only";
     EXPECT_FALSE(pgd.get_mgd_placement_fallbacks_for_mgd(mgd, psd).at("MESH").at("M0").empty());
 
-    // build logical
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-
     // place, and build the flat ASIC adjacency
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
     ASSERT_EQ(placements.size(), 1u) << "the single mesh should place";
-    EXPECT_FALSE(placements.front().mesh_node_to_asic_position.empty())
+    EXPECT_FALSE(placements.front().placement.mesh_node_to_asic_position.empty())
         << "the PGD grouping carries pinning and must win; an empty map means the MGD fallback was used";
     EXPECT_THAT(footprints_of(placements), ::testing::ElementsAre(std::set<uint64_t>{100, 101}))
         << "the pinned PGD pair, not an MGD seating on {101,102} or {102,103}";
 
-    // build physical
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-
     // place and map
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
-    const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+    const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, mgd, config);
     ASSERT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: " << mapping.error_message;
     EXPECT_THAT(mapped_footprints(mapping), ::testing::ElementsAre(std::set<uint64_t>{100, 101}))
         << "the mapper should keep the mesh on the PGD-pinned pair";
@@ -5536,25 +5433,18 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
-    // build logical
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-
-    // place, and build the flat ASIC adjacency the physical graph is derived from
+    // place
     const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
     EXPECT_EQ(placements.size(), 2u)
         << "one instance can take the pinned pair and the other the MGD grouping, so both should place";
 
     // Nothing to build a physical graph from while placement comes back empty. Guarded rather than
     // asserted so the grouping check at the end still reports in the same run.
     if (!placements.empty()) {
-        // build physical
-        const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-
         // place and map
         utils::TopologyMappingConfig config;
         config.disable_rank_bindings = true;
-        const auto mapping = utils::map_multi_mesh_to_physical(logical, physical, config);
+        const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, mgd, config);
         EXPECT_TRUE(mapping.success) << "the two-level solve should succeed, but failed with: "
                                      << mapping.error_message;
         EXPECT_THAT(
@@ -5859,9 +5749,9 @@ TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, StrainManyMeshesPlacesInO
         EXPECT_FALSE(stats.candidate_lists_complete) << label << "\n" << stats.to_string();
         // Every placement must be a disjoint footprint of the right size.
         std::set<uint64_t> seen;
-        for (const auto& placement : placements) {
-            EXPECT_EQ(placement.asics.size(), mesh_rows * mesh_cols) << label;
-            for (const auto& asic : placement.asics) {
+        for (const auto& placed : placements) {
+            EXPECT_EQ(placed.placement.asics.size(), mesh_rows * mesh_cols) << label;
+            for (const auto& asic : placed.placement.asics) {
                 EXPECT_TRUE(seen.insert(*asic).second) << label << ": ASIC " << *asic << " placed twice";
             }
         }
@@ -5916,9 +5806,9 @@ void expect_each_rank_inside_one_pgd_host(
 // add_rank_binding_constraints. asic_id_to_mesh_rank is left empty, which marks every host UNSET and so
 // leaves which host holds which rank to the solver rather than pinning it here.
 utils::TopologyMappingResult map_placement_with_declared_ranks(
-    const utils::LogicalMultiMeshGraph& logical,
-    const utils::PhysicalMultiMeshGraph& physical,
     const tt::tt_metal::PhysicalSystemDescriptor& psd,
+    const PhysicalGroupingDescriptor& pgd,
+    const MeshGraphDescriptor& mgd,
     const std::vector<std::vector<LogicalChipId>>& declared_ranks) {
     utils::TopologyMappingConfig config;
     for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
@@ -5932,7 +5822,7 @@ utils::TopologyMappingResult map_placement_with_declared_ranks(
         }
     }
     return utils::map_multi_mesh_to_physical(
-        logical, physical, config, /*asic_id_to_mesh_rank=*/{}, fabric_node_id_to_mesh_rank);
+        psd, pgd, mgd, config, /*pinnings=*/{}, /*asic_id_to_mesh_rank=*/{}, fabric_node_id_to_mesh_rank);
 }
 
 ValidGroupingsMap without_mgd_fallback(ValidGroupingsMap valid_groupings, const std::string& mgd_mesh_name) {
@@ -6042,7 +5932,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
         for (LogicalChipId chip : declared_ranks[rank]) {
-            const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+            const auto& position = placements.front().placement.mesh_node_to_asic_position.at(chip);
             hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
         }
         EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
@@ -6052,10 +5942,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
     // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
     // placement it was handed.
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-    const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+    const auto mapping = map_placement_with_declared_ranks(psd, pgd, mgd, declared_ranks);
     ASSERT_TRUE(mapping.success) << mapping.error_message;
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -6064,24 +5951,6 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         }
         EXPECT_EQ(hosts.size(), 1u) << "the mapper put declared rank " << rank << " on " << hosts.size() << " hosts";
     }
-
-    // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,
-    // so the ranks below are those groups read off the committed seating, written out here rather than
-    // by launching them: nothing about the second pass needs more than one process. It is the only
-    // framing the pipeline produces, and it leaves phase 2 no decision to make, so the same seating has
-    // to come back out.
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    for (const auto& [chip, position] : committed.front().mesh_node_to_asic_position) {
-        asic_id_to_mesh_rank[MeshId{0}][asic_at_slot.at({*position.first, *position.second})] =
-            MeshHostRankId{committed.front().mesh_node_to_host_group.at(chip)};
-    }
-
-    utils::PhysicalMultiMeshGraph phase2;
-    ASSERT_NO_THROW(phase2 = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd));
-    ASSERT_TRUE(phase2.mesh_pgd_pinnings_.contains(MeshId{0}))
-        << "phase 2 lost a split that phase 1 had committed and seated";
-    EXPECT_EQ(phase2.mesh_pgd_pinnings_.at(MeshId{0}), committed.front().mesh_node_to_asic_position)
-        << "phase 2 seated the mesh somewhere other than where phase 1 put it";
 }
 
 // The same agreement on the other axis: two ranks of one row each, on a machine split by row. Kept so
@@ -6191,7 +6060,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
         for (LogicalChipId chip : declared_ranks[rank]) {
-            const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+            const auto& position = placements.front().placement.mesh_node_to_asic_position.at(chip);
             hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
         }
         EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
@@ -6201,10 +6070,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
     // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
     // placement it was handed.
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-    const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+    const auto mapping = map_placement_with_declared_ranks(psd, pgd, mgd, declared_ranks);
     ASSERT_TRUE(mapping.success) << mapping.error_message;
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -6213,24 +6079,6 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         }
         EXPECT_EQ(hosts.size(), 1u) << "the mapper put declared rank " << rank << " on " << hosts.size() << " hosts";
     }
-
-    // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,
-    // so the ranks below are those groups read off the committed seating, written out here rather than
-    // by launching them: nothing about the second pass needs more than one process. It is the only
-    // framing the pipeline produces, and it leaves phase 2 no decision to make, so the same seating has
-    // to come back out.
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    for (const auto& [chip, position] : committed.front().mesh_node_to_asic_position) {
-        asic_id_to_mesh_rank[MeshId{0}][asic_at_slot.at({*position.first, *position.second})] =
-            MeshHostRankId{committed.front().mesh_node_to_host_group.at(chip)};
-    }
-
-    utils::PhysicalMultiMeshGraph phase2;
-    ASSERT_NO_THROW(phase2 = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd));
-    ASSERT_TRUE(phase2.mesh_pgd_pinnings_.contains(MeshId{0}))
-        << "phase 2 lost a split that phase 1 had committed and seated";
-    EXPECT_EQ(phase2.mesh_pgd_pinnings_.at(MeshId{0}), committed.front().mesh_node_to_asic_position)
-        << "phase 2 seated the mesh somewhere other than where phase 1 put it";
 }
 
 // The wrong axis, checked in both places it has to hold. The machine is cut widthwise -- across the
@@ -6444,7 +6292,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
         for (LogicalChipId chip : declared_ranks[rank]) {
-            const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+            const auto& position = placements.front().placement.mesh_node_to_asic_position.at(chip);
             hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
         }
         EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
@@ -6454,10 +6302,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
     // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
     // placement it was handed.
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-    const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+    const auto mapping = map_placement_with_declared_ranks(psd, pgd, mgd, declared_ranks);
     ASSERT_TRUE(mapping.success) << mapping.error_message;
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -6466,24 +6311,6 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         }
         EXPECT_EQ(hosts.size(), 1u) << "the mapper put declared rank " << rank << " on " << hosts.size() << " hosts";
     }
-
-    // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,
-    // so the ranks below are those groups read off the committed seating, written out here rather than
-    // by launching them: nothing about the second pass needs more than one process. It is the only
-    // framing the pipeline produces, and it leaves phase 2 no decision to make, so the same seating has
-    // to come back out.
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    for (const auto& [chip, position] : committed.front().mesh_node_to_asic_position) {
-        asic_id_to_mesh_rank[MeshId{0}][asic_at_slot.at({*position.first, *position.second})] =
-            MeshHostRankId{committed.front().mesh_node_to_host_group.at(chip)};
-    }
-
-    utils::PhysicalMultiMeshGraph phase2;
-    ASSERT_NO_THROW(phase2 = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd));
-    ASSERT_TRUE(phase2.mesh_pgd_pinnings_.contains(MeshId{0}))
-        << "phase 2 lost a split that phase 1 had committed and seated";
-    EXPECT_EQ(phase2.mesh_pgd_pinnings_.at(MeshId{0}), committed.front().mesh_node_to_asic_position)
-        << "phase 2 seated the mesh somewhere other than where phase 1 put it";
 }
 
 // Being finer than the machine does not rescue a split that runs the wrong way. The host grid is [2,1],
@@ -6679,7 +6506,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
         for (LogicalChipId chip : declared_ranks[rank]) {
-            const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+            const auto& position = placements.front().placement.mesh_node_to_asic_position.at(chip);
             hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
         }
         EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
@@ -6689,10 +6516,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
     // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
     // placement it was handed.
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-    const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+    const auto mapping = map_placement_with_declared_ranks(psd, pgd, mgd, declared_ranks);
     ASSERT_TRUE(mapping.success) << mapping.error_message;
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -6701,25 +6525,6 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
         }
         EXPECT_EQ(hosts.size(), 1u) << "the mapper put declared rank " << rank << " on " << hosts.size() << " hosts";
     }
-
-    // Phase 2, handed phase 1's own answer. generate_rank_bindings emits one rank per declared group,
-    // so the ranks below are those groups read off the committed seating, written out here rather than
-    // by launching them: nothing about the second pass needs more than one process. It is the only
-    // framing the pipeline produces, and it leaves phase 2 no decision to make, so the same seating has
-    // to come back out.
-    // Here that is four ranks on two hosts: the binding is finer than the machine, which is legal.
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-    for (const auto& [chip, position] : committed.front().mesh_node_to_asic_position) {
-        asic_id_to_mesh_rank[MeshId{0}][asic_at_slot.at({*position.first, *position.second})] =
-            MeshHostRankId{committed.front().mesh_node_to_host_group.at(chip)};
-    }
-
-    utils::PhysicalMultiMeshGraph phase2;
-    ASSERT_NO_THROW(phase2 = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd));
-    ASSERT_TRUE(phase2.mesh_pgd_pinnings_.contains(MeshId{0}))
-        << "phase 2 lost a split that phase 1 had committed and seated";
-    EXPECT_EQ(phase2.mesh_pgd_pinnings_.at(MeshId{0}), committed.front().mesh_node_to_asic_position)
-        << "phase 2 seated the mesh somewhere other than where phase 1 put it";
 }
 
 // The refusing half of that pair, with the two grids exchanged: the machine is now cut on both axes into
@@ -7022,20 +6827,16 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
         for (LogicalChipId chip : declared_ranks[rank]) {
-            const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+            const auto& position = placements.front().placement.mesh_node_to_asic_position.at(chip);
             hosts.insert(psd.get_host_name_for_asic(asic_at_slot.at({*position.first, *position.second})));
         }
         EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
                                     << " hosts";
     }
 
-    // The physical graph built from that seating, and the logical mesh mapped onto it. The mapper
-    // re-solves the intra-mesh assignment, so the split has to survive that too and not only the
-    // placement it was handed.
-    const auto logical = utils::build_logical_multi_mesh_adjacency_graph(mgd);
-    const AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(utils::build_flat_adjacency_map_from_psd(psd));
-    const auto physical = utils::build_hierarchical_from_flat_graph(flat_graph, placements);
-    const auto mapping = map_placement_with_declared_ranks(logical, physical, psd, declared_ranks);
+    // The logical mesh mapped onto that seating. The mapper re-solves the intra-mesh assignment,
+    // so the split has to survive that too and not only the placement it was handed.
+    const auto mapping = map_placement_with_declared_ranks(psd, pgd, mgd, declared_ranks);
     ASSERT_TRUE(mapping.success) << mapping.error_message;
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -7056,12 +6857,25 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
             MeshHostRankId{phase1.front().mesh_node_to_host_group.at(chip)};
     }
 
-    utils::PhysicalMultiMeshGraph phase2;
-    ASSERT_NO_THROW(phase2 = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd));
-    ASSERT_TRUE(phase2.mesh_pgd_pinnings_.contains(MeshId{0}))
-        << "phase 2 lost a split that phase 1 had committed and seated";
-    EXPECT_EQ(phase2.mesh_pgd_pinnings_.at(MeshId{0}), phase1.front().mesh_node_to_asic_position)
-        << "phase 2 seated the mesh somewhere other than where phase 1 put it";
+    utils::TopologyMappingConfig phase2_config;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        phase2_config.hostname_to_asics[descriptor.host_name].insert(asic_id);
+    }
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_ranks;
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            fabric_ranks[MeshId{0}][FabricNodeId(MeshId{0}, chip)] = MeshHostRankId{static_cast<uint32_t>(rank)};
+        }
+    }
+    const auto phase2 = utils::map_multi_mesh_to_physical(
+        psd, pgd, mgd, phase2_config, /*pinnings=*/{}, asic_id_to_mesh_rank, fabric_ranks);
+    ASSERT_TRUE(phase2.success) << phase2.error_message;
+    for (const auto& [chip, position] : phase1.front().mesh_node_to_asic_position) {
+        EXPECT_EQ(
+            phase2.fabric_node_to_asic.at(FabricNodeId(MeshId{0}, chip)),
+            asic_at_slot.at({*position.first, *position.second}))
+            << "phase 2 seated chip " << chip << " somewhere other than where phase 1 put it";
+    }
 }
 
 // A descriptor names a grouping once per place it sits, so one mesh flattens to a variant per place, and a

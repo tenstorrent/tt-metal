@@ -330,11 +330,11 @@ if run_group "phys-grouping"; then
 run_test tt-run --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --rank-binding "${BH_GALAXY_SP4_RANK_BINDINGS}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalGroupingDescriptorSP4Tests*"
 run_test tt-run --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/dual_t3k_ci/dual_t3k_ci_cluster_desc_mapping.yaml --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalGroupingDescriptorDualT3kTests*"
 
-# build_physical_multi_mesh_adjacency_graph with SP4 GLX mock (16 ranks; tt-run)
-run_test tt-run --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --rank-binding "${BH_GALAXY_SP4_RANK_BINDINGS}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx*"
+# map_multi_mesh_to_physical with SP4 GLX mock (16 ranks; tt-run)
+run_test tt-run --mock-cluster-rank-binding "${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}" --rank-binding "${BH_GALAXY_SP4_RANK_BINDINGS}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.MapMultiMeshToPhysical_Sp4Glx*"
 
-# build_physical_multi_mesh_adjacency_graph with single BH galaxy (32 ASICs, torus XY links; no tt-run).
-run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_galaxy_xyz_cluster_desc/bh_galaxy_xyz_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleBHGalaxy_*:TopologyMapperUtilsTest.BuildPhysicalMultiMeshGraph_VectorOverload_ThreadsPinnings_MatchesSingular:PhysicalGroupingDescriptorTests.GetValidGroupingsForMGD_SinglePod4x4LineLinePrefersSingleHost"
+# map_multi_mesh_to_physical with single BH galaxy (32 ASICs, torus XY links; no tt-run).
+run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/blackhole/bh_galaxy_xyz_cluster_desc/bh_galaxy_xyz_cluster_desc.yaml ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="TopologyMapperUtilsTest.MapMultiMeshToPhysical_SingleBHGalaxy_*:PhysicalGroupingDescriptorTests.GetValidGroupingsForMGD_SinglePod4x4LineLinePrefersSingleHost"
 
 ######################################
 # Topology Mapper tests

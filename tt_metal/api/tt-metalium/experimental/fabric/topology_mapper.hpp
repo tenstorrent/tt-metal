@@ -47,8 +47,6 @@ using AsicPosition = tt::tt_metal::ASICPosition;
  */
 
 using HostMeshMapping = std::map<MeshId, std::unordered_set<HostName>>;
-using LogicalAdjacencyMap = std::map<tt::tt_fabric::FabricNodeId, std::vector<tt::tt_fabric::FabricNodeId>>;
-using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>>;
 
 /**
  * @brief Centralized representation of chip topology information
@@ -447,11 +445,6 @@ private:
      * - Ensures physical chip IDs map correctly to ASIC IDs via cluster API for local chips
      */
     void verify_topology_mapping(const Cluster& cluster) const;
-
-    void print_logical_adjacency_map(
-        const ::tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& multi_mesh_graph) const;
-    void print_physical_adjacency_map(
-        const ::tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph& multi_mesh_graph) const;
 };
 
 }  // namespace tt::tt_fabric
