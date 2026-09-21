@@ -1047,6 +1047,12 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     const Tensor& intermed,
     const Tensor& output,
     const std::optional<Tensor>& penult_intermediate) {
+    // RuntimeArgsData references the program's storage; keep the tables by reference as well.
+    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
+    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
+    const auto input_address = input.buffer()->address();
+    const auto intermediate_address = intermed.buffer()->address();
+    const auto output_address = output.buffer()->address();
     // update senders
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -1054,21 +1060,17 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 uint32_t mux_core_offset = (link * num_cores_per_link) +
                                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-                std::vector<std::vector<RuntimeArgsData>> reader_runtime_args =
-                    GetRuntimeArgs(program, reader_kernel_id);
-                std::vector<std::vector<RuntimeArgsData>> writer_runtime_args =
-                    GetRuntimeArgs(program, writer_kernel_id);
 
                 // sender reader
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
                 if (normalized_dim == 0) {
-                    worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                    worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
+                    worker_reader_sender_runtime_args[0] = input_address;
+                    worker_reader_sender_runtime_args[1] = intermediate_address;
                     worker_reader_sender_runtime_args[2] = semaphore.at(dir).address();
                 } else {
-                    worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                    worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
-                    worker_reader_sender_runtime_args[2] = output.buffer()->address();
+                    worker_reader_sender_runtime_args[0] = input_address;
+                    worker_reader_sender_runtime_args[1] = intermediate_address;
+                    worker_reader_sender_runtime_args[2] = output_address;
                     worker_reader_sender_runtime_args[3] = semaphore.at(dir).address();
                     worker_reader_sender_runtime_args[4] = semaphore.at(!dir).address();
                     if (penult_intermediate.has_value()) {
@@ -1085,8 +1087,8 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                 // Both layouts now carry the opposite-direction core coords at indices 4/5, so the
                 // dim-0 and non-dim-0 writer arg lists agree up to index 15.
-                worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
-                worker_writer_sender_runtime_args[1] = output.buffer()->address();
+                worker_writer_sender_runtime_args[0] = intermediate_address;
+                worker_writer_sender_runtime_args[1] = output_address;
                 worker_writer_sender_runtime_args[6] = semaphore.at(dir).address();
                 worker_writer_sender_runtime_args[7] = semaphore.at(num_directions_per_link).address();
                 if (barrier_semaphore.has_value()) {
@@ -1731,6 +1733,12 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
     const Tensor& input,
     const Tensor& intermed,
     const Tensor& output) {
+    // RuntimeArgsData references the program's storage; keep the tables by reference as well.
+    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
+    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
+    const auto input_address = input.buffer()->address();
+    const auto intermediate_address = intermed.buffer()->address();
+    const auto output_address = output.buffer()->address();
     // update senders
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -1738,21 +1746,17 @@ void line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 uint32_t mux_core_offset = (link * num_cores_per_link) +
                                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-                std::vector<std::vector<RuntimeArgsData>> reader_runtime_args =
-                    GetRuntimeArgs(program, reader_kernel_id);
-                std::vector<std::vector<RuntimeArgsData>> writer_runtime_args =
-                    GetRuntimeArgs(program, writer_kernel_id);
 
                 // sender reader
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
-                worker_reader_sender_runtime_args[2] = output.buffer()->address();
+                worker_reader_sender_runtime_args[0] = input_address;
+                worker_reader_sender_runtime_args[1] = intermediate_address;
+                worker_reader_sender_runtime_args[2] = output_address;
                 worker_reader_sender_runtime_args[3] = semaphore.at(0).address();
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
-                worker_writer_sender_runtime_args[1] = output.buffer()->address();
+                worker_writer_sender_runtime_args[0] = intermediate_address;
+                worker_writer_sender_runtime_args[1] = output_address;
                 worker_writer_sender_runtime_args[4] = semaphore.at(0).address();
 
                 if (barrier_semaphore.has_value()) {
