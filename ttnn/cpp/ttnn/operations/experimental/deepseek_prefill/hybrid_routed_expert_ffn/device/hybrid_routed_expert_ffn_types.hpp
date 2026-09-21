@@ -32,6 +32,12 @@ namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert
 // written at each use: the arena is HEIGHT_SHARDED one row per core, so a shard grid that does
 // not match the rectangle hands some core an arena it does not own -- and the kernels address
 // their buffers by a common offset, so that reads as corruption rather than a fault.
+// The one semaphore id neither half declares, so the merged program keeps a spare out of the
+// sixteen a core has. It is the fused half's SEM_H_BASE + 1, which no fused kernel reads; the
+// unified half steps over it because every id it uses arrives as a runtime arg, so a gap is free.
+// hybrid_program_factory.cpp static_asserts the two stay in step.
+inline constexpr uint32_t kHybridReservedSemaphoreId = 3;
+
 inline constexpr uint32_t kOriginY = 2;
 inline constexpr uint32_t kGridX = 11;
 inline constexpr uint32_t kGridY = 8;

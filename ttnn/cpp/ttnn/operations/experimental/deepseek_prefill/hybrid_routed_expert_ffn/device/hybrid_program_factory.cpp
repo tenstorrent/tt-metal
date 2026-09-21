@@ -508,7 +508,17 @@ void append_to_descriptor(
 
     // The device kernels use fixed IDs because the mcast wire carries them as
     // compile-time arguments. Descriptor IDs are explicit, so preserve that order.
+    //
+    // SEM_H_BASE and SEM_H_BASE+1 are skipped: the h-mcast compile-time block still carries them,
+    // but no kernel reads those slots, so declaring them only burns ids out of the sixteen a core
+    // has. Leaving the gap is what lets the merged program keep one id spare.
+    static_assert(
+        kHybridReservedSemaphoreId == geo::SEM_H_BASE + 1,
+        "the reserved id must be one the fused half genuinely leaves undeclared");
     for (uint32_t expected = 0; expected < geo::SEM_COUNT; ++expected) {
+        if (expected == geo::SEM_H_BASE || expected == geo::SEM_H_BASE + 1) {
+            continue;
+        }
         descriptor.semaphores.push_back(SemaphoreDescriptor{
             .id = expected,
             .core_type = tt::CoreType::WORKER,
@@ -1654,6 +1664,12 @@ void append_to_descriptor(
     // Descriptor semaphores carry explicit ids. They come from the caller's counter rather than
     // from 0 so a merged program can place this half's ids above the other half's.
     auto make_sem = [&]() {
+        // Step over the one id the fused half also leaves free, so the merged program keeps a
+        // spare. This half addresses every semaphore through a runtime arg, so the gap costs it
+        // nothing.
+        if (next_semaphore_id == kHybridReservedSemaphoreId) {
+            ++next_semaphore_id;
+        }
         const uint32_t id = next_semaphore_id++;
         descriptor.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = id,

@@ -367,6 +367,13 @@ tt::tt_metal::ProgramDescriptor merge_halves(
     report.semaphore_count = static_cast<uint32_t>(merged.semaphores.size());
     report.arena_bytes_per_core = overlay_circular_buffers(fused, unified, run_fused_pass, l1_arena, merged);
 
+    // Pass B's id SPAN, not its count: its ids are sparse (it steps over the reserved one), so a
+    // count would stop short of the highest id it actually reads.
+    uint32_t pass_b_span = 0;
+    for (const auto& sem : unified.semaphores) {
+        pass_b_span = std::max(pass_b_span, sem.id + 1);
+    }
+
     const auto fused_by_role = index_by_role(fused, "fused");
     const auto unified_by_role = index_by_role(unified, "unified");
     TT_FATAL(
@@ -406,10 +413,9 @@ tt::tt_metal::ProgramDescriptor merge_halves(
             /*is_coordinator_kernel=*/role ==
                 KernelDescriptor::ConfigDescriptor(tt::tt_metal::ReaderConfigDescriptor{}).index(),
             report.barrier_semaphore_id,
-            // Only what pass B can read. Its ids run 0..n-1 from its own counter, so its count is
-            // the whole span; anything above that belongs to pass A alone, which has finished by
-            // the time the master zeroes -- a stale value there is unobservable.
-            /*shared_semaphore_count=*/static_cast<uint32_t>(unified.semaphores.size()),
+            // Only what pass B can read; anything above its span belongs to pass A alone, which
+            // has finished by the time the master zeroes -- a stale value there is unobservable.
+            /*shared_semaphore_count=*/pass_b_span,
             *bases_it->second));
     }
     return merged;
