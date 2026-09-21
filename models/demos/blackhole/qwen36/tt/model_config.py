@@ -8,6 +8,7 @@ Qwen3.5-specific params (GDN, partial RoPE, layer types) come from HF text confi
 load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 """
 
+import math
 import os
 from pathlib import Path
 
@@ -178,7 +179,18 @@ class Qwen36ModelArgs(ModelArgs):
         # Native depthwise conv1d (prefill) keeps all qkv_dim_tp channels resident per core (L1_FULL);
         # the 35B-A3B channel count overflows L1 on BH. Split the conv over N channel chunks (exact —
         # depthwise is per-channel-independent) so each call fits. 27B (chunks=1) is unchanged.
-        self.gdn_conv_channel_chunks = 2 if self.moe_num_experts > 0 else 1
+        # Chunk count is driven by the PER-DEVICE channel width, not by "is this MoE". The
+        # depthwise conv1d runs with Conv2dL1FullSliceConfig, so all qkv_dim_tp channels stay
+        # L1-resident for the call; past a certain width its CBs collide with whatever else is
+        # already in L1. Keying on moe_num_experts happened to cover the 35B-A3B, but the width
+        # is what actually matters and it also grows as TP DROPS: Qwen3.5-2B has
+        # qkv_dim_tp 768 at TP=8 (fits) and 1536 at TP=4, where the conv overflows by ~31 KB --
+        #   gdn/tp.py:379 Statically allocated circular buffers in program 178 clash with L1
+        #   buffers on core range [0-0 - 11-5] ... allocated at 1260288, CB region ends 1291328
+        # so TP=4 failed outright while TP=8 worked. Split whenever the per-device width exceeds
+        # the widest value measured good in one call, keeping chunks a divisor of the width.
+        # QWEN_GDN_CONV_CHUNKS overrides for A/B.
+        self.gdn_conv_channel_chunks = self._gdn_conv_chunks()
         self.gdn_z_dim_tp = self.gdn_z_dim // tp
         self.gdn_qkvz_dim_tp = (self.gdn_qkv_dim + self.gdn_z_dim) // tp
         # Per-device width of the [qkv|z|a|b] fused in-projection: folding the tiny a/b (decay/beta)
@@ -344,20 +356,53 @@ class Qwen36ModelArgs(ModelArgs):
             return False
         return (layer_idx + 1) % self.moe_decoder_sparse_step == 0
 
+    # Widest per-device GDN conv channel width that fits one L1-resident conv1d call.
+    # Bracketed by measurement, not guessed: 1280 is known good (Qwen3.6-27B at TP=8,
+    # gdn_qkv_dim 10240 / 8) and 1536 is known bad (Qwen3.5-2B at TP=4, 6144 / 4, which
+    # overflows by ~31 KB). Sits at the good end of that bracket.
+    #
+    # CAVEAT: this also moves Qwen3.6-27B at TP=4 (width 2560) from 1 chunk to 2. Chunking is
+    # exact -- depthwise conv is per-channel independent and the chunked path already ships for
+    # the 35B-A3B -- so correctness is unaffected, but that config's prefill timing may shift
+    # slightly and I have no 27B checkpoint here to measure it. Re-check if 27B/TP=4 perf
+    # regresses; QWEN_GDN_CONV_CHUNKS=1 restores the old behaviour.
+    GDN_CONV_MAX_CHANNELS_PER_CALL = 1280
+
+    def _gdn_conv_chunks(self):
+        """Smallest chunk count that keeps each conv1d call's channel width within budget."""
+        override = os.environ.get("QWEN_GDN_CONV_CHUNKS")
+        if override:
+            return int(override)
+        width = self.gdn_qkv_dim // self.num_devices
+        chunks = math.ceil(width / self.GDN_CONV_MAX_CHANNELS_PER_CALL)
+        # Depthwise is per-channel independent, so any divisor is exact; pick the smallest
+        # divisor >= chunks so the split stays even (gdn/tp.py asserts divisibility).
+        while chunks <= width and width % chunks != 0:
+            chunks += 1
+        return max(1, chunks)
+
     def is_distributed_norm(self, mode):
-        """Force the distributed-norm path for multi-device MoE prefill.
+        """Force the distributed-norm path for any multi-device prefill.
 
         The prefill norm-all-gather fusion (all_gather_minimal_matmul_async in-proj) needs the norm
         to honor enable_all_gather and leave its output hidden-fractured for the fused matmul to
         gather. The base enables the distributed-norm path only for dim>4096 (an L1 heuristic the
         dense 27B's 5120 hits but the MoE 35B-A3B's 2048 misses) — on the miss it force-gathers the
-        norm output, so the AGMM in-proj double-gathers (K mismatch). Only the MoE configs need this
-        override (dense variants either hit the dim>4096 heuristic like the 27B, or are validated on
-        the base path), so gate it on moe_num_experts to avoid diverging the dense path from base.
+        norm output, so the AGMM in-proj double-gathers (K mismatch).
+
+        This was originally gated on moe_num_experts because at the time every dense variant either
+        cleared dim>4096 (27B) or ran single-device (9B). Qwen3.5-2B is dense, multi-device AND
+        dim 2048, so it hit the identical double-gather; the gate is now simply "multi-device
+        prefill". Widening costs the 27B/35B-A3B nothing (dim>4096 already returns True for the
+        27B, and the MoE case is what the override was built for), and it buys the narrow dense
+        configs the fusion plus one fewer full-width collective per norm.
+
+        PREFILL only: decode feeds the norm sharded inputs, which distributed RMSNorm rejects, and
+        decode gathers pre-norm by design.
         """
         from models.tt_transformers.tt.common import Mode
 
-        if self.moe_num_experts > 0 and self.is_multichip and mode == Mode.PREFILL:
+        if self.is_multichip and mode == Mode.PREFILL:
             return True
         return super().is_distributed_norm(mode)
 

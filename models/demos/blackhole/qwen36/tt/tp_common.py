@@ -6,6 +6,7 @@ Used only when num_devices > 1. DRAM-sharded matmul cfgs, prefill progcfgs,
 mesh shard/replicate, FP8 dequant, HF weight reorder for per-device sharding.
 """
 import math
+import os
 
 import torch
 
@@ -362,8 +363,23 @@ def all_gather_matmul_prefill(
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
     # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
     # = num_links*workers, and the 7-wide default (prime) forces 1 link -> widen to 8 (2 links, 4 workers).
-    num_links = 2
-    grid = (8, grid[1])
+    #
+    # This op is the single largest device-time consumer in TP prefill (30.4% of a profiled
+    # 8-layer chunk-outer run) and the (8, 9) grid uses only 72 of the 120 available worker
+    # cores. Unlike the pure-CCL reduce-scatter -- which sits at the 2-link ethernet roofline
+    # and gains nothing from more cores -- this op fuses a MATMUL with the gather, so the
+    # matmul half does scale with the grid. QWEN_AGMM_GRID="X,Y" overrides it for A/B;
+    # X must stay a multiple of num_links (grid.x == num_links * workers).
+    # get_num_links() is a hardcoded per-SKU table (BHGLX -> (2, 2)), not a hardware query,
+    # so QWEN_AGMM_LINKS exists to test whether this Galaxy actually offers more.
+    num_links = int(os.environ.get("QWEN_AGMM_LINKS", "2"))
+    _env_grid = os.environ.get("QWEN_AGMM_GRID")
+    if _env_grid:
+        _gx, _gy = (int(v) for v in _env_grid.split(","))
+        assert _gx % num_links == 0, f"QWEN_AGMM_GRID x={_gx} must be a multiple of num_links={num_links}"
+        grid = (_gx, _gy)
+    else:
+        grid = (8, grid[1])
     workers = grid[0] // num_links
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=4,
@@ -565,10 +581,14 @@ def mmrs_prefill_supported(device, nd, grid=(8, 8), rs_offset=(0, 8)):
     workaround. Until the fused op is retuned for a wider ring, fall back to the unfused
     row-parallel matmul + tt_all_reduce, which is verified working at TP=8.
 
-    Returns True only when the worker set is known to fit, i.e. TP<=4 with two rows free.
+    The worker set is 36 cores (3 full rows on this 12-wide grid) at BOTH nd=4 and nd=8, so the
+    ring size is not the discriminator -- the free-row count above the matmul grid is. With the
+    tuned grid (8,8) and offset (0,8) a 10-row Blackhole leaves only 2 rows, so the fusion cannot
+    be placed at any TP here and we take the unfused path everywhere on this SKU.
     """
+    rows_needed = 3  # measured: 36 selected worker cores / 12-wide grid
     rows_free = max(0, device.compute_with_storage_grid_size().y - rs_offset[1])
-    return nd <= 4 and rows_free >= 2
+    return rows_free >= rows_needed
 
 
 def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8)):

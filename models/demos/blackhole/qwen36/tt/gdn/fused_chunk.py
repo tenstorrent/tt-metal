@@ -25,6 +25,8 @@ Notes:
 * GVA (Nk<Nv) head expansion is done inside the fused op; we pass q/k with Nk heads.
 """
 
+import os
+
 import torch
 from loguru import logger
 
@@ -32,7 +34,20 @@ import ttnn
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import l2_norm_ttnn
 
 # The chunk size the fused op runs at (same math as 128, different internal tiling).
-_FUSED_CHUNK_SIZE = 32
+#
+# This is the single biggest lever on GDN prefill latency. The op's Phase B scan is a
+# SEQUENTIAL loop over num_chunks = T / chunk_size (chunk_gdn_scan.cpp: "the
+# sequential-over-chunk recurrence for one head"), parallelised only across
+# (head x V-block). At T=2048 and chunk 32 that is 64 serial steps per GDN layer, on
+# BH*NV cores -- just 8 of ~120 at TP=8, B=1 (2 local heads x NV=4). The serial depth
+# does NOT shrink with more devices, so raising chunk_size is the only config-level way
+# to shorten it: 128 gives 16 steps instead of 64.
+#
+# QWEN_GDN_FUSED_CHUNK overrides it for A/B. 32 stays the default because 128 was
+# originally rejected on the L1 CB budget, and 64 is numerically unsafe (its 2x2 WY
+# tile-block has an ill-conditioned bottom-right sub-block; see the module docstring).
+# Validate PCC, not just wall time, before promoting any new default.
+_FUSED_CHUNK_SIZE = int(os.environ.get("QWEN_GDN_FUSED_CHUNK", "32"))
 
 
 def fused_chunk_enabled():
@@ -48,7 +63,7 @@ def phased_enabled():
 
 def flat_qkv_enabled():
     """Flat token-major q/k/v + in-kernel L2-norm; needs phased path and chunk_size==32."""
-    return True
+    return _FUSED_CHUNK_SIZE == 32
 
 
 _logged_path = False
