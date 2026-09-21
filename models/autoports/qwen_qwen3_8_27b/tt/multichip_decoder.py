@@ -29,8 +29,8 @@ class MultichipDecoder(OptimizedDecoder):
     def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, policy=None, ccl=None):
         import torch
 
-        if mesh_device.get_num_devices() != 4 or tuple(mesh_device.shape) != (1, 4):
-            raise ValueError("MultichipDecoder requires the target 1x4 Blackhole mesh")
+        if mesh_device.get_num_devices() != cls.TP or tuple(mesh_device.shape) != (1, cls.TP):
+            raise ValueError(f"MultichipDecoder requires a 1x{cls.TP} Blackhole mesh")
         if ccl is not None and ccl.mesh_device is not mesh_device:
             raise ValueError("The shared CCL context must belong to this mesh")
         self = cls()
@@ -286,11 +286,11 @@ class MultichipDecoder(OptimizedDecoder):
             workspace = getattr(self.ccl, workspace_key, None)
             if workspace is None:
                 workspace = ttnn.empty(
-                    [1, 1, 32, 20480],
+                    [1, 1, 32, 5120 * self.TP],
                     dtype=getattr(ttnn, self.policy["ccl_dtype"]),
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
-                    memory_config=self._width_memory(ar_cores, 32, 20480 // ar_cores),
+                    memory_config=self._width_memory(ar_cores, 32, 5120 * self.TP // ar_cores),
                 )
                 setattr(self.ccl, workspace_key, workspace)
             self.allreduce_buffer = workspace
@@ -308,7 +308,7 @@ class MultichipDecoder(OptimizedDecoder):
             )
         if self.sharded_residual and self.policy.get("fused_norm", False):
             template = ttnn.empty(
-                [1, 1, batch_size, 1280],
+                [1, 1, batch_size, 5120 // self.TP],
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
@@ -353,7 +353,7 @@ class MultichipDecoder(OptimizedDecoder):
                     memory_config=memory,
                 )
                 scattered = ttnn.empty(
-                    [*shape[:-1], 1280],
+                    [*shape[:-1], 5120 // self.TP],
                     dtype=dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
@@ -370,7 +370,7 @@ class MultichipDecoder(OptimizedDecoder):
         return state
 
     def _gather(self, x):
-        full_shape = (*list(x.shape)[:-1], x.shape[-1] * 4)
+        full_shape = (*list(x.shape)[:-1], x.shape[-1] * self.TP)
         buffers = self.ccl_buffers.get((full_shape, x.dtype))
         memory = self._collective_memory(x)
         if buffers and buffers[0].memory_config() != memory:
@@ -435,11 +435,11 @@ class MultichipDecoder(OptimizedDecoder):
             return ttnn.reshape(output, [batch, length, output.shape[-1]])
         if (
             self.policy.get("fused_input", False)
-            and x.shape[-1] == 1280
+            and x.shape[-1] == 5120 // self.TP
             and self._role(name) in ("attention", "gate", "up")
         ):
             shape = list(x.shape)
-            xx = ttnn.reshape(ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG), [1, 1, -1, 1280])
+            xx = ttnn.reshape(ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG), [1, 1, -1, 5120 // self.TP])
             xx = ttnn.typecast(xx, getattr(ttnn, self.policy["ccl_dtype"]))
             weight = self.weights[name + ".weight"]
             result = ttnn.experimental.all_gather_minimal_matmul_async(
@@ -549,7 +549,7 @@ class MultichipDecoder(OptimizedDecoder):
                 result = ttnn.typecast(result, ttnn.bfloat16)
             if not self.sharded_residual:
                 result = self._gather(result)
-            return ttnn.reshape(result, [*shape[:-1], 1280 if self.sharded_residual else 5120])
+            return ttnn.reshape(result, [*shape[:-1], 5120 // self.TP if self.sharded_residual else 5120])
         if self.policy.get("prefill_1d", False) and self.policy.get("prefill_1d_min", 2) <= x.shape[
             1
         ] <= self.policy.get("prefill_1d_max", 256):
@@ -642,7 +642,7 @@ class MultichipDecoder(OptimizedDecoder):
             output = self._gather(output)
         if output.dtype != ttnn.bfloat16:
             output = ttnn.typecast(output, ttnn.bfloat16)
-        return ttnn.reshape(output, [*shape[:-1], 1280 if self.sharded_residual else 5120])
+        return ttnn.reshape(output, [*shape[:-1], 5120 // self.TP if self.sharded_residual else 5120])
 
     def prefill_sharded_forward(self, x, **kwargs):
         """Opt-in prefill layout; restore the decode contract even on failure.
@@ -671,6 +671,42 @@ class MultichipDecoder(OptimizedDecoder):
             return super()._norm(x, name)
         shape = list(x.shape)
         if self.policy.get("prefill_replicated_norm", False):
+            if (
+                self.policy.get("prefill_row_parallel_norm", False)
+                and len(shape) == 3
+                and shape[1] > 1
+                and shape[1] % 32 == 0
+                and shape[0] * shape[1] % (32 * self.TP) == 0
+            ):
+                rows = shape[0] * shape[1]
+                local = ttnn.experimental.all_to_all_async_generic(
+                    ttnn.reshape(x, [1, 1, rows, shape[-1]]),
+                    in_dim=3,
+                    out_dim=2,
+                    topology=self.topology,
+                    cluster_axis=1,
+                    num_links=self.policy["num_links"],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                local = ttnn.reshape(local, [1, rows // self.TP, 5120])
+                local_weight = self.weights[name + ".weight"]
+                try:
+                    self.weights[name + ".weight"] = self.weights[name + ".replicated_weight"]
+                    normalized = super()._norm(local, name)
+                finally:
+                    self.weights[name + ".weight"] = local_weight
+                gathered = ttnn.experimental.all_gather_async(
+                    ttnn.reshape(normalized, [1, 1, rows // self.TP, 5120]),
+                    dim=2,
+                    cluster_axis=1,
+                    mesh_device=self.device,
+                    topology=self.topology,
+                    num_links=self.policy["num_links"],
+                    multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(1),
+                    barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(1),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                return ttnn.reshape(gathered, [*shape[:-1], 5120])
             full = self._gather(ttnn.reshape(x, [1, *shape]))
             full = ttnn.reshape(full, [*shape[:-1], 5120])
             local_weight = self.weights[name + ".weight"]

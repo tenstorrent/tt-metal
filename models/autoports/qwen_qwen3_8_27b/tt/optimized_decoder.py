@@ -587,9 +587,13 @@ class OptimizedDecoder(LightweightModule):
         elif self.policy.get("packed_mlp", False):
             packed = self._linear(n, "mlp.gate_up")
             width = self.config.intermediate_size
-            product = ttnn.mul(
-                packed[:, :, :width], packed[:, :, width:], input_tensor_a_activations=[ttnn.UnaryOpType.SILU]
-            )
+            if x.shape[0] > 1 and x.shape[1] > 1 and self.policy.get("prefill_split_mlp", False):
+                batch, length, _ = packed.shape
+                gate, up = ttnn.split(ttnn.reshape(packed, [1, batch, length, 2 * width]), width, dim=3)
+                gate, up = [ttnn.reshape(part, [batch, length, width]) for part in (gate, up)]
+            else:
+                gate, up = packed[:, :, :width], packed[:, :, width:]
+            product = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         else:
             gate = self._linear(
                 n, "mlp.gate_proj", activation="silu" if self.policy.get("gate_epilogue", True) else None

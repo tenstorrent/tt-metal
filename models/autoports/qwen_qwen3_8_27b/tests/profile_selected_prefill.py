@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--lengths", default="4096,32768")
     parser.add_argument("--full", action="store_true")
+    parser.add_argument("--leaf-ops", action="store_true", help="Attribute tensor operations within each phase")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     lengths = [int(value) for value in args.lengths.split(",")]
@@ -34,7 +35,7 @@ def main():
     configure_fabric()
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=134217728)
     gen = None
-    report = dict(batch=args.batch, full=args.full, rows=[])
+    report = dict(batch=args.batch, full=args.full, leaf_ops=args.leaf_ops, rows=[])
     selected = dict(prefill_sharded_residual=True, prefill_replicated_norm=True)
     try:
         with patch(
@@ -58,13 +59,16 @@ def main():
                 inclusive, exclusive, counts = defaultdict(float), defaultdict(float), defaultdict(int)
                 active = []
 
-                def wrap(stack, owner, name, label, named=False):
+                def wrap(stack, owner, name, label, named=False, contextual=False):
                     original = getattr(owner, name)
 
                     def measured(*a, **kw):
                         key = label + ("." + (a[1] if len(a) > 1 else kw["name"]) if named else "")
+                        if contextual:
+                            parent = next((f[2] for f in reversed(active) if not f[2].startswith("leaf.")), "outer")
+                            key = "leaf." + parent + ":" + label
                         ttnn.synchronize_device(mesh)
-                        frame = [time.perf_counter(), 0.0]
+                        frame = [time.perf_counter(), 0.0, key]
                         active.append(frame)
                         try:
                             return original(*a, **kw)
@@ -95,6 +99,27 @@ def main():
                             (ttnn.experimental.kda, "qkv_causal_conv1d_silu"),
                         ):
                             wrap(stack, owner, name, "native." + name)
+                        if args.leaf_ops:
+                            for name in (
+                                "add",
+                                "mul",
+                                "concat",
+                                "typecast",
+                                "to_layout",
+                                "pad",
+                                "slice",
+                                "reshape",
+                                "copy",
+                                "rms_norm",
+                            ):
+                                wrap(stack, ttnn, name, name, contextual=True)
+                            for name in (
+                                "minimal_matmul",
+                                "minimal_matmul_strided_reduce_scatter_async",
+                                "reduce_scatter_minimal_async",
+                                "all_gather_async",
+                            ):
+                                wrap(stack, ttnn.experimental, name, name, contextual=True)
                     ttnn.synchronize_device(mesh)
                     begin = time.perf_counter()
                     outputs = gen.prefill_forward(

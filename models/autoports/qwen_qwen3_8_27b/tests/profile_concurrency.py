@@ -29,6 +29,11 @@ def main():
     parser.add_argument("--compare-fused-mlp", action="store_true", help="Fuse prefill MLP only; decode unchanged")
     parser.add_argument("--compare-single-step", action="store_true", help="Experimental B16 decode recurrence")
     parser.add_argument("--compare-sharded-prefill", action="store_true", help="Prefill-only sharded residual")
+    parser.add_argument(
+        "--compare-row-parallel-norm",
+        action="store_true",
+        help="Compare row-parallel norm against selected layout/head baseline",
+    )
     parser.add_argument("--replicated-prefill-norm", action="store_true", help="Gather residual before unchanged norm")
     parser.add_argument(
         "--prefill-head-optimizations", action="store_true", help="Combine batched final head and skip unused heads"
@@ -46,6 +51,7 @@ def main():
                 args.compare_fused_mlp,
                 args.compare_single_step,
                 args.compare_sharded_prefill,
+                args.compare_row_parallel_norm,
             )
         )
         > 1
@@ -75,8 +81,8 @@ def main():
             return {
                 **decoder_policy(precision, layer),
                 "minimal_mlp": args.compare_fused_mlp,
-                "prefill_sharded_residual": args.compare_sharded_prefill,
-                "prefill_replicated_norm": args.replicated_prefill_norm,
+                "prefill_sharded_residual": args.compare_sharded_prefill or args.compare_row_parallel_norm,
+                "prefill_replicated_norm": args.replicated_prefill_norm or args.compare_row_parallel_norm,
             }
 
         with patch("models.autoports.qwen_qwen3_8_27b.tt.model.decoder_policy", side_effect=policy):
@@ -106,15 +112,27 @@ def main():
             if args.distinct_prompts:
                 tokens += torch.arange(args.batch).reshape(-1, 1) * 13
             for trial in range(
-                4
+                6
+                if args.compare_row_parallel_norm
+                else 4
                 if args.compare_prefill
                 or args.compare_sdpa
                 or args.compare_fused_mlp
                 or args.compare_single_step
                 or args.compare_sharded_prefill
+                or args.compare_row_parallel_norm
                 else 2
             ):
                 repeat = trial % 2
+                if args.compare_row_parallel_norm and repeat == 0:
+                    generator._release_traces()
+                    generator.prefill_signatures.clear()
+                    generator.batched_prefill = True
+                    generator.model.prefill_sharded_residual = True
+                    generator.model.prefill_batched_head = True
+                    generator.skip_intermediate_prefill_head = True
+                    for layer in generator.model.layers:
+                        layer.policy["prefill_row_parallel_norm"] = 2 <= trial < 4
                 if args.compare_sharded_prefill and repeat == 0:
                     generator._release_traces()
                     generator.prefill_signatures.clear()
@@ -174,9 +192,13 @@ def main():
                 row = dict(
                     batched_prefill=generator.batched_prefill,
                     fused_prefill_mlp=args.compare_fused_mlp and trial >= 2,
-                    sharded_prefill=args.compare_sharded_prefill and trial >= 2,
-                    replicated_prefill_norm=args.replicated_prefill_norm,
-                    prefill_head_optimizations=args.prefill_head_optimizations and trial >= 2,
+                    sharded_prefill=args.compare_row_parallel_norm or (args.compare_sharded_prefill and trial >= 2),
+                    row_parallel_norm=args.compare_row_parallel_norm and 2 <= trial < 4,
+                    selected_baseline=args.compare_row_parallel_norm,
+                    trial=trial,
+                    replicated_prefill_norm=args.replicated_prefill_norm or args.compare_row_parallel_norm,
+                    prefill_head_optimizations=args.compare_row_parallel_norm
+                    or (args.prefill_head_optimizations and trial >= 2),
                     single_step_recurrence=args.compare_single_step and trial >= 2,
                     batched_sdpa=generator.model.layers[0].policy.get("batched_prefill_sdpa", False),
                     length=length,
