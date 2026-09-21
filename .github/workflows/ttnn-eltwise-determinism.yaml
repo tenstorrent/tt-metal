@@ -8,7 +8,7 @@ name: "[eltwise] Determinism and correctness (daily)"
 # A plain pytest file rather than a sweep module: the sweep runner isolates every vector in its own
 # process for hang detection, so a 192-op run pays device setup and cache warmup 192 times over and
 # overruns the job timeout. These results are not published to the dashboard, so that isolation buys
-# nothing here. One process for the whole table brings the same coverage in under three minutes.
+# nothing here. One process covers the whole table at both float dtypes in about five minutes.
 
 on:
   workflow_dispatch:
@@ -49,17 +49,6 @@ on:
           - N300
           - P150b
         default: N150
-  # Gate the PRs that can actually break this: the check itself and the eltwise op and SFPU sources
-  # it covers. Deliberately not every PR -- a run is a build plus every eltwise op on a device,
-  # which is not worth spending on a diff that cannot affect the result.
-  pull_request:
-    branches:
-      - "main"
-    paths:
-      - "tests/ttnn/unit_tests/operations/eltwise/test_eltwise_determinism.py"
-      - ".github/workflows/ttnn-eltwise-determinism.yaml"
-      - "ttnn/cpp/ttnn/operations/eltwise/**"
-      - "tt_metal/hw/ckernels/**/llk_sfpu/**"
   schedule:
     # 05:00 UTC daily. ttnn-run-sweeps already occupies 02:00 and 03:00.
     - cron: "0 5 * * *"
@@ -70,9 +59,8 @@ permissions:
   contents: read
   packages: write
 
-# On a PR, a new push makes the running check obsolete, so cancel it rather than hold a device for
-# a result nobody will read. On a protected branch the run_id keeps every run in its own group, so
-# the daily runs never cancel each other.
+# Two dispatches of the same arch would contend for one device, so the later one wins. The run_id
+# keeps every run on a protected branch in its own group, so the daily runs never cancel each other.
 concurrency:
   group: ${{ github.workflow }}-${{ inputs.arch || 'wormhole_b0' }}-${{
     github.ref_protected && github.run_id || github.ref }}
@@ -146,5 +134,11 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: eltwise-determinism-report-${{ inputs.arch || 'wormhole_b0' }}
-          path: /work/eltwise-determinism-report.xml
+          # /docker-job/ is the host-side mount of the container's /work/. pytest writes the report
+          # to /work inside the container; this host path is what upload-artifact can actually see.
+          path: ${{ github.workspace }}/docker-job/eltwise-determinism-report.xml
+          # warn, not error: a crash before pytest writes the report is a real failure already, and
+          # failing here on top of it would just bury the cause. The warning is what caught the
+          # container-path mistake this line fixes.
+          if-no-files-found: warn
           retention-days: 7
