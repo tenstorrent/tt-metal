@@ -76,8 +76,9 @@ constexpr std::uint32_t ENGINE_NOC_PER_ROW = 2;
 
 // All 8 iDMA backend VCs. Each carries 16 B/cycle, so this is the 128 B/cycle ceiling.
 constexpr std::uint32_t CHANNELS_ALL = 8;
-// Sub-splitting a row below this is never worth the extra issue cost, so the split arm of
-// ChannelSweep skips shapes whose pieces would land under it.
+// Floor on a sub-split packet: below this the issue cost swamps whatever the split buys. It
+// is also what makes the split arm of ChannelSweep a no-op on short rows, since a floor at or
+// above the row size is not a split.
 constexpr std::uint32_t MIN_SPLIT_PACKET_BYTES = 64;
 
 // The reference workload: a 32 x 252 Float16_b matrix. 252 datums needs 8 tiles to cover
@@ -592,10 +593,11 @@ TEST_F(QuasarNarrowRowUntilize, ChannelSweep) {
             devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = last_tile_w, .num_channels = CHANNELS_ALL}))
             << "ct_dim=" << ct_dim << " ch=" << CHANNELS_ALL << " natural packets";
 
-        // Fan-out with each row sub-split into CHANNELS_ALL packets -- the old policy. Skipped
-        // when the row is too short to split into pieces worth issuing.
-        const std::uint32_t split = row_bytes / CHANNELS_ALL;
-        if (split >= MIN_SPLIT_PACKET_BYTES) {
+        // Fan-out with each row sub-split -- exactly the old policy, reproduced so the two can
+        // be compared rather than argued about. A "split" that is not smaller than the row is
+        // no split at all, which is what rules out the short shape (32 B row, floor 64 B).
+        const std::uint32_t split = std::max(MIN_SPLIT_PACKET_BYTES, row_bytes / CHANNELS_ALL);
+        if (split < row_bytes) {
             EXPECT_TRUE(run_narrow_row(
                 devices_[0],
                 buffers,
