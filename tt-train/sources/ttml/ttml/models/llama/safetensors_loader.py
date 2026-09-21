@@ -330,12 +330,14 @@ def load_from_safetensors(
     canonical form. Every check that needs only names runs before the first tensor is read.
 
     Raises:
+        FileNotFoundError: no ``.safetensors`` file under *safetensors_path*.
         RuntimeError: for any of
-            - a parameter no rule feeds
-            - a rule naming a parameter the model does not have
-            - a missing source tensor
-            - a shape that disagrees with the config
-            - a parameter sharded over a mesh axis other than 'tp'
+            - a parameter no rule feeds, a rule naming a parameter the model lacks, or two rules for one
+            - a source tensor the checkpoint lacks; a tied checkpoint on an untied model, or the reverse
+            - a bias the checkpoint ships, which this loader cannot load
+            - a tensor named twice across files, or one that is not 1-D or 2-D
+            - a shape that disagrees with the config; a transposed ``[in, out]`` weight is not accepted
+            - a parameter sharded over a mesh axis other than 'tp', or over 'tp' on a dim other than rows or columns
     """
     parameters = model.parameters()
     parameter_names = set(parameters)
