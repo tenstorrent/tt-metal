@@ -1,3 +1,11 @@
+"""The decoder block: hyper-connection -> attention -> mix -> hyper-connection -> MoE -> mix.
+
+``B`` = users decoded per step, ``S`` = query length (1 on the decode path), ``hc`` =
+``hc_mult`` (the hyper-connection residual-stream count) and ``D`` = ``hidden_size``. The
+residual is a stack of ``hc`` parallel streams ``[B, S, hc, D]`` carried through the whole
+block, so both sublayers read and write that one tensor.
+"""
+
 from typing import Optional
 
 import torch
@@ -16,7 +24,11 @@ from .weight_cache import WeightCache, _as_cache
 
 
 def _strip_prefix(weights: dict, prefix: str) -> dict:
-    """Sub-dict of ``weights`` whose keys start with ``prefix.`` (prefix stripped)."""
+    """Sub-dict of ``weights`` whose keys start with ``prefix.`` (prefix stripped).
+
+    The values are passed through untouched, so a weight keeps its own shape (``[K, N]`` for a
+    projection) and a lazy thunk stays lazy.
+    """
     p = f"{prefix}."
     return {k[len(p) :]: v for k, v in weights.items() if k.startswith(p)}
 
@@ -24,13 +36,11 @@ def _strip_prefix(weights: dict, prefix: str) -> dict:
 class DeepSeekV4DecoderLayer(DeepSeekV4Module):
     """ttnn port of ``DeepseekV4DecoderLayer`` (decode).
 
-    The residual is a stack of ``hc_mult`` parallel streams kept in
-    ``[B, S, H, D]`` (``H`` = ``hc_mult``, ``D`` = ``hidden_size``) throughout the
-    block, mixed in/out by two :class:`DeepSeekV4HyperConnection` modules. For
-    each sublayer (attention, then MoE) the matching HC collapses the streams
-    into the sublayer input, and the sublayer output is folded back into the
-    streams via the learned ``post`` placement weights plus the Sinkhorn
-    ``comb`` stream-mixing matrix::
+    The residual is a stack of ``hc`` parallel streams kept in ``[B, S, hc, D]`` throughout the
+    block, mixed in/out by two :class:`DeepSeekV4HyperConnection` modules. For each sublayer
+    (attention, then MoE) the matching HC collapses the streams into the sublayer input, and the
+    sublayer output is folded back into the streams via the learned ``post`` placement weights
+    plus the Sinkhorn ``comb`` stream-mixing matrix::
 
         post, comb, collapsed = hc(streams)
         out = sublayer(norm(collapsed))
@@ -60,6 +70,16 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         prefetch_buffers: Optional[dict] = None,
         tp_size: int = 1,
     ):
+        """Build layer ``layer_idx``: attention, MoE, the two hyper-connections and the two
+        ``[D]`` RMSNorms.
+
+        ``weights`` is this layer's HF-named parameter dict (see the class docstring),
+        ``experts`` the injected routed-expert compute module and ``gate`` an optional router
+        override (e.g. :class:`~.moe.DeepSeekV4HashRouter` for the hash layers), ``cache`` the
+        tile-cache namespace for this layer. ``prefetch_buffers`` is the per-device mapping from
+        :func:`~.decode_prefetch.make_decode_prefetch_buffers`; ``use_prefetcher`` streams
+        weights through it, and ``tp_size`` is the stage's tensor-parallel width.
+        """
         self.config = config
         self.layer_idx = layer_idx
         self.device = device
@@ -120,15 +140,15 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         _profile(self.device)
 
     def prefetch_weights(self):
-        """Stage this layer's prefetched weights ahead of the :meth:`decode` that uses them.
+        """Stage this layer's prefetched weights ahead of the :meth:`decode_static` that uses them.
 
-        Hyper-connection ``fn`` first (private GCB, consumed before attention), then
+        Every weight staged here answers that next call on this layer's ``[B,S,hc,D]`` streams.
+        Hyper-connection ``fn`` first (private ring, consumed before attention), then
         attention (its own four projections and its compressor's pair), then the FFN
-        hyper-connection, then the MoE (router gate on its 8-receiver ring, then the
-        shared expert). q_a's 32-receiver FIFO continues from CSA into shared-expert
-        gate/up; the shared 64-core GCB continues from o_b into shared-expert down.
-        Each HC streams through its own buffer. The requests queued here must be
-        consumed by this layer's own decode before any later layer queues its own.
+        hyper-connection, then the MoE (router gate on its 8-receiver ring, then the shared
+        expert's down on the shared ring; at TP4 the shared gate/up are per-step DRAM -> L1
+        copies and queue on no ring). The requests queued here must be consumed by this layer's
+        own decode before any later layer queues its own.
         """
         self.attn_hc.prefetch_weights()
         self.self_attn.prefetch_weights()
@@ -140,8 +160,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
     ) -> ttnn.Tensor:
         """``post[..,None] * out[..,None,:] + comb.T @ streams`` -> new streams.
 
-        ``post`` ``[B,S,H,1]``, ``comb`` ``[B,S,H,H]``, ``sublayer_out`` ``[B,S,1,D]``,
-        ``streams`` ``[B,S,H,D]``; returns ``[B,S,H,D]``.
+        ``post`` ``[B,S,hc,1]``, ``comb`` ``[B,S,hc,hc]``, ``sublayer_out`` ``[B,S,1,D]``,
+        ``streams`` ``[B,S,hc,D]``; returns ``[B,S,hc,D]``.
 
         Fused into a single composite device op (``ttnn.experimental.deepseek.mix_streams``)
         that folds the broadcast-multiply, the ``comb`` transpose (via ``transpose_a=True``)
@@ -172,8 +192,9 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
     ) -> ttnn.Tensor:
         """Single-token decode: same graph as :meth:`decode_static` (the capture).
 
-        Host ``input_ids`` are uploaded only for hash-routed layers, as the static
-        path's on-device ``hash_token``.
+        ``hidden_streams`` ``[B,S,hc,D]`` -> ``[B,S,hc,D]``; the remaining tensors are as in
+        :meth:`decode_static`. Host ``input_ids`` ``[B]`` are uploaded only for hash-routed
+        layers, as the static path's on-device ``hash_token`` ``[1,B]``.
         """
         if hash_token is None and input_ids is not None and self.mlp.is_hash:
             t = hidden_streams.shape[0]
@@ -225,6 +246,15 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         """Trace-safe single-token decode (see :meth:`decode`). Uses the fixed-size
         in-place attention cache + the host-sync-free MoE so the whole block can be
         captured into a reusable ``ttnn`` trace.
+
+        ``hidden_streams`` ``[B,S,hc,D]`` -> ``[B,S,hc,D]``; ``cos``/``sin``/``neg_sin`` are the
+        bf16 RoPE rows ``[1,1,1,Rd]`` (``cos_win``/``sin_win`` the compressor family's, ``None``
+        for sliding layers); ``mask`` is the additive bf16 TILE mask ``[1,1,1,kv_len]`` or
+        ``None`` when the step is causal-only; ``sliding_pos`` and ``compress_pos`` are INT32
+        ``[B]`` absolute positions; ``sdpa_cur_pos``/``win_slot``/``win_row`` INT32 ``[B]``
+        per-user indices; ``hash_token`` a uint32 ROW_MAJOR ``[1,B]`` for a hash-routed MoE;
+        ``scache`` the layer's fixed-size in-place caches (``_StaticLayerCache``) and ``paged``
+        the shared-block-pool view of its KV.
 
         ``pool_compressor`` is fixed at capture time: the traced path captures one
         variant per window phase (see :meth:`DeepSeekV4Model._capture_traces`)."""

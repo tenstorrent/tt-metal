@@ -2,7 +2,8 @@
 
 The V4-Flash weights ship in two mixed-precision formats (see the checkpoint's
 ``quantization_config`` and the per-tensor ``.scale`` companions exposed by
-:class:`DeepseekV4WeightLoader`):
+:class:`DeepseekV4WeightLoader`). Shapes here are host (torch) ``[R, C]``: ``R`` rows and ``C``
+logical columns, where a packed MXFP4 weight stores ``C / 2``.
 
 * **Block FP8** (``fmt=e4m3``, ``scale_fmt=ue8m0``, ``weight_block_size=128x128``)
   for the dense projections and the *shared* expert MLP. Each ``128x128`` block
@@ -47,10 +48,10 @@ _E8M0_BIAS = 127
 
 
 def _e8m0_to_exponent(scale: torch.Tensor) -> torch.Tensor:
-    """Reinterpret an e8m0 (or raw uint8) scale tensor as its int exponent.
+    """Reinterpret an e8m0 (or raw uint8) scale ``[R, C]`` as its int32 exponents ``[R, C]``.
 
-    ``2 ** (byte - 127)`` is the represented value; we return ``byte - 127`` so
-    callers can fold it in with :func:`torch.ldexp`.
+    ``2 ** (byte - 127)`` is the represented value; we return ``byte - 127`` so callers
+    can fold it in with :func:`torch.ldexp`.
     """
     if scale.dtype == torch.uint8:
         raw = scale
@@ -66,16 +67,12 @@ def dequantize_mxfp4(
     block_size: int = 32,
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
-    """Dequantize an MXFP4 weight ``[R, C/2]`` -> ``[R, C]``.
+    """Dequantize an MXFP4 weight ``[R, C/2]`` int8 -> ``[R, C]`` in ``dtype``.
 
-    Args:
-        weight: packed ``int8`` tensor; two fp4 nibbles per byte (low nibble is
-            the lower logical index, matching transformers).
-        scale: e8m0 block scale ``[R, C/block_size]``.
-        block_size: logical values per shared scale along the last dim (32).
-
-    Returns:
-        The dequantized ``[R, C]`` tensor in ``dtype``.
+    Two fp4 nibbles per byte, the low nibble holding the lower logical index (matching
+    transformers). ``scale`` is the e8m0 companion ``[R, C/block_size]`` -- uint8 or
+    float8_e8m0fnu -- and ``block_size`` (32) is the number of logical values sharing one scale
+    along the last dim. Raises if the expanded scales do not span exactly ``C``.
     """
     packed = weight.view(torch.uint8)
     rows, cols_b = packed.shape
@@ -99,12 +96,11 @@ def dequantize_fp8_block(
     block: tuple[int, int] = (128, 128),
     dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
-    """Dequantize a block-FP8 weight ``[R, C]`` with a per-``block`` e8m0 scale.
+    """Dequantize a block-FP8 weight ``[R, C]`` -> ``[R, C]`` in ``dtype``.
 
-    Args:
-        weight: ``float8_e4m3fn`` tensor ``[R, C]``.
-        scale: e8m0 block scale ``[ceil(R/bh), ceil(C/bw)]``.
-        block: ``(bh, bw)`` block size (``128x128`` for V4-Flash).
+    ``weight`` is ``float8_e4m3fn``; ``scale`` is the e8m0 companion
+    ``[ceil(R/bh), ceil(C/bw)]`` for the ``(bh, bw)`` block size (``128x128`` for V4-Flash), and
+    is cropped to the weight's own extent, so a padded scale grid is fine.
     """
     w = weight.to(dtype)
     bh, bw = block
@@ -119,9 +115,10 @@ def dequantize_weight(
 ) -> torch.Tensor:
     """Dequantize ``weight`` given its companion ``scale`` (or pass through).
 
-    Dispatches on the *weight* dtype: ``int8`` -> MXFP4, ``float8_e4m3fn`` ->
-    block-FP8. Anything else (bf16/fp32 unquantized) is returned cast to
-    ``dtype`` and the scale (which should be ``None``) is ignored.
+    ``weight`` is ``[R, C]`` -- or ``[R, C/2]`` when packed MXFP4 -- and the result is ``[R, C]``
+    in ``dtype``. Dispatches on the *weight* dtype: ``int8`` -> MXFP4, ``float8_e4m3fn`` ->
+    block-FP8. Anything else (bf16/fp32 unquantized) is returned cast to ``dtype`` and the scale,
+    which should be ``None``, is ignored.
     """
     if scale is None:
         return weight.to(dtype)
