@@ -52,7 +52,7 @@ TEST_F(UnitMeshFastDispatchFixture, PCIeMidCleanup) {
     constexpr uint32_t transfer_size = 64;
     constexpr uint32_t num_words = transfer_size / sizeof(uint32_t);
 
-    auto l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, logical_core);
+    auto l1_info = unit_tests::dm::get_l1_address_and_size(*mesh_device, logical_core);
     ASSERT_GE(l1_info.size, 10 * transfer_size) << "Insufficient L1 for test buffers";
     uint32_t l1_base = static_cast<uint32_t>(l1_info.base_address);
 
