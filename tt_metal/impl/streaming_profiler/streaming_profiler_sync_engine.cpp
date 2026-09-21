@@ -248,13 +248,35 @@ void ClockMap::append_host(HostNode node) {
         node.value,
         node.tangent);
     impl_->host.append(kHostSeries, node);
+    impl_->cover_generation.fetch_add(1, std::memory_order_release);
 }
 
+// The chip's cover, held back to where its line reaches the host series' last node: a record placed beyond that
+// node sits on its tangent while a later record at the same tick takes the chord to the next node, so two lanes of
+// one chip would part by the line's move between bursts. A finished chip releases everything.
 int64_t ClockMap::cover_ticks(uint32_t chip_id) const noexcept {
     if (chip_id >= kMaxChips) {
         return std::numeric_limits<int64_t>::max();
     }
-    return impl_->chips[chip_id].cover.load(std::memory_order_acquire);
+    const Log<int64_t>& cl = impl_->chips[chip_id];
+    const int64_t cover = cl.cover.load(std::memory_order_acquire);
+    if (cover == std::numeric_limits<int64_t>::max()) {
+        return cover;
+    }
+    const double host_cover = impl_->host.cover.load(std::memory_order_acquire);
+    ClockNode<int64_t> last{};
+    const uint64_t n = cl.nodes.count();
+    if (n == cl.nodes.first() || !cl.nodes.read(n - 1, last) || !(last.tangent > 0.0)) {
+        return cover;
+    }
+    const double wall = static_cast<double>(last.at) + (host_cover - last.value) / last.tangent;
+    if (wall >= static_cast<double>(cover)) {
+        return cover;
+    }
+    if (wall <= static_cast<double>(std::numeric_limits<int64_t>::min())) {
+        return std::numeric_limits<int64_t>::min();
+    }
+    return static_cast<int64_t>(std::floor(wall));
 }
 
 int64_t ClockMap::oldest_at(uint32_t chip_id) const noexcept {
