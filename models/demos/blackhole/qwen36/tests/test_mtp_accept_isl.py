@@ -17,7 +17,7 @@ Isolation: hold CONTENT STRUCTURE fixed and vary only the length.
 A CLIFF between 2048 (one chunk) and 2176/2304 (two chunks) => multi-chunk warm bug.
 A smooth decline with no boundary feature => genuine length/content effect.
 
-Run: MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/tests/test_mtp_accept_isl.py -v -s
+Run: MESH_DEVICE=T3K (or P150x4) pytest models/demos/blackhole/qwen36/tests/test_mtp_accept_isl.py -v -s
 Override the sweep with QWEN36_ISL_SWEEP="rep128:512,rep128:2048,long4k:3968". An entry may carry a
 per-case draft length as a third field, "src:plen:K" (e.g. "frank:3968:6"); without it the decoder's
 default K applies. QWEN36_ISL_NUM_BLOCKS overrides NUM_BLOCKS (the KV / max_seq_len budget).
@@ -30,7 +30,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.demo.text_demo import _MESH_SHAPE, _MULTI, BLOCK_SIZE, DEVICE_PARAMS, _get_prompt
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
@@ -112,12 +112,12 @@ class _WarmGate:
         return False
 
 
-@run_for_blackhole()
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_mtp_accept_vs_isl(mesh_device):
     if not _MULTI:
-        pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
+        pytest.skip("spec decode is the TP path; run with MESH_DEVICE=T3K (or P150x4)")
     from transformers import AutoTokenizer
 
     from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
@@ -190,7 +190,7 @@ def test_mtp_accept_vs_isl(mesh_device):
         )
 
 
-@run_for_blackhole()
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_mtp_warm_chunk_ablation(mesh_device):
@@ -201,7 +201,7 @@ def test_mtp_warm_chunk_ablation(mesh_device):
     A tail skip that costs NOTHING would mean the chunk>0 warm was never writing usable KV.
     """
     if not _MULTI:
-        pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
+        pytest.skip("spec decode is the TP path; run with MESH_DEVICE=T3K (or P150x4)")
     from transformers import AutoTokenizer
 
     from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
@@ -255,7 +255,7 @@ class _StopAfterWarm(Exception):
     """Raised from a stubbed `_warm_mtp_last` to freeze generate() right after the chunk warms."""
 
 
-@run_for_blackhole()
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_mtp_warm_kv_map(mesh_device):
@@ -268,7 +268,7 @@ def test_mtp_warm_kv_map(mesh_device):
     The base model's own K cache is printed alongside as the reference profile.
     """
     if not _MULTI:
-        pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
+        pytest.skip("spec decode is the TP path; run with MESH_DEVICE=T3K (or P150x4)")
     from transformers import AutoTokenizer
 
     from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder

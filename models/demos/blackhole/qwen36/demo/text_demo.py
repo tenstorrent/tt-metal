@@ -414,10 +414,9 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     T = token_ids.shape[1]
     # Draft width. K is chosen so that T=K+1 is a layout the fused verify SDPA (spec_multi_pos_tiles)
     # supports: it splits the T candidates into L1-fitting groups of 4 and reads KV once per group
-    # rather than once per candidate. Short prompts (<=4k) accept many drafts, so K=11 -> T=12 =
-    # 3 groups x 4; elsewhere acceptance saturates and the narrower K=7 -> T=8 = 2 groups x 4 keeps
-    # the drafter cheap. Other K values fall back to the legacy B=T pseudo-user verify, which reads
-    # KV T times and rounds differently from plain decode at near ties, so they are avoided.
+    # rather than once per candidate. K=7 -> T=8 = 2 groups x 4. Other K values fall back to the
+    # legacy B=T pseudo-user verify, which reads KV T times and rounds differently from plain decode
+    # at near ties, so they are avoided -- which is why the alternative below is 11 (T=12), not 9.
     # WORMHOLE: was capped at (6, 6) because the K=11 -> T=12 split needs the fused multi-pos verify
     # SDPA, and TPAttention._SPEC_SDPA_L1_FIT was Blackhole-only. That table now has a WH arm
     # (_SPEC_SDPA_L1_FIT_WH: same Tg=4 splits, cores-per-head rescaled to the 64-core grid), so the
@@ -428,24 +427,38 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     # so nobody has to sweep it again:
     #     K= 6  accept 4.10/6   5.10 committed/iter  ttft 4.62s  47.49 tok/s   <- the old cap
     #     K= 7  accept 4.10/7   5.10 committed/iter  ttft 4.73s  45.78 tok/s
-    #     K=11  accept 6.14/11  7.14 committed/iter  ttft 5.15s  54.46 tok/s   <- used, the peak
+    #     K=11  accept 6.14/11  7.14 committed/iter  ttft 5.15s  54.46 tok/s   <- the peak ON THIS PROMPT
     #     K=15  accept 6.14/15  7.14 committed/iter  ttft 5.66s  48.11 tok/s
     #     K=19  accept 6.14/19  7.14 committed/iter  ttft 6.24s  41.89 tok/s
-    # +14.7% over the old cap: K=11 turns the extra depth into 40% more committed tokens per
-    # iteration (7 iterations instead of 10 for the same output).
     #
     # THE DRAFTER SATURATES AT 6.14 ACCEPTED. Read the accept column, not tok/s: it pins at 6.14
     # from K=11 on, so every draft slot past 11 costs a drafter leg and commits nothing -- which is
     # the whole of the decline at 15 and 19. Raising K further cannot help without a better drafter;
-    # _SPEC_SDPA_L1_FIT_WH carries T=16/20 entries that DO fit L1, and they are still the wrong
-    # policy. K=7 is a separate local dip (same acceptance as K=6 for a longer chain), which is why
-    # Blackhole's policy skips it too.
-    # TTFT costs +0.53s (more trace captures); see the TTFT note in the module docstring.
-    # ONLY ISL 128 was measured; the >4k arm keeps Blackhole's 7 rather than inventing a data point.
-    _k_short, _k_long = (11, 7)
+    # _SPEC_SDPA_L1_FIT_WH carries T=16/20 entries that DO fit L1, and they are still the wrong policy.
+    #
+    # ...BUT THAT CURVE IS ONE PROMPT, AND K=11 DOES NOT GENERALISE. Acceptance varies 3.2x BY PROMPT
+    # at a fixed ISL (1.79-5.70 of 11 over the eight prompts in tests/test_mtp_accept_prompts.py), and
+    # this file's ISL-128 prompt is at the very top of that range. Re-measured over the whole set,
+    # same build, K fixed per run (tok/s per prompt):
+    #             condiment hello mayo yel+blu room joke good-at 2+2 | MEAN
+    #     K=11        21.64  50.71 37.64  35.20 37.56 34.97  36.30 50.60 | 38.08
+    #     K= 7        25.66  55.39 42.88  39.05 38.96 38.91  40.49 48.67 | 41.25
+    # K=7 wins 7 of 8 prompts and +8.3% on the mean; only 2+2 (the highest-acceptance prompt) prefers
+    # K=11. So K=7 is the policy at EVERY ISL, and the ISL branch is gone with it.
+    #
+    # THE COST, STATED PLAINLY: on this demo's own ISL-128 prompt K=7 is 46.99 vs K=11's 55.96 tok/s
+    # (-16%), because that prompt is one of the two where the long chain pays. The demo's headline
+    # number drops accordingly; the typical-prompt number rises. Chosen deliberately: the mean over a
+    # prompt SET is the honest expectation, one favourable prompt is not.
+    # A per-request adaptive K would take both (the controller would sit at ~7 on the set and ~10 on
+    # this prompt) -- deliberately NOT implemented here.
+    #
+    # >4k was already 7 and re-confirmed on this build: at 8k K=11 accepts 2.79/11 -- IDENTICAL to
+    # K=7's 2.79/7 -- for 28.34 vs 33.90 tok/s; at 16k, 3.08/11 vs 2.89/7 for 29.83 vs 34.47.
+    _k = 7
     # QWEN36_SPEC_DRAFT_LEN, when set, overrides this (draft_len=None defers to the env in
     # SpeculativeDecoder, whose own library default stays 3).
-    draft_len = None if os.environ.get("QWEN36_SPEC_DRAFT_LEN") else (_k_short if T <= 4096 else _k_long)
+    draft_len = None if os.environ.get("QWEN36_SPEC_DRAFT_LEN") else _k
     logger.info(
         f"[TP SPEC] T={T} -> K={draft_len if draft_len is not None else os.environ['QWEN36_SPEC_DRAFT_LEN']}"
         f"{'' if draft_len is not None else ' (QWEN36_SPEC_DRAFT_LEN)'}"

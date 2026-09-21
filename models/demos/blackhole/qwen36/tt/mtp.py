@@ -268,8 +268,34 @@ class Qwen36MTP:
         # Swept program config for the 1-tile-tall form (every draft leg, and the batched reseed at
         # B<=32). It is per_core_M=1 + fuse_batch, so anything taller -- prefill -- must keep auto or
         # work_split trips. 2.3x on this matmul; see tp_common.fc_decode_program_config.
-        if self._fc_decode_pc is not None and int(cat.shape[-2]) <= 32:
+        _m = int(cat.shape[-2])
+        if self._fc_decode_pc is not None and _m <= 32:
             kw["program_config"] = self._fc_decode_pc
+        elif _m >= 512:
+            # PREFILL shape. fc_decode_program_config's 42-arm sweep tuned M=32 ONLY, and this call
+            # fell through to ttnn's auto config, which MEASURED at 24 of 64 cores / 2.4% DRAM /
+            # 41.2% FLOPs in the drafter warm -- the worst-utilised matmul in the chunk. Auto is not
+            # finding the 2D split: at M=2048 there are 64 M-tiles to spread, where the decode shape
+            # had one (which is why its optimum is 10 cores and does not carry over).
+            #
+            # SWEPT at 2048x10240x640, trace-replay timing, PCC 1.000000 on every arm
+            # (tests/perf/test_fc_prefill_sweep.py):
+            #     auto (was shipping)  898.2 us      2D grid=8x5  1018.7 (+13.4%)
+            #     2D full grid         853.2 (-5.0%) 2D grid=4x8  1017.6 (+13.3%)
+            #     2D grid=8x8 halved   863.2 (-3.9%) 2D grid=8x4  1208.1 (+34.5%)
+            #     2D grid=5x8          874.8 (-2.6%) 2D grid=8x2  1962.3 (+118.5%)
+            # Monotonic in core count, so this takes the device's real grid rather than a literal.
+            #
+            # M>=512 because only 2048 was swept; the small tail buckets keep auto rather than run an
+            # unmeasured config. try/except because the helper's blocking has shape preconditions and
+            # a warm that TT_FATALs is far worse than one that is 5% slow.
+            try:
+                _g = self.device.compute_with_storage_grid_size()
+                kw["program_config"] = tpc.create_prefill_matmul_program_config(
+                    _m, cat.shape[-1], self.fc.shape[-1], grid_size=(_g.x, _g.y)
+                )
+            except Exception:
+                pass  # auto, exactly as before
         fused = ttnn.linear(cat, self.fc, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kw)  # [1,1,*,dim/tp]
         ttnn.deallocate(cat)
         return fused
@@ -591,8 +617,23 @@ class Qwen36MTP:
                     compute_kernel_config=ttnn.init_device_compute_kernel_config(
                         self.device.arch(),
                         math_fidelity=ttnn.MathFidelity.LoFi,  # LoFi matches the bfp4 weight
-                        fp32_dest_acc_en=True,
-                        packer_l1_acc=False,
+                        # fp32 dest accumulation STAYS ON. It is not a perf choice: the drafter's
+                        # argmax consumes these logits directly, and at lower precision exact ties
+                        # throw good drafts away (4.7-5.5% of rejections at 8k/32k, see
+                        # model.py::_lm_head). MEASURED here, turning it off is only -2.1% on its
+                        # own and moves the logits (PCC 0.9992463) -- not worth an acceptance risk.
+                        #
+                        # packer_l1_acc was off only because that was the combination originally
+                        # measured. SWEPT in isolation at the real shape
+                        # ([1,1,32,5120] bf16 x [5120,31040] bfp4 -> fp32, the vocab shard at TP=8;
+                        # tests/perf/test_lm_head_sweep.py), 20 timed iterations per arm:
+                        #     fp32acc=T packer=F   576.0 us  155.2 GB/s   <- was shipping
+                        #     fp32acc=F packer=F   564.0 us  158.5 GB/s   -2.1%, PCC 0.9992463
+                        #     fp32acc=T packer=T   553.1 us  161.6 GB/s   -4.0%, output UNCHANGED
+                        #     fp32acc=F packer=T   536.5 us  166.6 GB/s   -6.9%, PCC 0.9999405
+                        # Taking the third: -4.0% on the drafter's single largest op (38% of a
+                        # 1428.9 us leg) with the output identical, so acceptance cannot move.
+                        packer_l1_acc=True,
                     ),
                 )
             else:
