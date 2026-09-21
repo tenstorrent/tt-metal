@@ -252,6 +252,7 @@ def test_unary_cache_miss_different_output_tiles(device):
         )
         with device.cache_entries_counter.measure():
             ttnn.relu(tt_a, output_tensor=tt_out)
+        assert_equal(torch.relu(torch_a), ttnn.to_torch(tt_out))
 
     assert device.cache_entries_counter.total == 2
 

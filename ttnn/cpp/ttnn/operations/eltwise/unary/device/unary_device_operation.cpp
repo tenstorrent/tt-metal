@@ -320,9 +320,9 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     // TODO(port): When TensorParameter replaces TensorAccessorArgs, TensorSpec becomes the authoritative source.
     // Swap the Buffer branch for the spec on both sides since Metal 2.0 validation reads
     // spec.compute_buffer_sharding_args().
-    const auto distribution_key =
-        [](const tt::tt_metal::TensorSpec& spec,
-           const tt::tt_metal::Buffer* buffer) -> std::optional<std::pair<Shape, std::vector<CoreCoord>>> {
+    const auto distribution_key = [](const tt::tt_metal::TensorSpec& spec,
+                                     const Tensor* tensor) -> std::optional<std::pair<Shape, std::vector<CoreCoord>>> {
+        const auto* buffer = tensor != nullptr && tensor->device() != nullptr ? tensor->buffer() : nullptr;
         const auto computed = buffer == nullptr ? std::optional{spec.compute_buffer_sharding_args()} : std::nullopt;
         const auto& distribution =
             buffer != nullptr ? buffer->buffer_distribution_spec() : computed->buffer_distribution_spec();
@@ -340,9 +340,8 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         // different widths get separate cache entries. Consider hashing only the last
         // dimension to allow cache reuse when only height differs
         input_tensor.layout() == Layout::ROW_MAJOR ? std::optional{input_tensor.padded_shape()} : std::nullopt,
-        distribution_key(input_tensor.tensor_spec(), input_tensor.buffer()),
-        distribution_key(
-            output_spec, tensor_args.output_tensor.has_value() ? tensor_args.output_tensor->buffer() : nullptr),
+        distribution_key(input_tensor.tensor_spec(), &input_tensor),
+        distribution_key(output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr),
         src_shard_vol,
         dst_shard_vol);
 }
