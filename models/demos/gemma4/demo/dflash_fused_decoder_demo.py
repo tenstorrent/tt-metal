@@ -206,6 +206,9 @@ def _unwrap_kv_layers(kv_cache):
     },
 )
 def test_demo_dflash_fused_decoder(mesh_device, device_params, reset_seeds):
+    # DFlashDrafter's persistent L1 footprint + fp32 per-head norm buffers clash
+    # at the 128-token prefill bucket; keep the bf16 norm path for this demo only.
+    os.environ.setdefault("GEMMA4_PREFILL_HEAD_NORM_FP32", "0")
     import ttnn
     from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
     from models.demos.gemma4.tt.dflash_drafter import DFlashDrafter, DFlashFusedDecoder

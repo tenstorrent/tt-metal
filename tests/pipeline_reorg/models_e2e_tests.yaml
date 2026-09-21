@@ -746,10 +746,7 @@
     export MODEL_WEIGHTS_DIR=$(ls -d "$HF_HOME"/hub/models--google--gemma-4-31B-it/snapshots/*/ | head -1)
     # Real end-to-end generation: prefill + drafter + fused-trace steady-state decode
     # loop, checked for coherent, non-crashing output on the default (code-generation)
-    # prompt. Same coherence-only bar as the plain text_demo.py entries above. Numerical
-    # correctness for the drafter's context-KV build is covered separately, in
-    # models_unit_tests.yaml's "Gemma-4-31B unit tests" entry
-    # (test_dflash_drafter_pcc.py) -- not duplicated here.
+    # prompt. Same coherence-only bar as the plain text_demo.py entries above.
     pytest -s --timeout 900 models/demos/gemma4/demo/dflash_fused_decoder_demo.py -k 1x8
   model: gemma-4-31b
   model_family: Gemma

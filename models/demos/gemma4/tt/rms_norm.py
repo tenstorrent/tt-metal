@@ -16,6 +16,19 @@ from models.demos.gemma4.utils.general_utils import get_cache_file_name
 # comfortably (~197 KB/bank). Longer prefill keeps the plain interleaved path.
 _SHARDED_NORM_MAX_HEIGHT = 1024
 
+# Per-core byte cutoff for the same path. Height alone is NOT a sufficient
+# gate: the shard is (height, dim/num_cores), and num_cores is whatever grid
+# divides dim/32, which varies wildly with hidden size. hidden=5376 spreads
+# over 56 cores (96 cols => 192 KB/core at height 1024), but hidden=2816
+# (gemma-4-26B-A4B) factors as 88 tiles = 8*11 and 11 exceeds the grid, so only
+# 8 cores divide it -- 352 cols => 704 KB/core at the same height. The norm
+# holds the input shard AND its output shard in L1 at once, so 2*704 KB does
+# not fit a ~1.33 MB bank and the output allocation TT_FATALs (Out of Memory:
+# 5767168 B across 8 banks). 192 KB/core is the measured-good point (31B at
+# height 1024, in CI); this cap sits above it with margin and below the
+# measured-bad 352 KB, so only the badly-factoring widths fall back.
+_SHARDED_NORM_MAX_SHARD_BYTES = 256 * 1024
+
 
 def sharded_norm_enabled() -> bool:
     """Width-sharded RMSNorm fast path. Default ON; ``GEMMA4_SHARDED_NORM=0``
@@ -141,7 +154,12 @@ def width_shard_spec(mesh_device, dim, height):
 
     Shared by ``RMSNorm._build_sharded_cfg`` and ``ccl._short_seq_l1_gather_memcfg`` so
     an all-gather can write the exact layout the following norm expects.
-    ``height`` must be tile-aligned and ``<= _SHARDED_NORM_MAX_HEIGHT``.
+    ``height`` must be tile-aligned and ``<= _SHARDED_NORM_MAX_HEIGHT``, and the
+    resulting per-core shard must fit ``_SHARDED_NORM_MAX_SHARD_BYTES``.
+
+    Returning None means "no usable width-shard" — every caller (``RMSNorm.forward``,
+    ``ccl._short_seq_l1_gather_memcfg``, ``layer.py``'s residual prefetch) treats
+    that as "stay interleaved".
     """
     if height <= 0 or height > _SHARDED_NORM_MAX_HEIGHT:
         return None
@@ -158,6 +176,9 @@ def width_shard_spec(mesh_device, dim, height):
     if best is None or best[0] == 1:
         return None
     num_cores, gx, gy = best
+    # bf16 activation; the norm keeps input and output shards live at once.
+    if height * (dim // num_cores) * 2 > _SHARDED_NORM_MAX_SHARD_BYTES:
+        return None
     block_w = tiles // num_cores
     subblock_w = 4
     while subblock_w > 1 and block_w % subblock_w != 0:

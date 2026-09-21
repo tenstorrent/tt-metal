@@ -27,6 +27,7 @@ from .operations import (
     effective_block_size,
     interleave_qkv_if_sharded,
     o_proj_input_memcfg,
+    prefill_head_norm_fp32_enabled,
     prefill_sdpa_act_memcfg,
     prefill_sdpa_compute_kernel_config,
     prefill_sdpa_program_config,
@@ -468,7 +469,15 @@ def _prefill_forward_single(
     # not still resident under SDPA.
     ttnn.deallocate(xqkv)
 
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc)
+    fp32_head_norm = prefill_head_norm_fp32_enabled()
+    tt_q = apply_per_head_norm(
+        tt_q,
+        weights.q_norm_weight,
+        config.rms_norm_eps,
+        with_scale=True,
+        memory_config=act_mc,
+        fp32_accumulate=fp32_head_norm,
+    )
 
     if shared_kv is not None:
         tt_k.deallocate(True)
@@ -477,9 +486,21 @@ def _prefill_forward_single(
     else:
         # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
         tt_k = apply_per_head_norm(
-            tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc
+            tt_k,
+            weights.k_norm_weight,
+            config.rms_norm_eps,
+            with_scale=True,
+            memory_config=act_mc,
+            fp32_accumulate=fp32_head_norm,
         )
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc)
+        tt_v = apply_per_head_norm(
+            tt_v,
+            None,
+            config.rms_norm_eps,
+            with_scale=False,
+            memory_config=act_mc,
+            fp32_accumulate=fp32_head_norm,
+        )
 
     # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
     # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse
@@ -993,7 +1014,15 @@ def prefill_forward(
     )
     ttnn.deallocate(xqkv)
 
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc)
+    fp32_head_norm = prefill_head_norm_fp32_enabled()
+    tt_q = apply_per_head_norm(
+        tt_q,
+        weights.q_norm_weight,
+        config.rms_norm_eps,
+        with_scale=True,
+        memory_config=act_mc,
+        fp32_accumulate=fp32_head_norm,
+    )
 
     if shared_kv is not None:
         tt_k.deallocate(True)
@@ -1002,9 +1031,21 @@ def prefill_forward(
     else:
         # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
         tt_k = apply_per_head_norm(
-            tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc
+            tt_k,
+            weights.k_norm_weight,
+            config.rms_norm_eps,
+            with_scale=True,
+            memory_config=act_mc,
+            fp32_accumulate=fp32_head_norm,
         )
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc)
+        tt_v = apply_per_head_norm(
+            tt_v,
+            None,
+            config.rms_norm_eps,
+            with_scale=False,
+            memory_config=act_mc,
+            fp32_accumulate=fp32_head_norm,
+        )
 
     # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
     # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse

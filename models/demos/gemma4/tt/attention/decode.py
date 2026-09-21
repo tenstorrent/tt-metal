@@ -10,7 +10,6 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 import os
 
 import ttnn
-from models.demos.gemma4.tt.compute_config import decode_sdpa_compute_kernel_config
 
 from .operations import (
     apply_allreduce,
@@ -278,13 +277,12 @@ def decode_forward(
     """
     tp = mesh_config.tp if mesh_config else 1
 
-    # 1. Fused QKV projection. Land the output straight in L1: the only consumer
-    # is ``nlp_create_qkv_heads_decode``, which needs an L1 input anyway (see
-    # split_qkv_heads_decode). Writing DRAM and copying back cost one extra
-    # CopyDeviceOperation per layer plus a full DRAM round-trip of the fused
-    # QKV. At decode M=32 the tensor is
-    # tiny (2048-3072 cols bf16 = 128-192 KB across the grid).
-    xqkv = apply_qkv_projection(hidden_states, weights, memory_config=ttnn.L1_MEMORY_CONFIG, decode=True)
+    # 1. Fused QKV projection. Do not pass ``decode=True`` here: the swept
+    # narrow-N decode program config (``GEMMA4_QKV_DECODE_PROGCFG``) is not
+    # bit-exact against auto and drops unit-test PCC below 0.99 on long-cache
+    # global decode (e.g. test_attention_decode_paged cache1500). DFlash's
+    # packed-verify path keeps its own L1 projection call in packed_decode_forward.
+    xqkv = apply_qkv_projection(hidden_states, weights)
 
     # 2. Split into Q, K, V heads
     tt_q, tt_k, tt_v = split_qkv_heads_decode(
@@ -583,8 +581,6 @@ def decode_forward(
         k_chunk_size=64,
         exp_approx_mode=False,
     )
-    sdpa_compute_kernel_config = decode_sdpa_compute_kernel_config(mesh_device)
-
     if page_table is not None:
         sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -597,7 +593,6 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
-            compute_kernel_config=sdpa_compute_kernel_config,
             # Tell SDPA the layer's view of the cache when the buffer was allocated
             # for a different layer type under HMA cross-group sharing — same
             # rationale as the num_kv_heads override on paged_update_cache.
@@ -617,7 +612,6 @@ def decode_forward(
             sliding_window_size=sliding_window,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=sdpa_program_config,
-            compute_kernel_config=sdpa_compute_kernel_config,
         )
     tt_q.deallocate(True)
 
