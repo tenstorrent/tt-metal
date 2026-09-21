@@ -196,7 +196,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     add_cb(prod_set, fcb::lmask, cc);
     add_cb(prod_set, fcb::kbeta, ck);
     add_cb(prod_set, fcb::out, cv, 2, df_qkv);
-    add_cb(prod_set, fcb::u, cv);
+    // Sized like the phased prep factory: the u slot doubles as the 3-tile WY-mask holder.
+    add_cb(prod_set, fcb::u, std::max<uint32_t>(cv, 3));
     add_cb(prod_set, fcb::s2, kv, 2);
     add_cb(prod_set, fcb::ointer, cv);
     add_cb(prod_set, fcb::supd, kv);
