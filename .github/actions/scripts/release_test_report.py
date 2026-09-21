@@ -210,6 +210,9 @@ def parse_horizon(path, req_key=HORIZON_REQUIREMENT, max_age_days=7):
     except (json.JSONDecodeError, OSError) as e:
         print(f"horizon: results file unreadable ({e}); {req_key} inconclusive")
         return INCONCLUSIVE, {}
+    if not isinstance(data, dict):
+        print(f"horizon: results root is {type(data).__name__}, not an object; {req_key} inconclusive")
+        return INCONCLUSIVE, {}
     if data.get("schema") != "horizon-test-results/v1":
         print(f"horizon: unexpected schema {data.get('schema')!r}; {req_key} inconclusive")
         return INCONCLUSIVE, {}

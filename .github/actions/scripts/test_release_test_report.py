@@ -368,6 +368,14 @@ def test_horizon_missing_file_is_inconclusive(tmp_path):
     assert parse_horizon(str(truncated)) == (INCONCLUSIVE, {}), "a truncated upload must not crash the report"
 
 
+def test_horizon_non_object_root_is_inconclusive(tmp_path):
+    """Valid JSON that is not an object (array, string, null) must degrade, not raise."""
+    for i, body in enumerate(['[{"name": "t", "result": "passed"}]', '"horizon-test-results/v1"', "null", "42"]):
+        p = tmp_path / f"root{i}.json"
+        p.write_text(body)
+        assert parse_horizon(str(p)) == (INCONCLUSIVE, {}), body
+
+
 def test_horizon_stale_is_inconclusive(tmp_path):
     path = _horizon(tmp_path, [{"name": "t", "result": "passed"}], ts="2020-01-01T00:00:00Z")
     assert parse_horizon(path, max_age_days=7) == (INCONCLUSIVE, {})

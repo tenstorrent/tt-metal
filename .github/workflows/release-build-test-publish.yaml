@@ -435,10 +435,12 @@ jobs:
           path: test-reports
           merge-multiple: false
 
-      # AIIPSW-15 (Horizon) is tested in the separate private tt-umd-horizon repo,
-      # which publishes its latest results to results/latest.json on its `stable`
-      # branch. Pull that file (read-only, cross-repo) so the report can account it.
-      # Non-fatal: a missing token/branch/file just leaves AIIPSW-15 inconclusive.
+      # AIIPSW-15 (Horizon) is tested in the separate private tt-umd-horizon repo.
+      # Its "Release Horizon" workflow tags each main commit that passes the
+      # /dev/horizon suite and publishes a GitHub Release carrying the evidence as
+      # a `latest.json` asset (schema horizon-test-results/v1). Pull the newest
+      # release's asset (read-only, cross-repo) so the report can account it.
+      # Non-fatal: a missing token/release/asset just leaves AIIPSW-15 inconclusive.
       - name: Pull tt-umd-horizon test evidence
         continue-on-error: true
         env:
@@ -449,11 +451,21 @@ jobs:
             echo "::notice::HORIZON_RESULTS_TOKEN not configured; skipping Horizon evidence."
             exit 0
           fi
-          if gh api "repos/tenstorrent/tt-umd-horizon/contents/results/latest.json?ref=stable" \
-               --jq '.content' 2>/dev/null | base64 -d > horizon-results.json; then
-            echo "Pulled Horizon results:"; cat horizon-results.json
+          if gh release download --repo tenstorrent/tt-umd-horizon \
+               --pattern latest.json --output horizon-results.json --clobber 2>/dev/null \
+             && [ -s horizon-results.json ]; then
+            # Log only the verdict, never the file: it comes from a private repo
+            # and this log is public. The report step prints the per-test rows.
+            python3 - <<'PY' || echo "::notice::Horizon results downloaded but not parseable; report will treat as inconclusive."
+          import json
+          d = json.load(open("horizon-results.json"))
+          d = d if isinstance(d, dict) else {}
+          t = d.get("totals") or {}
+          print("Pulled Horizon results:", "schema=%s conclusion=%s passed=%s failed=%s timestamp=%s"
+                % (d.get("schema"), d.get("conclusion"), t.get("passed"), t.get("failed"), d.get("timestamp")))
+          PY
           else
-            echo "::notice::Horizon results not available (repo/branch/file missing); AIIPSW-15 inconclusive."
+            echo "::notice::Horizon results not available (repo/release/asset missing); AIIPSW-15 inconclusive."
             rm -f horizon-results.json
           fi
 
