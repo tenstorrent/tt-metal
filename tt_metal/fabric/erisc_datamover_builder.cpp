@@ -88,21 +88,20 @@ namespace {
 // Returns true when fabric 2-ERISC should be considered enabled for builders.
 // This is disabled for Wormhole and enabled for Blackhole when 2-eriscs can be dispatched to
 // and if we are not building with the tensix mux extension (due to stack size issue).
-bool is_fabric_two_erisc_enabled() {
-    auto& mc = tt::tt_metal::MetalContext::instance();
+bool is_fabric_two_erisc_enabled(
+    const tt::tt_metal::Hal& hal, const tt::llrt::RunTimeOptions& rtoptions, FabricTensixConfig fabric_tensix_config) {
     // Force-disable if the override is present
-    bool force_disable_2_erisc = mc.rtoptions().get_disable_fabric_2_erisc_mode();
+    bool force_disable_2_erisc = rtoptions.get_disable_fabric_2_erisc_mode();
     if (force_disable_2_erisc) {
         log_debug(tt::LogFabric, "Disabling fabric 2-ERISC mode due to force disable");
         return false;
     }
 
-    const auto& hal = mc.hal();
     // by default, enable only single erisc mode for future architectures as well to simplify bringup
     bool arch_bh = hal.get_arch() == tt::ARCH::BLACKHOLE;
 
     // out of stack size issue on the erisc, to be investigated
-    bool tensix_extensions_enabled = mc.get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED;
+    bool tensix_extensions_enabled = fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
     bool single_erisc_dispatch = hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) < 2;
 
@@ -116,6 +115,7 @@ void configure_risc_settings(
     size_t num_riscv_cores,
     size_t risc_id,
     tt::ARCH arch,
+    const tt::llrt::RunTimeOptions& rtoptions,
     bool& enable_handshake,
     bool& enable_context_switch,
     bool& enable_interrupts) {
@@ -127,7 +127,7 @@ void configure_risc_settings(
     } else if (arch == tt::ARCH::BLACKHOLE) {
         if (num_riscv_cores == 1) {
             enable_handshake = true;
-            enable_context_switch = tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
+            enable_context_switch = rtoptions.get_enable_2_erisc_mode();
             enable_interrupts = false;
         } else {
             // Blackhole: Distribute sender/receiver across two RISC cores
@@ -150,11 +150,10 @@ void configure_risc_settings(
     }
 }
 
-size_t get_num_riscv_cores() {
-    if (is_fabric_two_erisc_enabled()) {
-        size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-        return nriscs;
+size_t get_num_riscv_cores(
+    const tt::tt_metal::Hal& hal, const tt::llrt::RunTimeOptions& rtoptions, FabricTensixConfig fabric_tensix_config) {
+    if (is_fabric_two_erisc_enabled(hal, rtoptions, fabric_tensix_config)) {
+        return hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
     }
     return 1;
 }
@@ -162,9 +161,13 @@ size_t get_num_riscv_cores() {
 // Helper to determine if a RISC core should service sender channels
 // On Blackhole with 2 ERISCs: ERISC0 services senders, ERISC1 does not
 // On Wormhole or Blackhole with 1 ERISC: all RISCs service both
-bool should_risc_service_sender_channels(size_t risc_id) {
-    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
-    size_t num_riscv_cores = get_num_riscv_cores();
+bool should_risc_service_sender_channels(
+    size_t risc_id,
+    const tt::tt_metal::Hal& hal,
+    const tt::llrt::RunTimeOptions& rtoptions,
+    FabricTensixConfig fabric_tensix_config) {
+    auto arch = hal.get_arch();
+    size_t num_riscv_cores = get_num_riscv_cores(hal, rtoptions, fabric_tensix_config);
 
     if (arch == tt::ARCH::BLACKHOLE && num_riscv_cores == 2) {
         return risc_id == 0;  // Only ERISC0 services senders
@@ -175,14 +178,28 @@ bool should_risc_service_sender_channels(size_t risc_id) {
 // Helper to determine if a RISC core should service receiver channels
 // On Blackhole with 2 ERISCs: ERISC1 services receivers, ERISC0 does not
 // On Wormhole or Blackhole with 1 ERISC: all RISCs service both
-bool should_risc_service_receiver_channels(size_t risc_id) {
-    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
-    size_t num_riscv_cores = get_num_riscv_cores();
+bool should_risc_service_receiver_channels(
+    size_t risc_id,
+    const tt::tt_metal::Hal& hal,
+    const tt::llrt::RunTimeOptions& rtoptions,
+    FabricTensixConfig fabric_tensix_config) {
+    auto arch = hal.get_arch();
+    size_t num_riscv_cores = get_num_riscv_cores(hal, rtoptions, fabric_tensix_config);
 
     if (arch == tt::ARCH::BLACKHOLE && num_riscv_cores == 2) {
         return risc_id == 1;  // Only ERISC1 services receivers
     }
     return true;  // Wormhole or single-ERISC mode: all service receivers
+}
+
+bool requires_forced_assignment_to_noc1(
+    const tt::tt_metal::Hal& hal, const tt::llrt::RunTimeOptions& rtoptions, FabricTensixConfig fabric_tensix_config) {
+    // When creating a kernel on erisc0 and 2 erisc mode is disabled, the physical processor is erisc1 while erisc0 is
+    // running base firmware. As base firmware may occasionally use noc0 force fabric on "erisc0" to use noc1
+    //
+    // When 2 erisc mode is enabled on the runtime, erisc index == noc index is enforced in tt_metal.cpp
+    //
+    return hal.get_arch() == tt::ARCH::BLACKHOLE && get_num_riscv_cores(hal, rtoptions, fabric_tensix_config) == 1;
 }
 
 }  // anonymous namespace
@@ -201,37 +218,33 @@ static std::pair<bool, bool> compute_edge_facing_flags(
     return {is_intermesh, is_intramesh};
 }
 
-FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
+FabricRiscConfig::FabricRiscConfig(
+    uint32_t risc_id,
+    const tt::tt_metal::Hal& hal,
+    const tt::llrt::RunTimeOptions& rtoptions,
+    FabricTensixConfig fabric_tensix_config) :
     noc_(risc_id == 0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1),
     iterations_between_ctx_switch_and_teardown_checks_(
         FabricEriscDatamoverConfig::default_iterations_between_ctx_switch_and_teardown_checks),
     enable_handshake_(true),
     enable_context_switch_(true),
     enable_interrupts_(true) {
-    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
-
     configure_risc_settings(
-        get_num_riscv_cores(),
+        get_num_riscv_cores(hal, rtoptions, fabric_tensix_config),
         risc_id,
-        arch,
+        hal.get_arch(),
+        rtoptions,
         this->enable_handshake_,
         this->enable_context_switch_,
         this->enable_interrupts_);
 }
 
-namespace {
-bool requires_forced_assignment_to_noc1() {
-    // When creating a kernel on erisc0 and 2 erisc mode is disabled, the physical processor is erisc1 while erisc0 is
-    // running base firmware. As base firmware may occasionally use noc0 force fabric on "erisc0" to use noc1
-    //
-    // When 2 erisc mode is enabled on the runtime, erisc index == noc index is enforced in tt_metal.cpp
-    //
-    return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE && get_num_riscv_cores() == 1;
-}
-
-}  // anonymous namespace
-
-FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topology(topology) {
+FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
+    Topology topology,
+    const tt::tt_metal::Hal& hal,
+    const tt::llrt::RunTimeOptions& rtoptions,
+    FabricTensixConfig fabric_tensix_config) :
+    topology(topology) {
     const bool is_2D_routing = is_2D_topology(topology);
     // Allocate L1 addresses for global max sender channels so layout is stable across all configs
     uint32_t num_sender_channels =
@@ -242,15 +255,13 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     // https://github.com/tenstorrent/tt-metal/issues/26354 to track fix for this hack where we always set aside the
     // memory for the telemetry buffer in Blackhole
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_bw_telemetry() ||
-        tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+    if (rtoptions.get_enable_fabric_bw_telemetry() || hal.get_arch() == tt::ARCH::BLACKHOLE) {
         // Avoid a bug on BH, always allocate the space for the telemetry buffer
         this->perf_telemetry_buffer_address = next_l1_addr;
         next_l1_addr += 32;
     }
 
     // Allocate code profiling buffer (conditionally enabled)
-    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     if (rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd()) {
         // Buffer size: max timer types * 16 bytes per result
         constexpr size_t code_profiling_buffer_size =
@@ -280,17 +291,17 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
-    if (is_fabric_two_erisc_enabled()) {
+    if (is_fabric_two_erisc_enabled(hal, rtoptions, fabric_tensix_config)) {
         this->receiver_txq_id = 1;
     }
-    this->num_riscv_cores = get_num_riscv_cores();
+    this->num_riscv_cores = get_num_riscv_cores(hal, rtoptions, fabric_tensix_config);
     for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
-        this->risc_configs.emplace_back(risc_id);
+        this->risc_configs.emplace_back(risc_id, hal, rtoptions, fabric_tensix_config);
     }
     // temporary work-around for BH until 2-erisc is enabled. We are required to switch entirely to noc1 for
     // routers when only using a single erisc because erisc0 will be used by base FW and may periodically use
     // noc0 for link health related functionality.
-    if (requires_forced_assignment_to_noc1()) {
+    if (requires_forced_assignment_to_noc1(hal, rtoptions, fabric_tensix_config)) {
         for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
             this->risc_configs[risc_id].set_configured_noc(tt::tt_metal::NOC::NOC_1);
         }
@@ -370,7 +381,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     buffer_address += field_size;
 
     // location for temporarily store the src address when performing inline writes to L1 with spoof
-    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+    if (hal.get_arch() == tt::ARCH::BLACKHOLE) {
         this->notify_worker_of_read_counter_update_src_address = buffer_address;
         buffer_address += field_size;
     }
@@ -388,8 +399,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     Topology topology,
     FabricEriscDatamoverOptions options,
     const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
-    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc) :
-    FabricEriscDatamoverConfig(topology) {
+    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc,
+    const ControlPlane& control_plane) :
+    FabricEriscDatamoverConfig(
+        topology, control_plane.hal(), control_plane.rtoptions(), control_plane.get_fabric_tensix_config()) {
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
 
     // Set channel counts from parameters
@@ -493,7 +506,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->receiver_channel_local_write_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_LOCAL_WRITE_NOC;
         this->receiver_channel_local_write_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
 
-        if (requires_forced_assignment_to_noc1()) {
+        if (requires_forced_assignment_to_noc1(
+                control_plane.hal(), control_plane.rtoptions(), control_plane.get_fabric_tensix_config())) {
             this->receiver_channel_forwarding_noc_ids[i] =
                 FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
             this->receiver_channel_local_write_noc_ids[i] =
@@ -505,7 +519,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
         this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
 
-        if (requires_forced_assignment_to_noc1()) {
+        if (requires_forced_assignment_to_noc1(
+                control_plane.hal(), control_plane.rtoptions(), control_plane.get_fabric_tensix_config())) {
             this->sender_channel_ack_noc_ids[i] =
                 FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_SENDER_ACK_NOC;
         }
@@ -584,11 +599,11 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t sender_worker_terminate_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out) {
-    chan_id_t eth_channel =
-        tt::tt_metal::MetalContext::instance()
-            .get_cluster()
-            .get_logical_ethernet_core_from_virtual(chip_id, tt::tt_metal::CoreCoord(connection.edm_noc_x, connection.edm_noc_y))
-            .y;
+    chan_id_t eth_channel = tt::tt_metal::MetalContext::instance()
+                                .get_cluster()
+                                .get_logical_ethernet_core_from_virtual(
+                                    chip_id, tt::tt_metal::CoreCoord(connection.edm_noc_x, connection.edm_noc_y))
+                                .y;
 
     // copy "only" connections[eth_channel] to L1, not the whole tensix_fabric_connections_l1_info_t
     // because this function is called several times for same device which overwrites info written by previous calls
@@ -684,11 +699,13 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc,
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc,
     std::optional<ChannelTrimmingOverrides> channel_trimming_overrides,
-    std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info) :
+    std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info,
+    const ControlPlane* control_plane) :
     FabricDatamoverBuilderBase(my_noc_x, my_noc_y, direction),
     my_eth_core_logical(my_eth_core_logical),
     my_eth_channel(my_eth_core_logical.y),
     config(config),
+    control_plane_(control_plane),
     local_fabric_node_id(local_fabric_node_id),
     peer_fabric_node_id(peer_fabric_node_id),
     is_inter_mesh(local_fabric_node_id.mesh_id != peer_fabric_node_id.mesh_id),
@@ -716,6 +733,11 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     // First level ack is enabled to support bubble flow control
     enable_first_level_ack(
         config.topology == tt::tt_fabric::Topology::Ring || config.topology == tt::tt_fabric::Topology::Torus) {
+    TT_FATAL(control_plane_ != nullptr, "FabricEriscDatamoverBuilder requires a ControlPlane");
+    const auto& hal = control_plane_->hal();
+    const auto& rtoptions = control_plane_->rtoptions();
+    const auto fabric_tensix_config = control_plane_->get_fabric_tensix_config();
+
     // NOTE: actual_sender_channels_per_vc and actual_receiver_channels_per_vc are:
     // 1. Stored as members for later use in compile-time args
     // 2. Used for connection validation
@@ -735,8 +757,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     const auto& receiver_counts =
         actual_receiver_channels_per_vc.value_or(this->config.num_used_receiver_channels_per_vc);
 
-    bool is_mux_mode = has_tensix_extension && (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
-                                                tt::tt_fabric::FabricTensixConfig::MUX);
+    bool is_mux_mode = has_tensix_extension && (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX);
 
     size_t num_riscv_cores = this->config.risc_configs.size();
     for (size_t risc_id = 0; risc_id < num_riscv_cores; ++risc_id) {
@@ -759,8 +780,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
             }
         } else {
             // Normal mode: Enable channels based on per-VC counts AND this RISC's responsibility
-            bool services_senders = should_risc_service_sender_channels(risc_id);
-            bool services_receivers = should_risc_service_receiver_channels(risc_id);
+            bool services_senders = should_risc_service_sender_channels(risc_id, hal, rtoptions, fabric_tensix_config);
+            bool services_receivers =
+                should_risc_service_receiver_channels(risc_id, hal, rtoptions, fabric_tensix_config);
 
             if (services_senders) {
                 size_t sender_offset = 0;
@@ -790,9 +812,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     // Skipped for an express fabric: an imported capture describes the queue graph it was captured
     // against, and express gives a router a different sender/downstream shape, so replaying it can
     // disable a channel this router genuinely uses.
-    const bool express_routing_enabled =
-        tt::tt_metal::MetalContext::instance().get_control_plane().express_routing_enabled(
-            local_fabric_node_id.mesh_id);
+    const bool express_routing_enabled = control_plane_->express_routing_enabled(local_fabric_node_id.mesh_id);
     if (channel_trimming_overrides.has_value() && !express_routing_enabled) {
         apply_channel_trimming_overrides(channel_trimming_overrides.value());
     }
@@ -840,13 +860,14 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 }
 
 void FabricEriscDatamoverBuilder::configure_telemetry_settings() {
-    auto& telemetry_rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    TT_FATAL(control_plane_ != nullptr, "FabricEriscDatamoverBuilder requires a ControlPlane");
+    const auto& control_plane = *control_plane_;
+    auto& telemetry_rtoptions = control_plane.rtoptions();
     const auto& telemetry_settings = telemetry_rtoptions.get_fabric_telemetry_settings();
     const bool telemetry_globally_enabled = telemetry_rtoptions.get_enable_fabric_telemetry() &&
                                             telemetry_settings.enabled && telemetry_settings.stats_mask != 0;
     const auto local_physical_chip_id =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
-            this->local_fabric_node_id);
+        control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
     for (uint32_t risc_id = 0; risc_id < this->config.num_riscv_cores; risc_id++) {
         bool telemetry_enabled_on_erisc =
             telemetry_globally_enabled &&
@@ -859,10 +880,11 @@ void FabricEriscDatamoverBuilder::configure_telemetry_settings() {
 
 void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
     uint32_t risc_id, std::unordered_map<std::string, uint32_t>& named_args) const {
+    TT_FATAL(control_plane_ != nullptr, "FabricEriscDatamoverBuilder requires a ControlPlane");
     const auto& risc_config = config.risc_configs[risc_id];
     const bool telemetry_enabled = risc_config.telemetry_enabled();
 
-    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    auto& rtoptions = control_plane_->rtoptions();
     named_args["ENABLE_FABRIC_TELEMETRY"] = static_cast<uint32_t>(telemetry_enabled);
 
     // Add telemetry statistic mask (per ERISC)
@@ -945,9 +967,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type));
     }();
 
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    TT_FATAL(control_plane_ != nullptr, "FabricEriscDatamoverBuilder requires a ControlPlane");
+    const auto& control_plane = *control_plane_;
     auto local_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
-    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(local_physical_chip_id);
+    const auto& soc_desc = control_plane.cluster().get_soc_desc(local_physical_chip_id);
 
     const auto& fabric_context = control_plane.get_fabric_context();
 
@@ -1113,11 +1136,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // host has already proven that the exact peer on this link is the
     // matching worker-only source router.
     const bool enable_speedy_vc0 =
-        !express_routing_enabled &&
-        vc0_speedy_path_enabled(
-            actual_sender_channels_vc0,
-            base_enable_deadlock_avoidance,
-            vc0_trim_fast_path_info_.value_or(Vc0TrimFastPathInfo{}));
+        !express_routing_enabled && vc0_speedy_path_enabled(
+                                        actual_sender_channels_vc0,
+                                        base_enable_deadlock_avoidance,
+                                        vc0_trim_fast_path_info_.value_or(Vc0TrimFastPathInfo{}));
 
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
@@ -1245,7 +1267,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["MY_ETH_CHANNEL"] = my_eth_channel_;
     named_args["MY_ERISC_ID"] = risc_id;
     named_args["NUM_ACTIVE_ERISCS"] = static_cast<uint32_t>(this->get_configured_risc_count());
-    named_args["FORCE_ALL_PATHS_TO_USE_SAME_NOC"] = requires_forced_assignment_to_noc1();
+    named_args["FORCE_ALL_PATHS_TO_USE_SAME_NOC"] = requires_forced_assignment_to_noc1(
+        control_plane.hal(), control_plane.rtoptions(), control_plane.get_fabric_tensix_config());
     named_args["IS_INTERMESH_ROUTER_ON_EDGE"] = is_intermesh_router_on_edge;
     named_args["IS_INTRAMESH_ROUTER_ON_EDGE"] = is_intramesh_router_on_edge;
 
@@ -1522,6 +1545,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     ChipId local_physical_chip_id,
     ChipId peer_physical_chip_id,
     const FabricEriscDatamoverConfig& config,
+    const ControlPlane& control_plane,
     std::vector<bool>&& sender_channel_injection_flags,
     bool build_in_worker_connection_mode,
     eth_chan_directions direction,
@@ -1530,7 +1554,6 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc,
     std::optional<ChannelTrimmingOverrides> channel_trimming_overrides,
     std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     log_debug(
         tt::LogFabric,
         "Building FabricEriscDatamover for device {}:  "
@@ -1547,6 +1570,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         control_plane.get_fabric_node_id_from_physical_chip_id(local_physical_chip_id),
         control_plane.get_fabric_node_id_from_physical_chip_id(peer_physical_chip_id),
         config,
+        control_plane,
         std::move(sender_channel_injection_flags),
         build_in_worker_connection_mode,
         direction,
@@ -1564,6 +1588,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     const FabricNodeId& local_fabric_node_id,
     const FabricNodeId& peer_fabric_node_id,
     const FabricEriscDatamoverConfig& config,
+    const ControlPlane& control_plane,
     std::vector<bool>&& sender_channel_injection_flags,
     bool build_in_worker_connection_mode,
     eth_chan_directions direction,
@@ -1624,8 +1649,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
                 config.sender_channels_connection_semaphore_address[vc2_flat];
         }
     } else {
-        const bool is_2D_routing =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
+        const bool is_2D_routing = control_plane.get_fabric_context().is_2D_routing_enabled();
 
         uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
 
@@ -1666,7 +1690,8 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         actual_sender_channels_per_vc,
         actual_receiver_channels_per_vc,
         channel_trimming_overrides,
-        vc0_trim_fast_path_info);
+        vc0_trim_fast_path_info,
+        &control_plane);
 }
 
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel(
@@ -1732,7 +1757,8 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
         downstream_vc_idx,
         builder_config::MAX_NUM_VCS);
 
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    TT_FATAL(control_plane_ != nullptr, "FabricEriscDatamoverBuilder requires a ControlPlane");
+    const auto& fabric_context = control_plane_->get_fabric_context();
     const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
 
     // VC1 is only supported for 2D routing
@@ -1774,14 +1800,20 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     auto* adapter_ptr = this->receiver_channel_to_downstream_adapter.get();
     TT_FATAL(adapter_ptr != nullptr, "Adapter is not set. Failed to build TT-Fabric router. Internal error.");
     adapter_ptr->add_downstream_connection(
-        adapter_spec, upstream_vc_idx, absolute_channel_id, ds_dir, tt::tt_metal::CoreCoord(ds_noc_x, ds_noc_y), is_2D_routing);
+        adapter_spec,
+        upstream_vc_idx,
+        absolute_channel_id,
+        ds_dir,
+        tt::tt_metal::CoreCoord(ds_noc_x, ds_noc_y),
+        is_2D_routing);
 }
 
 size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }
 
 tt::tt_metal::KernelBuildOptLevel FabricEriscDatamoverBuilder::get_kernel_opt_level() const {
+    TT_FATAL(control_plane_ != nullptr, "FabricEriscDatamoverBuilder requires a ControlPlane");
     // User override via TT_METAL_FABRIC_OPT_LEVEL takes priority
-    auto opt_level_override = tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_kernel_opt_level();
+    auto opt_level_override = control_plane_->rtoptions().get_fabric_kernel_opt_level();
     if (opt_level_override.has_value()) {
         return opt_level_override.value();
     }

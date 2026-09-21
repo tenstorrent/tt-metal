@@ -31,12 +31,21 @@
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/fabric_datamover_builder_base.hpp"
 
+namespace tt::llrt {
+class RunTimeOptions;
+}
+
+namespace tt::tt_metal {
+class Hal;
+}
+
 namespace tt::tt_fabric {
 
 struct FabricRiscConfig;
 class FabricRouterBuilder;
 class ComputeMeshRouterBuilder;
 class FabricRemoteChannelsAllocator;
+class ControlPlane;
 
 class FabricEriscDatamoverBuilder;
 class FabricTensixDatamoverBuilder;
@@ -219,7 +228,8 @@ struct FabricEriscDatamoverConfig {
         Topology topology,
         FabricEriscDatamoverOptions options,
         const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
-        const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc);
+        const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc,
+        const ControlPlane& control_plane);
 
     std::size_t channel_buffer_size_bytes = 0;
 
@@ -259,11 +269,19 @@ struct FabricEriscDatamoverConfig {
     std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
 private:
-    FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
+    FabricEriscDatamoverConfig(
+        Topology topology,
+        const tt::tt_metal::Hal& hal,
+        const tt::llrt::RunTimeOptions& rtoptions,
+        FabricTensixConfig fabric_tensix_config);
 };
 
 struct FabricRiscConfig {
-    FabricRiscConfig(uint32_t risc_id);
+    FabricRiscConfig(
+        uint32_t risc_id,
+        const tt::tt_metal::Hal& hal,
+        const tt::llrt::RunTimeOptions& rtoptions,
+        FabricTensixConfig fabric_tensix_config);
     bool enable_handshake() const { return enable_handshake_; };
     bool enable_context_switch() const { return enable_context_switch_; };
     bool enable_interrupts() const { return enable_interrupts_; };
@@ -394,7 +412,8 @@ public:
         std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc =
             std::nullopt,
         std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt,
-        std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info = std::nullopt);
+        std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info = std::nullopt,
+        const ControlPlane* control_plane = nullptr);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -403,6 +422,7 @@ public:
         const FabricNodeId& local_fabric_node_id,
         const FabricNodeId& peer_fabric_node_id,
         const FabricEriscDatamoverConfig& config,
+        const ControlPlane& control_plane,
         std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
         eth_chan_directions direction = eth_chan_directions::EAST,
@@ -421,6 +441,7 @@ public:
         ChipId local_physical_chip_id,
         ChipId peer_physical_chip_id,
         const FabricEriscDatamoverConfig& config,
+        const ControlPlane& control_plane,
         std::vector<bool>&& sender_channel_injection_flags,
         bool build_in_worker_connection_mode = false,
         eth_chan_directions direction = eth_chan_directions::EAST,
@@ -479,6 +500,7 @@ public:
     chan_id_t my_eth_channel;
 
     FabricEriscDatamoverConfig config;
+    const ControlPlane* control_plane_ = nullptr;
 
     FabricNodeId local_fabric_node_id = FabricNodeId(MeshId{0}, 0);
     FabricNodeId peer_fabric_node_id = FabricNodeId(MeshId{0}, 0);
@@ -538,8 +560,10 @@ public:
 
 private:
     // Per-RISC channel servicing flags [risc_id][channel_id]
-    std::array<std::array<bool, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS> is_sender_channel_serviced_{};
-    std::array<std::array<bool, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS> is_receiver_channel_serviced_{};
+    std::array<std::array<bool, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>
+        is_sender_channel_serviced_{};
+    std::array<std::array<bool, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
+        is_receiver_channel_serviced_{};
 
     // Apply channel trimming overrides: disables unused sender/receiver channels
     // and stores overrides for compile-time arg generation (RX forwarding disable flags).

@@ -240,7 +240,8 @@ std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_con
         fabric_context_.get_fabric_topology(),
         edm_options,
         sender_channels,
-        receiver_channels);
+        receiver_channels,
+        fabric_context_.control_plane());
 }
 
 FabricEriscDatamoverConfig& FabricBuilderContext::get_fabric_router_config(

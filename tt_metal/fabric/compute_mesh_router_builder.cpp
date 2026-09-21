@@ -524,6 +524,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         local_node,
         location.remote_node,
         edm_config,
+        fabric_context.control_plane(),
         std::move(erisc_injection_flags),
         false, /* build_in_worker_connection_mode */
         eth_direction,
