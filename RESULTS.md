@@ -63,3 +63,13 @@ reproduction on `bh-glx-120-b09u02` would settle them.
 g03blx04 is excluded entirely: it drops tray 1 (chips 8-15) under MiniMax-H3 load, reproduced six
 times across two different source trees, while non-H3 matmul at 29.9 TFLOP/s per chip runs 180 s
 clean. A controlled A/B on the pre-change tree ruled out this branch's commits as the cause.
+
+### Grid configuration changed mid-sweep
+
+Rows measured before 22:50 ran with SDPA and the VSA pooled matmuls clamped to an 11x10 core grid;
+rows after run unclamped at the device's full 12x10. The clamp was reverted because it broke
+ref2va -- at `padded_len` 89856 the SDPA circular buffers on 11x10 reach 1647616 B against L1's
+1572864 B, since a narrower grid gives each core more to hold. Matmuls were on 11x10 in both cases
+(`get_matmul_core_grid` has always clamped them), so the difference is confined to SDPA and the
+VSA stages, worth roughly 8 % more cores. Treat cross-row comparisons spanning that boundary as
+approximate until the early points are re-measured.
