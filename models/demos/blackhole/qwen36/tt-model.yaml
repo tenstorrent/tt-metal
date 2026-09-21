@@ -92,7 +92,10 @@ serve_profiles:
     env:
       MESH_DEVICE: P150x2
       TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/tt_metal/fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.textproto
-      TT_MODEL_CLASS_OVERRIDES: "Qwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM"
+      # The plugin registers the checkpoint arch under its TT-prefixed name (platform.py: "TT" + arch, the bundle too), so the
+      # override MUST be keyed on TTQwen3_5ForConditionalGeneration to beat the bundle's DFlash main_class; the raw arch is kept
+      # for the plain lookup path. (Keyed on the raw arch alone, the container resolved Qwen36DFlashForCausalLM: boot 1 of step 3.)
+      TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM,Qwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM"
       QWEN36_MTP: "0"                     # explicit: the plain class must not load the MTP drafter head / its paged KV cache
       QWEN36_MAX_TOKENS_ALL_USERS: "622592"   # bf8 KV pool (9,760 blocks -> vLLM reports 624,640 tokens): 2.76 GiB/die free after the
                                               # prefill warmup; 786,432 OOMs in the chunk-prefill warmup; 64k prefill + 32-user burst pass
@@ -112,7 +115,10 @@ serve_profiles:
     env:
       TT_SERVE_LAUNCHER: pd_container      # the plugin's general-plugin hook execs the PD supervisor (MANIFEST_DESIGN.md 2.2)
       MESH_DEVICE: P150                    # per rank (1,1); the rank binding sets TT_VISIBLE_DEVICES / TT_MESH_ID
-      TT_MODEL_CLASS_OVERRIDES: "Qwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM"
+      # The plugin registers the checkpoint arch under its TT-prefixed name (platform.py: "TT" + arch, the bundle too), so the
+      # override MUST be keyed on TTQwen3_5ForConditionalGeneration to beat the bundle's DFlash main_class; the raw arch is kept
+      # for the plain lookup path. (Keyed on the raw arch alone, the container resolved Qwen36DFlashForCausalLM: boot 1 of step 3.)
+      TT_MODEL_CLASS_OVERRIDES: "TTQwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM,Qwen3_5ForConditionalGeneration=models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM"
       QWEN36_FORCE_TP_PATH: "1"
       QWEN36_PREFILL_BUCKET_TRACE: "1"     # required by the KV connector (platform.py:743)
       QWEN36_MTP: "0"                      # no speculation on either node (spec must be off on the PD decode node)
