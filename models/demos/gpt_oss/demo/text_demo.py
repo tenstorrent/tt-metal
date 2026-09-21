@@ -892,6 +892,15 @@ def test_gpt_oss_demo(
                 )
                 out_tok = torch.argmax(logits, dim=-1).view(-1)
 
+            # DIAGNOSTIC: record the per-step token for every user. Works with the trace ON,
+            # unlike a hidden-state dump, because out_tok comes back to host each step.
+            _tok_dir = os.getenv("GPT_OSS_DUMP_TOKENS")
+            if _tok_dir:
+                if "_tok_trace" not in dir():
+                    _tok_trace = []
+                _tok_trace.append(out_tok.detach().cpu().clone().view(-1))
+                torch.save(torch.stack(_tok_trace), f"{_tok_dir}/tokens.pt")
+
             if iteration == 0:
                 profiler.end(f"compile_decode", iteration=batch_idx)
                 decode_iteration_time = profiler.get_duration("compile_decode", iteration=batch_idx)
