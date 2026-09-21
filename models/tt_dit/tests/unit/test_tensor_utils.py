@@ -211,10 +211,10 @@ def test_to_torch_ellipsis(
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
-def test_to_torch_ellipsis_repeated(mesh_device: ttnn.MeshDevice) -> None:
+def test_to_torch_ellipsis_repeated(mesh_device: ttnn.MeshDevice, expect_error) -> None:
     torch.manual_seed(0)  # every host must build the same tensor
     x = torch.randn(8, 128, 128, dtype=torch.bfloat16)
-    with pytest.raises(ValueError, match="at most one Ellipsis"):
+    with expect_error(ValueError, "at most one Ellipsis"):
         tensor.from_torch(x, device=mesh_device, mesh_axes=(..., 0, ...))
 
 

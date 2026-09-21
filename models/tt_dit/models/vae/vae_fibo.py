@@ -11,6 +11,8 @@ import torch
 from diffusers import AutoencoderKLWan
 
 import ttnn
+from models.tt_dit.layers.linear import Linear
+from models.tt_dit.layers.module import Module, ModuleList
 from models.tt_dit.models.vae.vae import (
     VaeContext,
     VaeConv2d,
@@ -21,8 +23,6 @@ from models.tt_dit.models.vae.vae import (
     VaeUpsampler,
     _all_gather_hw,
 )
-from models.tt_dit.layers.linear import Linear
-from models.tt_dit.layers.module import Module, ModuleList
 from models.tt_dit.parallel.config import Flux2VaeParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import cache, tensor

@@ -11,7 +11,6 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_dit.pipelines.events import log_section_durations, profiler_event_callback
 from models.tt_dit.pipelines.fibo.pipeline_fibo import FiboPipeline
 
-
 NUM_INFERENCE_STEPS = 20
 
 PROMPTS = [
