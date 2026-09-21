@@ -4713,3 +4713,460 @@ def test_measurement_contract_cannot_shrink_or_change_after_execution(tmp_path, 
     )
     assert proc.returncode != 0
     assert "cannot remove or change a predeclared measurement contract" in proc.stderr
+
+
+def _host_worktree(tmp_path, body):
+    """Real pytest + real Git; no model, device, compiler, or mocked outcomes."""
+    import shutil
+
+    tree = tmp_path / "worktree/tt_metal/tt-llk"
+    tests = tree / "tests/python_tests"
+    tests.mkdir(parents=True)
+    (tests / "conftest.py").write_bytes(LLK_CONFTEST.read_bytes())
+    (tests / "test_host.py").write_text(body)
+    (tests / "test_device.py").write_text("def test_device(): pass\n")
+    scripts = tree / "codegen/scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy(SCRIPT, scripts / SCRIPT.name)
+    shutil.copy(SCRIPT.parent / "nng_channel.sh", scripts / "nng_channel.sh")
+    wrapper = tree / ".claude/scripts/run_test.sh"
+    wrapper.parent.mkdir(parents=True)
+    shutil.copy(RUN_TEST, wrapper)
+    (tree / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n")
+    for args in (
+        ["init", "-q"],
+        ["config", "user.email", "host@test.invalid"],
+        ["config", "user.name", "Host Test"],
+        ["add", "-A"],
+        ["commit", "-qm", "base"],
+    ):
+        subprocess.run(["git", "-C", str(tree.parents[1]), *args], check=True)
+    base = subprocess.check_output(
+        ["git", "-C", str(tree), "rev-parse", "HEAD"], text=True
+    ).strip()
+    return tree, wrapper, base
+
+
+def _host_run(tmp_path, body, *, extra=(), env_extra=None, prepare=None):
+    tree, wrapper, base = _host_worktree(tmp_path, body)
+    if prepare is not None:
+        prepare(tree)
+    result = tmp_path / "result.json"
+    env = {
+        **os.environ,
+        "TT_LLK_LOCAL_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+        "CODEGEN_BASE_COMMIT": base,
+        "CODEGEN_RUN_ID": "host-run",
+        "CODEGEN_ATTEMPT_ID": "attempt-001",
+        "CODEGEN_HOST_TIMEOUT_SECS": "10",
+        **(env_extra or {}),
+    }
+    for name in (
+        "CODEGEN_REQUIRED_VERIFICATION_MANIFEST",
+        "CODEGEN_VERIFICATION_BACKEND",
+        "CODEGEN_PATCH_SHA256",
+        "CODEGEN_VERIFICATION_SUITE",
+    ):
+        env.pop(name, None)
+    proc = subprocess.run(
+        [
+            "bash",
+            str(wrapper),
+            "host",
+            "--worktree",
+            str(tree),
+            "--arch",
+            "blackhole",
+            "--test",
+            "test_host.py",
+            "--result-json-out",
+            str(result),
+            *extra,
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return proc, json.loads(result.read_text()) if result.exists() else None, tree
+
+
+def test_host_wrapper_real_pytest_no_device_import_or_elf(tmp_path):
+    proc, result, tree = _host_run(
+        tmp_path,
+        """import sys, pytest
+pytestmark = pytest.mark.llk_host
+@pytest.mark.parametrize("value", [1, 2, 3])
+def test_schema(value):
+    assert value > 0
+    assert "ttexalens" not in sys.modules
+    assert "helpers.test_config" not in sys.modules
+""",
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert result["version"] == 3 and result["backend"] == "host"
+    assert result["execution"]["passed"] == 3
+    assert result["classification"] == "success"
+    assert (
+        result["provenance"]["selected_nodeids"]
+        == result["provenance"]["observed_nodeids"]
+    )
+    assert "artifact_set_sha256" not in result["provenance"]
+    assert not (tree / "tests/sfpi").exists()
+    assert not list(tmp_path.rglob("*.elf"))
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("host_writer", SCRIPT)
+    writer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(writer)
+    assert writer._load_verification_result(tmp_path / "result.json") == result
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        (
+            "import pytest\npytestmark=pytest.mark.llk_host\ndef test_bad(): assert False\n",
+            "candidate_failure",
+        ),
+        (
+            'import pytest\npytestmark=pytest.mark.llk_host\n@pytest.mark.skip(reason="no")\ndef test_skip(): pass\n',
+            "coverage_error",
+        ),
+        ("def test_unmarked(): pass\n", "infra_error"),
+        (
+            'import pytest\npytestmark=pytest.mark.llk_host\n@pytest.fixture\ndef device(): raise AssertionError("DEVICE SETUP RAN")\n@pytest.fixture\ndef hidden(device): return device\ndef test_bad(hidden): pass\n',
+            "infra_error",
+        ),
+        ("import missing_host_dependency\n", "infra_error"),
+    ],
+)
+def test_host_wrapper_fails_closed_with_structured_evidence(tmp_path, body, expected):
+    proc, result, _ = _host_run(tmp_path, body)
+    assert proc.returncode != 0, proc.stderr
+    assert result is not None, proc.stderr
+    assert result["classification"] == expected
+    assert "DEVICE SETUP RAN" not in proc.stderr
+
+
+def test_host_wrapper_zero_selected_and_timeout(tmp_path):
+    zero = tmp_path / "zero"
+    zero.mkdir()
+    proc, result, _ = _host_run(
+        zero,
+        "import pytest\npytestmark=pytest.mark.llk_host\ndef test_one(): pass\n",
+        extra=("--k", "missing"),
+    )
+    assert proc.returncode != 0 and result["classification"] != "success"
+    timed = tmp_path / "timed"
+    timed.mkdir()
+    proc, result, _ = _host_run(
+        timed,
+        "import time,pytest\npytestmark=pytest.mark.llk_host\ndef test_slow(): time.sleep(10)\n",
+        env_extra={"CODEGEN_HOST_TIMEOUT_SECS": "1", "GRACE_SECS": "1"},
+    )
+    assert proc.returncode == 5, proc.stderr
+    assert result["classification"] == "timed_out"
+
+
+def test_host_wrapper_rejects_source_mutation(tmp_path):
+    proc, result, _ = _host_run(
+        tmp_path,
+        'import pytest\nfrom pathlib import Path\npytestmark=pytest.mark.llk_host\ndef test_mutation(): Path(__file__).write_text("# changed\\n")\n',
+    )
+    assert proc.returncode == 3, proc.stderr
+    assert result["classification"] == "infra_error"
+    assert "host_inputs_mutated_during_execution" in result["reason_codes"]
+
+
+def test_sealed_host_and_silicon_require_independent_evidence(tmp_path):
+    tree, wrapper, base = _host_worktree(
+        tmp_path,
+        "import pytest\npytestmark=pytest.mark.llk_host\ndef test_schema(): pass\n",
+    )
+    analysis = tmp_path / "analysis.md"
+    analysis.write_text(
+        "## Verification\nverification_required: yes\nverifiable_in_llk_suite: yes\nllk_coverage: existing\n"
+    )
+    plan = tmp_path / "plan.md"
+    plan.write_text(
+        "## Test Strategy\nreproduction_tests:\n- arch: blackhole\n  test: test_host.py\n  execution: host\nregression_tests:\n- arch: blackhole\n  test: test_device.py\n"
+    )
+    manifest_path = tmp_path / "required_verification_manifest.json"
+    cmd = [
+        sys.executable,
+        str(SCRIPT),
+        "required-verification",
+        "--log-dir",
+        str(tmp_path),
+        "--analysis",
+        str(analysis),
+        "--plan",
+        str(plan),
+        "--worktree",
+        str(tree.parents[1]),
+        "--run-id",
+        "host-run",
+        "--expected-base-sha",
+        base,
+        "--architectures-json",
+        '["blackhole"]',
+        "--backend",
+        "local",
+        "--output",
+        str(manifest_path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["version"] == 2
+    assert [r["backend"] for r in manifest["requirements"]] == ["host", "silicon"]
+    results = tmp_path / "verification-results"
+    results.mkdir()
+    env = {
+        **os.environ,
+        "TT_LLK_LOCAL_ARTIFACT_ROOT": str(tmp_path / "artifacts"),
+        "CODEGEN_REQUIRED_VERIFICATION_MANIFEST": str(manifest_path),
+        "CODEGEN_RUN_ID": "host-run",
+        "CODEGEN_ATTEMPT_ID": "attempt-001",
+    }
+    proc = subprocess.run(
+        [
+            "bash",
+            str(wrapper),
+            "host",
+            "--worktree",
+            str(tree),
+            "--arch",
+            "blackhole",
+            "--test",
+            "test_host.py",
+            "--result-json-out",
+            str(results / "host.json"),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, proc.stderr
+    host = json.loads((results / "host.json").read_text())
+    _reduce(tmp_path, manifest_path)
+    reduction = json.loads((tmp_path / "verification_reduction.json").read_text())
+    assert reduction["classification"] == "partial"
+    assert reduction["success_token"] is None
+    device = _sealed_result(
+        manifest,
+        manifest["requirements"][1],
+        patch_sha256=host["provenance"]["patch_sha256"],
+    )
+    device["provenance"]["actual_base_sha"] = base
+    device["result_id"] = _content_id(device, {"result_id"})
+    (results / "device.json").write_text(json.dumps(device))
+    _reduce(tmp_path, manifest_path)
+    assert (
+        json.loads((tmp_path / "verification_reduction.json").read_text())[
+            "classification"
+        ]
+        == "success"
+    )
+    # A host result cannot claim the silicon leaf, even with a recomputed receipt hash.
+    fake = json.loads(json.dumps(host))
+    fake["backend"] = "silicon"
+    fake["result_id"] = _content_id(fake, {"result_id"})
+    (results / "host.json").write_text(json.dumps(fake))
+    _reduce(tmp_path, manifest_path)
+    assert (
+        json.loads((tmp_path / "verification_reduction.json").read_text())[
+            "classification"
+        ]
+        == "infra_error"
+    )
+    # Existing wrapper entry points cannot route the host leaf through a device compile.
+    rejected = subprocess.run(
+        [
+            "bash",
+            str(wrapper),
+            "host",
+            "--worktree",
+            str(tree),
+            "--arch",
+            "blackhole",
+            "--test",
+            "test_device.py",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert rejected.returncode == 3
+    assert "host/device execution must match" in rejected.stderr
+    # A later revision cannot silently downgrade the manifest's version.
+    plan.write_text(plan.read_text().replace("  execution: host\n", ""))
+    subprocess.run(
+        [*cmd, "--supersedes-reason", "explicit route revision"],
+        check=True,
+        capture_output=True,
+    )
+    assert json.loads(manifest_path.read_text())["version"] == 2
+
+
+@pytest.mark.parametrize("execution", ["gpu", "HOST", "silicon"])
+def test_host_plan_requires_typed_execution(tmp_path, execution):
+    proc, _ = _required_manifest(
+        tmp_path,
+        "## Verification\nverification_required: yes\nverifiable_in_llk_suite: yes\nllk_coverage: existing\n",
+        "## Test Strategy\nreproduction_tests:\n- arch: blackhole\n  test: test_reduce.py\n  execution: "
+        + execution
+        + "\n",
+        check=False,
+    )
+    assert proc.returncode != 0 and "execution must be device|host" in proc.stderr
+
+
+def test_host_versioned_harness_does_not_import_pinned_device_conftest(tmp_path):
+    def prepare(tree):
+        writer = tree / "codegen/scripts/run_json_writer.py"
+        writer.unlink()
+        writer.symlink_to(SCRIPT)
+        (tree / "tests/python_tests/conftest.py").write_text(
+            'raise AssertionError("PINNED DEVICE HARNESS LOADED")\n'
+        )
+
+    proc, result, _ = _host_run(
+        tmp_path,
+        "import pytest\npytestmark=pytest.mark.llk_host\ndef test_schema(): pass\n",
+        prepare=prepare,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert result["execution"]["passed"] == 1
+    assert "PINNED DEVICE HARNESS LOADED" not in proc.stderr
+    assert result["provenance"]["host_inputs"]["harness_sha256"]
+
+
+@pytest.fixture(scope="module")
+def host_success_receipt(tmp_path_factory):
+    proc, result, _ = _host_run(
+        tmp_path_factory.mktemp("host-receipt"),
+        "import pytest\npytestmark=pytest.mark.llk_host\ndef test_schema(): pass\n",
+    )
+    assert proc.returncode == 0, proc.stderr
+    return result
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "run_id",
+        "attempt_id",
+        "selector",
+        "expected_base_sha",
+        "patch_sha256",
+        "source_tree_sha256",
+        "dependencies_sha256",
+        "observed_nodeids",
+        "junit_sha256",
+        "version",
+    ],
+)
+def test_host_receipt_rejects_rehashed_identity_or_evidence_tampering(
+    tmp_path, host_success_receipt, field
+):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("host_validator", SCRIPT)
+    writer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(writer)
+    record = json.loads(json.dumps(host_success_receipt))
+    if field in {"run_id", "attempt_id"}:
+        record[field] += "-other"
+    elif field == "selector":
+        record[field]["test"] = "other.py"
+    elif field == "version":
+        record[field] = 2
+    elif field in {"source_tree_sha256", "dependencies_sha256"}:
+        record["provenance"]["host_inputs"][field] = "0" * 64
+        if field == "dependencies_sha256":
+            record["provenance"]["host_inputs_sha256"] = writer._canonical_digest(
+                record["provenance"]["host_inputs"]
+            )
+    elif field == "observed_nodeids":
+        record["provenance"][field] = ["test_host.py::other"]
+    elif field == "junit_sha256":
+        record["provenance"][field] = None
+    else:
+        record["provenance"][field] = "0" * (40 if field == "expected_base_sha" else 64)
+    record["result_id"] = _content_id(record, {"result_id"})
+    path = tmp_path / "forged.json"
+    path.write_text(json.dumps(record))
+    with pytest.raises(ValueError):
+        writer._load_verification_result(path)
+
+
+def test_host_skips_cannot_certify_complete_coverage(tmp_path):
+    proc, result, _ = _host_run(
+        tmp_path,
+        'import pytest\npytestmark=pytest.mark.llk_host\ndef test_ok(): pass\n@pytest.mark.skip(reason="missing")\ndef test_missing(): pass\n',
+    )
+    assert proc.returncode == 1, proc.stderr
+    assert result["execution"]["passed"] == 1 and result["execution"]["skipped"] == 1
+    assert result["classification"] == "coverage_error"
+    assert result["reason_codes"] == ["host_execution_outcome_incomplete"]
+
+
+def test_device_manifest_still_rejects_empty_artifact_root(tmp_path):
+    root = tmp_path / "empty"
+    root.mkdir()
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "artifact-manifest",
+            "--output",
+            str(tmp_path / "manifest.json"),
+            "--artifact-root",
+            str(root),
+            "--owner-id",
+            "owner",
+            "--build-input-digest",
+            "1" * 64,
+            "--source-tree-sha256",
+            "2" * 64,
+            "--compiler-sha256",
+            "3" * 64,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0 and "artifact root contains no files" in proc.stderr
+    assert not (tmp_path / "manifest.json").exists()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "import pytest\n@pytest.mark.llk_host\ndef test_pure(): pass\ndef test_device(): pass\n",
+        'import pytest\npytestmark=pytest.mark.llk_host\n@pytest.fixture\ndef tmp_path(): raise AssertionError("DEVICE FIXTURE RAN")\ndef test_masked(tmp_path): pass\n',
+        'import pytest\npytestmark=pytest.mark.llk_host\n@pytest.fixture\ndef device(): raise AssertionError("DEVICE FIXTURE RAN")\ndef test_dynamic(request): request.getfixturevalue("device")\n',
+    ],
+)
+def test_host_rejects_mixed_and_hidden_fixture_execution(tmp_path, body):
+    proc, result, _ = _host_run(tmp_path, body)
+    assert proc.returncode != 0, proc.stderr
+    assert result is not None and result["classification"] != "success"
+    assert "DEVICE FIXTURE RAN" not in proc.stderr
+
+
+def test_host_approved_pytest_fixture_and_exact_node_selection(tmp_path):
+    proc, result, _ = _host_run(
+        tmp_path,
+        'import pytest\npytestmark=pytest.mark.llk_host\ndef test_safe(tmp_path,monkeypatch):\n    monkeypatch.setenv("HOST_CHECK","1")\n    (tmp_path/"x").write_text("ok")\ndef test_not_selected(): assert False\n',
+        extra=("--test-id", "test_host.py::test_safe"),
+        env_extra={
+            "PYTEST_PLUGINS": "missing_unsafe_plugin",
+            "PYTEST_ADDOPTS": "--run-simulator",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert result["selector"]["test_id"] == "test_host.py::test_safe"
+    assert result["provenance"]["observed_nodeids"] == ["test_host.py::test_safe"]

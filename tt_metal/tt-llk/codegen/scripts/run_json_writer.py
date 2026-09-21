@@ -1453,8 +1453,17 @@ def _validate_required_manifest(doc: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("required-verification architecture is invalid")
         if requirement["suite"] not in {"llk", "metal", "ttnn", "perf"}:
             raise ValueError("required-verification suite is invalid")
-        if requirement["backend"] not in {"silicon", "ttsim", "quasar", "local"}:
+        if requirement["backend"] not in (
+            {"silicon", "ttsim", "quasar", "local"}
+            | ({"host"} if doc["version"] == 2 else set())
+        ):
             raise ValueError("required-verification backend is invalid")
+        if requirement["backend"] == "host" and (
+            requirement["suite"] != "llk" or requirement["required_measurements"]
+        ):
+            raise ValueError(
+                "host verification is an LLK functional check, not device measurement"
+            )
         selector = requirement["selector"]
         if (
             not isinstance(selector, dict)
@@ -1717,6 +1726,14 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
         requirements.append(requirement)
         return requirement
 
+    for item in [*plan_tests, *candidates]:
+        if item.get("execution", "device") not in {"device", "host"}:
+            raise ValueError("test execution must be device|host")
+        if item.get("execution") == "host" and _is_performance_selector(
+            item.get("test", "")
+        ):
+            raise ValueError("performance verification cannot execute on host")
+
     if llk_applicable:
         source_items = llk_plan or applicable_candidates
         for arch in arches:
@@ -1731,7 +1748,11 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
                 add_requirement(
                     arch,
                     "llk",
-                    _verification_backend(args.backend, arch),
+                    (
+                        "host"
+                        if item.get("execution") == "host"
+                        else _verification_backend(args.backend, arch)
+                    ),
                     _normalize_pytest_selector(item["test"], arch, worktree),
                     _requirement_count(item, "minimum_selected"),
                     _requirement_count(item, "minimum_executed"),
@@ -2058,7 +2079,10 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
         "schema": "tt.issue-solver.required-verification",
         "version": (
             2
-            if any("measurement_contract" in r for r in requirements)
+            if any(
+                "measurement_contract" in r or r["backend"] == "host"
+                for r in requirements
+            )
             or (previous and previous["version"] == 2)
             else 1
         ),
@@ -2244,7 +2268,7 @@ def _load_local_manifest(path: Path, artifact_root: Path) -> dict[str, Any]:
 
 
 def _classify_verification(
-    collection: dict[str, int], execution: dict[str, Any]
+    collection: dict[str, int], execution: dict[str, Any], *, host: bool = False
 ) -> tuple[str, list[str]]:
     markers = execution["infrastructure_markers"]
     collection_nonzero = collection["returncode"] != 0 and not (
@@ -2280,6 +2304,12 @@ def _classify_verification(
         and execution["xpassed"] == 0
         and execution["passed"] == execution["executed"]
     ):
+        if host and (
+            execution["executed"] != collection["selected"]
+            or execution["skipped"]
+            or execution["xfailed"]
+        ):
+            return "coverage_error", ["host_execution_outcome_incomplete"]
         return "success", []
     if execution["returncode"] == 1 and execution["failed"] > 0:
         return "candidate_failure", ["test_failure"]
@@ -2290,8 +2320,122 @@ def _classify_verification(
     return "infra_error", ["execution_nonzero_exit"]
 
 
+def _host_dependencies() -> dict[str, Any]:
+    """Identity of the Python runtime and installed distributions actually used."""
+    import importlib.metadata
+
+    return {
+        "python_sha256": hashlib.sha256(Path(sys.executable).read_bytes()).hexdigest(),
+        "python_version": sys.version,
+        "distributions": sorted(
+            (d.metadata["Name"], d.version) for d in importlib.metadata.distributions()
+        ),
+    }
+
+
+def _host_inputs(args: argparse.Namespace, source: str, patch: str) -> dict[str, Any]:
+    llk_root = Path(__file__).resolve().parents[2]
+    harness = {
+        name: hashlib.sha256((llk_root / name).read_bytes()).hexdigest()
+        for name in (
+            "tests/python_tests/conftest.py",
+            ".claude/scripts/run_test.sh",
+            "codegen/scripts/run_json_writer.py",
+        )
+    }
+    return {
+        "source_tree_sha256": source,
+        "harness_sha256": _canonical_digest(harness),
+        "dependencies_sha256": _canonical_digest(_host_dependencies()),
+        "expected_base_sha": args.expected_base_sha,
+        "actual_base_sha": args.actual_base_sha,
+        "patch_sha256": patch,
+        "run_id": args.run_id,
+        "attempt_id": args.attempt_id,
+        "requirement_id": args.requirement_id,
+        "architecture": args.architecture,
+        "selector": {"test": args.test, "test_id": args.test_id, "k": args.k},
+    }
+
+
+def cmd_host_input_manifest(args: argparse.Namespace) -> None:
+    inputs = _host_inputs(args, args.host_source_sha256, args.patch_sha256)
+    document = {
+        "schema": "tt.issue-solver.host-inputs",
+        "version": 1,
+        "inputs": inputs,
+        "inputs_sha256": _canonical_digest(inputs),
+    }
+    destination = Path(args.output)
+    _atomic_write(destination.parent, document, destination=destination)
+
+
+def _host_provenance(
+    args: argparse.Namespace, collection: dict, markers: list, counts: dict
+) -> dict:
+    document = json.loads(Path(args.host_input_manifest).read_text())
+    if (
+        set(document) != {"schema", "version", "inputs", "inputs_sha256"}
+        or document["schema"] != "tt.issue-solver.host-inputs"
+        or document["version"] != 1
+        or document["inputs_sha256"] != _canonical_digest(document["inputs"])
+    ):
+        raise ValueError("invalid host input manifest")
+    current = _host_inputs(args, args.host_source_sha256, args.patch_sha256)
+    if document["inputs"] != current:
+        markers.append("host_inputs_mutated_during_execution")
+    nodeids = collection.get("nodeids")
+    if (
+        not isinstance(nodeids, list)
+        or len(nodeids) != collection["selected"]
+        or any(not isinstance(n, str) or not n for n in nodeids)
+        or len(set(nodeids)) != len(nodeids)
+    ):
+        raise ValueError("invalid exact host collection nodeids")
+    observed = []
+    junit_path = Path(args.junit)
+    if junit_path.is_file():
+        try:
+            root = ET.parse(junit_path).getroot()
+            for testcase in root.iter("testcase"):
+                nodes = [
+                    prop.get("value")
+                    for prop in testcase.findall("./properties/property")
+                    if prop.get("name") == "codegen_nodeid"
+                ]
+                if len(nodes) != 1 or not nodes[0]:
+                    markers.append("host_junit_node_identity_missing")
+                else:
+                    observed.append(nodes[0])
+        except ET.ParseError:
+            markers.append("result_report_missing_or_invalid")
+    if len(observed) != counts["executed"] + counts["skipped"] + counts["xfailed"]:
+        markers.append("host_junit_count_mismatch")
+    if sorted(observed) != sorted(nodeids):
+        markers.append("host_selected_nodes_not_observed")
+    return {
+        "expected_base_sha": args.expected_base_sha,
+        "actual_base_sha": args.actual_base_sha,
+        "patch_sha256": args.patch_sha256,
+        "host_inputs": document["inputs"],
+        "host_inputs_sha256": document["inputs_sha256"],
+        "executed_inputs_sha256": _canonical_digest(current),
+        "collection_sha256": hashlib.sha256(
+            Path(args.collection_json).read_bytes()
+        ).hexdigest(),
+        "junit_sha256": (
+            hashlib.sha256(junit_path.read_bytes()).hexdigest()
+            if junit_path.is_file()
+            else None
+        ),
+        "selected_nodeids": nodeids,
+        "observed_nodeids": observed,
+    }
+
+
 def cmd_verification_result(args: argparse.Namespace) -> int:
     collection = json.loads(Path(args.collection_json).read_text(encoding="utf-8"))
+    host = args.backend == "host"
     expected_collection = {
         "schema",
         "version",
@@ -2300,12 +2444,13 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
         "errors",
         "returncode",
     }
+    if host:
+        expected_collection.add("nodeids")
     if not isinstance(collection, dict) or set(collection) != expected_collection:
         raise ValueError("collection result does not match the exact schema")
-    if (
-        collection["schema"] != "tt.issue-solver.pytest-collection"
-        or collection["version"] != 1
-    ):
+    if collection["schema"] != "tt.issue-solver.pytest-collection" or collection[
+        "version"
+    ] != (2 if host else 1):
         raise ValueError("unsupported collection-result schema")
     for field in ("selected", "collected", "errors", "returncode"):
         value = collection[field]
@@ -2343,11 +2488,28 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
         }
         marker_codes.append("result_report_missing_or_invalid")
 
-    manifest = _load_local_manifest(
-        Path(args.artifact_manifest), Path(args.artifact_root)
-    )
-    if manifest["artifact_mutated"]:
-        marker_codes.append("artifact_mutated_during_execution")
+    if host:
+        if args.suite != "llk" or args.artifact_manifest or args.artifact_root:
+            raise ValueError("host verification must not use device artifact evidence")
+        if not args.host_input_manifest or not args.host_source_sha256:
+            raise ValueError("host input manifest and current source digest required")
+        provenance = _host_provenance(args, collection, marker_codes, counts)
+    else:
+        if not args.artifact_manifest or not args.artifact_root:
+            raise ValueError("device artifact manifest and root required")
+        manifest = _load_local_manifest(
+            Path(args.artifact_manifest), Path(args.artifact_root)
+        )
+        if manifest["artifact_mutated"]:
+            marker_codes.append("artifact_mutated_during_execution")
+        provenance = {
+            "expected_base_sha": args.expected_base_sha,
+            "actual_base_sha": args.actual_base_sha,
+            "patch_sha256": args.patch_sha256,
+            "manifest_id": manifest["manifest_id"],
+            "artifact_set_sha256": manifest["artifact_set_sha256"],
+            "executed_artifact_sha256": manifest["executed_artifact_sha256"],
+        }
     marker_codes = list(dict.fromkeys(marker_codes))
     signal_number = args.signal
     if signal_number is None and 129 <= args.returncode <= 255:
@@ -2377,7 +2539,9 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
     ):
         raise ValueError("signal number does not match the execution return code")
 
-    classification, reasons = _classify_verification(normalized_collection, execution)
+    classification, reasons = _classify_verification(
+        normalized_collection, execution, host=host
+    )
 
     for field, pattern in (
         ("expected_base_sha", _SHA40_RE),
@@ -2400,7 +2564,7 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
             raise ValueError(f"{field} must be non-empty")
     result = {
         "schema": "tt.issue-solver.verification-result",
-        "version": 2,
+        "version": 3 if host else 2,
         "result_id": "0" * 64,
         "requirement_id": args.requirement_id,
         "run_id": args.run_id,
@@ -2410,14 +2574,7 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
         "suite": args.suite,
         "backend": args.backend,
         "selector": {"test": args.test, "test_id": args.test_id, "k": args.k},
-        "provenance": {
-            "expected_base_sha": args.expected_base_sha,
-            "actual_base_sha": args.actual_base_sha,
-            "patch_sha256": args.patch_sha256,
-            "manifest_id": manifest["manifest_id"],
-            "artifact_set_sha256": manifest["artifact_set_sha256"],
-            "executed_artifact_sha256": manifest["executed_artifact_sha256"],
-        },
+        "provenance": provenance,
         "collection": normalized_collection,
         "execution": execution,
         "classification": classification,
@@ -2436,6 +2593,110 @@ def cmd_verification_result(args: argparse.Namespace) -> int:
         "infra_error": 3,
         "timed_out": 5,
     }[classification]
+
+
+def _validate_host_provenance(result: dict) -> None:
+    if result["backend"] != "host" or result["suite"] != "llk":
+        raise ValueError("v3 host evidence cannot represent silicon or performance")
+    p = result["provenance"]
+    fields = {
+        "expected_base_sha",
+        "actual_base_sha",
+        "patch_sha256",
+        "host_inputs",
+        "host_inputs_sha256",
+        "executed_inputs_sha256",
+        "collection_sha256",
+        "junit_sha256",
+        "selected_nodeids",
+        "observed_nodeids",
+    }
+    if not isinstance(p, dict) or set(p) != fields:
+        raise ValueError("host provenance schema is invalid")
+    for field in ("expected_base_sha", "actual_base_sha"):
+        if not isinstance(p[field], str) or not _SHA40_RE.fullmatch(p[field]):
+            raise ValueError("host base identity is invalid")
+    for field in (
+        "patch_sha256",
+        "host_inputs_sha256",
+        "executed_inputs_sha256",
+        "collection_sha256",
+    ):
+        if not isinstance(p[field], str) or not _SHA256_RE.fullmatch(p[field]):
+            raise ValueError("host digest is invalid: " + field)
+    inputs = p["host_inputs"]
+    input_fields = {
+        "source_tree_sha256",
+        "harness_sha256",
+        "dependencies_sha256",
+        "expected_base_sha",
+        "actual_base_sha",
+        "patch_sha256",
+        "run_id",
+        "attempt_id",
+        "requirement_id",
+        "architecture",
+        "selector",
+    }
+    if (
+        not isinstance(inputs, dict)
+        or set(inputs) != input_fields
+        or _canonical_digest(inputs) != p["host_inputs_sha256"]
+    ):
+        raise ValueError("host pre-execution input identity is invalid")
+    for field in (
+        "source_tree_sha256",
+        "harness_sha256",
+        "dependencies_sha256",
+        "patch_sha256",
+    ):
+        if not isinstance(inputs[field], str) or not _SHA256_RE.fullmatch(
+            inputs[field]
+        ):
+            raise ValueError("host input digest is invalid")
+    for field in ("expected_base_sha", "actual_base_sha"):
+        if not isinstance(inputs[field], str) or not _SHA40_RE.fullmatch(inputs[field]):
+            raise ValueError("host input base is invalid")
+    for field in ("run_id", "attempt_id", "requirement_id", "architecture", "selector"):
+        if inputs[field] != result[field]:
+            raise ValueError("host input identity mismatch: " + field)
+    if inputs["expected_base_sha"] != p["expected_base_sha"]:
+        raise ValueError("host expected base changed")
+    markers = result["execution"]["infrastructure_markers"]
+    mutated = p["host_inputs_sha256"] != p["executed_inputs_sha256"]
+    if mutated != ("host_inputs_mutated_during_execution" in markers):
+        raise ValueError("host mutation marker contradicts input evidence")
+    if not mutated and any(
+        inputs[f] != p[f] for f in ("actual_base_sha", "patch_sha256")
+    ):
+        raise ValueError("host source identity contradicts input evidence")
+    if p["junit_sha256"] is None:
+        if "result_report_missing_or_invalid" not in markers:
+            raise ValueError("host JUnit evidence is missing")
+    elif not isinstance(p["junit_sha256"], str) or not _SHA256_RE.fullmatch(
+        p["junit_sha256"]
+    ):
+        raise ValueError("host JUnit digest is invalid")
+    for field in ("selected_nodeids", "observed_nodeids"):
+        nodes = p[field]
+        if (
+            not isinstance(nodes, list)
+            or any(not isinstance(n, str) or not n for n in nodes)
+            or len(nodes) != len(set(nodes))
+        ):
+            raise ValueError("host node identities are invalid")
+    counts = result["execution"]
+    if (
+        len(p["observed_nodeids"])
+        != counts["executed"] + counts["skipped"] + counts["xfailed"]
+    ) != ("host_junit_count_mismatch" in markers):
+        raise ValueError("host JUnit counts contradict node evidence")
+    if len(p["selected_nodeids"]) != result["collection"]["selected"]:
+        raise ValueError("host selected nodes contradict collection")
+    if (sorted(p["selected_nodeids"]) != sorted(p["observed_nodeids"])) != (
+        "host_selected_nodes_not_observed" in markers
+    ):
+        raise ValueError("host exact-node coverage contradicts evidence")
 
 
 def _load_verification_result(path: Path) -> dict[str, Any]:
@@ -2462,13 +2723,13 @@ def _load_verification_result(path: Path) -> dict[str, Any]:
         not isinstance(result, dict)
         or set(result) != fields
         or result["schema"] != "tt.issue-solver.verification-result"
-        or result["version"] != 2
+        or result["version"] not in {2, 3}
         or result["result_id"]
         != _canonical_digest(
             {key: value for key, value in result.items() if key != "result_id"}
         )
     ):
-        raise ValueError("verification result does not match the exact v2 schema")
+        raise ValueError("verification result does not match the exact v2/v3 schema")
     for field in (
         "result_id",
         "requirement_id",
@@ -2496,30 +2757,33 @@ def _load_verification_result(path: Path) -> dict[str, Any]:
     ):
         raise ValueError("verification result selector is invalid")
     provenance = result["provenance"]
-    if not isinstance(provenance, dict) or set(provenance) != {
-        "expected_base_sha",
-        "actual_base_sha",
-        "patch_sha256",
-        "manifest_id",
-        "artifact_set_sha256",
-        "executed_artifact_sha256",
-    }:
-        raise ValueError("verification result provenance is invalid")
-    for field in ("expected_base_sha", "actual_base_sha"):
-        if not isinstance(provenance[field], str) or not _SHA40_RE.fullmatch(
-            provenance[field]
+    if result["version"] != 3:
+        if result["backend"] == "host":
+            raise ValueError("host execution requires a v3 result")
+        if not isinstance(provenance, dict) or set(provenance) != {
+            "expected_base_sha",
+            "actual_base_sha",
+            "patch_sha256",
+            "manifest_id",
+            "artifact_set_sha256",
+            "executed_artifact_sha256",
+        }:
+            raise ValueError("verification result provenance is invalid")
+        for field in ("expected_base_sha", "actual_base_sha"):
+            if not isinstance(provenance[field], str) or not _SHA40_RE.fullmatch(
+                provenance[field]
+            ):
+                raise ValueError(f"verification result provenance.{field} is invalid")
+        for field in (
+            "patch_sha256",
+            "manifest_id",
+            "artifact_set_sha256",
+            "executed_artifact_sha256",
         ):
-            raise ValueError(f"verification result provenance.{field} is invalid")
-    for field in (
-        "patch_sha256",
-        "manifest_id",
-        "artifact_set_sha256",
-        "executed_artifact_sha256",
-    ):
-        if not isinstance(provenance[field], str) or not _SHA256_RE.fullmatch(
-            provenance[field]
-        ):
-            raise ValueError(f"verification result provenance.{field} is invalid")
+            if not isinstance(provenance[field], str) or not _SHA256_RE.fullmatch(
+                provenance[field]
+            ):
+                raise ValueError(f"verification result provenance.{field} is invalid")
     collection = result["collection"]
     if not isinstance(collection, dict) or set(collection) != {
         "selected",
@@ -2594,7 +2858,11 @@ def _load_verification_result(path: Path) -> dict[str, Any]:
         > collection["selected"]
     ):
         raise ValueError("verification result outcomes exceed selected count")
-    classification, reasons = _classify_verification(collection, execution)
+    if result["version"] == 3:
+        _validate_host_provenance(result)
+    classification, reasons = _classify_verification(
+        collection, execution, host=result["version"] == 3
+    )
     if result["classification"] != classification or result["reason_codes"] != reasons:
         raise ValueError("verification result classification contradicts evidence")
     return result
@@ -2976,7 +3244,13 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
                 mismatch_fields.append("expected_base_sha")
             if result["provenance"]["actual_base_sha"] != manifest["expected_base_sha"]:
                 mismatch_fields.append("actual_base_sha")
-            if (
+            if result["backend"] == "host":
+                if (
+                    result["provenance"]["host_inputs_sha256"]
+                    != result["provenance"]["executed_inputs_sha256"]
+                ):
+                    mismatch_fields.append("executed_inputs_sha256")
+            elif (
                 result["provenance"]["artifact_set_sha256"]
                 != result["provenance"]["executed_artifact_sha256"]
             ):
@@ -3566,8 +3840,10 @@ def _build_parser() -> argparse.ArgumentParser:
     result.add_argument("--collection-json", required=True)
     result.add_argument("--junit", required=True)
     result.add_argument("--output-log", default=None)
-    result.add_argument("--artifact-manifest", required=True)
-    result.add_argument("--artifact-root", required=True)
+    result.add_argument("--artifact-manifest", default=None)
+    result.add_argument("--artifact-root", default=None)
+    result.add_argument("--host-input-manifest", default=None)
+    result.add_argument("--host-source-sha256", default=None)
     result.add_argument("--requirement-id", required=True)
     result.add_argument("--run-id", required=True)
     result.add_argument("--attempt-id", required=True)
@@ -3575,7 +3851,9 @@ def _build_parser() -> argparse.ArgumentParser:
     result.add_argument("--architecture", required=True)
     result.add_argument("--suite", required=True)
     result.add_argument(
-        "--backend", required=True, choices=["silicon", "ttsim", "quasar", "local"]
+        "--backend",
+        required=True,
+        choices=["silicon", "ttsim", "quasar", "local", "host"],
     )
     result.add_argument("--test", required=True)
     result.add_argument("--test-id", default=None)
@@ -3588,6 +3866,26 @@ def _build_parser() -> argparse.ArgumentParser:
     result.add_argument("--timed-out", action="store_true")
     result.add_argument("--infrastructure-code", action="append", default=[])
     result.set_defaults(func=cmd_verification_result)
+
+    host_input = sub.add_parser(
+        "host-input-manifest", help="Seal source/runtime identity before host execution"
+    )
+    for field in (
+        "output",
+        "host-source-sha256",
+        "patch-sha256",
+        "expected-base-sha",
+        "actual-base-sha",
+        "run-id",
+        "attempt-id",
+        "requirement-id",
+        "architecture",
+        "test",
+    ):
+        host_input.add_argument("--" + field, required=True)
+    host_input.add_argument("--test-id", default=None)
+    host_input.add_argument("--k", default=None)
+    host_input.set_defaults(func=cmd_host_input_manifest)
 
     reduce_result = sub.add_parser(
         "reduce-verification",

@@ -35,6 +35,26 @@ orchestrator handles changes that are not verifiable in this suite.
 - Do not invoke the standalone `.claude` run-test skill or
   `llk-test-runner` agent; this pipeline tester owns execution.
 
+## Explicit host checks
+
+A fix-plan test declared `execution: host` seals as `backend: host` in the
+required-verification manifest. Run such leaves separately, before applying the
+device-backend flow below: `CODEGEN_VERIFICATION_BACKEND=host
+.claude/scripts/run_test.sh host --worktree "$WORKTREE_DIR/tt_metal/tt-llk"
+--arch "$ARCH" --test "$TEST" --log-dir "$LOG_DIR"` (one shell command; retain
+sealed `--test-id`/`--k` when present). Do not submit them to the hardware queue.
+
+Host modules/nodes must explicitly carry `pytest.mark.llk_host`; absent markers,
+mixed selections and unsupported fixture closures fail closed. The wrapper loads
+its versioned host harness, disables other conftest/plugin discovery, and records
+exact collection, JUnit, source/patch and runtime identities without ELF artifacts.
+It does not initialize the device harness and is not a sandbox for arbitrary Python.
+Tests requiring repository conftest fixtures need a reviewed host-safe fixture
+contract; do not silently bypass their setup. Never convert a device requirement
+to host after compilation fails. Host evidence satisfies only the sealed host
+leaf; all device leaves remain independently required. Missing/invalid host
+coverage must be repaired by the worker, never reported as silicon success.
+
 ## State
 
 The spawn prompt provides `WORKTREE_DIR`. Resolve both state stores directly:

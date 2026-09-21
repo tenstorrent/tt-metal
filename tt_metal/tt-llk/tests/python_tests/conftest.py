@@ -13,6 +13,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
+import pytest
+
+# Explicit opt-in is available before importing any device harness modules.
+_CODEGEN_HOST_ONLY = "--codegen-host-only" in sys.argv
+
 # ttsim runs in-process (no ExalensServer). Its init must complete before any helpers.* import,
 # because helpers.chip_architecture.get_chip_architecture() reaches check_context() and this
 # conftest calls it at module-load time via the skip_for_* markers defined further down.
@@ -29,26 +34,35 @@ _IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
 _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
     "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
 )
-if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so"):
+if (
+    not _CODEGEN_HOST_ONLY
+    and _SHOULD_RUN_SIMULATOR
+    and _SIMULATOR_PATH
+    and _SIMULATOR_PATH.endswith(".so")
+):
     from ttexalens import tt_exalens_init as _tt_exalens_init
 
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
 
-import helpers.order_processing as order_processing
-import helpers.utils as utils_module
-import pytest
-import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.device import LLKAssertException
-from helpers.exalens_server import ExalensServer
-from helpers.format_config import InputOutputFormat
-from helpers.logger import configure_logger, logger
-from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
-from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
-from ttexalens import check_context, tt_exalens_init
-from ttexalens.tt_exalens_lib import get_tensix_state
+if not _CODEGEN_HOST_ONLY:
+    import helpers.order_processing as order_processing
+    import helpers.utils as utils_module
+    import torch
+    from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+    from helpers.device import LLKAssertException
+    from helpers.exalens_server import ExalensServer
+    from helpers.format_config import InputOutputFormat
+    from helpers.logger import configure_logger, logger
+    from helpers.perf import PerfConfig, PerfReport, combine_perf_reports
+    from helpers.test_config import (
+        BuildMode,
+        TestConfig,
+        process_coverage_run_artefacts,
+    )
+    from ttexalens import check_context, tt_exalens_init
+    from ttexalens.tt_exalens_lib import get_tensix_state
 
-_exalens_server: Optional[ExalensServer] = None
+_exalens_server: Optional["ExalensServer"] = None
 
 
 # This is a workaround for this issue: https://github.com/tenstorrent/tt-exalens/issues/958
@@ -123,12 +137,19 @@ def _seed_torch_rng():
     global generator, so seeding here makes both generate_stimuli() and any
     direct torch.rand/randn/randint/uniform_ calls reproducible.
     """
-    torch.manual_seed(_DEFAULT_TORCH_SEED)
+    if not _CODEGEN_HOST_ONLY:
+        torch.manual_seed(_DEFAULT_TORCH_SEED)
     yield
 
 
 # Define the possible custom command line options
 def pytest_addoption(parser):
+    parser.addoption(
+        "--codegen-host-only",
+        action="store_true",
+        default=False,
+        help="Run only explicitly marked llk_host checks without the device harness.",
+    )
     parser.addoption(
         "--codegen-collection-json",
         action="store",
@@ -322,6 +343,35 @@ _CODEGEN_COLLECTED: Optional[int] = None
 
 
 def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "llk_host: explicitly device-free host verification"
+    )
+    if _CODEGEN_HOST_ONLY:
+        if os.environ.get("CHIP_ARCH") not in {"blackhole", "wormhole", "quasar"}:
+            raise pytest.UsageError("host verification requires explicit CHIP_ARCH")
+        incompatible = (
+            "--compile-producer",
+            "--compile-consumer",
+            "--run-simulator",
+            "--coverage",
+            "--enable-perf-counters",
+            "--dump-csv-counters",
+            "--dump-raw-counters",
+            "--dump-raw-metrics",
+            "--record-test-order",
+            "--test-order-file",
+            "--stimuli-only",
+            "--use-stimuli",
+        )
+        if any(config.getoption(flag, default=False) for flag in incompatible):
+            raise pytest.UsageError(
+                "host verification cannot enable device/build modes"
+            )
+        if config.getoption("numprocesses", default=0):
+            raise pytest.UsageError("host verification requires one pytest process")
+        config.coverage_enabled = False
+        return
+
     # Configure loguru log level from CLI option or environment variable.
     log_level = config.getoption("--logging-level", default=None)
     configure_logger(level=log_level)
@@ -475,6 +525,8 @@ def pytest_configure(config):
 
 
 def pytest_ignore_collect(collection_path, config):
+    if _CODEGEN_HOST_ONLY:
+        return None
     # Skip collecting the quasar/ dir on non-quasar arch — those tests are
     # deselected there anyway, so there's no need to collect them.
     if (
@@ -580,6 +632,9 @@ def pytest_collection_modifyitems(config, items):
         # --op, producer variant collapsing, or rewind selection deselects items.
         _CODEGEN_COLLECTED = len(items)
 
+    if _CODEGEN_HOST_ONLY:
+        return
+
     _select_tests_by_op(config, items)
 
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
@@ -621,7 +676,83 @@ def pytest_collection_modifyitems(config, items):
     )
 
 
+# Host checks may use pytest's pure fixtures and the inert autouse fixtures below.
+# Other fixture closures require a separately reviewed extension of this contract;
+# merely marking a test does not authorize a device fixture hidden behind another.
+_HOST_FIXTURES = {
+    "request",
+    "tmp_path",
+    "tmp_path_factory",
+    "tmpdir",
+    "tmpdir_factory",
+    "monkeypatch",
+    "capsys",
+    "capsysbinary",
+    "capfd",
+    "capfdbinary",
+    "caplog",
+    "pytestconfig",
+    "record_property",
+    "record_testsuite_property",
+    "record_xml_attribute",
+    "recwarn",
+    "_seed_torch_rng",
+    "counter_report",
+    "perf_report",
+}
+
+
+def _host_fixture_allowed(definition):
+    module = definition.func.__module__
+    return (
+        (
+            module == "_pytest.python"
+            and definition.func.__name__ == "get_direct_param_fixture_func"
+        )
+        or (definition.argname in _HOST_FIXTURES and module.startswith("_pytest."))
+        or (
+            module == __name__
+            and definition.argname
+            in {"_seed_torch_rng", "counter_report", "perf_report"}
+        )
+    )
+
+
+def pytest_collection_finish(session):
+    if not _CODEGEN_HOST_ONLY:
+        return
+    for item in session.items:
+        if item.get_closest_marker("llk_host") is None:
+            raise pytest.UsageError(
+                f"host selection contains unmarked test: {item.nodeid}"
+            )
+        unsupported = set()
+        for name in item.fixturenames:
+            if name == "request":
+                continue
+            definitions = item._fixtureinfo.name2fixturedefs.get(name, ())
+            if not definitions or not all(
+                _host_fixture_allowed(d) for d in definitions
+            ):
+                unsupported.add(name)
+        if unsupported:
+            raise pytest.UsageError(
+                f"host test requests unsupported/device fixture closure: {sorted(unsupported)}"
+            )
+        item.user_properties.append(("codegen_nodeid", item.nodeid))
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_fixture_setup(fixturedef, request):
+    if _CODEGEN_HOST_ONLY and not _host_fixture_allowed(fixturedef):
+        raise pytest.UsageError(
+            f"host test requests unsupported/device fixture: {fixturedef.argname}"
+        )
+
+
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    if _CODEGEN_HOST_ONLY:
+        return
     """Suppress the short test summary info section."""
 
     # Override the method that writes the short test summary
@@ -724,6 +855,8 @@ def pytest_runtest_makereport(item, call):
     # Execute all other hooks to obtain the report object
     outcome = yield
     report = outcome.get_result()
+    if _CODEGEN_HOST_ONLY:
+        return report
 
     if report.when == "call" and not report.skipped and _RECORD_TEST_ORDER:
         worker_id = getattr(item.config, "workerinput", {}).get("workerid", "master")
@@ -819,6 +952,8 @@ _reset_simulator_pending = False
 
 
 def pytest_runtest_teardown(item, nextitem):
+    if _CODEGEN_HOST_ONLY:
+        return
     """Mark that a restart is needed before the next test."""
     if not TestConfig.TEST_TARGET.reset_simulator_per_test:
         return
@@ -862,7 +997,11 @@ def pytest_sessionstart(session):
 
 
 @pytest.fixture(scope="module", autouse=True)
-def counter_report(request, worker_id):
+def counter_report(request):
+    if _CODEGEN_HOST_ONLY:
+        yield None
+        return
+    worker_id = request.getfixturevalue("worker_id")
     """Separate report for raw hardware counter CSV data (--dump-csv-counters)."""
     if not TestConfig.DUMP_CSV_COUNTERS:
         PerfConfig.COUNTER_REPORT = None
@@ -899,7 +1038,11 @@ def counter_report(request, worker_id):
 
 
 @pytest.fixture(scope="module", autouse=True)
-def perf_report(request, worker_id):
+def perf_report(request):
+    if _CODEGEN_HOST_ONLY:
+        yield None
+        return
+    worker_id = request.getfixturevalue("worker_id")
 
     test_module = request.path.stem
 
@@ -941,16 +1084,20 @@ def pytest_sessionfinish(session, exitstatus):
 
     collection_path = session.config.getoption("--codegen-collection-json")
     if collection_path:
-        selected = int(session.testscollected)
+        selected = (
+            len(session.items) if _CODEGEN_HOST_ONLY else int(session.testscollected)
+        )
         collected = _CODEGEN_COLLECTED if _CODEGEN_COLLECTED is not None else selected
         record = {
             "schema": "tt.issue-solver.pytest-collection",
-            "version": 1,
+            "version": 2 if _CODEGEN_HOST_ONLY else 1,
             "selected": selected,
             "collected": int(collected),
             "errors": int(session.testsfailed),
             "returncode": int(exitstatus),
         }
+        if _CODEGEN_HOST_ONLY:
+            record["nodeids"] = [item.nodeid for item in session.items]
         destination = Path(collection_path)
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_name(f".{destination.name}.tmp-{os.getpid()}")
@@ -959,6 +1106,9 @@ def pytest_sessionfinish(session, exitstatus):
             encoding="utf-8",
         )
         os.replace(temporary, destination)
+        return
+
+    if _CODEGEN_HOST_ONLY:
         return
 
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
@@ -980,17 +1130,29 @@ def pytest_sessionfinish(session, exitstatus):
 # decorate the test with @skip_for_wormhole.
 
 skip_for_wormhole = pytest.mark.skipif(
-    get_chip_architecture() == ChipArchitecture.WORMHOLE,
+    (
+        os.environ.get("CHIP_ARCH") == "wormhole"
+        if _CODEGEN_HOST_ONLY
+        else get_chip_architecture() == ChipArchitecture.WORMHOLE
+    ),
     reason="Test is not supported on Wormhole architecture",
 )
 
 skip_for_blackhole = pytest.mark.skipif(
-    get_chip_architecture() == ChipArchitecture.BLACKHOLE,
+    (
+        os.environ.get("CHIP_ARCH") == "blackhole"
+        if _CODEGEN_HOST_ONLY
+        else get_chip_architecture() == ChipArchitecture.BLACKHOLE
+    ),
     reason="Test is not supported on Blackhole architecture",
 )
 
 skip_for_quasar = pytest.mark.skipif(
-    get_chip_architecture() == ChipArchitecture.QUASAR,
+    (
+        os.environ.get("CHIP_ARCH") == "quasar"
+        if _CODEGEN_HOST_ONLY
+        else get_chip_architecture() == ChipArchitecture.QUASAR
+    ),
     reason="Test is not supported on Quasar architecture",
 )
 

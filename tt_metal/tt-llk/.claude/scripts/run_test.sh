@@ -26,6 +26,7 @@
 #   run_test.sh <COMMAND> --worktree DIR --arch ARCH --test FILE [OPTIONS]
 #
 # Commands:
+#   host      Run explicitly llk_host-marked checks locally; no compiler/device.
 #   count     Count test variants (collection-only; prints an integer). Uses its
 #             own artifact entry, separate from compiled outputs.
 #   compile   Compile-producer step (parallel, -x). Locks only its artifact entry.
@@ -205,6 +206,7 @@ _validate() {
   TRIAGE="${WORKTREE}/.claude/scripts/llk_triage.py"
   RUN_TAG="ttllk_${ARCH}_$$"
 
+  [[ "$CMD" != "host" ]] || MODE="host"
   if [[ "$MODE" == "simulator" ]]; then
     _resolve_nng_channel || exit $?
     _vlog "NNG callback ${NNG_ADDR} -> local port ${NNG_LOCAL}"
@@ -304,15 +306,15 @@ PY
       echo "ERROR: required-verification manifest is missing: ${required_manifest}" >&2
       return 3
     }
-    required_output="$(python3 - "$required_manifest" "$ARCH" "$TEST_FILE" "$TEST_ID" "$K_FILTER" "$verification_suite" <<'PY'
+    required_output="$(python3 - "$required_manifest" "$ARCH" "$TEST_FILE" "$TEST_ID" "$K_FILTER" "$verification_suite" "$purpose" <<'PY'
 import hashlib, json, sys
-path, arch, test, test_id, k, suite = sys.argv[1:7]
+path, arch, test, test_id, k, suite, purpose = sys.argv[1:8]
 d = json.load(open(path))
 payload = json.dumps({key: value for key, value in d.items() if key != "manifest_id"},
                      sort_keys=True, separators=(",", ":"), ensure_ascii=False,
                      allow_nan=False).encode()
 if (d.get("schema") != "tt.issue-solver.required-verification" or
-    d.get("version") != 1 or
+    d.get("version") not in (1, 2) or
     d.get("manifest_id") != hashlib.sha256(payload).hexdigest() or
     d.get("waivers") != []):
     raise SystemExit("invalid required-verification manifest")
@@ -324,6 +326,8 @@ if len(matches) != 1:
     raise SystemExit(
         f"selector must match exactly one sealed {suite} requirement (matched {len(matches)})"
     )
+if (matches[0].get("backend") == "host") != (purpose == "host"):
+    raise SystemExit("host/device execution must match the sealed backend")
 print(d["expected_base_sha"], d["run_id"], d["attempt_id"],
       matches[0]["requirement_id"], sep="\t")
 PY
@@ -362,7 +366,7 @@ PY
   fi
   if [[ -f "$compiler" ]]; then
     COMPILER_SHA256="$(sha256sum "$compiler" | cut -d' ' -f1)"
-  elif [[ "$purpose" == "count" ]]; then
+  elif [[ "$purpose" == "count" || "$purpose" == "host" ]]; then
     COMPILER_SHA256="unavailable-for-collection"
   else
     echo "ERROR: compiler is unavailable after SFPI setup: ${compiler}" >&2
@@ -423,6 +427,7 @@ PY
     echo "ERROR: result writer is missing: ${RUN_JSON_WRITER}" >&2
     return 3
   }
+  [[ "$purpose" != "host" ]] || return 0
   if grep -Fq -- 'TT_LLK_ARTEFACTS_DIR' \
       "${WORKTREE}/tests/python_tests/helpers/test_config.py"; then
     export TT_LLK_ARTEFACTS_DIR="$ARTIFACT_DIR"
@@ -528,6 +533,10 @@ _seal_artifacts() {
 
 _emit_structured_result() {
   local backend="${CODEGEN_VERIFICATION_BACKEND:-}"
+  if [[ "$CMD" == "host" ]]; then
+    [[ -z "$backend" || "$backend" == "host" ]] || return 3
+    backend="host"
+  fi
   if [[ -z "$backend" ]]; then
     if [[ "$SIM_PATH" == *.so ]]; then backend="ttsim"
     elif [[ "$ARCH" == "quasar" ]]; then backend="quasar"
@@ -540,8 +549,6 @@ _emit_structured_result() {
     --collection-json "$COLLECTION_JSON"
     --junit "$CONSUMER_JUNIT"
     --output-log "$CONSUMER_LOG"
-    --artifact-manifest "$ARTIFACT_MANIFEST"
-    --artifact-root "$ARTIFACT_DIR"
     --requirement-id "$REQUIREMENT_IDENTITY"
     --run-id "$RUN_IDENTITY"
     --attempt-id "$ATTEMPT_IDENTITY"
@@ -555,6 +562,11 @@ _emit_structured_result() {
     --patch-sha256 "$PATCH_SHA256"
     --returncode "${CONSUMER_RETURN_CODE:-$_rc}"
   )
+  if [[ "$backend" == "host" ]]; then
+    args+=(--host-input-manifest "$HOST_INPUT_MANIFEST" --host-source-sha256 "$HOST_CURRENT_SOURCE")
+  else
+    args+=(--artifact-manifest "$ARTIFACT_MANIFEST" --artifact-root "$ARTIFACT_DIR")
+  fi
   [[ -n "$TEST_ID" ]] && args+=(--test-id "$TEST_ID")
   [[ -n "$K_FILTER" ]] && args+=(--k "$K_FILTER")
   [[ "${CONSUMER_TIMED_OUT:-false}" == "true" ]] && args+=(--timed-out)
@@ -752,6 +764,67 @@ _do_count() {
     "$COLLECTION_JSON" || { echo "0"; return 3; }
 }
 
+# Explicit host route. Collection and execution use the same isolated pytest
+# configuration. The harness refuses unmarked tests and unknown fixture closures;
+# this is device avoidance, not a sandbox for arbitrary Python source.
+_do_host() {
+  _validate; _activate_venv
+  [[ -z "${CODEGEN_VERIFICATION_BACKEND:-}" || "$CODEGEN_VERIFICATION_BACKEND" == "host" ]] || { echo "ERROR: host command requires host backend" >&2; return 4; }
+  [[ "$NO_SPLIT" == "false" ]] || { echo "ERROR: --no-split is not a host option" >&2; return 4; }
+  _prepare_artifact_identity host || return 3
+  _build_target; cd "$TEST_DIR" || return 3
+  HOST_INPUT_MANIFEST="${EVIDENCE_DIR}/host-input-manifest.json"
+  local limit="${CODEGEN_HOST_TIMEOUT_SECS:-300}" collection_rc=0
+  [[ "$limit" =~ ^[1-9][0-9]*$ ]] || { echo "ERROR: invalid host timeout" >&2; return 4; }
+  local -a identity=(--expected-base-sha "$EXPECTED_BASE_SHA" --actual-base-sha "$ACTUAL_BASE_SHA"
+    --patch-sha256 "$PATCH_SHA256" --run-id "$RUN_IDENTITY" --attempt-id "$ATTEMPT_IDENTITY"
+    --requirement-id "$REQUIREMENT_IDENTITY" --architecture "$ARCH" --test "$TEST_FILE")
+  [[ -z "$TEST_ID" ]] || identity+=(--test-id "$TEST_ID")
+  [[ -z "$K_FILTER" ]] || identity+=(--k "$K_FILTER")
+  python3 "$RUN_JSON_WRITER" host-input-manifest --output "$HOST_INPUT_MANIFEST" \
+    --host-source-sha256 "$SOURCE_TREE_SHA256" "${identity[@]}" || return 3
+  local host_plugin host_bootstrap
+  host_plugin="$(dirname "$(dirname "$(dirname "$(realpath "$RUN_JSON_WRITER")")")")/tests/python_tests/conftest.py"
+  host_bootstrap='import importlib.util,sys,pytest
+path=sys.argv.pop(1)
+spec=importlib.util.spec_from_file_location("_codegen_host_harness",path)
+plugin=importlib.util.module_from_spec(spec);spec.loader.exec_module(plugin)
+raise SystemExit(pytest.main(sys.argv[1:],plugins=[plugin]))'
+  local -a host_pytest=(env PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTEST_PLUGINS= PYTEST_ADDOPTS= CHIP_ARCH="$ARCH"
+    python3 -c "$host_bootstrap" "$host_plugin" --noconftest --codegen-host-only
+    --rootdir "$TEST_DIR" --confcutdir "$TEST_DIR" -o addopts=)
+  timeout --kill-after="$GRACE_SECS" "$limit" "${host_pytest[@]}" --collect-only -q \
+    --codegen-collection-json "$COLLECTION_JSON" "${TARGET[@]}" >"${EVIDENCE_DIR}/collection.log" 2>&1 || collection_rc=$?
+  cat "${EVIDENCE_DIR}/collection.log" >&2
+  if [[ ! -f "$COLLECTION_JSON" ]]; then
+    python3 - "$COLLECTION_JSON" "$collection_rc" <<'HOST_COLLECTION'
+import json,sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({"schema":"tt.issue-solver.pytest-collection",
+    "version":2,"selected":0,"collected":0,"errors":1,"returncode":int(sys.argv[2]),"nodeids":[]}))
+HOST_COLLECTION
+  fi
+  CONSUMER_RETURN_CODE="$collection_rc"
+  CONSUMER_TIMED_OUT=false
+  if [[ "$collection_rc" == 0 ]]; then
+    timeout --kill-after="$GRACE_SECS" "$limit" "${host_pytest[@]}" \
+      --junitxml "$CONSUMER_JUNIT" --maxfail "$MAXFAIL" "${TARGET[@]}" >"$CONSUMER_LOG" 2>&1 &
+    CONSUMER_PID=$!
+    wait "$CONSUMER_PID"; CONSUMER_RETURN_CODE=$?
+    unset CONSUMER_PID
+    cat "$CONSUMER_LOG" >&2
+  else
+    cp "${EVIDENCE_DIR}/collection.log" "$CONSUMER_LOG"
+  fi
+  if [[ "$CONSUMER_RETURN_CODE" == 124 || "$CONSUMER_RETURN_CODE" == 137 ]]; then
+    CONSUMER_TIMED_OUT=true
+  fi
+  HOST_CURRENT_SOURCE="$(_source_tree_sha256)" || return 3
+  PATCH_SHA256="$(_patch_sha256)" || return 3
+  ACTUAL_BASE_SHA="$(git -C "$WORKTREE" rev-parse HEAD)" || return 3
+  return "$CONSUMER_RETURN_CODE"
+}
+
 _do_compile() {
   _validate; _activate_venv; _ensure_sfpi || return 3
   _prepare_artifact_identity build || return 3
@@ -851,23 +924,24 @@ trap 'exit 130' INT
 
 _rc=0
 case "$CMD" in
+  host)     _do_host        ; _rc=$? ;;
   count)    _do_count       ; _rc=$? ;;
   compile)  _do_compile     ; _rc=$? ;;
   simulate) _run_under_lock 0 ; _rc=$? ;;
   run)      _run_under_lock 1 ; _rc=$? ;;
   help|--help|-h) sed -n 's/^# \{0,1\}//p' "$0" | head -70; exit 0 ;;
-  "") echo "ERROR: no command. Use: count | compile | simulate | run" >&2; exit 4 ;;
-  *)  echo "ERROR: unknown command '${CMD}'. Use: count | compile | simulate | run" >&2; exit 4 ;;
+  "") echo "ERROR: no command. Use: host | count | compile | simulate | run" >&2; exit 4 ;;
+  *)  echo "ERROR: unknown command '${CMD}'. Use: host | count | compile | simulate | run" >&2; exit 4 ;;
 esac
 
 # Once a consumer ran, the structured classification is authoritative. This can
 # tighten an exit-0 process to coverage/infra failure but never turn a failing
 # process into success.
-if [[ "$CMD" == "simulate" || "$CMD" == "run" ]] && [[ -n "${CONSUMER_RETURN_CODE:-}" ]]; then
+if [[ "$CMD" == "simulate" || "$CMD" == "run" || "$CMD" == "host" ]] && [[ -n "${CONSUMER_RETURN_CODE:-}" ]]; then
   _emit_structured_result
   _rc=$?
 fi
 
 # count's stdout contract is "just the integer" — no verdict line.
-case "$CMD" in compile|simulate|run) _emit_verdict "$_rc" "$CMD" ;; esac
+case "$CMD" in host|compile|simulate|run) _emit_verdict "$_rc" "$CMD" ;; esac
 exit "$_rc"
