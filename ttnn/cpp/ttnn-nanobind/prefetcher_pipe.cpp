@@ -16,6 +16,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::prefetcher_pipe {
@@ -36,11 +37,15 @@ void py_module_types(nb::module_& mod) {
         .def("buffer_address", &PrefetcherPipe::buffer_address, "Base address of the data ring on every pipe core.")
         .def("config_address", &PrefetcherPipe::config_address, "Base address of the config page on every pipe core.")
         .def("ring_size", &PrefetcherPipe::ring_size, "Per-core data ring size in bytes.")
+        .def("initial_entry_size", &PrefetcherPipe::initial_entry_size)
         .def("config_page_size", &PrefetcherPipe::config_page_size, "Config page size in bytes.")
         .def("sender_core", &PrefetcherPipe::sender_core)
         .def("sender_cores", &PrefetcherPipe::sender_cores, nb::rv_policy::reference_internal)
         .def("receiver_cores", &PrefetcherPipe::receiver_cores, nb::rv_policy::reference_internal)
-        .def("all_cores", &PrefetcherPipe::all_cores, nb::rv_policy::reference_internal);
+        .def("all_cores", &PrefetcherPipe::all_cores, nb::rv_policy::reference_internal)
+        .def("sender_core_type", [](const PrefetcherPipe& pipe) {
+            return pipe.sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram ? "dram" : "worker";
+        });
 
     nb::class_<PrefetcherPipeSpace>(mod, "PrefetcherPipeSpace", R"doc(
         A reservation of persistent L1 (data ring + config page) on sender_cores ∪ receiver_domain
@@ -53,6 +58,7 @@ void py_module_types(nb::module_& mod) {
         .def("ring_size", &PrefetcherPipeSpace::ring_size)
         .def("config_page_size", &PrefetcherPipeSpace::config_page_size)
         .def("max_receivers_per_pipe", &PrefetcherPipeSpace::max_receivers_per_pipe)
+        .def("num_dram_senders", &PrefetcherPipeSpace::num_dram_senders)
         .def("sender_cores", &PrefetcherPipeSpace::sender_cores, nb::rv_policy::reference_internal)
         .def("receiver_domain", &PrefetcherPipeSpace::receiver_domain, nb::rv_policy::reference_internal)
         .def("reservation_cores", &PrefetcherPipeSpace::reservation_cores, nb::rv_policy::reference_internal)
@@ -113,8 +119,8 @@ void py_module_types(nb::module_& mod) {
 
 void py_module(nb::module_& mod) {
     // Binds tt_metal's CreatePrefetcherPipeSpace directly; the config struct is flattened into
-    // keyword arguments and the reservation runs under a ttnn-named allocation context. Worker
-    // senders only (DRAM-sender pipes are not exposed here).
+    // keyword arguments and the reservation runs under a ttnn-named allocation context. Exact
+    // DRAM senders, when capacity is requested, are selected by the tensor-prefetcher factory.
     mod.def(
         "create_prefetcher_pipe_space",
         [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
@@ -122,13 +128,14 @@ void py_module(nb::module_& mod) {
            const tt::tt_metal::CoreRangeSet& receiver_domain,
            uint32_t ring_size,
            uint32_t max_receivers_per_pipe,
-           tt::tt_metal::BufferType buffer_type) {
+           tt::tt_metal::BufferType buffer_type,
+           uint32_t num_dram_senders) {
             auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.experimental.create_prefetcher_pipe_space");
             return tt::tt_metal::experimental::CreatePrefetcherPipeSpace(
                 mesh_device,
                 PrefetcherPipeSpaceConfig{
                     .sender_cores = sender_cores,
-                    .num_dram_senders = 0,
+                    .num_dram_senders = num_dram_senders,
                     .receiver_domain = receiver_domain,
                     .ring_size = ring_size,
                     .max_receivers_per_pipe = max_receivers_per_pipe,
@@ -142,6 +149,8 @@ void py_module(nb::module_& mod) {
         nb::arg("ring_size"),
         nb::arg("max_receivers_per_pipe"),
         nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
+        nb::kw_only(),
+        nb::arg("num_dram_senders") = 0,
         R"doc(
             Reserve persistent L1 for PrefetcherPipes on sender_cores ∪ receiver_domain.
 

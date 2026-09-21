@@ -26,27 +26,21 @@ namespace {
 // a pipe's destructor reaches into the device to free its L1; nb::keep_alive<0, 1> would tie only
 // the list's own lifetime to the device (and a list cannot be a keep-alive nurse at all).
 nb::list create_prefetcher_pipes_for_tensor_prefetcher_py(
-    const nb::object& mesh_device_object,
+    const nb::object& space_object,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
-    uint32_t entry_size,
-    uint32_t num_entries,
-    tt::tt_metal::BufferType buffer_type,
     bool support_multi_receiver_shards) {
     // ttnn::bind_function calls this with the GIL released, and everything below touches Python
     // objects.
     nb::gil_scoped_acquire gil;
     const auto pipes = create_prefetcher_pipes_for_tensor_prefetcher(
-        nb::cast<tt::tt_metal::distributed::MeshDevice*>(mesh_device_object),
+        nb::cast<tt::tt_metal::experimental::PrefetcherPipeSpace&>(space_object),
         bank_to_receivers,
-        entry_size,
-        num_entries,
-        buffer_type,
         support_multi_receiver_shards);
 
     nb::list pipe_list;
     for (const auto& pipe : pipes) {
         nb::object pipe_object = nb::cast(pipe);
-        nb::detail::keep_alive(pipe_object.ptr(), mesh_device_object.ptr());
+        nb::detail::keep_alive(pipe_object.ptr(), space_object.ptr());
         pipe_list.append(pipe_object);
     }
     return pipe_list;
@@ -55,26 +49,6 @@ nb::list create_prefetcher_pipes_for_tensor_prefetcher_py(
 }  // namespace
 
 void bind_tensor_prefetcher(nb::module_& mod) {
-    // One durable ring per sender, read-only from Python: a delivery target is a list of these, and
-    // a caller names one to ask which core sends it, which cores read it, and how big its ring is.
-    // Not constructible here -- the public constructor builds a *worker*-sender pipe, which the
-    // prefetcher rejects; the DRAM-sender ones come from
-    // create_prefetcher_pipes_for_tensor_prefetcher.
-    nb::class_<tt::tt_metal::experimental::PrefetcherPipe>(mod, "PrefetcherPipe")
-        .def("config_address", &tt::tt_metal::experimental::PrefetcherPipe::config_address)
-        .def("buffer_address", &tt::tt_metal::experimental::PrefetcherPipe::buffer_address)
-        .def("ring_size", &tt::tt_metal::experimental::PrefetcherPipe::ring_size)
-        .def("initial_entry_size", &tt::tt_metal::experimental::PrefetcherPipe::initial_entry_size)
-        // DRAM-logical for a DRAM sender, so its x is the bank id this pipe is fed from.
-        .def("sender_core", &tt::tt_metal::experimental::PrefetcherPipe::sender_core)
-        .def(
-            "receiver_cores",
-            &tt::tt_metal::experimental::PrefetcherPipe::receiver_cores,
-            nb::rv_policy::reference_internal)
-        .def("sender_core_type", [](const tt::tt_metal::experimental::PrefetcherPipe& pipe) {
-            return pipe.sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram ? "dram" : "worker";
-        });
-
     ttnn::bind_function<"is_tensor_prefetcher_supported", "ttnn.experimental.">(
         mod,
         R"doc(
@@ -255,28 +229,22 @@ void bind_tensor_prefetcher(nb::module_& mod) {
             bank-local slab base its sender owns, so queueing accepts any order or subset of them;
             what it rejects is mixing two calls' pipes.
 
-            Consumers Attach the pipes and read them through the device-side PrefetcherPipe
-            (wait_front / scoped_read_lock / pop_front). Keep the pipes alive for as long as any
-            program uses them: dropping the last reference to one frees its ring and config.
+            Consumers bind the pipes through ProgramRunArgs and read them through the device-side
+            PrefetcherPipe (wait_front / scoped_read_lock / pop_front). Keep the pipes alive for as
+            long as any program uses them: dropping the last reference to one frees its ring and
+            config.
 
             Args:
-                mesh_device: The mesh device to create the buffer on.
+                space: Existing PrefetcherPipeSpace that owns the ring geometry and reserves
+                    enough DRAM sender capacity. Keep it alive while using the returned pipes.
                 bank_to_receivers: List of (bank_id, receivers) pairs.
-                entry_size: Push granularity in bytes the pipes start life at. With num_entries
-                    it fixes the ring size, which never changes. A later queued tensor may use a
-                    different per-receiver block size as long as the ring holds two of them.
-                num_entries: Ring depth, in entries, per receiver.
-                buffer_type: Buffer type (L1 or L1_SMALL).
                 support_multi_receiver_shards: If True, a bank's shard may feed multiple receivers,
                     which forces a single sender per bank. Defaults to False (receiver-contiguous),
                     letting a bank with two or more receivers split them across two DRISC senders.
         )doc",
         &create_prefetcher_pipes_for_tensor_prefetcher_py,
-        nb::arg("mesh_device"),
+        nb::arg("space"),
         nb::arg("bank_to_receivers"),
-        nb::arg("entry_size"),
-        nb::arg("num_entries"),
-        nb::arg("buffer_type") = tt::tt_metal::BufferType::L1,
         nb::arg("support_multi_receiver_shards") = false);
 
     ttnn::bind_function<"create_global_circular_buffer_for_matmul_1d", "ttnn.experimental.">(

@@ -144,16 +144,14 @@ void QueueTensorPrefetcherRequest(
 // object is what selects the delivery transport; everything else behaves as documented above, and
 // requests against a GCB and against PrefetcherPipes may be interleaved on one running prefetcher.
 //
-// `prefetcher_pipes` must be what CreatePrefetcherPipesForTensorPrefetcher returned for the same
-// mesh device, in that order: a bank's pipes must stay adjacent and in sender order, since that is
-// what assigns each sender its bank-local slab base.
-// Consumers of the delivered pages Attach each pipe on its own receivers and read through the
-// device-side experimental::PrefetcherPipe.
+// `prefetcher_pipes` may be any order or subset of one
+// CreatePrefetcherPipesForTensorPrefetcher result for the same mesh device. Each pipe carries its
+// bank-local slab base. Consumers bind each pipe on its own receivers through ProgramRunArgs and
+// read through the device-side experimental::PrefetcherPipe.
 //
 // Additional preconditions for this transport, all TT_FATAL with the offending values:
-//   - every pipe has a DRAM sender, and they share one entry size and ring size;
-//   - each bank's pipes form one contiguous run, in sender order, and receiver sets are disjoint
-//     across every pipe;
+//   - every pipe has a DRAM sender, comes from the same factory call, and shares one ring size;
+//   - receiver sets are disjoint across every pipe;
 //   - every tensor must resolve to the receiver-contiguous layout (each receiver owning a disjoint
 //     contiguous shard). One receiver per bank qualifies: a bank's whole shard is then that
 //     receiver's slab, which is why such a weight is read as receiver-contiguous here even though

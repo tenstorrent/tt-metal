@@ -13,9 +13,6 @@
 // tests), mirroring the GCB split between the public factory and
 // global_circular_buffer_dram_sender_internal.hpp.
 //
-// Not implemented yet: DRISC L1 for the sender ring / config page is blocked on #55285. Both
-// functions validate their arguments and then TT_FATAL.
-
 #include <span>
 
 #include <tt-metalium/core_coord.hpp>
@@ -29,6 +26,10 @@ void set_dram_sender_cores(PrefetcherPipeSpace& space, std::span<const CoreCoord
 
 // Carve a pipe whose sender is one of the cores passed to set_dram_sender_cores.
 PrefetcherPipe create_dram_sender_pipe(
-    PrefetcherPipeSpace& space, CoreCoord dram_sender, const CoreRangeSet& receivers);
+    PrefetcherPipeSpace& space,
+    CoreCoord dram_sender,
+    const CoreRangeSet& receivers,
+    uint32_t recv_index_base = 0,
+    uint64_t tensor_prefetcher_factory_id = 0);
 
 }  // namespace tt::tt_metal::experimental

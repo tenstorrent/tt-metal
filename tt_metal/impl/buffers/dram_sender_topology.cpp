@@ -21,7 +21,7 @@
 namespace tt::tt_metal {
 
 std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
-    distributed::MeshDevice* mesh_device,
+    const distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     DramSenderSplit split) {
     // Sender coords name endpoint roles, so resolving them against any one device gives the
@@ -78,7 +78,7 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
 }
 
 void validate_dram_senders_across_mesh(
-    distributed::MeshDevice* mesh_device, const std::vector<std::pair<CoreCoord, CoreRangeSet>>& mapping) {
+    const distributed::MeshDevice* mesh_device, const std::vector<std::pair<CoreCoord, CoreRangeSet>>& mapping) {
     std::unordered_map<uint32_t, std::vector<CoreCoord>> senders_by_bank;
     for (const IDevice* device : mesh_device->get_devices()) {
         senders_by_bank.clear();
@@ -114,7 +114,7 @@ std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<Co
 }
 
 void write_dram_sender_l1(
-    distributed::MeshDevice& mesh_device,
+    const distributed::MeshDevice& mesh_device,
     IDevice* device,
     const CoreCoord& sender_logical,
     DeviceAddr local_addr,

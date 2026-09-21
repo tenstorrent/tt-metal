@@ -539,7 +539,7 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
 
     std::unordered_set<CoreCoord> distinct_receivers;
     uint32_t total_receivers = 0;
-    std::optional<uint32_t> first_entry_size;
+    std::optional<uint64_t> factory_id;
 
     // The bank-local slabs each pipe claims, collected per bank (a pipe's bank is its sender's
     // DRAM-logical x) and checked for overlap once the whole list is in.
@@ -571,22 +571,28 @@ TensorPrefetcherManager::RequestTarget TensorPrefetcherManager::target_for(
             p,
             bank_id);
 
-        const uint32_t entry_size = pipe.initial_entry_size();
         const uint32_t ring_size = pipe.ring_size();
-        if (!first_entry_size.has_value()) {
-            first_entry_size = entry_size;
+        if (!factory_id.has_value()) {
+            factory_id = pipe.impl().tensor_prefetcher_factory_id();
             target.per_recv_capacity_bytes = ring_size;
         }
         TT_FATAL(
-            entry_size == *first_entry_size && ring_size == target.per_recv_capacity_bytes,
-            "QueueTensorPrefetcherRequest requires one geometry across every pipe: pipe {} (bank {}) has entry size "
-            "{} B and ring size {} B, but the first pipe has {} B and {} B. One request stamps one layout for "
-            "every sender.",
+            pipe.impl().tensor_prefetcher_factory_id() != 0 &&
+                pipe.impl().tensor_prefetcher_factory_id() == *factory_id,
+            "QueueTensorPrefetcherRequest requires every pipe to come from one "
+            "CreatePrefetcherPipesForTensorPrefetcher call, but pipe {} (bank {}) has factory identity {} and the "
+            "first has {}.",
             p,
             bank_id,
-            entry_size,
+            pipe.impl().tensor_prefetcher_factory_id(),
+            *factory_id);
+        TT_FATAL(
+            ring_size == target.per_recv_capacity_bytes,
+            "QueueTensorPrefetcherRequest requires one ring size across every pipe: pipe {} (bank {}) has {} B, "
+            "but the first pipe has {} B.",
+            p,
+            bank_id,
             ring_size,
-            *first_entry_size,
             target.per_recv_capacity_bytes);
 
         const CoreRangeSet& receivers = target.mapping[p].second;
