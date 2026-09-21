@@ -244,7 +244,7 @@ tt::tt_metal::TensorSpec UnaryDeviceOperation::compute_output_specs(
 
         if (!shard_spec_opt.has_value()) {
             const auto& padded_out_shape = tensor_args.input.padded_shape();
-            if (tensor_args.input.is_sharded()) {
+            if (tensor_args.input.memory_config().shard_spec().has_value()) {
                 shard_spec_opt = adjust_to_shape(
                     *tensor_args.input.memory_config().shard_spec(),
                     tensor_args.input.padded_shape(),

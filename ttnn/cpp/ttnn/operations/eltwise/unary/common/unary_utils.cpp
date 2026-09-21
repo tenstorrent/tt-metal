@@ -144,9 +144,26 @@ CoreRangeSet get_worker_grid(
         return sub_core_grids.value();
     }
 
-    auto get_tensor_grid = [](const Tensor& tensor) -> CoreRangeSet {
-        const auto& grid = tensor.shard_spec()->grid;
-        auto* device = tensor.device();
+    // A sharded tensor's grid is in shard_spec or in nd_shard_spec when the config is ND_SHARDED
+    auto shard_grid_of = [](const tt::tt_metal::MemoryConfig& mem_config) -> std::optional<CoreRangeSet> {
+        if (!mem_config.is_sharded()) {
+            return std::nullopt;
+        }
+        if (mem_config.shard_spec().has_value()) {
+            return mem_config.shard_spec()->grid;
+        }
+        if (mem_config.nd_shard_spec().has_value()) {
+            return mem_config.nd_shard_spec()->grid;
+        }
+        return std::nullopt;
+    };
+
+    // All worker cores of the sub-device holding this grid, or nullopt if no sub-device holds it. Callers
+    // fall through to the all-workers default on nullopt; the previous __builtin_unreachable() here made
+    // that case UB instead. Returns by value: a pointer into worker_cores() would be valid, but the
+    // grid is a small vector and copying it keeps the lifetime obvious.
+    auto sub_device_workers_for = [](const CoreRangeSet& grid,
+                                     tt::tt_metal::IDevice* device) -> std::optional<CoreRangeSet> {
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers =
                 device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
@@ -154,25 +171,24 @@ CoreRangeSet get_worker_grid(
                 return sub_device_workers;
             }
         }
-        __builtin_unreachable();
+        return std::nullopt;
     };
 
-    // is_sharded() is true for an ND_SHARDED output but shard_spec() is empty
-    if (output_tensor.has_value() && output_tensor->is_sharded() && output_tensor->shard_spec().has_value()) {
-        log_debug(
-            tt::LogOp, "Unary: Using output tensor grid for worker grid {}", output_tensor->shard_spec()->grid.str());
-        return get_tensor_grid(*output_tensor);
+    // Each log sits inside the return so it never claims a grid the function then falls through.
+    if (output_tensor.has_value()) {
+        if (const auto grid = shard_grid_of(output_tensor->memory_config())) {
+            if (const auto workers = sub_device_workers_for(*grid, output_tensor->device())) {
+                log_debug(tt::LogOp, "Unary: Using output tensor grid for worker grid {}", grid->str());
+                return *workers;
+            }
+        }
     }
 
-    if (memory_config.has_value() && memory_config->is_sharded() && memory_config->shard_spec().has_value()) {
-        const auto& grid = memory_config->shard_spec()->grid;
-        log_debug(tt::LogOp, "Unary: Using memory config shard spec grid for worker grid {}", grid.str());
-        auto* device = input_tensor.device();
-        for (const auto& sub_device_id : device->get_sub_device_ids()) {
-            const auto& sub_device_workers =
-                device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
-            if (sub_device_workers.intersects(grid)) {
-                return sub_device_workers;
+    if (memory_config.has_value()) {
+        if (const auto grid = shard_grid_of(*memory_config)) {
+            if (const auto workers = sub_device_workers_for(*grid, input_tensor.device())) {
+                log_debug(tt::LogOp, "Unary: Using memory config shard spec grid for worker grid {}", grid->str());
+                return *workers;
             }
         }
     }
@@ -185,9 +201,12 @@ CoreRangeSet get_worker_grid(
     }
 
     if (input_tensor.is_sharded() && is_native_L1_sharding(input_tensor.tensor_spec(), memory_config_actual)) {
-        log_debug(
-            tt::LogOp, "Unary: Native L1 sharding using input tensor grid {}", input_tensor.shard_spec()->grid.str());
-        return get_tensor_grid(input_tensor);
+        if (const auto grid = shard_grid_of(input_tensor.memory_config())) {
+            if (const auto workers = sub_device_workers_for(*grid, input_tensor.device())) {
+                log_debug(tt::LogOp, "Unary: Native L1 sharding using input tensor grid {}", grid->str());
+                return *workers;
+            }
+        }
     }
 
     log_debug(tt::LogOp, "Unary: Using all worker cores of the device");
