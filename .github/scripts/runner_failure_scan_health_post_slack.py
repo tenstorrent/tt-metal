@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Post runner-failure scan health alerts to Slack."""
+"""Post runner-failure scanner health alerts to Slack."""
 
 from __future__ import annotations
 

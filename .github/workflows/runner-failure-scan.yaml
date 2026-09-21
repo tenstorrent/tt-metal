@@ -133,7 +133,7 @@ jobs:
             echo "Slack posting was not requested."
             exit 0
           fi
-          python3 .github/scripts/runner_failure_scan_post_slack.py \
+          python3 .github/scripts/runner_failure_scan_health_post_slack.py \
             --scan-report-json out/runner_failure_report.json \
             --slack-channel "$DEFAULT_SLACK_CHANNEL"
 

@@ -1,4 +1,4 @@
-from runner_failure_scan_post_slack import (
+from runner_failure_scan_health_post_slack import (
     format_scan_health_alert,
     scan_health_from_report,
     should_post_health_alert,
