@@ -1,5 +1,10 @@
 # Per-op tables: Gemma4 prefill at chunk 2048 / 4096 / 8192
 
+> **Base note.** Every number in this file is on the **pre-L1-activations** base.
+> For the same measurements on `mmanzoor/svuckovic/gemma4-L1-activations` @ `9dc8e32a2`
+> (Asif's branch, PR #56862) see [`L1Activations/`](L1Activations/). **Do not compare
+> numbers across the two** — re-render both sides on one build instead.
+
 Generated with `tt-perf-report` (v1.2.9) over Tracy captures of the in-tree isolated-layer
 benchmark. This is the per-op, per-core view of the two effects described in
 [`README.md`](README.md), with one op per row and chunk sizes side by side.

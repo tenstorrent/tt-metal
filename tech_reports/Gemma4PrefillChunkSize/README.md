@@ -1,5 +1,10 @@
 # Gemma4 prefill: why chunk 2048 is ~2x slower than 8192 at long context
 
+> **Base note.** Every number in this file is on the **pre-L1-activations** base.
+> For the same measurements on `mmanzoor/svuckovic/gemma4-L1-activations` @ `9dc8e32a2`
+> (Asif's branch, PR #56862) see [`L1Activations/`](L1Activations/). **Do not compare
+> numbers across the two** — re-render both sides on one build instead.
+
 Measured on a BH Galaxy, mesh 8x4 (CP8/TP4), branch `kmabee/gemma4-swa-multihop-halo`.
 Gemma4-31B: 60 layers = 50 sliding + 10 full attention, hidden 5376, 16 KV heads, head_dim 256,
 sliding window 1024.
