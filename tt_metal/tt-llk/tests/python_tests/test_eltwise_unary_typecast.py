@@ -200,6 +200,7 @@ def _run_typecast(
     approx_mode: ApproximationMode,
     input_dimensions: list[int],
     spec_A: StimuliSpec,
+    twos_complement: bool = False,
 ):
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -265,6 +266,7 @@ def _run_typecast(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
         ),
         dest_acc=dest_acc,
         unpack_to_dest=unpack_to_dest,
@@ -318,21 +320,24 @@ def test_eltwise_unary_typecast_int32_negative(
     approx_mode: ApproximationMode,
     input_dimensions: list[int],
 ):
-    """Int32 typecast input stimuli including negative values, packed as sign-magnitude.
+    """Int32 typecast input stimuli including negative values, packed as two's complement.
 
     test_eltwise_unary_typecast above only ever samples non-negative integers, so it never
     exercises the negative half of Int32's range. The Int32 typecast kernels (see
-    calculate_typecast_int32_to_fp32 / calculate_typecast_int32_to_fp16b, and Quasar's
-    _calculate_typecast_int32_to_fp32_rows) load Dest with a plain bit-preserving INT32 load
-    and then SFPCAST/SFPABS+SFPSETSGN it directly, with no INT32_2S_COMP conversion step --
-    i.e. they expect Dest to hold sign-magnitude, not two's-complement, matching pack_int32's
-    default (twos_complement=False). Packing a negative stimulus as two's-complement here
-    would silently feed the kernel the wrong bit pattern.
+    calculate_typecast_int32_to_fp32 / calculate_typecast_int32_to_fp16b) load Dest with a
+    plain bit-preserving INT32 load (InstrModLoadStore::INT32, which per the ISA docs carries
+    the bits through unconverted) and then run SFPABS in its default two's-complement mode
+    (SFPABS_MOD1_INT) before SFPSETSGN -- i.e. they expect Dest to hold two's-complement, not
+    sign-magnitude, data. This matches #56808's own diagnosis and was confirmed on real
+    hardware (N150): a device run showed the two's-complement kernels already produce correct
+    results end to end, while a prior attempt to switch them to sign-magnitude corrupted every
+    negative case. pack_int32(twos_complement=True) is what makes the stimuli match that
+    expectation.
     """
     bfp_involved = _is_block_float(formats.output_format)
-    # Sign-magnitude Int32 cannot represent INT32_MIN (see pack_int32), so stay a step inside
-    # iinfo(int32).min on the negative end.
     spec_A = StimuliSpec.uniform(-15 if bfp_involved else -255, 255)
 
-    _run_typecast(formats, dest_acc, approx_mode, input_dimensions, spec_A)
+    _run_typecast(
+        formats, dest_acc, approx_mode, input_dimensions, spec_A, twos_complement=True
+    )
 
