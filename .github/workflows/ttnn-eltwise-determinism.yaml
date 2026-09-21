@@ -70,6 +70,14 @@ permissions:
   contents: read
   packages: write
 
+# On a PR, a new push makes the running check obsolete, so cancel it rather than hold a device for
+# a result nobody will read. On a protected branch the run_id keeps every run in its own group, so
+# the daily runs never cancel each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.arch || 'wormhole_b0' }}-${{
+    github.ref_protected && github.run_id || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
