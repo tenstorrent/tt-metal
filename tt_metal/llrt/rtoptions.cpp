@@ -57,6 +57,10 @@ enum class EnvVarID {
     TT_METAL_EMU_SERVER,                      // Chippy emu_axi endpoint (host:port)
     TT_METAL_EMU_SOC_DESC,                    // SoC descriptor for the emulated package
     TT_METAL_EMU_BRINGUP,                     // Emulation bring-up owner (umd_server or sival)
+    TT_METAL_GRENDEL_JTAG_SERVER,             // OpenOCD TCL endpoint (host:port)
+    TT_METAL_GRENDEL_JTAG_SOC_DESC,           // SoC descriptor for the attached package
+    TT_METAL_GRENDEL_JTAG_TRANSPORT,          // jtag2axi_v1 or jtag2axi_v2
+    TT_METAL_GRENDEL_JTAG_CHIPLET,            // 0-based TAP/chiplet index
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
@@ -393,7 +397,8 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     // acts on the flag). The simulator and emule backends cannot model dual-erisc, so force it off for them.
     if (this->runtime_target_device_ == tt::TargetDevice::Simulator ||
         this->runtime_target_device_ == tt::TargetDevice::Emule ||
-        this->runtime_target_device_ == tt::TargetDevice::EmuAxi) {
+        this->runtime_target_device_ == tt::TargetDevice::EmuAxi ||
+        this->runtime_target_device_ == tt::TargetDevice::GrendelJtag) {
         log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/emule target device");
         this->enable_2_erisc_mode = false;
     }
@@ -539,6 +544,30 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 this->sival_emu_bringup = true;
             } else {
                 TT_THROW("TT_METAL_EMU_BRINGUP must be 'umd_server' or 'sival', got '{}'", value);
+            }
+            break;
+
+        case EnvVarID::TT_METAL_GRENDEL_JTAG_SERVER:
+            this->grendel_jtag_server = std::string(value);
+            this->runtime_target_device_ = tt::TargetDevice::GrendelJtag;
+            this->using_slow_dispatch = true;
+            this->fast_dispatch = false;
+            break;
+
+        case EnvVarID::TT_METAL_GRENDEL_JTAG_SOC_DESC: this->grendel_jtag_soc_desc_path = value; break;
+
+        case EnvVarID::TT_METAL_GRENDEL_JTAG_TRANSPORT:
+            if (std::strcmp(value, "jtag2axi_v1") != 0 && std::strcmp(value, "jtag2axi_v2") != 0) {
+                TT_THROW("TT_METAL_GRENDEL_JTAG_TRANSPORT must be 'jtag2axi_v1' or 'jtag2axi_v2', got '{}'", value);
+            }
+            this->grendel_jtag_transport = value;
+            break;
+
+        case EnvVarID::TT_METAL_GRENDEL_JTAG_CHIPLET:
+            try {
+                this->grendel_jtag_chiplet = static_cast<uint32_t>(std::stoul(value));
+            } catch (const std::exception& e) {
+                TT_THROW("Invalid TT_METAL_GRENDEL_JTAG_CHIPLET '{}': {}", value, e.what());
             }
             break;
 
@@ -2009,8 +2038,12 @@ void RunTimeOptions::InitializeFromEnvVars() {
     if (this->runtime_target_device_ == tt::TargetDevice::EmuAxi && this->emu_soc_desc_path.empty()) {
         TT_THROW("TT_METAL_EMU_SERVER requires TT_METAL_EMU_SOC_DESC to be set");
     }
-    if (this->sival_emu_bringup && this->runtime_target_device_ != tt::TargetDevice::EmuAxi) {
-        TT_THROW("TT_METAL_EMU_BRINGUP=sival requires TT_METAL_EMU_SERVER to be set");
+    if (this->runtime_target_device_ == tt::TargetDevice::GrendelJtag && this->grendel_jtag_soc_desc_path.empty()) {
+        TT_THROW("TT_METAL_GRENDEL_JTAG_SERVER requires TT_METAL_GRENDEL_JTAG_SOC_DESC to be set");
+    }
+    if (this->sival_emu_bringup && this->runtime_target_device_ != tt::TargetDevice::EmuAxi &&
+        this->runtime_target_device_ != tt::TargetDevice::GrendelJtag) {
+        TT_THROW("TT_METAL_EMU_BRINGUP=sival requires TT_METAL_EMU_SERVER or TT_METAL_GRENDEL_JTAG_SERVER to be set");
     }
 
     // Set inspector log path

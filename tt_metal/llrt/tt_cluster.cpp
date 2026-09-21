@@ -233,7 +233,7 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster_desc);
 
     if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emule &&
-        this->target_type_ != tt::TargetDevice::EmuAxi) {
+        this->target_type_ != tt::TargetDevice::EmuAxi && this->target_type_ != tt::TargetDevice::GrendelJtag) {
         this->assert_risc_reset();
     }
 }
@@ -252,11 +252,14 @@ void Cluster::detect_arch_and_target() {
     if (this->target_type_ == tt::TargetDevice::EmuAxi) {
         log_warning(tt::LogDevice, "Using chippy emu_axi device mode");
     }
+    if (this->target_type_ == tt::TargetDevice::GrendelJtag) {
+        log_warning(tt::LogDevice, "Using chippy Grendel JTAG attach mode");
+    }
 
     TT_FATAL(
         this->target_type_ == tt::TargetDevice::Silicon || this->target_type_ == tt::TargetDevice::Simulator ||
             this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emule ||
-            this->target_type_ == tt::TargetDevice::EmuAxi,
+            this->target_type_ == tt::TargetDevice::EmuAxi || this->target_type_ == tt::TargetDevice::GrendelJtag,
         "Target type={} is not supported",
         this->target_type_);
 }
@@ -281,7 +284,8 @@ void Cluster::generate_cluster_descriptor() {
             "Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type");
     }
     if (this->target_type_ == TargetDevice::Simulator || this->target_type_ == TargetDevice::Mock ||
-        this->target_type_ == TargetDevice::Emule || this->target_type_ == TargetDevice::EmuAxi) {
+        this->target_type_ == TargetDevice::Emule || this->target_type_ == TargetDevice::EmuAxi ||
+        this->target_type_ == TargetDevice::GrendelJtag) {
         return;
     }
 
@@ -506,6 +510,32 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             // sival bring-up is owned by chippy, which has already run against this server. INIT
             // would reset the model and undo it.
             .emu_skip_init = rtoptions_.get_sival_emu_bringup(),
+        });
+    } else if (this->target_type_ == TargetDevice::GrendelJtag) {
+        const std::string& endpoint = rtoptions_.get_grendel_jtag_server();
+        const size_t colon = endpoint.rfind(':');
+        TT_FATAL(
+            colon != std::string::npos && colon != 0 && colon + 1 < endpoint.size(),
+            "TT_METAL_GRENDEL_JTAG_SERVER must be host:port, got '{}'",
+            endpoint);
+        const std::string host = endpoint.substr(0, colon);
+        uint32_t port = 0;
+        try {
+            const unsigned long parsed = std::stoul(endpoint.substr(colon + 1));
+            TT_FATAL(parsed > 0 && parsed <= 65535, "Invalid OpenOCD TCL port in '{}'", endpoint);
+            port = static_cast<uint32_t>(parsed);
+        } catch (const std::exception& e) {
+            TT_THROW("Invalid TT_METAL_GRENDEL_JTAG_SERVER '{}': {}", endpoint, e.what());
+        }
+        device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+            .chip_type = tt::umd::ChipType::GRENDEL_JTAG,
+            .num_host_mem_ch_per_mmio_device = 0,
+            .sdesc_path = rtoptions_.get_grendel_jtag_soc_desc_path(),
+            .target_devices = {0},
+            .grendel_jtag_host = host,
+            .grendel_jtag_port = port,
+            .grendel_jtag_chiplet = rtoptions_.get_grendel_jtag_chiplet(),
+            .grendel_jtag_use_v1 = rtoptions_.get_grendel_jtag_transport() == "jtag2axi_v1",
         });
     }
 
