@@ -93,7 +93,8 @@ Optional:
                                             By default every failed attempt, whatever failed, runs
                                             run_cluster_debug.sh over the hosts and writes each Galaxy's ETH
                                             and QSFP state as one file per host plus one merged cluster file
-                                            (~2 min). Never affects the outcome.
+                                            (~2 min). Never affects the outcome. A host without the collector
+                                            installed is named and the snapshot skipped.
     --cluster-debug-always                  Collect the snapshot after every attempt, passing or failing,
                                             e.g. for a known-good baseline. Ignored with --skip-cluster-debug.
     --cluster-debug-tool <path>             The tt-bh-glx-cluster-debug executable for that snapshot; must be
@@ -151,6 +152,7 @@ REGENERATE_ON_FAILURE=true
 SKIP_CLUSTER_DEBUG=false
 CLUSTER_DEBUG_ALWAYS=false
 CLUSTER_DEBUG_TOOL=""
+CLUSTER_DEBUG_TOOL_NAME="tt-bh-glx-cluster-debug"
 CLUSTER_DEBUG_LOG_ROOT_DEFAULT="/data/dcamp/cluster-debug/logs"
 CLUSTER_DEBUG_LOG_ROOT="$CLUSTER_DEBUG_LOG_ROOT_DEFAULT"
 
@@ -654,6 +656,9 @@ collect_cluster_debug() {
     if [[ $debug_exit -eq 130 || $debug_exit -eq 143 ]]; then
         echo "Cluster debug collection was interrupted; stopping recovery."
         exit "$debug_exit"
+    elif [[ $debug_exit -eq 3 ]]; then
+        # run_cluster_debug.sh's "not installed" status: a setup gap, named above, not a failure.
+        echo "Cluster debug snapshot skipped: $CLUSTER_DEBUG_TOOL_NAME is not installed (see above); recovery continues"
     elif [[ $debug_exit -ne 0 ]]; then
         echo "Warning: cluster debug collection failed (see above); recovery continues"
     fi

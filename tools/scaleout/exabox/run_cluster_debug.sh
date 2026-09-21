@@ -36,6 +36,10 @@ FSD_DEFAULT="/data/scaleout_configs/tt-cluster-config-sources/exabox-latest-stag
 # is the outer guard, for the case where a host has stopped answering altogether.
 COLLECT_TIMEOUT_DEFAULT="20m"
 
+# Exit status for "the collector is not installed", distinct from a failed collection so a
+# caller can say which happened.
+EXIT_NOT_INSTALLED=3
+
 show_help() {
     cat << EOF
 Usage: $0 --hosts <comma-separated-host-list> [OPTIONS]
@@ -89,7 +93,8 @@ Example:
     $0 --hosts bh-glx-110-a07u02,bh-glx-110-a07u08 --reason "link flap triage"
 
 Exit status: 0 when a merged cluster.jsonl was written (even if some hosts failed to collect;
-those are listed), 1 when nothing could be collected or merged.
+those are listed), 1 when nothing could be collected or merged, 3 when the collector is not
+installed here or on one of the hosts (named; nothing is collected).
 EOF
 }
 
@@ -186,9 +191,9 @@ if [[ -z "$TOOL" ]]; then
     TOOL="$(command -v "$TOOL_NAME" || true)"
 fi
 if [[ -z "$TOOL" ]]; then
-    echo "Error: no $TOOL_NAME found. Pass --tool <path>, set TT_CLUSTER_DEBUG_TOOL," >&2
-    echo "       or install the tt-syseng-diag package that provides it." >&2
-    exit 1
+    echo "$TOOL_NAME is not installed on $(hostname): not on PATH and no --tool or TT_CLUSTER_DEBUG_TOOL given." >&2
+    echo "Install the tt-syseng-diag package that provides it, or pass --tool <path>. Nothing collected." >&2
+    exit $EXIT_NOT_INSTALLED
 fi
 if [[ ! -x "$TOOL" ]]; then
     echo "Error: tool '$TOOL' is not an executable file" >&2
@@ -379,7 +384,7 @@ fi
 echo "Checking the tool and output directory are visible on all $NUM_HOSTS hosts..."
 PREFLIGHT_FILE="$OUTPUT_DIR/.preflight_$$"
 
-# Each rank reports PREFLIGHT|<host>|<non-empty if it failed>|<ipmi>|<rootbad>, matched
+# Each rank reports PREFLIGHT|<host>|<non-empty if it failed>|<ipmi>|<rootbad>|<notool>, matched
 # anywhere on the line because mpirun --tag-output puts a rank prefix in front, so the hosts that
 # cannot see the shared mount are named rather than the run just failing. <ipmi> says
 # whether the QSFP half of the collection can happen there: the collector reads the cages
@@ -396,14 +401,21 @@ if [[ -n "$PER_HOST_ROOT" ]]; then
     root_q=$(printf '%q' "$PER_HOST_ROOT")
     root_probe="mkdir -p $root_q/\$h/$RUN_DATE 2>/dev/null && test -w $root_q/\$h/$RUN_DATE || rootbad=1"
 fi
-PREFLIGHT_CMD="h=\$(hostname); bad=\"\"; rootbad=\"\"
-test -x $tool_q || { echo \"[\$h] ERROR: tool not executable here: $RANK_TOOL\" >&2; bad=1; }
+# A tool missing on a host is "not installed" on a shared mount; with --no-shared-mount it was
+# copied there a moment ago, so its absence is a failure of that copy instead.
+if [[ "$SHARED_MOUNT" == true ]]; then
+    tool_check="test -x $tool_q || { echo \"[\$h] $TOOL_NAME is not installed here: $RANK_TOOL\" >&2; notool=1; }"
+else
+    tool_check="test -x $tool_q || { echo \"[\$h] ERROR: tool not executable here: $RANK_TOOL\" >&2; bad=1; }"
+fi
+PREFLIGHT_CMD="h=\$(hostname); bad=\"\"; notool=\"\"; rootbad=\"\"
+$tool_check
 test -w $out_q || { echo \"[\$h] ERROR: dump directory not writable here: $RANK_DUMP_DIR\" >&2; bad=1; }
 $root_probe
 if ! command -v ipmitool >/dev/null 2>&1; then ipmi=no-ipmitool
 elif sudo -n ipmitool help >/dev/null 2>&1; then ipmi=ok
 else ipmi=no-sudo; fi
-echo \"PREFLIGHT|\$h|\$bad|\$ipmi|\$rootbad\""
+echo \"PREFLIGHT|\$h|\$bad|\$ipmi|\$rootbad|\$notool\""
 
 # Bounded, and forgiving of a host that is down: this script is called after exactly the
 # failures that leave one down, and a snapshot of the other fifteen is what is wanted then.
@@ -456,11 +468,13 @@ preflight_seen=0
 no_sudo_hosts=()
 no_ipmitool_hosts=()
 root_failed=()
+tool_missing=()
 while IFS= read -r line; do
-    if [[ $line =~ PREFLIGHT\|([^|]+)\|([^|]*)\|([^|]*)\|(.*)$ ]]; then
+    if [[ $line =~ PREFLIGHT\|([^|]+)\|([^|]*)\|([^|]*)\|([^|]*)\|(.*)$ ]]; then
         ((preflight_seen++))
         [[ -n "${BASH_REMATCH[2]}" ]] && preflight_failed+=("${BASH_REMATCH[1]}")
         [[ -n "${BASH_REMATCH[4]}" ]] && root_failed+=("${BASH_REMATCH[1]}")
+        [[ -n "${BASH_REMATCH[5]}" ]] && tool_missing+=("${BASH_REMATCH[1]}")
         case "${BASH_REMATCH[3]}" in
             no-sudo)     no_sudo_hosts+=("${BASH_REMATCH[1]}") ;;
             no-ipmitool) no_ipmitool_hosts+=("${BASH_REMATCH[1]}") ;;
@@ -474,11 +488,20 @@ if [[ ${#root_failed[@]} -gt 0 ]]; then
 fi
 rm -f "$PREFLIGHT_FILE"
 
+# Not installed is said as such, and first: it is a setup gap, not a collection failure.
+if [[ ${#tool_missing[@]} -gt 0 ]]; then
+    echo "$TOOL_NAME is not installed on: ${tool_missing[*]} (looked for $RANK_TOOL). Nothing collected." >&2
+    if [[ "$SHARED_MOUNT" == true ]]; then
+        echo "       Put the tool on a mount every host shares, install the tt-syseng-diag package on those hosts," >&2
+        echo "       or pass --no-shared-mount to have it copied over ssh." >&2
+    fi
+    exit $EXIT_NOT_INSTALLED
+fi
 if [[ ${#preflight_failed[@]} -gt 0 ]]; then
     echo "Error: pre-flight failed on: ${preflight_failed[*]}" >&2
     if [[ "$SHARED_MOUNT" == true ]]; then
-        echo "       The tool and the output directory must both be on a mount every host shares," >&2
-        echo "       or pass --no-shared-mount to have them copied over ssh." >&2
+        echo "       The output directory must be on a mount every host shares," >&2
+        echo "       or pass --no-shared-mount to have the dumps copied over ssh." >&2
     fi
     exit 1
 fi
