@@ -71,7 +71,7 @@ struct operation_attributes_t {
     // the optional TP axis (only alongside an SP axis + block_cyclic) adds a Sq-row sub-offset so each device
     // owns [tp_rank*Sq, (tp_rank+1)*Sq) of its SP chip's chunk_local slab. Read via sp_axis()/tp_axis().
     // Hashed via those accessors (it shapes the causal geometry, so distinct shardings get distinct programs).
-    std::vector<uint32_t> seq_shard_axes{};
+    std::vector<uint32_t> seq_shard_axes;
     std::optional<uint32_t> sp_axis() const {
         return seq_shard_axes.empty() ? std::nullopt : std::optional<uint32_t>(seq_shard_axes.front());
     }
