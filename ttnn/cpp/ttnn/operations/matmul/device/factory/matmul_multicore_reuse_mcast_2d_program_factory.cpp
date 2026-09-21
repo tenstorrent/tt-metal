@@ -57,6 +57,252 @@ namespace ttnn::prim {
 
 namespace reuse_mcast_optimized_helpers {
 
+// Runtime args are handed to the spec as (name, value) pairs; the two in1 builders below assemble
+// a whole kernel's worth at once.
+using NamedRuntimeArgs = std::vector<std::pair<std::string, uint32_t>>;
+
+// Geometry of the output block grid together with the padding of the last block along each
+// dimension. Every field is derived from the block/subblock sizes and the per-core output extent.
+// The in1 sender and in1 receiver/writer arg builders each select between the full-block and the
+// last-block value on most padding args, so both take this instead of a dozen loose scalars --
+// and the derivation lives in one place rather than as thirteen locals in the factory's scope.
+struct OutBlockPadding {
+    uint32_t out_block_h = 0;
+    uint32_t out_block_w = 0;
+    uint32_t out_subblock_h = 0;
+    uint32_t out_subblock_w = 0;
+    uint32_t out_num_blocks_x = 0;
+    uint32_t out_num_blocks_y = 0;
+    uint32_t last_out_block_h = 0;
+    uint32_t last_out_block_w = 0;
+    uint32_t last_out_num_blocks_h = 0;
+    uint32_t last_out_num_blocks_w = 0;
+    uint32_t last_block_num_nonzero_subblocks_h = 0;
+    uint32_t last_block_num_nonzero_subblocks_w = 0;
+    uint32_t last_subblock_of_last_block_h = 0;
+    uint32_t last_subblock_of_last_block_w = 0;
+    uint32_t last_block_padded_subblock_tiles_addr_skip = 0;
+    uint32_t last_block_padded_block_tiles_w_skip = 0;
+    uint32_t last_block_padded_block_tiles_h_skip = 0;
+};
+
+static OutBlockPadding make_out_block_padding(
+    uint32_t M,
+    uint32_t N,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    uint32_t out_block_h,
+    uint32_t out_block_w,
+    uint32_t out_subblock_h,
+    uint32_t out_subblock_w,
+    uint32_t out_num_blocks_x,
+    uint32_t out_num_blocks_y,
+    uint32_t output_single_tile_size) {
+    const uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
+    const uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
+
+    OutBlockPadding pad;
+    pad.out_block_h = out_block_h;
+    pad.out_block_w = out_block_w;
+    pad.out_subblock_h = out_subblock_h;
+    pad.out_subblock_w = out_subblock_w;
+    pad.out_num_blocks_x = out_num_blocks_x;
+    pad.out_num_blocks_y = out_num_blocks_y;
+    pad.last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
+    pad.last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    pad.last_out_num_blocks_h = ((last_per_core_M - 1) / out_block_h) + 1;
+    pad.last_out_num_blocks_w = ((last_per_core_N - 1) / out_block_w) + 1;
+    pad.last_block_num_nonzero_subblocks_h = ((pad.last_out_block_h - 1) / out_subblock_h) + 1;
+    pad.last_block_num_nonzero_subblocks_w = ((pad.last_out_block_w - 1) / out_subblock_w) + 1;
+    pad.last_subblock_of_last_block_h =
+        pad.last_out_block_h % out_subblock_h == 0 ? out_subblock_h : pad.last_out_block_h % out_subblock_h;
+    pad.last_subblock_of_last_block_w =
+        pad.last_out_block_w % out_subblock_w == 0 ? out_subblock_w : pad.last_out_block_w % out_subblock_w;
+    pad.last_block_padded_subblock_tiles_addr_skip =
+        output_single_tile_size * (out_subblock_w - pad.last_subblock_of_last_block_w);
+    pad.last_block_padded_block_tiles_w_skip =
+        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - pad.last_block_num_nonzero_subblocks_w);
+    pad.last_block_padded_block_tiles_h_skip =
+        (out_block_h / out_subblock_h - pad.last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
+    return pad;
+}
+
+// Runtime args for the in1 sender/writer kernel on one node: the top row of the grid, or the left
+// column when transpose_mcast (the per-core loop swaps the axes before calling).
+static NamedRuntimeArgs build_in1_sender_writer_args(
+    const OutBlockPadding& pad,
+    uint32_t in0_idx,
+    uint32_t in1_idx,
+    bool last_col,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    uint32_t N,
+    uint32_t in1_tensor_start_tile_id_stride,
+    CoreCoord in1_mcast_start,
+    CoreCoord in1_mcast_end,
+    bool has_bias,
+    bool output_is_sharded) {
+    NamedRuntimeArgs args = {
+        {"in1_tensor_start_tile_id", in1_tensor_start_tile_id_stride * in1_idx},
+        {"in1_mcast_dest_noc_start_x", (std::uint32_t)in1_mcast_start.x},
+        {"in1_mcast_dest_noc_start_y", (std::uint32_t)in1_mcast_start.y},
+        {"in1_mcast_dest_noc_end_x", (std::uint32_t)in1_mcast_end.x},
+        {"in1_mcast_dest_noc_end_y", (std::uint32_t)in1_mcast_end.y},
+        {"out_tensor_start_tile_id", ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},
+        // padding args (READER)
+        {"last_block_w", last_col ? pad.last_out_block_w : pad.out_block_w},
+        // padding args (WRITER)
+        {"out_num_nonzero_subblocks_h", pad.out_block_h / pad.out_subblock_h},
+        {"out_last_subblock_h", pad.out_subblock_h},
+        {"padded_block_tiles_h_skip", 0u},
+        {"out_num_nonzero_subblocks_w", pad.out_block_w / pad.out_subblock_w},
+        {"out_last_num_nonzero_subblocks_w",
+         last_col ? pad.last_block_num_nonzero_subblocks_w : pad.out_block_w / pad.out_subblock_w},
+        {"out_last_subblock_w", last_col ? pad.last_subblock_of_last_block_w : pad.out_subblock_w},
+        {"padded_subblock_tiles_addr_skip", last_col ? pad.last_block_padded_subblock_tiles_addr_skip : 0u},
+        {"padded_block_tiles_w_skip", last_col ? pad.last_block_padded_block_tiles_w_skip : 0u},
+    };
+    if (has_bias) {
+        args.emplace_back("in3_tensor_start_tile_id", (std::uint32_t)per_core_N * in1_idx);
+    }
+    if (!output_is_sharded) {
+        args.emplace_back("last_num_blocks_w_dim", last_col ? pad.last_out_num_blocks_w : pad.out_num_blocks_x);
+    }
+    return args;
+}
+
+// Runtime args for the in1 receiver/writer kernel on one node: every node below the sender row
+// (or right of the sender column when transpose_mcast).
+static NamedRuntimeArgs build_in1_receiver_writer_args(
+    const OutBlockPadding& pad,
+    uint32_t in0_idx,
+    uint32_t in1_idx,
+    bool last_row,
+    bool last_col,
+    uint32_t per_core_M,
+    uint32_t per_core_N,
+    uint32_t N,
+    CoreCoord in1_mcast_sender,
+    bool output_is_sharded) {
+    NamedRuntimeArgs args = {
+        {"in1_mcast_sender_noc_x", (std::uint32_t)in1_mcast_sender.x},
+        {"in1_mcast_sender_noc_y", (std::uint32_t)in1_mcast_sender.y},
+        {"out_tensor_start_tile_id", ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},
+        // padding args (WRITER)
+        {"out_num_nonzero_subblocks_h", pad.out_block_h / pad.out_subblock_h},
+        {"out_last_num_nonzero_subblocks_h",
+         last_row ? pad.last_block_num_nonzero_subblocks_h : pad.out_block_h / pad.out_subblock_h},
+        {"out_last_subblock_h", last_row ? pad.last_subblock_of_last_block_h : pad.out_subblock_h},
+        {"padded_block_tiles_h_skip", last_row ? pad.last_block_padded_block_tiles_h_skip : 0u},
+        {"out_num_nonzero_subblocks_w", pad.out_block_w / pad.out_subblock_w},
+        {"out_last_num_nonzero_subblocks_w",
+         last_col ? pad.last_block_num_nonzero_subblocks_w : pad.out_block_w / pad.out_subblock_w},
+        {"out_last_subblock_w", last_col ? pad.last_subblock_of_last_block_w : pad.out_subblock_w},
+        {"padded_subblock_tiles_addr_skip", last_col ? pad.last_block_padded_subblock_tiles_addr_skip : 0u},
+        {"padded_block_tiles_w_skip", last_col ? pad.last_block_padded_block_tiles_w_skip : 0u},
+    };
+    if (!output_is_sharded) {
+        args.emplace_back("last_num_blocks_h_dim", last_row ? pad.last_out_num_blocks_h : pad.out_num_blocks_y);
+        args.emplace_back("last_num_blocks_w_dim", last_col ? pad.last_out_num_blocks_w : pad.out_num_blocks_x);
+    }
+    return args;
+}
+
+// Assigns each in1-sender node the DRAM banks it reads when in1 is DRAM width-sharded.
+//
+// A worker's per_core_N columns rarely line up with a bank's per_core_N_storage columns, so a node
+// may straddle several banks and a bank may feed several nodes. The cursors below carry that
+// running position from one node to the next, which makes this order-dependent: it must be stepped
+// once per in1-sender node, in the grid order the senders are visited. Owning them here keeps five
+// mutable cursors out of the factory's scope, where nothing marked them as sequence-critical.
+class DramWidthShardWalker {
+public:
+    DramWidthShardWalker(
+        uint32_t num_dram_banks, uint32_t per_core_N, uint32_t per_core_N_storage, uint32_t in1_single_tile_size) :
+        num_dram_banks_(num_dram_banks),
+        per_core_N_(per_core_N),
+        per_core_N_storage_(per_core_N_storage),
+        in1_single_tile_size_(in1_single_tile_size) {}
+
+    // Appends this node's vc / shard-count / start-offset args and returns its (stride_bytes,
+    // bank_id) vararg pairs, advancing the cursors to the next node.
+    AdvancedKernelRunArgs::Varargs advance(NamedRuntimeArgs& args) {
+        vc_ = vc_ == 3 ? 0 : vc_ + 1;
+
+        uint32_t num_iter = 0;  // iterate how many banks, till fill the current worker block
+        uint32_t dram_tensor_start_offset = 0;
+        AdvancedKernelRunArgs::Varargs bank_varargs;
+
+        if (curr_storage_core_ < num_dram_banks_) {
+            num_iter++;
+
+            worker_core_stride_ = per_core_N_storage_ - storage_core_stride_;
+
+            dram_tensor_start_offset = storage_core_stride_ * in1_single_tile_size_;
+            bank_varargs.push_back(worker_core_stride_ * in1_single_tile_size_);
+            bank_varargs.push_back(curr_storage_core_);
+
+            log_debug(
+                tt::LogOp,
+                "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
+                curr_worker_core_,
+                worker_core_stride_,
+                curr_storage_core_,
+                storage_core_stride_);
+
+            curr_storage_core_ += (storage_core_stride_ + worker_core_stride_) / per_core_N_storage_;
+            storage_core_stride_ = (storage_core_stride_ + worker_core_stride_) % per_core_N_storage_;
+
+            uint32_t curr_worker_core_old = curr_worker_core_;
+            if (worker_core_stride_ >= per_core_N_) {
+                curr_worker_core_ += 1;
+            }
+
+            while (curr_worker_core_ <= curr_worker_core_old and curr_storage_core_ < num_dram_banks_) {
+                num_iter++;
+
+                uint32_t stride = worker_core_stride_ + per_core_N_storage_;
+                stride = std::min(stride, per_core_N_);
+
+                bank_varargs.push_back((stride - worker_core_stride_) * in1_single_tile_size_);
+                bank_varargs.push_back(curr_storage_core_);
+
+                log_debug(
+                    tt::LogOp,
+                    "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
+                    curr_worker_core_,
+                    (stride - worker_core_stride_),
+                    curr_storage_core_,
+                    storage_core_stride_);
+
+                if (stride >= per_core_N_) {
+                    curr_worker_core_ += 1;
+                }
+                storage_core_stride_ = (stride - worker_core_stride_) % per_core_N_storage_;
+                curr_storage_core_ += (stride - worker_core_stride_) / per_core_N_storage_;
+                worker_core_stride_ = stride;
+            }
+        }
+        args.emplace_back("vc", vc_);
+        args.emplace_back("num_dram_shards_to_read", num_iter);
+        args.emplace_back("dram_tensor_start_offset", dram_tensor_start_offset);
+        return bank_varargs;
+    }
+
+private:
+    uint32_t num_dram_banks_ = 0;
+    uint32_t per_core_N_ = 0;
+    uint32_t per_core_N_storage_ = 0;
+    uint32_t in1_single_tile_size_ = 0;
+
+    // Carried from one in1-sender node to the next.
+    uint32_t worker_core_stride_ = 0;   // stride in the worker core
+    uint32_t storage_core_stride_ = 0;  // stride in the dram bank
+    uint32_t curr_worker_core_ = 0;     // current worker core
+    uint32_t curr_storage_core_ = 0;    // current read dram bank
+    uint32_t vc_ = 0;
+};
+
 static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spec(
     tt::tt_metal::IDevice* device,
     ComputeHardwareConfig compute_hw,
@@ -687,25 +933,18 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     ////////////////////////////////////////////////////////////////////////////
     //                      Runtime Args (per-core loop) and node placement
     ////////////////////////////////////////////////////////////////////////////
-    // Parameters for last row, col, or block
-    uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
-    uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
-    uint32_t last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
-    uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
-    uint32_t last_out_num_blocks_h = ((last_per_core_M - 1) / out_block_h) + 1;
-    uint32_t last_out_num_blocks_w = ((last_per_core_N - 1) / out_block_w) + 1;
-    uint32_t last_block_num_nonzero_subblocks_h = ((last_out_block_h - 1) / out_subblock_h) + 1;
-    uint32_t last_block_num_nonzero_subblocks_w = ((last_out_block_w - 1) / out_subblock_w) + 1;
-    uint32_t last_subblock_of_last_block_h =
-        last_out_block_h % out_subblock_h == 0 ? out_subblock_h : last_out_block_h % out_subblock_h;
-    uint32_t last_subblock_of_last_block_w =
-        last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
-    uint32_t last_block_padded_subblock_tiles_addr_skip =
-        output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
-    uint32_t last_block_padded_block_tiles_w_skip =
-        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
-    uint32_t last_block_padded_block_tiles_h_skip =
-        (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
+    const OutBlockPadding pad = make_out_block_padding(
+        M,
+        N,
+        per_core_M,
+        per_core_N,
+        out_block_h,
+        out_block_w,
+        out_subblock_h,
+        out_subblock_w,
+        out_num_blocks_x,
+        out_num_blocks_y,
+        output_single_tile_size);
 
     if (in0_block_sharded) {
         if (in0_noc == tt::tt_metal::NOC::NOC_1) {
@@ -713,12 +952,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         }
     }
 
-    // dram sharded weights stride params
-    uint32_t worker_core_stride = 0;   // stride in the worker core
-    uint32_t storage_core_stride = 0;  // stride in the dram bank
-    uint32_t curr_worker_core = 0;     // current worker core
-    uint32_t curr_storage_core = 0;    // current read dram bank
-    uint32_t vc = 0;
+    // Assigns DRAM banks to in1 sender nodes; only stepped when in1 is DRAM width-sharded.
+    DramWidthShardWalker in1_dram_walker(num_dram_banks, per_core_N, per_core_N_storage, in1_single_tile_size);
 
     uint32_t in0_end_idx = num_blocks_y - 1;
     uint32_t in1_end_idx = num_blocks_x - 1;
@@ -863,7 +1098,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                  {"in0_mcast_dest_noc_end_x", (std::uint32_t)in0_mcast_end.x},
                  {"in0_mcast_dest_noc_end_y", (std::uint32_t)in0_mcast_end.y},
                  // padding args (READER)
-                 {"last_block_h", in0_idx == in0_end_idx ? last_out_block_h : out_block_h}});
+                 {"last_block_h", in0_idx == in0_end_idx ? pad.last_out_block_h : out_block_h}});
             kernels_here.push_back(IN0_SENDER);
 
             // in0 receiver
@@ -886,102 +1121,27 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         if (in0_idx < num_blocks_y and in1_idx < num_blocks_x) {
             // in1 sender
             if (in0_idx == 0) {
-                const bool last_col = in1_idx == in1_end_idx;  // right cores when no transpose_mcast
-                std::vector<std::pair<std::string, uint32_t>> args = {
-                    {"in1_tensor_start_tile_id", in1_tensor_start_tile_id_stride * in1_idx},
-                    {"in1_mcast_dest_noc_start_x", (std::uint32_t)in1_mcast_start.x},
-                    {"in1_mcast_dest_noc_start_y", (std::uint32_t)in1_mcast_start.y},
-                    {"in1_mcast_dest_noc_end_x", (std::uint32_t)in1_mcast_end.x},
-                    {"in1_mcast_dest_noc_end_y", (std::uint32_t)in1_mcast_end.y},
-                    {"out_tensor_start_tile_id", ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},
-                    // padding args (READER)
-                    {"last_block_w", last_col ? last_out_block_w : out_block_w},
-                    // padding args (WRITER)
-                    {"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h},
-                    {"out_last_subblock_h", out_subblock_h},
-                    {"padded_block_tiles_h_skip", 0u},
-                    {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
-                    {"out_last_num_nonzero_subblocks_w",
-                     last_col ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w},
-                    {"out_last_subblock_w", last_col ? last_subblock_of_last_block_w : out_subblock_w},
-                    {"padded_subblock_tiles_addr_skip", last_col ? last_block_padded_subblock_tiles_addr_skip : 0u},
-                    {"padded_block_tiles_w_skip", last_col ? last_block_padded_block_tiles_w_skip : 0u},
-                };
-                if (bias_mesh.has_value()) {
-                    args.emplace_back("in3_tensor_start_tile_id", (std::uint32_t)per_core_N * in1_idx);
-                }
-                if (!output_is_sharded) {
-                    args.emplace_back("last_num_blocks_w_dim", last_col ? last_out_num_blocks_w : out_num_blocks_x);
-                }
+                NamedRuntimeArgs args = build_in1_sender_writer_args(
+                    pad,
+                    in0_idx,
+                    in1_idx,
+                    /*last_col=*/in1_idx == in1_end_idx,  // right cores when no transpose_mcast
+                    per_core_M,
+                    per_core_N,
+                    N,
+                    in1_tensor_start_tile_id_stride,
+                    in1_mcast_start,
+                    in1_mcast_end,
+                    /*has_bias=*/bias_mesh.has_value(),
+                    output_is_sharded);
 
-                if (in1_is_sharded and in1_is_dram) {  // in1 is dram sharded
-                    if (in1_is_width_sharded) {
-                        vc = vc == 3 ? 0 : vc + 1;
-
-                        uint32_t num_iter = 0;  // iterate how many banks, till fill the current worker block
-                        uint32_t dram_tensor_start_offset = 0;
-                        AdvancedKernelRunArgs::Varargs bank_varargs;
-
-                        if (curr_storage_core < num_dram_banks) {
-                            num_iter++;
-
-                            worker_core_stride = per_core_N_storage - storage_core_stride;
-
-                            dram_tensor_start_offset = storage_core_stride * in1_single_tile_size;
-                            bank_varargs.push_back(worker_core_stride * in1_single_tile_size);
-                            bank_varargs.push_back(curr_storage_core);
-
-                            log_debug(
-                                tt::LogOp,
-                                "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
-                                curr_worker_core,
-                                worker_core_stride,
-                                curr_storage_core,
-                                storage_core_stride);
-
-                            curr_storage_core += (storage_core_stride + worker_core_stride) / per_core_N_storage;
-                            storage_core_stride = (storage_core_stride + worker_core_stride) % per_core_N_storage;
-
-                            uint32_t curr_worker_core_old = curr_worker_core;
-                            if (worker_core_stride >= per_core_N) {
-                                curr_worker_core += 1;
-                            }
-
-                            while (curr_worker_core <= curr_worker_core_old and curr_storage_core < num_dram_banks) {
-                                num_iter++;
-
-                                uint32_t stride = worker_core_stride + per_core_N_storage;
-                                stride = std::min(stride, per_core_N);
-
-                                bank_varargs.push_back((stride - worker_core_stride) * in1_single_tile_size);
-                                bank_varargs.push_back(curr_storage_core);
-
-                                log_debug(
-                                    tt::LogOp,
-                                    "curr worker core: {} read {} tiles from dram bank: {}, start from index: {}",
-                                    curr_worker_core,
-                                    (stride - worker_core_stride),
-                                    curr_storage_core,
-                                    storage_core_stride);
-
-                                if (stride >= per_core_N) {
-                                    curr_worker_core += 1;
-                                }
-                                storage_core_stride = (stride - worker_core_stride) % per_core_N_storage;
-                                curr_storage_core += (stride - worker_core_stride) / per_core_N_storage;
-                                worker_core_stride = stride;
-                            }
-                        }
-                        args.emplace_back("vc", vc);
-                        args.emplace_back("num_dram_shards_to_read", num_iter);
-                        args.emplace_back("dram_tensor_start_offset", dram_tensor_start_offset);
-                        num_in1_writer_varargs =
-                            std::max<uint32_t>(num_in1_writer_varargs, static_cast<uint32_t>(bank_varargs.size()));
-                        in1_writer_varargs[core] = std::move(bank_varargs);
-                    } else {
-                        // Height sharded: no additional runtime args needed
-                        // (bank/offset computed from compile-time args + batch index)
-                    }
+                // DRAM width-sharded in1 needs a per-node bank assignment; height-sharded needs none
+                // (bank and offset come from compile-time args plus the batch index).
+                if (in1_is_sharded and in1_is_dram and in1_is_width_sharded) {
+                    AdvancedKernelRunArgs::Varargs bank_varargs = in1_dram_walker.advance(args);
+                    num_in1_writer_varargs =
+                        std::max<uint32_t>(num_in1_writer_varargs, static_cast<uint32_t>(bank_varargs.size()));
+                    in1_writer_varargs[core] = std::move(bank_varargs);
                 }
                 add_runtime_args(in1_sender_writer_run_args.runtime_arg_values, core, args);
                 kernels_here.push_back(IN1_SENDER_WRITER);
@@ -989,29 +1149,17 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                 // in1 receiver
             } else {
                 // bottom-right / bottom / right / interior core when no transpose_mcast
-                const bool last_row = in0_idx == in0_end_idx;
-                const bool last_col = in1_idx == in1_end_idx;
-                std::vector<std::pair<std::string, uint32_t>> args = {
-                    {"in1_mcast_sender_noc_x", (std::uint32_t)in1_mcast_sender.x},
-                    {"in1_mcast_sender_noc_y", (std::uint32_t)in1_mcast_sender.y},
-                    {"out_tensor_start_tile_id", ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},
-                    // padding args (WRITER)
-                    {"out_num_nonzero_subblocks_h", out_block_h / out_subblock_h},
-                    {"out_last_num_nonzero_subblocks_h",
-                     last_row ? last_block_num_nonzero_subblocks_h : out_block_h / out_subblock_h},
-                    {"out_last_subblock_h", last_row ? last_subblock_of_last_block_h : out_subblock_h},
-                    {"padded_block_tiles_h_skip", last_row ? last_block_padded_block_tiles_h_skip : 0u},
-                    {"out_num_nonzero_subblocks_w", out_block_w / out_subblock_w},
-                    {"out_last_num_nonzero_subblocks_w",
-                     last_col ? last_block_num_nonzero_subblocks_w : out_block_w / out_subblock_w},
-                    {"out_last_subblock_w", last_col ? last_subblock_of_last_block_w : out_subblock_w},
-                    {"padded_subblock_tiles_addr_skip", last_col ? last_block_padded_subblock_tiles_addr_skip : 0u},
-                    {"padded_block_tiles_w_skip", last_col ? last_block_padded_block_tiles_w_skip : 0u},
-                };
-                if (!output_is_sharded) {
-                    args.emplace_back("last_num_blocks_h_dim", last_row ? last_out_num_blocks_h : out_num_blocks_y);
-                    args.emplace_back("last_num_blocks_w_dim", last_col ? last_out_num_blocks_w : out_num_blocks_x);
-                }
+                NamedRuntimeArgs args = build_in1_receiver_writer_args(
+                    pad,
+                    in0_idx,
+                    in1_idx,
+                    /*last_row=*/in0_idx == in0_end_idx,
+                    /*last_col=*/in1_idx == in1_end_idx,
+                    per_core_M,
+                    per_core_N,
+                    N,
+                    in1_mcast_sender,
+                    output_is_sharded);
 
                 // left half
                 if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {
