@@ -21,10 +21,18 @@ void start_tensor_prefetcher(
     std::optional<uint32_t> ordinary_mpfe_weight,
     std::optional<bool> dynamic_mpfe_weighting) {
     tt::tt_metal::experimental::TensorPrefetcherConfig config;
-    config.free_sender_mpfe_weight = free_sender_mpfe_weight.value_or(config.free_sender_mpfe_weight);
-    config.noc1_sender_mpfe_weight = noc1_sender_mpfe_weight.value_or(config.noc1_sender_mpfe_weight);
-    config.ordinary_mpfe_weight = ordinary_mpfe_weight.value_or(config.ordinary_mpfe_weight);
-    config.dynamic_mpfe_weighting = dynamic_mpfe_weighting.value_or(config.dynamic_mpfe_weighting);
+    if (free_sender_mpfe_weight.has_value() || noc1_sender_mpfe_weight.has_value() ||
+        ordinary_mpfe_weight.has_value() || dynamic_mpfe_weighting.has_value()) {
+        tt::tt_metal::experimental::BlackholeTensorPrefetcherConfig blackhole_config;
+        blackhole_config.free_sender_mpfe_weight =
+            free_sender_mpfe_weight.value_or(blackhole_config.free_sender_mpfe_weight);
+        blackhole_config.noc1_sender_mpfe_weight =
+            noc1_sender_mpfe_weight.value_or(blackhole_config.noc1_sender_mpfe_weight);
+        blackhole_config.ordinary_mpfe_weight = ordinary_mpfe_weight.value_or(blackhole_config.ordinary_mpfe_weight);
+        blackhole_config.dynamic_mpfe_weighting =
+            dynamic_mpfe_weighting.value_or(blackhole_config.dynamic_mpfe_weighting);
+        config.blackhole = blackhole_config;
+    }
     tt::tt_metal::experimental::StartTensorPrefetcher(*mesh_device, config);
 }
 

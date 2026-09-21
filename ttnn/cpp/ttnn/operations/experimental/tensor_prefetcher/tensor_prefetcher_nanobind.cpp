@@ -46,6 +46,12 @@ void bind_tensor_prefetcher(nb::module_& mod) {
             request), so a single prefetcher can serve GCBs with different num_receivers
             values.
 
+            On Blackhole, the GDDR Memory Controller Multi-Port Front End (MPFE) uses
+            weighted round-robin arbitration. Weights are in [0, 7], and higher relative
+            values receive more service. The hardware slots P1/P2/P3 correspond to DRAM
+            tiles D0/D1/D2; the arguments below name traffic roles, which Metal maps to
+            each bank's D tiles using its worker_endpoint assignment.
+
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device to launch on.
                 free_sender_mpfe_weight (Optional[int]): active free-sender MPFE weight.

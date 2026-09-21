@@ -226,6 +226,7 @@ void kernel_main() {
     constexpr uint32_t own_active_mpfe_weight = get_compile_time_arg_val(7);
     constexpr uint32_t ordinary_mpfe_weight = get_compile_time_arg_val(8);
     constexpr bool dynamic_mpfe_weighting = get_compile_time_arg_val(9) != 0;
+    constexpr bool mpfe_enabled = get_compile_time_arg_val(10) != 0;
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
@@ -252,9 +253,12 @@ void kernel_main() {
 
     // Each sender owns only its private MPFE slot. The primary sender also owns
     // the ordinary-operation slot, which remains static for the whole lifetime.
-    gddr_mc_write_mpfe_weight(own_mpfe_port, dynamic_mpfe_weighting ? ordinary_mpfe_weight : own_active_mpfe_weight);
-    if constexpr (controls_ordinary_mpfe) {
-        gddr_mc_write_mpfe_weight(ordinary_mpfe_port, ordinary_mpfe_weight);
+    if constexpr (mpfe_enabled) {
+        gddr_mc_write_mpfe_weight(
+            own_mpfe_port, dynamic_mpfe_weighting ? ordinary_mpfe_weight : own_active_mpfe_weight);
+        if constexpr (controls_ordinary_mpfe) {
+            gddr_mc_write_mpfe_weight(ordinary_mpfe_port, ordinary_mpfe_weight);
+        }
     }
 
     RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
@@ -302,7 +306,7 @@ void kernel_main() {
             continue;
         }
         // DRAM_PREFETCHER_CMD_PREFETCH
-        if constexpr (dynamic_mpfe_weighting) {
+        if constexpr (mpfe_enabled && dynamic_mpfe_weighting) {
             gddr_mc_write_mpfe_weight(own_mpfe_port, own_active_mpfe_weight);
         }
 
@@ -815,7 +819,7 @@ void kernel_main() {
         // resumes at the right ring offset.
         store_sender_state(state, iface);
 
-        if constexpr (dynamic_mpfe_weighting) {
+        if constexpr (mpfe_enabled && dynamic_mpfe_weighting) {
             gddr_mc_write_mpfe_weight(own_mpfe_port, ordinary_mpfe_weight);
         }
 
@@ -825,9 +829,11 @@ void kernel_main() {
 <<<<<<< HEAD
 =======
 
-    gddr_mc_write_mpfe_weight(own_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
-    if constexpr (controls_ordinary_mpfe) {
-        gddr_mc_write_mpfe_weight(ordinary_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
+    if constexpr (mpfe_enabled) {
+        gddr_mc_write_mpfe_weight(own_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
+        if constexpr (controls_ordinary_mpfe) {
+            gddr_mc_write_mpfe_weight(ordinary_mpfe_port, GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_DEFAULT);
+        }
     }
 
     // Restore NoC2AXI mode. No NoC drain is needed here: the stream is already

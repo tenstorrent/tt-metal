@@ -34,8 +34,16 @@ namespace experimental {
 
 class GlobalCircularBuffer;
 
-struct TensorPrefetcherConfig {
-    // Blackhole GDDR MPFE round-robin weights. Higher relative values receive more service.
+struct BlackholeTensorPrefetcherConfig {
+    // GDDR Memory Controller Multi-Port Front End (MPFE) weighted round-robin service levels.
+    // Higher relative values receive more arbitration service; valid weights are 0 through 7.
+    //
+    // The controller register names use slots P1/P2/P3, which correspond to the Blackhole
+    // DRAM tile names D0/D1/D2, respectively. These config fields name traffic roles rather
+    // than fixed D tiles because each DRAM bank's SoC descriptor assigns those roles:
+    //   - free_sender_mpfe_weight: the unreserved D tile selected for the first prefetch sender.
+    //   - noc1_sender_mpfe_weight: the D tile named by worker_endpoint[1].
+    //   - ordinary_mpfe_weight: the D tile named by worker_endpoint[0].
     uint32_t free_sender_mpfe_weight = 0;
     uint32_t noc1_sender_mpfe_weight = 1;
     uint32_t ordinary_mpfe_weight = 5;
@@ -49,6 +57,11 @@ struct TensorPrefetcherConfig {
     // TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ENABLE=1 plus per-field environment
     // overrides. While enabled, those benchmark-only values take precedence over
     // this config and the resolved policy is logged.
+};
+
+// Architectures apply their default config when arch specific configs are unset.
+struct TensorPrefetcherConfig {
+    std::optional<BlackholeTensorPrefetcherConfig> blackhole = std::nullopt;
 };
 
 // Returns true if the Tensor prefetcher is supported on `mesh_device`. Both must hold:

@@ -64,7 +64,8 @@ uint32_t get_mpfe_port(const metal_SocDescriptor& soc_desc, const CoreCoord& sen
     const tt::umd::CoreCoord sender_subchannel = soc_desc.translate_coord_to(
         tt::umd::CoreCoord(sender_physical.x, sender_physical.y, tt::CoreType::DRAM, tt::CoordSystem::TRANSLATED),
         tt::CoordSystem::LOGICAL);
-    // MPFE P0 is tied off. Hardware GDDR subchannels 0..2 enter through P1..P3.
+    // MPFE P0 is tied off. Blackhole DRAM tiles D0..D2 (logical subchannels 0..2)
+    // enter through the register-map ports P1..P3.
     return sender_subchannel.y + 1;
 }
 
@@ -577,7 +578,7 @@ void TensorPrefetcherManager::allocate_sockets() {
 }
 
 void TensorPrefetcherManager::build_and_launch_programs(
-    uint32_t stage_ring_base, uint32_t stage_ring_size, const MpfePolicy& mpfe_policy) {
+    uint32_t stage_ring_base, uint32_t stage_ring_size, const std::optional<MpfePolicy>& mpfe_policy) {
     // Sockets must already be allocated so each kernel can be given its
     // socket_config_addr as a runtime arg.
     TT_FATAL(sockets_.size() == devices_.size() * num_senders_, "sockets must be allocated before programs");
@@ -601,14 +602,18 @@ void TensorPrefetcherManager::build_and_launch_programs(
             const CoreCoord sender_logical = sender_logical_cores_[s];
             const uint32_t bank_id = static_cast<uint32_t>(sender_logical.x);
             const uint32_t bank_sender_base = 2 * bank_id;
-            const uint32_t free_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base]);
-            const uint32_t noc1_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base + 1]);
-            const bool controls_ordinary_mpfe = s == bank_sender_base;
-            const uint32_t own_mpfe_port = controls_ordinary_mpfe ? free_sender_port : noc1_sender_port;
-            // Logical DRAM y=0 is the harvest-stable NOC0 worker-endpoint role, not raw
-            // hardware subchannel 0. get_mpfe_port resolves that role through this device's
-            // physical subchannel and maps hardware subchannels 0..2 to MPFE P1..P3.
-            const uint32_t ordinary_mpfe_port = get_mpfe_port(soc_desc, CoreCoord{bank_id, 0});
+            const bool controls_ordinary_mpfe = mpfe_policy.has_value() && s == bank_sender_base;
+            uint32_t own_mpfe_port = 0;
+            uint32_t ordinary_mpfe_port = 0;
+            if (mpfe_policy.has_value()) {
+                const uint32_t free_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base]);
+                const uint32_t noc1_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base + 1]);
+                own_mpfe_port = controls_ordinary_mpfe ? free_sender_port : noc1_sender_port;
+                // Logical DRAM y=0 is the harvest-stable NOC0 worker-endpoint role, not raw
+                // hardware subchannel 0. get_mpfe_port resolves that role through this device's
+                // physical subchannel and maps hardware subchannels 0..2 to MPFE P1..P3.
+                ordinary_mpfe_port = get_mpfe_port(soc_desc, CoreCoord{bank_id, 0});
+            }
 
             std::vector<uint32_t> compile_args = {
                 stage_ring_base,
@@ -618,9 +623,12 @@ void TensorPrefetcherManager::build_and_launch_programs(
                 cq_signal_l1_addr_,
                 cq_signal_slot_stride_,
                 static_cast<uint32_t>(controls_ordinary_mpfe),
-                controls_ordinary_mpfe ? mpfe_policy.active.free_sender : mpfe_policy.active.noc1_sender,
-                mpfe_policy.active.ordinary,
-                static_cast<uint32_t>(mpfe_policy.dynamic),
+                mpfe_policy.has_value()
+                    ? (controls_ordinary_mpfe ? mpfe_policy->active.free_sender : mpfe_policy->active.noc1_sender)
+                    : 0,
+                mpfe_policy.has_value() ? mpfe_policy->active.ordinary : 0,
+                mpfe_policy.has_value() ? static_cast<uint32_t>(mpfe_policy->dynamic) : 0,
+                static_cast<uint32_t>(mpfe_policy.has_value()),
             };
 
             KernelHandle kernel_id = CreateKernel(
@@ -638,44 +646,55 @@ void TensorPrefetcherManager::build_and_launch_programs(
 void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& config) {
     auto lock = lock_api_function_();
     TT_FATAL(!active_, "A Tensor prefetcher is already active on this mesh device. Call StopTensorPrefetcher first.");
-    const bool benchmark_enabled = benchmark_mpfe_enabled();
-    const experimental::TensorPrefetcherConfig effective_config{
-        .free_sender_mpfe_weight =
-            benchmark_mpfe_weight("FREE_SENDER_WEIGHT", config.free_sender_mpfe_weight, benchmark_enabled),
-        .noc1_sender_mpfe_weight =
-            benchmark_mpfe_weight("NOC1_SENDER_WEIGHT", config.noc1_sender_mpfe_weight, benchmark_enabled),
-        .ordinary_mpfe_weight =
-            benchmark_mpfe_weight("ORDINARY_WEIGHT", config.ordinary_mpfe_weight, benchmark_enabled),
-        .dynamic_mpfe_weighting =
-            benchmark_mpfe_bool("DYNAMIC_MPFE_WEIGHTING", config.dynamic_mpfe_weighting, benchmark_enabled),
-    };
-    TT_FATAL(
-        effective_config.free_sender_mpfe_weight <= kMaxMpfeWeight &&
-            effective_config.noc1_sender_mpfe_weight <= kMaxMpfeWeight &&
-            effective_config.ordinary_mpfe_weight <= kMaxMpfeWeight,
-        "Tensor prefetcher MPFE weights must be in [0, {}], got {}/{}/{}",
-        kMaxMpfeWeight,
-        effective_config.free_sender_mpfe_weight,
-        effective_config.noc1_sender_mpfe_weight,
-        effective_config.ordinary_mpfe_weight);
+    bool benchmark_enabled = false;
+    std::optional<MpfePolicy> mpfe_policy = std::nullopt;
+    if (mesh_device_->arch() == ARCH::BLACKHOLE) {
+        benchmark_enabled = benchmark_mpfe_enabled();
+        const experimental::BlackholeTensorPrefetcherConfig requested_config =
+            config.blackhole.value_or(experimental::BlackholeTensorPrefetcherConfig{});
+        const experimental::BlackholeTensorPrefetcherConfig effective_config{
+            .free_sender_mpfe_weight = benchmark_mpfe_weight(
+                "FREE_SENDER_WEIGHT", requested_config.free_sender_mpfe_weight, benchmark_enabled),
+            .noc1_sender_mpfe_weight = benchmark_mpfe_weight(
+                "NOC1_SENDER_WEIGHT", requested_config.noc1_sender_mpfe_weight, benchmark_enabled),
+            .ordinary_mpfe_weight =
+                benchmark_mpfe_weight("ORDINARY_WEIGHT", requested_config.ordinary_mpfe_weight, benchmark_enabled),
+            .dynamic_mpfe_weighting = benchmark_mpfe_bool(
+                "DYNAMIC_MPFE_WEIGHTING", requested_config.dynamic_mpfe_weighting, benchmark_enabled),
+        };
+        TT_FATAL(
+            effective_config.free_sender_mpfe_weight <= kMaxMpfeWeight &&
+                effective_config.noc1_sender_mpfe_weight <= kMaxMpfeWeight &&
+                effective_config.ordinary_mpfe_weight <= kMaxMpfeWeight,
+            "Tensor prefetcher MPFE weights must be in [0, {}], got {}/{}/{}",
+            kMaxMpfeWeight,
+            effective_config.free_sender_mpfe_weight,
+            effective_config.noc1_sender_mpfe_weight,
+            effective_config.ordinary_mpfe_weight);
 
-    const MpfeWeights active_mpfe_weights{
-        .free_sender = effective_config.free_sender_mpfe_weight,
-        .noc1_sender = effective_config.noc1_sender_mpfe_weight,
-        .ordinary = effective_config.ordinary_mpfe_weight,
-    };
-    const MpfePolicy mpfe_policy{
-        .active = active_mpfe_weights,
-        .dynamic = effective_config.dynamic_mpfe_weighting,
-    };
-    if (benchmark_enabled) {
-        log_info(
-            tt::LogMetal,
-            "TENSOR_PREFETCHER_MPFE_POLICY active={}/{}/{} dynamic={} source=benchmark_env",
-            mpfe_policy.active.free_sender,
-            mpfe_policy.active.noc1_sender,
-            mpfe_policy.active.ordinary,
-            mpfe_policy.dynamic ? 1 : 0);
+        mpfe_policy = MpfePolicy{
+            .active =
+                {
+                    .free_sender = effective_config.free_sender_mpfe_weight,
+                    .noc1_sender = effective_config.noc1_sender_mpfe_weight,
+                    .ordinary = effective_config.ordinary_mpfe_weight,
+                },
+            .dynamic = effective_config.dynamic_mpfe_weighting,
+        };
+        if (benchmark_enabled) {
+            log_info(
+                tt::LogMetal,
+                "TENSOR_PREFETCHER_MPFE_POLICY active={}/{}/{} dynamic={} source=benchmark_env",
+                mpfe_policy->active.free_sender,
+                mpfe_policy->active.noc1_sender,
+                mpfe_policy->active.ordinary,
+                mpfe_policy->dynamic ? 1 : 0);
+        }
+    } else {
+        TT_FATAL(
+            !config.blackhole.has_value(),
+            "Blackhole tensor prefetcher configuration cannot be used on architecture {}",
+            mesh_device_->arch());
     }
 
     const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();

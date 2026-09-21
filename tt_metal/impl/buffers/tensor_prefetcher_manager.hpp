@@ -153,7 +153,7 @@ private:
     void enumerate_dram_senders();
     std::vector<uint32_t> sender_indices_for_gcb(const experimental::GlobalCircularBuffer& gcb) const;
     void build_and_launch_programs(
-        uint32_t stage_ring_base, uint32_t stage_ring_size, const MpfePolicy& mpfe_policy);
+        uint32_t stage_ring_base, uint32_t stage_ring_size, const std::optional<MpfePolicy>& mpfe_policy);
     void allocate_sockets();
     // Serialize a Queue call's tensors into one or more socket pages, deduplicating
     // tensor layouts within each page and splitting when a page fills. Returns one entry per

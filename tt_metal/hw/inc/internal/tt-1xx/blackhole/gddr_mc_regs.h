@@ -9,6 +9,7 @@
 #ifdef COMPILE_FOR_DRISC
 
 // GDDR Memory Controller Multi-Port Front End (MPFE) priority fields.
+// The MC register names P1/P2/P3 correspond to the Blackhole DRAM tile names D0/D1/D2.
 #define GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_P1_REG_ADDR (0xFC105830u)
 #define GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_P2_REG_ADDR (0xFC105834u)
 #define GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_P3_REG_ADDR (0xFC105838u)
