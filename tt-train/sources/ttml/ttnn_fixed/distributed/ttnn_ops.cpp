@@ -376,7 +376,9 @@ std::vector<ttnn::Tensor> ring_shift_many(
     auto& socket_manager = ctx.get_socket_manager();
     auto distributed_ctx = ctx.get_distributed_context();
     const auto mesh_shape = ctx.get_device_ptr()->shape();
-    const bool single_ring = mesh_shape.mesh_size() == plan.ring_size;
+    // A ring of two is left to the two-launch order: a chip's two neighbours
+    // are the same chip there, an untested case for the one-launch mode.
+    const bool single_ring = mesh_shape.mesh_size() == plan.ring_size && plan.ring_size >= 4U;
     static bool logged = false;
     if (!logged) {
         logged = true;

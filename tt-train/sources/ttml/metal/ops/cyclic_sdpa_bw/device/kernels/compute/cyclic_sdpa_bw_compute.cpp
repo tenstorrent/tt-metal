@@ -487,10 +487,12 @@ namespace pack_sfpu {
 // 2^f for f in [0, 1) as 1 + c1 f + c2 f^2 + c3 f^3 + c4 f^4: the
 // near-minimax fit with the constant term pinned to one (so it can be the
 // hardware's 1.0 register). Relative error within 2.9e-6, mean 1e-8.
-constexpr uint32_t kExpC1 = 0x3F316B63u;
-constexpr uint32_t kExpC2 = 0x3E771229u;
-constexpr uint32_t kExpC3 = 0x3D55FC32u;
-constexpr uint32_t kExpC4 = 0x3C5BFB9Cu;
+// 2^f for f in [0, 1) as 1 + c1 f + c2 f^2 + c3 f^3: minimax, 9.5e-5
+// relative, under the 19 bits P^T is read back at (the degree-4 version,
+// 2.9e-6, cost two more SFPU steps a tile for nothing measurable).
+constexpr uint32_t kExpC1 = 0x3F31F01Eu;
+constexpr uint32_t kExpC2 = 0x3E691DD8u;
+constexpr uint32_t kExpC3 = 0x3D9DFC59u;
 
 // Two independent chains share the eight general registers: the first
 // chain in 0..2, the second in 3..5, the bias and c1 in 6 and 7. The
@@ -505,13 +507,11 @@ constexpr uint32_t kC1Reg = p_sfpu::LREG7;
 constexpr uint32_t kScaleReg = p_sfpu::LREG12;
 constexpr uint32_t kC2Reg = p_sfpu::LREG13;
 constexpr uint32_t kC3Reg = p_sfpu::LREG14;
-constexpr uint32_t kC4Reg = p_sfpu::LREG11;  // borrowed from the sfpi compiler's -1.0, see exp_release
 
 // Instruction mode bits, from the Blackhole ISA documentation.
 constexpr uint32_t kMadNegateVa = 1u;         // SFPMAD: VD = -VA * VB + VC
 constexpr uint32_t kSetExpFromInt = 0u;       // SFPSETEXP: exponent = low 8 bits of VD
 constexpr uint32_t kCastIntToFloat = 0u;      // SFPCAST: sign-magnitude int -> FP32
-constexpr uint32_t kGtSetVd = 8u;             // SFPGT: VD = (VD > VC) ? all ones : 0
 
 inline void set_dst(const uint32_t tile) {
     TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, (tile << 6) + get_dest_buffer_base());
@@ -567,13 +567,8 @@ inline void init() {
 inline void exp_prepare() {
     load_constant(kBiasReg, exp_bias_bits);  // 127 - log2(sqrt d)
     load_constant(kC1Reg, kExpC1);
-    program_constant(kC4Reg, kExpC4);
 }
 
-// Register 11 back to the -1.0 every sfpi-compiled kernel assumes.
-inline void exp_release() {
-    program_constant(p_sfpu::LREG11, 0xBF800000u);
-}
 
 // One step of the exponential for one 32-lane vector held in registers
 // (x, i, f): 2^z with z = a x / ln 2 + bias, the bias carrying the exponent
@@ -591,24 +586,27 @@ inline void exp_release() {
 // its operands on its first cycle without the automatic stall after a
 // multiply-add (a documented hardware bug) and measured as reading the
 // stale value; the compare and the AND are covered by the stall logic.
+// The argument clamped at the bias by one max against the zero constant
+// (its min half, written into the constant register, is dropped): below it
+// the result is 2^-127 or less and flushes to zero, which is what the
+// masked scores and any underflow need. One instruction where the
+// forward's first version and this kernel's had a compare and a mask.
 #define EXP_STEP(step, x, i, f, column)                                                                     \
     if constexpr (step == 0) TTI_SFPLOAD(x, InstrModLoadStore::DEFAULT, ADDR_MOD_7, column);              \
     if constexpr (step == 1) TTI_SFPMAD(x, kScaleReg, kBiasReg, x, 0);                                     \
-    if constexpr (step == 2)                                                                                \
+    if constexpr (step == 2) TTI_SFPSWAP(0, p_sfpu::LCONST_0, x, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);          \
+    if constexpr (step == 3)                                                                                \
         TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_ZERO, 0, x, x, i, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);    \
-    if constexpr (step == 3) TTI_SFPCAST(i, f, kCastIntToFloat);                                           \
-    if constexpr (step == 4) TTI_SFPMAD(f, p_sfpu::LCONST_1, x, f, kMadNegateVa);                          \
-    if constexpr (step == 5) TTI_SFPGT(0, p_sfpu::LCONST_0, x, kGtSetVd);                                  \
-    if constexpr (step == 6) TTI_SFPAND(0, x, i, 0);                                                        \
-    if constexpr (step == 7) TTI_SFPMAD(f, kC4Reg, kC3Reg, x, 0);                                          \
-    if constexpr (step == 8) TTI_SFPMAD(x, f, kC2Reg, x, 0);                                               \
-    if constexpr (step == 9) TTI_SFPMAD(x, f, kC1Reg, x, 0);                                               \
-    if constexpr (step == 10) TTI_SFPMAD(x, f, p_sfpu::LCONST_1, x, 0);                                    \
-    if constexpr (step == 11) TTI_SFPSETEXP(0, x, i, kSetExpFromInt);                                      \
-    if constexpr (step == 12 && column == 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);   \
-    if constexpr (step == 12 && column != 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_6, column);
+    if constexpr (step == 4) TTI_SFPCAST(i, f, kCastIntToFloat);                                           \
+    if constexpr (step == 5) TTI_SFPMAD(f, p_sfpu::LCONST_1, x, f, kMadNegateVa);                          \
+    if constexpr (step == 6) TTI_SFPMAD(f, kC3Reg, kC2Reg, x, 0);                                          \
+    if constexpr (step == 7) TTI_SFPMAD(x, f, kC1Reg, x, 0);                                               \
+    if constexpr (step == 8) TTI_SFPMAD(x, f, p_sfpu::LCONST_1, x, 0);                                     \
+    if constexpr (step == 9) TTI_SFPSETEXP(0, x, i, kSetExpFromInt);                                       \
+    if constexpr (step == 10 && column == 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);   \
+    if constexpr (step == 10 && column != 0) TTI_SFPSTORE(i, InstrModLoadStore::DEFAULT, ADDR_MOD_6, column);
 
-constexpr uint32_t kExpSteps = 13;
+constexpr uint32_t kExpSteps = 11;
 
 template <uint32_t step>
 inline void exp_pair_step() {
@@ -935,7 +933,6 @@ void kernel_main() {
                     PACK((pack_sfpu::exp_tile(score_reg(i))));
                 }
                 PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
-                PACK((pack_sfpu::exp_release()));
                 PACK((pack_sfpu::wait_before_pack()));
             }
             tile_regs_commit();
