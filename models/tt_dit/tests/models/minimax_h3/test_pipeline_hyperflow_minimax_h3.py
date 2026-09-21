@@ -12,11 +12,8 @@ when it is wrong:
 * **The grid came from the file.** The adapter, not the caller, decides the forward count. A run that
   silently fell back to 49 forwards is a fast pass with a slow number, so the resolved count is
   asserted and an explicit mismatching count is asserted to be refused.
-* **The endpoint reached the table.** ``endpoint_time_embedder`` targets a module the checkpoint does
-  not have; if its tensors are dropped, the blend runs against the unadapted base embedder. The
-  table's own levels are the observable: a two-time build carries ``r != t`` on the rows that move.
-* **The endpoint fold is complete.** Four surfaces, and a spelling the fold does not recognise leaves
-  a valid table built from the wrong weights.
+* **The endpoint reached the table, completely.** Checked by
+  :func:`common_av.assert_hyperflow_applied`, shared with the yuv420 gate.
 
 **Quality here is recorded, not gated**, for the reason
 ``test_pipeline_lora_minimax_h3.py`` gives: the CLIP and VBench bars in
@@ -31,10 +28,8 @@ this file up, and so a two-time adapter cannot be handed to the plain test.
 import os
 
 import pytest
-import torch
 from loguru import logger
 
-from ....pipelines.minimax_h3.adaln_precompute import MiniMaxH3AdalnLoraFold
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ..wan2_2.common import check_output_sanity
@@ -42,6 +37,7 @@ from .common import GALAXY_MESHES
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
+    assert_hyperflow_applied,
     check_audio_sanity,
     check_av_sync,
     check_written_file,
@@ -67,10 +63,6 @@ BASE_MODEL_REFERENCE = {5: "49 forwards: 66.4 s compute (denoise 54.6 s), CLIP m
 # Structural only. Eight forwards should be far inside this; it exists to fail a run that silently
 # fell back to the 49-forward schedule rather than to measure anything.
 MAX_S_PER_VIDEO_SECOND = 40.0
-
-# `time_embedder.linear_{1,2}.weight`. A low-rank factorization has nothing to say about a bias, so
-# the endpoint embedder's two biases come from the base checkpoint and only the matrices are adapted.
-EXPECTED_ENDPOINT_TARGETS = 2
 
 
 @pytest.mark.timeout(5400)
@@ -110,19 +102,7 @@ def test_t2va_hyperflow_end_to_end(mesh_device, reset_seeds, expect_error):
     logger.info(f"adapter {lora_path} at strength {strength}: {contract.identity()}")
     logger.info(f"working point: {width}x{height}, {num_frames} frames, {num_forwards} forwards")
 
-    # 2. The endpoint fold, whose entries have no device counterpart to fail later.
-    two_time = pipeline._adaln_two_time()
-    assert two_time is not None and two_time.gate == contract.gate
-    endpoint_targets = two_time.weight_hook.targets()
-    assert len(endpoint_targets) == EXPECTED_ENDPOINT_TARGETS, (
-        f"the endpoint embedder covers {endpoint_targets}, not both of "
-        f"`time_embedder.linear_{{1,2}}.weight`; the rest would come from base weights"
-    )
-    assert not any(
-        target.startswith(MiniMaxH3AdalnLoraFold.ENDPOINT_PREFIX) for target in endpoint_targets
-    ), "the endpoint fold kept the adapter's own spelling, so it will match no checkpoint key"
-
-    # 3. An explicit step count that is not the adapter's is refused, not silently honoured.
+    # 2. An explicit step count that is not the adapter's is refused, not silently honoured.
     with expect_error(ValueError, "cannot be honoured"):
         pipeline(PROMPT, num_frames=num_frames, height=height, width=width, num_inference_steps=50, seed=SEED)
 
@@ -135,31 +115,8 @@ def test_t2va_hyperflow_end_to_end(mesh_device, reset_seeds, expect_error):
         seed=SEED,
     )
 
-    # 4. The schedule that actually ran, read off the built table rather than off the contract.
-    table = pipeline._adaln_table
-    assert (
-        table.num_steps == num_forwards
-    ), f"the AdaLN table covers {table.num_steps} forwards but the adapter publishes {num_forwards}"
-
-    # 5. Interval conditioning reached the rows. Anchors and clean reference rows keep `r == t`, so
-    #    the assertion is that *some* level moves -- all of them equal is the single-time table.
-    moving = ~torch.isclose(table.levels[:, 0], table.levels[:, 1])
-    assert bool(moving.any()), (
-        "every level in the table has `r == t`, so it was built without interval conditioning; "
-        "the two-time adapter is running against single-time modulation"
-    )
-    logger.info(f"two-time table: {int(moving.sum())} of {table.levels.shape[0]} levels carry a non-empty interval")
-
-    # Both halves of the adapter, checked rather than assumed, as in test_pipeline_lora.
-    report = pipeline._lora_report
-    assert report is not None, "the transformer was built without an adapter bound"
-    logger.info(f"device half: {report.summary()}")
-    assert report.bound, "no low-rank adapter was bound to the transformer"
-    assert report.host, (
-        "no adapter entries were deferred to the host AdaLN fold, but this pipeline builds with "
-        "precomputed_adaln -- the two time embedders alone should have landed there"
-    )
-    logger.info(f"host half: {len(report.host)} entries folded into the AdaLN table")
+    # 3. Both halves of the adapter and the schedule that actually ran.
+    assert_hyperflow_applied(pipeline, num_forwards=num_forwards)
 
     log_timing_table(
         pipeline,

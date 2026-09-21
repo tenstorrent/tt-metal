@@ -428,6 +428,60 @@ def weights_dir(*required_subdirs: str) -> Path:
     return directory
 
 
+# `time_embedder.linear_{1,2}.weight`. A low-rank pair cannot express a bias delta, so the endpoint
+# embedder's biases come from the base checkpoint and only the two matrices are adapted.
+HYPERFLOW_ENDPOINT_TARGETS = 2
+
+
+def assert_hyperflow_applied(pipeline, *, num_forwards: int):
+    """Both halves of a two-time adapter, checked on a pipeline that has already generated once.
+
+    Shared by the gated and the yuv420 gates because none of it depends on the pixel layout, and a
+    yuv run that skipped these would be a timing number with nothing behind it. Every one of these
+    fails silently if left unchecked -- the run completes and produces video either way:
+
+    * the endpoint embedder targets a module the checkpoint does not have, so a dropped tensor means
+      the blend ran against unadapted base weights;
+    * the AdaLN table's own levels are the only place the interval is observable, and a single-time
+      table carries `r == t` on every row;
+    * the host half has no device counterpart to fail later.
+    """
+    from ....pipelines.minimax_h3.adaln_precompute import MiniMaxH3AdalnLoraFold
+
+    two_time = pipeline._adaln_two_time()
+    assert two_time is not None, "the pipeline resolved no interval conditioning for this adapter"
+    targets = two_time.weight_hook.targets()
+    assert len(targets) == HYPERFLOW_ENDPOINT_TARGETS, (
+        f"the endpoint embedder covers {targets}, not both of `time_embedder.linear_{{1,2}}.weight`; "
+        "the rest would come from base weights"
+    )
+    assert not any(
+        target.startswith(MiniMaxH3AdalnLoraFold.ENDPOINT_PREFIX) for target in targets
+    ), "the endpoint fold kept the adapter's own spelling, so it will match no checkpoint key"
+
+    table = pipeline._adaln_table
+    assert (
+        table.num_steps == num_forwards
+    ), f"the AdaLN table covers {table.num_steps} forwards but the adapter publishes {num_forwards}"
+
+    moving = ~torch.isclose(table.levels[:, 0], table.levels[:, 1])
+    assert bool(moving.any()), (
+        "every level in the table has `r == t`, so it was built without interval conditioning; "
+        "the two-time adapter is running against single-time modulation"
+    )
+    logger.info(f"two-time table: {int(moving.sum())} of {table.levels.shape[0]} levels carry a non-empty interval")
+
+    report = pipeline._lora_report
+    assert report is not None, "the transformer was built without an adapter bound"
+    logger.info(f"device half: {report.summary()}")
+    assert report.bound, "no low-rank adapter was bound to the transformer"
+    assert report.host, (
+        "no adapter entries were deferred to the host AdaLN fold, but this pipeline builds with "
+        "precomputed_adaln -- the two time embedders alone should have landed there"
+    )
+    logger.info(f"host half: {len(report.host)} entries folded into the AdaLN table")
+
+
 def artifact_dir(name: str) -> Path:
     """The gate's artifact directory `~/{name}`, created if absent."""
     directory = Path.home() / name
