@@ -63,8 +63,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         constexpr auto unp_res = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? ckernel::trisc::BfdResource::Unp1 : ckernel::trisc::BfdResource::Unp0;
         ckernel::trisc::bfd_alloc_and_program<unp_res>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_A_src);
 
-        _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
-        _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, unpack_to_dest>(
+        if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
+        {
+            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+                static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
+        }
+        else
+        {
+            _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
+        }
+        _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(
             ckernel::trisc::bfd_current<unp_res>(), num_tiles_per_unpack);
 
         PROFILER_SYNC();
@@ -187,7 +195,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _configure_default_alu_data_format_state_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
         }
-        _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, unpack_to_dest>(tensor_shape);
+        _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(tensor_shape);
 
         PROFILER_SYNC();
     }
@@ -217,7 +225,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
-                        _llk_math_eltwise_unary_broadcast_(tile);
+                        _llk_math_eltwise_unary_broadcast_<unpack_to_dest>(tile);
                     }
                 }
             }
@@ -230,7 +238,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
-                        _llk_math_eltwise_unary_broadcast_(tile);
+                        _llk_math_eltwise_unary_broadcast_<unpack_to_dest>(tile);
                     }
                     _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
                 }
