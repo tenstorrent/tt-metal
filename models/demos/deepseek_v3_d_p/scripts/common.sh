@@ -24,15 +24,20 @@ LOOP="${LOOP:-${2:-20}}"
 # Per-run logs: one log_NN under here per outer iteration.
 LOG_DIR="/data/$USER/$LOG_NAME"
 
-# Test selection — single source of truth.
-TEST_FILE="$TT_METAL_HOME/models/demos/deepseek_v3_d_p/tests/test_prefill_transformer.py"
-KFILTER="ds_prefill and pretrained and e384_device_fp32 and torus-xy-8x4 and 61_layers and balanced and right_pad and smoke and no_determinism and iter25 and 25600 and longbook"
+# Test selection — single source of truth. The chunked file holds many tests, so pin the function
+# too: -k alone no longer selects one.
+TEST_FILE="$TT_METAL_HOME/models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py"
+TEST_FUNC="test_ds_prefill_transformer_chunked_no_pcc"
+KFILTER="deepseek_v3 and torus-xy-8x4 and L10 and chunks2 and not chunks20 and no_determinism and perf_median_runs25"
 
-# Inner-iteration count, derived from the iterNN token in the filter above.
-INNER_ITERS=$(grep -oE 'iter[0-9]+' <<<"$KFILTER" | grep -oE '[0-9]+' | head -1)
+# Inner-iteration count, from the first perf_median_runsNN/stressNN token in the filter above — so the positive
+# selector must come before any `not stressNNNN` clause.
+INNER_ITERS=$(grep -oE '(perf_median_runs|stress)[0-9]+' <<<"$KFILTER" | grep -oE '[0-9]+$' | head -1)
 
 # Model + cache paths handed to pytest.
-ENV_VARS='TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/'
+# PREFILL_TRACE_DIR is what the chunked test reads for its golden (check_pcc); the TT_DS_* names
+# stay for any non-chunked filter.
+ENV_VARS='TT_DS_PREFILL_TTNN_CACHE=/mnt/models/DeepSeek-R1-0528-Cache/DeepSeek-R1-0528-Cache-prefill_secure DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/models/deepseek-prefill-cache/golden/ PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/longbook_qa_eng_prefill_56320_nopad'
 
 # Seconds without log growth before a still-running iteration is flagged STALE.
 STALE_SECS="${STALE_SECS:-240}"
