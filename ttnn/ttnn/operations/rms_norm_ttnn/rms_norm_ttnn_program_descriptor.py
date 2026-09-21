@@ -1475,6 +1475,26 @@ ABLATE = tuple(
 )
 
 
+# Ablation of the ORDER OF SUMMATION (journal 4m.6).  RMS_REDUCE_ORDER=native[:WT] sums each tile's
+# 32 positions first (FPU, fp32) and the tile totals second, as the native op does, for rows whose
+# width chunk is <= WT tiles (default all); nofold[:WT] only disables the square fold.  Host-side
+# because both choices size CBs and CT args; the CT args are in the JIT cache key.
+def _reduce_order():
+    v = os.environ.get("RMS_REDUCE_ORDER", "").strip().lower()
+    if not v:
+        return "shipped", 0
+    name, _, wt = v.partition(":")
+    assert name in ("native", "nofold"), f"RMS_REDUCE_ORDER: expected native[:WT] or nofold[:WT], got {v!r}"
+    return name, (int(wt) if wt else 10**9)
+
+
+REDUCE_ORDER, REDUCE_ORDER_MAX_WT = _reduce_order()
+
+
+def _reduce_order_applies(wt_chunk: int) -> bool:
+    return REDUCE_ORDER != "shipped" and wt_chunk <= REDUCE_ORDER_MAX_WT
+
+
 def _kernel_defines():
     """Kernel `-D` defines shared by all three kernels.  ONE source of truth.
 
@@ -1681,6 +1701,8 @@ def _x_squared_wt(wt_chunk: int, partial_w: int) -> int:
         # row's last width tile INCLUDING its pad lanes before the reduce runs, so the
         # reduce's partial scaler / 0-1 mask can no longer reach them.
         return wt_chunk
+    if _reduce_order_applies(wt_chunk):
+        return wt_chunk  # ablation: no fold
     if wt_chunk <= DEST_ACC_SQUARE_MAX_WT:
         # Already inside the vetted serial depth: fold the whole chunk, exactly as
         # pre-D43.  Keeping this branch is what makes every currently-folding geometry
@@ -4158,6 +4180,7 @@ def create_program_descriptor(
         and wt_per_core >= REDUCE_ACC_VIA_ADD_MIN_WT
         and wt_chunk >= REDUCE_ACC_VIA_ADD_MIN_CHUNK_WT
         and not (num_w_chunks == 1 and x_squared_wt < REDUCE_ACC_VIA_ADD_MIN_CALL_WT)
+        and not (REDUCE_ORDER == "native" and _reduce_order_applies(wt_chunk))  # ablation: FPU per tile
     )
     scaler_tiles = 1 if reduce_acc_via_add else scaler_pages
     assert scaler_tiles <= scaler_pages, "rms_norm_ttnn: cb_scaler is sized below the tiles the reader pushes"
