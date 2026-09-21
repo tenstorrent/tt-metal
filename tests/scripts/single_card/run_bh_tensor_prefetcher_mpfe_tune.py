@@ -13,6 +13,7 @@ import json
 import os
 import platform
 import random
+import re
 import shutil
 import statistics
 import subprocess
@@ -127,13 +128,11 @@ def parse_timer_total_us(output: str) -> tuple[float, int]:
         if marker_index < 0:
             continue
         value_with_unit = line[marker_index + len(TIMER_MARKER) :].strip()
-        for unit in ("ns", "us", "µs", "ms", "s"):
-            if value_with_unit.endswith(unit):
-                number = value_with_unit[: -len(unit)].strip()
-                durations.append(float(number) * scale_to_us[unit])
-                break
-        else:
+        match = re.match(r"^([0-9]+(?:\.[0-9]+)?)\s*(ns|us|µs|ms|s)\b", value_with_unit)
+        if match is None:
             raise ValueError(f"unknown timer unit: {line}")
+        number, unit = match.groups()
+        durations.append(float(number) * scale_to_us[unit])
     if not durations:
         raise ValueError(f"model output did not contain {TIMER_MARKER!r}")
     return sum(durations), len(durations)
@@ -227,7 +226,13 @@ def validate_or_write_manifest(path: Path, manifest: dict[str, object], resume: 
         existing = json.loads(path.read_text())
         if not resume:
             raise RuntimeError(f"{path} already exists; pass --resume to continue it")
-        if existing != manifest:
+        existing_comparable = dict(existing)
+        manifest_comparable = dict(manifest)
+        for comparable in (existing_comparable, manifest_comparable):
+            hardware = dict(comparable.get("hardware", {}))
+            hardware.pop("tt_smi", None)
+            comparable["hardware"] = hardware
+        if existing_comparable != manifest_comparable:
             raise RuntimeError(
                 "resume manifest does not match the current command, configuration, revision, or hardware"
             )

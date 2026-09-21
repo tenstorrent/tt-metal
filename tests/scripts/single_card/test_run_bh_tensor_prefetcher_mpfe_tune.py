@@ -47,7 +47,7 @@ def test_parse_timer_sums_multiple_lifetimes():
         [
             "TENSOR_PREFETCHER_MPFE_ACTIVE_LIFETIME -- elapsed: 1200us",
             "timer TENSOR_PREFETCHER_MPFE_ACTIVE_LIFETIME -- elapsed: 1.5ms",
-            "timer TENSOR_PREFETCHER_MPFE_ACTIVE_LIFETIME -- elapsed: 300000ns",
+            "timer TENSOR_PREFETCHER_MPFE_ACTIVE_LIFETIME -- elapsed: 300000ns (scoped_timer.hpp:40)",
         ]
     )
 
@@ -86,6 +86,15 @@ def test_resume_rejects_manifest_mismatch(tmp_path):
 
     with pytest.raises(RuntimeError, match="does not match"):
         MODULE.validate_or_write_manifest(path, {"schema_version": 1, "command": ["different.py"]}, resume=True)
+
+
+def test_resume_ignores_volatile_tt_smi_snapshot(tmp_path):
+    path = tmp_path / "manifest.json"
+    manifest = {"schema_version": 1, "command": ["model.py"], "hardware": {"hostname": "host", "tt_smi": "time=1"}}
+    MODULE.validate_or_write_manifest(path, manifest, resume=False)
+
+    resumed = {"schema_version": 1, "command": ["model.py"], "hardware": {"hostname": "host", "tt_smi": "time=2"}}
+    MODULE.validate_or_write_manifest(path, resumed, resume=True)
 
 
 def test_completed_keys_excludes_failed_runs():
