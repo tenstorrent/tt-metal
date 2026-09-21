@@ -610,6 +610,8 @@ def test_scalar_tensor_row_major_sharded(device, op_name):
     assert_with_pcc(torch_fn(scalar, torch_input), output, 0.999)
 
 
+
+
 @pytest.mark.parametrize("tensor_dtype", [ttnn.int32, ttnn.uint32])
 @pytest.mark.parametrize("scalar", [2.5, 0.5, -1.5])
 @pytest.mark.parametrize("ttnn_op", [ttnn.multiply, ttnn.div])
