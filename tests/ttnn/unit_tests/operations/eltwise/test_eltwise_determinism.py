@@ -33,7 +33,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # The configuration is read from the environment so one file serves both the scheduled run and a
 # manual dispatch that wants to sweep an axis, without a second copy of the op table. The defaults
-# are the cheap corner -- bfloat16, a single tile, DRAM -- which is what runs daily and on PRs.
+# cover both float dtypes on a single DRAM tile, which is what runs daily and on PRs.
 #
 # How many times each op runs. 3 is the useful minimum: one uncached, two cached, so a
 # cache-path difference and a run-to-run difference are both reachable.
@@ -45,7 +45,9 @@ _MEMORY = {"dram": ttnn.DRAM_MEMORY_CONFIG, "l1": ttnn.L1_MEMORY_CONFIG}
 
 def _dtypes_from_env():
     names = [
-        n.strip().lower() for n in os.environ.get("ELTWISE_DETERMINISM_DTYPES", "bfloat16").split(",") if n.strip()
+        n.strip().lower()
+        for n in os.environ.get("ELTWISE_DETERMINISM_DTYPES", "bfloat16,float32").split(",")
+        if n.strip()
     ]
     unknown = [n for n in names if n not in _DTYPES]
     if unknown:

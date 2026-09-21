@@ -17,10 +17,10 @@ on:
         description: "Comma-separated dtypes to run every op at."
         type: choice
         options:
+          - bfloat16,float32
           - bfloat16
           - float32
-          - bfloat16,float32
-        default: bfloat16
+        default: bfloat16,float32
       shape:
         description: "Input shape, e.g. 1x1x32x32. GLU-family ops pin their own shape and ignore this."
         type: string
@@ -64,7 +64,7 @@ on:
     # 05:00 UTC daily. ttnn-run-sweeps already occupies 02:00 and 03:00.
     - cron: "0 5 * * *"
 
-run-name: "eltwise determinism [${{ inputs.dtypes || 'bfloat16' }} ${{ inputs.shape || '1x1x32x32' }} ${{ inputs.memory-config || 'dram' }}] (${{ inputs.arch || 'wormhole_b0' }})"
+run-name: "eltwise determinism [${{ inputs.dtypes || 'bfloat16,float32' }} ${{ inputs.shape || '1x1x32x32' }} ${{ inputs.memory-config || 'dram' }}] (${{ inputs.arch || 'wormhole_b0' }})"
 
 permissions:
   contents: read
@@ -95,7 +95,7 @@ jobs:
       build-inplace-wheel: true
 
   eltwise-determinism:
-    name: "eltwise determinism [${{ inputs.dtypes || 'bfloat16' }}]"
+    name: "eltwise determinism [${{ inputs.dtypes || 'bfloat16,float32' }}]"
     needs: [check-harbor, build-artifact]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     container:
@@ -107,7 +107,7 @@ jobs:
         ARCH_NAME: ${{ inputs.arch || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
-        ELTWISE_DETERMINISM_DTYPES: ${{ inputs.dtypes || 'bfloat16' }}
+        ELTWISE_DETERMINISM_DTYPES: ${{ inputs.dtypes || 'bfloat16,float32' }}
         ELTWISE_DETERMINISM_SHAPE: ${{ inputs.shape || '1x1x32x32' }}
         ELTWISE_DETERMINISM_MEMORY: ${{ inputs.memory-config || 'dram' }}
         ELTWISE_DETERMINISM_RUNS: ${{ inputs.runs || '3' }}
