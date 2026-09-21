@@ -30,6 +30,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    DestSync,
     FastMode,
     FusedSort,
     MathOperation,
@@ -37,12 +38,13 @@ from helpers.llk_params import (
     Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
+    DEST_SYNC,
     FAST_MODE,
     FUSED_SORT,
     ITERATIONS,
@@ -72,40 +74,42 @@ def _config(formats, mathop, dest_acc, unpack_to_dest, input_dimensions):
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
-    return PerfConfig(
-        "sources/eltwise_unary_sfpu_perf.cpp",
-        formats,
+    return create_test_or_perf_config(
+        is_perf=True,
         run_types=ALL_PERF_RUN_TYPES,
-        templates=[
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(ApproximationMode.No),
-            ITERATIONS(32),
-            FAST_MODE(FastMode.No),
-            STABLE_SORT(StableSort.No),
-            # eltwise_unary_sfpu_perf.cpp instantiates the topk primitives with both sort
-            # constants.
-            FUSED_SORT(FusedSort.No),
-            CLAMP_NEGATIVE(False),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_count_A),
-            LOOP_FACTOR(16),
-            NUM_FACES(num_faces=faces_to_generate),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count_A,
-            tile_count_B=tile_count_B,
-            tile_count_res=tile_count_A,
-        ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        test_config_kwargs={
+            "test_name": "sources/eltwise_unary_sfpu_test.cpp",
+            "formats": formats,
+            "templates": [
+                MATH_OP(mathop=mathop),
+                APPROX_MODE(ApproximationMode.No),
+                ITERATIONS(32),
+                FAST_MODE(FastMode.No),
+                STABLE_SORT(StableSort.No),
+                FUSED_SORT(FusedSort.No),
+                CLAMP_NEGATIVE(False),
+                DEST_SYNC(DestSync.Half),
+            ],
+            "runtimes": [
+                TILE_COUNT(tile_count_A),
+                LOOP_FACTOR(16),
+                NUM_FACES(num_faces=faces_to_generate),
+                UNPACK_TRANS_FACES(Transpose.No),
+                UNPACK_TRANS_WITHIN_FACE(Transpose.No),
+            ],
+            "variant_stimuli": StimuliConfig(
+                None,
+                formats.input_format,
+                None,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_count_A,
+                tile_count_B=tile_count_B,
+                tile_count_res=tile_count_A,
+            ),
+            "unpack_to_dest": unpack_to_dest,
+            "dest_acc": dest_acc,
+        },
     )
 
 
