@@ -11,6 +11,7 @@ load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 import os
 from pathlib import Path
 
+import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 
 # l1_small_size the GDN prefill depthwise ttnn.conv1d requires.
@@ -22,6 +23,32 @@ class Qwen36ModelArgs(ModelArgs):
 
     # Opt into base ModelArgs TP > n_kv_heads path; attention/tp.py replicates via replicate_kv_weight.
     SUPPORTS_KV_REPLICATION = True
+
+    def ccl_topology(self):
+        """Force Linear CCL on a 1-D Blackhole-Galaxy submesh.
+
+        The base policy returns Ring for BLACKHOLE_GALAXY whenever num_devices >= 8, which
+        is right for a standalone P150x8 LoudBox (its 8 chips are wired as a ring) but wrong
+        for a 1x8 row carved out of a Galaxy. Row 0 of the (4, 8) mesh is physical chips
+        [0, 1, 2, 3, 27, 26, 25, 24] -- a line. There is no wrap-around link from the last
+        chip back to the first, so a Ring collective dies in fabric route resolution:
+
+            fabric.cpp:174 forwarding_direction.has_value()
+            Could not find any forwarding direction from src (M0, D0) to dst (M0, D28)
+
+        Measured on this 32-chip BH Galaxy with tt_all_reduce over a 1x8 submesh:
+        Linear reduce-scatters correctly (2048 -> 256 per device); Ring raises the above.
+        Scoped to 1-D meshes on BLACKHOLE_GALAXY only, so P150x4 / P150x8 / T3K / TG and
+        the full 2-D Galaxy mesh all keep the base behaviour.
+        """
+        mesh_device = getattr(self, "mesh_device", None)
+        if (
+            mesh_device is not None
+            and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+            and 1 in tuple(mesh_device.shape)
+        ):
+            return ttnn.Topology.Linear
+        return super().ccl_topology()
 
     def __init__(
         self,
