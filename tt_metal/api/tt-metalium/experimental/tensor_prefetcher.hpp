@@ -35,7 +35,7 @@ namespace experimental {
 class GlobalCircularBuffer;
 
 struct TensorPrefetcherConfig {
-    // Blackhole GDDR MPFE round-robin weights. Lower values receive more service.
+    // Blackhole GDDR MPFE round-robin weights. Higher relative values receive more service.
     uint32_t free_sender_mpfe_weight = 0;
     uint32_t noc1_sender_mpfe_weight = 1;
     uint32_t ordinary_mpfe_weight = 5;
@@ -44,6 +44,11 @@ struct TensorPrefetcherConfig {
     // Dynamic mode idles both prefetch senders at H and independently lowers each
     // sender to its active weight only while that sender processes a request.
     bool dynamic_mpfe_weighting = false;
+
+    // The benchmark tuner runs unchanged model commands by setting
+    // TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ENABLE=1 plus per-field environment
+    // overrides. While enabled, those benchmark-only values take precedence over
+    // this config and the resolved policy is logged.
 };
 
 // Returns true if the Tensor prefetcher is supported on `mesh_device`. Both must hold:

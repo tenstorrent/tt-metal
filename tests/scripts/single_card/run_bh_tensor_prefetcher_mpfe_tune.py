@@ -27,6 +27,7 @@ POLICY_MARKER = "TENSOR_PREFETCHER_MPFE_POLICY "
 TIMER_MARKER = "TENSOR_PREFETCHER_MPFE_ACTIVE_LIFETIME -- elapsed: "
 ENV_PREFIX = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_"
 ENV_NAMES = (
+    f"{ENV_PREFIX}ENABLE",
     f"{ENV_PREFIX}FREE_SENDER_WEIGHT",
     f"{ENV_PREFIX}NOC1_SENDER_WEIGHT",
     f"{ENV_PREFIX}ORDINARY_WEIGHT",
@@ -49,7 +50,7 @@ class Candidate:
 
     @property
     def idle(self) -> tuple[int, int, int]:
-        return self.high, self.high, self.high
+        return (self.high, self.high, self.high) if self.dynamic else self.active
 
     @property
     def active(self) -> tuple[int, int, int]:
@@ -77,6 +78,7 @@ def candidate_environment(candidate: Candidate, base: dict[str, str] | None = No
         environment.pop(name, None)
     environment.update(
         {
+            f"{ENV_PREFIX}ENABLE": "1",
             f"{ENV_PREFIX}FREE_SENDER_WEIGHT": str(candidate.low),
             f"{ENV_PREFIX}NOC1_SENDER_WEIGHT": str(candidate.medium),
             f"{ENV_PREFIX}ORDINARY_WEIGHT": str(candidate.high),

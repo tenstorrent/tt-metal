@@ -58,6 +58,10 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     at the ordinary weight and lower each private sender slot only while it
                     handles a request. None uses the Metal default.
 
+            The benchmark tuning script enables TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ENABLE
+            and supplies per-field environment overrides. Those benchmark-only values take
+            precedence over these keyword arguments while the enable variable is set.
+
             Two sender kernels are provisioned per DRAM bank. Each queued GCB selects one
             or both senders per bank; unused senders remain parked on their sockets.
         )doc",

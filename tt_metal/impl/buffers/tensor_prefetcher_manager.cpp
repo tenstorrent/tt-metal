@@ -49,6 +49,8 @@ namespace {
 
 constexpr uint32_t kRemoteCBId = 31;
 constexpr uint32_t kNumGddrSubchannelsPerBank = 3;
+// Blackhole MPFE round-robin weights occupy the 3-bit field defined by
+// GDDR_MC_MPFE_CFG_ROUNDROBIN_WEIGHT_MASK in the DRISC-only register map.
 constexpr uint32_t kMaxMpfeWeight = 7;
 constexpr std::string_view kBenchmarkMpfeEnvPrefix = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_";
 constexpr std::string_view kBenchmarkTimerName = "TENSOR_PREFETCHER_MPFE_ACTIVE_LIFETIME";
@@ -72,23 +74,46 @@ const char* benchmark_mpfe_env(std::string_view suffix, std::string& name) {
     return std::getenv(name.c_str());
 }
 
+// Benchmark overrides and their telemetry are opt-in so stale individual weight
+// variables cannot silently alter a normal caller's explicit configuration.
+bool benchmark_mpfe_enabled() {
+    std::string name;
+    const char* value = benchmark_mpfe_env("ENABLE", name);
+    if (value == nullptr) {
+        return false;
+    }
+    TT_FATAL((value[0] == '0' || value[0] == '1') && value[1] == '\0', "{} must be 0 or 1, got '{}'", name, value);
+    return value[0] == '1';
+}
+
 // Use the benchmark environment override when set, validating it as an MPFE weight.
-uint32_t benchmark_mpfe_weight(std::string_view suffix, uint32_t fallback) {
+uint32_t benchmark_mpfe_weight(std::string_view suffix, uint32_t fallback, bool benchmark_enabled) {
+    if (!benchmark_enabled) {
+        return fallback;
+    }
     std::string name;
     const char* value = benchmark_mpfe_env(suffix, name);
     if (value == nullptr) {
         return fallback;
     }
+    const uint32_t parsed = static_cast<uint32_t>(value[0] - '0');
     TT_FATAL(
-        value[0] >= '0' && value[0] <= '7' && value[1] == '\0',
-        "{} must be one digit in [0, 7], got '{}'",
+        value[0] >= '0' && parsed <= kMaxMpfeWeight && value[1] == '\0',
+        "{} must be one digit in [0, {}], got '{}'",
         name,
+        kMaxMpfeWeight,
         value);
-    return static_cast<uint32_t>(value[0] - '0');
+    if (parsed != fallback) {
+        log_info(tt::LogMetal, "{}={} overrides configured value {}", name, parsed, fallback);
+    }
+    return parsed;
 }
 
 // Use the benchmark environment override when set, validating it as a boolean.
-bool benchmark_mpfe_bool(std::string_view suffix, bool fallback) {
+bool benchmark_mpfe_bool(std::string_view suffix, bool fallback, bool benchmark_enabled) {
+    if (!benchmark_enabled) {
+        return fallback;
+    }
     std::string name;
     const char* value = benchmark_mpfe_env(suffix, name);
     if (value == nullptr) {
@@ -99,7 +124,11 @@ bool benchmark_mpfe_bool(std::string_view suffix, bool fallback) {
         "{} must be 0 or 1, got '{}'",
         name,
         value);
-    return value[0] == '1';
+    const bool parsed = value[0] == '1';
+    if (parsed != fallback) {
+        log_info(tt::LogMetal, "{}={} overrides configured value {}", name, parsed ? 1 : 0, fallback ? 1 : 0);
+    }
+    return parsed;
 }
 
 // Largest `page` (multiple of tile_size, <= max_page_size) such that num_tiles*tile_size
@@ -576,6 +605,9 @@ void TensorPrefetcherManager::build_and_launch_programs(
             const uint32_t noc1_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base + 1]);
             const bool controls_ordinary_mpfe = s == bank_sender_base;
             const uint32_t own_mpfe_port = controls_ordinary_mpfe ? free_sender_port : noc1_sender_port;
+            // Logical DRAM y=0 is the harvest-stable NOC0 worker-endpoint role, not raw
+            // hardware subchannel 0. get_mpfe_port resolves that role through this device's
+            // physical subchannel and maps hardware subchannels 0..2 to MPFE P1..P3.
             const uint32_t ordinary_mpfe_port = get_mpfe_port(soc_desc, CoreCoord{bank_id, 0});
 
             std::vector<uint32_t> compile_args = {
@@ -606,13 +638,16 @@ void TensorPrefetcherManager::build_and_launch_programs(
 void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& config) {
     auto lock = lock_api_function_();
     TT_FATAL(!active_, "A Tensor prefetcher is already active on this mesh device. Call StopTensorPrefetcher first.");
+    const bool benchmark_enabled = benchmark_mpfe_enabled();
     const experimental::TensorPrefetcherConfig effective_config{
         .free_sender_mpfe_weight =
-            benchmark_mpfe_weight("FREE_SENDER_WEIGHT", config.free_sender_mpfe_weight),
-        .noc1_sender_mpfe_weight = benchmark_mpfe_weight("NOC1_SENDER_WEIGHT", config.noc1_sender_mpfe_weight),
-        .ordinary_mpfe_weight = benchmark_mpfe_weight("ORDINARY_WEIGHT", config.ordinary_mpfe_weight),
+            benchmark_mpfe_weight("FREE_SENDER_WEIGHT", config.free_sender_mpfe_weight, benchmark_enabled),
+        .noc1_sender_mpfe_weight =
+            benchmark_mpfe_weight("NOC1_SENDER_WEIGHT", config.noc1_sender_mpfe_weight, benchmark_enabled),
+        .ordinary_mpfe_weight =
+            benchmark_mpfe_weight("ORDINARY_WEIGHT", config.ordinary_mpfe_weight, benchmark_enabled),
         .dynamic_mpfe_weighting =
-            benchmark_mpfe_bool("DYNAMIC_MPFE_WEIGHTING", config.dynamic_mpfe_weighting),
+            benchmark_mpfe_bool("DYNAMIC_MPFE_WEIGHTING", config.dynamic_mpfe_weighting, benchmark_enabled),
     };
     TT_FATAL(
         effective_config.free_sender_mpfe_weight <= kMaxMpfeWeight &&
@@ -633,13 +668,15 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
         .active = active_mpfe_weights,
         .dynamic = effective_config.dynamic_mpfe_weighting,
     };
-    log_info(
-        tt::LogMetal,
-        "TENSOR_PREFETCHER_MPFE_POLICY active={}/{}/{} dynamic={}",
-        mpfe_policy.active.free_sender,
-        mpfe_policy.active.noc1_sender,
-        mpfe_policy.active.ordinary,
-        mpfe_policy.dynamic ? 1 : 0);
+    if (benchmark_enabled) {
+        log_info(
+            tt::LogMetal,
+            "TENSOR_PREFETCHER_MPFE_POLICY active={}/{}/{} dynamic={} source=benchmark_env",
+            mpfe_policy.active.free_sender,
+            mpfe_policy.active.noc1_sender,
+            mpfe_policy.active.ordinary,
+            mpfe_policy.dynamic ? 1 : 0);
+    }
 
     const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
     TT_FATAL(
@@ -731,7 +768,9 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     stop_requested_.store(false);
     host_worker_ = std::thread(&TensorPrefetcherManager::worker_loop, this);
     active_ = true;
-    active_lifetime_timer_.emplace(std::string(kBenchmarkTimerName));
+    if (benchmark_enabled) {
+        active_lifetime_timer_.emplace(std::string(kBenchmarkTimerName));
+    }
 }
 
 MeshCoordinateRangeSet TensorPrefetcherManager::full_mesh_subset() const {

@@ -22,7 +22,24 @@ def test_generate_candidates_uses_ordered_weight_tuples():
     assert len(candidates) == 8
     assert {candidate.active for candidate in candidates} == {(0, 0, 0), (0, 0, 1), (0, 1, 1), (1, 1, 1)}
     matching = [candidate for candidate in candidates if candidate.active == (0, 0, 1)]
-    assert all(candidate.idle == (1, 1, 1) for candidate in matching)
+    static = next(candidate for candidate in matching if not candidate.dynamic)
+    dynamic = next(candidate for candidate in matching if candidate.dynamic)
+    assert static.idle == static.active
+    assert dynamic.idle == (1, 1, 1)
+
+
+def test_candidate_environment_enables_benchmark_overrides():
+    candidate = MODULE.Candidate(dynamic=True, low=0, medium=1, high=5)
+
+    environment = MODULE.candidate_environment(candidate, base={name: "stale" for name in MODULE.ENV_NAMES})
+
+    assert environment == {
+        f"{MODULE.ENV_PREFIX}ENABLE": "1",
+        f"{MODULE.ENV_PREFIX}FREE_SENDER_WEIGHT": "0",
+        f"{MODULE.ENV_PREFIX}NOC1_SENDER_WEIGHT": "1",
+        f"{MODULE.ENV_PREFIX}ORDINARY_WEIGHT": "5",
+        f"{MODULE.ENV_PREFIX}DYNAMIC_MPFE_WEIGHTING": "1",
+    }
 
 
 def test_parse_and_verify_policy_marker():

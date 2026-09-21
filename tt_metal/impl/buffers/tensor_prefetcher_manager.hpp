@@ -225,8 +225,8 @@ private:
     // replay_trace() on each trace execution; erased by release_trace(). Guarded by queue_mu_.
     std::unordered_map<MeshTraceId, std::vector<Request>> trace_requests_;
 
-    // Created only after kernels and the worker are live; destroyed immediately
-    // after shutdown/drain so setup and cleanup are excluded from benchmark timing.
+    // In benchmark mode, created only after kernels and the worker are live and
+    // destroyed immediately after shutdown/drain so setup and cleanup are excluded.
     std::optional<tt::ScopedTimer<std::chrono::microseconds>> active_lifetime_timer_;
 };
 
