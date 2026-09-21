@@ -49,6 +49,7 @@ struct IndexerScoreDeviceOperation {
         const Tensor& k,
         const Tensor& weights,
         uint32_t chunk_start_idx,
+        uint32_t key_compression_ratio,
         bool apply_relu,
         uint32_t num_groups,
         uint32_t block_size,
@@ -69,7 +70,8 @@ namespace ttnn::experimental {
 
 // Two public frontends over one shared device op: the lightning indexer's two flavours differ only in
 // fixed knobs, so each gets its own callable. Both share the program factory + 3 kernels (flavour = compile-
-// time args) and produce a row-major bf16 score. Causality: key t visible to query s iff t <= chunk_start + s.
+// time args) and produce a row-major bf16 score. Causality: key t is visible to query s iff
+// t < floor((chunk_start + s + 1) / key_compression_ratio).
 //
 // BLOCK-CYCLIC K LAYOUT: the gathered K cache is a per-SP-shard slab (chunked prefill + SP all-gather), so the
 // reader reads it back in natural token order via an invP remap. The interface matches
@@ -99,6 +101,7 @@ ttnn::Tensor indexer_score_dsa(
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
+    uint32_t key_compression_ratio = 1,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
@@ -158,6 +161,7 @@ ttnn::Tensor ring_indexer_score_dsa(
     uint32_t num_links = 1,
     std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id = std::nullopt,
     std::optional<uint32_t> chunk_start_idx = std::nullopt,
+    uint32_t key_compression_ratio = 1,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
