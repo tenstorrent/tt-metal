@@ -45,7 +45,7 @@ from models.demos.gemma4.tt.attention.operations import (
     split_qkv_heads_decode,
     split_qkv_heads_prefill,
 )
-from models.demos.gemma4.tt.ccl import CCLManager, ccl_allreduce
+from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -249,12 +249,191 @@ def _persistent_ccl_memory_config(mesh_device, shard_height: int, width: int) ->
 PREFILL_REDUCE_ROW_BUCKET = int(os.environ.get("GEMMA4_PREFILL_REDUCE_ROW_BUCKET", "1024"))
 
 
+# Prefill performance levers, each independently switchable (GEMMA4_PREFILL_OPTS is a
+# comma-separated list of the keys below; tests/harnesses may also toggle the dict).
+#   matmul : explicit 2D-multicast program configs + LoFi for the large-M (>128 rows)
+#            prefill projections. Without a program config ttnn's matmul heuristic
+#            picks HiFi2 for BF16 activations and a blocking that runs 1.5-1.8x slower
+#            than the tuned 110-core config on Blackhole.
+#   gelu   : fuse the GELU into the gate projection (requires ``matmul``); removes a
+#            separate [S, 5376] elementwise pass per layer.
+#   scalar : fuse the Gemma layer_scalar multiply into the residual add (prefill only).
+#   sdpa8  : full-attention prefill SDPA with BFP8 Q/K/V, LoFi + FP32 accumulation and
+#            the full 11x10 grid (q=256, k=128) instead of BF16/HiFi2 on 8x4 cores.
+#            K/V are already BFP8 (the cache dtype); Q is cast per call.
+#   concat : concatenate the TP-local attention heads with ``nlp_concat_heads`` instead of
+#            the permute + copying-reshape rewrite (3.5 ms/sliding layer, 8.8 ms/global layer
+#            at 4K rows vs 0.12/0.21 ms; bit-identical output). The rewrite exists for the
+#            single-chip 32-head case whose concat kernel overflowed L1; 8 local heads fit.
+PREFILL_OPTS = {key: False for key in ("matmul", "gelu", "scalar", "sdpa8", "concat")}
+for _flag in os.environ.get("GEMMA4_PREFILL_OPTS", "").split(","):
+    _flag = _flag.strip()
+    if _flag:
+        if _flag not in PREFILL_OPTS:
+            raise ValueError(f"unknown GEMMA4_PREFILL_OPTS flag {_flag!r}; known: {sorted(PREFILL_OPTS)}")
+        PREFILL_OPTS[_flag] = True
+
+# in0_block_w caps (K tiles per block) per prefill projection; the derivation below
+# mirrors the tuned QB2 decoder (models/demos/gemma4_31b_qb2) at its 6656-row chunks
+# and keeps the static circular buffers inside Blackhole L1 for any M up to 8192 rows.
+PREFILL_MATMUL_CAPS = {"qkv": 6, "o": 4, "gate_up": 6, "down": 6}
+PREFILL_MATMUL_MAX_GRID = (11, 10)
+# Static circular-buffer budget per core for the explicit configs: Blackhole L1 is
+# 1.5 MiB, of which ~110 KiB is the reserved CB base and a few tens of KiB hold the
+# persistent decode CCL shards on the tail cores.
+PREFILL_MATMUL_CB_BUDGET_BYTES = 1_300_000
+_TILE_BYTES = {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, ttnn.float32: 4096}
+_PREFILL_SDPA_COMPUTE: dict = {}
+
+
+def _prefill_matmul_cb_bytes(per_core_m: int, per_core_n: int, block: int, weight_dtype) -> int:
+    """Double-buffered in0/in1 blocks plus BF16 output and packer intermediate."""
+    in0 = 2 * per_core_m * block * _TILE_BYTES[ttnn.bfloat16]
+    in1 = 2 * block * per_core_n * _TILE_BYTES.get(weight_dtype, 2048)
+    out = 2 * per_core_m * per_core_n * _TILE_BYTES[ttnn.bfloat16]
+    return in0 + in1 + out
+
+
+def prefill_matmul_program_config(
+    mesh_device, rows: int, k: int, n: int, *, name: str, weight_dtype=ttnn.bfloat8_b, fused_activation=None
+):
+    """Explicit 2D multicast matmul config for a [rows, k] x [k, n] prefill projection.
+
+    Returns ``None`` when no K block keeps the static circular buffers inside the L1
+    budget (very long single-shot prompts); callers then fall back to the heuristic
+    matmul with the same LoFi fidelity.
+    """
+    grid = mesh_device.compute_with_storage_grid_size()
+    gx, gy = min(grid.x, PREFILL_MATMUL_MAX_GRID[0]), min(grid.y, PREFILL_MATMUL_MAX_GRID[1])
+    m_tiles, n_tiles, k_tiles = math.ceil(rows / ttnn.TILE_SIZE), n // ttnn.TILE_SIZE, k // ttnn.TILE_SIZE
+    if n % ttnn.TILE_SIZE or k % ttnn.TILE_SIZE:
+        raise ValueError(f"prefill matmul {name}: K={k} and N={n} must be tile multiples")
+    gy = min(gy, m_tiles)
+    per_core_m, per_core_n = math.ceil(m_tiles / gy), math.ceil(n_tiles / gx)
+    sub_w = max(i for i in range(1, min(per_core_n, 8) + 1) if per_core_n % i == 0)
+    sub_h = (
+        1 if sub_w < per_core_n else max(i for i in range(1, min(per_core_m, 8 // sub_w) + 1) if per_core_m % i == 0)
+    )
+    cap = PREFILL_MATMUL_CAPS[name]
+    block = None
+    for candidate in range(min(k_tiles, cap), 0, -1):
+        if (
+            k_tiles % candidate == 0
+            and _prefill_matmul_cb_bytes(per_core_m, per_core_n, candidate, weight_dtype)
+            <= PREFILL_MATMUL_CB_BUDGET_BYTES
+        ):
+            block = candidate
+            break
+    if block is None:
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=block,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        transpose_mcast=False,
+        fuse_batch=False,
+        fused_activation=fused_activation,
+    )
+
+
+def prefill_linear(x, weight, *, name: str, compute_kernel_config, mesh_device, fused_activation=None):
+    """[1, 1, S, K] x [.., K, N] prefill projection with the explicit config and the caller's fidelity."""
+    config = prefill_matmul_program_config(
+        mesh_device,
+        int(x.shape[-2]),
+        int(weight.shape[-2]),
+        int(weight.shape[-1]),
+        name=name,
+        weight_dtype=weight.dtype,
+        fused_activation=fused_activation,
+    )
+    if config is None:
+        # Too many rows per core for an explicit block layout: keep the heuristic
+        # blocking but still run LoFi, then apply the activation separately.
+        out = ttnn.linear(
+            x,
+            weight,
+            compute_kernel_config=compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if fused_activation is not None:
+            raw = out
+            out = ttnn.gelu(raw, fast_and_approximate_mode=True)
+            raw.deallocate(True)
+        return out
+    return ttnn.linear(
+        x,
+        weight,
+        program_config=config,
+        compute_kernel_config=compute_kernel_config,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _use_prefill_matmul(x) -> bool:
+    return PREFILL_OPTS["matmul"] and int(x.shape[0]) == 1 and int(x.shape[-2]) > MLP_PREFILL_1D_MAX_ROWS
+
+
+def prefill_sdpa_compute_config(mesh_device):
+    """LoFi with FP32 accumulation: the accepted full-attention prefill fidelity of the QB2 decoder."""
+    arch = mesh_device.arch()
+    if arch not in _PREFILL_SDPA_COMPUTE:
+        _PREFILL_SDPA_COMPUTE[arch] = ttnn.init_device_compute_kernel_config(
+            arch,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+    return _PREFILL_SDPA_COMPUTE[arch]
+
+
+def prefill_full_attention_sdpa_config(mesh_device, seq_len: int, *, pinned_pow2: bool = True):
+    """Full-grid SDPA config for BFP8 full-attention prefill.
+
+    Power-of-two chunks no larger than the padded sequence: the kernel handles a
+    partial final chunk, and window-aligned ``chunk_start_idx`` values divide them.
+    """
+    grid = mesh_device.compute_with_storage_grid_size()
+    padded = math.ceil(seq_len / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    q_chunk = next((c for c in (256, 128, 64, 32) if c <= padded), 32)
+    k_chunk = next((c for c in (128, 64, 32) if c <= padded), 32)
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(
+            min(grid.x, PREFILL_MATMUL_MAX_GRID[0]), min(grid.y, PREFILL_MATMUL_MAX_GRID[1])
+        ),
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+        exp_approx_mode=False,
+    )
+
+
+def _prefill_allreduce(tensor, mesh_config, ccl_manager):
+    """Composite all-reduce on the CCL manager's topology (the shared helper pins Linear)."""
+    if mesh_config is None or mesh_config.tp <= 1:
+        return tensor
+    reduced = ttnn.all_reduce(
+        tensor,
+        cluster_axis=mesh_config.tp_axis,
+        num_links=ccl_manager.num_links,
+        topology=ccl_manager.topology,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tensor.deallocate(True)
+    return reduced
+
+
 def _bucketed_ccl_allreduce(communicated, mesh_config, ccl_manager):
     rows = communicated.shape[-2]
     bucket = PREFILL_REDUCE_ROW_BUCKET
     # rows <= 32 is the eager decode/batched path; leave it alone
     if bucket <= 1 or rows <= 32 or rows % bucket == 0:
-        return ccl_allreduce(communicated, mesh_config, ccl_manager)
+        return _prefill_allreduce(communicated, mesh_config, ccl_manager)
     padded_rows = math.ceil(rows / bucket) * bucket
     shape = communicated.shape
     padded = ttnn.pad(
@@ -263,7 +442,7 @@ def _bucketed_ccl_allreduce(communicated, mesh_config, ccl_manager):
         value=0.0,
     )
     communicated.deallocate(True)
-    reduced_padded = ccl_allreduce(padded, mesh_config, ccl_manager)
+    reduced_padded = _prefill_allreduce(padded, mesh_config, ccl_manager)
     reduced = ttnn.slice(
         reduced_padded,
         [0, 0, 0, 0],
@@ -588,6 +767,39 @@ class _TPOptimizedSharedMLP:
                 )
                 activated.deallocate(True)
                 return self._reduce(partial)
+            if _use_prefill_matmul(hidden_states):
+                fuse_gelu = PREFILL_OPTS["gelu"]
+                gate = prefill_linear(
+                    hidden_states,
+                    self.gate_prefill,
+                    name="gate_up",
+                    compute_kernel_config=self.gate_up_compute,
+                    mesh_device=self.mesh_device,
+                    fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0) if fuse_gelu else None,
+                )
+                if not fuse_gelu:
+                    raw_gate = gate
+                    gate = ttnn.gelu(raw_gate, fast_and_approximate_mode=True)
+                    raw_gate.deallocate(True)
+                up = prefill_linear(
+                    hidden_states,
+                    self.up_prefill,
+                    name="gate_up",
+                    compute_kernel_config=self.gate_up_compute,
+                    mesh_device=self.mesh_device,
+                )
+                activated = ttnn.mul(gate, up)
+                gate.deallocate(True)
+                up.deallocate(True)
+                partial = prefill_linear(
+                    activated,
+                    self.down_prefill,
+                    name="down",
+                    compute_kernel_config=self.down_compute,
+                    mesh_device=self.mesh_device,
+                )
+                activated.deallocate(True)
+                return self._reduce(partial)
             gate = ttnn.linear(hidden_states, self.gate_prefill)
             gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
             up = ttnn.linear(hidden_states, self.up_prefill)
@@ -775,11 +987,18 @@ class MultichipDecoder(OptimizedDecoder):
         prefill_communication_dtype=ttnn.bfloat16,
         residual_dtype=ttnn.bfloat16,
         use_persistent_async_ccl=True,
-        topology=ttnn.Topology.Linear,
+        topology=None,
         **kwargs,
     ):
         if kwargs:
             raise TypeError(f"unsupported MultichipDecoder kwargs: {sorted(kwargs)}")
+        if topology is None:
+            # Ring halves the composite all-reduce time of every prefill layer on
+            # QB2 but needs the mesh opened with FABRIC_1D_RING; the operator
+            # selects it together with the fabric config.
+            topology = (
+                ttnn.Topology.Ring if os.environ.get("GEMMA4_MC_TOPOLOGY", "linear") == "ring" else ttnn.Topology.Linear
+            )
         if tuple(mesh_device.shape) != TARGET_MESH_SHAPE or mesh_device.get_num_devices() != TP_SIZE:
             raise ValueError(
                 f"MultichipDecoder requires MeshShape{TARGET_MESH_SHAPE}, got "
@@ -1225,7 +1444,16 @@ class MultichipDecoder(OptimizedDecoder):
         """
         attention = self.layer.self_attn
         config, weights = attention.config, attention.weights
-        qkv = apply_qkv_projection(hidden_states, weights)
+        if _use_prefill_matmul(hidden_states):
+            qkv = prefill_linear(
+                hidden_states,
+                weights.wqkv,
+                name="qkv",
+                compute_kernel_config=self.attention_qkv_compute,
+                mesh_device=self.mesh_device,
+            )
+        else:
+            qkv = apply_qkv_projection(hidden_states, weights)
         # Prefill never reads the normalized attention input after QKV
         # projection.  Releasing this prompt-sized DRAM buffer here is
         # required before head concat and the output all-reduce allocate their
@@ -1288,6 +1516,7 @@ class MultichipDecoder(OptimizedDecoder):
                 )
                 fill_batch_idx = 0
                 owns_fill_table = True
+        bfp8_kv = None
         if config.cache_position_modulo is not None and valid_seq_len < k.shape[-2]:
             self._fill_bounded_sliding_cache_exact(
                 k_cache,
@@ -1310,10 +1539,25 @@ class MultichipDecoder(OptimizedDecoder):
             ttnn.experimental.paged_fill_cache(
                 v_cache, v_fill, fill_page_table, batch_idx=fill_batch_idx, block_size=block_size, **modulo
             )
-            if k_fill is not k:
-                k_fill.deallocate(True)
-            if v_fill is not v:
-                v_fill.deallocate(True)
+            # The BFP8 K/V written to the cache double as the full-attention SDPA
+            # operands (same values the resumed-chunk path reads back from the
+            # cache), so a fresh global-layer prefill can run the LoFi/BFP8 SDPA
+            # without a second cast.
+            if (
+                PREFILL_OPTS["sdpa8"]
+                and not config.is_sliding
+                and not chunk_start
+                and k_fill is not k
+                and v_fill is not v
+                and k_fill.dtype == ttnn.bfloat8_b
+            ):
+                bfp8_kv = (k_fill, v_fill)
+            else:
+                bfp8_kv = None
+                if k_fill is not k:
+                    k_fill.deallocate(True)
+                if v_fill is not v:
+                    v_fill.deallocate(True)
         if owns_fill_table:
             fill_page_table.deallocate(True)
         if config.is_sliding and user_id == 0 and not chunk_start:
@@ -1338,6 +1582,10 @@ class MultichipDecoder(OptimizedDecoder):
             # Resumed chunk on a full-attention layer: the prefix K/V exist
             # only in the paged cache. chunked SDPA reads [0, chunk_start +
             # local end) through the user's full page table.
+            if bfp8_kv is not None:
+                for tensor in bfp8_kv:
+                    tensor.deallocate(True)
+                bfp8_kv = None
             k.deallocate(True)
             v.deallocate(True)
             k = None
@@ -1371,6 +1619,10 @@ class MultichipDecoder(OptimizedDecoder):
             # SDPA result directly into its final head-concatenated output.
             # This avoids both the accumulated-output concat and a giant final
             # permute that requires a late contiguous DRAM allocation.
+            if bfp8_kv is not None:
+                for tensor in bfp8_kv:
+                    tensor.deallocate(True)
+                bfp8_kv = None
             k.deallocate(True)
             v.deallocate(True)
             k = None
@@ -1382,7 +1634,32 @@ class MultichipDecoder(OptimizedDecoder):
             )
             q = None
             sdpa = None
+        elif bfp8_kv is not None and seq_len <= PREFILL_SDPA_MAX_SEQ:
+            # Full-attention prefill on the whole 11x10 grid with BFP8 operands and
+            # LoFi/FP32-accumulate: ~3.4x faster than BF16/HiFi2 on 8x4 cores at 4K
+            # rows and the gap grows quadratically with the prompt. The output is
+            # restored to BF16 so head concat and the output projection are unchanged.
+            q_bfp8 = ttnn.typecast(q, ttnn.bfloat8_b)
+            sdpa_bfp8 = ttnn.transformer.scaled_dot_product_attention(
+                q_bfp8,
+                bfp8_kv[0],
+                bfp8_kv[1],
+                is_causal=True,
+                scale=1.0,
+                program_config=prefill_full_attention_sdpa_config(self.mesh_device, seq_len),
+                compute_kernel_config=prefill_sdpa_compute_config(self.mesh_device),
+            )
+            q_bfp8.deallocate(True)
+            for tensor in bfp8_kv:
+                tensor.deallocate(True)
+            bfp8_kv = None
+            sdpa = ttnn.typecast(sdpa_bfp8, ttnn.bfloat16)
+            sdpa_bfp8.deallocate(True)
         else:
+            if bfp8_kv is not None:
+                for tensor in bfp8_kv:
+                    tensor.deallocate(True)
+                bfp8_kv = None
             sdpa = ttnn.transformer.scaled_dot_product_attention(
                 q,
                 k,
@@ -1406,7 +1683,16 @@ class MultichipDecoder(OptimizedDecoder):
             output = self._chunked_attention_output_projection(concatenated, weights.o_proj, residual=residual)
             concatenated.deallocate(True)
             return output, residual is not None
-        partial = ttnn.linear(concatenated, weights.o_proj)
+        if _use_prefill_matmul(concatenated):
+            partial = prefill_linear(
+                concatenated,
+                weights.o_proj,
+                name="o",
+                compute_kernel_config=self.attention_o_compute,
+                mesh_device=self.mesh_device,
+            )
+        else:
+            partial = ttnn.linear(concatenated, weights.o_proj)
         concatenated.deallocate(True)
         return (
             _tp_allreduce(
@@ -1421,6 +1707,12 @@ class MultichipDecoder(OptimizedDecoder):
             ),
             False,
         )
+
+    def _concatenate_heads(self, sdpa, *, num_heads: int, head_dim: int):
+        """TP-local head concat: the dedicated kernel when enabled, else the inherited rewrite."""
+        if PREFILL_OPTS["concat"] and int(sdpa.shape[0]) == 1:
+            return ttnn.experimental.nlp_concat_heads(sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return OptimizedDecoder._concatenate_heads(sdpa, num_heads=num_heads, head_dim=head_dim)
 
     @staticmethod
     def _paged_cache_read_view(cache, num_kv_heads, head_dim):
@@ -1475,7 +1767,16 @@ class MultichipDecoder(OptimizedDecoder):
         for start, end in _output_proj_row_ranges(seq_len):
             chunk_rows = end - start
             chunk = ttnn.slice(concatenated, [0, 0, start, 0], [1, 1, end, concatenated.shape[-1]])
-            partial = ttnn.linear(chunk, output_weight)
+            if _use_prefill_matmul(chunk):
+                partial = prefill_linear(
+                    chunk,
+                    output_weight,
+                    name="o",
+                    compute_kernel_config=self.attention_o_compute,
+                    mesh_device=self.mesh_device,
+                )
+            else:
+                partial = ttnn.linear(chunk, output_weight)
             chunk.deallocate(True)
             reduced = _tp_allreduce(
                 partial,
@@ -1542,8 +1843,18 @@ class MultichipDecoder(OptimizedDecoder):
         if page_table.shape[0] > 1:
             user_page_table = ttnn.slice(page_table, [user_id, 0], [user_id + 1, page_table.shape[1]])
             owns_page_table = True
-        program_config = _prefill_sdpa_config(head_dim, seq_len)
-        if base_offset:
+        use_bfp8 = PREFILL_OPTS["sdpa8"] and k_cache.dtype == ttnn.bfloat8_b
+        if use_bfp8:
+            # Chunk sizes are powers of two, so any window-aligned chunk_start_idx
+            # divides them (the op requires chunk_start_idx % chunk == 0).
+            program_config = prefill_full_attention_sdpa_config(
+                self.mesh_device, min(FULL_ATTN_Q_CHUNK, seq_len), pinned_pow2=True
+            )
+            sdpa_compute = prefill_sdpa_compute_config(self.mesh_device)
+        else:
+            program_config = _prefill_sdpa_config(head_dim, seq_len)
+            sdpa_compute = None
+        if base_offset and not use_bfp8:
             # min(chunk, seq_len) may produce a non-power-of-two (e.g. 96 for a
             # padded tail), which cannot divide the absolute chunk_start_idx.
             q_chunk = 1 << min(int(program_config.q_chunk_size), seq_len).bit_length() - 1
@@ -1564,6 +1875,10 @@ class MultichipDecoder(OptimizedDecoder):
         for start in range(0, seq_len, FULL_ATTN_Q_CHUNK):
             end = min(start + FULL_ATTN_Q_CHUNK, seq_len)
             q_chunk = ttnn.slice(q, [0, 0, start, 0], [1, num_heads, end, head_dim])
+            if use_bfp8:
+                q_chunk_bf16 = q_chunk
+                q_chunk = ttnn.typecast(q_chunk_bf16, ttnn.bfloat8_b)
+                q_chunk_bf16.deallocate(True)
             sdpa_chunk = ttnn.transformer.chunked_scaled_dot_product_attention(
                 q_chunk,
                 k_cache,
@@ -1572,8 +1887,13 @@ class MultichipDecoder(OptimizedDecoder):
                 chunk_start_idx=base_offset + start,
                 scale=1.0,
                 program_config=program_config,
+                compute_kernel_config=sdpa_compute,
             )
             q_chunk.deallocate(True)
+            if use_bfp8:
+                sdpa_chunk_bfp8 = sdpa_chunk
+                sdpa_chunk = ttnn.typecast(sdpa_chunk_bfp8, ttnn.bfloat16)
+                sdpa_chunk_bfp8.deallocate(True)
             transposed = ttnn.permute(sdpa_chunk, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
             sdpa_chunk.deallocate(True)
             chunk = ttnn.reshape(transposed, [1, 1, end - start, num_heads * head_dim])
@@ -1912,6 +2232,22 @@ class MultichipDecoder(OptimizedDecoder):
             normed.deallocate(True)
         hidden_states = self.layer.post_feedforward_layernorm.forward(mlp_output)
         mlp_output.deallocate(True)
+        if PREFILL_OPTS["scalar"] and not is_decode:
+            # One fused pass: add, cast to the residual dtype and apply the Gemma
+            # layer scalar in the SFPU instead of three [S, 5376] sweeps.
+            combined = ttnn.add(
+                residual,
+                hidden_states,
+                dtype=self.residual_dtype,
+                activations=(
+                    [ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, float(self.layer.layer_scalar))]
+                    if self.layer.layer_scalar != 1.0
+                    else []
+                ),
+            )
+            residual.deallocate(True)
+            hidden_states.deallocate(True)
+            return combined
         combined = ttnn.add(residual, hidden_states)
         residual.deallocate(True)
         hidden_states.deallocate(True)
