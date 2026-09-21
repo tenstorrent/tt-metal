@@ -5,22 +5,37 @@ name: "[eltwise] Determinism and correctness (daily)"
 # rest hit it, so a cache-path divergence surfaces here rather than as an intermittent failure
 # somewhere downstream.
 #
-# Deliberately standalone rather than an input on ttnn-run-sweeps: this needs its own schedule and
-# its own failure signal, and folding it in would multiply device time for every op group rather
-# than the eltwise ones.
+# A plain pytest file rather than a sweep module: the sweep runner isolates every vector in its own
+# process for hang detection, so a 192-op run pays device setup and cache warmup 192 times over and
+# overruns the job timeout. These results are not published to the dashboard, so that isolation buys
+# nothing here. One process for the whole table brings the same coverage in under three minutes.
 
 on:
   workflow_dispatch:
     inputs:
-      suite:
-        description: "Which suite to run. 'default' is one vector per op at bfloat16 / 1x1x32x32 / DRAM; the others sweep a dtype, memory-config or shape axis."
+      dtypes:
+        description: "Comma-separated dtypes to run every op at."
         type: choice
         options:
-          - default
-          - dtypes
-          - memory_configs
-          - shapes
-        default: default
+          - bfloat16
+          - float32
+          - bfloat16,float32
+        default: bfloat16
+      shape:
+        description: "Input shape, e.g. 1x1x32x32. GLU-family ops pin their own shape and ignore this."
+        type: string
+        default: 1x1x32x32
+      memory-config:
+        description: "Where the operands live."
+        type: choice
+        options:
+          - dram
+          - l1
+        default: dram
+      runs:
+        description: "Times each op runs. Run 1 is uncached, the rest hit the program cache."
+        type: string
+        default: "3"
       arch:
         type: choice
         options:
@@ -34,16 +49,14 @@ on:
           - N300
           - P150b
         default: N150
-  # Gate the PRs that can actually break this: the check itself, the runner it goes through, and
-  # the eltwise op and SFPU sources it covers. Deliberately not every PR -- a run is a build plus
-  # 192 vectors on a device, which is not worth spending on a diff that cannot affect the result.
+  # Gate the PRs that can actually break this: the check itself and the eltwise op and SFPU sources
+  # it covers. Deliberately not every PR -- a run is a build plus every eltwise op on a device,
+  # which is not worth spending on a diff that cannot affect the result.
   pull_request:
     branches:
       - "main"
     paths:
-      - "tests/sweep_framework/sweeps/eltwise/**"
-      - "tests/sweep_framework/sweeps_runner.py"
-      - "tests/sweep_framework/sweep_utils/**"
+      - "tests/ttnn/unit_tests/operations/eltwise/test_eltwise_determinism.py"
       - ".github/workflows/ttnn-eltwise-determinism.yaml"
       - "ttnn/cpp/ttnn/operations/eltwise/**"
       - "tt_metal/hw/ckernels/**/llk_sfpu/**"
@@ -51,7 +64,7 @@ on:
     # 05:00 UTC daily. ttnn-run-sweeps already occupies 02:00 and 03:00.
     - cron: "0 5 * * *"
 
-run-name: "eltwise determinism [${{ inputs.suite || 'default' }}] (${{ inputs.arch || 'wormhole_b0' }})"
+run-name: "eltwise determinism [${{ inputs.dtypes || 'bfloat16' }} ${{ inputs.shape || '1x1x32x32' }} ${{ inputs.memory-config || 'dram' }}] (${{ inputs.arch || 'wormhole_b0' }})"
 
 permissions:
   contents: read
@@ -74,7 +87,7 @@ jobs:
       build-inplace-wheel: true
 
   eltwise-determinism:
-    name: "eltwise determinism [${{ inputs.suite || 'default' }}]"
+    name: "eltwise determinism [${{ inputs.dtypes || 'bfloat16' }}]"
     needs: [check-harbor, build-artifact]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     container:
@@ -86,6 +99,10 @@ jobs:
         ARCH_NAME: ${{ inputs.arch || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
+        ELTWISE_DETERMINISM_DTYPES: ${{ inputs.dtypes || 'bfloat16' }}
+        ELTWISE_DETERMINISM_SHAPE: ${{ inputs.shape || '1x1x32x32' }}
+        ELTWISE_DETERMINISM_MEMORY: ${{ inputs.memory-config || 'dram' }}
+        ELTWISE_DETERMINISM_RUNS: ${{ inputs.runs || '3' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -94,7 +111,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work
-    timeout-minutes: 60
+    timeout-minutes: 45
     runs-on: tt-ubuntu-2204-${{ inputs.runner-label || 'N150' }}-viommu-stable
     steps:
       - name: 🧬 Checkout Repository
@@ -109,24 +126,14 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: Generate sweep vectors
-        run: |
-          python3 tests/sweep_framework/sweeps_parameter_generator.py \
-            --module-name eltwise.eltwise_determinism --tag ci-main
       - name: Run eltwise determinism and correctness
         run: |
-          python3 tests/sweep_framework/sweeps_runner.py \
-            --module-name eltwise.eltwise_determinism \
-            --suite-name "${{ inputs.suite || 'default' }}" \
-            --vector-source vectors_export \
-            --result-dest results_export \
-            --tag ci-main \
-            --fail-on-test-failure \
-            --summary
+          pytest tests/ttnn/unit_tests/operations/eltwise/test_eltwise_determinism.py \
+            -v --junit-xml=/work/eltwise-determinism-report.xml
       - name: Upload test report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: eltwise-determinism-report-${{ inputs.arch || 'wormhole_b0' }}
-          path: /work/tests/sweep_framework/results_export/
+          path: /work/eltwise-determinism-report.xml
           retention-days: 7

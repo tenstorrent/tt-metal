@@ -2,59 +2,102 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Every eltwise op, run N times on identical inputs, graded on two properties.
+"""One test per eltwise op: run it N times on the same inputs and require that every run is
+bit-identical to the first, and that the first matches the golden.
 
-Each run must be bit-identical to the first, and the first must match the golden. Either alone
-passes for the wrong reason: an op returning garbage returns the same garbage every time, so
-determinism says nothing about correctness, and an op checked once cannot see a result that
-moves between dispatches. Run 1 populates the program cache and runs 2..N hit it, so a
-cache-path divergence shows up here rather than as an intermittent failure downstream.
+Two properties, because either alone passes for the wrong reason. An op that returns garbage
+returns the *same* garbage every time, so determinism alone says nothing about correctness; and
+an op checked once cannot see a result that changes between dispatches. Run 1 populates the
+program cache and runs 2..N hit it, so a cache-path divergence shows up as a determinism failure
+rather than as an intermittent CI flake somewhere downstream.
 
-The run-to-run comparison is on raw bytes rather than values, so a NaN payload change or a
-signed-zero flip counts -- `==` would call those equal, or for NaN never equal. Correctness is
-PCC, matching how the rest of the eltwise sweeps grade.
+The comparison across runs is on the raw bytes rather than on values, so a NaN payload change or
+a signed-zero flip counts as a difference -- `==` would call those equal, or in NaN's case never
+equal. Correctness is PCC against torch, matching how the rest of the eltwise suite grades.
 
-Suites are the configuration surface. `default` is one vector per op at bfloat16, a single
-32x32 tile, DRAM in and out -- small enough to run daily. The wider suites exist for manual
-dispatch, via --suite-name, when a dtype, shape or memory-config axis is worth sweeping.
+Ops live in one table rather than one function each: the interesting part of a case is its
+operand ranges and its golden, and a table keeps those visible side by side instead of spread
+over hundreds of near-identical bodies.
 """
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional, Sequence
 
+import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
-# Hang detection. A vector runs the op RUNS times, so it needs more headroom than a single call.
-TIMEOUT = 60
+# The configuration is read from the environment so one file serves both the scheduled run and a
+# manual dispatch that wants to sweep an axis, without a second copy of the op table. The defaults
+# are the cheap corner -- bfloat16, a single tile, DRAM -- which is what runs daily and on PRs.
+#
+# How many times each op runs. 3 is the useful minimum: one uncached, two cached, so a
+# cache-path difference and a run-to-run difference are both reachable.
+RUNS = int(os.environ.get("ELTWISE_DETERMINISM_RUNS", "3"))
 
-DEFAULT_SHAPE = [1, 1, 32, 32]
-# The GLU family splits the last dim in half and each half has to be a full tile.
-GLU_SHAPE = [1, 1, 32, 64]
+_DTYPES = {"bfloat16": ttnn.bfloat16, "float32": ttnn.float32}
+_MEMORY = {"dram": ttnn.DRAM_MEMORY_CONFIG, "l1": ttnn.L1_MEMORY_CONFIG}
+
+
+def _dtypes_from_env():
+    names = [
+        n.strip().lower() for n in os.environ.get("ELTWISE_DETERMINISM_DTYPES", "bfloat16").split(",") if n.strip()
+    ]
+    unknown = [n for n in names if n not in _DTYPES]
+    if unknown:
+        raise ValueError(f"ELTWISE_DETERMINISM_DTYPES: unknown {unknown}; known are {sorted(_DTYPES)}")
+    return [(_DTYPES[n], n) for n in names]
+
+
+def _shape_from_env():
+    raw = os.environ.get("ELTWISE_DETERMINISM_SHAPE", "1,1,32,32")
+    try:
+        shape = tuple(int(p) for p in raw.replace("x", ",").split(",") if p.strip())
+    except ValueError:
+        raise ValueError(f"ELTWISE_DETERMINISM_SHAPE must be integers separated by ',' or 'x'; got {raw!r}")
+    if len(shape) < 2 or any(d < 1 for d in shape):
+        raise ValueError(f"ELTWISE_DETERMINISM_SHAPE needs >=2 positive dims; got {raw!r}")
+    return shape
+
+
+def _memory_from_env():
+    name = os.environ.get("ELTWISE_DETERMINISM_MEMORY", "dram").strip().lower()
+    if name not in _MEMORY:
+        raise ValueError(f"ELTWISE_DETERMINISM_MEMORY: unknown {name!r}; known are {sorted(_MEMORY)}")
+    return _MEMORY[name]
+
+
+DTYPES = _dtypes_from_env()
+DEFAULT_SHAPE = _shape_from_env()
+MEMORY_CONFIG = _memory_from_env()
+# GLU-family ops split the last dim in half and each half has to be a full tile, so they pin their
+# own shape and ignore the one above.
+GLU_SHAPE = (1, 1, 32, 64)
 
 
 def _make_torch(shape, torch_dtype, values, seed):
-    """Operand generator. `values` picks a range that keeps the op inside its domain."""
+    """Operand generator. `values` picks a range that keeps the op in its domain."""
     gen = torch.Generator().manual_seed(seed)
     if torch_dtype == torch.int32:
         lo, hi = {"positive": (1, 100), "small": (-10, 10), "unit": (0, 2)}.get(values, (-1000, 1000))
-        return torch.randint(lo, hi, tuple(shape), dtype=torch_dtype, generator=gen)
-    raw = torch.rand(tuple(shape), dtype=torch.float32, generator=gen)
+        return torch.randint(lo, hi, shape, dtype=torch_dtype, generator=gen)
+    raw = torch.rand(shape, dtype=torch.float32, generator=gen)
     if values == "positive":  # (0.1, 100]  -- log, sqrt, reciprocal, divisors
         out = raw * 99.9 + 0.1
     elif values == "unit":  # (-1, 1)       -- asin, acos, atanh, erfinv
         out = raw * 1.98 - 0.99
-    elif values == "small":  # (-1, 1)      -- exp-family, avoids overflow
+    elif values == "small":  # (-1, 1) scaled -- exp-family, avoids overflow
         out = raw * 2.0 - 1.0
     elif values == "gamma":  # [1, 100]     -- digamma, lgamma, multigammaln
         out = raw * 99.0 + 1.0
-    elif values == "above_one":  # (1, 100] -- acosh
+    elif values == "above_one":  # (1, 100]  -- acosh
         out = raw * 99.0 + 1.0001
-    elif values == "well_above_one":  # [2, 100] -- acosh_bw, whose derivative blows up at 1
+    elif values == "well_above_one":  # [2, 100] -- acosh_bw, whose derivative blows up at x == 1
         out = raw * 98.0 + 2.0
-    elif values == "mid":  # [3, 10]        -- multigammaln_bw
+    elif values == "mid":  # [3, 10]  -- multigammaln_bw
         out = raw * 7.0 + 3.0
     else:  # "range": (-100, 100)
         out = raw * 200.0 - 100.0
@@ -69,19 +112,49 @@ class OpSpec:
     golden: Optional[Callable] = None
     arity: int = 1
     values: Any = "range"  # str, or a per-operand tuple
-    dtype: Any = None  # pins the dtype when the op only accepts one (bitwise ops are int32)
-    shape: Optional[Sequence[int]] = None  # pins the shape when the op constrains it (GLU)
+    dtype: Any = None  # defaults to the dtype under test
+    shape: Optional[Sequence[int]] = None
     args: tuple = ()
     kwargs: dict = field(default_factory=dict)
     # Backward ops return a tuple of gradients; compare this many of them.
     outputs: int = 1
     pcc: float = 0.99
-    # Backward ops take (grad, *inputs). Their goldens run a real autograd backward pass, so
-    # every operand after the gradient has to be a leaf with requires_grad set.
+    # Backward ops take (grad, *inputs). Their registered goldens run a real autograd backward
+    # pass, so every operand after the gradient has to be a leaf with requires_grad set.
     backward: bool = False
 
     def operand_values(self, i):
         return self.values[i] if isinstance(self.values, (tuple, list)) else self.values
+
+
+def _build_operands(spec, dtype, device):
+    torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32, ttnn.int32: torch.int32}[
+        spec.dtype or dtype
+    ]
+    shape = tuple(spec.shape or DEFAULT_SHAPE)
+    torch_operands, ttnn_operands = [], []
+    for i in range(spec.arity):
+        t = _make_torch(shape, torch_dtype, spec.operand_values(i), seed=1000 + i)
+        # The ttnn tensor is built before requires_grad is set: from_torch wants a plain leaf.
+        ttnn_operands.append(
+            ttnn.from_torch(
+                t, dtype=spec.dtype or dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=MEMORY_CONFIG
+            )
+        )
+        if spec.backward and i > 0 and t.is_floating_point():
+            t.requires_grad_(True)
+        torch_operands.append(t)
+    return torch_operands, ttnn_operands
+
+
+def _as_bytes(tensor):
+    """Raw bytes of a ttnn output, so NaN payloads and signed zeros participate in the compare."""
+    t = ttnn.to_torch(tensor).contiguous()
+    return t.view(torch.uint8).clone() if t.dtype != torch.bool else t.to(torch.uint8).clone()
+
+
+def _outputs_of(result, count):
+    return [result[i] for i in range(count)] if isinstance(result, (list, tuple)) else [result]
 
 
 def _relu6(x):
@@ -335,85 +408,14 @@ BACKWARD_OPS = [
 ]
 
 ALL_OPS = UNARY_OPS + BINARY_OPS + TERNARY_OPS + BACKWARD_OPS
-OPS = {spec.name: spec for spec in ALL_OPS}
-OP_NAMES = sorted(OPS)
-
-_TORCH_DTYPE = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32, ttnn.int32: torch.int32}
-
-
-# Vectors carry only serialisable values, so the op travels as its name and is looked up here.
-parameters = {
-    # One vector per op at the smallest useful configuration. This is what runs on a schedule.
-    "default": {
-        "op_name": OP_NAMES,
-        "input_shape": [DEFAULT_SHAPE],
-        "input_dtype": [ttnn.bfloat16],
-        "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "runs": [3],
-    },
-    # The axes below are for manual dispatch (--suite-name), not the daily run.
-    "dtypes": {
-        "op_name": OP_NAMES,
-        "input_shape": [DEFAULT_SHAPE],
-        "input_dtype": [ttnn.bfloat16, ttnn.float32],
-        "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "runs": [3],
-    },
-    "memory_configs": {
-        "op_name": OP_NAMES,
-        "input_shape": [DEFAULT_SHAPE],
-        "input_dtype": [ttnn.bfloat16],
-        "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "runs": [3],
-    },
-    "shapes": {
-        "op_name": OP_NAMES,
-        # A sub-tile shape, the single tile, a multi-tile row and a batched case. The GLU family
-        # overrides this anyway, since it needs an even last dim of at least two tiles.
-        "input_shape": [[1, 1, 32, 32], [1, 1, 64, 128], [2, 3, 96, 96], [1, 1, 320, 384]],
-        "input_dtype": [ttnn.bfloat16],
-        "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-        "runs": [3],
-    },
-}
-
-
-def _build_operands(spec, shape, ttnn_dtype, memory_config, device):
-    ttnn_dtype = spec.dtype or ttnn_dtype
-    torch_dtype = _TORCH_DTYPE[ttnn_dtype]
-    shape = list(spec.shape or shape)
-    torch_operands, ttnn_operands = [], []
-    for i in range(spec.arity):
-        t = _make_torch(shape, torch_dtype, spec.operand_values(i), seed=1000 + i)
-        # The ttnn tensor is built before requires_grad is set: from_torch wants a plain leaf.
-        ttnn_operands.append(
-            ttnn.from_torch(t, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-        )
-        if spec.backward and i > 0 and t.is_floating_point():
-            t.requires_grad_(True)
-        torch_operands.append(t)
-    return torch_operands, ttnn_operands
-
-
-def _as_bytes(tensor):
-    """Raw bytes of an output, so NaN payloads and signed zeros take part in the comparison."""
-    t = ttnn.to_torch(tensor).contiguous()
-    return t.view(torch.uint8).clone() if t.dtype != torch.bool else t.to(torch.uint8).clone()
-
-
-def _outputs_of(result, count):
-    return [result[i] for i in range(count)] if isinstance(result, (list, tuple)) else [result]
 
 
 def _golden_for(spec, torch_operands, device):
     """Either the torch expression in the table, or the golden ttnn registers for the op.
 
-    A table golden already closes over the op's constants, so it takes the operands only. The
-    registered golden is the op's own signature and does take them.
+    A table golden already closes over the op's constants -- `lambda x: torch.clamp(x, -1, 1)`
+    against `args=(-1, 1)` -- so it takes the operands only. The registered golden is the
+    op's own signature and does take them.
     """
     if spec.golden is not None:
         return [spec.golden(*torch_operands)]
@@ -426,71 +428,36 @@ def _golden_for(spec, torch_operands, device):
     return list(result)[: spec.outputs] if isinstance(result, (list, tuple)) else [result]
 
 
-def run(
-    op_name,
-    input_shape,
-    input_dtype,
-    input_memory_config,
-    output_memory_config,
-    runs,
-    *,
-    device,
-) -> list:
-    spec = OPS[op_name]
-    torch_operands, ttnn_operands = _build_operands(spec, input_shape, input_dtype, input_memory_config, device)
+@pytest.mark.parametrize("dtype", [d for d, _ in DTYPES], ids=[n for _, n in DTYPES])
+@pytest.mark.parametrize("spec", ALL_OPS, ids=lambda s: s.name)
+def test_eltwise_deterministic_and_correct(device, spec, dtype):
+    """Every run bit-identical to the first, and the first correct against the golden."""
+    torch_operands, ttnn_operands = _build_operands(spec, dtype, device)
 
-    kwargs = dict(spec.kwargs)
-    if output_memory_config is not None:
-        kwargs["memory_config"] = output_memory_config
-
-    start_time = start_measuring_time()
-    captured = []
-    for _ in range(runs):
-        try:
-            result = spec.ttnn_fn(*ttnn_operands, *spec.args, **kwargs)
-        except TypeError:
-            # Not every op takes memory_config; fall back to the op's own signature.
-            kwargs.pop("memory_config", None)
-            result = spec.ttnn_fn(*ttnn_operands, *spec.args, **kwargs)
-        captured.append([_as_bytes(t) for t in _outputs_of(result, spec.outputs)])
+    runs = []
+    for _ in range(RUNS):
+        result = spec.ttnn_fn(*ttnn_operands, *spec.args, **spec.kwargs)
+        runs.append([_as_bytes(t) for t in _outputs_of(result, spec.outputs)])
         last = result
-    e2e_perf = stop_measuring_time(start_time)
 
     # Determinism. Compared as bytes, so a NaN payload or signed-zero change is a difference.
-    for run_index in range(1, runs):
-        for out_index, (first, later) in enumerate(zip(captured[0], captured[run_index])):
+    for run_index in range(1, RUNS):
+        for out_index, (first, later) in enumerate(zip(runs[0], runs[run_index])):
             if not torch.equal(first, later):
                 differing = int((first != later).sum())
-                return [
-                    (
-                        False,
-                        f"{op_name} is not deterministic: run {run_index + 1} of {runs} differs from "
-                        f"run 1 in output {out_index} at {differing} bytes, on identical inputs",
-                    ),
-                    e2e_perf,
-                ]
-
-    # Bring the outputs to host, then free every device tensor before grading. Vectors run back
-    # to back in one process, so an L1 residency left alive here is still held while the next
-    # vector allocates its own -- which showed up as neighbouring vectors failing in the L1
-    # suites while passing in isolation. Outputs are read first because an in-place op aliases
-    # its input, and deallocating the operand would take the result with it.
-    actual = [ttnn.to_torch(t) for t in _outputs_of(last, spec.outputs)]
-    for tensor in list(_outputs_of(last, spec.outputs)) + ttnn_operands:
-        try:
-            ttnn.deallocate(tensor)
-        except RuntimeError:
-            pass  # already freed, e.g. an in-place result aliasing an operand
+                pytest.fail(
+                    f"{spec.name} ({dtype}) is not deterministic: run {run_index + 1} of {RUNS} "
+                    f"differs from run 1 in output {out_index} at {differing} bytes, on identical inputs"
+                )
 
     # Correctness. Determinism alone would also hold for an op that is consistently wrong.
     expected = _golden_for(spec, torch_operands, device)
-    for out_index, (want, got_torch) in enumerate(zip(expected, actual)):
+    actual = _outputs_of(last, spec.outputs)
+    for out_index, (want, got) in enumerate(zip(expected, actual)):
+        got_torch = ttnn.to_torch(got)
         if want.dtype == torch.bool or got_torch.dtype == torch.bool:
-            if not torch.equal(got_torch.to(torch.float32), want.to(torch.float32)):
-                return [(False, f"{op_name} output {out_index} does not match the golden"), e2e_perf]
+            assert torch.equal(
+                got_torch.to(torch.float32), want.to(torch.float32)
+            ), f"{spec.name} ({dtype}) output {out_index} does not match the golden"
         else:
-            passed, message = check_with_pcc(want, got_torch, spec.pcc)
-            if not passed:
-                return [(False, f"{op_name} output {out_index}: {message}"), e2e_perf]
-
-    return [(True, f"{op_name}: {runs} runs bit-identical, output matches golden"), e2e_perf]
+            assert_with_pcc(want, got_torch, spec.pcc)
