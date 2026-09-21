@@ -142,13 +142,19 @@ struct StampSum {
         rel += static_cast<uint32_t>(ts - base);
         n++;
     }
-    // The average in quarter-ns of the refclk domain: PTP64NS minus the timer's offset from the CFR count. The
-    // quotient and remainder of the ns sum are scaled separately: the sum itself times the units would not fit.
+    // The average in quarter-ns of the refclk domain: PTP64NS minus the timer's offset from the CFR count, the offset
+    // taken off in 64ths of a ns and the one rounding done last, so no part of it settles on every stamp of the
+    // session. The quotient and remainder of the ns sum are scaled separately: the sum itself times the units would
+    // not fit.
     uint64_t q(const LinkSession& s) const {
-        const int64_t base_units = (static_cast<int64_t>(base) - s.ptp_offset_ns) * kHwUnitsPerNs;
+        static_assert(64 % kHwUnitsPerNs == 0);
+        constexpr int64_t kPerUnit = 64 / kHwUnitsPerNs;
         const uint32_t whole = rel / n;
         const uint32_t part = rel - whole * n;
-        return static_cast<uint64_t>(base_units + whole * kHwUnitsPerNs + (part * kHwUnitsPerNs + n / 2) / n);
+        // part < n <= kTripsPerRound, so the remainder's share stays a 32-bit division: a 64-bit one is a routine.
+        const int64_t avg64 = static_cast<int64_t>(base) * 64 - s.ptp_offset_64 + static_cast<int64_t>(whole) * 64 +
+                              static_cast<int64_t>((part * 64u + n / 2) / n);
+        return static_cast<uint64_t>((avg64 + kPerUnit / 2) / kPerUnit);
     }
 };
 // One side's hardware round: the egress stamps of the frames it sent and the ingress stamps of those it received.
@@ -438,7 +444,7 @@ private:
     void write_diag() {
         const Instant now = read_instant();
         // The session's PTP offset rides in the timer word: a tick multiple, so its low two bits are free.
-        diag.timer = (sess.timer_ok ? 1u : 2u) | (static_cast<uint32_t>(sess.ptp_offset_ns) & ~3u);
+        diag.timer = (sess.timer_ok ? 1u : 2u) | (static_cast<uint32_t>(sess.ptp_offset_64 >> 6) & ~3u);
         diag.span_wall = now.wall() - start_at.wall();
         diag.span_refclk = now.refclk - start_at.refclk;
         diag.write(diag_addr);
@@ -575,7 +581,7 @@ private:
     void write_diag() {
         const Instant now = read_instant();
         // The session's PTP offset rides in the timer word: a tick multiple, so its low two bits are free.
-        diag.timer = (sess.timer_ok ? 1u : 2u) | (static_cast<uint32_t>(sess.ptp_offset_ns) & ~3u);
+        diag.timer = (sess.timer_ok ? 1u : 2u) | (static_cast<uint32_t>(sess.ptp_offset_64 >> 6) & ~3u);
         diag.span_wall = now.wall() - start_at.wall();
         diag.span_refclk = now.refclk - start_at.refclk;
         diag.write(diag_addr);

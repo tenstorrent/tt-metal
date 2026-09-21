@@ -118,7 +118,7 @@ constexpr uint32_t kRxThLabelValid = 1u << 31;
 // [1:0]: 0 accept all, 2 use the flow table. At 0 the classifier still applies the table's keep-timestamp action and
 // only ignores its drop decisions, so the stamp rule needs no change here.
 constexpr uint32_t kRxFdOverrideDecision = 0xFFB9D000;
-constexpr uint32_t kRxFlNoMatchActions = 0xFFB9CD04;    // [1:0] queue [2] drop [3] rm_hdr [4] keep_timestamp
+constexpr uint32_t kRxFlNoMatchActions = 0xFFB9CD04;  // [1:0] queue [2] drop [3] rm_hdr [4] keep_timestamp
 constexpr uint32_t kRxFlKeepTimestamp = 1u << 4;
 
 // RX classifier flow lookup (64-row TCAM) and flow table, per tt-isa-documentation EthernetRxClassifier.md.
@@ -324,16 +324,23 @@ __attribute__((noinline, cold)) inline bool ptp_timer_start(uint32_t pti, uint32
 
 // The once-per-session routines are cold: in a kernel built -O3 (the fabric router) they would otherwise unroll into
 // a couple of KB of a 26 KB kernel budget shared with the router, for code that runs once.
-// PTP64NS minus the CFR count in ns, as the ERISC sees the two registers: the count moves in four-tick steps and
-// PTP64NS on its own step, so one pair of reads sits anywhere from zero to a few ticks above the constant depending on
-// where the reads fell in the registers' update cycles, and a median of a few pairs rounded to the tick landed on
-// either side of a boundary from one launch to the next (a 20 ns bias on every stamp of that end, hence its cable, in
-// about one launch in eight; a read at the count's update alone was worse, 80 ns). The mean over many pairs at
-// pseudo-random phases, read in both orders so the read latency cancels, is the constant plus the same phase term on
-// every end, to well under a nanosecond; it is not rounded, and the term cancels between the two ends of a link.
-__attribute__((noinline, cold)) inline int64_t ptp_offset_ns() {
-    constexpr uint32_t kPairs = 2048;
-    int64_t sum = 0;
+// PTP64NS minus the CFR count, in 64ths of a ns, as the ERISC sees the two registers: the count moves in four-tick
+// steps and PTP64NS on its own step, so one pair of reads sits anywhere from zero to a few ticks above the constant
+// depending on where the reads fell in the registers' update cycles, and a median of a few pairs rounded to the tick
+// landed on either side of a boundary from one launch to the next (a 20 ns bias on every stamp of that end, hence its
+// cable, in about one launch in eight; a read at the count's update alone was worse, 80 ns). The mean over many pairs
+// at pseudo-random phases, read in both orders so the read latency cancels, is the constant plus the same phase term
+// on every end, and the term cancels between the two ends of a link. The count's staleness is spread over its four
+// ticks, 22 ns rms per read, and an error in the mean sits on every stamp of the end for the session, which the link
+// solve sees as a constant of the link that is new each launch: 32768 pairs (~2 ms, once per session) hold the mean
+// of 65536 reads to 0.09 ns. The timer restarts with every session, so the constant's fraction of a nanosecond is
+// new each launch: kept, not rounded, since rounded it sat on every stamp of the end as a bias of up to a nanosecond
+// that the other end did not share.
+__attribute__((noinline, cold)) inline int64_t ptp_offset_64ths() {
+    constexpr uint32_t kPairs = 32768;
+    // Summed as deviations from the first pair: the constant itself grows with the count's uptime and 4096 of it
+    // would overflow within weeks, while the deviations stay within ticks of it.
+    int64_t first = 0, dev = 0;
     uint32_t walk = rd(kWallClockLo) | 1u;
     for (uint32_t i = 0; i < kPairs; i++) {
         phase_walk(walk);
@@ -342,9 +349,14 @@ __attribute__((noinline, cold)) inline int64_t ptp_offset_ns() {
         phase_walk(walk);
         const uint64_t n2 = read_ptp64ns();
         const uint64_t c2 = read_cfr();
-        sum += static_cast<int64_t>(n1 - ((c1 << 4) + (c1 << 2))) + static_cast<int64_t>(n2 - ((c2 << 4) + (c2 << 2)));
+        const int64_t d1 = static_cast<int64_t>(n1 - ((c1 << 4) + (c1 << 2)));
+        const int64_t d2 = static_cast<int64_t>(n2 - ((c2 << 4) + (c2 << 2)));
+        if (i == 0) {
+            first = d1;
+        }
+        dev += (d1 - first) + (d2 - first);
     }
-    return sum / static_cast<int64_t>(2 * kPairs);
+    return first * 64 + (dev * 32) / static_cast<int64_t>(kPairs);
 }
 
 // One end's use of the tile's 1588 hardware: frames sent on queue Txq carry kStampFrameDa through header row
@@ -360,13 +372,13 @@ struct StampSession {
     static_assert(Label <= kRxThLabelMask);
 
     bool timer_ok = false;      // the PTP timer runs at kPtiRefclk; hardware stamps are meaningless otherwise
-    int64_t ptp_offset_ns = 0;  // PTP64NS minus the CFR count in ns while this session's timer runs
+    int64_t ptp_offset_64 = 0;  // PTP64NS minus the CFR count, in 64ths of a ns, while this session's timer runs
     raw::TxHeaderPrev hdr_prev{};
     uint32_t no_match_prev = 0;
 
     __attribute__((noinline, cold)) bool begin() {
         timer_ok = ptp_timer_start(kPtiRefclk, kTimerLeadTicks, kTimerAckSpins);
-        ptp_offset_ns = eth_ptp::ptp_offset_ns();
+        ptp_offset_64 = eth_ptp::ptp_offset_64ths();
         no_match_prev = raw::rd(kRxFlNoMatchActions);
         raw::rx_th_flush();
         raw::wr(kRxFlNoMatchActions, no_match_prev & ~kRxFlKeepTimestamp);
