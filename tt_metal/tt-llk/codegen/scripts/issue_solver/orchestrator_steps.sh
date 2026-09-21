@@ -1538,7 +1538,7 @@ execute_step_write_generated_patch() {
     rj metric --patch-json '{"supervisor_phase":"finalization"}' || return $?
     local wt num title; wt="$(_wt)"; num="$(sg ISSUE_NUMBER)"; title="$(sg ISSUE_TITLE)"
     local mode; mode="$(sg RUN_MODE)"
-    local cf cfj base fix packaged tmp_patch
+    local cf cfj base fix packaged tmp_patch candidate_tree candidate_digest current_digest
     # Input validation requires either a clean dedicated worktree or the exact
     # content-addressed resumed candidate, so every non-ignored change belongs to
     # this run. Stage the whole worktree and exclude generated test infrastructure.
@@ -1567,6 +1567,16 @@ execute_step_write_generated_patch() {
     cfj="$(CF="$cf" python -c "import json,os;print(json.dumps([l for l in os.environ['CF'].splitlines() if l]))")"
     ss CHANGED_FILES_JSON "$cfj" --json
 
+    # Hooks can change either the index or working files. Freeze both views
+    # before committing; path-set equality alone cannot bind packaged bytes.
+    if ! candidate_tree="$(git -C "$wt" write-tree)" ||
+       ! candidate_digest="$(python "$_ORCH_SCRIPTS/run_json_writer.py" candidate-patch-digest \
+            --worktree "$wt" --expected-base-sha "$base")"; then
+        ss PACKAGING_ERROR "packaging failed: could not freeze candidate identity"
+        echo "PACKAGING_FAILED: could not freeze candidate identity" >&2
+        return 1
+    fi
+
     fix=""
     if ! git -C "$wt" diff --cached --quiet 2>/dev/null; then
         local cm="AI issue-solver: fix #${num} ${title}"
@@ -1580,6 +1590,14 @@ execute_step_write_generated_patch() {
     fi
     # A retry may find that the previous attempt already committed the fix.
     [ -z "$cf" ] || fix="$(git -C "$wt" rev-parse HEAD)"
+    if [ "$(git -C "$wt" rev-parse 'HEAD^{tree}')" != "$candidate_tree" ] ||
+       ! current_digest="$(python "$_ORCH_SCRIPTS/run_json_writer.py" candidate-patch-digest \
+            --worktree "$wt" --expected-base-sha "$base")" ||
+       [ "$current_digest" != "$candidate_digest" ]; then
+        ss PACKAGING_ERROR "packaging failed: candidate changed during commit; verification must be renewed"
+        echo "PACKAGING_FAILED: candidate changed during commit; preserve hook output and return to verification" >&2
+        return 1
+    fi
     ss FIX_COMMIT "$fix"
 
     if [ -n "$fix" ] && [ "$fix" != "$base" ]; then
@@ -1601,6 +1619,13 @@ execute_step_write_generated_patch() {
             rm -f "$tmp_patch"
             ss PACKAGING_ERROR "packaging failed: generated.patch is empty"
             echo "PACKAGING_FAILED: generated.patch is empty" >&2
+            return 1
+        fi
+        current_digest="$(sha256sum "$tmp_patch")"
+        if [ "${current_digest%% *}" != "$candidate_digest" ]; then
+            rm -f "$tmp_patch"
+            ss PACKAGING_ERROR "packaging failed: generated.patch differs from candidate"
+            echo "PACKAGING_FAILED: generated.patch differs from candidate" >&2
             return 1
         fi
         if ! _disk_guard mv "$tmp_patch" "$_L/generated.patch"; then

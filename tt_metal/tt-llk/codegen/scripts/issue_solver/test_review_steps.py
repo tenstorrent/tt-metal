@@ -1099,6 +1099,78 @@ def test_packaging_failure_and_retry_preserve_verification(
         assert obstacle in run["obstacle"]
 
 
+@pytest.mark.parametrize("restores_worktree", [False, True])
+def test_packaging_rejects_hook_candidate_mutation(
+    tmp_path, worktree, restores_worktree
+):
+    result, _ = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 1,
+                "tests_passed": 1,
+            }
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    llk = worktree / "tt_metal/tt-llk"
+    log_dir = tmp_path / "combine-log"
+    _prepare_review(worktree, log_dir, None)
+    source = worktree / "fix.cpp"
+    source.write_text("reviewed candidate\n")
+    _prepare_review(
+        worktree,
+        log_dir,
+        {
+            "verdict": "clean",
+            "blocking_total": 0,
+            "requirements_complete": True,
+        },
+    )
+    reviewed = json.loads((log_dir / "review_context.json").read_text())
+    hook = worktree / ".git/hooks/pre-commit"
+    commands = "#!/bin/sh\nprintf 'unverified hook bytes\\n' > fix.cpp\n"
+    if restores_worktree:
+        # Keep the same path set and restore the reviewed worktree, while the
+        # hook's unreviewed index content is what git commit actually packages.
+        commands += "git add fix.cpp\nprintf 'reviewed candidate\\n' > fix.cpp\n"
+    hook.write_text(commands)
+    hook.chmod(0o755)
+
+    packaged = _bash(
+        "execute_step_mark_status success; execute_step_write_generated_patch",
+        llk,
+    )
+    assert packaged.returncode != 0
+    state = json.loads((log_dir / "state.json").read_text())
+    assert "candidate changed during commit" in state["PACKAGING_ERROR"]
+    assert not (log_dir / "generated.patch").exists()
+    # Do not hide mutations or bypass hooks: retain the failure for inspection.
+    assert hook.read_text() == commands
+    if restores_worktree:
+        committed = subprocess.check_output(
+            ["git", "-C", str(worktree), "show", "HEAD:fix.cpp"]
+        )
+        assert committed == b"unverified hook bytes\n"
+        assert source.read_text() == "reviewed candidate\n"
+        check = _bash(
+            'rj() { python "$_ORCH_SCRIPTS/run_json_writer.py" "$@"; }; '
+            f'rj review --action check --log-dir "{log_dir}" --worktree "{worktree}" '
+            f'--expected-base-sha "{reviewed["base_commit"]}" --run-kind issue',
+            llk,
+        )
+        # Existing review validates the worktree, so cannot detect this alone.
+        assert check.returncode == 0, check.stderr
+    else:
+        assert source.read_text() == "unverified hook bytes\n"
+    finalized = _bash("refresh_cost() { :; }; execute_step_finalize_run", llk)
+    assert finalized.returncode == 0, finalized.stderr
+    assert json.loads((log_dir / "run.json").read_text())["status"] == "failed"
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
 
