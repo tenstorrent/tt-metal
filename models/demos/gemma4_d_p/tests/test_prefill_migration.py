@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 
 import ttnn
-from models.demos.gemma4_d_p.tt.runners.adapter import Gemma4PrefillAdapter, Gemma4ServiceConfig
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, Gemma4ServiceConfig
 from models.demos.gemma4_d_p.tt.runners.kv_validation import (
     PREPARED_GPU_TRACE_LAYOUT,
     check_table_samples,

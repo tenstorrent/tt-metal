@@ -13,7 +13,7 @@ import torch
 from loguru import logger
 from safetensors.torch import save_file
 
-from models.demos.gemma4_d_p.tt.runners.adapter import Gemma4PrefillAdapter, Gemma4ServiceConfig
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, Gemma4ServiceConfig
 from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import CONFIG_NAMES
 from models.demos.gemma4_d_p.tt.runners.kv_validation import PREPARED_GPU_TRACE_LAYOUT, load_gpu_cache_heads
 

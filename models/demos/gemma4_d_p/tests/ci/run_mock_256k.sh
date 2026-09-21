@@ -40,7 +40,7 @@ from pathlib import Path
 from models.common.weight_cache import weight_cache_is_complete
 from models.demos.gemma4_d_p.tt.common import weight_cache_identity
 from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
-from models.demos.gemma4_d_p.tt.runners.adapter import Gemma4PrefillAdapter, Gemma4ServiceConfig
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, Gemma4ServiceConfig
 
 adapter = Gemma4PrefillAdapter()
 trace = Path(os.environ["PREFILL_TRACE_DIR"])

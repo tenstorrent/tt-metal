@@ -1,6 +1,6 @@
 # Gemma4 prefill service
 
-The service supports **Gemma4-31B-it, Blackhole 8×4, 262144 tokens per slot, 8192-token chunks, and batch 1**, with up to six resident KV slots. Defaults are in [the model manifest](tt/runners/manifest.json).
+The service supports **Gemma4-31B-it, Blackhole 8×4, 262144 tokens per slot, 8192-token chunks, and batch 1**, with up to six resident KV slots. Defaults are in [the model manifest](../tt/runners/manifest.json).
 
 Run this setup from the repository root in both terminals:
 
