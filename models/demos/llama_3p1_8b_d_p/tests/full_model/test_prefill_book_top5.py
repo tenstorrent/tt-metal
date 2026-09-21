@@ -126,11 +126,23 @@ def test_prefill_book_top5(context_length, request, record_property):
         ttnn.synchronize_device(mesh_device)
         assert tuple(logits.shape) == (128256,) and torch.isfinite(logits).all()
         top5 = logits.topk(5).indices.tolist()
+        forward_and_readback_seconds = time.perf_counter() - started
+        # Decode only after device readback; tokenizer setup is outside forward timing.
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(CHECKPOINT, local_files_only=True)
         result = {
             "context_length": context_length, "final_position": context_length - 1,
             "num_layers": 32, "vocab_size": logits.numel(),
-            "reference_top1_id": golden["reference_top1_id"], "tt_top5_ids": top5,
-            "forward_and_readback_seconds": time.perf_counter() - started,
+            "reference_top1_id": golden["reference_top1_id"],
+            "reference_top1_token": tokenizer.decode(
+                [golden["reference_top1_id"]], clean_up_tokenization_spaces=False,
+            ),
+            "tt_top5_ids": top5,
+            "tt_top5_tokens": [
+                tokenizer.decode([token], clean_up_tokenization_spaces=False) for token in top5
+            ],
+            "forward_and_readback_seconds": forward_and_readback_seconds,
         }
         record_property("book_top5", json.dumps(result))
         print(json.dumps(result), flush=True)
