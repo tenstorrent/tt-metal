@@ -48,19 +48,19 @@ _CMD_MISTRAL4_8X1 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and toru
 # test_mla_perf.py: local, one run, DDR 14000 against baselines cut at 16000 -- and here also a
 # different fabric from every sibling row. Replace BOTH with the first CI result on this fabric.
 _MISTRAL4_MOE_NS_UNCALIBRATED = 2_661_495
-# Midpoint of two independent LoudBox runs of the same code -- 4,790,339 (run 35025551183) and
-# 4,771,953 (run 35025541781) -- which agree to 0.39%, so the measurement is stable and it was the
-# baseline that went stale. It supersedes 5,468,946 from run 34399947211: main's drift made this row
-# 12.6% FASTER, and a 3% two-sided band failed it for that. DeepSeek's 8x1 proxy passed against its
-# own committed number in the same run, which is how we know the box did not move -- Mistral's MoE did.
+# Single LoudBox CI run on the post-rebase branch (run 35648827107), which is the first run on
+# main including #57133 ([Performance] Reduce MoE op and model host overhead for GLM prefill).
+# That PR optimized dispatch scheduling and kernel readers/writers for the routed-expert path,
+# making this row 14% FASTER (4,101,099 vs the prior 4,781,146). The box did not move: DeepSeek's
+# 8x1 proxy measured 3,360,055 in that run, matching its committed baseline to <0.1%. It supersedes
+# 4,781,146 from runs 35025551183/35025541781, which in turn superseded 5,468,946.
 #
-# 10% rather than the 3% the sibling rows use. The box reproduces to 0.39%, so this is headroom for
-# main's drift between now and merge, not for noise. Re-cut it tight once the branch has landed and
-# the number stops moving.
+# 10% rather than the 3% the sibling rows use: this baseline will keep moving as long as the branch
+# is pre-merge. Re-cut it tight once the branch has landed and the number stops moving.
 #
 # Breakdown at the superseded number: Other 5,133,978 / Matmul 310,647 / CCL 24,321. CCL is 0.44%
 # here against ~21% of a layer at TP=4, which is why the TP=4 lever ranking does not carry across.
-_MISTRAL4_MOE_LB_8X1_NS = 4_781_146
+_MISTRAL4_MOE_LB_8X1_NS = 4_101_099
 _MISTRAL4_MOE_LB_8X1_MARGIN = 0.10
 
 
