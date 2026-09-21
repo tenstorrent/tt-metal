@@ -66,6 +66,6 @@ void kernel_main() {
         const bool last = (c == NC - 1);
         const uint32_t dst = last ? cb_final : nxt_S;
 
-        scan_step(CBS, cur_S, dst, Ct, Kt, Vt);
+        scan_step<Ct, Kt, Vt>(CBS, cur_S, dst);
     }
 }

@@ -101,6 +101,6 @@ void kernel_main() {
     // sequential state scan lives in the separate scan kernel. Outputs (per chunk) u, w, k_dec_t,
     // q_decay, intra, dl are pushed to their CBs and streamed to DRAM by the prep writer.
     for (uint32_t c = 0; c < NC; c++) {
-        prep_chunk(CBS, Ct, Kt, Vt, QK_NORM != 0, SCALE_BITS, EPS_BITS);
+        prep_chunk<Ct, Kt, Vt, QK_NORM != 0>(CBS, SCALE_BITS, EPS_BITS);
     }
 }

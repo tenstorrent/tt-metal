@@ -464,12 +464,15 @@ struct GdnScanCbs {
 // PHASE A (prep): one state-independent (head, chunk) work-item. No recurrent state here; the
 // sequential state scan lives in scan_step. Outputs (per chunk) v_beta, kd(->cb.w), T_inv,
 // k_dec_t, q_decay, intra, dl are pushed to their CBs and streamed to DRAM by the prep writer.
-inline void prep_chunk(
-    const GdnPrepCbs& cb, uint32_t Ct, uint32_t Kt, uint32_t Vt, bool qk_norm, uint32_t scale_bits, uint32_t eps_bits) {
-    const uint32_t cc = Ct * Ct;
-    const uint32_t ck = Ct * Kt;
-    const uint32_t cv = Ct * Vt;
-    const uint32_t C = Ct * 32;
+// Ct/Kt/Vt/qk_norm are TEMPLATE parameters (not runtime args): the shape branches below must compile
+// out exactly as the monolithic kernel's `if constexpr` did, or the Ct==2 prep program overflows the
+// 70 KB kernel-config buffer (found on QB2 at chunk_size=64: 73344 > 70656 bytes).
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool qk_norm>
+inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_bits) {
+    constexpr uint32_t cc = Ct * Ct;
+    constexpr uint32_t ck = Ct * Kt;
+    constexpr uint32_t cv = Ct * Vt;
+    constexpr uint32_t C = Ct * 32;
 
     WAIT(cb.q, ck);
     WAIT(cb.k, ck);
@@ -481,7 +484,7 @@ inline void prep_chunk(
     // and produces normalized q->cb.supd, k->cb.stmp (both free in Ct==1). The rest of the chunk
     // then reads Q/Kk instead of cb.q/cb.k. scr1/scr2/scr3 are free here (used only later). ----
     uint32_t Q = cb.q, Kk = cb.k;
-    if (qk_norm) {
+    if constexpr (qk_norm) {
         // q: q^2 -> rowsum_K -> rsqrt(+eps)*scale -> q_normed (cb.supd)
         ew(cb.q, cb.q, cb.scr1, ck, 2);
         WAIT(cb.scr1, ck);
@@ -581,12 +584,12 @@ inline void prep_chunk(
     // by the prep writer (unlike the output CBs cb.w/cb.qdecay/cb.intra, whose scratch pushes the
     // writer would wrongly consume). None alias src (cb.scr3), out, or the Ct==2 persistents
     // (cb.supd/cb.stmp).
-    if (Ct == 1) {
+    if constexpr (Ct == 1) {
         // Single 32x32 block: T_inv is just its inverse.
         invert_block(cb.scr3, 0, cb.Tinv, cb.scr1, cb.scr2, cb.eye, cb.mask, cb.S, cb.final_s, cb.s2, cb.s3);
         WAIT(cb.Tinv, cc);
         POP(cb.scr3, cc);
-    } else if (Ct == 2) {
+    } else if constexpr (Ct == 2) {
         // 2x2 tile-block lower-triangular. negN tiles: 0=(0,0), 2=(1,0), 3=(1,1); (0,1)=0.
         // Diagonal inverses Mi11, Mi22, then off-diagonal Mi21 = -Mi22 @ A21 @ Mi11.
         // (A21 = -negN21, so -Mi22@A21@Mi11 = Mi22 @ negN21 @ Mi11.)
@@ -677,12 +680,13 @@ inline void prep_chunk(
 // PHASE B (scan): one chunk of the sequential recurrence. cur_S = the state input CB for this
 // chunk (reader-fed cb_S at chunk 0, then the compute-only ping-pong), dst = where the updated
 // state goes (the other ping-pong CB, or the final-state CB on the last chunk).
-inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst, uint32_t Ct, uint32_t Kt, uint32_t Vt) {
-    const uint32_t cc = Ct * Ct;
-    const uint32_t ck = Ct * Kt;
-    const uint32_t cv = Ct * Vt;
-    const uint32_t kv = Kt * Vt;
-    const uint32_t kc = Kt * Ct;
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
+inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
+    constexpr uint32_t cc = Ct * Ct;
+    constexpr uint32_t ck = Ct * Kt;
+    constexpr uint32_t cv = Ct * Vt;
+    constexpr uint32_t kv = Kt * Vt;
+    constexpr uint32_t kc = Kt * Ct;
 
     // v_new = T_inv @ (v_beta - kd@S)  -- apply the inverse AFTER the subtraction so the WY
     // inverse's fp error is not amplified by the cancellation (vs the u - w@S form).
