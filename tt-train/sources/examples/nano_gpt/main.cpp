@@ -242,7 +242,7 @@ struct DeviceConfig {
     // TTML_CP_SHIFT_TRANSPORT, TTML_CP_LAYOUT and TTML_CP_ROWS_PER_BLOCK_TILES
     // override them, so one config can be run both ways.
     std::string cp_backward = "two_pass";          // two_pass | cyclic | cyclic_in_place
-    std::string cp_shift_transport = "fifo";       // fifo | direct
+    std::string cp_shift_transport = "fifo";       // fifo | direct | direct_two_phase
     std::string cp_layout = "contiguous";          // contiguous | zigzag
     uint32_t cp_rows_per_block_tiles = 0;          // 0 = the planner picks; else 1, 2 or 4
     std::string cp_forward = "two_pass";           // two_pass | ttnn | cyclic
@@ -267,6 +267,8 @@ ttml::ops::distributed::RingAttentionOptions ring_attention_options_from(const D
         opts.shift_transport = RingShiftTransport::Fifo;
     } else if (config.cp_shift_transport == "direct") {
         opts.shift_transport = RingShiftTransport::Direct;
+    } else if (config.cp_shift_transport == "direct_two_phase") {
+        opts.shift_transport = RingShiftTransport::DirectTwoPhase;  // the first direct transport, for comparisons
     } else {
         throw std::runtime_error("cp_shift_transport must be fifo or direct; got " + config.cp_shift_transport);
     }
