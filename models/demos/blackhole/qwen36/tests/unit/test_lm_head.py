@@ -23,13 +23,13 @@ def test_lm_head_precision(device, setup, request):
     args, sd, raw = setup
     lm_w = sd["output.weight"]  # [vocab_size, hidden_size]
 
-    x_cpu = torch.randn(1, 1, 4096, dtype=torch.bfloat16)
+    x_cpu = torch.randn(1, 1, args.dim, dtype=torch.bfloat16)
 
     # Torch reference
     ref = F.linear(x_cpu, lm_w.to(torch.bfloat16))  # [1, 1, vocab_size]
 
     # TTNN with bfloat8_b (current)
-    lm_w_t = lm_w.T.contiguous()  # [4096, vocab_size]
+    lm_w_t = lm_w.T.contiguous()  # [hidden_size, vocab_size]
     lm_ttnn_bf8 = ttnn.from_torch(lm_w_t, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     x_ttnn = ttnn.from_torch(x_cpu, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     out_bf8 = ttnn.to_torch(ttnn.linear(x_ttnn, lm_ttnn_bf8))
