@@ -8,12 +8,14 @@ from .decode_prefetch import (
     DECODE_LAYOUTS,
     KV_GCB,
     Q_A_GCB,
+    ROUTER_GATE_GCB,
     check_decode_layout,
     decode_prefetch_page_bytes,
     ensure_named_gcb,
     kv_page_bytes,
     make_decode_prefetch_buffers,
     q_a_page_bytes,
+    router_gate_page_bytes,
 )
 from .layers import (
     BatchedLinearDecode,
@@ -158,7 +160,19 @@ class _StaticLayerCache:
     decode one token at a time.
     """
 
-    __slots__ = ("sliding", "win_kv", "win_gate", "prev_kv", "prev_gate", "combined")
+    __slots__ = (
+        "sliding",
+        "win_kv",
+        "win_gate",
+        "prev_kv",
+        "prev_gate",
+        "combined",
+        "idx_win_kv",
+        "idx_win_gate",
+        "idx_prev_kv",
+        "idx_prev_gate",
+        "idx_key_cache",
+    )
 
     def __init__(
         self,
@@ -168,6 +182,11 @@ class _StaticLayerCache:
         prev_kv: Optional[ttnn.Tensor] = None,
         prev_gate: Optional[ttnn.Tensor] = None,
         combined: Optional[ttnn.Tensor] = None,
+        idx_win_kv: Optional[ttnn.Tensor] = None,
+        idx_win_gate: Optional[ttnn.Tensor] = None,
+        idx_prev_kv: Optional[ttnn.Tensor] = None,
+        idx_prev_gate: Optional[ttnn.Tensor] = None,
+        idx_key_cache: Optional[ttnn.Tensor] = None,
     ):
         """Store the pre-built caches; each is ``None`` on a layer type that does not use it.
 
@@ -183,6 +202,11 @@ class _StaticLayerCache:
         self.prev_kv = prev_kv
         self.prev_gate = prev_gate
         self.combined = combined
+        self.idx_win_kv = idx_win_kv
+        self.idx_win_gate = idx_win_gate
+        self.idx_prev_kv = idx_prev_kv
+        self.idx_prev_gate = idx_prev_gate
+        self.idx_key_cache = idx_key_cache
 
 
 def build_static_layer_cache(
@@ -194,6 +218,7 @@ def build_static_layer_cache(
     compress_rates: dict,
     paged: bool = False,
     batch: int = 1,
+    index_head_dim: Optional[int] = None,
 ) -> _StaticLayerCache:
     """Allocate a layer's fixed-size in-place caches empty (all-zero), for ``batch`` users.
 
@@ -242,6 +267,7 @@ def build_static_layer_cache(
     # own buffer, so only sliding-only layers allocate ``sliding``.
     sliding = None if paged or layer_type != "sliding_attention" else _filled(sliding_window, head_dim)
     win_kv = win_gate = prev_kv = prev_gate = combined = None
+    idx_win_kv = idx_win_gate = idx_prev_kv = idx_prev_gate = idx_key_cache = None
     if layer_type != "sliding_attention":
         cr = compress_rates[layer_type]
         cap = max_seq
@@ -262,7 +288,44 @@ def build_static_layer_cache(
         # mask that :func:`host_decode_mask` builds for this layer.
         if not paged:
             combined = _filled(sliding_window + max(cap // cr, 0), head_dim)
-    return _StaticLayerCache(sliding, win_kv, win_gate, prev_kv, prev_gate, combined)
+        if is_csa and index_head_dim:
+            idx_feat = 2 * index_head_dim
+            idx_win_kv = _csa_window(cr, idx_feat)
+            idx_win_gate = _csa_window(cr, idx_feat)
+            idx_prev_kv = _csa_window(cr, idx_feat)
+            idx_prev_gate = _csa_window(cr, idx_feat, _MASK_NEG)
+            if not paged:
+                n_win = max(cap // cr, 0)
+                tp = device.get_num_devices()
+                if tp > 1:
+                    if n_win % tp:
+                        raise ValueError(f"index-key cache T={n_win} is not divisible by tp_size={tp}")
+                    t_local = n_win // tp
+                    if t_local % ttnn.TILE_SIZE:
+                        raise ValueError(f"TP{tp} index-key shard T/tp={t_local} must be tile-aligned")
+                    idx_key_cache = ttnn.from_torch(
+                        torch.zeros(batch, 1, n_win, index_head_dim),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
+                    )
+                else:
+                    idx_key_cache = _filled(n_win, index_head_dim)
+    return _StaticLayerCache(
+        sliding,
+        win_kv,
+        win_gate,
+        prev_kv,
+        prev_gate,
+        combined,
+        idx_win_kv,
+        idx_win_gate,
+        idx_prev_kv,
+        idx_prev_gate,
+        idx_key_cache,
+    )
 
 
 def int32_pos_tensor(pos: int, device: ttnn.MeshDevice, batch: int = 1) -> ttnn.Tensor:
@@ -637,6 +700,10 @@ def _compressor_projections(
     use_prefetcher: bool,
     num_prefetch_pages: int,
     prefetch_buffers: Optional[dict],
+    *,
+    feat: Optional[int] = None,
+    layout_name: Optional[str] = None,
+    weight_prefix: str = "compressor",
 ):
     """The compressor's ``(kv_proj, gate_proj)``, both projecting the block's ``hidden``.
 
@@ -644,19 +711,31 @@ def _compressor_projections(
     ``matmul_decode`` taking the decode all-gather replica as A (``[T, D]`` ROW_MAJOR
     HEIGHT_SHARDED, ``T`` = shard height) against a DRAM ND-sharded weight ``[D, N]``,
     with ``N = Dh`` for HCA and ``2*Dh`` for CSA's Ca/Cb pair -- which is why the layout
-    is keyed by ``layer_type``. Under the prefetcher CSA shares q_a's 32-receiver FIFO and
-    HCA shares kv's 16-receiver FIFO, queued after those projections in the block's turn
+    is keyed by ``layer_type``.     The CSA Lightning Indexer reuses this helper at
+    ``index_head_dim`` (``layout_name="indexer.kv_proj"``, ``N = 2*128``). Under the
+    prefetcher CSA rides q_a's 32-receiver FIFO, the indexer's 8-core kv/gate pair
+    rides the router gate's 8-receiver FIFO (same ``[4096, 256]`` cut), and HCA
+    shares kv's 16-receiver FIFO, queued after those projections in the block's turn
     (see ``decode_prefetch``).
     """
-    feat = config.head_dim * (2 if layer_type == "compressed_sparse_attention" else 1)
-    layout = dict(check_decode_layout(layer_type, config.hidden_size, feat))
+    if feat is None:
+        feat = config.head_dim * (2 if layer_type == "compressed_sparse_attention" else 1)
+    layout_name = layout_name or layer_type
+    layout = dict(check_decode_layout(layout_name, config.hidden_size, feat))
     if use_prefetcher and prefetch_buffers is None:
         prefetch_buffers = make_decode_prefetch_buffers(device, weight_dtype, num_prefetch_pages)
     prefetch = {"use_prefetcher": use_prefetcher}
     if use_prefetcher:
-        # Same cut as q_a (32 cores) / kv (16 cores), so the same rings. Queued after
-        # those projections in :meth:`DeepSeekV4Attention.prefetch_weights`.
-        if layer_type == "compressed_sparse_attention":
+        # Same cut as q_a (32 cores) / kv (16 cores) / router gate (8 cores), so the
+        # same rings. Queued after those projections in
+        # :meth:`DeepSeekV4Attention.prefetch_weights`. Indexer kv/gate is the
+        # router-gate cut (``n_blocks=8``) and cannot ride q_a's 32-receiver ring.
+        if layout_name == "indexer.kv_proj":
+            prefetch["global_cb"] = ensure_named_gcb(
+                prefetch_buffers, ROUTER_GATE_GCB, device, [DECODE_LAYOUTS["router_gate"]], weight_dtype
+            )
+            prefetch["global_cb_page_bytes"] = router_gate_page_bytes(weight_dtype)
+        elif layout_name == "compressed_sparse_attention" or layer_type == "compressed_sparse_attention":
             prefetch["global_cb"] = ensure_named_gcb(
                 prefetch_buffers, Q_A_GCB, device, [DECODE_LAYOUTS["q_a_proj"]], weight_dtype
             )
@@ -668,16 +747,16 @@ def _compressor_projections(
             prefetch["global_cb_page_bytes"] = kv_page_bytes(weight_dtype)
 
     def projection(name):
-        """``LinearDecode`` for ``compressor.<name>.weight`` ``[D, N]`` (``N = Dh`` / ``2*Dh``)."""
+        """``LinearDecode`` for ``{weight_prefix}.<name>.weight`` ``[D, N]``."""
         return LinearDecode(
-            weights[f"compressor.{name}.weight"],
+            weights[f"{weight_prefix}.{name}.weight"],
             device,
-            cache.file(f"compressor.{name}.full"),
+            cache.file(f"{weight_prefix}.{name}.full"),
             dtype=weight_dtype,
             **layout,
             **prefetch,
             rectangle_b_grid=True,
-            use_rm_hs=not layout.get("partial_width_sharded", False),
+            use_rm_hs=True,
         )
 
     kv_proj = projection("kv_proj")
@@ -1008,6 +1087,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 use_prefetcher=use_prefetcher,
                 num_prefetch_pages=num_prefetch_pages,
                 prefetch_buffers=prefetch_buffers,
+                tp_size=tp_size,
             )
             if compressor_cls is not None
             else None

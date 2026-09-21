@@ -127,6 +127,12 @@ profiles:
       sdpa_k_chunk_size: 32
       sdpa_max_cores_per_head_batch: 2
       sdpa_exp_approx_mode: false
+      # CSA Lightning Indexer. off = dense causal CSA (current path). always =
+      # require indexer weights. auto = enable when the checkpoint ships them.
+      # env: DEEPSEEK_V4_INDEXER / DEEPSEEK_V4_INDEX_TOPK
+      indexer: "off"
+      index_topk: 512
+      index_dense_max_positions: 0
 
     decode:
       # On-device weight precision for the whole stack.
@@ -239,6 +245,9 @@ profiles:
       sdpa_k_chunk_size: 32
       sdpa_max_cores_per_head_batch: 2
       sdpa_exp_approx_mode: false
+      indexer: "off"
+      index_topk: 512
+      index_dense_max_positions: 0
 
     decode:
       # ~4x the aggregate DRAM, so the KV budget scales with it.
