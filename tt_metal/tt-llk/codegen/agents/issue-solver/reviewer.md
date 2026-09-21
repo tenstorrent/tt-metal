@@ -220,6 +220,8 @@ reuse a stale result:
 Rules for the JSON:
 
 - The writer validates identity, field types and counts and archives each accepted review.
+- `unresolved` contains nonempty strings naming missing evidence, for example
+  `["Need the Blackhole SFPMUL dependency-stall rule"]`; use `[]` when resolved.
 - `verdict` is `changes_requested` when `blocking_total > 0`, else `clean`.
 - For issue solves, `requirements_complete` is true only after the whole-issue
   comparison above passes. Otherwise set it false and report the incomplete
@@ -232,6 +234,17 @@ Rules for the JSON:
   `findings: []`, `verdict: "clean"`.
 
 ## Return Value
+
+Before returning, validate the prepared result without recording or accepting it:
+
+```bash
+python "$WORKTREE_DIR/tt_metal/tt-llk/codegen/scripts/run_json_writer.py" review \
+  --log-dir "$LOG_DIR" --action validate --run-kind "$(sg RUN_KIND)" \
+  --worktree "$WORKTREE_DIR" --expected-base-sha "$(sg GIT_COMMIT)"
+```
+
+Correct schema errors before returning; preserve substantive blockers and unresolved
+evidence. The orchestrator records the result separately.
 
 Return `REVIEW_CLEAN` or `REVIEW_CHANGES_REQUESTED` with the issue number,
 finding totals, summary, and a one-line location/title for each blocker.

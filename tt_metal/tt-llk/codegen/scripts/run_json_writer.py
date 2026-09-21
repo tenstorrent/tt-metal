@@ -857,6 +857,10 @@ def cmd_review(args: argparse.Namespace) -> None:
         "tt-review-skills"
     ) and "tt-review-core" not in skills:
         raise ValueError("configured review plugin was not consumed")
+    if args.action == "validate":
+        # Schema/identity validation is separate from acceptance: a legitimate
+        # review may request changes or identify evidence still needed.
+        return
     if args.action == "check":
         if (
             (
@@ -3489,7 +3493,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_common(review)
     review.add_argument(
-        "--action", required=True, choices=["prepare", "record", "check"]
+        "--action", required=True, choices=["prepare", "validate", "record", "check"]
     )
     review.add_argument("--run-kind", default="issue", choices=["issue", "review", ""])
     review.add_argument("--worktree", required=True)

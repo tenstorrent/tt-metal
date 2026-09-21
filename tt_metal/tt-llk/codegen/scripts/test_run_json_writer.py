@@ -3523,6 +3523,83 @@ def test_review_records_pending_evidence_but_cannot_succeed(reviewed_candidate, 
         review("check")
 
 
+@pytest.mark.parametrize("blocking", [False, True])
+def test_review_validate_accepts_pending_review_without_mutation(
+    reviewed_candidate, blocking
+):
+    wt, logs, git, review, result = reviewed_candidate
+    # Preserve an existing accepted record/archive as well as the new handoff.
+    review("record")
+    if blocking:
+        result.update(
+            findings=[
+                {
+                    "severity": "correctness",
+                    "blocking": True,
+                    "file": "kernel.h",
+                    "line": "1",
+                    "title": "Unsupported architecture",
+                    "comment": "Gate the new pool on the supported architecture.",
+                }
+            ],
+            findings_total=1,
+            blocking_total=1,
+            verdict="changes_requested",
+        )
+    result["unresolved"] = ["Need the Blackhole dependency-stall rule"]
+    (logs / "review_result.json").write_text(json.dumps(result))
+    snapshot = {
+        p.relative_to(logs): p.read_bytes() for p in logs.rglob("*") if p.is_file()
+    }
+    index = (wt / ".git/index").read_bytes()
+    status = git("status", "--porcelain", "-uall")
+
+    review("validate")
+
+    assert snapshot == {
+        p.relative_to(logs): p.read_bytes() for p in logs.rglob("*") if p.is_file()
+    }
+    assert (wt / ".git/index").read_bytes() == index
+    assert git("status", "--porcelain", "-uall") == status
+    assert not list((wt / ".git").glob(".candidate-index-*"))
+    with pytest.raises(subprocess.CalledProcessError, match="returned non-zero"):
+        review("check")
+
+
+@pytest.mark.parametrize(
+    "mutation, expected_error",
+    [
+        ("unresolved_object", "unresolved entries must name the missing evidence"),
+        ("identity", "review result is missing the current review identity"),
+        ("candidate", "review context is stale"),
+    ],
+)
+def test_review_validate_rejects_bad_handoff_without_mutation(
+    reviewed_candidate, mutation, expected_error
+):
+    wt, logs, git, review, result = reviewed_candidate
+    if mutation == "unresolved_object":
+        result["unresolved"] = [{"item": "SFPMUL", "evidence_needed": "ISA rule"}]
+    elif mutation == "identity":
+        result["identity"]["run_id"] = "another-run"
+    else:
+        (wt / "kernel.h").write_text("another fix\n")
+    (logs / "review_result.json").write_text(json.dumps(result))
+    snapshot = {
+        p.relative_to(logs): p.read_bytes() for p in logs.rglob("*") if p.is_file()
+    }
+    index = (wt / ".git/index").read_bytes()
+
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        review("validate")
+
+    assert expected_error in error.value.stderr
+    assert snapshot == {
+        p.relative_to(logs): p.read_bytes() for p in logs.rglob("*") if p.is_file()
+    }
+    assert (wt / ".git/index").read_bytes() == index
+
+
 @pytest.mark.parametrize("ending", ["exit 0", "exit 1", "sleep 30"])
 def test_autodebug_launcher_is_bounded_and_archives_report(
     tmp_path, monkeypatch, ending
