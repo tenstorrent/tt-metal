@@ -671,6 +671,45 @@ class MultichipDecoder(OptimizedDecoder):
             return super()._norm(x, name)
         shape = list(x.shape)
         if self.policy.get("prefill_replicated_norm", False):
+            # Redistribute complete token rows, never partial norm statistics.
+            # Each chip keeps the original per-row reduction arithmetic. Flatten
+            # only tile-aligned tokens so batch boundaries contain no padding.
+            if (
+                self.policy.get("prefill_row_parallel_norm", False)
+                and len(shape) == 3
+                and shape[1] > 1
+                and shape[1] % 32 == 0
+                and shape[0] * shape[1] % (32 * self.TP) == 0
+            ):
+                rows = shape[0] * shape[1]
+                local = ttnn.experimental.all_to_all_async_generic(
+                    ttnn.reshape(x, [1, 1, rows, shape[-1]]),
+                    in_dim=3,
+                    out_dim=2,
+                    topology=self.topology,
+                    cluster_axis=1,
+                    num_links=self.policy["num_links"],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                local = ttnn.reshape(local, [1, rows // self.TP, 5120])
+                local_weight = self.weights[name + ".weight"]
+                try:
+                    self.weights[name + ".weight"] = self.weights[name + ".replicated_weight"]
+                    normalized = super()._norm(local, name)
+                finally:
+                    self.weights[name + ".weight"] = local_weight
+                gathered = ttnn.experimental.all_gather_async(
+                    ttnn.reshape(normalized, [1, 1, rows // self.TP, 5120]),
+                    dim=2,
+                    cluster_axis=1,
+                    mesh_device=self.device,
+                    topology=self.topology,
+                    num_links=self.policy["num_links"],
+                    multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(1),
+                    barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(1),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                return ttnn.reshape(gathered, [*shape[:-1], 5120])
             full = self._gather(ttnn.reshape(x, [1, *shape]))
             full = ttnn.reshape(full, [*shape[:-1], 5120])
             local_weight = self.weights[name + ".weight"]
