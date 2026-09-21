@@ -10,24 +10,26 @@ import torch
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
-    TILE_DIMENSIONS,
     UnarySFPUGolden,
     get_golden_generator,
 )
 from helpers.llk_params import (
     ApproximationMode,
-    BlocksCalculationAlgorithm,
     DestAccumulation,
     FastMode,
+    FusedSort,
     MathOperation,
+    PerfRunType,
+    StableSort,
+    Transpose,
     format_dict,
 )
 from helpers.param_config import (
     build_param_id,
-    get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
 )
+from helpers.perf.core import ALL_PERF_RUN_TYPES, create_test_or_perf_config
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SHIFT_EDGE_AMOUNTS,
@@ -43,20 +45,29 @@ from helpers.sfpu_domains import (
     specials_safe,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.stimuli_generator import (
+    StimuliSpec,
+    calculate_tile_and_face_counts,
+    generate_stimuli,
+)
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
+    DEST_SYNC,
     FAST_MODE,
+    FUSED_SORT,
+    ITERATIONS,
+    LOOP_FACTOR,
     MATH_OP,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
+    NUM_FACES,
     SFPU_RELU_MIN_INT_THRESHOLD,
     SFPU_SHIFT_AMOUNT,
+    STABLE_SORT,
     TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
     DestSync,
-    generate_input_dim,
 )
 from helpers.utils import passed_test
 
@@ -144,8 +155,8 @@ BROAD_FORMATS = input_output_formats(
 # and fp32 for full precision.
 STANDARD_FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
-BROAD_DIMENSIONS = [[64, 64], [128, 256]]
-STANDARD_DIMENSIONS = [[64, 64]]
+BROAD_DIMENSIONS = [[64, 64], [128, 64], [128, 256]]
+STANDARD_DIMENSIONS = [[64, 64], [128, 64]]
 
 # Bfp4_b is only exercised as an input format, so the input is pinned to Bfp4_b here
 # rather than building the full matrix and skipping the 12 non-Bfp4_b-input combos.
@@ -351,6 +362,7 @@ _UNARY_SWEEP_ARGNAMES = (
 
 
 @pytest.mark.nightly
+@pytest.mark.parametrize("dest_sync", [DestSync.Half])
 @pytest.mark.parametrize(
     ",".join(_UNARY_SWEEP_ARGNAMES),
     UNARY_SWEEP_PARAMS,
@@ -363,6 +375,7 @@ def test_eltwise_unary_sfpu(
     fast_mode: FastMode,
     dest_acc: DestAccumulation,
     input_dimensions: list[int],
+    dest_sync: DestSync,
 ):
     """Every float unary SFPU op, over its registered domain.
 
@@ -405,6 +418,7 @@ def test_eltwise_unary_sfpu(
         mathop,
         fast_mode,
         input_dimensions,
+        dest_sync=dest_sync,
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
     )
@@ -596,47 +610,22 @@ def test_sqrt_custom_infinity_regression(request):
     src_A[0] = float("inf")
     src_A[1] = float("-inf")
     src_B = torch.zeros(num_elements, dtype=torch.float32)
-    tile_cnt = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=MathOperation.SqrtCustom),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
+    res = torch.tensor(
+        eltwise_unary_sfpu(
+            formats=formats,
+            dest_acc=dest_acc,
+            approx_mode=ApproximationMode.No,
+            mathop=MathOperation.SqrtCustom,
+            fast_mode=FastMode.No,
+            input_dimensions=input_dimensions,
+            src_A=src_A,
+            src_B=src_B,
+            unpack_to_dest=True,
+            check_golden=False,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
+        dtype=torch.float32,
     )
-
-    res = torch.tensor(configuration.run().result, dtype=torch.float32)
 
     assert res[0] == float("inf"), (
         f"sqrt_custom(+inf) returned {res[0]!r}, expected +inf. The non-finite guard in "
@@ -683,47 +672,22 @@ def test_reciprocal_compat_negative_zero_regression():
     src_A[0] = -0.0
     src_A[1] = 0.0
     src_B = torch.zeros(num_elements, dtype=torch.float32)
-    tile_cnt = 1
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=MathOperation.ReciprocalCompat),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
+    res = torch.tensor(
+        eltwise_unary_sfpu(
+            formats=formats,
+            dest_acc=dest_acc,
+            approx_mode=ApproximationMode.No,
+            mathop=MathOperation.ReciprocalCompat,
+            fast_mode=FastMode.No,
+            input_dimensions=input_dimensions,
+            src_A=src_A,
+            src_B=src_B,
+            unpack_to_dest=True,
+            check_golden=False,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
+        dtype=torch.float32,
     )
-
-    res = torch.tensor(configuration.run().result, dtype=torch.float32)
     bits = res.view(torch.int32)
 
     assert bits[0].item() & 0xFFFFFFFF == 0xFF800000, (
@@ -798,47 +762,22 @@ def test_sqrt_family_negative_zero_regression(
     # A negative that must stay NaN: catches the zero-magnitude arm being widened.
     src_A[2] = -1.0
     src_B = torch.zeros(num_elements, dtype=torch.float32)
-    tile_cnt = 1
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(approx_mode),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
+    res = torch.tensor(
+        eltwise_unary_sfpu(
+            formats=formats,
+            dest_acc=dest_acc,
+            approx_mode=approx_mode,
+            mathop=mathop,
+            fast_mode=FastMode.No,
+            input_dimensions=input_dimensions,
+            src_A=src_A,
+            src_B=src_B,
+            unpack_to_dest=True,
+            check_golden=False,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=True,
+        dtype=torch.float32,
     )
-
-    res = torch.tensor(configuration.run().result, dtype=torch.float32)
     bits = res.view(torch.int32)
     op = mathop.name.lower()
 
@@ -1257,83 +1196,121 @@ def test_eltwise_unary_sfpu_threshold(
 
 
 def eltwise_unary_sfpu(
-    test_name,
-    formats: list[InputOutputFormat],
-    dest_acc,
-    approx_mode,
-    mathop,
-    fast_mode: FastMode,
-    input_dimensions: list[int],
+    test_name="sources/eltwise_unary_sfpu_test.cpp",
+    formats: list[InputOutputFormat] | None = None,
+    dest_acc=None,
+    approx_mode=None,
+    mathop=None,
+    fast_mode: FastMode = FastMode.No,
+    input_dimensions: list[int] | None = None,
+    dest_sync: DestSync = DestSync.Half,
     spec_A=None,
     custom_atol=None,
     custom_rtol=None,
     shift_amount=None,
     relu_min_int_threshold=None,
     twos_complement=False,
+    *,
+    clamp_negative=True,
+    iterations=32,
+    stable_sort=StableSort.No,
+    fused_sort=FusedSort.No,
+    loop_factor=1,
+    src_A=None,
+    src_B=None,
+    tile_cnt_A=None,
+    tile_cnt_B=None,
+    unpack_to_dest=None,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    collect_result=False,
+    check_golden=True,
 ):
+    """Shared unary SFPU runner for functional, perf, and accuracy."""
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
 
-    # The op's own signed domain, not generate_stimuli's positive-only format default, which
-    # would leave the x<0 branch, the knees and the saturation tails unreached. A KeyError
-    # means a new op arrived with no _OP_DOMAIN_REGISTRY entry -- register it. The domain has
-    # to hold for the whole pipeline, so for_op_pipeline resolves against both formats and the
-    # approximation mode and keeps the tightest result.
-    if spec_A is None:
-        spec_A = exclude_undefined(
-            mathop,
-            for_op_pipeline(
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if run_types is None:
+        run_types = ALL_PERF_RUN_TYPES if is_perf else [PerfRunType.L1_TO_L1]
+
+    need_stimuli = src_A is not None or not is_perf or collect_result or check_golden
+    if src_A is None and need_stimuli:
+        # The op's own signed domain, not generate_stimuli's positive-only format default,
+        # which would leave the x<0 branch, the knees and the saturation tails unreached.
+        if spec_A is None:
+            spec_A = exclude_undefined(
                 mathop,
-                formats.input_format,
-                formats.output_format,
-                approx_mode=approx_mode,
-            ).spec_A,
+                for_op_pipeline(
+                    mathop,
+                    formats.input_format,
+                    formats.output_format,
+                    approx_mode=approx_mode,
+                ).spec_A,
+            )
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=input_dimensions,
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=input_dimensions,
+            spec_A=spec_A,
+        )
+    elif src_A is not None:
+        computed_A, computed_B, _ = calculate_tile_and_face_counts(
+            input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+        )
+        if tile_cnt_A is None:
+            tile_cnt_A = computed_A
+        if tile_cnt_B is None:
+            tile_cnt_B = computed_B
+        if src_B is None:
+            src_B = torch.zeros_like(src_A)
+    else:
+        tile_cnt_A, tile_cnt_B, _ = calculate_tile_and_face_counts(
+            input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
         )
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=spec_A,
+    _, _, faces_to_generate = calculate_tile_and_face_counts(
+        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
 
-    generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        src_A,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-        **({} if shift_amount is None else {"shift_amount": shift_amount}),
-        **(
-            {}
-            if relu_min_int_threshold is None
-            else {"relu_min_int_threshold": relu_min_int_threshold}
-        ),
-    )
+    golden_tensor = None
+    if check_golden:
+        generate_golden = get_golden_generator(UnarySFPUGolden)
+        golden_tensor = generate_golden(
+            mathop,
+            src_A,
+            formats.output_format,
+            dest_acc,
+            formats.input_format,
+            input_dimensions,
+            **({} if shift_amount is None else {"shift_amount": shift_amount}),
+            **(
+                {}
+                if relu_min_int_threshold is None
+                else {"relu_min_int_threshold": relu_min_int_threshold}
+            ),
+        )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
+    if unpack_to_dest is None:
+        unpack_to_dest = (
+            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+        )
 
-    configuration = TestConfig(
-        test_name,
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(approx_mode),
-            FAST_MODE(fast_mode),
-            CLAMP_NEGATIVE(True),
+    test_config_kwargs = {
+        "test_name": test_name,
+        "formats": formats,
+        "templates": [
             MATH_OP(mathop=mathop),
-            # Only emitted when swept: sfpu_operations.h keys off #ifdef, and every other
-            # unary test has to keep compiling without the macro.
+            APPROX_MODE(approx_mode),
+            ITERATIONS(iterations),
+            FAST_MODE(fast_mode),
+            STABLE_SORT(stable_sort),
+            FUSED_SORT(fused_sort),
+            CLAMP_NEGATIVE(clamp_negative),
+            DEST_SYNC(dest_sync),
             *([] if shift_amount is None else [SFPU_SHIFT_AMOUNT(shift_amount)]),
             *(
                 []
@@ -1341,15 +1318,17 @@ def eltwise_unary_sfpu(
                 else [SFPU_RELU_MIN_INT_THRESHOLD(relu_min_int_threshold)]
             ),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            LOOP_FACTOR(loop_factor),
+            NUM_FACES(num_faces=faces_to_generate),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
+        "variant_stimuli": StimuliConfig(
+            src_A if need_stimuli else None,
             formats.input_format,
-            src_B,
+            src_B if need_stimuli else None,
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,
@@ -1357,17 +1336,32 @@ def eltwise_unary_sfpu(
             tile_count_res=tile_cnt_A,
             twos_complement=twos_complement,
         ),
-        dest_acc=dest_acc,
-        # dest_acc off: Float32 unpacks to 16-bit in src regs (later copied to dest for SFPU op)
-        unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        "dest_acc": dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
 
-    res_from_L1 = configuration.run().result
+    if is_perf and not collect_result:
+        configuration.run(perf_report)
+        return None
 
-    # res_from_L1 = res_from_L1[:1024]
-    # golden_tensor = golden_tensor[:1024]
+    if is_perf and collect_result:
+        configuration.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+        configuration.run(perf_report)
+        res_from_L1 = configuration.variant_stimuli.collect_results(
+            TestConfig.TENSIX_LOCATION
+        )
+    else:
+        res_from_L1 = configuration.run().result
+
+    if not check_golden:
+        return res_from_L1
+
     assert len(res_from_L1) == len(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
@@ -1382,6 +1376,7 @@ def eltwise_unary_sfpu(
         custom_atol=custom_atol,
         custom_rtol=custom_rtol,
     ), "Assert against golden failed"
+    return res_from_L1
 
 
 # Test exponential with APPROX_MODE=true, FAST_MODE=true, and CLAMP_NEGATIVE=true/false
@@ -1403,8 +1398,6 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     src_A[4] = -88.5
 
     src_B = torch.zeros(num_elements, dtype=torch.bfloat16)
-    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
-    tile_cnt_B = tile_cnt_A
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
     golden_tensor = generate_golden(
@@ -1416,45 +1409,18 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         input_dimensions,
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.Yes),
-            FAST_MODE(FastMode.Yes),
-            CLAMP_NEGATIVE(clamp_negative),
-            MATH_OP(mathop=MathOperation.Exp),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
+    res_from_L1 = eltwise_unary_sfpu(
+        formats=formats,
         dest_acc=dest_acc,
-        unpack_to_dest=False,
+        approx_mode=ApproximationMode.Yes,
+        mathop=MathOperation.Exp,
+        fast_mode=FastMode.Yes,
+        input_dimensions=input_dimensions,
+        src_A=src_A,
+        src_B=src_B,
+        clamp_negative=clamp_negative,
+        check_golden=False,
     )
-
-    res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(
         golden_tensor

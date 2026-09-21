@@ -67,27 +67,13 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     ApproximationMode,
-    BlocksCalculationAlgorithm,
     DestAccumulation,
     FastMode,
     MathOperation,
     format_dict,
 )
-from helpers.param_config import get_num_blocks_and_num_tiles_in_block
-from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import (
-    APPROX_MODE,
-    CLAMP_NEGATIVE,
-    FAST_MODE,
-    MATH_OP,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
-    TILE_COUNT,
-    DestSync,
-    generate_input_dim,
-)
+from test_eltwise_unary_sfpu import eltwise_unary_sfpu
 
 _FACE_ELEMENTS = 16 * 16
 
@@ -336,44 +322,20 @@ def _drive(mathop, formats, spec_A, num_tiles, dest_acc, want_golden=True):
             actual_dimensions,
         )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        actual_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(actual_dimensions, actual_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
+    res = eltwise_unary_sfpu(
+        formats=formats,
         dest_acc=dest_acc,
+        approx_mode=ApproximationMode.No,
+        mathop=mathop,
+        fast_mode=FastMode.No,
+        input_dimensions=actual_dimensions,
+        src_A=src_A,
+        src_B=src_B,
+        tile_cnt_A=tile_cnt_A,
+        tile_cnt_B=tile_cnt_B,
         unpack_to_dest=_unpack_to_dest(formats.input_format, dest_acc),
+        check_golden=False,
     )
-    res = configuration.run().result
     res_tensor = torch.tensor(res, dtype=format_dict[formats.output_format])
     return src_A, res_tensor, golden_tensor
 

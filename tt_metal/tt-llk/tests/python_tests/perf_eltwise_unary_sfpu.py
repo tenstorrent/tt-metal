@@ -9,31 +9,16 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
+    DestSync,
     FastMode,
     FusedSort,
     MathOperation,
     StableSort,
-    Transpose,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES
 from helpers.sfpu_domains import sfpu_unary_ops
-from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import calculate_tile_and_face_counts
-from helpers.test_variant_parameters import (
-    APPROX_MODE,
-    CLAMP_NEGATIVE,
-    FAST_MODE,
-    FUSED_SORT,
-    ITERATIONS,
-    LOOP_FACTOR,
-    MATH_OP,
-    NUM_FACES,
-    STABLE_SORT,
-    TILE_COUNT,
-    UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHIN_FACE,
-)
+from test_eltwise_unary_sfpu import eltwise_unary_sfpu
 
 _OPS_WITHOUT_DEST_ACC = {
     MathOperation.Abs,
@@ -183,6 +168,7 @@ def _get_formats(mathop):
     fast_mode=lambda mathop: _get_fast_modes(mathop),
     stable_sort=lambda mathop: _get_stable_sort_modes(mathop),
     fused_sort=lambda mathop: _get_fused_sort_modes(mathop),
+    dest_sync=[DestSync.Half],
     input_dimensions=[
         [128, 64],  # tile_cnt: 8
     ],  # Specifying different input sizes to cover different tile counts
@@ -198,6 +184,7 @@ def test_perf_eltwise_unary_sfpu(
     fast_mode,
     stable_sort,
     fused_sort,
+    dest_sync,
     input_dimensions,
 ):
     if fused_sort == FusedSort.Yes and (
@@ -212,11 +199,6 @@ def test_perf_eltwise_unary_sfpu(
             "fused sort requires bf16 formats, dest_acc=Yes, and stable_sort=No"
         )
 
-    # Calculate tile count from input dimensions
-    tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
-    )
-
     # A 32-bit (fp32) input with dest_acc ON unpacks straight into the 32-bit Dest
     # register. With dest_acc OFF it goes through the source registers (converted to 16-bit)
     # and is copied into Dest for the SFPU op.
@@ -224,41 +206,25 @@ def test_perf_eltwise_unary_sfpu(
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
-    configuration = PerfConfig(
-        "sources/eltwise_unary_sfpu_perf.cpp",
-        formats,
-        run_types=ALL_PERF_RUN_TYPES,
-        templates=[
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(approx_mode),
-            ITERATIONS(iterations),
-            FAST_MODE(fast_mode),
-            STABLE_SORT(stable_sort),
-            FUSED_SORT(fused_sort),
-            CLAMP_NEGATIVE(False),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_count_A),
-            LOOP_FACTOR(loop_factor),
-            NUM_FACES(num_faces=faces_to_generate),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count_A,
-            tile_count_B=tile_count_B,
-            tile_count_res=tile_count_A,
-        ),
-        unpack_to_dest=unpack_to_dest,
+    eltwise_unary_sfpu(
+        formats=formats,
         dest_acc=dest_acc,
+        approx_mode=approx_mode,
+        mathop=mathop,
+        fast_mode=fast_mode,
+        input_dimensions=input_dimensions,
+        dest_sync=dest_sync,
+        clamp_negative=False,
+        iterations=iterations,
+        stable_sort=stable_sort,
+        fused_sort=fused_sort,
+        loop_factor=loop_factor,
+        unpack_to_dest=unpack_to_dest,
+        is_perf=True,
+        perf_report=perf_report,
+        run_types=ALL_PERF_RUN_TYPES,
+        check_golden=False,
     )
-
-    configuration.run(perf_report)
 
 
 # Extra slices for formats the main sweep does not cover. They must use
@@ -285,42 +251,24 @@ _UINT_COMP_OPS = [
 ]
 
 
-def _extra_slice_config(formats, mathop, dest_acc, unpack_to_dest, input_dimensions):
-    tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
-    )
-    return PerfConfig(
-        "sources/eltwise_unary_sfpu_perf.cpp",
-        formats,
-        run_types=ALL_PERF_RUN_TYPES,
-        templates=[
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(ApproximationMode.No),
-            ITERATIONS(32),
-            FAST_MODE(FastMode.No),
-            STABLE_SORT(StableSort.No),
-            FUSED_SORT(FusedSort.No),
-            CLAMP_NEGATIVE(False),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_count_A),
-            LOOP_FACTOR(16),
-            NUM_FACES(num_faces=faces_to_generate),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count_A,
-            tile_count_B=tile_count_B,
-            tile_count_res=tile_count_A,
-        ),
-        unpack_to_dest=unpack_to_dest,
+def _extra_slice_run(
+    perf_report, formats, mathop, dest_acc, unpack_to_dest, input_dimensions
+):
+    eltwise_unary_sfpu(
+        formats=formats,
         dest_acc=dest_acc,
+        approx_mode=ApproximationMode.No,
+        mathop=mathop,
+        fast_mode=FastMode.No,
+        input_dimensions=input_dimensions,
+        dest_sync=DestSync.Half,
+        clamp_negative=False,
+        unpack_to_dest=unpack_to_dest,
+        is_perf=True,
+        perf_report=perf_report,
+        run_types=ALL_PERF_RUN_TYPES,
+        check_golden=False,
+        loop_factor=16,
     )
 
 
@@ -331,13 +279,14 @@ def _extra_slice_config(formats, mathop, dest_acc, unpack_to_dest, input_dimensi
     input_dimensions=_EXTRA_SLICE_DIMS,
 )
 def test_perf_eltwise_unary_sfpu_int32(perf_report, formats, mathop, input_dimensions):
-    _extra_slice_config(
+    _extra_slice_run(
+        perf_report,
         formats,
         mathop,
         DestAccumulation.No,
         formats.input_format.is_32_bit(),
         input_dimensions,
-    ).run(perf_report)
+    )
 
 
 def _comp_dest_acc(formats):
@@ -361,13 +310,14 @@ def test_perf_eltwise_unary_sfpu_comp_uint16(
     perf_report, formats, mathop, input_dimensions
 ):
     dest_acc = _comp_dest_acc(formats)
-    _extra_slice_config(
+    _extra_slice_run(
+        perf_report,
         formats,
         mathop,
         dest_acc,
         formats.input_format.is_32_bit(),
         input_dimensions,
-    ).run(perf_report)
+    )
 
 
 @skip_for_blackhole
@@ -381,13 +331,14 @@ def test_perf_eltwise_unary_sfpu_comp_uint32(
     perf_report, formats, mathop, input_dimensions
 ):
     dest_acc = _comp_dest_acc(formats)
-    _extra_slice_config(
+    _extra_slice_run(
+        perf_report,
         formats,
         mathop,
         dest_acc,
         formats.input_format.is_32_bit(),
         input_dimensions,
-    ).run(perf_report)
+    )
 
 
 @pytest.mark.perf
@@ -403,6 +354,6 @@ def test_perf_eltwise_unary_sfpu_erfinv_fp32(
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
-    _extra_slice_config(
-        formats, mathop, dest_acc, unpack_to_dest, input_dimensions
-    ).run(perf_report)
+    _extra_slice_run(
+        perf_report, formats, mathop, dest_acc, unpack_to_dest, input_dimensions
+    )

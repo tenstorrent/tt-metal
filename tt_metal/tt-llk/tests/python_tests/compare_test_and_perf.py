@@ -1,17 +1,22 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare the @parametrize sweeps of a functional test module vs a perf module.
+"""Compare the @parametrize sweeps of two test modules.
 
-For each matched pair it maps parametrized functions in the functional module to
-counterparts in the perf module and, axis by axis, reports which parameters are
-identical and which differ. For a differing axis it prints both value lists.
-When one sweep is a subset of the other it labels that relationship (perf subset
-of functional, or the reverse); otherwise it reports a true mismatch. Measurement
-control axes (``iterations``, ``loop_factor``, ``run_types``, ``is_perf``) are
-reported but excluded from coverage comparisons, on whichever side declares them,
-because they are measurement knobs and not coverage dimensions. An axis whose
-values cannot be read is reported as unreadable rather than compared.
+The default mode maps a functional ``test_*.py`` module to its ``perf_*.py``
+counterpart and, axis by axis, reports which parameters are identical and which
+differ. For a differing axis it prints both value lists. When one sweep is a
+subset of the other it labels that relationship; otherwise it reports a true
+mismatch. Measurement control axes (``iterations``, ``loop_factor``,
+``run_types``, ``is_perf``) are reported but excluded from coverage comparisons,
+on whichever side declares them, because they are measurement knobs and not
+coverage dimensions. An axis whose values cannot be read is reported as
+unreadable rather than compared.
+
+``--cross-arch LEFT RIGHT`` compares perf modules across architectures instead:
+``perf_matmul.py`` under CHIP_ARCH=LEFT against ``quasar/perf_matmul_quasar.py``
+under CHIP_ARCH=RIGHT. Function names are paired after stripping ``test_perf_`` /
+``perf_`` prefixes and a trailing ``_quasar``.
 
 This is an axis-level comparison: it compares the union of values observed on
 each axis, not the dependency or combination structure between axes.
@@ -39,13 +44,16 @@ It is not named ``test_*.py`` and pytest does not collect it.
 
 The target architecture comes from ``CHIP_ARCH`` (``export CHIP_ARCH=quasar``) and
 ``--arch`` overrides it; the resolved value is printed with the sweep header.
+``--cross-arch`` sets CHIP_ARCH independently on each side.
 
 Usage (run from the python_tests folder):
     python compare_test_and_perf.py                         # sweep this folder
     python compare_test_and_perf.py --full                  # no value-list truncation
     python compare_test_and_perf.py --dir quasar            # sweep the Quasar pairs
+    python compare_test_and_perf.py --arch blackhole        # WH/BH folder, Blackhole skips
+    python compare_test_and_perf.py --cross-arch blackhole quasar
     python compare_test_and_perf.py --csv reports/          # export parameter tables
-    python compare_test_and_perf.py <functional.py> <perf.py>   # single explicit pair
+    python compare_test_and_perf.py <left.py> <right.py>    # single explicit pair
 """
 from __future__ import annotations
 
@@ -68,11 +76,33 @@ _HERE = _SELF.parent
 _BANNER_WIDTH = 88
 _VALUE_PREVIEW_LIMIT = 8
 _ARCH_CHOICES = ("wormhole", "blackhole", "quasar")
+_ARCH_TAGS = {"wormhole": "WH", "blackhole": "BH", "quasar": "QSR"}
+
+
+@dataclass(frozen=True)
+class Side:
+    """One side of a comparison (functional vs perf, or one arch vs another)."""
+
+    label: str
+    tag: str
+
+
+FUNCTIONAL_SIDE = Side("functional", "T")
+PERF_SIDE = Side("perf", "P")
 
 # `pytest.param(...)` returns a ParameterSet, which is itself a 3-tuple of
 # (values, marks, id) and so is indistinguishable from a 3-axis parameter row.
 # The type comes from the public factory rather than from `_pytest.mark`.
 _PARAMETER_SET = type(pytest.param(None))
+
+
+def side_for_arch(arch: str) -> Side:
+    return Side(arch, _ARCH_TAGS.get(arch, arch[:2].upper()))
+
+
+def modules_dir_for_arch(arch: str) -> Path:
+    """WH/BH perf and functional tests live at the python_tests root; Quasar in quasar/."""
+    return _HERE / "quasar" if arch == "quasar" else _HERE
 
 
 # --------------------------------------------------------------------------- #
@@ -87,6 +117,21 @@ def find_python_tests_root(sample: Path) -> Path:
     )
 
 
+def set_chip_architecture(arch: str) -> None:
+    """Pin CHIP_ARCH for the next import, including modules already in sys.modules."""
+    os.environ["CHIP_ARCH"] = arch
+    chip_architecture = sys.modules.get("helpers.chip_architecture")
+    if chip_architecture is not None:
+        chip_architecture._cached_chip_architecture = None
+        chip_architecture.get_chip_architecture()
+    test_config = sys.modules.get("helpers.test_config")
+    if test_config is not None and hasattr(test_config.TestConfig, "setup_arch"):
+        try:
+            test_config.TestConfig.setup_arch()
+        except Exception:
+            pass
+
+
 def import_test_module(path: Path, root: Path, arch: str) -> ModuleType:
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
@@ -94,8 +139,9 @@ def import_test_module(path: Path, root: Path, arch: str) -> ModuleType:
     os.environ.setdefault("LLK_HOME", str(root.parent.parent))
     # Importing a test module runs get_chip_architecture() at module load. Without
     # CHIP_ARCH it probes for a physical device (or simulator context) and fails on a
-    # plain host. The explicit CLI selection must override the caller's environment.
-    os.environ["CHIP_ARCH"] = arch
+    # plain host. The explicit CLI selection must override the caller's environment
+    # and any architecture cached from a previous import (cross-arch mode).
+    set_chip_architecture(arch)
     dotted = ".".join(path.resolve().relative_to(root).with_suffix("").parts)
     return importlib.import_module(dotted)
 
@@ -306,7 +352,7 @@ def normalize(name: str) -> str:
         if normalized.startswith(pre):
             normalized = normalized[len(pre) :]
             break
-    for suffix in ("_perf", "_test"):
+    for suffix in ("_quasar", "_perf", "_test"):
         if normalized.endswith(suffix):
             normalized = normalized[: -len(suffix)]
             break
@@ -346,87 +392,109 @@ def fmt_values(values: list[str], full: bool) -> str:
     )
 
 
-def axis_value_relation(test_values: list[str], perf_values: list[str]) -> str:
-    """Classify how functional and perf value sets relate."""
-    if not test_values or not perf_values:
+def _label_width(left: Side, right: Side) -> int:
+    return max(len(left.label), len(right.label))
+
+
+def fmt_side(side: Side, left: Side, right: Side) -> str:
+    return f"{side.label:<{_label_width(left, right)}}"
+
+
+def axis_value_relation(left_values: list[str], right_values: list[str]) -> str:
+    """Classify how the two value sets relate (right subset of left, or reverse)."""
+    if not left_values or not right_values:
         # A declared axis with no values means the rows could not be read, so the
         # two sides must not be reported as identical (or as a deliberate subset).
         return "unreadable"
-    set_t, set_p = set(test_values), set(perf_values)
-    if set_t == set_p:
+    set_left, set_right = set(left_values), set(right_values)
+    if set_left == set_right:
         return "identical"
-    if set_p <= set_t:
-        return "perf_subset"
-    if set_t <= set_p:
-        return "functional_subset"
+    if set_right <= set_left:
+        return "right_subset"
+    if set_left <= set_right:
+        return "left_subset"
     return "different"
 
 
 def verdict(
-    name: str, t: list[str], p: list[str], in_t: bool, in_p: bool, kind: str
+    name: str,
+    left_values: list[str],
+    right_values: list[str],
+    in_left: bool,
+    in_right: bool,
+    kind: str,
+    left: Side,
+    right: Side,
 ) -> tuple[str, str]:
     """Classify one axis or parameter and render its headline."""
-    if not in_t:
-        return "diff", f"[P] {name}: PERF-ONLY {kind}"
-    if not in_p:
-        return "diff", f"[T] {name}: FUNCTIONAL-ONLY {kind}"
-    relation = axis_value_relation(t, p)
+    if not in_left:
+        return "diff", f"[{right.tag}] {name}: {right.label.upper()}-ONLY {kind}"
+    if not in_right:
+        return "diff", f"[{left.tag}] {name}: {left.label.upper()}-ONLY {kind}"
+    relation = axis_value_relation(left_values, right_values)
     if relation == "identical":
-        return "same", f"[=] {name}: identical ({len(t)} value(s))"
+        return "same", f"[=] {name}: identical ({len(left_values)} value(s))"
     if relation == "unreadable":
         return (
             "unreadable",
             f"[!] {name}: UNREADABLE - no values parsed "
-            f"(functional={len(t)}, perf={len(p)})",
+            f"({left.label}={len(left_values)}, {right.label}={len(right_values)})",
         )
-    if relation == "perf_subset":
+    if relation == "right_subset":
         return (
             "diff",
-            f"[~] {name}: perf subset of functional ({len(p)}/{len(t)} value(s))",
+            f"[~] {name}: {right.label} subset of {left.label} "
+            f"({len(right_values)}/{len(left_values)} value(s))",
         )
-    if relation == "functional_subset":
+    if relation == "left_subset":
         return (
             "diff",
-            f"[~] {name}: functional subset of perf ({len(t)}/{len(p)} value(s))",
+            f"[~] {name}: {left.label} subset of {right.label} "
+            f"({len(left_values)}/{len(right_values)} value(s))",
         )
     return "diff", f"[x] {name}: DIFFERENT"
 
 
 def compare(
-    test_axes: dict,
-    perf_axes: dict,
+    left_axes: dict,
+    right_axes: dict,
     ignored_axes: frozenset[str],
     composite_axes: set[str],
     full: bool,
+    left: Side,
+    right: Side,
 ) -> None:
     """Report identical vs differing axes; for differing ones print both sweeps."""
     same, diff, ignored, unreadable = [], [], [], []
     buckets = {"same": same, "diff": diff, "unreadable": unreadable}
-    for axis in dict.fromkeys([*test_axes, *perf_axes]):
-        in_t, in_p = axis in test_axes, axis in perf_axes
-        t, p = test_axes.get(axis, []), perf_axes.get(axis, [])
+    left_hdr, right_hdr = fmt_side(left, left, right), fmt_side(right, left, right)
+    for axis in dict.fromkeys([*left_axes, *right_axes]):
+        in_left, in_right = axis in left_axes, axis in right_axes
+        left_vals, right_vals = left_axes.get(axis, []), right_axes.get(axis, [])
 
         if axis in ignored_axes:
             ignored.append(axis)
             print(f"  [i] {axis}: ignored measurement axis")
-            if in_t:
-                print(f"        functional : {fmt_values(t, full)}")
-            print(f"        perf       : {fmt_values(p, full)}")
+            if in_left:
+                print(f"        {left_hdr} : {fmt_values(left_vals, full)}")
+            print(f"        {right_hdr} : {fmt_values(right_vals, full)}")
             continue
 
-        bucket, headline = verdict(axis, t, p, in_t, in_p, "axis")
+        bucket, headline = verdict(
+            axis, left_vals, right_vals, in_left, in_right, "axis", left, right
+        )
         buckets[bucket].append(axis)
         print(f"  {headline}")
         if bucket == "same":
             if full:
-                print(f"        values : {fmt_values(t, full)}")
+                print(f"        values : {fmt_values(left_vals, full)}")
         elif axis in composite_axes and not full:
             # Whole configuration tuples are unreadable; the parameter view below
             # carries the same information one parameter at a time.
             print("        values : split per parameter below (--full for tuples)")
         else:
-            print(f"        functional : {fmt_values(t, full)}")
-            print(f"        perf       : {fmt_values(p, full)}")
+            print(f"        {left_hdr} : {fmt_values(left_vals, full)}")
+            print(f"        {right_hdr} : {fmt_values(right_vals, full)}")
     print(f"\n  Summary: {len(same)} identical axis/axes, {len(diff)} differing.")
     if same:
         print(f"    identical : {', '.join(same)}")
@@ -438,7 +506,13 @@ def compare(
         print(f"    UNREADABLE: {', '.join(unreadable)} (verdict withheld)")
 
 
-def compare_parameters(functional: Parameters, perf: Parameters, full: bool) -> None:
+def compare_parameters(
+    left_params: Parameters,
+    right_params: Parameters,
+    full: bool,
+    left: Side,
+    right: Side,
+) -> None:
     """Report the parameters that composite axes were built from, one at a time.
 
     Parameters carry the name of the component they came from rather than the name
@@ -446,21 +520,24 @@ def compare_parameters(functional: Parameters, perf: Parameters, full: bool) -> 
     into differently named tuples still line up parameter by parameter. Axes that
     did not decompose are left out, since the axis view already reported them.
     """
-    test_params, perf_params = functional.values, perf.values
-    split = functional.from_composite | perf.from_composite
-    names = [n for n in dict.fromkeys([*test_params, *perf_params]) if n in split]
+    left_values, right_values = left_params.values, right_params.values
+    split = left_params.from_composite | right_params.from_composite
+    names = [n for n in dict.fromkeys([*left_values, *right_values]) if n in split]
     same, diff, unreadable = [], [], []
     buckets = {"same": same, "diff": diff, "unreadable": unreadable}
+    left_hdr, right_hdr = fmt_side(left, left, right), fmt_side(right, left, right)
     print(f"\n  Composite axes split into {len(names)} parameter(s):")
     for name in names:
-        in_t, in_p = name in test_params, name in perf_params
-        t, p = test_params.get(name, []), perf_params.get(name, [])
-        bucket, headline = verdict(name, t, p, in_t, in_p, "parameter")
+        in_left, in_right = name in left_values, name in right_values
+        lv, rv = left_values.get(name, []), right_values.get(name, [])
+        bucket, headline = verdict(
+            name, lv, rv, in_left, in_right, "parameter", left, right
+        )
         buckets[bucket].append(name)
         print(f"    {headline}")
         if bucket != "same" or full:
-            print(f"          functional : {fmt_values(t, full)}")
-            print(f"          perf       : {fmt_values(p, full)}")
+            print(f"          {left_hdr} : {fmt_values(lv, full)}")
+            print(f"          {right_hdr} : {fmt_values(rv, full)}")
     print(
         f"\n  Parameter summary: {len(same)} identical parameter(s), "
         f"{len(diff)} differing."
@@ -473,18 +550,28 @@ def compare_parameters(functional: Parameters, perf: Parameters, full: bool) -> 
 
 def write_parameter_csv(
     path: Path,
-    test_params: dict[str, list[str]],
-    perf_params: dict[str, list[str]],
+    left_params: dict[str, list[str]],
+    right_params: dict[str, list[str]],
+    left: Side,
+    right: Side,
 ) -> None:
     """Write the full, untruncated parameter/value table for one function pair."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["parameter", "value", "functional", "perf"])
-        for name in dict.fromkeys([*test_params, *perf_params]):
-            t, p = test_params.get(name, []), perf_params.get(name, [])
-            for value in dict.fromkeys([*t, *p]):
-                writer.writerow([name, value, int(value in t), int(value in p)])
+        writer.writerow(["parameter", "value", left.label, right.label])
+        for name in dict.fromkeys([*left_params, *right_params]):
+            lv, rv = left_params.get(name, []), right_params.get(name, [])
+            for value in dict.fromkeys([*lv, *rv]):
+                writer.writerow([name, value, int(value in lv), int(value in rv)])
+
+
+def perf_stem_key(stem: str) -> str:
+    """``perf_matmul`` and ``perf_matmul_quasar`` share the key ``matmul``."""
+    key = stem[len("perf_") :] if stem.startswith("perf_") else stem
+    if key.endswith("_quasar"):
+        key = key[: -len("_quasar")]
+    return key
 
 
 def discover_pairs(
@@ -513,24 +600,53 @@ def discover_pairs(
     return matched, tests_without_perf, perfs_without_test
 
 
+def discover_cross_arch_perf_pairs(
+    left_dir: Path, right_dir: Path
+) -> tuple[list[tuple[str, Path, Path]], list[Path], list[Path]]:
+    """Pair perf_*.py files across two folders by the op name after perf_/_quasar."""
+    left: dict[str, Path] = {}
+    right: dict[str, Path] = {}
+    for path in sorted(left_dir.glob("perf_*.py")):
+        if path.resolve() == _SELF:
+            continue
+        left[perf_stem_key(path.stem)] = path
+    for path in sorted(right_dir.glob("perf_*.py")):
+        if path.resolve() == _SELF:
+            continue
+        right[perf_stem_key(path.stem)] = path
+
+    matched = [(key, left[key], right[key]) for key in left if key in right]
+    matched.sort(key=lambda item: item[0])
+    left_only = [left[key] for key in sorted(left) if key not in right]
+    right_only = [right[key] for key in sorted(right) if key not in left]
+    return matched, left_only, right_only
+
+
 def compare_pair(
-    functional: Path,
-    perf: Path,
+    left_path: Path,
+    right_path: Path,
     root: Path,
-    arch: str,
+    left_arch: str,
+    right_arch: str,
     full: bool,
     csv_dir: Path | None = None,
+    left: Side = FUNCTIONAL_SIDE,
+    right: Side = PERF_SIDE,
 ) -> bool:
-    """Import a functional/perf module pair and print their axis comparison.
+    """Import a module pair and print their axis comparison.
+
+    ``left_arch`` / ``right_arch`` are the CHIP_ARCH values used for each import.
+    Cross-arch mode passes different values so Blackhole and Quasar parametrize
+    marks resolve independently.
 
     Returns True if at least one function pair was compared, False otherwise.
     """
     print("#" * _BANNER_WIDTH)
-    print(f"# {functional.name}  vs  {perf.name}")
+    print(f"# {left_path.name}  vs  {right_path.name}")
     print("#" * _BANNER_WIDTH)
     try:
-        test_mod = import_test_module(functional, root, arch)
-        perf_mod = import_test_module(perf, root, arch)
+        left_mod = import_test_module(left_path, root, left_arch)
+        right_mod = import_test_module(right_path, root, right_arch)
     except KeyboardInterrupt:
         raise
     except BaseException as exc:  # keep sweeping even if a module aborts on import
@@ -539,60 +655,71 @@ def compare_pair(
         print(f"  ! skipped: failed to import ({type(exc).__name__}: {exc})\n")
         return False
 
-    test_funcs = parametrized_functions(test_mod)
-    perf_funcs = parametrized_functions(perf_mod)
-    if not test_funcs:
-        print(f"  ! no parametrized functions found in {functional.name}\n")
+    left_funcs = parametrized_functions(left_mod)
+    right_funcs = parametrized_functions(right_mod)
+    if not left_funcs:
+        print(f"  ! no parametrized functions found in {left_path.name}\n")
         return False
-    if not perf_funcs:
-        print(f"  ! no parametrized functions found in {perf.name}\n")
+    if not right_funcs:
+        print(f"  ! no parametrized functions found in {right_path.name}\n")
         return False
 
+    left_hdr, right_hdr = fmt_side(left, left, right), fmt_side(right, left, right)
     compared = False
-    for tname, pname, match_method in pair_functions(test_funcs, perf_funcs):
+    for lname, rname, match_method in pair_functions(left_funcs, right_funcs):
         print("=" * _BANNER_WIDTH)
-        print(f"functional: {test_mod.__name__}.{tname or '<none>'}")
-        print(f"perf      : {perf_mod.__name__}.{pname or '<none>'}")
+        print(f"{left_hdr}: {left_mod.__name__}.{lname or '<none>'}")
+        print(f"{right_hdr}: {right_mod.__name__}.{rname or '<none>'}")
         print("=" * _BANNER_WIDTH)
-        if tname is None or pname is None:
+        if lname is None or rname is None:
             print("  (unmatched - no counterpart found)\n")
             continue
         if match_method == "position":
             print("  ! paired by position because normalized function names differ")
         try:
-            t_sweep = axis_value_sets(test_funcs[tname])
-            p_sweep = axis_value_sets(perf_funcs[pname])
+            left_sweep = axis_value_sets(left_funcs[lname])
+            right_sweep = axis_value_sets(right_funcs[rname])
         except Exception as exc:  # one odd sweep must not abort the whole run
             print(
                 "  ! skipped: cannot read parametrize marks "
                 f"({type(exc).__name__}: {exc})\n"
             )
             continue
-        if not t_sweep.rows or not p_sweep.rows:
+        if not left_sweep.rows or not right_sweep.rows:
             print(
                 "  ! empty sweep: "
-                f"functional={len(t_sweep.rows)} row(s), "
-                f"perf={len(p_sweep.rows)} row(s)\n"
+                f"{left.label}={len(left_sweep.rows)} row(s), "
+                f"{right.label}={len(right_sweep.rows)} row(s)\n"
             )
             continue
         ignored_axes = frozenset(
             axis
             for axis in MEASUREMENT_AXES
-            if axis in p_sweep.axes or axis in t_sweep.axes
+            if axis in right_sweep.axes or axis in left_sweep.axes
         )
-        t_n = projected_variant_count(t_sweep.rows, ignored_axes)
-        p_n = projected_variant_count(p_sweep.rows, ignored_axes)
-        print(f"  variants: functional={t_n}, perf={p_n}\n")
+        left_n = projected_variant_count(left_sweep.rows, ignored_axes)
+        right_n = projected_variant_count(right_sweep.rows, ignored_axes)
+        print(f"  variants: {left.label}={left_n}, {right.label}={right_n}\n")
 
-        t_params = parameter_values(t_sweep, ignored_axes)
-        p_params = parameter_values(p_sweep, ignored_axes)
-        composite_axes = t_params.composite_axes | p_params.composite_axes
-        compare(t_sweep.axes, p_sweep.axes, ignored_axes, composite_axes, full)
+        left_params = parameter_values(left_sweep, ignored_axes)
+        right_params = parameter_values(right_sweep, ignored_axes)
+        composite_axes = left_params.composite_axes | right_params.composite_axes
+        compare(
+            left_sweep.axes,
+            right_sweep.axes,
+            ignored_axes,
+            composite_axes,
+            full,
+            left,
+            right,
+        )
         if composite_axes:
-            compare_parameters(t_params, p_params, full)
+            compare_parameters(left_params, right_params, full, left, right)
         if csv_dir is not None:
-            target = csv_dir / f"{functional.stem}.{tname}.csv"
-            write_parameter_csv(target, t_params.values, p_params.values)
+            target = csv_dir / f"{left_path.stem}.{lname}.csv"
+            write_parameter_csv(
+                target, left_params.values, right_params.values, left, right
+            )
             print(f"\n  parameter table written to {target}")
         print()
         compared = True
@@ -602,16 +729,16 @@ def compare_pair(
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
-        "functional",
+        "left",
         type=Path,
         nargs="?",
-        help="functional test module (single-pair mode; requires `perf` too)",
+        help="left module (functional in test-vs-perf; left-arch perf in --cross-arch)",
     )
     ap.add_argument(
-        "perf",
+        "right",
         type=Path,
         nargs="?",
-        help="perf test module (single-pair mode)",
+        help="right module (perf in test-vs-perf; right-arch perf in --cross-arch)",
     )
     ap.add_argument(
         "--dir",
@@ -637,21 +764,111 @@ def main() -> int:
         default=env_arch if env_arch in _ARCH_CHOICES else "wormhole",
         help="CHIP_ARCH used to resolve the sweeps (default: $CHIP_ARCH or wormhole)",
     )
+    ap.add_argument(
+        "--cross-arch",
+        nargs=2,
+        metavar=("LEFT_ARCH", "RIGHT_ARCH"),
+        help=(
+            "compare perf_*.py of LEFT_ARCH against perf_*_quasar.py of RIGHT_ARCH "
+            "(typically: --cross-arch blackhole quasar)"
+        ),
+    )
     args = ap.parse_args()
 
-    if bool(args.functional) ^ bool(args.perf):
+    if bool(args.left) ^ bool(args.right):
         ap.error(
-            "provide both `functional` and `perf` for single-pair mode, or neither to sweep"
+            "provide both left and right modules for single-pair mode, or neither to sweep"
         )
 
+    if args.cross_arch:
+        left_arch, right_arch = (a.lower() for a in args.cross_arch)
+        for arch in (left_arch, right_arch):
+            if arch not in _ARCH_CHOICES:
+                ap.error(
+                    f"invalid --cross-arch architecture {arch!r}; "
+                    f"choose from {', '.join(_ARCH_CHOICES)}"
+                )
+        left_side, right_side = side_for_arch(left_arch), side_for_arch(right_arch)
+        if args.left and args.right:
+            root = find_python_tests_root(args.left)
+            print(
+                f"Resolving sweeps for {left_arch} vs {right_arch}: "
+                f"{args.left.name} / {args.right.name}"
+            )
+            return (
+                0
+                if compare_pair(
+                    args.left,
+                    args.right,
+                    root,
+                    left_arch,
+                    right_arch,
+                    args.full,
+                    args.csv,
+                    left_side,
+                    right_side,
+                )
+                else 1
+            )
+
+        left_dir, right_dir = modules_dir_for_arch(left_arch), modules_dir_for_arch(
+            right_arch
+        )
+        matched, left_only, right_only = discover_cross_arch_perf_pairs(
+            left_dir, right_dir
+        )
+        print(
+            f"Sweeping perf modules: {left_arch} ({left_dir}) vs "
+            f"{right_arch} ({right_dir})"
+        )
+        print(
+            f"Matched {len(matched)} perf pair(s): "
+            f"{', '.join(k for k, _, _ in matched) or '-'}"
+        )
+        if left_only:
+            print(
+                f"{left_arch} perf without a {right_arch} counterpart: "
+                f"{', '.join(p.name for p in left_only)}"
+            )
+        if right_only:
+            print(
+                f"{right_arch} perf without a {left_arch} counterpart: "
+                f"{', '.join(p.name for p in right_only)}"
+            )
+        print()
+        if not matched:
+            return 1
+        root = find_python_tests_root(matched[0][1])
+        results = [
+            compare_pair(
+                left_path,
+                right_path,
+                root,
+                left_arch,
+                right_arch,
+                args.full,
+                args.csv,
+                left_side,
+                right_side,
+            )
+            for _key, left_path, right_path in matched
+        ]
+        return 0 if all(results) else 1
+
     # Single-pair mode: explicit functional + perf paths.
-    if args.functional and args.perf:
-        root = find_python_tests_root(args.functional)
+    if args.left and args.right:
+        root = find_python_tests_root(args.left)
         print(f"Resolving sweeps for CHIP_ARCH={args.arch}")
         return (
             0
             if compare_pair(
-                args.functional, args.perf, root, args.arch, args.full, args.csv
+                args.left,
+                args.right,
+                root,
+                args.arch,
+                args.arch,
+                args.full,
+                args.csv,
             )
             else 1
         )
@@ -679,11 +896,10 @@ def main() -> int:
         return 1
 
     root = find_python_tests_root(matched[0][1])
-    results = []
-    for _key, functional, perf in matched:
-        results.append(
-            compare_pair(functional, perf, root, args.arch, args.full, args.csv)
-        )
+    results = [
+        compare_pair(functional, perf, root, args.arch, args.arch, args.full, args.csv)
+        for _key, functional, perf in matched
+    ]
     return 0 if all(results) else 1
 
 

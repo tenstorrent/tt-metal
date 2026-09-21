@@ -30,6 +30,7 @@ from helpers.param_config import (
     generate_quasar_sfpu_format_variants,
     input_output_formats,
     parametrize,
+    resolve_quasar_sfpu_variant,
     runtime,
     select_perf_input_dimensions,
 )
@@ -38,7 +39,7 @@ from helpers.sfpu_dispatch_constants import (
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
 )
-from helpers.sfpu_domains import op_edge_points
+from helpers.sfpu_domains import op_edge_points, sfpu_unary_ops
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -721,8 +722,19 @@ class OpConfig:
     uniform_spec: bool = False
 
 
+# Dest Half + FP32 dest holds 4 tiles of 32x32. BH unary perf uses [128, 64]
+# (8 tiles), which overflows that dest cap, so Quasar keeps [64, 64] (4 tiles).
 TENSOR_DIMS = ([32, 32], [64, 64])
+PERF_INPUT_DIMENSIONS_UNARY = [[64, 64]]
 DEST_SYNC_MODES = (DestSync.Half, DestSync.Full)
+_APPROX_MATHOPS = (
+    MathOperation.Exp,
+    MathOperation.Gelu,
+    MathOperation.Reciprocal,
+    MathOperation.Rsqrt,
+)
+_QSR_EXTRA_MATHOPS = (MathOperation.Relu, MathOperation.Cumsum)
+_BH_UNARY_OPS = sfpu_unary_ops()
 
 OP_CONFIGS = [
     OpConfig(MathOperation.Abs, TENSOR_DIMS, DEST_SYNC_MODES),
@@ -750,7 +762,6 @@ OP_CONFIGS = [
     # cross-tile carry (first=false) needs the shared C++ source to thread
     # `first = (i == 0)` through its tile loop, so it is a follow-on.
     OpConfig(MathOperation.Cumsum, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
     # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,
     # fed a uniform [0, 1] stimulus that prepare_trig_inputs maps into each op's domain.
     *[
@@ -765,55 +776,39 @@ OP_CONFIGS = [
 
 OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}
 
+MAIN_MATHOPS = [cfg.mathop for cfg in OP_CONFIGS if cfg.mathop in _BH_UNARY_OPS]
+QSR_EXTRA_MATHOPS = [
+    cfg.mathop for cfg in OP_CONFIGS if cfg.mathop in _QSR_EXTRA_MATHOPS
+]
+COMP_MATHOPS = list(COMP_OPS)
+
 
 def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
     """Float formats for every op, plus the integer/UInt16 formats only comp sweeps."""
-    if cfg.mathop == MathOperation.Typecast:
-        return [InputOutputFormat(case.src, case.dst) for case in TYPECAST_CASES]
     if cfg.mathop in COMP_OPS:
         return SFPU_UNARY_FORMATS + SFPU_COMP_EXTRA_FORMATS
     return SFPU_UNARY_FORMATS
 
 
 def generate_sfpu_unary_combinations(*, is_perf=False):
-    """
-    Build the unary-SFPU sweep across all operations and their format matrices.
-
-    Functional mode sweeps dest-sync, implied-math, and both [32, 32]/[64, 64]
-    dimensions. Performance mode intentionally keeps the complete op, format,
-    dest_acc, and approximation coverage while pinning those three axes to
-    DestSync.Half, ImpliedMathFormat.Yes, and the largest functional matrix
-    because none of the preferred perf matrices are supported.
+    """Combo oracle for the unary-SFPU family split (no Typecast).
 
     Returns: list of (mathop, resolved format variant, dest_sync,
     implied_math_format, approx_mode, input_dimensions) tuples.
     """
     combinations = []
     for cfg in OP_CONFIGS:
-        # Ops that expose both a non-approximate and an approximate kernel are swept over both
-        # ApproximationMode values; every other op has a single implementation (ApproximationMode.No).
-        approx_modes = (
-            (ApproximationMode.No, ApproximationMode.Yes)
-            if cfg.mathop
-            in (
-                MathOperation.Exp,
-                MathOperation.Gelu,
-                MathOperation.Reciprocal,
-                MathOperation.Rsqrt,
-            )
-            else (ApproximationMode.No,)
-        )
+        approx_modes = _approx_modes_for_mathop(cfg.mathop)
         format_variants = generate_quasar_sfpu_format_variants(
             cfg.mathop, formats_for_op(cfg)
         )
         for variant in format_variants:
             dest_sync_modes = (DestSync.Half,) if is_perf else cfg.dest_sync_modes
-            if cfg.mathop == MathOperation.Typecast:
-                implied_math_formats = (ImpliedMathFormat.No,)
-            elif is_perf:
-                implied_math_formats = (ImpliedMathFormat.Yes,)
-            else:
-                implied_math_formats = (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
+            implied_math_formats = (
+                (ImpliedMathFormat.Yes,)
+                if is_perf
+                else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
+            )
             input_dims = (
                 select_perf_input_dimensions(cfg.input_dims)
                 if is_perf
@@ -837,45 +832,86 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
     return combinations
 
 
-@pytest.mark.quasar
-@parametrize(
-    mathop_formats_dest_acc_sync_implied_math_input_dims=generate_sfpu_unary_combinations(),
-)
-def test_eltwise_unary_sfpu_quasar(
-    mathop_formats_dest_acc_sync_implied_math_input_dims,
+def _approx_modes_for_mathop(mathop):
+    if mathop in _APPROX_MATHOPS:
+        return [ApproximationMode.No, ApproximationMode.Yes]
+    return [ApproximationMode.No]
+
+
+def _unique_formats(variants):
+    formats = []
+    seen = set()
+    for variant in variants:
+        key = (variant.formats.input_format, variant.formats.output_format)
+        if key not in seen:
+            seen.add(key)
+            formats.append(variant.formats)
+    return formats
+
+
+def _float_formats_for_mathop(mathop):
+    return _unique_formats(
+        generate_quasar_sfpu_format_variants(mathop, SFPU_UNARY_FORMATS)
+    )
+
+
+def _int_comp_formats_for_mathop(mathop):
+    return _unique_formats(
+        generate_quasar_sfpu_format_variants(mathop, SFPU_COMP_EXTRA_FORMATS)
+    )
+
+
+def _dest_acc_for_mathop_formats(mathop, formats):
+    dests = []
+    seen = set()
+    for variant in generate_quasar_sfpu_format_variants(mathop, [formats]):
+        if variant.dest_acc not in seen:
+            seen.add(variant.dest_acc)
+            dests.append(variant.dest_acc)
+    return dests
+
+
+def typecast_formats():
+    return _unique_formats(
+        generate_quasar_sfpu_format_variants(
+            MathOperation.Typecast,
+            [InputOutputFormat(case.src, case.dst) for case in TYPECAST_CASES],
+        )
+    )
+
+
+def _dest_acc_for_typecast_formats(formats):
+    return _dest_acc_for_mathop_formats(MathOperation.Typecast, formats)
+
+
+def run_eltwise_unary_sfpu_quasar(
+    formats,
+    dest_acc,
+    mathop,
+    approx_mode,
+    input_dimensions,
+    dest_sync=DestSync.Half,
+    implied_math_format=ImpliedMathFormat.Yes,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
     is_perf=False,
     perf_report=None,
 ):
-    """
-    Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
-    variant (abs, exp, gelu, relu, lrelu, relu_min, relu_max, reciprocal, sqrt,
-    tanh, sigmoid, silu, rsqrt, square, cumsum, typecast,
-    floor/ceil/trunc/frac/round, and the six
-    compare-to-zero modes), validated against the UnarySFPUGolden reference.
-    Typecast sweeps explicit (src, dst) format pairs; every other op sweeps the
-    shared format matrix.
-    """
-    (
-        mathop,
-        format_variant,
-        dest_sync,
-        implied_math_format,
-        approx_mode,
-        input_dimensions,
-    ) = mathop_formats_dest_acc_sync_implied_math_input_dims[0]
-
+    """Shared unary SFPU runner. Perf pins dest_sync/implied via defaults."""
+    format_variant = resolve_quasar_sfpu_variant(mathop, formats, dest_acc)
+    assert (
+        format_variant is not None
+    ), f"no Quasar SFPU variant for {mathop} {formats} dest_acc={dest_acc}"
     assert isinstance(format_variant, QuasarSfpuVariant)
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
     is_typecast = mathop == MathOperation.Typecast
 
-    cfg = OP_CONFIG_BY_MATHOP[mathop]
+    cfg = OP_CONFIG_BY_MATHOP.get(mathop)
     spec = (
         StimuliSpec.uniform(low=0.0, high=1.0)
-        if (cfg.uniform_spec and not is_typecast)
+        if (cfg is not None and cfg.uniform_spec and not is_typecast)
         else None
     )
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -887,7 +923,6 @@ def test_eltwise_unary_sfpu_quasar(
         spec_B=spec,
     )
 
-    # Prepare inputs with operation-specific ranges
     if is_typecast:
         src_A = _prepare_typecast_input(
             src_A, src_B, formats.input_format, formats.output_format
@@ -922,10 +957,6 @@ def test_eltwise_unary_sfpu_quasar(
                 op_res, dtype=format_dict[formats.output_format]
             )
 
-    # A layout-sensitive op reads the tile's face structure, so it gets the tilized buffer tt-metal
-    # would feed it, and its result is read back through the matching untilize. UnarySFPUGolden
-    # already models the logical -> Dest -> logical round trip, so the golden above stays on the
-    # logical tensor and only what crosses to L1 and back is converted.
     is_layout_sensitive = mathop in LAYOUT_SENSITIVE_OPS
     device_src_A = (
         get_golden_generator(TilizeGolden)(
@@ -951,10 +982,6 @@ def test_eltwise_unary_sfpu_quasar(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(dest_sync),
-            # Typecast bakes the (input, output) pair so the compile-time functor can pick
-            # the right conversion; every other op defaults it. The typecast dispatcher branch
-            # in the shared C++ source references TYPECAST_IN_FORMAT/TYPECAST_OUT_FORMAT, so
-            # every build must define them.
             (
                 TYPECAST_FORMATS(
                     input_format=format_variant.sfpu_src,
@@ -1000,7 +1027,6 @@ def test_eltwise_unary_sfpu_quasar(
 
     res_from_L1 = configuration.run().result
 
-    # Verify results match golden
     assert len(res_from_L1) == len(
         golden_tensor
     ), "Result tensor and golden tensor are not of the same length"
@@ -1018,6 +1044,126 @@ def test_eltwise_unary_sfpu_quasar(
         res_tensor,
         formats.output_format,
     ), "Assert against golden failed"
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=MAIN_MATHOPS,
+    formats=_float_formats_for_mathop,
+    dest_acc=_dest_acc_for_mathop_formats,
+    approx_mode=_approx_modes_for_mathop,
+    dest_sync=list(DEST_SYNC_MODES),
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    input_dimensions=list(TENSOR_DIMS),
+)
+def test_eltwise_unary_sfpu_quasar(
+    mathop,
+    formats,
+    dest_acc,
+    approx_mode,
+    dest_sync,
+    implied_math_format,
+    input_dimensions,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    """Main unary SFPU family: BH-intersection ops on float formats."""
+    run_eltwise_unary_sfpu_quasar(
+        formats,
+        dest_acc,
+        mathop,
+        approx_mode,
+        input_dimensions,
+        dest_sync,
+        implied_math_format,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=COMP_MATHOPS,
+    formats=_int_comp_formats_for_mathop,
+    dest_acc=_dest_acc_for_mathop_formats,
+    approx_mode=_approx_modes_for_mathop,
+    dest_sync=list(DEST_SYNC_MODES),
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    input_dimensions=list(TENSOR_DIMS),
+)
+def test_eltwise_unary_sfpu_comp_quasar(
+    mathop,
+    formats,
+    dest_acc,
+    approx_mode,
+    dest_sync,
+    implied_math_format,
+    input_dimensions,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    """Integer-format compare-to-zero ops (QSR-only vs BH)."""
+    run_eltwise_unary_sfpu_quasar(
+        formats,
+        dest_acc,
+        mathop,
+        approx_mode,
+        input_dimensions,
+        dest_sync,
+        implied_math_format,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    mathop=QSR_EXTRA_MATHOPS,
+    formats=_float_formats_for_mathop,
+    dest_acc=_dest_acc_for_mathop_formats,
+    approx_mode=_approx_modes_for_mathop,
+    dest_sync=list(DEST_SYNC_MODES),
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    input_dimensions=list(TENSOR_DIMS),
+)
+def test_eltwise_unary_sfpu_qsr_extra_quasar(
+    mathop,
+    formats,
+    dest_acc,
+    approx_mode,
+    dest_sync,
+    implied_math_format,
+    input_dimensions,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
+):
+    """Relu and Cumsum: in OP_CONFIGS but not in BH sfpu_unary_ops()."""
+    run_eltwise_unary_sfpu_quasar(
+        formats,
+        dest_acc,
+        mathop,
+        approx_mode,
+        input_dimensions,
+        dest_sync,
+        implied_math_format,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        is_perf=is_perf,
+        perf_report=perf_report,
+    )
 
 
 # ---------------------------------------------------------------------------
