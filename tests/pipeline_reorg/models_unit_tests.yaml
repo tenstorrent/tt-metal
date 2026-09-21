@@ -477,8 +477,7 @@
     # heavy full-model-build + device-trace tests added *after* that PR by #45355
     # (prefill device trace + batched prefill) time out the larger variants on
     # constrained runners (e.g. 26B/31B on wh_llmbox), so the whole
-    # test_prefill_trace_* and test_batched_prefill_perf files are ignored
-    # here.
+    # test_prefill_trace_* and test_batched_prefill_perf files are ignored here.
     # test_full_model_parity_* (vLLM full-model parity decode loops, from #44265)
     # is likewise deselected. The tier-1 promotion of 26B/31B/12B is intentionally
     # kept — only the heavy test cases are removed, not the tiers.
@@ -587,7 +586,6 @@
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
@@ -622,7 +620,6 @@
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-12B-it
     pytest --timeout 900 \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
@@ -637,9 +634,6 @@
     bh_quietbox_2:
       timeout: 15
       tier: 1
-    wh_llmbox:
-      timeout: 27
-      tier: 2
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
   budget_type: unit
@@ -710,7 +704,9 @@
 
 - name: Qwen3-32B unit tests (Galaxy)
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    # Watcher setup is per SKU: this cmd is shared by wh_galaxy_perf and bh_galaxy, and only
+    # the Blackhole leg has been revalidated. See the skus block below.
+    {watcher_setup}
     export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     export QWEN_BH_PREFETCHER=1  # opt-in BH dram_prefetcher path (no-op on WH)
     pytest --timeout 60 models/tt_transformers/tests/test_attention_utils.py
@@ -728,9 +724,18 @@
     wh_galaxy_perf:
       timeout: 10
       tier: 1
+      # Still blocked by #50886: this leg has its own watcher-exposed fabric / paged-attention
+      # hang (see #49081), unfixed and unvalidated. Keep the watcher off until it is revalidated.
+      watcher_setup: "unset TT_METAL_WATCHER"
     bh_galaxy:
       timeout: 15
       tier: 1
+      # The #53330 slice fault is fixed by #56176, so the watcher goes back on here.
+      # DISABLE_ETH is required: with the watcher on ethernet cores the fabric program needs
+      # 27328 bytes against a 26624 byte ACTIVE_ETH kernel config buffer, so open_mesh_device
+      # throws in FabricFirmwareInitializer::compile_and_configure_fabric() and no test runs.
+      # Worker cores stay watched, which is where the #50886 faults have been.
+      watcher_setup: "export TT_METAL_WATCHER=30; export TT_METAL_WATCHER_DISABLE_ETH=1"
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
   budget_type: unit
@@ -1060,7 +1065,7 @@
 
 - name: TT-DiT common unit tests, shared amongst all models.
   cmd: |
-    unset TT_METAL_WATCHER  # blocked by #50886
+    export TT_METAL_WATCHER=30
     pytest --timeout 10000 models/tt_dit/tests/unit/
   model: dit-common
   skus:

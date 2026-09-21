@@ -160,7 +160,7 @@ train:
     bh_p100: 160
     bh_p150b_civ2: 400
   e2e_tier3:
-    bh_sc1: 260
+    bh_sc1_high_power: 140
 
 ttsim:
   merge_gate:
@@ -441,14 +441,14 @@ models:
     bh_p150: 30
   sweep_tier2:
     wh_n150: 30
-    wh_llmbox_perf: 100
+    wh_llmbox_perf: 60
     bh_quietbox_2: 30
     bh_p150: 30
   vllm:
     wh_galaxy_perf: 430
     bh_quietbox_2: 310
     wh_llmbox: 342
-    bh_loudbox: 155  # 75 (Llama-3.1-8B dp=8) + 40 (Gemma4-12B tp=8) + 40 (Gemma4-31B tp=8)
+    bh_loudbox: 245
     bh_galaxy: 65
     wh_n150: 65
 umd:
