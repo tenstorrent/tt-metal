@@ -6,6 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1024 import ModelOptimisations1024x1024
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 
 
@@ -47,8 +48,18 @@ class TtAttention(LightweightModule):
             module_path=module_path, is_self_attention=self.is_self_attention
         )
 
+        sdpa_math_fidelity = ttnn.MathFidelity.LoFi
+        # Scope the higher fidelity to base-model Wormhole 1024 self-attention;
+        # refiner/VAE subclasses must retain their existing precision settings.
+        if (
+            type(model_config) is ModelOptimisations1024x1024
+            and self.is_self_attention
+            and module_path.startswith("up_blocks.0.")
+        ):
+            sdpa_math_fidelity = ttnn.MathFidelity.HiFi2
+
         self.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=sdpa_math_fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,

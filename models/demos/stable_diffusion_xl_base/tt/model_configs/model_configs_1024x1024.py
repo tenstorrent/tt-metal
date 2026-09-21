@@ -873,6 +873,21 @@ class ModelOptimisations1024x1024:
             "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
             "negative_mask": False,
         }
+        self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_WELFORD"] = {
+            "op_config": {
+                "core_grid": ttnn.CoreGrid(y=8, x=8),
+                "num_out_blocks": None,
+                "inplace": True,
+                "use_welford": True,
+                "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    math_approx_mode=True,
+                    fp32_dest_acc_en=True,
+                ),
+            },
+            "memory_config": ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
+            "negative_mask": False,
+        }
         self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"] = {
             "op_config": {
                 "core_grid": ttnn.CoreGrid(y=8, x=8),
@@ -971,6 +986,13 @@ class ModelOptimisations1024x1024:
 
         self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        self.compute_configs["CONV_HIFI4_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -1208,8 +1230,11 @@ class ModelOptimisations1024x1024:
             return self.conv_configs["DEFAULT"]
 
     def get_conv_compute_config(self, module_path):
-        if "conv_in" in module_path or "conv_out" in module_path:
+        if "conv_in" in module_path:
             return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
+        if "conv_out" in module_path:
+            # Final noise-prediction errors accumulate across denoising steps.
+            return self.compute_configs["CONV_HIFI4_FP32_COMPUTE_CONFIG"]
         if "resnets" in module_path:
             conv1_no_fp32 = {
                 "down_blocks.2.resnets",
@@ -1260,6 +1285,9 @@ class ModelOptimisations1024x1024:
         return mask, negative_mask, gamma, beta
 
     def _get_groupnorm_config(self, module_path):
+        if module_path == "unet.norm":
+            # Reduce final-normalization scale bias that accumulates across denoising steps.
+            return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_WELFORD"]
         if "up_blocks.2" in module_path and "norm1" in module_path:
             return self.groupnorm_configs["SHARDED_GROUPNORM_INPLACE_NEGATIVE"]
         if "resnets" in module_path:
