@@ -336,6 +336,28 @@ def prepare_gpt_oss_generator_args(
             True,  # stop_at_eos
             True,  # run_in_ci
         ),
+        # Batch 128, one prompt broadcast to all 128 users. The stock batch128 case gives each
+        # of 32 prompts to 4 users (one per mesh row), so it only checks consistency ACROSS rows
+        # -- every within-row slot holds a different prompt, hiding any defect that varies with
+        # position inside a row. Here all 128 outputs must be byte-identical, which makes
+        # within-row position observable too.
+        (
+            ["What is the capital of France?"],  # input_prompts (single prompt -> all users)
+            1,  # data_parallel
+            128,  # batch_size
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
+            False,  # warmup_prefill
+            True,  # users_row_sharded
+            False,  # long_context_mode
+            True,  # stop_at_eos
+            False,  # run_in_ci
+        ),
         # Batch 64. Diagnostic/coverage case: 16 users per row on a 4-row mesh means
         # batch_size % 32 != 0, so RotarySetup and SDPA both fall back to the *device* compute
         # grid (12 wide on this Blackhole galaxy) instead of the 8x8 used at batch 128. User b
@@ -459,6 +481,7 @@ def prepare_gpt_oss_generator_args(
         "prefill_64k",
         "prefill_128k",
         "batch128",
+        "batch128_same_prompt",
         "batch64",
         "batch128_logprobs",
         "long_context_128k",
