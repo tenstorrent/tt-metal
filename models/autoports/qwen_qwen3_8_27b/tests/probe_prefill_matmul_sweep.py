@@ -18,6 +18,7 @@ VARIANTS = {
     "baseline": {},
     "flat_projections": dict(flatten_prefill_batch=True),
     "batched_cache_fill": dict(batched_prefill_cache_fill=True),
+    "packed_prefill_conv": dict(experimental_packed_prefill_conv=True),
     "chunk2048": dict(batched_prefill_chunk_size=2048),
     "chunk8192": dict(batched_prefill_chunk_size=8192),
     "chunk8192_inner": dict(batched_prefill_chunk_size=8192, chunk_size=8192),

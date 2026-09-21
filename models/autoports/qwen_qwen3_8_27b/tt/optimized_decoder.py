@@ -16,7 +16,7 @@ and their helpers contain only TTNN device operations and shape orchestration.
 from dataclasses import dataclass
 
 import ttnn
-from models.autoports.qwen_qwen3_8_27b.tt.decode_conv import packed_decode_conv
+from models.autoports.qwen_qwen3_8_27b.tt.decode_conv import packed_decode_conv, packed_prefill_conv
 from models.common.lightweightmodule import LightweightModule
 
 # Measured Blackhole 11x10 / eight-bank policy. Overrides are full experiment policies.
@@ -885,6 +885,8 @@ class OptimizedDecoder(LightweightModule):
         row_qkv = ttnn.to_layout(padded_qkv, ttnn.ROW_MAJOR_LAYOUT)
         if t == 1 and b >= 8 and b % 8 == 0 and self.policy.get("packed_decode_conv", False):
             q, k, v = packed_decode_conv(row_qkv, state.conv, self.conv_taps, (h * d, h * d, hv * d))
+        elif t > 1 and b > 1 and self.policy.get("experimental_packed_prefill_conv", False):
+            q, k, v = packed_prefill_conv(row_qkv, state.conv, self.conv_taps, (h * d, h * d, hv * d))
         else:
             chunks = []
             for user in range(b):
