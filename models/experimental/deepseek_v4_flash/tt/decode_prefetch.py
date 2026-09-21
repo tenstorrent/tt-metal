@@ -80,6 +80,14 @@ DECODE_LAYOUTS = {
     # normalized full row directly onto q_b's 64-core weight grid.
     "q_a_proj": {"K": 4096, "N": 1024, "n_blocks": 32},
     "q_b_proj": {"K": 1024, "N": 32768, "n_blocks": 64},
+    # CSA Lightning Indexer (index_head_dim=128, index_n_heads=64). kv/gate share
+    # the Ca/Cb pair at 2*128; q_b is 64*128; weights_proj is one tile of heads.
+    # Prefetch rides existing rings where the B-core count matches: kv/gate on the
+    # router gate's 8-receiver ring (same ``[4096, 256]`` cut), q_b on the 64-receiver
+    # shared ring; weights_proj is 2 cores and gets its own ring via ensure_named_gcb.
+    "indexer.kv_proj": {"K": 4096, "N": 256, "n_blocks": 8},
+    "indexer.q_b_proj": {"K": 1024, "N": 8192, "n_blocks": 64},
+    "indexer.weights_proj": {"K": 4096, "N": 64, "n_blocks": 2},
     "kv_proj": {"K": 4096, "N": 512, "n_blocks": 16},
     "o_b_proj": {"K": 8192, "N": 4096},
     # Full-width hub mode so both projections consume the decode all-gather replica
