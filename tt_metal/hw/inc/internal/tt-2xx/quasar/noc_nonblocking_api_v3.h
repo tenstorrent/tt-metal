@@ -104,7 +104,7 @@ inline __attribute__((always_inline)) constexpr uint64_t noc_v3_state_operand(
 //    set_state and its with_state issues must run in the same binary
 //    (firmware state is invisible to kernels and vice versa). No current
 //    caller crosses that line; V2 could, V3 cannot.
-inline constexpr uint32_t NOC_V3_STATE_CMD_BUFS = 4;
+inline constexpr uint32_t NOC_V3_STATE_CMD_BUFS = 3;
 inline uint64_t noc_v3_read_state_base[NOC_V3_STATE_CMD_BUFS] = {};
 inline uint64_t noc_v3_write_state_base[NOC_V3_STATE_CMD_BUFS] = {};
 // The inline-write pair runs on the simple command buffer only, so one base.
