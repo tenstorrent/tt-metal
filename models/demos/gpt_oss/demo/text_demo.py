@@ -486,6 +486,12 @@ def test_gpt_oss_demo(
         config_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
         pytest.skip(f"This test configuration is skipped in CI: {config_id}")
 
+    # DIAGNOSTIC: with the decode trace on, the traced graph replays on device and Python
+    # forward() is not re-entered, so a per-step dump hook never advances past warmup.
+    if os.getenv("GPT_OSS_DISABLE_DECODE_TRACE") == "1":
+        enable_decode_trace = False
+        logger.warning("GPT_OSS_DISABLE_DECODE_TRACE=1: decode untraced (diagnostic)")
+
     # Total batch across all devices. Needed before setup_test so the mesh config can pick
     # the right expert-parallel degree (the sparse expert path needs EP=1 when users are
     # row-sharded; see decode_expert_parallel).

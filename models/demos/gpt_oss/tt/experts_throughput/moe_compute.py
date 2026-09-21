@@ -125,8 +125,12 @@ def _build_packed_weights(mesh_device, config, state_dict, K, N, E, ring_devices
         ttnn.deallocate(t)
 
     # memory_config=None keeps the quantized result on host.
-    w0_w1_host = ttnn.experimental.quantize_weights_via_host(tt_w0_w1_prepped, dtype=ttnn.bfloat4_b, memory_config=None)
-    w2_host = ttnn.experimental.quantize_weights_via_host(tt_w2_prepped, dtype=ttnn.bfloat4_b, memory_config=None)
+    # bfloat4_b is required: the kernel's weight unpacking assumes it. Measured with
+    # bfloat8_b instead, the op returns PCC -0.004 against a float golden, so this is not a
+    # knob for trading bytes against accuracy.
+    wdtype = ttnn.bfloat4_b
+    w0_w1_host = ttnn.experimental.quantize_weights_via_host(tt_w0_w1_prepped, dtype=wdtype, memory_config=None)
+    w2_host = ttnn.experimental.quantize_weights_via_host(tt_w2_prepped, dtype=wdtype, memory_config=None)
     ttnn.deallocate(tt_w0_w1_prepped)
     ttnn.deallocate(tt_w2_prepped)
     return w0_w1_host, w2_host
@@ -377,17 +381,14 @@ def moe_compute_decode_forward(
     )
     ttnn.deallocate(hidden_states)
 
-    # The combine accumulates into its output tensor, so it must start zeroed on every call --
-    # reusing a persistent buffer leaves the previous step's partial sums in place. (The
-    # moe_gpt path zeroes the same way.)
-    combine_out = ttnn.moreh_full(
-        shape=list(mc_config.combine_output.shape),
-        fill_value=0,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.bfloat16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # The combine accumulates into its output tensor, so it must start zeroed on every call.
+    # Zero the *persistent* buffer in place rather than allocating a fresh one: decode runs
+    # inside a captured trace, and allocating a device buffer per layer per step inside the
+    # trace region is the hazard tt-metal warns about ("these buffers may be corrupted once a
+    # trace is executed"). ttnn.fill with a preallocated output_tensor writes in place, so the
+    # trace records one fixed address and nothing is allocated during replay.
+    combine_out = mc_config.combine_output
+    ttnn.fill(combine_out, 0.0, output_tensor=combine_out)
 
     outputs = ttnn.experimental.moe_compute(
         tt_sparse,
