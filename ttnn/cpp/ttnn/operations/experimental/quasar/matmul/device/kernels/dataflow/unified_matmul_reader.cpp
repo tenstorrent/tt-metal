@@ -2,19 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified matmul reader: streams the A and B slices for this cluster's MN chunks.
+// Unified matmul reader: streams the A and B slices for this cluster's C slices.
 //
-// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N], batch_size times. An MN chunk is the
-// MN_chunk_M_tiles x MN_chunk_N_tiles tiles of C at origin (MN_chunk_first_M_tile, MN_chunk_first_N_tile). This cluster
-// owns num_MN_chunks consecutive chunks of the row-major walk over C (across N, then down M) starting at
-// (first_MN_chunk_M_tile, first_MN_chunk_N_tile), and produces them for every batch. For each batch, chunk
+// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N], batch_size times. A C slice is the
+// C_slice_M_tiles x C_slice_N_tiles tiles of C at origin (C_slice_first_M_tile, C_slice_first_N_tile). This cluster
+// owns num_C_slices consecutive C slices of the row-major walk over C (across N, then down M) starting at
+// (first_C_slice_M_tile, first_C_slice_N_tile), and produces them for every batch. For each batch, C slice
 // and K chunk the reader pushes
-//   - one A slice: the chunk's rows of A, K_chunk_tiles wide    -> [MN_chunk_M_tiles][K_chunk_tiles]
-//   - one B slice: the chunk's columns of B, K_chunk_tiles tall -> [K_chunk_tiles][MN_chunk_N_tiles]
+//   - one A slice: the C slice's rows of A, K_chunk_tiles wide    -> [C_slice_M_tiles][K_chunk_tiles]
+//   - one B slice: the C slice's columns of B, K_chunk_tiles tall -> [K_chunk_tiles][C_slice_N_tiles]
 // both row-major in tiles, which is the layout the compute kernel indexes. Loop order (batch, MN chunk,
 // K chunk) matches it.
 //
-// Edge chunks: tiles past M_tiles / N_tiles are never read; their slots keep stale L1, which only reaches
+// Edge C slices: tiles past M_tiles / N_tiles are never read; their slots keep stale L1, which only reaches
 // C tiles the writer drops (a valid C tile uses valid A rows and valid B columns only). When K is not a
 // multiple of the tile dim, the padding columns of A's last K tile are zeroed so they contribute nothing.
 //
@@ -32,18 +32,18 @@
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
 void kernel_main() {
-    // Per-core runtime args: where this cluster's run of MN chunks starts and how long it is.
-    const uint32_t first_MN_chunk_M_tile = get_arg(args::first_MN_chunk_M_tile);
-    const uint32_t first_MN_chunk_N_tile = get_arg(args::first_MN_chunk_N_tile);
-    const uint32_t num_MN_chunks = get_arg(args::num_MN_chunks);
+    // Per-core runtime args: where this cluster's run of C slices starts and how long it is.
+    const uint32_t first_C_slice_M_tile = get_arg(args::first_C_slice_M_tile);
+    const uint32_t first_C_slice_N_tile = get_arg(args::first_C_slice_N_tile);
+    const uint32_t num_C_slices = get_arg(args::num_C_slices);
 
     constexpr uint32_t batch_size = get_arg(args::batch_size);
     constexpr uint32_t M_tiles = get_arg(args::M_tiles);
     constexpr uint32_t K_tiles = get_arg(args::K_tiles);
     constexpr uint32_t N_tiles = get_arg(args::N_tiles);
     constexpr bool broadcast_B_over_batch = get_arg(args::broadcast_B_over_batch) != 0;
-    constexpr uint32_t MN_chunk_M_tiles = get_arg(args::MN_chunk_M_tiles);
-    constexpr uint32_t MN_chunk_N_tiles = get_arg(args::MN_chunk_N_tiles);
+    constexpr uint32_t C_slice_M_tiles = get_arg(args::C_slice_M_tiles);
+    constexpr uint32_t C_slice_N_tiles = get_arg(args::C_slice_N_tiles);
     constexpr uint32_t K_chunk_tiles = get_arg(args::K_chunk_tiles);
     constexpr uint32_t num_K_chunks = get_arg(args::num_K_chunks);
     // Valid element columns in A's last K tile; 0 when K is a multiple of the tile dim.
@@ -52,8 +52,8 @@ void kernel_main() {
     constexpr bool A_borrowed = get_arg(args::A_borrowed) != 0;
     constexpr bool B_borrowed = get_arg(args::B_borrowed) != 0;
 
-    constexpr uint32_t A_slice_tiles = MN_chunk_M_tiles * K_chunk_tiles;
-    constexpr uint32_t B_slice_tiles = K_chunk_tiles * MN_chunk_N_tiles;
+    constexpr uint32_t A_slice_tiles = C_slice_M_tiles * K_chunk_tiles;
+    constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_tiles;
     constexpr uint32_t A_tiles_per_batch = M_tiles * K_tiles;
     constexpr uint32_t B_tiles_per_batch = K_tiles * N_tiles;
 
@@ -71,8 +71,8 @@ void kernel_main() {
         A_slice.push_back(A_slice_tiles);
     }
     if constexpr (B_borrowed) {
-        B_slice.reserve_back(K_tiles * MN_chunk_N_tiles);
-        B_slice.push_back(K_tiles * MN_chunk_N_tiles);
+        B_slice.reserve_back(K_tiles * C_slice_N_tiles);
+        B_slice.push_back(K_tiles * C_slice_N_tiles);
     }
 
     const uint32_t A_tile_bytes = get_tile_size(dfb::A_slice);
@@ -86,28 +86,26 @@ void kernel_main() {
         const uint32_t A_batch_first_tile = batch * A_tiles_per_batch;
         const uint32_t B_batch_first_tile = broadcast_B_over_batch ? 0 : batch * B_tiles_per_batch;
 
-        uint32_t MN_chunk_first_M_tile = first_MN_chunk_M_tile;  // origin of the current chunk, in tiles
-        uint32_t MN_chunk_first_N_tile = first_MN_chunk_N_tile;
-        for (uint32_t MN_chunk = 0; MN_chunk < num_MN_chunks; ++MN_chunk) {
-            // Rows / columns of this chunk that lie inside the matrices (edge chunks are clipped).
-            const uint32_t valid_M_tiles = (M_tiles - MN_chunk_first_M_tile < MN_chunk_M_tiles)
-                                               ? (M_tiles - MN_chunk_first_M_tile)
-                                               : MN_chunk_M_tiles;
-            const uint32_t valid_N_tiles = (N_tiles - MN_chunk_first_N_tile < MN_chunk_N_tiles)
-                                               ? (N_tiles - MN_chunk_first_N_tile)
-                                               : MN_chunk_N_tiles;
+        uint32_t C_slice_first_M_tile = first_C_slice_M_tile;  // origin of the current C slice, in tiles
+        uint32_t C_slice_first_N_tile = first_C_slice_N_tile;
+        for (uint32_t MN_chunk = 0; MN_chunk < num_C_slices; ++MN_chunk) {
+            // Rows / columns of this C slice that lie inside the matrices (edge C slices are clipped).
+            const uint32_t valid_M_tiles =
+                (M_tiles - C_slice_first_M_tile < C_slice_M_tiles) ? (M_tiles - C_slice_first_M_tile) : C_slice_M_tiles;
+            const uint32_t valid_N_tiles =
+                (N_tiles - C_slice_first_N_tile < C_slice_N_tiles) ? (N_tiles - C_slice_first_N_tile) : C_slice_N_tiles;
 
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
                 const uint32_t K_chunk_first_K_tile = K_chunk * K_chunk_tiles;
 
                 if constexpr (!A_borrowed) {
-                    // A slice: rows MN_chunk_first_M_tile.., columns K_chunk_first_K_tile.. (invalid rows trail, so
+                    // A slice: rows C_slice_first_M_tile.., columns K_chunk_first_K_tile.. (invalid rows trail, so
                     // they are simply not written).
                     A_slice.reserve_back(A_slice_tiles);
                     uint32_t A_slot_offset = 0;
                     for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
                         uint32_t A_tile_index =
-                            A_batch_first_tile + (MN_chunk_first_M_tile + m_tile) * K_tiles + K_chunk_first_K_tile;
+                            A_batch_first_tile + (C_slice_first_M_tile + m_tile) * K_tiles + K_chunk_first_K_tile;
                         for (uint32_t k_tile = 0; k_tile < K_chunk_tiles;
                              ++k_tile, ++A_tile_index, A_slot_offset += A_slot_bytes) {
                             noc.async_read(
@@ -116,14 +114,14 @@ void kernel_main() {
                     }
                 }
                 if constexpr (!B_borrowed) {
-                    // B slice: rows K_chunk_first_K_tile.., columns MN_chunk_first_N_tile.. (invalid columns keep their
+                    // B slice: rows K_chunk_first_K_tile.., columns C_slice_first_N_tile.. (invalid columns keep their
                     // slot).
                     B_slice.reserve_back(B_slice_tiles);
                     uint32_t B_slot_offset = 0;
                     for (uint32_t k_tile = 0; k_tile < K_chunk_tiles; ++k_tile) {
                         uint32_t B_tile_index =
-                            B_batch_first_tile + (K_chunk_first_K_tile + k_tile) * N_tiles + MN_chunk_first_N_tile;
-                        for (uint32_t n_tile = 0; n_tile < MN_chunk_N_tiles;
+                            B_batch_first_tile + (K_chunk_first_K_tile + k_tile) * N_tiles + C_slice_first_N_tile;
+                        for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles;
                              ++n_tile, ++B_tile_index, B_slot_offset += B_slot_bytes) {
                             if (n_tile < valid_N_tiles) {
                                 noc.async_read(
@@ -156,11 +154,11 @@ void kernel_main() {
                 B_slice.push_back(B_slice_tiles);
             }
 
-            // Next chunk: across N, then down M.
-            MN_chunk_first_N_tile += MN_chunk_N_tiles;
-            if (MN_chunk_first_N_tile >= N_tiles) {
-                MN_chunk_first_N_tile = 0;
-                MN_chunk_first_M_tile += MN_chunk_M_tiles;
+            // Next C slice: across N, then down M.
+            C_slice_first_N_tile += C_slice_N_tiles;
+            if (C_slice_first_N_tile >= N_tiles) {
+                C_slice_first_N_tile = 0;
+                C_slice_first_M_tile += C_slice_M_tiles;
             }
         }
     }

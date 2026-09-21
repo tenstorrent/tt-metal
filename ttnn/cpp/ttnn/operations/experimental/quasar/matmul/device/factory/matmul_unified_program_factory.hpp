@@ -21,11 +21,11 @@ namespace ttnn::prim::qsr {
 // config is checked in that function with TT_FATAL, so calling it is the config check.
 //
 // Vocabulary (classic GEMM, all sizes in 32x32 tiles): C[M x N] = A[M x K] x B[K x N], per batch.
-//   MN chunk     the MN_chunk_M_tiles x MN_chunk_N_tiles tiles of C a core produces in one go: the
-//                L1-fittable piece of the core's output region. Normally the region is one chunk; a large
-//                region is produced as several consecutive chunks (across N, then down M). Every core
-//                produces its chunks for every batch
-//   subblock     the subblock_M_tiles x subblock_N_tiles tiles of a chunk accumulated in DST at once (one
+//   C slice     the C_slice_M_tiles x C_slice_N_tiles tiles of C a core produces in one go: the
+//                L1-fittable piece of the core's output region. Normally the region is one C slice; a large
+//                region is produced as several consecutive C slices (across N, then down M). Every core
+//                produces its C slices for every batch
+//   subblock     the subblock_M_tiles x subblock_N_tiles tiles of a C slice accumulated in DST at once (one
 //                matmul_block call per K tile); "block" means this and nothing else
 //   K chunk  K_chunk_tiles of the inner dimension; one A slice + one B slice per K chunk
 struct UnifiedMatmulPlan {
@@ -36,31 +36,31 @@ struct UnifiedMatmulPlan {
     bool broadcast_B_over_batch = true;  // one B for every batch, or a B per batch
 
     // Blocking, after the config's auto fields are resolved.
-    uint32_t MN_chunk_M_tiles = 0;
-    uint32_t MN_chunk_N_tiles = 0;
+    uint32_t C_slice_M_tiles = 0;
+    uint32_t C_slice_N_tiles = 0;
     uint32_t K_chunk_tiles = 0;
     uint32_t num_K_chunks = 0;  // K_tiles / K_chunk_tiles
     uint32_t subblock_M_tiles = 0;
     uint32_t subblock_N_tiles = 0;
 
-    // MN chunk assignment. The chunks of one batch are walked row-major (across N, then down M) and the
+    // C slice assignment. The C slices of one batch are walked row-major (across N, then down M) and the
     // walk is split into contiguous runs, one per active core; core i starts at
-    // (first_MN_chunk_M_tile[i], first_MN_chunk_N_tile[i]) and produces num_MN_chunks[i] chunks, for every
+    // (first_C_slice_M_tile[i], first_C_slice_N_tile[i]) and produces num_C_slices[i] C slices, for every
     // batch.
-    uint32_t MN_chunks_per_batch = 0;
+    uint32_t C_slices_per_batch = 0;
     bool row_major_cores = true;
     std::vector<tt::tt_metal::CoreCoord> cores;
-    std::vector<uint32_t> first_MN_chunk_M_tile;
-    std::vector<uint32_t> first_MN_chunk_N_tile;
-    std::vector<uint32_t> num_MN_chunks;
-    uint32_t max_MN_chunks_per_core = 0;
+    std::vector<uint32_t> first_C_slice_M_tile;
+    std::vector<uint32_t> first_C_slice_N_tile;
+    std::vector<uint32_t> num_C_slices;
+    uint32_t max_C_slices_per_core = 0;
 
     // Borrowing: an L1-sharded operand whose shard on every active core is exactly what that core's rings
     // would hold is bound as the ring itself (DFB borrowed_from), so nothing is copied. A: the shard is the
     // chunk's rows for all of K (one K chunk, chunks span N). B: the shard is the chunk's columns for all of
-    // K (chunks span M; K chunks are contiguous runs of it). C: the finished chunk is packed straight into
+    // K (chunks span M; K chunks are contiguous runs of it). C: the finished C slice is packed straight into
     // the shard, which needs subblock-major pack order to equal the shard's row-major tile order, i.e.
-    // subblock_N_tiles == MN_chunk_N_tiles; the writer then only waits. All three need one chunk per core
+    // subblock_N_tiles == C_slice_N_tiles; the writer then only waits. All three need one C slice per core
     // and batch 1, and a shard grid that lists the active cores in assignment order. Borrowed rings cost
     // no extra L1.
     bool borrow_A = false;
@@ -85,7 +85,7 @@ struct UnifiedMatmulPlan {
     bool alias_C_partials_onto_C_slice = false;
     uint64_t l1_bytes = 0;  // total ring footprint per core
 
-    // Only valid for a sharded output: the shard layout implied by how the MN chunks tile C.
+    // Only valid for a sharded output: the shard layout implied by how the C slices tile C.
     tt::tt_metal::TensorMemoryLayout sharded_output_layout() const;
 };
 

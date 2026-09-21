@@ -4,22 +4,22 @@
 
 // Unified matmul compute kernel: C = A x B for one cluster, as a classic blocked GEMM.
 //
-// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N], batch_size times. An MN chunk is
-// MN_chunk_M_tiles x MN_chunk_N_tiles tiles of C, the L1-fittable piece of the output region this cluster
-// owns; normally the region is one chunk. This kernel produces num_MN_chunks chunks for every batch and does
-// not care where in C they sit. For every chunk it accumulates over K, K_chunk_tiles per K chunk: the reader
-// delivers one A slice ([MN_chunk_M_tiles][K_chunk_tiles] tiles) and one B slice
-// ([K_chunk_tiles][MN_chunk_N_tiles] tiles) per K chunk, and the MATH engine multiplies them one subblock
+// GEMM view, all sizes in 32x32 tiles: C[M x N] = A[M x K] x B[K x N], batch_size times. A C slice is
+// C_slice_M_tiles x C_slice_N_tiles tiles of C, the L1-fittable piece of the output region this cluster
+// owns; normally the region is one C slice. This kernel produces num_C_slices C slices for every batch and does
+// not care where in C they sit. For every C slice it accumulates over K, K_chunk_tiles per K chunk: the reader
+// delivers one A slice ([C_slice_M_tiles][K_chunk_tiles] tiles) and one B slice
+// ([K_chunk_tiles][C_slice_N_tiles] tiles) per K chunk, and the MATH engine multiplies them one subblock
 // (subblock_M_tiles x subblock_N_tiles C tiles, the amount DST holds) at a time.
 //
-// Between K chunks the running sums have to leave DST. Default: they are packed into the C_partials ring
+// Between K chunks the running sums have to leave DST. Default: they are packed into the C_partials
 // and copied back into DST at the start of the next K chunk (spill / reload). With packer_l1_acc the packer
 // adds DST onto the partials already in L1 instead, so only the last K chunk reloads. The last K chunk packs
-// the finished subblocks into the C_slice ring for the writer.
+// the finished subblocks into the C_slice for the writer.
 //
-// Loop order matches the reader and the writer: batch, MN chunk, K chunk, subblocks (m_tile, n_tile)
-// row-major over the chunk, k_tile within the K chunk. Runtime args: num_MN_chunks. Compile-time args:
-// batch_size, K_chunk_tiles, num_K_chunks, MN_chunk_M_tiles, MN_chunk_N_tiles, subblock_M_tiles,
+// Loop order matches the reader and the writer: batch, MN chunk (which C slice), K chunk, subblocks (m_tile, n_tile)
+// row-major over the C slice, k_tile within the K chunk. Runtime args: num_C_slices. Compile-time args:
+// batch_size, K_chunk_tiles, num_K_chunks, C_slice_M_tiles, C_slice_N_tiles, subblock_M_tiles,
 // subblock_N_tiles, packer_l1_acc, partials_format_differs (C_partials and C_slice hold different formats,
 // so the packer must be reconfigured when switching between them).
 
@@ -34,21 +34,21 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t num_MN_chunks = get_arg(args::num_MN_chunks);  // this core's chunks, per batch
+    const uint32_t num_C_slices = get_arg(args::num_C_slices);  // this core's C slices, per batch
 
     constexpr uint32_t batch_size = get_arg(args::batch_size);
     constexpr uint32_t K_chunk_tiles = get_arg(args::K_chunk_tiles);
     constexpr uint32_t num_K_chunks = get_arg(args::num_K_chunks);
-    constexpr uint32_t MN_chunk_M_tiles = get_arg(args::MN_chunk_M_tiles);
-    constexpr uint32_t MN_chunk_N_tiles = get_arg(args::MN_chunk_N_tiles);
+    constexpr uint32_t C_slice_M_tiles = get_arg(args::C_slice_M_tiles);
+    constexpr uint32_t C_slice_N_tiles = get_arg(args::C_slice_N_tiles);
     constexpr uint32_t subblock_M_tiles = get_arg(args::subblock_M_tiles);
     constexpr uint32_t subblock_N_tiles = get_arg(args::subblock_N_tiles);
     constexpr bool packer_l1_acc = get_arg(args::packer_l1_acc) != 0;
     constexpr bool partials_format_differs = get_arg(args::partials_format_differs) != 0;
 
-    constexpr uint32_t A_slice_tiles = MN_chunk_M_tiles * K_chunk_tiles;
-    constexpr uint32_t B_slice_tiles = K_chunk_tiles * MN_chunk_N_tiles;
-    constexpr uint32_t MN_chunk_tiles = MN_chunk_M_tiles * MN_chunk_N_tiles;
+    constexpr uint32_t A_slice_tiles = C_slice_M_tiles * K_chunk_tiles;
+    constexpr uint32_t B_slice_tiles = K_chunk_tiles * C_slice_N_tiles;
+    constexpr uint32_t C_slice_tiles = C_slice_M_tiles * C_slice_N_tiles;
     constexpr uint32_t subblock_tiles = subblock_M_tiles * subblock_N_tiles;  // what DST holds
 
     DataflowBuffer A_slice(dfb::A_slice);
@@ -60,7 +60,7 @@ void kernel_main() {
     matmul_block_init(dfb::A_slice, dfb::B_slice, /*transpose=*/0, subblock_N_tiles, subblock_M_tiles, K_chunk_tiles);
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
-        for (uint32_t MN_chunk = 0; MN_chunk < num_MN_chunks; ++MN_chunk) {
+        for (uint32_t MN_chunk = 0; MN_chunk < num_C_slices; ++MN_chunk) {
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
                 const bool last_K_chunk = K_chunk == num_K_chunks - 1;
                 // Partials exist once a previous K chunk has packed them. Without packer L1 accumulation every
@@ -84,16 +84,16 @@ void kernel_main() {
                     pack_reconfig_l1_acc((!last_K_chunk && K_chunk > 0) ? 1 : 0);
                 }
 
-                // Slice layouts: A is [MN_chunk_M_tiles][K_chunk_tiles] row-major, B is
-                // [K_chunk_tiles][MN_chunk_N_tiles]. Walk the chunk in subblocks: (m_tile, n_tile) is the
-                // subblock's first tile within the chunk.
-                for (uint32_t m_tile = 0; m_tile < MN_chunk_M_tiles; m_tile += subblock_M_tiles) {
+                // Slice layouts: A is [C_slice_M_tiles][K_chunk_tiles] row-major, B is
+                // [K_chunk_tiles][C_slice_N_tiles]. Walk the C slice in subblocks: (m_tile, n_tile) is the
+                // subblock's first tile within the C slice.
+                for (uint32_t m_tile = 0; m_tile < C_slice_M_tiles; m_tile += subblock_M_tiles) {
                     const uint32_t A_subblock_first_tile = m_tile * K_chunk_tiles;  // A slice tile (m_tile, 0)
-                    for (uint32_t n_tile = 0; n_tile < MN_chunk_N_tiles; n_tile += subblock_N_tiles) {
+                    for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles; n_tile += subblock_N_tiles) {
                         const uint32_t B_subblock_first_tile = n_tile;  // B slice tile (0, n_tile)
                         tile_regs_acquire();
                         if (reload_partials) {
-                            // Copy this subblock's partial sums from the C_partials ring back into DST and keep
+                            // Copy this subblock's partial sums from the C_partials back into DST and keep
                             // accumulating onto them. The unpacker is switched to the partials format for the
                             // copy and back to B's format afterwards; the matmul MOP must be re-initialised
                             // after any copy_init.
@@ -118,7 +118,7 @@ void kernel_main() {
                         // subblock_N_tiles-wide row of tiles at k_tile and adds the subblock_M_tiles x
                         // subblock_N_tiles products onto DST tiles 0..subblock_tiles-1. The LLK has no
                         // multi-K-tile call: kt_dim is only the row stride of the A slice
-                        // ([MN_chunk_M_tiles][K_chunk_tiles] tiles), so the k loop lives here.
+                        // ([C_slice_M_tiles][K_chunk_tiles] tiles), so the k loop lives here.
                         uint32_t A_slice_tile = A_subblock_first_tile;
                         uint32_t B_slice_tile = B_subblock_first_tile;
                         for (uint32_t k_tile = 0; k_tile < K_chunk_tiles; ++k_tile) {
@@ -132,8 +132,8 @@ void kernel_main() {
                                 subblock_N_tiles,
                                 subblock_M_tiles,
                                 K_chunk_tiles);
-                            A_slice_tile += 1;                 // next K tile along the A slice row
-                            B_slice_tile += MN_chunk_N_tiles;  // next K row of the B slice
+                            A_slice_tile += 1;                // next K tile along the A slice row
+                            B_slice_tile += C_slice_N_tiles;  // next K row of the B slice
                         }
                         tile_regs_commit();
 
@@ -153,7 +153,7 @@ void kernel_main() {
                     if (!last_K_chunk && !second_to_last_K_chunk) {
                         // Pop without reading: dummy_unpack orders the pop after the wait on Quasar (a no-op
                         // elsewhere).
-                        for (uint32_t popped = 0; popped < MN_chunk_tiles; popped += subblock_tiles) {
+                        for (uint32_t popped = 0; popped < C_slice_tiles; popped += subblock_tiles) {
                             C_partials.wait_front(subblock_tiles);
                             dummy_unpack(dfb::C_partials);
                             C_partials.pop_front(subblock_tiles);

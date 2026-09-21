@@ -4,7 +4,7 @@
 
 """MatmulUnifiedProgramConfig: one placement-first matmul factory (Quasar-native matmul, stage A).
 
-Every test drives the same kernels through a different (cores, MN_chunk_M_tiles, MN_chunk_N_tiles) placement and
+Every test drives the same kernels through a different (cores, C_slice_M_tiles, C_slice_N_tiles) placement and
 memory layout. Correctness is checked with allclose against an fp32 golden of the bf16-rounded inputs
 (the device runs HiFi4 here), plus exact checks with structured inputs (identity / ones), which catch
 indexing and edge-clipping errors that a statistical check would not.
@@ -106,7 +106,7 @@ def _randn(*shape):
 # ----------------------------------------------------------------------------------------------------
 
 PLACEMENTS = [
-    # name,            cores (x0,y0,x1,y1) or list, MN_chunk_M_tiles, MN_chunk_N_tiles, row_major
+    # name,            cores (x0,y0,x1,y1) or list, C_slice_M_tiles, C_slice_N_tiles, row_major
     ("single_core", (0, 0, 0, 0), 16, 16, True),  # 1 block
     ("row_1d_mcast_in0_shape", (0, 0, 7, 0), 16, 2, True),  # 8 blocks, one per core, all share in0 rows
     ("col_1d_transposed", (0, 0, 0, 7), 2, 16, True),  # 8 blocks along M on a column of cores
@@ -120,9 +120,9 @@ PLACEMENTS = [
 
 
 @pytest.mark.parametrize(
-    "name,cores,MN_chunk_M_tiles,MN_chunk_N_tiles,row_major", PLACEMENTS, ids=[p[0] for p in PLACEMENTS]
+    "name,cores,C_slice_M_tiles,C_slice_N_tiles,row_major", PLACEMENTS, ids=[p[0] for p in PLACEMENTS]
 )
-def test_placements(device, name, cores, MN_chunk_M_tiles, MN_chunk_N_tiles, row_major):
+def test_placements(device, name, cores, C_slice_M_tiles, C_slice_N_tiles, row_major):
     gx, gy = _grid(device)
     ranges = cores if isinstance(cores, list) else [cores]
     for x0, y0, x1, y1 in ranges:
@@ -135,17 +135,15 @@ def test_placements(device, name, cores, MN_chunk_M_tiles, MN_chunk_N_tiles, row
     torch.manual_seed(0)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
-        cores=crs, MN_chunk_M_tiles=MN_chunk_M_tiles, MN_chunk_N_tiles=MN_chunk_N_tiles, row_major_cores=row_major
+        cores=crs, C_slice_M_tiles=C_slice_M_tiles, C_slice_N_tiles=C_slice_N_tiles, row_major_cores=row_major
     )
     out = _run(device, a, b, config)
     _check(out, _golden(a, b))
 
 
 def test_repr_and_fields():
-    cfg = qsr.MatmulUnifiedProgramConfig(
-        cores=_rect(0, 0, 1, 1), MN_chunk_M_tiles=2, MN_chunk_N_tiles=3, K_chunk_tiles=4
-    )
-    assert cfg.MN_chunk_M_tiles == 2 and cfg.MN_chunk_N_tiles == 3 and cfg.K_chunk_tiles == 4
+    cfg = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), C_slice_M_tiles=2, C_slice_N_tiles=3, K_chunk_tiles=4)
+    assert cfg.C_slice_M_tiles == 2 and cfg.C_slice_N_tiles == 3 and cfg.K_chunk_tiles == 4
     assert cfg.subblock_M_tiles == 0 and cfg.subblock_N_tiles == 0 and cfg.row_major_cores is True
     assert "MatmulUnifiedProgramConfig(" in repr(cfg)
 
@@ -156,7 +154,7 @@ def test_repr_and_fields():
 
 
 @pytest.mark.parametrize(
-    "M,K,N,MN_chunk_M_tiles,MN_chunk_N_tiles,K_chunk_tiles,subblock",
+    "M,K,N,C_slice_M_tiles,C_slice_N_tiles,K_chunk_tiles,subblock",
     [
         (7 * TILE, 3 * TILE, 11 * TILE, 3, 4, 0, (0, 0)),  # 3x3 blocks, ragged right and bottom edge
         (5 * TILE, 8 * TILE, 5 * TILE, 4, 4, 2, (2, 2)),  # 2x2 blocks with a 1-tile edge strip each way
@@ -165,14 +163,14 @@ def test_repr_and_fields():
         (3 * TILE, 4 * TILE, 3 * TILE, 3, 3, 4, (3, 1)),  # single K step: no partials at all
     ],
 )
-def test_edges_and_blocking(device, M, K, N, MN_chunk_M_tiles, MN_chunk_N_tiles, K_chunk_tiles, subblock):
+def test_edges_and_blocking(device, M, K, N, C_slice_M_tiles, C_slice_N_tiles, K_chunk_tiles, subblock):
     gx, gy = _grid(device)
     torch.manual_seed(1)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
         cores=_rect(0, 0, min(gx, 4) - 1, min(gy, 2) - 1),
-        MN_chunk_M_tiles=MN_chunk_M_tiles,
-        MN_chunk_N_tiles=MN_chunk_N_tiles,
+        C_slice_M_tiles=C_slice_M_tiles,
+        C_slice_N_tiles=C_slice_N_tiles,
         K_chunk_tiles=K_chunk_tiles,
         subblock_M_tiles=subblock[0],
         subblock_N_tiles=subblock[1],
@@ -189,7 +187,7 @@ def test_identity_is_exact_on_ragged_edges(device):
     a = _randn(1, 1, M, K)
     b = torch.eye(K, dtype=torch.bfloat16).reshape(1, 1, K, K)
     config = qsr.MatmulUnifiedProgramConfig(
-        cores=_rect(0, 0, min(gx, 3) - 1, min(gy, 3) - 1), MN_chunk_M_tiles=3, MN_chunk_N_tiles=2
+        cores=_rect(0, 0, min(gx, 3) - 1, min(gy, 3) - 1), C_slice_M_tiles=3, C_slice_N_tiles=2
     )
     out = _run(device, a, b, config)
     assert torch.equal(out.to(torch.bfloat16), a), "identity matmul differs from in0"
@@ -202,7 +200,7 @@ def test_ones_give_constant_k(device):
     a = torch.ones(1, 1, M, K, dtype=torch.bfloat16)
     b = torch.ones(1, 1, K, N, dtype=torch.bfloat16)
     config = qsr.MatmulUnifiedProgramConfig(
-        cores=_rect(0, 0, min(gx, 2) - 1, 0), MN_chunk_M_tiles=4, MN_chunk_N_tiles=2, K_chunk_tiles=3
+        cores=_rect(0, 0, min(gx, 2) - 1, 0), C_slice_M_tiles=4, C_slice_N_tiles=2, K_chunk_tiles=3
     )
     out = _run(device, a, b, config)
     assert torch.equal(out.to(torch.float32), torch.full((1, 1, M, N), float(K)))
@@ -220,9 +218,7 @@ def test_batch(device, bcast):
     torch.manual_seed(3)
     a = _randn(1, B, M, K)
     b = _randn(1, 1, K, N) if bcast else _randn(1, B, K, N)
-    config = qsr.MatmulUnifiedProgramConfig(
-        cores=_rect(0, 0, min(gx, 3) - 1, 0), MN_chunk_M_tiles=2, MN_chunk_N_tiles=3
-    )
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, min(gx, 3) - 1, 0), C_slice_M_tiles=2, C_slice_N_tiles=3)
     out = _run(device, a, b, config)
     _check(out, _golden(a, b))
 
@@ -251,7 +247,7 @@ def test_height_sharded_in0_and_out(device):
     )
     torch.manual_seed(4)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
-    config = qsr.MatmulUnifiedProgramConfig(cores=cores, MN_chunk_M_tiles=2, MN_chunk_N_tiles=3)
+    config = qsr.MatmulUnifiedProgramConfig(cores=cores, C_slice_M_tiles=2, C_slice_N_tiles=3)
     out = _run(device, a, b, config, in0_mem=in0_mem, out_mem=out_mem)
     _check(out, _golden(a, b))
 
@@ -269,7 +265,7 @@ def test_block_sharded_in0_and_out(device):
     )
     torch.manual_seed(5)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
-    config = qsr.MatmulUnifiedProgramConfig(cores=cores, MN_chunk_M_tiles=2, MN_chunk_N_tiles=3)
+    config = qsr.MatmulUnifiedProgramConfig(cores=cores, C_slice_M_tiles=2, C_slice_N_tiles=3)
     out = _run(device, a, b, config, in0_mem=in0_mem, out_mem=out_mem)
     _check(out, _golden(a, b))
 
@@ -285,7 +281,7 @@ def test_width_sharded_in1_and_out(device):
     out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, _shard(cores, [M, 2 * TILE]))
     torch.manual_seed(6)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
-    config = qsr.MatmulUnifiedProgramConfig(cores=cores, MN_chunk_M_tiles=2, MN_chunk_N_tiles=2)
+    config = qsr.MatmulUnifiedProgramConfig(cores=cores, C_slice_M_tiles=2, C_slice_N_tiles=2)
     out = _run(device, a, b, config, in1_mem=in1_mem, out_mem=out_mem)
     _check(out, _golden(a, b))
 
@@ -303,15 +299,13 @@ def test_dram_sharded_in1(device):
     )
     torch.manual_seed(7)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
-    config = qsr.MatmulUnifiedProgramConfig(
-        cores=_rect(0, 0, min(gx, 8) - 1, 0), MN_chunk_M_tiles=1, MN_chunk_N_tiles=2
-    )
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, min(gx, 8) - 1, 0), C_slice_M_tiles=1, C_slice_N_tiles=2)
     out = _run(device, a, b, config, in1_mem=in1_mem)
     _check(out, _golden(a, b))
 
 
 def test_borrowed_B_over_several_K_chunks(device):
-    """B width-sharded in L1 on the row of cores that own the chunks: its shard is bound as the B slice ring
+    """B width-sharded in L1 on the row of cores that own the C slices: its shard is bound as the B slice ring
     (no copy) and consumed one K chunk at a time; four K chunks here."""
     gx, gy = _grid(device)
     if gx < 4:
@@ -321,14 +315,14 @@ def test_borrowed_B_over_several_K_chunks(device):
     in1_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, _shard(cores, [K, 2 * TILE]))
     torch.manual_seed(13)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
-    config = qsr.MatmulUnifiedProgramConfig(cores=cores, MN_chunk_M_tiles=2, MN_chunk_N_tiles=2, K_chunk_tiles=2)
+    config = qsr.MatmulUnifiedProgramConfig(cores=cores, C_slice_M_tiles=2, C_slice_N_tiles=2, K_chunk_tiles=2)
     out = _run(device, a, b, config, in1_mem=in1_mem)
     _check(out, _golden(a, b))
 
 
 def test_height_sharded_A_with_padded_K_takes_the_copy_path(device):
     """K = 100 is not a tile multiple, so A's padding has to be zeroed in the ring: A cannot be borrowed and is
-    copied even though its shard matches the chunks."""
+    copied even though its shard matches the C slices."""
     gx, gy = _grid(device)
     if gy < 4:
         pytest.skip("needs 4 rows")
@@ -339,13 +333,13 @@ def test_height_sharded_A_with_padded_K_takes_the_copy_path(device):
     )
     torch.manual_seed(14)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
-    config = qsr.MatmulUnifiedProgramConfig(cores=cores, MN_chunk_M_tiles=2, MN_chunk_N_tiles=3)
+    config = qsr.MatmulUnifiedProgramConfig(cores=cores, C_slice_M_tiles=2, C_slice_N_tiles=3)
     out = _run(device, a, b, config, in0_mem=in0_mem)
     _check(out, _golden(a, b))
 
 
 def test_sharded_C_with_narrow_subblock_takes_the_copy_path(device):
-    """An explicit subblock narrower than the chunk means pack order != shard order, so C is written by the
+    """An explicit subblock narrower than the C slice means pack order != shard order, so C is written by the
     writer instead of packed in place (with a warning); the result must still be right."""
     gx, gy = _grid(device)
     if gy < 2:
@@ -358,7 +352,7 @@ def test_sharded_C_with_narrow_subblock_takes_the_copy_path(device):
     torch.manual_seed(15)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
-        cores=cores, MN_chunk_M_tiles=2, MN_chunk_N_tiles=4, subblock_M_tiles=1, subblock_N_tiles=2
+        cores=cores, C_slice_M_tiles=2, C_slice_N_tiles=4, subblock_M_tiles=1, subblock_N_tiles=2
     )
     out = _run(device, a, b, config, out_mem=out_mem)
     _check(out, _golden(a, b))
@@ -374,7 +368,7 @@ def test_single_core_all_operands_borrowed(device):
     out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard(core, [M, N]))
     torch.manual_seed(16)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
-    config = qsr.MatmulUnifiedProgramConfig(cores=core, MN_chunk_M_tiles=3, MN_chunk_N_tiles=2)
+    config = qsr.MatmulUnifiedProgramConfig(cores=core, C_slice_M_tiles=3, C_slice_N_tiles=2)
     out = _run(device, a, b, config, in0_mem=in0_mem, in1_mem=in1_mem, out_mem=out_mem)
     _check(out, _golden(a, b))
 
@@ -384,7 +378,7 @@ def test_l1_interleaved_everything(device):
     M, K, N = 4 * TILE, 4 * TILE, 4 * TILE
     torch.manual_seed(8)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
-    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), MN_chunk_M_tiles=2, MN_chunk_N_tiles=2)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), C_slice_M_tiles=2, C_slice_N_tiles=2)
     out = _run(
         device,
         a,
@@ -407,7 +401,7 @@ def test_bfp8_inputs(device):
     M, K, N = 4 * TILE, 8 * TILE, 4 * TILE
     torch.manual_seed(9)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
-    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), MN_chunk_M_tiles=2, MN_chunk_N_tiles=2)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), C_slice_M_tiles=2, C_slice_N_tiles=2)
     out = _run(device, a, b, config, in0_dtype=ttnn.bfloat8_b, in1_dtype=ttnn.bfloat8_b)
     # bfp8 quantizes the operands; compare against the same quantization.
     a_q = ttnn.to_torch(ttnn.from_torch(a, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT))
@@ -422,7 +416,7 @@ def test_fp32_dest_acc_and_fp32_out(device):
     torch.manual_seed(10)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
-        cores=_rect(0, 0, 1, 0), MN_chunk_M_tiles=4, MN_chunk_N_tiles=2, K_chunk_tiles=2
+        cores=_rect(0, 0, 1, 0), C_slice_M_tiles=4, C_slice_N_tiles=2, K_chunk_tiles=2
     )
     out = _run(device, a, b, config, out_dtype=ttnn.float32, fp32_dest_acc_en=True)
     _check(out, _golden(a, b), rtol=0.005)
@@ -435,7 +429,7 @@ def test_packer_l1_acc(device):
     torch.manual_seed(11)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
-        cores=_rect(0, 0, 1, 1), MN_chunk_M_tiles=2, MN_chunk_N_tiles=2, K_chunk_tiles=1
+        cores=_rect(0, 0, 1, 1), C_slice_M_tiles=2, C_slice_N_tiles=2, K_chunk_tiles=1
     )
     out = _run(device, a, b, config, packer_l1_acc=True)
     _check(out, _golden(a, b))
@@ -449,7 +443,7 @@ def test_bias_is_applied_as_separate_add(device):
     a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     b_t = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
     bias_t = ttnn.from_torch(bias, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), MN_chunk_M_tiles=2, MN_chunk_N_tiles=2)
+    config = qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 1, 1), C_slice_M_tiles=2, C_slice_N_tiles=2)
     out = ttnn.experimental.quasar.linear(
         a_t, b_t, bias=bias_t, program_config=config, compute_kernel_config=_hifi4(device)
     )
@@ -465,44 +459,44 @@ def test_bias_is_applied_as_separate_add(device):
     "make_config,out_mem,pattern",
     [
         (
-            lambda: qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 63, 63), MN_chunk_M_tiles=1, MN_chunk_N_tiles=1),
+            lambda: qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 63, 63), C_slice_M_tiles=1, C_slice_N_tiles=1),
             None,
             "exceed the device compute grid",
         ),
         (
             lambda: qsr.MatmulUnifiedProgramConfig(
-                cores=_rect(0, 0, 0, 0), MN_chunk_M_tiles=2, MN_chunk_N_tiles=2, K_chunk_tiles=3
+                cores=_rect(0, 0, 0, 0), C_slice_M_tiles=2, C_slice_N_tiles=2, K_chunk_tiles=3
             ),
             None,
             "must divide K_tiles",
         ),
         (
             lambda: qsr.MatmulUnifiedProgramConfig(
-                cores=_rect(0, 0, 0, 0), MN_chunk_M_tiles=2, MN_chunk_N_tiles=2, subblock_M_tiles=2, subblock_N_tiles=0
+                cores=_rect(0, 0, 0, 0), C_slice_M_tiles=2, C_slice_N_tiles=2, subblock_M_tiles=2, subblock_N_tiles=0
             ),
             None,
             "both be set",
         ),
         (
             lambda: qsr.MatmulUnifiedProgramConfig(
-                cores=_rect(0, 0, 0, 0), MN_chunk_M_tiles=4, MN_chunk_N_tiles=4, subblock_M_tiles=4, subblock_N_tiles=4
+                cores=_rect(0, 0, 0, 0), C_slice_M_tiles=4, C_slice_N_tiles=4, subblock_M_tiles=4, subblock_N_tiles=4
             ),
             None,
             "DST fits",
         ),
         (
-            lambda: qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), MN_chunk_M_tiles=0, MN_chunk_N_tiles=2),
+            lambda: qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=0, C_slice_N_tiles=2),
             None,
             "must be > 0",
         ),
         (
-            lambda: qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), MN_chunk_M_tiles=2, MN_chunk_N_tiles=2),
+            lambda: qsr.MatmulUnifiedProgramConfig(cores=_rect(0, 0, 0, 0), C_slice_M_tiles=2, C_slice_N_tiles=2),
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                 ttnn.BufferType.L1,
                 _shard(_rect(0, 0, 0, 0), [2 * TILE, 4 * TILE]),
             ),
-            "exactly one MN chunk per core",
+            "exactly one C slice per core",
         ),
     ],
     ids=[
