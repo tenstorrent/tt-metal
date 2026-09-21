@@ -419,6 +419,7 @@ def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
     if model.num_devices > 1:
         _, perf = _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks, token_acc)
         profiler = perf["profiler"]
+        ttft, decode_tok_s = perf["ttft_s"], perf["decode_tok_s"]
     else:
         # Single device (the 9B dev checkpoint) has no phase profiler, so it reports no benchmark
         # JSON; the CI legs that feed the dashboard are all TP. No _warmup_prefill: the reference
@@ -431,7 +432,7 @@ def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
     logger.info(f"Top-1 token accuracy: {top1:.2f}%  Top-5 token accuracy: {top5:.2f}%")
 
     if profiler is not None:
-        _save_accuracy_benchmark(profiler, model, top1, top5, prompt_len, max_generated_tokens)
+        _save_accuracy_benchmark(profiler, model, top1, top5, prompt_len, max_generated_tokens, ttft, decode_tok_s)
 
     # get_accuracy_thresholds resolves the centralized targets and raises when none match, so a
     # renamed checkpoint or a relabelled SKU fails here instead of leaving the gate a no-op. It
@@ -446,16 +447,21 @@ def test_demo_text_accuracy(mesh_device, max_generated_tokens, monkeypatch):
     assert top5 >= min_top5, f"top-5 token accuracy {top5:.2f}% below target {min_top5}%"
 
 
-def _save_accuracy_benchmark(profiler, model, top1, top5, prompt_len, num_generated):
+def _save_accuracy_benchmark(profiler, model, top1, top5, prompt_len, num_generated, ttft, decode_tok_s):
     """Emit the CI benchmark JSON for an accuracy run (no-op outside CI).
 
-    ``create_benchmark_data`` requires the perf keys to be present but nothing reads them on an
-    accuracy run: ``validate_perf_targets._is_accuracy_run`` classifies a run by the top1/top5
-    measurement names below (the JSON's run_type is not read) and then skips the perf block. A
-    teacher-forced run's throughput is an artifact anyway — the fed token is not the model's own —
-    so the keys are zero rather than a number that invites comparison.
+    The perf numbers are real: teacher forcing changes which token id is written into the decode
+    input buffer, not the device work per step, and the bookkeeping happens outside the timed
+    window. They are simply not gated — ``validate_perf_targets._is_accuracy_run`` classifies a
+    run by the top1/top5 measurement names below and then skips the perf block — and they are
+    measured at the reference's prompt length, which no perf entry covers.
     """
-    measurements = {"prefill_t/s": 0.0, "prefill_time_to_token": 0.0, "decode_t/s": 0.0, "decode_t/s/u": 0.0}
+    measurements = {
+        "prefill_t/s": (prompt_len / ttft) if ttft > 0 else 0.0,
+        "prefill_time_to_token": ttft,
+        "decode_t/s": decode_tok_s,
+        "decode_t/s/u": decode_tok_s,
+    }
     benchmark_data = create_benchmark_data(profiler, measurements, {"inference_prefill": 0, "inference_decode": 1}, {})
     for name, value in (("top1_token_accuracy", top1), ("top5_token_accuracy", top5)):
         benchmark_data.add_measurement(profiler, 0, "inference_decode", name, value)
