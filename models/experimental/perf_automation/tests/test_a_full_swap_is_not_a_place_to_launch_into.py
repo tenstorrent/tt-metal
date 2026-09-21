@@ -439,6 +439,25 @@ def test_run_perf_node_requests_low_mem_unconditionally():
     assert 'env.setdefault(_pr.LOW_MEM_REFERENCE_ENV, "1")' in src, "the signal is not set unconditionally"
 
 
+def test_make_run_profiled_defaults_the_profiled_run_to_bf16():
+    """THE SINGLE PROFILING CHOKEPOINT. make_run_profiled builds the env for every tracy-profiled
+    run (before_loop's baseline AND measure_runs' candidate/profile), so the bf16 default lives here
+    once instead of in each caller's extra_env -- measure_runs forgetting it is exactly what let the
+    30B nemotron model build a full-depth fp32 reference (~226 GB) and get OOM-killed on 2026-09-21.
+    Profiling reads the reference for shapes/timing only, so bf16 is always right, and the factory's
+    own comment applies this to the PROFILED run's env only, never the correctness/PCC gates. An
+    explicit operator/caller value still wins via setdefault."""
+    import models.experimental.perf_automation.agent.probes as P
+
+    src = inspect.getsource(P.make_run_profiled)
+    assert "should_use_low_mem_reference" not in src, (
+        "a profiling build's reference precision must not depend on a memory check -- profiling " "never needed fp32"
+    )
+    assert (
+        'env.setdefault("PERF_MCP_LOW_MEM_REFERENCE", "1")' in src
+    ), "make_run_profiled must default the profiled run to a bf16 reference so no caller can forget it"
+
+
 def test_adaptive_run_requests_low_mem_unconditionally():
     """Same rule for _adaptive_run's full-pipeline BEFORE/AFTER bookend -- a TIMING measurement,
     never a PCC check, so its reference build has the same "shapes only" contract."""

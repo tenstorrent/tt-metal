@@ -1622,6 +1622,15 @@ def make_run_profiled(
                 env.update(json.loads(_prof))
             except (ValueError, TypeError):
                 pass
+        # PROFILING IS TIMING-ONLY: profile_model reads the reference build for op shapes and device
+        # timing, never its values, so full (fp32) precision is pure waste here -- and a large model's
+        # fp32 reference can OOM the host (the 30B nemotron model's fp32 full-depth build hit ~226 GB
+        # and was OOM-killed, 2026-09-21). Default every profiled run to a bf16 reference. This is the
+        # ONE point all profiling callers funnel through (before_loop baseline, measure_runs profile),
+        # so no caller has to remember the signal, and -- like the depth cap just below -- it applies to
+        # the PROFILED run's env only, never os.environ, so the correctness/PCC gates are untouched. An
+        # explicit operator or caller value still wins (setdefault).
+        env.setdefault("PERF_MCP_LOW_MEM_REFERENCE", "1")
         # THE LAST POINT AT WHICH "NO CAP ARRIVED" IS STILL FIXABLE. Every earlier route that carries
         # the proven cap here is conditional, and this is the one place that knows the profiler is
         # about to be launched. Applied to the PROFILED run's env only -- never to os.environ -- so
