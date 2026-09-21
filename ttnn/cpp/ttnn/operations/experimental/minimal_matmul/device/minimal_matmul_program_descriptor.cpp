@@ -381,11 +381,6 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     auto core_0_endy = CoreCoord{0, grid_size.y - 1};
     auto core_endx_endy = CoreCoord{grid_size.x - 1, grid_size.y - 1};
 
-    auto in0_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
-    auto in0_receiver_cores = CoreRange(transpose_core_grid ? core_0_1 : core_1_0, core_endx_endy);
-    auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
-    auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
-
     ProgramSpec spec;
     spec.name = "minimal_matmul";
 
