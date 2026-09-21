@@ -109,7 +109,7 @@ void barrier_across_send_recv_ranks(
 
 }  // namespace
 
-void MeshSocket::process_host_ranks(MetalEnvImpl& metal_env) {
+void MeshSocket::process_host_ranks(const tt_fabric::ControlPlane& control_plane) {
     multihost::Rank sender_rank = config_.sender_rank;
     multihost::Rank receiver_rank = config_.receiver_rank;
     if (config_.distributed_context) {
@@ -126,7 +126,7 @@ void MeshSocket::process_host_ranks(MetalEnvImpl& metal_env) {
         rank_translation_table_[config_.sender_rank] = config_.sender_rank;
         rank_translation_table_[config_.receiver_rank] = config_.receiver_rank;
     }
-    const auto& global_logical_bindings = metal_env.get_control_plane().get_global_logical_bindings();
+    const auto& global_logical_bindings = control_plane.get_global_logical_bindings();
     TT_FATAL(
         global_logical_bindings.contains(sender_rank) && global_logical_bindings.contains(receiver_rank),
         "Invalid socket sender rank {} or receiver rank {} specified.",
@@ -142,8 +142,8 @@ void MeshSocket::process_host_ranks(MetalEnvImpl& metal_env) {
     // enforced by the rank-based check in the constructor.
 }
 
-void MeshSocket::process_mesh_ids(MetalEnvImpl& metal_env) {
-    const auto& global_logical_bindings = metal_env.get_control_plane().get_global_logical_bindings();
+void MeshSocket::process_mesh_ids(const tt_fabric::ControlPlane& control_plane) {
+    const auto& global_logical_bindings = control_plane.get_global_logical_bindings();
 
     for (const auto& [rank, mesh_id_and_host_rank] : global_logical_bindings) {
         if (std::get<0>(mesh_id_and_host_rank) == config_.sender_mesh_id.value() ||
@@ -212,9 +212,9 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
     if (config_.sender_mesh_id.has_value()) {
         TT_FATAL(
             config.receiver_mesh_id.has_value(), "Expected receiver mesh id to be set when sender mesh id is set.");
-        this->process_mesh_ids(metal_env);
+        this->process_mesh_ids(metal_env.get_control_plane());
     } else {
-        this->process_host_ranks(metal_env);
+        this->process_host_ranks(metal_env.get_control_plane());
     }
     TT_FATAL(
         config_.sender_mesh_id.has_value() && config_.receiver_mesh_id.has_value(),
