@@ -232,7 +232,7 @@ Thread N Stall Rate = THREAD_STALLS_N / ref_cnt * 100
 Thread mapping: Thread 0 = unpack, Thread 1 = math, Thread 2 = pack.
 
 - **High value (>30%)**: Thread is frequently stalled. For Thread 0 this usually means waiting for data (NOC, semaphore). For Thread 1, waiting for math hardware. For Thread 2, waiting for pack hardware.
-- **Low value (<5%)**: Thread rarely stalls. Expected for compute-bound ops on the math thread. A low value does not rule out a data wait: time the unpack thread spends in `cb_wait_front` is a RISC-V poll and is not counted here.
+- **Low value (<5%)**: Thread rarely stalls. Expected for compute-bound ops on the math thread. A low value does not rule out a data wait: the unpack thread may be spending its time in `cb_wait_front`, a RISC-V poll that is not counted here.
 
 **Use case:** First-order indicator of where time is being lost. The stall breakdown metrics (below) identify the specific stall reason.
 
@@ -1105,6 +1105,6 @@ Some counters will still be 0 for a given workload, for example `WAITING_FOR_SFP
 
 The counters measure Tensix engine signals. `cb_wait_front` and `cb_reserve_back` are RISC-V loops that poll the circular buffer's tiles-received and tiles-acked counts, and a NOC read barrier is a RISC-V poll on the NOC status registers. While a thread spins in one of these, no Tensix instruction is issued, so `THREAD_STALLS_N`, `WAITING_FOR_SRCA_VALID`, `WAITING_FOR_SRCB_VALID` and the semaphore waits all stay where they were. A kernel that waits on DRAM for most of its runtime can therefore report a stall rate near zero.
 
-Measured on a Blackhole causal SDPA prefill: the unpack thread spent 38 percent of the kernel in `cb_wait_front` on the K and V buffers, while `WAITING_FOR_SRCA_VALID` and `WAITING_FOR_SRCB_VALID` read 0 and `WAITING_FOR_NONZERO_SEM_0` read 1.4 percent of the window. The same holds for `L1_*_NOC_RING*_INCOMING`, which counts NoC writes into L1 and stays at 0 when every core reads its data from DRAM itself.
+Measured on a Blackhole causal SDPA prefill: the unpack thread spent 38 percent of the kernel in `cb_wait_front` on the K and V buffers, while `WAITING_FOR_SRCA_VALID` and `WAITING_FOR_SRCB_VALID` read 0 and `WAITING_FOR_NONZERO_SEM_0` read 1.4 percent of the window. The same holds for `L1_*_NOC_RING*_INCOMING`: it counts the NIU interface that serves requests other cores make to this L1, while the data of a DRAM read this core issued comes back through the interface that carries its own requests, the `OUTGOING` one, so it stays at 0 when every core reads its data from DRAM itself.
 
 When the question is whether a kernel is memory bound, put a `DeviceZoneScopedN` around the wait or read the RISC-V cycle counter; the stall metrics on their own cannot answer it.

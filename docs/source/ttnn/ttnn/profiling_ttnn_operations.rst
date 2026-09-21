@@ -130,7 +130,7 @@ The headers of the columns with their descriptions is below:
 Hardware Performance Counters
 -----------------------------
 
-Tenstorrent devices contain hardware performance counters that measure cycle-level events inside each Tensix core. These counters provide visibility into compute utilization, memory traffic, instruction pipeline stalls, and NOC bandwidth that is not available from kernel-level timestamps alone. They see Tensix engine activity only: a RISC-V poll such as ``cb_wait_front`` moves no counter, so a data wait on a circular buffer shows up in zone timings, not in the stall metrics.
+Tenstorrent devices contain hardware performance counters that measure cycle-level events inside each Tensix core. These counters provide visibility into compute utilization, memory traffic, instruction pipeline stalls, and NOC bandwidth that is not available from kernel-level timestamps alone. They see Tensix engine activity only: a RISC-V poll such as ``cb_wait_front`` moves no counter, so a data wait on a circular buffer is invisible to the stall metrics and only shows up in a zone placed around the wait.
 
 **Quick Start**
 
