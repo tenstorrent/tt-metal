@@ -849,7 +849,7 @@ jobs:
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: 🔍 Import the wheel in a clean venv
-        if: ${{ inputs.build-inplace-wheel && github.event_name == 'merge_group' }}
+        if: ${{ inputs.build-inplace-wheel }}
         timeout-minutes: 10
         run: |
           # ttnn must import on its declared dependencies alone.
