@@ -6,15 +6,9 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-
-FORCE_INLINE void zero_tile_at(uint32_t l1_write_addr, uint32_t tile_bytes) {
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr);
-    for (uint32_t i = 0; i < tile_bytes / sizeof(uint32_t); ++i) {
-        ptr[i] = 0;
-    }
-}
 
 void kernel_main() {
     Noc noc;
@@ -32,19 +26,20 @@ void kernel_main() {
     const auto s = TensorAccessor(tensor::output);
 
     DataflowBuffer dfb_out(dfb::out);
-    DataflowBuffer dfb_zero(dfb::zero);
+    // Zero-fill staging region (Wt tiles). Formerly a self-looped DFB — this kernel bound both
+    // PRODUCER and CONSUMER, a shape Gen2 rejects for DM kernels — converted to a Scratchpad per
+    // dm_self_loop_dfbs.md. The fake-FIFO calls translated away entirely: both FIFO pointers were
+    // only ever read at their initial (base) position, so no index or wrap survives.
+    Scratchpad<volatile uint32_t> zero_stage(scratch::zero);
 
     const uint32_t tile_bytes = dfb_out.get_entry_size();
-    const uint32_t zero_tile_bytes = dfb_zero.get_entry_size();
+    // Per-tile stride/size within the zero region. Its entries share `out`'s entry size: every
+    // binding factory sets both to output_single_tile_size.
+    const uint32_t zero_tile_bytes = tile_bytes;
 
-    dfb_zero.reserve_back(Wt);
-    uint32_t zero_l1_write_addr = dfb_zero.get_write_ptr();
-    for (uint32_t j = 0; j < Wt; j++) {
-        zero_tile_at(zero_l1_write_addr, zero_tile_bytes);
-        zero_l1_write_addr += zero_tile_bytes;
+    for (uint32_t i = 0; i < zero_stage.size(); ++i) {
+        zero_stage[i] = 0;
     }
-    dfb_zero.push_back(Wt);
-    dfb_zero.wait_front(Wt);
 
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
@@ -55,7 +50,7 @@ void kernel_main() {
                     dfb_out.wait_front(Wt);
                 }
 
-                uint32_t l1_read_addr = write_rotary_output ? dfb_out.get_read_ptr() : dfb_zero.get_read_ptr();
+                uint32_t l1_read_addr = write_rotary_output ? dfb_out.get_read_ptr() : zero_stage.get_base_address();
                 const uint32_t l1_read_stride = write_rotary_output ? tile_bytes : zero_tile_bytes;
                 const uint32_t write_bytes = write_rotary_output ? tile_bytes : zero_tile_bytes;
                 for (uint32_t j = 0; j < Wt; j++) {
@@ -72,6 +67,4 @@ void kernel_main() {
             }
         }
     }
-
-    dfb_zero.pop_front(Wt);
 }
