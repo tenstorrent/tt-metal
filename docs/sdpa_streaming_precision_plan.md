@@ -1,12 +1,11 @@
 # Streaming SDPA precision integration — PR 1
 
-Status: recipe/evidence freeze, clean branch setup, and internal numerical-policy
-and compatibility-resolver foundation implemented and built on the new base.
-Shared streaming-buffer helpers and the C/D FP32 recurrent-state primitives
-are extracted and device-checked. Complete numerical recipes are not yet ported
-or qualified. No new public recipe
-interface or dispatch is enabled. Public enum/helper names below are intentionally
-not prescribed until the interface implementation is reviewed.
+Status: the named A/B/C/D/E recipes and explicit input preparation are integrated
+and built. Release qualification reproduces all 147 frozen outputs bit-for-bit.
+See the [public interface](sdpa_precision.md) and
+[final qualification report](sdpa_precision_qualification.md) for current scope,
+results and limitations. The foundation/build-recovery sections below are a
+historical record of earlier commits, not the current API's availability.
 
 ## Immutable inputs to the port
 
@@ -87,24 +86,25 @@ eligibility only with explicit implementation and qualification.
 
 ## Internally staged commits, one implementation PR
 
-This document is the first branch-setup commit. The remaining stages are not
-complete and should remain separate reviewable commits within PR 1:
+These stages are retained as separate reviewable commits within PR 1:
 
-- [ ] Refresh the affected main-side dispatch/default tests and establish a
-  current-main device baseline. The September 16 usage audit is historical.
+- [x] Refresh dispatch/default tests and compare the unchanged legacy streaming
+  implementation with named A. This is a paired kernel/API control, not a
+  separate full build of pristine main. The September 16 usage audit is historical.
 - [x] Introduce numerical-policy types, validation and compatibility resolver;
   test omitted versus explicitly constructed configs and conflicting knobs.
-- [ ] Extract shared streaming primitives and FP32 state support; integrate
+- [x] Extract shared streaming primitives and FP32 state support; integrate
   D/C with their exact exp/subtraction/normalization decisions.
-- [ ] Integrate B compensation and E's shared compute path, with explicit
+- [x] Integrate B compensation and E's shared compute path, with explicit
   state ownership, changed-max handling, final flush and input preparation.
-- [ ] Transfer qualified scheduling optimizations only behind their supported
+- [x] Transfer qualified scheduling optimizations only behind their supported
   geometry/lifetime guards. Rejected experimental branches, debug counters,
   global monkeypatches and research-only include overrides are not retained.
-- [ ] Add production-path accuracy, trace/cache-hit, boundary and performance
-  regression tests, plus concise user documentation and model opt-in examples.
-- [ ] Build on the actual new base and qualify the extracted implementations
-  against both the frozen reference and current main.
+- [x] Add production-path accuracy, trace/cache-hit, boundary and opt-in performance
+  tests, user documentation and explicit opt-in examples. Replay captured FLUX.2
+  attention inputs through the new API; full pretrained pipelines are separate.
+- [x] Build on the new base and qualify against the frozen outputs and the legacy
+  streaming control. Document rather than hide the legacy Watcher size limit.
 
 Current-main checks at branch creation:
 
@@ -209,8 +209,11 @@ See [validation details and commands](sdpa_streaming_precision_validation.md).
 - Frozen resident optimizations favor unchanged maxima. Check changing-max
   and shorter-context regressions before selecting dispatch conditions; no
   universally optimal context threshold has been established.
-- Existing FLUX/Wan results predate the final v3 implementation and do not
-  qualify this newly extracted source. Rerun representative model tests.
+- Existing FLUX/Wan image/video results predate the final v3 implementation and
+  do not qualify the production port. PR1 replays real captured FLUX.2 attention
+  inputs. Before model-default rollout, rerun pretrained model/block quality and
+  timing tests; the current single-device dense support does not qualify ring
+  attention, masked Wan tails or multi-device model execution.
 - All C++/binding/build-system changes must build; device kernels must JIT
   compile and execute. Old libraries are not validation of new host code.
 

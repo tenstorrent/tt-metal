@@ -1,8 +1,9 @@
-# PR 1 foundation and streaming-primitive validation
+# Historical PR 1 foundation and streaming-primitive validation
 
-Date: 2026-09-21. This validates the compatibility resolver and the first shared
-streaming helper extraction. D/C/B/E device implementations and the public recipe
-API remain pending. The frozen research evidence is unchanged.
+Date: 2026-09-21. This records the compatibility resolver and first shared-helper
+commits. It is superseded by the [complete recipe qualification report](sdpa_precision_qualification.md).
+Statements about pending implementation below describe those earlier stages.
+The frozen research evidence is unchanged.
 
 ## FP32 recurrent-state extraction
 
