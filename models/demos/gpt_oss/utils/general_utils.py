@@ -46,6 +46,26 @@ def throughput_experts_supported_on_arch():
     return True
 
 
+def decode_expert_parallel(mesh_device, users_row_sharded, use_throughput_experts):
+    """Expert-parallel degree to use for decode on this mesh.
+
+    Expert parallelism splits each token's active experts across the rows, so it is only
+    coherent when every row holds the *same* tokens. The throughput path satisfies that by
+    re-gathering tokens across rows with all_to_all_dispatch before the experts run, so it
+    can use EP = rows. The sparse (low-latency) path has no such gather: when users are
+    row-sharded each row holds different users, so the rows are data-parallel and EP must be
+    1 -- otherwise the expert-parallel all_reduce would sum across different users.
+
+    MeshConfig then derives dp = devices / (tp * ep), e.g. tp=8, ep=1 -> dp=4 on a 4x8 mesh,
+    and skips the EP-vs-axis check entirely for ep == 1 (see MeshConfig._validate_config).
+    """
+    if mesh_device.shape[0] == 1:
+        return 1
+    if users_row_sharded and not use_throughput_experts:
+        return 1
+    return mesh_device.shape[0]
+
+
 def fused_moe_kernels_supported_on_arch():
     """Whether the fused MoE kernels (moe_gpt, all_to_all_dispatch_metadata,
     selective_reduce_combine, topk_router_gpt) are supported on the current arch.

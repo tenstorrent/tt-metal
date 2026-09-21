@@ -12,7 +12,11 @@ from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_fo
 from models.tt_transformers.tt.rope import RotarySetup
 
 from ...tt.layer import DecoderLayer
-from ...utils.general_utils import fused_moe_kernels_supported_on_arch, throughput_experts_supported_on_arch
+from ...utils.general_utils import (
+    decode_expert_parallel,
+    fused_moe_kernels_supported_on_arch,
+    throughput_experts_supported_on_arch,
+)
 from ..test_factory import TestFactory, compare_tensors, parametrize_batch_seq, parametrize_mesh_with_fabric
 
 
@@ -468,8 +472,16 @@ def run_fused_throughput_experts_component(
         ttnn.synchronize_device(mesh_device)
 
 
-def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_decode, pcc_threshold):
-    """Test experts component - extracted from decoder layer"""
+def run_experts_component(
+    mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_decode, pcc_threshold, is_row_sharded=False
+):
+    """Test experts component - extracted from decoder layer
+
+    is_row_sharded mirrors the decoder component: when users are row-sharded the mesh runs
+    EP=1 (rows are data-parallel), so each row must receive its own slice of the tokens. With
+    EP>1 the rows instead hold the same tokens and split the experts, so the input is
+    replicated and the expert-parallel all_reduce recombines them.
+    """
 
     # Create input
     batch_size, seq_len, hidden_size = hidden_shape
@@ -503,19 +515,24 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
     )
 
     # Convert to TTNN tensors
+    # decode_forward reads hidden_states as [1, batch, seq, hidden], so the token axis is
+    # dim 1 -- not -2, which is the seq axis here. Row-shard tokens under EP=1 (see
+    # docstring); replicate them under EP>1.
+    token_dims = (1, None) if is_row_sharded else (None, None)
+    routing_dims = (0, None) if is_row_sharded else (None, None)
     tt_hidden_states = ttnn.from_torch(
         hidden_states.unsqueeze(0),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(None, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(dims=token_dims, mesh_shape=mesh_device.shape, mesh_device=mesh_device),
     )
     tt_routing_weights = ttnn.from_torch(
         routing_weights,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
-        mesh_mapper=ttnn.ShardTensor2dMesh(dims=(None, None), mesh_shape=mesh_device.shape, mesh_device=mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(dims=routing_dims, mesh_shape=mesh_device.shape, mesh_device=mesh_device),
     )
 
     # Extract TT experts from decoder layer
@@ -525,6 +542,9 @@ def run_experts_component(mesh_device, hidden_shape, config, reference_layer, de
         topk_expert_weights=tt_routing_weights,
         is_decode=is_decode,
     )
+    # decode_forward emits the canonical [1, 1, B, hidden], so the token axis is -2 in both
+    # modes: under EP=1 the rows hold different users and this concat reassembles them; under
+    # EP>1 every row holds the same fully reduced result and the slice below drops the copies.
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
     tt_output = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)[..., : batch_size * seq_len, :hidden_size]
     # Compare outputs
@@ -728,14 +748,8 @@ def test_decoder(
     is_decode = seq_len == 1
     mode = "decode" if is_decode else "prefill"
 
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
-    pcc_thresholds = test_thresholds[setup["model_args"].model_name][mode]
-    # Set attention implementation for transformers compatibility
-    config = setup["config"]
-    config._attn_implementation = "eager"
-    # transformers 5.x also needs the MoE experts dispatch pinned for standalone reference layers.
-    config._experts_implementation = "eager"
-
+    # Row sharding is resolved before setup_test because the mesh config's expert-parallel
+    # degree depends on it: the sparse expert path needs EP=1 when rows hold different users.
     if batch_size > 32:
         if mesh_device.shape[0] == 1:
             pytest.skip(f"Batch size > 32 is not supported for mesh shape {tuple(mesh_device.shape)}")
@@ -745,6 +759,24 @@ def test_decoder(
     else:
         is_row_sharded = False
         local_batch_size = batch_size
+
+    # Must match setup_decoder_layer's gate below, or the mesh config and the experts module
+    # would disagree about whether tokens are gathered across rows.
+    use_throughput_experts = (
+        mesh_device.shape[0] > 1 and local_batch_size > 1 and throughput_experts_supported_on_arch()
+    )
+
+    setup = TestFactory.setup_test(
+        mesh_device,
+        use_real_weights=False,
+        decode_ep=decode_expert_parallel(mesh_device, is_row_sharded, use_throughput_experts),
+    )
+    pcc_thresholds = test_thresholds[setup["model_args"].model_name][mode]
+    # Set attention implementation for transformers compatibility
+    config = setup["config"]
+    config._attn_implementation = "eager"
+    # transformers 5.x also needs the MoE experts dispatch pinned for standalone reference layers.
+    config._experts_implementation = "eager"
 
     # Paged attention: when enabled, allocate a PagedAttentionConfig sized to fit the
     # longest seq_len in the parametrize matrix (one user per call here), then build
@@ -941,7 +973,10 @@ def test_decoder(
                 pcc_threshold=pcc_thresholds["experts"],
             )
         else:
-            logger.info(f"Testing Low Throughput Experts (EP=4) for mesh shape {tuple(mesh_device.shape)}...")
+            logger.info(
+                f"Testing Low Throughput Experts (EP={setup['mesh_config'].ep}) for mesh shape "
+                f"{tuple(mesh_device.shape)}..."
+            )
             run_experts_component(
                 setup["mesh_device"],
                 hidden_states.shape,
@@ -950,6 +985,7 @@ def test_decoder(
                 decoder_layer,
                 is_decode=is_decode,
                 pcc_threshold=pcc_thresholds["experts"],
+                is_row_sharded=is_row_sharded,
             )
 
     if should_test("attention"):
@@ -1245,9 +1281,18 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, num_layers
     # Set attention implementation
     config._attn_implementation = "eager"
 
-    # Create mesh config
+    # Create mesh config. EP must match how run_model_forward_test decides row sharding and
+    # the expert path below, or the mesh config and the experts module disagree about whether
+    # tokens are gathered across rows.
     mesh_shape = tuple(mesh_device.shape)
-    mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
+    is_row_sharded = batch_size > 32
+    use_throughput_experts = is_row_sharded and mesh_shape[0] > 1 and throughput_experts_supported_on_arch()
+    mesh_config = MeshConfig(
+        mesh_shape,
+        decode=ModeConfig(
+            tp=mesh_shape[1], ep=decode_expert_parallel(mesh_device, is_row_sharded, use_throughput_experts)
+        ),
+    )
 
     # Build a small random-init reference. ``setup_test`` already pulled the
     # HF config (a tiny JSON) so we have the correct architecture; we don't

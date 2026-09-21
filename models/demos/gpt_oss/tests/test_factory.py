@@ -29,8 +29,14 @@ class TestFactory:
     ]
 
     @staticmethod
-    def setup_test(mesh_device, use_real_weights=True, dtype=ttnn.bfloat8_b):
-        """Universal test setup - replaces all the duplicated setup code"""
+    def setup_test(mesh_device, use_real_weights=True, dtype=ttnn.bfloat8_b, decode_ep=None):
+        """Universal test setup - replaces all the duplicated setup code
+
+        decode_ep: expert-parallel degree for decode. Defaults to the number of mesh rows,
+            which is right whenever every row holds the same tokens. Callers that row-shard
+            users onto the sparse expert path must pass 1 -- see
+            models/demos/gpt_oss/utils/general_utils.py::decode_expert_parallel.
+        """
 
         # Use mesh_device as-is (already created by conftest.py fixture)
         mesh_shape = mesh_device.shape
@@ -41,7 +47,9 @@ class TestFactory:
         # Setup mesh config using actual mesh shape
         from models.demos.gpt_oss.config import ModeConfig
 
-        mesh_config = MeshConfig(mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0]))
+        mesh_config = MeshConfig(
+            mesh_shape, decode=ModeConfig(tp=mesh_shape[1], ep=mesh_shape[0] if decode_ep is None else decode_ep)
+        )
 
         # Setup CCL
         ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
