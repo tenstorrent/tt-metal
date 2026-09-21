@@ -266,7 +266,7 @@ inline uint8_t dfb_read_init_entry_producer_signal_bit(const uint8_t* entry_byte
 // Returns total serialized bytes for one dfb_hart_init_entry_t with num_tcs TC slots.
 // num_tcs pairs (8B each) + num_tcs ptc bytes, rounded up to 4B.
 // = sizeof(header) + ((num_tcs * 9 + 3) & ~3).
-inline constexpr uint32_t dfb_hart_init_entry_byte_size(uint32_t num_tcs) {
+constexpr uint32_t dfb_hart_init_entry_byte_size(uint32_t num_tcs) {
     const uint32_t tc_bytes = num_tcs * 9u;
     return static_cast<uint32_t>(sizeof(dfb_hart_init_entry_t)) + ((tc_bytes + 3u) & ~3u);
 }
