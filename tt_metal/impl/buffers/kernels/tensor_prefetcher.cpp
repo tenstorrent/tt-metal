@@ -201,15 +201,15 @@ FORCE_INLINE uint32_t poll_min_free_aligned_pages(
 // receiver the same B blocks, so all receivers share one cursor and receiver 0's is representative.
 // That holds under the streaming rotation too -- it varies which DRAM block feeds a receiver, not
 // how much each one is credited.
-FORCE_INLINE void load_pipe_sender_state(
-    const experimental::PipeSenderCtx& ctx, uint32_t entry_size, RemoteSenderCBInterface& iface) {
+FORCE_INLINE void load_pipe_sender_state(const experimental::PipeSenderCtx& ctx, RemoteSenderCBInterface& iface) {
     iface.config_ptr = ctx.config_ptr;
     iface.fifo_start_addr = ctx.fifo_start_addr;
-    iface.fifo_page_size = entry_size;
+    iface.fifo_page_size = ctx.entry_bytes;
     iface.receiver_noc_xy_ptr = ctx.receiver_noc_xy_ptr;
     iface.aligned_pages_sent_ptr = ctx.local_sent_base;
     iface.num_receivers_and_remote_pages_sent_ptr = remote_cb_pack(ctx.num_receivers, ctx.remote_sent_base);
-    iface.fifo_limit_page_aligned = ctx.fifo_start_addr + (ctx.ring_bytes - ctx.ring_bytes % entry_size);
+    // pipe_usable_bytes owns the trailing-gap rule; do not re-derive it here.
+    iface.fifo_limit_page_aligned = ctx.fifo_start_addr + experimental::pipe_usable_bytes(ctx);
     iface.fifo_wr_ptr = ctx.fifo_start_addr + experimental::pipe_sender_wr_offset(ctx, 0);
 }
 
@@ -456,8 +456,9 @@ void kernel_main() {
                 experimental::pipe_set_entry_size(pipe_ctx, t_page_bytes_per_recv, noc_index);
                 // Rebuild the interface from the PrefetcherPipe config page each tensor. The write
                 // cursor comes out of that page, which is what makes it resume correctly across
-                // requests and across programs.
-                load_pipe_sender_state(pipe_ctx, t_page_bytes_per_recv, iface);
+                // requests and across programs. pipe_set_entry_size above put this tensor's entry
+                // size in the context, so the interface follows from the context alone.
+                load_pipe_sender_state(pipe_ctx, iface);
             } else {
                 // Set the sender fifo page size to one full per-receiver page. When resize skips
                 // padding to reach the next aligned page (e.g. a larger page after a smaller one in

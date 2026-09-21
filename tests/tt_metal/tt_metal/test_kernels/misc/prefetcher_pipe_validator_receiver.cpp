@@ -31,14 +31,6 @@
 
 #include "prefetcher_validator_common.h"
 
-namespace {
-
-// Long enough to cover a sender's round trip to publish one more entry after this receiver's last
-// pop -- the window in which an overshoot would show up -- while still ending the test if none does.
-constexpr uint32_t kExtraPollCycles = 1u << 18;
-
-}  // namespace
-
 void kernel_main() {
     // ---- Compile-time args ----
     constexpr uint32_t num_layers = get_arg(args::num_layers);
@@ -101,10 +93,9 @@ void kernel_main() {
                 n_col_start,
                 n_per_recv_tiles);
 
-            const uint32_t words = page_bytes / sizeof(uint32_t);
             const uint32_t mismatch_word =
                 prefetcher_validator::first_mismatching_word(page_addr, scratch_addr, page_bytes);
-            if (mismatch_word != words) {
+            if (mismatch_word != prefetcher_validator::kNoMismatch) {
                 DPRINT(
                     "PIPE_VALIDATOR_MISMATCH layer={} blk={} bank={} recv_idx={} word={} got=0x{:x} exp=0x{:x}\n",
                     layer,
@@ -120,9 +111,7 @@ void kernel_main() {
                 }
             }
 
-            const bool log = (global_iter < 2) || (global_iter + 1 == num_layers * num_blocks) ||
-                             (print_stride > 0 && (global_iter % print_stride == 0));
-            if (log) {
+            if (prefetcher_validator::should_log(global_iter, num_layers * num_blocks, print_stride)) {
                 DPRINT(
                     "PIPE_VALIDATOR ok layer={} blk={} bank={} recv_idx={}\n", layer, blk, bank_id, recv_idx_in_bank);
             }
@@ -135,7 +124,7 @@ void kernel_main() {
     DPRINT("PIPE_VALIDATOR_LOOP_DONE bank={} recv_idx={}\n", bank_id, recv_idx_in_bank);
 
     // Bounded-poll for an entry the sender pushed past the last one this receiver consumed.
-    for (uint32_t spin = 0; spin < kExtraPollCycles; ++spin) {
+    for (uint32_t spin = 0; spin < prefetcher_validator::kExtraPollCycles; ++spin) {
         if (pipe.has_unconsumed_entries()) {
             DPRINT("PIPE_VALIDATOR_OVERFLOW: sender pushed an extra entry past the expected last one\n");
             while (true) {

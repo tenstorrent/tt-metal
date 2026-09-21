@@ -115,7 +115,7 @@ public:
     DeviceAddr kernel_working_region_base() const { return unreserved_base_ + kSenderStateZoneSize; }
 
     // Total DRISC L1 bytes available to the prefetcher kernel above the fixed
-    // GCB zone. The manager uses this to size its ping-pong stage budget so
+    // sender-state zone. The manager uses this to size its ping-pong stage budget so
     // changing `kSenderStateZoneSize` automatically reduces the budget.
     uint32_t kernel_working_region_size() const { return drisc_unreserved_size_ - kSenderStateZoneSize; }
 

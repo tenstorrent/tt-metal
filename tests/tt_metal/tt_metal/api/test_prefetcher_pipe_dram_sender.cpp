@@ -337,7 +337,6 @@ TEST_F(PrefetcherPipeDramSenderFixture, SmokeOneSenderFourReceivers) {
         make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/false);
     ASSERT_EQ(set.pipes.size(), 1u);
     ASSERT_EQ(set.pipes[0]->sender_core().x, 0u) << "a pipe's DRAM-logical sender x is the bank it is fed from";
-    ASSERT_EQ(set.pipes.size(), 1u);
     ASSERT_EQ(set.pipes[0]->sender_core_type(), experimental::SenderCoreType::Dram);
 
     const CoreCoord sender_logical = set.mapping.at(0).first;

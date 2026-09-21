@@ -6,16 +6,13 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
 
-#include <buffer_types.hpp>
 #include <core_coord.hpp>
 
 #include "impl/buffers/dram_sender_topology.hpp"
@@ -44,19 +41,9 @@ std::vector<std::shared_ptr<PrefetcherPipe>> CreatePrefetcherPipesForTensorPrefe
         mesh_device,
         bank_to_receivers,
         support_multi_receiver_shards ? DramSenderSplit::OnePerBank : DramSenderSplit::TwoPerBank);
-    validate_dram_senders_across_mesh(mesh_device, mapping);
-    TT_FATAL(
-        mapping.size() <= space.num_dram_senders(),
-        "CreatePrefetcherPipesForTensorPrefetcher selected {} DRAM senders, but the space reserves capacity for {}",
-        mapping.size(),
-        space.num_dram_senders());
-    for (const auto& [_sender, receivers] : mapping) {
-        TT_FATAL(
-            space.receiver_domain().contains(receivers),
-            "CreatePrefetcherPipesForTensorPrefetcher receiver set {} is outside the space domain {}",
-            receivers.str(),
-            space.receiver_domain().str());
-    }
+    // Capacity, receiver domain and claim state all live in the space, so its batch validator is
+    // the one place they are checked; set_dram_sender_cores below rechecks that each selected core
+    // really is a provisioned sender for its bank.
     space.impl().validate_dram_carves(mapping);
 
     // Each sender's bank-local slab base, taken from the mapping while the whole bank's receiver
