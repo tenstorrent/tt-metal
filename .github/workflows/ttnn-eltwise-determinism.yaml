@@ -12,10 +12,15 @@ name: "[eltwise] Determinism and correctness (daily)"
 on:
   workflow_dispatch:
     inputs:
-      runs:
-        description: "Times to run each op. Needs >= 2 for the comparison to mean anything."
-        type: string
-        default: "3"
+      suite:
+        description: "Which suite to run. 'default' is one vector per op at bfloat16 / 1x1x32x32 / DRAM; the others sweep a dtype, memory-config or shape axis."
+        type: choice
+        options:
+          - default
+          - dtypes
+          - memory_configs
+          - shapes
+        default: default
       arch:
         type: choice
         options:
@@ -33,7 +38,7 @@ on:
     # 05:00 UTC daily. ttnn-run-sweeps already occupies 02:00 and 03:00.
     - cron: "0 5 * * *"
 
-run-name: "eltwise determinism x${{ inputs.runs || '3' }} (${{ inputs.arch || 'wormhole_b0' }})"
+run-name: "eltwise determinism [${{ inputs.suite || 'default' }}] (${{ inputs.arch || 'wormhole_b0' }})"
 
 permissions:
   contents: read
@@ -56,7 +61,7 @@ jobs:
       build-inplace-wheel: true
 
   eltwise-determinism:
-    name: "eltwise determinism x${{ inputs.runs || '3' }}"
+    name: "eltwise determinism [${{ inputs.suite || 'default' }}]"
     needs: [check-harbor, build-artifact]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     container:
@@ -91,21 +96,24 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: Run eltwise determinism and correctness
-        env:
-          # The test file reads this; >= 2 or the run-to-run comparison has nothing to compare.
-          ELTWISE_DETERMINISM_RUNS: ${{ inputs.runs || '3' }}
+      - name: Generate sweep vectors
         run: |
-          if ! [[ "$ELTWISE_DETERMINISM_RUNS" =~ ^[0-9]+$ ]] || (( ELTWISE_DETERMINISM_RUNS < 2 )); then
-            echo "::error::runs must be an integer >= 2, got '$ELTWISE_DETERMINISM_RUNS'"
-            exit 1
-          fi
-          pytest tests/ttnn/unit_tests/operations/eltwise/test_eltwise_determinism.py \
-            -v --tb=short --junitxml=/work/generated/test_reports/eltwise_determinism.xml
+          python3 tests/sweep_framework/sweeps_parameter_generator.py \
+            --module-name eltwise.eltwise_determinism --tag ci-main
+      - name: Run eltwise determinism and correctness
+        run: |
+          python3 tests/sweep_framework/sweeps_runner.py \
+            --module-name eltwise.eltwise_determinism \
+            --suite-name "${{ inputs.suite || 'default' }}" \
+            --vector-source vectors_export \
+            --result-dest results_export \
+            --tag ci-main \
+            --fail-on-test-failure \
+            --summary
       - name: Upload test report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: eltwise-determinism-report-${{ inputs.arch || 'wormhole_b0' }}
-          path: /work/generated/test_reports/
+          path: /work/tests/sweep_framework/results_export/
           retention-days: 7
