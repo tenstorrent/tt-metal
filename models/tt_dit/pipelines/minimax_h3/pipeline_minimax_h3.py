@@ -270,7 +270,7 @@ class _BucketState:
 # axis 0 is intra-host, while SP hides its KV all-gather inside ring attention and tolerates the
 # inter-host hop. TP=4 also fits the shapes -- 56 // 4 = 14 heads, 5376 % (32 * 4) == 0 for the norms.
 _PRESETS_BH: dict[tuple[int, ...], dict] = {
-    # One Blackhole Galaxy: the working point MiniMaxH3.md documents.
+    # One Blackhole Galaxy: the documented working point.
     (4, 8): {"tp_axis": 0, "sp_axis": 1, "num_links": 2, "topology": ttnn.Topology.Ring, "coresident": True},
     # Quad Blackhole Galaxy, 4 MPI hosts x 32 chips. Same axes, links and topology; SP goes 8 -> 32,
     # which moves the SP alignment to 32 * TILE_SIZE = 1024 and re-keys every packed length.

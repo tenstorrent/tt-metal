@@ -25,7 +25,7 @@ Knobs, all environment variables so the driver can loop without editing the file
 
     H3_SWEEP_STEPS        scheduler steps (default 10 -> 9 forwards). Per-forward time is flat across
                           steps, so 10 gives the same ms/forward as 50 at a fifth of the wall clock;
-                          confirm a winner at 50 before quoting it against the published tables.
+                          confirm a winner at 50 before quoting it against the 50-step sweep tables.
     H3_SWEEP_ASPECT       "16,9" (default)
     H3_SWEEP_DURATION_S   15 (default)
     H3_SWEEP_OUT          results dir (default ~/h3_parallel_sweep): one JSON line per run in

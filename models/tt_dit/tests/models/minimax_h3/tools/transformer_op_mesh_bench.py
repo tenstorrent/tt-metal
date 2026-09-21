@@ -19,7 +19,7 @@ sweep harness: the minimal reproducer for kernel changes. Not a test; pytest lea
     ff2     minimal_matmul on the full 8x9 grid (per device), --with-rs adds the ring reduce-scatter the model runs next
     --no-fusion runs the same shape as a plain matmul (what the sweep harness's "plain" use case measures).
 
-Bar (MiniMaxH3_wormhole_perf.md, ff1 numerics): pcc > 0.9995, rel-RMSE < 0.02. The golden is computed on the first
+Bar (ff1 numerics acceptance): pcc > 0.9995, rel-RMSE < 0.02. The golden is computed on the first
 --check-rows rows only (matmul rows are independent), which keeps the host side to seconds.
 Wrap in `timeout 600` when testing kernel changes: a hang shows up as the run never printing "ms per call", and a
 ring hang wedges the ETH heartbeat (recovery: `tt-smi -r all`, then wait ~75 s).

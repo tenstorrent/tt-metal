@@ -39,7 +39,7 @@ kept verbatim, labelled as inherited, for the side-by-side. Note the two fabrics
 ingress (4 x 12.5 = 2 x 25 = 50 GB/s per direction), so the fabric bars are identical across arches.
 
 Whole-block mode (default when the Tracy profile exists; `--no-block` restores the selected-ops-only output): reads
-the fsdp1 15 s block profile the perf doc's per-op table came from (`--profile-csv`), merges the warm iteration
+the fsdp1 15 s block profile of 2026-09-17 (`--profile-csv`), merges the warm iteration
 across the 32 devices like `project_block_perf.py`, and gives every op a roofline by class -- these are
 judgement calls built on the models already in the repo (the ring-matmul analysis, `OpPerformanceModelGeneral`,
 `roofline_utils.py`, `estimate_fabric_transfer_cycles`) and are printed on every block figure:
@@ -144,10 +144,10 @@ BH = Arch(
 )
 
 
-# The ops themselves (shapes, fusion, blocking, perf-doc baselines, colours) live in `minimax_h3_ops.py`.
+# The ops themselves (shapes, fusion, blocking, 2026-09-17 baselines, colours) live in `minimax_h3_ops.py`.
 # 15 s / 768P / 16:9: 1344x768, 362 frames -> 107 latent frames x 24x42 patches = 107856 video rows
 # + 603 audio latents x 2 channels + 39 text tokens = 109101, padded to SP*TILE*... = 109312
-# (`packing.padded_sequence_length`), 13664 rows per device at SP=8 (MiniMaxH3_wormhole_perf.md:129).
+# (`packing.padded_sequence_length`), 13664 rows per device at SP=8 (test_performance_minimax_h3.py logs it).
 M_REFINER = 64  # the 2 token-refiner blocks run the same (K, N) shapes over the 39-token text stream
 BLOCKS_PER_FORWARD = 50
 
@@ -877,7 +877,7 @@ def selftest() -> None:
     assert r.limiter == "compute"
     close(BH.peak_flops("HiFi2") / 1e12, 298.6, 0.05)
     close(BH.n_star("HiFi2", 1), 4479, 1)  # artifact N* table, ring 4 / 1 link
-    # Wormhole anchors (MiniMaxH3_wormhole_perf.md roofline section: ff1 1.05 T, 8.0 ms at 64 cores).
+    # Wormhole anchors (ff1 at 15 s: 1.05 TFLOP, 8.0 ms at 64 cores).
     close(WH.peak_flops("HiFi2") / 1e12, 131.07, 0.01)
     r = roofline(M_15S_768P_16_9, OPS_BY_NAME["ff1"], WH, "HiFi2", measured_us=MEASURED_US_WH_15S["ff1"])
     close(r.flops / 1e12, 1.053, 0.001)
@@ -908,7 +908,7 @@ DTYPE_BYTES = {
     "BFLOAT4_B": 0.5625,
     "UINT8": 1,
 }
-SDPA_COMPUTE_CORES = 63  # 7x9: CORE COUNT reads 71 because it includes the fused CCL workers (perf doc)
+SDPA_COMPUTE_CORES = 63  # 7x9: CORE COUNT reads 71 because it includes the fused CCL workers (attention_minimax_h3.py ccl_core_grid_offset)
 OTHER_SHARE = 0.01  # ops below this share of the block are grouped as "other"
 CLASS_COLOR = {
     "compute": RESOURCE_COLOR["compute"],
@@ -1262,7 +1262,7 @@ def main() -> None:
     )
     p.add_argument("--dump", action="store_true", help="print the constants and roofline tables (markdown) to stdout")
     p.add_argument(
-        "--selftest", action="store_true", help="check the port against the artifact rows and the perf-doc anchors"
+        "--selftest", action="store_true", help="check the port against the artifact rows and the Wormhole anchors"
     )
     p.add_argument(
         "--fidelity",
@@ -1386,7 +1386,7 @@ def main() -> None:
         elif args.measured_csv:
             measured_note = f"measured, best swept blocking ({os.path.basename(args.measured_csv)})"
         else:
-            measured_note = "measured, shipped blocking (MiniMaxH3_wormhole_perf.md)"
+            measured_note = "measured, shipped blocking (Tracy, 2026-09-17)"
         if "roofline" in figs:
             fig = fig_roofline(
                 rows_by_arch[wh.short],
