@@ -441,7 +441,7 @@ static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
  * | Argument                              | Description                             | Type                                           | Required |
  * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
  * | WORKER_HANDSHAKE_NOC                  | Template parameter: NoC for open        | uint8_t                                        | False    |
- * | worker_sem_arg_kind                   | Template parameter: sem args are ids or addresses | WorkerSemArgKind                     | False    |
+ * | WorkerSemArg                          | Template parameter: sem arg resolution policy | SemaphoreIdArg / L1AddressArg            | False    |
  * | connection_manager                    | Connection manager to build and open    | RoutingPlaneConnectionManager&                 | True     |
  * | num_connections_to_build              | Number of connections to build/open     | uint32_t                                       | True     |
  * | rt_arg_idx                            | Runtime-args cursor (advanced as parsed)| size_t&                                        | True     |
@@ -449,7 +449,7 @@ static FORCE_INLINE void populate_unicast_fused_scatter_write_atomic_inc_fields(
 // clang-format on
 template <
     uint8_t WORKER_HANDSHAKE_NOC = tt::tt_fabric::get_fabric_worker_noc(),
-    tt::tt_fabric::WorkerSemArgKind worker_sem_arg_kind = tt::tt_fabric::default_worker_sem_arg_kind>
+    typename WorkerSemArg = tt::tt_fabric::DefaultWorkerSemArg>
 FORCE_INLINE void open_connections(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint32_t num_connections_to_build,
@@ -457,7 +457,7 @@ FORCE_INLINE void open_connections(
     connection_manager = tt::tt_fabric::RoutingPlaneConnectionManager::template build_from_args<
         tt::tt_fabric::RoutingPlaneConnectionManager::BUILD_AND_OPEN_CONNECTION,
         WORKER_HANDSHAKE_NOC,
-        worker_sem_arg_kind>(rt_arg_idx, num_connections_to_build);
+        WorkerSemArg>(rt_arg_idx, num_connections_to_build);
 }
 
 // clang-format off

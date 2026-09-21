@@ -338,7 +338,7 @@ void bind_fabric_api(nb::module_& mod) {
             are given as L1 addresses rather than program semaphore IDs — for callers that
             keep them outside the program semaphore table. Both addresses must be 16 B
             aligned. The kernel must build those connections with
-            WorkerSemArgKind::L1_ADDRESS.
+            the L1AddressArg policy.
 
             Args:
                 src_fabric_node_id: FabricNodeId of the source chip

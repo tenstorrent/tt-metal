@@ -733,7 +733,7 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(tt::t
 // Compute fabric connection RT args without any PD mutation.
 // Caller provides the two per-connection semaphore values (teardown + buffer_index); they are
 // copied through verbatim, so both the id and the L1-address entry points share this body and
-// the kernel's WorkerSemArgKind decides how they are read.
+// the kernel's resolution policy decides how they are read.
 // Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
 static std::vector<uint32_t> compute_fabric_connection_rt_args_impl(
     const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
