@@ -78,7 +78,27 @@ void kernel_main() {
     const uint32_t in_base = cb_in.get_write_ptr();
     const uint32_t scratch_base = cb_scratch.get_write_ptr();
 
-    // Software pipeline over rows, `depth` slots deep, with a NOC transaction id per slot.
+    // Software pipeline over rows, `depth` slots deep, with PLAIN (untagged) barriers.
+    //
+    // This deliberately does NOT use NocOptions::TXN_ID. Transaction ids looked attractive
+    // - a barrier that waits for one row instead of all outstanding reads - but they are
+    // unsafe here, for two reasons visible in the hardware API:
+    //
+    //   * noc_async_read_set_trid() programs the STICKY NOC_PACKET_TAG register, so the tag
+    //     outlives this kernel and silently applies to later transactions, including those
+    //     issued by other ops' kernels on the same core;
+    //   * reads and writes share one counter per id -
+    //     ncrisc_noc_read_with_transaction_id_flushed() and
+    //     ncrisc_noc_nonposted_write_with_transaction_id_flushed() both test
+    //     NIU_MST_REQS_OUTSTANDING_ID(trid) == 0.
+    //
+    // Together that means a tagged barrier can wait on traffic this kernel never issued.
+    // In isolation it always passed; inside a real graph, after ~24 other ops, the r=2 call
+    // hung indefinitely. Plain barriers only ever wait for transactions this kernel issued.
+    //
+    // The cost is small: the depth-2 prefetch keeps exactly ONE read outstanding at a time,
+    // so async_read_barrier() waits for precisely that read anyway. The measured speedup
+    // came from the unrolled 32-bit gather (loads_in_flight), not from the tagging.
     //
     // The deinterleave below - not the NOC - is the critical path: with the copy compiled
     // out, the two block-A calls together drop from ~195us to ~55us, so the data movement
@@ -93,35 +113,21 @@ void kernel_main() {
     // row only.
     uint32_t row = start_row;
 
-    // Prefetch up to `depth` rows before entering the loop, each tagged with its slot's
-    // transaction id, so `depth` reads are in flight rather than one.
-    {
-        const uint32_t pf = (num_rows < depth) ? num_rows : depth;
-        uint32_t pr = start_row;
-        for (uint32_t s = 0; s < pf; s++) {
-            noc.async_read<NocOptions::TXN_ID>(
-                s_in,
-                cb_in,
-                stick_nbytes_in,
-                {.page_id = pr},
-                {.offset_bytes = s * aligned_stick_nbytes_in},
-                {.trid = s + 1});
-            pr += row_stride;
-        }
-    }
+    // Prefetch row 0; from then on row i+1 is issued while row i is being copied, so
+    // exactly one read is in flight and a plain barrier waits for exactly that read.
+    noc.async_read(s_in, cb_in, stick_nbytes_in, {.page_id = start_row}, {.offset_bytes = 0});
 
     for (uint32_t i = 0; i < num_rows; i++) {
         const uint32_t slot = i % depth;
-        const uint32_t rtrid = slot + 1;          // read  trids: 1 .. depth
-        const uint32_t wtrid = depth + slot + 1;  // write trids: depth+1 .. 2*depth
 
-        // Wait only for THIS row's read; the other depth-1 reads stay in flight.
-        noc.async_read_barrier<NocOptions::TXN_ID>({.trid = rtrid});
+        // Row i's read is the only one outstanding, so this waits for exactly it.
+        noc.async_read_barrier();
 
-        // Row i-depth shares this scratch group, so its writes must land before the copy
-        // below overwrites it. Only that row's writes are waited on.
+        // Row i-depth wrote from this same scratch group; its writes must land before the
+        // copy below overwrites the slot. A plain barrier is stricter than necessary (it
+        // also drains row i-1) but is correct and costs one extra drain per row.
         if (i >= depth) {
-            noc.async_write_barrier<NocOptions::TXN_ID>({.trid = wtrid});
+            noc.async_write_barrier();
         }
 
         // ---- decode row -> base output page ----
@@ -261,24 +267,22 @@ void kernel_main() {
 
         // The copy has drained this input slot, so it can be refilled now; this read
         // overlaps the writes issued just below and the next rows' copies.
-        if (i + depth < num_rows) {
-            noc.async_read<NocOptions::TXN_ID>(
+        if (i + 1 < num_rows) {
+            noc.async_read(
                 s_in,
                 cb_in,
                 stick_nbytes_in,
-                {.page_id = row + depth * row_stride},
-                {.offset_bytes = slot * aligned_stick_nbytes_in},
-                {.trid = rtrid});
+                {.page_id = row + row_stride},
+                {.offset_bytes = ((slot + 1) % depth) * aligned_stick_nbytes_in});
         }
 
         for (uint32_t j = 0; j < r; j++) {
-            noc.async_write<NocOptions::TXN_ID>(
+            noc.async_write(
                 use<experimental::CB::AddrSelector::WRITE_PTR>(cb_scratch),
                 s_out,
                 stick_nbytes_out,
                 {.offset_bytes = (sbase + j) * aligned_stick_nbytes_out},
-                {.page_id = page0 + j * rw_page_stride},
-                {.trid = wtrid});
+                {.page_id = page0 + j * rw_page_stride});
         }
 
         row += row_stride;
