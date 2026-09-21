@@ -19,7 +19,7 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/l2cpu_lim.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 #ifdef TT_METAL_USE_EMULE
-#include "emulated_program_runner.hpp"  // emule::pump_device (moved to tt-emule::runtime)
+#include "emulated_program_runner.hpp"  // emule::pump_device
 #endif
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>

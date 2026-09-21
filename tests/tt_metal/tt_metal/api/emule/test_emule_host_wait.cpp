@@ -16,7 +16,7 @@
 #include <stdexcept>
 #include <type_traits>
 
-#include "emule_fiber_scheduler.hpp"  // moved to tt-emule::runtime
+#include "emule_fiber_scheduler.hpp"
 #include "jit_hw/internal/emule_thread_ctx.h"
 
 namespace {
