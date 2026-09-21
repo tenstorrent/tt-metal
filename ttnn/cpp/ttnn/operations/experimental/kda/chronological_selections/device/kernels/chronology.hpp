@@ -23,10 +23,10 @@ constexpr uint32_t record_count(uint32_t sp_size) { return local_final_history(s
 struct Topology {
     uint32_t first_rank;
     uint32_t head_rows;
-    uint32_t local_split;
+    uint32_t local_split;  // This rank physically holds head and tail segments, even if the tail is padded.
     uint32_t rank;
     uint32_t final_owner;
-    uint32_t split;
+    uint32_t split;  // The global interval includes a valid separated tail; select its final state.
     uint32_t local_rows;
     uint32_t valid_rows;
     uint32_t active_groups(uint32_t groups) const {
@@ -36,7 +36,7 @@ struct Topology {
     uint32_t valid_chunks(uint32_t group, uint32_t groups) const {
         const uint32_t chunks = group_chunks(groups);
         const uint32_t begin = group * chunks;
-        const uint32_t end = valid_rows / 32;
+        const uint32_t end = valid_rows / tt::constants::TILE_HEIGHT;
         return end <= begin ? 0 : (end - begin < chunks ? end - begin : chunks);
     }
     bool has_valid_tail() const { return local_split && valid_rows > head_rows; }
