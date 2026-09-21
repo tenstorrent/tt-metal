@@ -68,22 +68,20 @@ public:
     static constexpr auto attribute_names =
         std::forward_as_tuple("sender_receiver_core_mapping", "size", "buffer_type");
     auto attribute_values() const {
-        return std::make_tuple(
-            this->sender_receiver_core_mapping_, this->size_, cb_buffer_.get_buffer()->buffer_type());
+        return std::make_tuple(this->sender_receiver_core_mapping_, this->size_, cb_buffer().buffer_type());
     }
 
 private:
     void setup_cb_buffers(BufferType buffer_type, uint32_t max_num_receivers_per_sender);
     // Allocates and writes the per-GCB sender state block in DRISC L1. DRAM-sender flavour only.
-    void initialize_dram_sender_state_block(
-        distributed::MeshDevice* mesh_device, uint32_t max_num_receivers_per_sender);
+    void initialize_dram_sender_state_block(uint32_t max_num_receivers_per_sender);
 
     // Tag for the private experimental DRAM-sender constructor; only the experimental
     // factory (a friend) can name this type. Takes MeshDevice because the DRAM-sender
     // path relies on the per-mesh DriscL1Arena for pages_sent placement.
     struct DramSenderTag {};
     GlobalCircularBuffer(
-        distributed::MeshDevice* mesh_device,
+        distributed::MeshDevice& mesh_device,
         const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
         uint32_t size,
         BufferType buffer_type,
@@ -91,9 +89,9 @@ private:
 
     // GlobalCircularBuffer is implemented as a wrapper around a sharded buffer
     // This can be updated in the future to be its own container with optimized dispatch functions
-    distributed::AnyBuffer cb_buffer_;
-    distributed::AnyBuffer cb_config_buffer_;
-    IDevice* device_;
+    std::shared_ptr<distributed::MeshBuffer> cb_buffer_;
+    std::shared_ptr<distributed::MeshBuffer> cb_config_buffer_;
+    distributed::MeshDevice* device_;
     std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping_;
     CoreRangeSet sender_cores_;
     CoreRangeSet receiver_cores_;
