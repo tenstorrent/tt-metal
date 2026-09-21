@@ -80,16 +80,20 @@ def test_bw_hyperbolic_upper_range(input_value, grad_value, torch_dtype, ttnn_dt
         f"{float(want.flatten()[0]):g}"
     )
 
-    # Where the derivative itself does not fit the dtype, grad * inf is NaN in float32 but 0 in
-    # bfloat16 -- the op disagrees with itself across dtypes for grad = 0. That is a separate
-    # question from the range this test exists to cover, so the overflow rows assert only that
-    # nothing finite was invented, and the value check is left to the representable cases.
+    # One combination is left unpinned: grad = 0 against a derivative that overflows the dtype.
+    # There float32 computes 0 * inf = NaN while bfloat16 returns 0, so the op disagrees with
+    # itself across dtypes. That is a real finding but a separate question from the range this
+    # test covers, so those rows accept either answer -- as a whole tensor of one or the other,
+    # not a mixture -- rather than encoding one dtype's behaviour as the expectation.
+    #
+    # Everything else stays strict, including the overflow rows with a nonzero gradient: there
+    # inf is the only correct result, and the reference already says so.
     derivative_fits = bool(torch.isfinite(_reference(ttnn_op, torch.ones_like(grad_data), in_data, torch_dtype)).all())
-    if derivative_fits:
+    if derivative_fits or grad_value != 0:
         torch.testing.assert_close(got, want, rtol=2e-2, atol=0.0, equal_nan=True)
     else:
-        assert not torch.isfinite(got).all() or bool((got == 0).all()), (
-            f"{ttnn_op.__name__}(grad={grad_value:g}, input={input_value:g}) [{torch_dtype}]: "
-            f"derivative overflows the dtype, so the result should be non-finite or zero, got "
-            f"{float(got.flatten()[0]):g}"
+        assert bool(got.isnan().all()) or bool((got == 0).all()), (
+            f"{ttnn_op.__name__}(grad=0, input={input_value:g}) [{torch_dtype}]: derivative "
+            f"overflows the dtype, so every element should be NaN (float32) or 0 (bfloat16), got "
+            f"{got.unique().tolist()[:4]}"
         )
