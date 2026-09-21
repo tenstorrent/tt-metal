@@ -156,9 +156,8 @@ Tensor reduce(
     // interleaved I/O on both sides. Anything else — MAX/MIN, HW reduce, other dtypes, sharded
     // input or output — falls back to the standard tilize + tile-reduce path.
     //
-    // MAX/MIN are excluded because the RM compute kernel accumulates partial reductions via
-    // Accumulate::at across chunks, and the cross-chunk fold uses SUM semantics. Wiring MAX
-    // accumulation through that pipeline is doable but not yet done; for now they tilize.
+    // MAX/MIN do reach the RM factory, but only as the TILE H-axis split's stage 2 below (TILE
+    // input, ROW_MAJOR partials). The user-facing ROW_MAJOR entry stays SUM/AVG.
     const bool both_interleaved =
         input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
         output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
@@ -202,9 +201,20 @@ Tensor reduce(
     // to the FPU without fp32_dest_acc_en or on Quasar (no SFPU reduce LLKs). The dense RM kernels
     // share the same SFPU fold via CT arg 6. negate=true marks the FPU's -MAX(-x) min lowering,
     // which has no SFPU fold, so MAX/MIN exclude it.
-    const bool fp32_sfpu_eligible = !fast_and_approximate_mode &&
-                                    input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 &&
-                                    arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en;
+    const bool fp32_sfpu_available =
+        input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 && arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en;
+    const bool fp32_sfpu_eligible = !fast_and_approximate_mode && fp32_sfpu_available;
+
+    // The flag asks for the FPU, which has no min pool at all, so it lowers min to -max(-x): an
+    // extra negate pass, inputs truncated to tf32, and no H-axis split. Measured never faster than
+    // the default and up to 8.5x slower, so the flag has no correct use here. Scoped to configs
+    // where the SFPU min is reachable at all: without fp32_dest_acc_en, and on Quasar, -max(-x) is
+    // the only min there is and the flag is honoured.
+    TT_FATAL(
+        !(fast_and_approximate_mode && reduce_math == tt::tt_metal::ReduceOpMath::MIN && fp32_sfpu_available),
+        "ttnn.min does not support fast_and_approximate_mode=True on Float32: the FPU has no min "
+        "pool, so the flag lowers the reduce to -max(-x) — an extra negate pass, inputs truncated to "
+        "tf32, and no H-axis split. Use the default (False), which is both exact and faster.");
 
     const bool use_sfpu_fp32_sum = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::SUM;
     const bool use_sfpu_fp32_mean = fp32_sfpu_eligible && reduce_math == tt::tt_metal::ReduceOpMath::AVG;
@@ -412,14 +422,23 @@ Tensor reduce(
     }
 
     // Same split for TILE input: un-split also parallelizes only over NC*Wt. Stage 1 keeps the
-    // tiled reader/compute but emits ROW_MAJOR FP32 partials — a TILE partial would pack slices
-    // into one page. Stage 2 is the RM dense H collapse. Block-float rides along as whole tiles.
+    // tiled reader/compute but emits ROW_MAJOR partials — a TILE partial would pack slices into one
+    // page. Stage 2 is the RM dense H collapse.
+    // !negate keeps out every MIN the FPU lowers to -MAX(-x) (bfloat8_b, fast-mode fp32, fp32
+    // without fp32_dest_acc_en, Quasar bf16): those return through reduce_min() above and would
+    // need a negated stage-1 partial and a sign flip after stage 2.
+    const bool split_selects =
+        reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::MIN;
+    const bool split_accumulates =
+        reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM;
     if (prepared_input.layout() == tt::tt_metal::Layout::TILE && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
-        (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM) && !negate &&
-        both_interleaved && !prepared_input.shard_spec().has_value() && prepared_input.logical_shape().rank() == 4 &&
+        (split_accumulates || split_selects) && !negate && both_interleaved &&
+        !prepared_input.shard_spec().has_value() && prepared_input.logical_shape().rank() == 4 &&
         (prepared_input.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
          prepared_input.dtype() == tt::tt_metal::DataType::FLOAT32 ||
-         tt::tt_metal::is_block_float(prepared_input.dtype()))) {
+         // Block-float rides along as whole tiles only for the accumulating ops: MAX/MIN partials
+         // keep the input dtype, and block-float has no ROW_MAJOR form.
+         (tt::tt_metal::is_block_float(prepared_input.dtype()) && split_accumulates))) {
         const auto& logical = prepared_input.logical_shape();
         const auto& padded = prepared_input.padded_shape();
         const uint32_t tile_h = prepared_input.tensor_spec().tile().get_height();
@@ -437,14 +456,22 @@ Tensor reduce(
             compute_h_slices(col_groups, Ht, grid_cores, k_min_ht_for_split_tile, k_min_ht_per_slice_tile);
 
         if (num_h_slices >= 2) {
-            // Stage 1: tiled H reduce, unit scaler, ROW_MAJOR FP32 partials.
+            // Both stages run this op; AVG lowers to SUM with the scaler applied on stage 2.
+            const auto split_math = split_selects ? reduce_math : tt::tt_metal::ReduceOpMath::SUM;
+            // A MAX/MIN partial is an exact input value, so a wider one buys no precision and
+            // doubles the bf16 round-trip. FP32 partials are also what keeps stage 2 on the SFPU
+            // (s2_use_sfpu -> fp32_sfpu_reduce -> UnpackToDest), which is what stops the in-kernel
+            // tilize narrowing them to tf32 — narrowing fp32 partials to bf16 would unhook that.
+            const auto partial_dtype = split_selects ? prepared_input.dtype() : tt::tt_metal::DataType::FLOAT32;
+
+            // Stage 1: tiled H reduce, unit scaler, ROW_MAJOR partials.
             const Tensor partials = ttnn::prim::reduce(
                 prepared_input,
-                tt::tt_metal::ReduceOpMath::SUM,
+                split_math,
                 tt::tt_metal::ReduceOpDim::H,
                 /*scaler=*/1.0f,
                 output_mem_config,
-                tt::tt_metal::DataType::FLOAT32,
+                partial_dtype,
                 config,
                 sub_core_grids,
                 /*negate=*/false,
@@ -457,11 +484,13 @@ Tensor reduce(
                 /*output_layout=*/tt::tt_metal::Layout::ROW_MAJOR);
 
             // Stage 2 folds FP32 partials on SFPU even if stage 1 used the FPU; FPU would round each to tf32.
+            // Selection partials carry no mantissa their inputs lacked, so the engine is free for
+            // MAX/MIN and they share the expression rather than special-case it.
             // Scaler vs post-mul follows the partial dtype: SFPU ignores the scaler CB.
             const bool s2_use_sfpu = !tt::tt_metal::is_block_float(input_tensor.dtype()) && arch != tt::ARCH::QUASAR &&
                                      config.fp32_dest_acc_en;
-            const auto s2_scaler_mode = ttnn::prim::derive_scaler_mode(
-                tt::tt_metal::ReduceOpMath::SUM, partials.dtype(), tt::tt_metal::ReduceOpDim::H, s2_use_sfpu);
+            const auto s2_scaler_mode =
+                ttnn::prim::derive_scaler_mode(split_math, partials.dtype(), tt::tt_metal::ReduceOpDim::H, s2_use_sfpu);
             const bool s2_post_mul = s2_scaler_mode == ttnn::prim::ScalerMode::PostMul;
             const float s2_scaler = s2_post_mul ? 1.0f : scaler;
             const float s2_mul = s2_post_mul ? scaler : 1.0f;
@@ -469,7 +498,7 @@ Tensor reduce(
             // Stage 2: collapse the slice axis. TILE in defaults to TILE out.
             return ttnn::prim::reduce(
                 partials,
-                tt::tt_metal::ReduceOpMath::SUM,
+                split_math,
                 tt::tt_metal::ReduceOpDim::H,
                 s2_scaler,
                 output_mem_config,

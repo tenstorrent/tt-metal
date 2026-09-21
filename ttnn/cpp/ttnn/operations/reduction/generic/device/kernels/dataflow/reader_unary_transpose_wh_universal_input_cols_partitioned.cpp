@@ -31,6 +31,9 @@ void kernel_main() {
     // {1, Ht} is the un-split reduce.
     constexpr auto num_h_slices = get_arg(args::num_h_slices);
     constexpr auto slice_Ht = get_arg(args::slice_Ht);
+    // MAX/MIN, spelled without naming PoolType::MIN — Quasar's ckernel::PoolType has no such
+    // enumerator, and MIN reaches this kernel as MAX with negate anyway on that arch.
+    constexpr bool reduce_selects = REDUCE_OP != ckernel::PoolType::SUM && REDUCE_OP != ckernel::PoolType::AVG;
 
     // Welford must process one column at a time because the SFPU can only maintain
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
@@ -85,6 +88,10 @@ void kernel_main() {
                     if (filled == 0) {
                         dfb_in0.reserve_back(tiles_per_batch);
                     }
+                    // slice_Ht is rounded up, so the trailing slices run past Ht. SUM pads those
+                    // with zeros; MAX/MIN re-read the column's last real tile instead, because
+                    // selecting a value already in the set changes nothing and the zero a pad
+                    // would carry is not the identity for either of them.
                     if (ht < Ht) {
                         noc.async_read(
                             tensor_accessor,
@@ -92,8 +99,14 @@ void kernel_main() {
                             tile_bytes,
                             {.page_id = nc * HtWt + ht * Wt + wt},
                             {.offset_bytes = filled * tile_bytes});
+                    } else if constexpr (reduce_selects) {
+                        noc.async_read(
+                            tensor_accessor,
+                            dfb_in0,
+                            tile_bytes,
+                            {.page_id = nc * HtWt + (Ht - 1) * Wt + wt},
+                            {.offset_bytes = filled * tile_bytes});
                     } else {
-                        // slice_Ht is rounded up; pad past Ht with the SUM identity.
                         noc.async_write_zeros(dfb_in0, tile_bytes, {.offset_bytes = filled * tile_bytes});
                         padded = true;
                     }
