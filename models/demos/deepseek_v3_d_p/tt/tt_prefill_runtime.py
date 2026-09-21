@@ -54,14 +54,14 @@ class TtPrefillRuntimeConfig:
     # l1_small_size > 0. Enable for Kimi (single expert group, device gate). See TtMoERoutingSetup.
     routing_use_l1_small_for_semaphores: bool = False
     # Static model-dimension constants for the model being built
-    # (DeepSeekV3Config | KimiK26Config). Drives expert counts, dense-layer
+    # (DeepSeekV3Config | KimiK27Config). Drives expert counts, dense-layer
     # count, route groups, etc. in the TT layer code. Supplied by the model
     # adapter — no default, so the runtime never bakes in a specific model.
     model_cfg: Optional[type] = None
     # When True, the last transformer layer runs kv-only: it fills the KV cache
-    # (which migration needs) and skips its Q/SDPA/output projection, FFN/MoE,
-    # the final RMSNorm, and the LM head. `prefill()` then returns None. The pipeline
-    # sets this on the last rank so the final stage is headless.
+    # (which migration needs) and skips its Q/SDPA/output projection and FFN/MoE.
+    # The KV cache is the prefill output either way; this only trims the last layer.
+    # The pipeline sets it on the last rank.
     kv_only_last_layer: bool = False
     # Build the DFlash drafter context-KV cache during this prefill (opt-in). Every rank builds its owned fc
     # slices from $DFLASH_HF_MODEL; only the last rank builds the KV tail + cache.
@@ -88,7 +88,6 @@ class TtPrefillRuntimeConfig:
     # KV dedup: also shard the KV/index caches across tp_axis, so each of the sp*tp devices stores a
     # distinct 1/(sp*tp) slice instead of tp copies. Must match how the caches were allocated and how the
     # KV chunk address table was built; sparse (DSA) path only.
-    tp_shard_kv: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -107,8 +106,14 @@ class TtPrefillRuntime:
     whole model (the config defaults). For pipeline-parallel prefill, a driver builds
     one runtime per rank with first_layer_idx / is_first_rank / is_last_rank set, and
     the non-boundary ranks consume/produce hidden-state activations instead of token
-    IDs / sampled tokens.
+    IDs.
     """
+
+    # The transformer this runtime drives. Overridden by a model whose stack is not
+    # `TtPrefillTransformer`: Kimi-K3's blocks are their own class because only 24 of its 93 layers
+    # write a KV slab and its residual is block-structured, so it cannot reuse the shared block. A
+    # class attribute rather than a constructor argument, so every existing caller is unaffected.
+    MODEL_CLS = TtPrefillTransformer
 
     def __init__(
         self,
@@ -183,7 +188,7 @@ class TtPrefillRuntime:
         if self.config.weight_cache_path:
             num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
             experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // num_devices
-            if TtPrefillTransformer.check_cache_complete(
+            if self.MODEL_CLS.check_cache_complete(
                 self.config.weight_cache_path,
                 self.config.num_layers,
                 experts_per_chip,
@@ -219,7 +224,7 @@ class TtPrefillRuntime:
                     f"TTNN weight cache not complete at {self.config.weight_cache_path}; "
                     f"it will be rebuilt from the supplied weights."
                 )
-        self.model = TtPrefillTransformer(
+        self.model = self.MODEL_CLS(
             mesh_device=self.mesh_device,
             config=self.hf_config,
             model_cfg=model_cfg,
@@ -239,7 +244,6 @@ class TtPrefillRuntime:
             shared_expert_activations_dtype=self.config.shared_expert_activations_dtype,
             shared_expert_weights_dtype=self.config.shared_expert_weights_dtype,
             weight_cache_path=self.config.weight_cache_path,
-            lm_head_is_column_parallel=True,
             is_chunked=True,
             slot_num=self.config.num_users,
             kv_only_last_layer=self.config.kv_only_last_layer,
@@ -249,7 +253,6 @@ class TtPrefillRuntime:
             is_last_rank=self.config.is_last_rank,
             sparse_kv_cache_format=self.config.sparse_kv_cache_format,
             overlap_shared_expert_with_dispatch=self.config.overlap_shared_expert_with_dispatch,
-            tp_shard_kv=self.config.tp_shard_kv,
         )
         self.model_built = True
 
@@ -295,7 +298,7 @@ class TtPrefillRuntime:
             kv_only_idx = last_excl - 1
             assert kv_only_idx not in dcfg.target_layer_ids, (
                 f"drafter target layer {kv_only_idx} coincides with the kv-only last layer; its post-FFN tap "
-                f"never fires. Move the tap off the last layer or disable PREFILL_KV_ONLY_LAST_LAYER."
+                "never fires. Move the tap off the last layer."
             )
 
         logger.info(
@@ -363,7 +366,7 @@ class TtPrefillRuntime:
 
     def make_placeholder_activation(self) -> ttnn.Tensor:
         """Allocate a zero hidden-state activation matching what the D2D socket delivers:
-        [1, 1, chunk_per_chip, emb_dim/tp] — or 2·emb_dim/tp under DFlash, which packs the drafter
+        [1, activation_planes, chunk_per_chip, emb_dim/tp] — or 2·emb_dim/tp under DFlash, which packs the drafter
         partial alongside the hidden — TILE_LAYOUT, DRAM, replicated.
 
         Stand-in input for a non-first rank until the upstream D2D-socket sync op
@@ -376,7 +379,10 @@ class TtPrefillRuntime:
         # 2H-wide tensor and this receive buffer must match. Non-dflash keeps H.
         feature_size = self.hf_config.hidden_size * (2 if self.config.dflash_enabled else 1)
         emb_per_tp = feature_size // self.config.tp_factor
-        zeros = torch.zeros(1, 1, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
+        # Dim 1 carries any extra per-token state the model ships across the boundary (DFlash widens
+        # the LAST dim instead, so the two compose). `_prepare_trace` captures this buffer as the
+        # address-stable input, so a wrong plane count here is baked into the replay.
+        zeros = torch.zeros(1, self.activation_planes, chunk_per_chip, emb_per_tp, dtype=torch.bfloat16)
         return ttnn.from_torch(
             zeros,
             device=self.mesh_device,
@@ -422,8 +428,24 @@ class TtPrefillRuntime:
         else:
             logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
             tt_input = self.make_chunk_input([0] * chunk)
-            self.prefill_chunk(tt_input, kv_caches, slot_id=0, actual_start=0, actual_end=chunk)
-            ttnn.synchronize_device(self.mesh_device)
+            # Warm with a NO-OP completion sink rather than none at all. `zero_pad_and_ack`'s whole
+            # body is gated on an ack transport being wired (tt/kv_ack.py), and the real sink is only
+            # registered after compile(), so a warm pass with no sink silently skips it and leaves
+            # `zero_padded_kv_cache` to compile on the first REAL chunk -- measured at 5863 ms of an
+            # 8.1 s chunk 0, against 0.3 ms once built. The traced path already warms these programs
+            # for the same reason (see capture_trace). A no-op sink emits no records and needs no
+            # draining, and d2h_service stays None so the device-op ack is not fired here.
+            # It is not free: with a sink wired, `zero_pad_and_ack`'s host-callback branch also
+            # runs its `ttnn.synchronize_device`, so this warm pass now costs one host sync per
+            # KV-writing layer on every model. That is bounded, once per process, and buys back
+            # the 5.8 s above.
+            prev_sink = self._layer_completion_sink
+            self._layer_completion_sink = lambda *_args, **_kwargs: None
+            try:
+                self.prefill_chunk(tt_input, kv_caches, slot_id=0, actual_start=0, actual_end=chunk)
+                ttnn.synchronize_device(self.mesh_device)
+            finally:
+                self._layer_completion_sink = prev_sink
         warmup_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(
             f"[prefill timing] task_id={'PREPARE' if self.config.use_trace else 'WARMUP'} num_tokens={chunk} "
@@ -534,7 +556,7 @@ class TtPrefillRuntime:
         """The captured/warmed metadata forward: per-chunk scalars come from the persistent metadata
         tensor on-device (actual_start/actual_end = None host-side). Writes user slot metadata[0].
         Returns the forward output — a hidden-state activation on a non-last rank (forwarded downstream
-        over D2D), or the last/single rank's ignored KV-only tuple.
+        over D2D), or None on the last/single rank (the KV cache is the output).
 
         index_kv_cache is threaded for the sparse/DSA path exactly as the eager prefill_chunk does;
         omitting it would replay the indexer against no cache. This warm pass is also what memoizes
@@ -570,11 +592,15 @@ class TtPrefillRuntime:
         # Per-element metadata: (slot_id, actual_start, actual_end), seeded for chunk 0.
         # ChunkMetadata, not a bare tuple: Mistral needs a 4th field (the llama4 query-scale buffer)
         # whose lifetime matches these scalars. None elsewhere, and fields 0-2 are unchanged.
+        # `make_llama4_scale_buffer` returns None for every variant without llama_4_scaling_beta, and
+        # a NoPE model (Kimi-K3) builds no RotarySetup at all, so there is nothing to ask -- reaching
+        # through an absent attribute would be the only difference between them.
+        rope_setup = getattr(self.model, "rope_setup", None)
         self._trace_metadata = ChunkMetadata(
             self._meta1_dev(0),
             self._meta1_dev(0),
             self._meta1_dev(chunk),
-            self.model.rope_setup.make_llama4_scale_buffer(chunk),
+            rope_setup.make_llama4_scale_buffer(chunk) if rope_setup is not None else None,
         )
         # Same three words packed, for the D2H ack record. Allocated whether or not the ack is wired:
         # set_d2h_ack_service() runs after compile(), and the capture needs an address that predates it.
@@ -617,9 +643,9 @@ class TtPrefillRuntime:
         Alternatively, if a host-side per-layer callback is registered (via set_layer_completion_sink),
         the model fires that once per layer instead.
 
-        Always returns None: no token is sampled. (When `kv_only_last_layer` is set on the config the
-        last layer's compute is stripped down to the KV cache fill, which migration consumes, and the
-        final RMSNorm / LM head / sample are skipped entirely.)
+        Always returns None on the last rank: the populated KV cache is the output (decode owns the
+        token sampling). When `kv_only_last_layer` is set on the config the last layer's compute is stripped
+        down to the KV cache fill, which migration consumes.
 
         Args:
             input_tensor: on the first rank, one chunk's tokens as an SP-sharded uint32 ROW_MAJOR DRAM
@@ -779,9 +805,18 @@ class TtPrefillRuntime:
             return self._pack_activation(out, self.drafter.export_partial())
 
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
-        # Last/single rank: forward returns the (token, prob, intermediates) tuple, which this
-        # KV-output path ignores.
+        # Last/single rank: forward returns None (no intermediates requested); the KV cache is the output.
         return out if not self.config.is_last_rank else None
+
+    @property
+    def activation_planes(self) -> int:
+        """Planes on dim 1 of the D2D payload this rank RECEIVES.
+
+        1 for every model whose cross-rank state is just the activation. Overridden by a model that
+        also carries per-token state produced upstream; it must agree with the adapter's
+        `pipeline_activation_planes` at this rank's first layer, since that is what sized the socket.
+        """
+        return 1
 
     def release_trace(self) -> None:
         """Free the captured trace segments and the sub-device managers that own them, BEFORE the
@@ -882,6 +917,16 @@ class TtPrefillRuntime:
             stages.append(KvCacheStage(int(index_cache.buffer_address()), first_full, count_full))
         return stages
 
+    def kv_table_layer_rows(self, stage_layouts):
+        """Model layer to publish each dense KV slab at, or None when every layer owns one.
+
+        Only a HYBRID attention stack needs this. `kv_migration_stages` numbers such a model's KVPE
+        stage in compacted slab space (as it already does for the DSA index cache), so the gathered
+        stages count slabs rather than layers; this maps slab -> model layer so the published table
+        keeps the model's layer axis and a consumer indexing by layer is unaffected.
+        """
+        return None
+
     def build_kv_chunk_table(
         self,
         kv_caches: MlaKvCaches,
@@ -911,6 +956,19 @@ class TtPrefillRuntime:
         Under DFlash, this rank's drafter context caches join the same merged table as
         ``2 * num_kv_heads`` further named configs (see the gate below)."""
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+
+        # The gathered stage is authoritative for this rank's KVPE range, not the caller's arguments.
+        # They can legitimately disagree: `kv_migration_stages` may number the stage in a COMPACTED
+        # space (the DSA index cache does, and a hybrid stack must for KVPE too, since only some
+        # layers own a slab) while the runner passes the rank's MODEL-layer span. Taking the layout
+        # keeps the cache-depth check and the address walk in the space everyone already agreed on.
+        _primary_layout = stage_layouts[0] if stage_layouts else None
+        if _primary_layout:
+            _my_rank = int(ttnn.distributed_context_get_rank())
+            _mine = [st for st in _primary_layout if st["rank"] == _my_rank]
+            if _mine:
+                first_layer_idx = int(_mine[0]["first_layer"])
+                num_my_layers = int(_mine[0]["count"])
 
         # DFlash: register the drafter's context K/V as further configs of the same merged table, so a
         # device-less consumer (prefill_producer) can read them back per (layer, head) and PCC them
@@ -957,7 +1015,6 @@ class TtPrefillRuntime:
             mesh_shape=self.config.mesh_shape,
             sp_axis=self.config.sp_axis,
             tp_axis=self.config.tp_axis,
-            tp_shard_kv=self.config.tp_shard_kv,
             num_users=self.config.num_users,
             chunk_size_global=self.config.chunk_size,  # block-cyclic period (prefill chunk size)
             path=path,
@@ -966,6 +1023,7 @@ class TtPrefillRuntime:
             first_layer_idx=first_layer_idx,
             num_my_layers=num_my_layers,
             stage_layouts=stage_layouts,
+            layer_rows=self.kv_table_layer_rows(stage_layouts),
             index_layer_ids=index_layer_ids,
         )
 
@@ -975,11 +1033,14 @@ class TtPrefillRuntime:
         not un-rotated to natural token order. DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is
         ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host
         read-back."""
-        # The `[:, :1]` below keeps ONE TP column, which is a full replica only when TP-replicated. Under
-        # KV dedup each column holds a distinct 1/tp of its row, so it would drop (tp-1)/tp of the tokens.
-        assert not self.config.tp_shard_kv, (
+        # The `[:, :1]` below keeps ONE TP column, which is a full replica only when TP-replicated. The
+        # sparse (DSA) path always TP-dedups, so each column holds a distinct 1/tp of its row and this
+        # would drop (tp-1)/tp of the tokens. Keyed on the index cache because that is what makes a model
+        # sparse here (dense models pass kv_caches.index=None and keep TP-replicated KVPE).
+        assert kv_caches.index is None, (
             "read_slot_kv (and the pairwise dst==src migration validation built on it) has no TP-sharded "
-            "host reconstruction. Use the mock-migration producer read-back to validate a TP-sharded cache."
+            "host reconstruction, and every sparse/DSA model TP-dedups its caches. Use the mock-migration "
+            "producer read-back to validate a sparse model's cache."
         )
         mesh_device = self.mesh_device
         num_layers = self.config.num_layers
