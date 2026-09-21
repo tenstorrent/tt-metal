@@ -7,7 +7,7 @@
 warm-iteration isolation and device merge as `project_block_perf.py` (mean over devices for collectives, max
 otherwise). Not a test; pytest leaves it alone.
 
-    python block_profile_stats.py compare doc=<csv> today=<csv> [...]   # per-op side by side, deltas vs the first
+    python block_profile_stats.py compare baseline=<csv> today=<csv> [...]   # per-op side by side, deltas vs the first
     python block_profile_stats.py runs r0=<csv> r1=<csv> [...]           # per-op mean / std / min / max / CoV across runs
     python block_profile_stats.py devices <csv> [<csv> ...]              # per-op spread across the 32 devices within a run
 

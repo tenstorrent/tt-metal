@@ -4,7 +4,7 @@
 
 """The matmul-class ops of one MiniMax-H3 transformer block, per device, as the model runs them on the
 Wormhole 4x8 Galaxy (TP = 4 / SP = 8): one `OpSpec` per op with its shape, fusion, blocking, grid, sweep-harness
-use case, Tracy op code and the perf-doc baseline. Shared by `transformer_roofline.py` (host-only: this module
+use case, Tracy op code and the 2026-09-17 baseline. Shared by `transformer_roofline.py` (host-only: this module
 imports neither torch nor ttnn at import time), `transformer_op_mesh_bench.py`, `transformer_op_single_device_bench.py`
 and `agmm_compute_zones.py`. Not a test; pytest leaves it alone.
 
@@ -19,7 +19,7 @@ multiplies over; K_local = K / TP is what each device holds. N is the per-device
 ff1, the pre-reduce-scatter width for ff2); N_out is the per-device output width.
 
 Shapes at 15 s / 768P / 16:9: hidden 5376, inner 7168 (56 heads x 128), ffn 14336, 13664 rows per device
-(`MiniMaxH3_wormhole_perf.md`, "Per-op device breakdown"). Blockings are what the model resolves at this M:
+(Tracy block breakdown, 2026-09-17). Blockings are what the model resolves at this M:
 to_qkv / to_out from `AGMM_BLOCK_SIZES` (`agmm_config.py`, subblock fixed at 2x2 by `get_matmul_config`), ff1 and
 ff2 from the swept `grid_88_configs` / `grid_89_configs` entries (`models/tt_dit/utils/matmul.py`), which win
 over the model's `default_block_size`.
@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-M_15S_768P_16_9 = 13664  # rows per device at SP=8 (MiniMaxH3_wormhole_perf.md, "Per-op device breakdown")
+M_15S_768P_16_9 = 13664  # rows per device at SP=8 (Tracy block breakdown, 2026-09-17)
 TP = 4
 
 
@@ -50,7 +50,7 @@ class OpSpec:
     sweep_use_case: str  # `USE_CASE_CONFIGS` key in models/tt_dit/utils/sweep_mm_block_sizes.py
     sweep_is_agmm: bool
     op_code: str  # Tracy OP CODE
-    measured_us_wh_15s: float  # perf-doc baseline at M=13664, HiFi2, shipped blocking
+    measured_us_wh_15s: float  # 2026-09-17 baseline at M=13664, HiFi2, shipped blocking (sweep_mm_block_sizes.py)
     color: str
     marker: str
     chunks: int = 1
@@ -129,7 +129,7 @@ TO_QKV = OpSpec(
     sweep_use_case="qkv",
     sweep_is_agmm=True,
     op_code="AllGatherMinimalMatmulAsyncOp",
-    measured_us_wh_15s=10401.8,  # perf doc "Matmul blockings", shipped (8,7,12)
+    measured_us_wh_15s=10401.8,  # blocking sweep 2026-09-17, shipped (8,7,12)
     color="#eda100",
     marker="o",
 )
@@ -149,7 +149,7 @@ TO_OUT = OpSpec(
     sweep_is_agmm=True,
     op_code="AllGatherMinimalMatmulAsyncOp",
     # Shipped (8,8,6) with the real addcmul epilogue: harness "to_out" use case, 2026-09-21 (5,294 / 5,311 us in two
-    # runs; includes the harness's bias add, ~50 us, which the model does not have). The perf doc's "Matmul blockings"
+    # runs; includes the harness's bias add, ~50 us, which the model does not have). The 2026-09-17 blocking-sweep
     # figure for to_out, 4332.8 us, was swept with the "plain" use case: no epilogue, math_approx_mode=False.
     measured_us_wh_15s=5294.0,
     color="#e87ba4",
@@ -201,7 +201,7 @@ OP_FAMILIES = {"agmm": AGMM_OPS, "all": ALL_OPS}
 
 MEASURED_US_WH_15S = {s.name: s.measured_us_wh_15s for s in ALL_OPS}
 OP_COLOR = {s.name: s.color for s in ALL_OPS}
-# sweep-harness use case -> op name; "plain" is the use case the perf doc's to_out rows were swept with
+# sweep-harness use case -> op name; "plain" is the use case the 2026-09-17 to_out rows were swept with
 SWEEP_USE_CASE_TO_OP = {s.sweep_use_case: s.name for s in ALL_OPS} | {"plain": "to_out"}
 
 

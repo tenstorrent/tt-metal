@@ -6,7 +6,7 @@
 the op (from `minimax_h3_ops.py`) run on one Wormhole chip through the single-device op that carries the same
 fusion, plain and fused, host-timed and checked against fp32 torch. The AGMM's matmul half is a near-verbatim
 copy of `minimal_matmul` (same relay-chain data movement, same compute kernel structure, same epilogues) and the
-ring gather is fully hidden (MiniMaxH3_wormhole_perf.md, "ff1 AGMM: where the other 49% goes", exp 3), so this is
+ring gather is fully hidden (measured 2026-09-18: 16.56 ms single device vs 15.7 ms on the mesh), so this is
 the fast loop for compute-kernel changes: ~25 s per case including the JIT compile, no mesh, no Tracy. Not a test;
 pytest leaves it alone.
 

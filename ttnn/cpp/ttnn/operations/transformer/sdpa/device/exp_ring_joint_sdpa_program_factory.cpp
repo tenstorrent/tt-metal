@@ -1056,7 +1056,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     // only one chunk resident; the reader then re-reads each pass's Q every ring iteration and
     // compute pops it at the end of the pass. Buys back (num_passes - 1) * Sq_chunk_t * DHt tiles,
     // which at H3 15s (q=320, k=384, P=2) is the difference between fitting and not.
-    // See exp_more_heads_per_row.md §9.
     // CBs must end below the lowest live L1 buffer (validate_circular_buffer_region enforces
     // exactly this). In the pipeline, global semaphores and persistent buffers occupy the top of
     // L1, so budgeting against the raw L1 size over-promises and the program clashes at allocate.

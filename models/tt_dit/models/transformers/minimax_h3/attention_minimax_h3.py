@@ -407,8 +407,7 @@ class MiniMaxH3Attention(Module):
         A shape fits if either Q mode does: resident Q (all passes' chunks stay in L1, read once) or
         the op's streamed-Q fallback (one chunk resident, re-read per pass per ring iteration).
         That gives 512 at q=224 resident, and 384 at q=320 streamed -- where the k=256 that resident
-        Q would force measured far slower (small k doubles the per-chunk flash overhead; see
-        exp_more_heads_per_row.md §9).
+        Q would force measured far slower (small k doubles the per-chunk flash overhead).
         """
         if not self.use_exp_ring_sdpa:
             return None

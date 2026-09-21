@@ -174,7 +174,7 @@ constexpr uint32_t INVALID_CB = 32;
 // (width-4 blocked-pack reconfiguration was measured to cost more than it saved), but on the
 // MiniMax-H3 ring shapes (q256 / k512, 4-wide subblocks) every subblock then took the per-tile
 // path; width 4 measured 1.3% faster on the exp ring op and 0.7% on the normal ring op at 15 s
-// on the Wormhole galaxy (MiniMaxH3_wormhole_perf.md, "Inner loop").
+// on the Wormhole galaxy (inner-loop phase zones, 2026-09-18).
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 4;
 ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width >= MIN_BLOCKED_PACK_TILES; }
 
