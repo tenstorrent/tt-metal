@@ -1741,7 +1741,8 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         .source = "ttnn/cpp/ttnn/operations/experimental/quasar/transformer/sdpa/device/kernels/compute/sdpa.cpp",
         .compiler_options =
             {.defines = compute_defines,
-             .opt_level = KernelBuildOptLevel::O3},  // Quasar no longer needs the Os bring-up workaround
+             // Quasar stays on Os: at O3 sdpa.cpp overflows trisc0's ~24KB code region on the emulator.
+             .opt_level = (device->arch() == tt::ARCH::QUASAR) ? KernelBuildOptLevel::Os : KernelBuildOptLevel::O3},
         .dfb_bindings = compute_dfbs,
         .compile_time_args = compute_cta,
         .runtime_arg_schema =
