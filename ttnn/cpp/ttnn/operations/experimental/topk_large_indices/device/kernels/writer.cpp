@@ -8,6 +8,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 
 namespace {
@@ -78,12 +79,40 @@ FORCE_INLINE void issue_contiguous_row_write(
     noc.async_write(src_cb, tensor, row_bytes, {.offset_bytes = 0}, {.page_id = row, .offset_bytes = 0});
 }
 
+template <
+    uint32_t source_slices_per_row,
+    uint32_t output_slices_per_row,
+    uint32_t slice_bytes,
+    typename TensorAccessorT>
+FORCE_INLINE void write_row_indices(
+    CircularBuffer& indices_cb,
+    CircularBuffer& indices_scratch_cb,
+    const Noc& noc,
+    const TensorAccessorT& indices,
+    uint32_t row,
+    uint32_t row_bytes) {
+    if constexpr (source_slices_per_row == 32) {
+        issue_contiguous_row_write(indices_cb, noc, indices, row, row_bytes);
+        noc.async_writes_flushed();
+        indices_cb.pop_front(1);
+    } else {
+        issue_reordered_row_write<source_slices_per_row, output_slices_per_row, slice_bytes>(
+            indices_cb, indices_scratch_cb, noc, indices, row, row_bytes);
+        noc.async_writes_flushed();
+        indices_scratch_cb.pop_front(1);
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
     const uint32_t indices_addr = get_common_arg_val<uint32_t>(topk_common_args::output_address);
-    const uint32_t start_row = get_arg_val<uint32_t>(0);
-    const uint32_t num_rows = get_arg_val<uint32_t>(1);
+    const uint32_t start_row = get_arg_val<uint32_t>(topk_core_args::writer_start_row);
+    const uint32_t num_rows = get_arg_val<uint32_t>(topk_core_args::writer_num_rows);
+    const uint32_t num_recv_rounds = get_arg_val<uint32_t>(topk_core_args::writer_num_recv_rounds);
+    const bool sends_survivor = get_arg_val<uint32_t>(topk_core_args::writer_sends_survivor) != 0;
+    const uint32_t parent_noc_x = get_arg_val<uint32_t>(topk_core_args::writer_parent_noc_x);
+    const uint32_t parent_noc_y = get_arg_val<uint32_t>(topk_core_args::writer_parent_noc_y);
 
     constexpr uint32_t cb_indices = get_compile_time_arg_val(0);
     constexpr uint32_t cb_indices_scratch = get_compile_time_arg_val(1);
@@ -92,29 +121,64 @@ void kernel_main() {
     constexpr uint32_t output_slices_per_row = get_compile_time_arg_val(4);
     constexpr uint32_t indices_slice_bytes = get_compile_time_arg_val(5);
     constexpr auto indices_args = TensorAccessorArgs<6>();
+    constexpr uint32_t tree_args_base = indices_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_landing = get_compile_time_arg_val(tree_args_base);
+    constexpr uint32_t cb_send = get_compile_time_arg_val(tree_args_base + 1);
+    constexpr uint32_t credit_sem_id = get_compile_time_arg_val(tree_args_base + 2);
+    constexpr uint32_t data_sem_id = get_compile_time_arg_val(tree_args_base + 3);
+    constexpr uint32_t survivor_tiles = get_compile_time_arg_val(tree_args_base + 4);
+    constexpr uint32_t survivor_bytes = get_compile_time_arg_val(tree_args_base + 5);
 
     const auto indices = TensorAccessor(indices_args, indices_addr, indices_page_bytes);
     CircularBuffer indices_cb(cb_indices);
+    CircularBuffer indices_scratch_cb(cb_indices_scratch);
+    CircularBuffer landing_cb(cb_landing);
+    CircularBuffer send_cb(cb_send);
+    Semaphore<> credit_sem(credit_sem_id);
+    Semaphore<> data_sem(data_sem_id);
     Noc noc;
 
-    if constexpr (source_slices_per_row == 32) {
-        for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
-            const uint32_t row = start_row + local_row;
-            issue_contiguous_row_write(indices_cb, noc, indices, row, indices_page_bytes);
-            noc.async_writes_flushed();
-            indices_cb.pop_front(1);
-        }
-    } else {
-        CircularBuffer indices_scratch_cb(cb_indices_scratch);
-        for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
-            const uint32_t row = start_row + local_row;
-            issue_reordered_row_write<source_slices_per_row, output_slices_per_row, indices_slice_bytes>(
-                indices_cb, indices_scratch_cb, noc, indices, row, indices_page_bytes);
+    // The landing CB is one survivor slot cycled whole, so its base is the same address on every core.
+    const uint32_t landing_base = landing_cb.get_write_ptr();
 
-            noc.async_writes_flushed();
-            indices_scratch_cb.pop_front(1);
+    uint32_t landed = 0;  // Child deliveries so far; data_sem counts them monotonically across rounds and rows.
+    for (uint32_t local_row = 0; local_row < num_rows; ++local_row) {
+        const uint32_t row = start_row + local_row;
+
+        for (uint32_t round = 0; round < num_recv_rounds; ++round) {
+            const uint32_t child_noc_x = get_arg_val<uint32_t>(topk_core_args::writer_child_coords_base + 2 * round);
+            const uint32_t child_noc_y =
+                get_arg_val<uint32_t>(topk_core_args::writer_child_coords_base + 2 * round + 1);
+
+            // The slot is free once the compute has consumed the previous round: tell the child to write.
+            landing_cb.reserve_back(survivor_tiles);
+            credit_sem.up(noc, child_noc_x, child_noc_y, 1);
+
+            // The child increments data_sem only after its write is drained, so the slot is complete here.
+            ++landed;
+            data_sem.wait_min(landed);
+            landing_cb.push_back(survivor_tiles);
+        }
+
+        if (sends_survivor) {
+            credit_sem.wait_min(local_row + 1);
+            send_cb.wait_front(survivor_tiles);
+            noc.async_write(
+                send_cb,
+                UnicastEndpoint{},
+                survivor_bytes,
+                {.offset_bytes = 0},
+                {.noc_x = parent_noc_x, .noc_y = parent_noc_y, .addr = landing_base});
+            noc.async_write_barrier();
+            send_cb.pop_front(survivor_tiles);
+            data_sem.up(noc, parent_noc_x, parent_noc_y, 1);
+            noc.async_atomic_barrier();
+        } else {
+            write_row_indices<source_slices_per_row, output_slices_per_row, indices_slice_bytes>(
+                indices_cb, indices_scratch_cb, noc, indices, row, indices_page_bytes);
         }
     }
 
     noc.async_write_barrier();
+    noc.async_atomic_barrier();
 }
