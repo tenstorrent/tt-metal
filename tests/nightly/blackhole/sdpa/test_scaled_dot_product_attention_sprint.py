@@ -278,13 +278,19 @@ def sdpa_realtime_profiled_device(device):
     INPUT_SHAPES,
     ids=INPUT_IDS,
 )
-def test_sdpa_create_perf_table(b, nh, s, d):
+def test_sdpa_create_perf_table(request, b, nh, s, d):
     """
     Sweep chunk sizes for a given SDPA shape and print a performance table.
     Shows the best chunk size configurations ranked by kernel duration.
     Skipped on CI - run locally with tracy profiler.
     """
     from tracy.process_model_log import run_device_profiler
+
+    # Every chunk configuration below runs pytest in a subprocess under the tracy profiler, and each of those
+    # needs the chip. Once any test in this process has opened a device the process keeps the chip lock for
+    # its lifetime, so the subprocesses wait on it forever. The table therefore only runs on its own.
+    if any(item.originalname != "test_sdpa_create_perf_table" for item in request.session.items):
+        pytest.skip("run test_sdpa_create_perf_table on its own: its profiler subprocesses need the chip")
 
     # NOTE: Hardcoded for Blackhole (11x10 grid = 110 cores)
     # Cannot query device here as it causes TLB resource contention with subprocess tests
