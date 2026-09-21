@@ -1657,12 +1657,6 @@ static void sdpa_inner_loop_step(
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
-                if (fp32_acc && kt_subblock == 0) {
-                    rows_unchanged |=
-                        sdpa_row_group_unchanged(
-                            cur.max, prev.max, prev_q_subblock * qkt_subblock_h, qkt_subblock_h, !is_first_iter)
-                        << (prev_q_subblock * qkt_subblock_h);
-                }
                 sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_exp_max_diff>();
                 sub_exp_block_bcast_cols<
                     profiling_enabled,
@@ -1830,12 +1824,10 @@ static void sdpa_inner_loop_step(
 
     // Lightweight ring mask tiles are permanently fronted — no pop needed.
 
-    // The last row group's max landed at the end of Phase 1; its flags complete the chunk's row map before
-    // Phase 2 rescales anything.
+    // Every row's max has landed at the end of Phase 1: one exchange gives all three threads the chunk's row map
+    // before Phase 2 rescales anything.
     if (fp32_acc) {
-        rows_unchanged |= sdpa_row_group_unchanged(
-                              cur.max, prev.max, (q_num_subblocks - 1) * qkt_subblock_h, qkt_subblock_h, !is_first_iter)
-                          << ((q_num_subblocks - 1) * qkt_subblock_h);
+        rows_unchanged = sdpa_row_group_unchanged(cur.max, prev.max, 0, Sq_chunk_t, !is_first_iter);
     }
 
     // ========== PHASE 2: Drain last row + QKT@V + SALAD ==========
@@ -1851,6 +1843,7 @@ static void sdpa_inner_loop_step(
         static_assert(vDHt % qktv_subblock_w == 0, "vDHt must be evenly divisible by qktv_subblock_w");
         static_assert(qktv_h * qktv_subblock_w <= dst_size, "qktv subblock must fit in dest register file");
         constexpr uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_h;  // full subblocks only
+        constexpr uint32_t total_v_row_groups_cond = qktv_q_num_subblocks + (has_qktv_remainder ? 1 : 0);
         constexpr uint32_t qktv_v_num_subblocks = vDHt / qktv_subblock_w;
         constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * vDHt;
         // cb_qkt_im row width is KT_stride (for pointer alignment), not Sk_chunk_t
@@ -2022,6 +2015,16 @@ static void sdpa_inner_loop_step(
             qktv_in0_wait_tiles += qktv_in0_row_tiles;
         }
 
+        if (cond && !is_first_iter && total_v_row_groups_cond > 1) {
+            // Group 1 is rescaled while the drain's PV product is still packing; its alpha goes behind group 0's.
+            CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
+            sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                prev.max, cur.max, cb_exp_max_diff, 1, qktv_h, fp32_acc);
+            CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
+            salad_rescale_inplace<qktv_h, vDHt, dst_size>(
+                acc_cb, cb_exp_max_diff, qktv_h, qktv_h, changed_bits(qktv_h, qktv_h), cb_identity_scale_in);
+        }
+
         // Pack→unpack barrier between Phase 2's q_sub=0 drain and the main V-matmul loop.
         // The drain runs sub_exp in-place on cb_qkt_im at the last q_subblock's positions
         // (PACK writes); the upcoming V matmul (UNPACK reads) targets those same positions.
@@ -2141,19 +2144,24 @@ static void sdpa_inner_loop_step(
                 CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
             }
             if (cond && !is_first_iter) {
-                // This group's alpha goes behind the previous group's (still needed for its row sums below),
-                // and the rows whose max moved are rescaled in place before the PV product below lands on them.
-                CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
-                sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
-                    prev.max, cur.max, cb_exp_max_diff, q_subblock, qktv_h, fp32_acc);
-                CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
-                salad_rescale_inplace<qktv_h, vDHt, dst_size>(
-                    acc_cb,
+                // Previous group: its PV product has landed, so fold prev.sum into its row sums (scaled where the
+                // max moved), release its alpha and normalize or hand the row on.
+                salad_sum_rows<qktv_h>(
+                    prev.sum,
                     cb_exp_max_diff,
-                    qktv_h,
-                    q_subblock * qktv_h,
-                    changed_bits(q_subblock * qktv_h, qktv_h),
+                    0,
+                    cur.sum,
+                    salad_row * qktv_h,
+                    w_salad * qktv_h,
+                    changed_bits(salad_row * qktv_h, qktv_h),
                     cb_identity_scale_in);
+                CircularBuffer(cb_exp_max_diff).pop_front(qktv_h);
+                if (is_last_iter) {
+                    normalize_row(pushed_rows, qktv_h);
+                } else {
+                    CircularBuffer(cur.sum).push_back(qktv_h);
+                    pushed_rows++;
+                }
             }
 
             // V matmul for current row group — cur_h adapts for remainder
@@ -2207,23 +2215,20 @@ static void sdpa_inner_loop_step(
 
             // SALAD corrections for previous group (always full, h=qktv_h) + row-by-row push
             if (cond && !is_first_iter) {
-                // Row sums of the previous group: prev.sum joins cur.sum, scaled where the max moved. Its alpha is
-                // at the front of cb_exp_max_diff and goes once folded.
-                salad_sum_rows<qktv_h>(
-                    prev.sum,
-                    cb_exp_max_diff,
-                    0,
-                    cur.sum,
-                    salad_row * qktv_h,
-                    w_salad * qktv_h,
-                    changed_bits(salad_row * qktv_h, qktv_h),
-                    cb_identity_scale_in);
-                CircularBuffer(cb_exp_max_diff).pop_front(qktv_h);
-                if (is_last_iter) {
-                    normalize_row(pushed_rows, qktv_h);
-                } else {
-                    CircularBuffer(cur.sum).push_back(qktv_h);
-                    pushed_rows++;
+                if (q_subblock + 1 < total_v_row_groups) {
+                    // Next group's rows are rescaled in place while this group's PV product packs; its alpha goes
+                    // behind this group's, which the fold at the top of the next iteration still needs.
+                    CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
+                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                        prev.max, cur.max, cb_exp_max_diff, q_subblock + 1, qktv_h, fp32_acc);
+                    CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
+                    salad_rescale_inplace<qktv_h, vDHt, dst_size>(
+                        acc_cb,
+                        cb_exp_max_diff,
+                        qktv_h,
+                        (q_subblock + 1) * qktv_h,
+                        changed_bits((q_subblock + 1) * qktv_h, qktv_h),
+                        cb_identity_scale_in);
                 }
                 if (q_subblock == total_v_row_groups - 1) {
                     // Last group: its own sums, then it is normalized or pushed like the others.
