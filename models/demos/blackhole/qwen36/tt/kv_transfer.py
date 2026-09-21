@@ -142,6 +142,7 @@ class Qwen36KVTransfer:
         self._rec_staging = None  # [1, Nv, Dk, Dv] rec dtype (consumer, raw mode)
         self._slice_start = None  # int32 [4] device tensors for the tensor-args slice (producer, dumpfile)
         self._slice_end = None
+        self._zero_blk = None  # [1, heads, block, head_dim] zeros (cache dtype): the dumpfile chunk's filler rows (producer)
         self._pt_host = {}
         self._warmed = set()  # {"producer", "consumer"}
         self._mode = None
@@ -344,6 +345,19 @@ class Qwen36KVTransfer:
                         self._slice_end = ttnn.to_device(
                             ttnn.from_torch(z, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT), self.mesh
                         )
+                    if self._zero_blk is None:
+                        # Filler for the chunk rows past the request's blocks. NOT a slice of the pad block: the masked-
+                        # bucket prefill writes its pad rows there, and their bytes are not run-to-run deterministic
+                        # (the rows are never read by a real request), so an export's filler would depend on the
+                        # prefill that last ran and two exports of one request could differ byte-for-byte.
+                        self._zero_blk = ttnn.from_torch(
+                            torch.zeros(1, g["heads"], g["block_size"], g["head_dim"], dtype=torch.bfloat16),
+                            dtype=kv[0][1].dtype,
+                            layout=ttnn.TILE_LAYOUT,
+                            device=self.mesh,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=rep,
+                        )
                     # the two dumpfile chunk-build programs: unit tensor-args slice + bpc-way concat (both cache shapes
                     # are the same across the 32 tensors, so one tensor warms all)
                     keep = []
@@ -351,7 +365,7 @@ class Qwen36KVTransfer:
                     for b in (0, pad):
                         keep.append(self._upload_starts(b))
                         parts.append(self._unit_slice(kv[0][1], num_blocks))
-                    parts += [parts[-1]] * (bpc - len(parts))
+                    parts += [self._zero_blk] * (bpc - len(parts))
                     blk = ttnn.concat(parts, dim=0)
                     self._note_shape("concat_chunk", (bpc, tuple(int(d) for d in blk.shape), dtype_name(blk.dtype)))
                     ttnn.synchronize_device(self.mesh)
@@ -502,7 +516,6 @@ class Qwen36KVTransfer:
             ids = [int(b) for b in block_ids[:nblk]]
             assert len(ids) == nblk, f"{len(block_ids)} blocks for {num_tokens} tokens (need {nblk})"
             bpc = self._bpc()
-            pad = self.pad_block
             num_blocks = g["num_blocks"]
             kv = self._kv_tensors()
             tmp = []
@@ -522,15 +535,17 @@ class Qwen36KVTransfer:
                 # dumpfile: one runtime-start unit slice per (block, tensor) + one bpc-way concat per tensor; the block
                 # index is set once and reused by all 32 tensors (in-order cq). Blocking sink writes so the chunk's
                 # temporaries can be freed right away (a 32k prompt would otherwise pin 2.3 GB of them).
-                rows = chunk_ids + [pad] * (bpc - len(chunk_ids))
+                # Filler rows past the request's blocks are the persistent zero block (warmup_kv_transfer), never a
+                # slice of the live pad block (see there): the exported bytes depend on the request alone.
+                assert self._zero_blk is not None, "warmup_kv_transfer(role=producer, mode=dumpfile) must run first"
                 parts = {name: [] for name, _ in kv}
                 keep = []
-                for b in rows:
+                for b in chunk_ids:
                     keep.append(self._upload_starts(b))
                     for name, t in kv:
                         parts[name].append(self._unit_slice(t, num_blocks))
                 for name, t in kv:
-                    blk = ttnn.concat(parts[name], dim=0)
+                    blk = ttnn.concat(parts[name] + [self._zero_blk] * (bpc - len(chunk_ids)), dim=0)
                     self._note_shape("concat_chunk", (bpc, tuple(int(d) for d in blk.shape), dtype_name(blk.dtype)))
                     sinks[name].write_from_device(blk, chunk=c, blocking=True)
                     ttnn.deallocate(blk)
