@@ -46,7 +46,7 @@ SplitFusedQKVAndSplitHeadsProgramFactory::cached_program_t SplitFusedQKVAndSplit
     uint32_t out_HtWt = out_h_tiles * out_w_tiles;
     uint32_t out_CHtWt = out_c * out_HtWt;
     // If block_size_is_one, writer kernel waits differently
-    uint32_t writer_num_blocks_per_tensor = block_size_is_one ? 16 : num_blocks_per_tensor;
+    uint32_t writer_num_blocks_per_tensor = block_size_is_one ? out_c : num_blocks_per_tensor;
     uint32_t num_c_per_block = block_size_is_one ? 1 : block_size / out_w_tiles;
 
     // Parallelize ashape[2] (384 / 32 = 12 tiles) across columns
