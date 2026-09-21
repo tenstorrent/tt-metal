@@ -696,7 +696,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
             .unique_id = OUT, .entry_size = out_tile_size, .num_entries = out0_t, .data_format_metadata = out_df},
     };
     // The non-streaming STANDARD path (no attention sink) merges the running-sum ping-pong (SUM_A/
-    // SUM_B) into a single 2-deep DFB bound to SUM_A (depth 2*statistics_tiles): the kernel keeps prev
+    // SUM_B) into a single 3-deep DFB bound to SUM_A (depth 3*statistics_tiles): the kernel keeps prev
     // at the ring front [0,statistics_tiles) and appends cur behind it, reading both from that
     // contiguous layout (fma_block_merged_sum) and re-basing the running sum to the front. SUM_B is
     // dropped, reclaiming one self-loop counter. (Since the native SrcA-transpose QK^T removed the kt

@@ -100,7 +100,7 @@ void kernel_main() {
     // Streaming and the attention-sink path keep two separate sum DFBs (prev/cur ping-pong halves).
     constexpr auto dfb_sum_B = dfb::sum_B;
 #else
-    // The non-streaming STANDARD path (no sink) merges the running-sum ping-pong into a single 2-deep
+    // The non-streaming STANDARD path (no sink) merges the running-sum ping-pong into a single 3-deep
     // DFB bound to sum_A; the factory drops the sum_B binding, so alias it to sum_A. sdpa_inner_loop
     // ignores this arg on the merged path (merged_sum).
     constexpr auto dfb_sum_B = dfb::sum_A;
