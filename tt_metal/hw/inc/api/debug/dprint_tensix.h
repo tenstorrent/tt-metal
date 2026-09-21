@@ -70,6 +70,13 @@ inline void dprint_data_format(uint8_t data_format) {
         default: DPRINT("INVALID DATA FORMAT"); break;
     }
 }
+#else
+// Declared and deleted rather than simply absent, so that a Quasar build which does reach this
+// function fails at the call site with "use of deleted function 'dprint_data_format'" instead of a
+// bare "not declared in this scope". An `#else #error` cannot be used here: this header is also
+// Quasar's DEST-print path, so it must keep compiling on Quasar, and an #error would fire on every
+// Quasar build rather than only on an actual reference.
+void dprint_data_format(uint8_t data_format) = delete;
 #endif  // !ARCH_QUASAR
 
 // if flag DEST_ACCESS_CFG_remap_addrs is enabled
@@ -225,6 +232,16 @@ inline void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) 
     dbg_read_dest_acc_row(row, rd_data);
     dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
+#else
+// Deleted on Quasar for the same reason as dprint_data_format above: these read DEST through the
+// debug bus, so a reference from a Quasar build is a bug, and a deleted declaration names the
+// offending call site instead of failing as an undeclared identifier.
+void dprint_tensix_dest_reg_row_float32(uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_float16(uint32_t data_format, uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_int32(uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_uint16(uint32_t data_format, uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_uint8(uint32_t data_format, uint16_t row) = delete;
+void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) = delete;
 #endif  // !ARCH_QUASAR
 
 #if !defined(ENV_LLK_INFRA)
