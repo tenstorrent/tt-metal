@@ -18,7 +18,6 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
-#include "impl/context/metal_env_accessor.hpp"
 #include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
@@ -53,9 +52,9 @@ uint32_t sync_seed_across_ranks(tt_fabric::MeshId sender_mesh_id, tt_fabric::Mes
     for (int i = 0; i < *distributed_context->size(); i++) {
         rank_translation_table[Rank{i}] = Rank{i};
     }
-    auto& metal_env = tt::tt_metal::MetalEnvAccessor(tt::tt_metal::MetalContext::instance().get_env()).impl();
-    std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(metal_env, sender_mesh_id, rank_translation_table);
-    std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(metal_env, recv_mesh_id, rank_translation_table);
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    std::vector<Rank> sender_ranks = get_ranks_for_mesh_id(control_plane, sender_mesh_id, rank_translation_table);
+    std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(control_plane, recv_mesh_id, rank_translation_table);
     Rank controller_rank = *std::min_element(sender_ranks.begin(), sender_ranks.end());
     if (distributed_context->rank() == controller_rank) {
         seed = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -287,7 +286,8 @@ std::vector<tt::tt_fabric::MeshId> get_neighbor_mesh_ids(SystemConfig system_con
     std::vector<tt::tt_fabric::MeshId> recv_mesh_ids;
 
     if (system_config == SystemConfig::NANO_EXABOX || system_config == SystemConfig::EXABOX) {
-        // Exabox and Nano-Exabox currently have 5 hosts. Sender ranks assignment is customized for a particular Rank File.
+        // Exabox and Nano-Exabox currently have 5 hosts. Sender ranks assignment is customized for a particular Rank
+        // File.
         recv_mesh_ids = {
             tt::tt_fabric::MeshId{0}, tt::tt_fabric::MeshId{2}, tt::tt_fabric::MeshId{3}, tt::tt_fabric::MeshId{4}};
     } else if (

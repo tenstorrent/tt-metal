@@ -47,9 +47,8 @@ void barrier_across_send_recv_ranks(
     multihost::Rank global_sender_rank,
     multihost::Rank global_receiver_rank,
     const SocketConfig& config,
-    MetalEnvImpl& metal_env) {
+    const tt_fabric::ControlPlane& control_plane) {
     const auto& global_distributed_context = DistributedContext::get_current_world();
-    const auto& control_plane = metal_env.get_control_plane();
     const auto& topology_mapper = control_plane.get_topology_mapper();
     const auto& global_logical_bindings = control_plane.get_global_logical_bindings();
 
@@ -201,7 +200,7 @@ SocketConfig MeshSocket::populate_mesh_ids(
 
 MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) : config_(config) {
     auto context = config_.distributed_context ? config_.distributed_context : DistributedContext::get_current_world();
-    auto& metal_env = device->impl().metal_env();
+    const auto& control_plane = device->impl().metal_env().get_control_plane();
 
     TT_FATAL(!config_.socket_connection_config.empty(), "Socket connection config cannot be empty.");
     TT_FATAL(
@@ -212,14 +211,14 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
     if (config_.sender_mesh_id.has_value()) {
         TT_FATAL(
             config.receiver_mesh_id.has_value(), "Expected receiver mesh id to be set when sender mesh id is set.");
-        this->process_mesh_ids(metal_env.get_control_plane());
+        this->process_mesh_ids(control_plane);
     } else {
-        this->process_host_ranks(metal_env.get_control_plane());
+        this->process_host_ranks(control_plane);
     }
     TT_FATAL(
         config_.sender_mesh_id.has_value() && config_.receiver_mesh_id.has_value(),
         "Unable to determine mesh ids for socket.");
-    auto local_mesh_binding = metal_env.get_control_plane().get_local_mesh_id_bindings();
+    auto local_mesh_binding = control_plane.get_local_mesh_id_bindings();
     TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
 
     bool same_mesh = config_.sender_mesh_id.value() == config_.receiver_mesh_id.value();
@@ -291,7 +290,7 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
 }
 
 void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context) {
-    auto& metal_env = get_mesh_device()->impl().metal_env();
+    const auto& control_plane = get_mesh_device()->impl().metal_env().get_control_plane();
     bool same_mesh = config_.sender_mesh_id.value() == config_.receiver_mesh_id.value();
     auto local_endpoint_desc = generate_local_endpoint_descriptor(*this, context->id());
     SocketPeerDescriptor remote_endpoint_desc;
@@ -307,7 +306,7 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(local_endpoint_desc, peer_rank, context);
             fabric_node_id_map_ = generate_fabric_node_id_map(
                 config_,
-                metal_env,
+                control_plane,
                 /*sender_device=*/nullptr,
                 /*receiver_device=*/nullptr,
                 /*peer_sender_chip_ids=*/
@@ -321,7 +320,7 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
             forward_descriptor_to_peer(local_endpoint_desc, peer_rank, context);
             fabric_node_id_map_ = generate_fabric_node_id_map(
                 config_,
-                metal_env,
+                control_plane,
                 /*sender_device=*/nullptr,
                 /*receiver_device=*/nullptr,
                 /*peer_sender_chip_ids=*/
@@ -338,12 +337,12 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
         // Cross-mesh socket: use the existing multi-rank handshake protocol
         if (socket_endpoint_type_ == SocketEndpoint::SENDER) {
             forward_descriptor_to_peer(
-                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_, metal_env);
+                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_, control_plane);
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(
-                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_, metal_env);
+                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_, control_plane);
             fabric_node_id_map_ = generate_fabric_node_id_map(
                 config_,
-                metal_env,
+                control_plane,
                 /*sender_device=*/nullptr,
                 /*receiver_device=*/nullptr,
                 /*peer_sender_chip_ids=*/
@@ -354,12 +353,12 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
                                                                 : std::vector<uint32_t>{});
         } else {
             remote_endpoint_desc = receive_and_verify_descriptor_from_peer(
-                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_, metal_env);
+                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_, control_plane);
             forward_descriptor_to_peer(
-                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_, metal_env);
+                local_endpoint_desc, socket_endpoint_type_, context, rank_translation_table_, control_plane);
             fabric_node_id_map_ = generate_fabric_node_id_map(
                 config_,
-                metal_env,
+                control_plane,
                 /*sender_device=*/nullptr,
                 /*receiver_device=*/nullptr,
                 /*peer_sender_chip_ids=*/
@@ -372,9 +371,9 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
         write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
 
         std::vector<Rank> sender_ranks =
-            get_ranks_for_mesh_id(metal_env, config_.sender_mesh_id.value(), rank_translation_table_);
+            get_ranks_for_mesh_id(control_plane, config_.sender_mesh_id.value(), rank_translation_table_);
         std::vector<Rank> recv_ranks =
-            get_ranks_for_mesh_id(metal_env, config_.receiver_mesh_id.value(), rank_translation_table_);
+            get_ranks_for_mesh_id(control_plane, config_.receiver_mesh_id.value(), rank_translation_table_);
         execute_with_timeout([&]() { barrier_across_send_recv_ranks(sender_ranks, recv_ranks, context); });
     }
 }
@@ -384,6 +383,10 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     const std::shared_ptr<MeshDevice>& receiver,
     const SocketConfig& base_config) {
     TT_FATAL(!base_config.socket_connection_config.empty(), "Socket connection config cannot be empty.");
+    TT_FATAL(
+        &sender->impl().metal_env() == &receiver->impl().metal_env(),
+        "create_socket_pair requires sender and receiver to share a MetalEnv; the pair is in-process and both "
+        "meshes must see the same control plane.");
 
     auto config = populate_mesh_ids(sender, receiver, base_config);
     auto sender_config_buffer = create_socket_config_buffer(sender, config, SocketEndpoint::SENDER);
@@ -405,7 +408,8 @@ std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
     write_socket_configs(
         recv_config_buffer, recv_peer_descriptor, send_peer_descriptor, SocketEndpoint::RECEIVER, sender);
 
-    auto fabric_node_id_map = generate_fabric_node_id_map(config, sender->impl().metal_env(), sender, receiver);
+    auto fabric_node_id_map =
+        generate_fabric_node_id_map(config, sender->impl().metal_env().get_control_plane(), sender, receiver);
 
     sender_socket.fabric_node_id_map_ = fabric_node_id_map;
     receiver_socket.fabric_node_id_map_ = fabric_node_id_map;
