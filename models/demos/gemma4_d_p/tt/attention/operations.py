@@ -34,6 +34,20 @@ def _attn_mm_grid(t):  # DIAG: GEMMA4_ATTN_MM_CFG
 
     Same mechanism mmanzoor's MLP change uses: ttnn only builds a good matmul program
     config when it is handed a user grid. The attention projections never got it.
+
+    MEASURED, AND IT IS NOT A WIN AT EVERY WIDTH -- keep it gated off by default.
+    Isolated floor captures at ctx 256k (see
+    tech_reports/Gemma4PrefillChunkSize/L1Activations/per_op_patched/README.md):
+
+        chunk 8192  -4.1 ms   all four projections get faster (-27% to -37%)
+        chunk 2048  +1.5 ms   three are flat; _x2048x5376 alone is +41%
+
+    The sign flip is that one small matmul: at chunk 2048 it is half the MACs of the
+    next smallest (2.82 G vs 5.6-6.3 G), and a full 120-core grid then costs more in
+    dispatch than it saves on math. Same lesson as the RMSNorm block-sharding result --
+    more cores is not faster. A size gate was written to keep the win at 8192 without
+    the loss at 2048; it measured as a no-op (+/-0.5 ms) and was reverted rather than
+    shipped on ambiguous data.
     """
     if os.environ.get("GEMMA4_ATTN_MM_CFG", "0").lower() not in ("1", "true", "yes"):
         return None

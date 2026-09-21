@@ -297,6 +297,8 @@ class Gemma4Attention:
         # Concat heads + apply out proj + all_reduce
         tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # DIAG: GEMMA4_ATTN_MM_CFG -- same core_grid mechanism as mmanzoor's MLP change.
+        # Helps at chunk 8192, costs ~1.5 ms at 2048; see _attn_mm_grid() in operations.py
+        # for the measurement and why this stays gated off.
         _cg = None
         if __import__("os").environ.get("GEMMA4_ATTN_MM_CFG", "0").lower() in ("1", "true", "yes"):
             _g = self.mesh_device.compute_with_storage_grid_size()
