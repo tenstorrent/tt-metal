@@ -133,6 +133,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> compressor_state_exchange(
     const auto mesh_shape = local_kv_state.device()->shape();
     TT_FATAL(mesh_shape.dims() == 2, "compressor_state_exchange requires a 2D mesh, got {}", mesh_shape);
     TT_FATAL(cluster_axis < 2, "cluster_axis must be 0 or 1, got {}", cluster_axis);
+    TT_FATAL(
+        local_kv_state.logical_shape()[-2] == kStateRows,
+        "Each device's local state must contain exactly {} rows",
+        kStateRows);
 
     auto predecessor_kv = shift_state(local_kv_state, initial_kv_state, cluster_axis, topology);
     auto predecessor_score = shift_state(local_score_state, initial_score_state, cluster_axis, topology);
