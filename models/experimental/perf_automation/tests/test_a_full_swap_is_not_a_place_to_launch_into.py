@@ -215,14 +215,49 @@ def test_a_second_memory_cap_failure_is_not_retried_again(probes):
 # first attempt, so a box already too loaded for the full-precision peak never has to risk it.
 
 
+def _size_model(monkeypatch, probes, params):
+    """Make the module size a model of `params` parameters, as perf_target_inputs.json would."""
+    monkeypatch.setattr(probes, "_model_reference_bytes", lambda: (params * 4, params * 2))
+
+
 def test_should_use_low_mem_reference_below_the_margin(monkeypatch, probes):
-    monkeypatch.setattr(probes, "available_memory_gb", lambda: 110.0)  # the exact reading measured
+    # 30B model: fp32 peak ~= 30e9*4/1e9*1.7 ~= 204 GB. The exact 110 GB reading measured on
+    # 2026-09-12 is far under that, so the fp32 build must not be risked.
+    _size_model(monkeypatch, probes, 30_000_000_000)
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: 110.0)
     assert probes.should_use_low_mem_reference() is True
 
 
 def test_should_use_low_mem_reference_above_the_margin(monkeypatch, probes):
-    monkeypatch.setattr(probes, "available_memory_gb", lambda: 200.0)
+    # Same 30B model, but genuine room for its ~204 GB fp32 peak: keep fp32.
+    _size_model(monkeypatch, probes, 30_000_000_000)
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: 300.0)
     assert probes.should_use_low_mem_reference() is False
+
+
+def test_should_use_low_mem_reference_is_model_aware_not_a_fixed_threshold(monkeypatch, probes):
+    # THE POINT OF THE COMPUTED GATE: the SAME available memory yields opposite decisions for a
+    # small vs a large model, because the threshold is the model's own fp32 need, not a constant.
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: 120.0)
+    _size_model(monkeypatch, probes, 3_000_000_000)  # 3B: ~20 GB fp32 peak -> fits in 120
+    assert probes.should_use_low_mem_reference() is False
+    _size_model(monkeypatch, probes, 30_000_000_000)  # 30B: ~204 GB fp32 peak -> does not
+    assert probes.should_use_low_mem_reference() is True
+
+
+def test_should_use_low_mem_reference_unsizable_model_does_not_intervene(monkeypatch, probes):
+    # No model size to compute from -> do not invent a number; leave fp32 as-is (historical default).
+    monkeypatch.setattr(probes, "_model_reference_bytes", lambda: (None, None))
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: 1.0)
+    assert probes.should_use_low_mem_reference() is False
+
+
+def test_should_use_low_mem_reference_honours_explicit_pinned_threshold(monkeypatch, probes):
+    # Back-compat: an operator who pins a hard GB threshold still gets exactly that comparison.
+    monkeypatch.setenv("PERF_MCP_FP32_REFERENCE_MIN_GB", "140")
+    _size_model(monkeypatch, probes, 3_000_000_000)  # small model would otherwise say False
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: 130.0)
+    assert probes.should_use_low_mem_reference() is True  # 130 < pinned 140
 
 
 def test_should_use_low_mem_reference_no_reading_is_not_a_reason_to_intervene(monkeypatch, probes):
@@ -311,6 +346,7 @@ def test_execute_samples_pressure_too(probes):
 def test_a_loaded_box_sets_the_signal_before_the_first_attempt(monkeypatch, probes):
     """THE ACTUAL GAP: on a box already below the margin, the FIRST call must already see the
     signal -- not just a retry after it fails once for nothing."""
+    _size_model(monkeypatch, probes, 30_000_000_000)  # a 30B fp32 build far exceeds 110 GB
     monkeypatch.setattr(probes, "available_memory_gb", lambda: 110.0)
     seen_by_first_call = {}
 

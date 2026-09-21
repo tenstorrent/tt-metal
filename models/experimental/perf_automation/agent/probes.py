@@ -2296,36 +2296,99 @@ def is_memory_cap_failure(output: str) -> bool:
     return bool(output) and bool(_MEMORY_FAILURE_RE.search(output))
 
 
+def _model_reference_bytes():
+    """Host bytes a reference build must hold for THIS model, derived from the model's OWN parameter
+    count -- never a hardcoded machine size. Returns (fp32_bytes, bf16_bytes), or (None, None) when
+    the model cannot be sized.
+
+    Source of truth: the planner's Step-1 census, written to <model_root>/perf_target_inputs.json
+    and keyed to the actual checkpoint. `total_params` gives the exact figures (fp32 = params*4,
+    bf16 = params*2); `weight_bytes` (the bf16 checkpoint size) is the fallback, with fp32 = 2x.
+    Model root comes from PERF_MCP_MODEL_ROOT, the same variable perf_mcp already resolves."""
+    root = (os.environ.get("PERF_MCP_MODEL_ROOT") or "").strip()
+    if not root:
+        return (None, None)
+    try:
+        d = json.loads((Path(root) / "perf_target_inputs.json").read_text())
+    except Exception:  # noqa: BLE001
+        return (None, None)
+    params = d.get("total_params")
+    if isinstance(params, (int, float)) and params > 0:
+        return (int(params) * 4, int(params) * 2)
+    wb = d.get("weight_bytes")
+    if isinstance(wb, (int, float)) and wb > 0:  # bf16 checkpoint bytes; fp32 is twice
+        return (int(wb) * 2, int(wb))
+    return (None, None)
+
+
+def _mem_safety_margin() -> float:
+    """Dimensionless multiplier from a model's steady-state parameter bytes to its BUILD-PEAK host
+    use: the held `self.hf` copy, the fp32 transients block-float packing makes of the experts, and
+    the mesh-replication staging all land on top of the resident weights. A RATIO, not a byte count
+    -- it assumes nothing about the machine and is tunable from measurement. Default 1.7 is the
+    observed peak/model ratio (2026-09-21: 217 GB anon-rss / 130 GB fp32 model = 1.67)."""
+    try:
+        return max(1.0, float(os.environ.get("PERF_MCP_MEM_SAFETY_MARGIN", "1.7")))
+    except Exception:  # noqa: BLE001
+        return 1.7
+
+
 def _fp32_reference_min_gb() -> float:
-    return float(os.environ.get("PERF_MCP_FP32_REFERENCE_MIN_GB", "140") or "140")
+    """Estimated PEAK host use (GB) of a full-fp32 reference build for THIS model: parameter bytes
+    at fp32 times the safety margin. COMPUTED from model size, not hardcoded. An explicit
+    PERF_MCP_FP32_REFERENCE_MIN_GB still overrides (back-compat). 0.0 when the model cannot be sized
+    -- there is nothing to report, and no invented number stands in for it."""
+    pinned = os.environ.get("PERF_MCP_FP32_REFERENCE_MIN_GB")
+    if pinned:
+        try:
+            return float(pinned)
+        except Exception:  # noqa: BLE001
+            pass
+    fp32_bytes, _ = _model_reference_bytes()
+    if not fp32_bytes:
+        return 0.0
+    return fp32_bytes / 1e9 * _mem_safety_margin()
 
 
 def should_use_low_mem_reference() -> bool:
-    """True when there is not enough headroom to safely risk a full-fp32 reference build's peak.
+    """True when a full-fp32 reference build would not fit the memory available RIGHT NOW, so the
+    build should load bf16 (half the footprint) instead.
 
-    PROACTIVE, NOT REACTIVE -- BECAUSE REACTIVE CANNOT ALWAYS FIRE. The retry this function guards
-    (run_with_low_memory_fallback, below) only helps when the subprocess FAILS CLEANLY; it cannot
-    help when the kernel OOM-killer kills the whole session's cgroup instead, which is what
-    happened on nvidia_nemotron_3_5_lightning_30b_a3b_bf16 TWICE on 2026-09-12 (~117-120 GB RSS
-    each time, with ~110 GB reported available at launch) -- the retry logic dies in the same sweep
-    as the process it would have retried. A hard RLIMIT cap would have contained it, but RLIMIT_AS
-    was retired the same day: it collided with the device driver's own large TLB-window mappings and
-    turned a healthy run into a device-level crash (see memory_cap_preexec_fn). Until there is a
-    containment mechanism that does both, deciding BEFORE launch is the only lever left -- ask a
-    model's reference build to use less memory from the start, on a box already too loaded to risk
-    the full-precision peak, rather than finding out by crashing.
+    COMPUTED, MODEL-AGNOSTIC. The decision is the model's own fp32 peak estimate versus live
+    MemAvailable -- (parameter bytes x 4 x safety-margin) > available. No fixed gigabyte threshold:
+    a 3B model and a 30B model, a 128 GB box and a 1 TB box, all fall out of the same arithmetic, so
+    the same available memory can say "fp32 is fine" for a small model and "drop to bf16" for a
+    large one. fp32 is kept whenever it genuinely fits, so accuracy/PCC builds are never needlessly
+    downgraded.
 
-    140 GB is a real margin above the measured ~117-120 GB peak, not the peak itself -- a box that
-    clears this was NOT what OOM'd either time (~110 GB available both times). Returns False (never
-    intervene) if available memory cannot be read, or if capping is disabled via
-    PERF_MCP_DISABLE_MEM_CAP=1, matching memory_cap_preexec_fn's own escape hatch.
+    PROACTIVE, NOT REACTIVE -- BECAUSE REACTIVE CANNOT ALWAYS FIRE. The retry this guards
+    (run_with_low_memory_fallback) only helps when the subprocess FAILS CLEANLY; it cannot help when
+    the kernel OOM-killer takes the whole session's cgroup, which is what happened on
+    nvidia_nemotron_3_5_lightning_30b_a3b_bf16 (2026-09-12 at ~120 GB, again 2026-09-21 at ~217 GB
+    once the build finally ran full-depth). Deciding before launch, from the model's real size, is
+    the containment.
+
+    Escape hatches: PERF_MCP_DISABLE_MEM_CAP=1 never intervenes; an explicit
+    PERF_MCP_FP32_REFERENCE_MIN_GB is honoured as a hard GB threshold for callers that pin one.
+    Returns False (do not intervene) when memory cannot be read, or when the model cannot be sized --
+    there is nothing to compute from, and inventing a number is the very thing this replaces.
     """
     if os.environ.get("PERF_MCP_DISABLE_MEM_CAP") == "1":
         return False
     avail = available_memory_gb()
     if avail is None:
         return False
-    return avail < _fp32_reference_min_gb()
+    pinned = os.environ.get("PERF_MCP_FP32_REFERENCE_MIN_GB")
+    if pinned:  # operator pinned a hard threshold: honour it verbatim
+        try:
+            return avail < float(pinned)
+        except Exception:  # noqa: BLE001
+            pass
+    fp32_bytes, _ = _model_reference_bytes()
+    if not fp32_bytes:
+        return False
+    need_fp32_gb = fp32_bytes / 1e9 * _mem_safety_margin()
+    return need_fp32_gb > avail
 
 
 def run_with_low_memory_fallback(run_once, env: dict):
