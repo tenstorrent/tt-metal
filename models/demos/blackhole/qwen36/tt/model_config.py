@@ -35,6 +35,17 @@ _QWEN36_SERVING_OPT_DEFAULTS = {
     "QWEN36_PREFILL_LOGITS_FAST": "1",
     "QWEN36_PREFILL_BUCKET_TRACE": "1",
     "QWEN_SDPA_BF8": "1",
+    # Speculative-decode drafter (demo/spec path): "dflash2" = the DFlash block-diffusion drafter
+    # (tt/dflash2_decode.py) on the same verify/accept substrate; "mtp" = the native MTP head.
+    # Measured 2026-09-12 (ISL 130, lossless): DFlash v1 K=11 107.8 tok/s vs native MTP 80.9.
+    "QWEN36_DRAFTER": "dflash2",
+    # The drafter checkpoint MUST match the served target (a local dir or an HF repo id resolved through
+    # the HF cache): z-lab/Qwen3.6-27B-DFlash for Qwen3.6-27B; incoai/Qwen3.8-27B-DFlash2 for Qwen3.8-27B
+    # (the *DFlash2* drafters target 3.8, a different checkpoint).
+    "DFLASH_WEIGHTS": "z-lab/Qwen3.6-27B-DFlash",
+    # Draft block: 12 -> K=11 -> T=12 fused verify SDPA (the measured sweet spot for the block-16 v1
+    # drafter); clamped to the checkpoint's own block_size (8 for DFlash2 -> K=7).
+    "QWEN36_DFLASH_BLOCK": "12",
 }
 for _k, _v in _QWEN36_SERVING_OPT_DEFAULTS.items():
     os.environ.setdefault(_k, _v)
@@ -89,6 +100,7 @@ class Qwen36ModelArgs(ModelArgs):
         mesh_device=None,
         max_batch_size=1,
         max_seq_len=2048,
+        enable_mtp=None,
         **kwargs,
     ):
         # HF_MODEL is canonical (defaults to Qwen/Qwen3.6-27B). Snapshot hub ids unless
@@ -147,6 +159,25 @@ class Qwen36ModelArgs(ModelArgs):
         self.linear_k_dim = self.linear_num_key_heads * self.linear_key_head_dim
         self.linear_v_dim = self.linear_num_value_heads * self.linear_value_head_dim
 
+        # MTP (multi-token prediction) head. Every Qwen3.5/3.6 checkpoint ships a single-layer
+        # MTP head (mtp.*) that reuses the main embedding + LM head; it is the speculative-decode
+        # drafter. mtp_use_dedicated_embeddings=False means it shares tok_embeddings.
+        # Loading the head is ON by default whenever the checkpoint has one (it is the production
+        # decode path). Opt out with enable_mtp=False or QWEN36_MTP=0 to skip its weights, KV cache
+        # and construction entirely (plain decode only).
+        self.mtp_num_hidden_layers = getattr(text_config, "mtp_num_hidden_layers", 0)
+        self.mtp_use_dedicated_embeddings = getattr(text_config, "mtp_use_dedicated_embeddings", False)
+        if enable_mtp is None:
+            enable_mtp = os.environ.get("QWEN36_MTP", "1") != "0"
+        self.has_mtp = self.mtp_num_hidden_layers > 0 and bool(enable_mtp)
+        if self.has_mtp:
+            assert (
+                self.mtp_num_hidden_layers == 1
+            ), f"Only single-layer MTP is supported (got mtp_num_hidden_layers={self.mtp_num_hidden_layers})"
+            assert (
+                not self.mtp_use_dedicated_embeddings
+            ), "mtp_use_dedicated_embeddings=True is unsupported (would need a separate MTP embedding/head)"
+
         # Lazy import for CPU-only testing.
         if mesh_device is not None:
             import ttnn
@@ -168,6 +199,11 @@ class Qwen36ModelArgs(ModelArgs):
             self.num_devices > 1 or tp_path_forced_for_single_device(self.dim, self.n_layers)
         )
         self.tp1 = self.use_tp_path and self.num_devices == 1
+        if self.tp1 and os.environ.get("QWEN36_MTP") is None and self.has_mtp:
+            # TP=1 mode (one die): the MTP head / speculative verify are the multi-device TP path and are not
+            # validated on one die, so the drafter weights are not loaded by default (plain decode, the PD
+            # profile's decode node). QWEN36_MTP=1 opts back in explicitly.
+            self.has_mtp = False
         if self.use_tp_path:
             self._init_tp_config(mesh_device)
 
@@ -369,11 +405,13 @@ class Qwen36ModelArgs(ModelArgs):
         Overrides base meta-key loader."""
         from models.demos.blackhole.qwen36.tt.weight_mapping import (
             is_fp8_checkpoint,
+            load_mtp_tensors,
             load_qwen36_state_dict_fp8,
             remap_qwen36_state_dict,
         )
 
         # Block FP8 checkpoints: dequant + remap for TP loaders (skip the HF model).
+        # The FP8 loader already keeps mtp.* (read raw from safetensors), so no extra merge.
         if is_fp8_checkpoint(self.CKPT_DIR):
             return load_qwen36_state_dict_fp8(self.CKPT_DIR)
 
@@ -401,4 +439,7 @@ class Qwen36ModelArgs(ModelArgs):
         model = Qwen3_5ForCausalLM.from_pretrained(self.CKPT_DIR, config=text_config, dtype="auto")
         state_dict = remap_qwen36_state_dict(model.state_dict())
         del model
+        # AutoModelForCausalLM drops mtp.* before remap; read the drafter weights directly.
+        if getattr(self, "has_mtp", False):
+            state_dict.update(load_mtp_tensors(self.CKPT_DIR))
         return state_dict

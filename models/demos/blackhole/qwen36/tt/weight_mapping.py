@@ -5,7 +5,7 @@
 
 Handles:
 - Stripping 'model.language_model.' prefix
-- Filtering out vision encoder and MTP weights
+- Filtering out vision encoder weights (MTP weights are KEPT — the spec-decode drafter)
 - Renaming combined in_proj_qkv → qkv_proj (DeltaNet layers; the op uses the fused weight)
 - Splitting combined conv1d.weight into separate Q, K, V conv weights (DeltaNet layers)
 - Renaming lm_head.weight → output.weight
@@ -44,9 +44,12 @@ def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
         # Filter out vision encoder weights (check original key — no prefix stripping yet)
         if "visual" in key or key.startswith("model.visual"):
             continue
-        # Filter out MTP (multi-token prediction) weights (original key)
-        if key.startswith("mtp"):
-            continue
+        # NOTE: mtp.* (multi-token prediction head) weights are NOT filtered — they are the
+        # speculative-decode drafter. They have no model./language_model. prefix and do not
+        # start with "layers." so they fall through to the catch-all pass-through below
+        # unchanged (the DeltaNet special-casing is guarded by "layers."). See load_mtp_tensors:
+        # AutoModelForCausalLM (BF16 path) drops mtp.* before we see them, so load_state_dict
+        # reads them directly from safetensors and merges them into this dict.
 
         # Strip the language-model prefix. Two checkpoint sources produce different
         # prefixes for the same internal weights:
@@ -127,6 +130,44 @@ def is_fp8_checkpoint(model_path) -> bool:
     return any(k.endswith(".weight_scale_inv") for k in weight_map)
 
 
+def load_mtp_tensors(model_path) -> Dict[str, torch.Tensor]:
+    """Read the MTP head tensors (mtp.*) directly from the checkpoint safetensors.
+
+    AutoModelForCausalLM (the BF16 load path) drops mtp.* via
+    ``_keys_to_ignore_on_load_unexpected = [r"^mtp.*"]`` BEFORE remap_qwen36_state_dict ever
+    sees them, so the spec-decode drafter weights must be read straight from the safetensors.
+    Returns the 15 mtp.* tensors keyed verbatim (mtp.fc.weight, mtp.pre_fc_norm_embedding.weight,
+    mtp.pre_fc_norm_hidden.weight, mtp.norm.weight, mtp.layers.0.*).
+    """
+    from safetensors import safe_open
+
+    model_path = Path(model_path)
+    index_path = model_path / "model.safetensors.index.json"
+    if index_path.is_file():
+        with open(index_path) as f:
+            weight_map = json.load(f)["weight_map"]
+        file_to_keys: Dict[str, list] = {}
+        for key, filename in weight_map.items():
+            if key.startswith("mtp"):
+                file_to_keys.setdefault(filename, []).append(key)
+        files = file_to_keys
+    else:
+        # Single-file checkpoint: scan the one safetensors for mtp.* keys.
+        files = {"model.safetensors": None}
+
+    tensors: Dict[str, torch.Tensor] = {}
+    for filename, keys in files.items():
+        path = model_path / filename
+        if not path.is_file():
+            continue
+        with safe_open(str(path), framework="pt") as sf:
+            if keys is None:
+                keys = [k for k in sf.keys() if k.startswith("mtp")]
+            for key in keys:
+                tensors[key] = sf.get_tensor(key)
+    return tensors
+
+
 def load_qwen36_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:
     """Load Qwen3.5 FP8 weights: block-wise dequant + minimal key remap.
 
@@ -178,8 +219,10 @@ def load_qwen36_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:
 
     state_dict: Dict[str, torch.Tensor] = {}
     for key, tensor in dequantized.items():
-        if "visual" in key or key.startswith("mtp"):
+        if "visual" in key:
             continue
+        # mtp.* is KEPT (spec-decode drafter). It has no prefix to strip and is not embed/lm_head,
+        # so it passes through the else branch below verbatim, matching the BF16 key scheme.
         short = key
         for prefix in ("model.language_model.", "model."):
             if short.startswith(prefix):
