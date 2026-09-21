@@ -156,17 +156,13 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         `serialize_kv_chunk_table` helper (common/prefill/runners/migration.py) for the config-population +
         protobuf-serialize boilerplate; supply only your model's table builder + chunk geometry."""
 
-    def kv_migration_base_address(self, kv_cache) -> int:
-        """This rank's KV base DRAM address — the anchor the engine all-gathers to merge every pipeline
-        stage into one table. Return `int(<your base tensor>.buffer_address())`; you pick which of your
-        cache tensors is the migratable base, since the engine treats `kv_cache` as opaque and cannot.
-        Enough for a model with ONE migratable cache; otherwise implement `kv_migration_stages`."""
-
     def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
         """One `KvCacheStage` (common/prefill/runners/migration.py) per config of your merged table, in
-        config order — the engine gathers a layout for each, on every rank, and hands them to
-        `build_kv_chunk_table`. Implement it instead of `kv_migration_base_address` when your model
-        migrates SEVERAL caches, or one whose layer numbering is not the model's global numbering."""
+        config order — the engine gathers a layout for each, on every rank, and hands them back to
+        `build_kv_chunk_table` as `stage_layouts`. A single-cache model returns a one-element list
+        anchored on whichever tensor it migrates, since the engine treats `kv_cache` as opaque and
+        cannot pick for you. Number a stage in its own space when that is not the model's global layer
+        numbering (a cache only some layers write), and map it back with `kv_table_layer_rows`."""
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register the per-layer completion sink. Required at any rank count, unless the runner runs
