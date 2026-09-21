@@ -97,6 +97,24 @@ The bring-up default for every projection matmul and the plain SDPA is **HiFi4 w
 costs. Where such a constraint is real it is also local: `fp32_dest_acc_en=False` belongs to the ring
 cache-read op, not to SDPA in general, and a source that sets it globally is over-broad.
 
+**Type hints on every non-trivial signature.** A constructor or function with more than two or three
+parameters is exactly where a mismatched type is easiest to introduce and hardest to catch by
+inspection — annotate every parameter and return type, especially the config/mesh/dtype-heavy
+signatures that recur throughout a bring-up.
+
+**One structure for every device-side module: subclass `LightweightModule`, override `forward`.**
+`models.common.lightweightmodule.LightweightModule` is the existing, deliberately minimal base for
+this (`__call__` just dispatches to `forward` — it exists to skip `torch.nn.Module`'s host-side
+attribute-access overhead, not to add ceremony). Every attention/MLP/norm/embedding/head module
+should follow it: define `forward`, invoke instances by calling them directly (`module(x)`), never by
+hand-rolling a class's own `__call__` or by calling `.forward()` explicitly and bypassing the
+dispatch.
+
+**Prefer polymorphism over a repeated if/else on the same flag.** A mode decided once at construction
+(which residual layout, which norm form, whether an op needs a closing collective) and then
+re-checked with the same branch in several methods is a sign the mode belongs in a small per-variant
+subclass or strategy object chosen once, not in a condition repeated at every call site.
+
 ### 2.4 Record the envelope
 
 Exploration is stage **E** and it is logged: one `source` record per part, naming what was chosen and
@@ -203,6 +221,36 @@ the project venv, and never read a bare `import ttnn` as proof the env is good �
 `ttnn/` directory, so from the repo root *any* python imports it as an empty namespace package while
 `torch` and `transformers` fail, which looks like a half-broken install rather than the wrong python.
 
+**Support multiple mesh topologies by default.** The spec's target hardware and sp/tp sharding(§1) is the one
+*graded* configuration, but the implementation itself must never hardcode that single shape: every
+sp/tp-dependent quantity (ring-SDPA chunk sizes, KV heads per chip, `% (32 × sp)`-style alignment) is
+re-derived from the mesh actually opened (§2.3), not fixed to the shape it was first measured at.
+This is the default, not a per-model decision — bring-up and testing routinely happen on smaller pods
+than the spec's target.
+
+Compare `ttnn.get_num_devices()` against what a shape needs before opening it. A shape the pod can't
+reach is an `env` finding (§7.3), logged immediately, and every Testing-table row is parametrized
+across the covered shapes and skips cleanly on one the pod can't reach — never faked, never silently
+dropped.
+
+Cover each available chip count with a pair of shapes: one matching the target's TP exactly
+(identical per-chip tensor shapes to production — the strongest proxy available), and one `tp=1`
+shape at the same chip count (isolates SP/ring bugs from TP-interaction bugs). TP is bounded by
+whatever divides evenly per chip for the model's attention family (e.g. a GQA model's KV head count)
+— "every shape" means every shape that divisibility allows.
+
+| Pod | Chips | Example pair |
+|---|---|---|
+| quietbox (qb) | 4 | (2,2) sp2×tp2 + (4,1) sp4×tp1 |
+| loudbox (lb) | 8 | (2,4) sp2×tp4 + (8,1) sp8×tp1 |
+| galaxy | spec's target | the spec's shape (graded) |
+
+On a galaxy, `MeshDevice.create_submesh(shape, offset=...)` carves a real sub-mesh out of a full
+allocation, so qb/lb-shaped coverage doesn't need separate physical hardware — a correctness proxy,
+not a performance one. Each shape needs its own PCC verification and its own tilized weight cache (a
+tensor sharded for one shape is different bytes than another), so N shapes cost N cold builds unless
+the checkpoint's host load is cached independently of the per-shape tilize (§3).
+
 **If that check fails, build the env before going further — do not work around it.** Setting up the
 venv is not this recipe's job and the commands differ per machine: load the **`build-metal` skill**
 if the box has one (it owns build + venv + the per-machine gotchas), otherwise follow the repo's own
@@ -215,7 +263,7 @@ Then, before the first module is written: the target mesh opens,
 Every module PCC test therefore exercises sharding and collectives from the first one — more setup
 cost, and the "worked on one card, broke on the mesh" class of bug disappears entirely.
 
-**Fabric topology: run on whatever galaxy you get.** The mesh-graph descriptor is chosen **before
+**Fabric topology: run on whatever machine you get.** The mesh-graph descriptor is chosen **before
 the cluster initialises** (set it in the package's `conftest.py`), and a torus descriptor cannot map
 on a pod without wrap-around links — so this is settled at mesh-up, not later. Default to the plain
 mesh descriptor with `FABRIC_1D` + `Topology.Linear`, which maps on **any** galaxy, torus-wired or
@@ -460,7 +508,7 @@ stage's log lines are written (§7). No stage is entered before the previous sta
 **Steps**
 1. Write `layer.py` composing the decoder from named blocks; every block is a mock. Nothing is
    implemented in this stage.
-2. Fix each block's constructor and `__call__` signature — this is the interface commitment the
+2. Fix each block's constructor and `forward` signature — this is the interface commitment the
    tests are written against.
 3. Decide the KV cache layout (§5.2). It is encoded by both the attention read path and the address
    table, so it cannot wait.
