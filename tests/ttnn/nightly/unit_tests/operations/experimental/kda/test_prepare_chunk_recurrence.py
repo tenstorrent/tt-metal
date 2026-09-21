@@ -109,7 +109,8 @@ def _prepare_chunk_recurrence_performance(
     measured_ns: float,
     math_fidelity: ttnn.MathFidelity,
 ) -> perf_model.KdaPerformance:
-    fpu, sfpu = _prepare_chunk_recurrence_ops(inputs, outputs)
+    # The trailing actual_start scalar controls chronology but adds no tensor arithmetic.
+    fpu, sfpu = _prepare_chunk_recurrence_ops(inputs[:-1], outputs)
     return perf_model.performance(
         fpu=fpu,
         sfpu=sfpu,
