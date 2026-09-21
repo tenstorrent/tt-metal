@@ -92,14 +92,14 @@ case "${CONFIG}" in
   *) echo "unknown config '${CONFIG}' (expected sc1, sc2 or sc4)" >&2; exit 2 ;;
 esac
 
-# sc1/sc4 have model-specific CI descriptors; sc2 has none, so fall back to the shared 2-galaxy one the
-# manual pipeline bindings already use (it is model-agnostic -- an 8x4 RING mesh per galaxy).
-MGD="${MGD_DIR}/${MODEL}_${CONFIG}_mgd.textproto"
+# The CI descriptors are per-SKU, not per-model; sc2 has none, so fall back to the shared 2-galaxy one
+# the manual pipeline bindings already use (an 8x4 RING mesh per galaxy).
+MGD="${MGD_DIR}/${CONFIG}_mgd.textproto"
 if [ ! -f "${MGD}" ] && [ "${CONFIG}" = sc2 ]; then
   MGD="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_2galaxy_connected_mesh_graph_descriptor.textproto"
 fi
 if [ ! -f "${MGD}" ]; then
-  echo "missing mesh-graph descriptor for ${MODEL}/${CONFIG}: ${MGD}" >&2
+  echo "missing mesh-graph descriptor for ${CONFIG}: ${MGD}" >&2
   exit 2
 fi
 
