@@ -1091,6 +1091,12 @@ def test_indexer_score_sptp_loudbox_ring_partial_readiness():
             tp_axis=tp_axis,
             chunk_global=chunk_global,
         )
+        usable_topology = ttnn.get_usable_topology(q_dev, cluster_axis=sp_axis)
+        if usable_topology not in (ttnn.Topology.Ring, ttnn.Topology.Torus):
+            pytest.skip(
+                f"the axis-ring readiness gate needs a wrapping SP axis; cluster_axis {sp_axis} of mesh "
+                f"{tuple(mesh.shape)} resolves to {usable_topology}"
+            )
         out = _run_sptp_loudbox_score(
             semaphores,
             subdevice_id,
