@@ -48,13 +48,15 @@ CyclicLayout plan_layout(
     uint32_t sequence_length,
     uint32_t rows_per_block_tiles,
     uint32_t slices,
-    uint32_t max_groups) {
+    uint32_t max_groups,
+    uint32_t max_block_tiles) {
     const uint32_t block_rows = rows_per_block_tiles * kTile;
     TT_FATAL(
-        rows_per_block_tiles >= 1U && rows_per_block_tiles <= 4U,
-        "cyclic_sdpa_bw: rows_per_block_tiles must be 1, 2, 3 or 4; got {}. Score tiles occupy "
+        rows_per_block_tiles >= 1U && rows_per_block_tiles <= max_block_tiles,
+        "cyclic_sdpa_bw: rows_per_block_tiles must be 1 to {}; got {}. Score tiles occupy "
         "contiguous DST registers with two shared scratch registers above them, which is "
         "rows_per_block_tiles + 2 of the eight Float32 registers.",
+        max_block_tiles,
         rows_per_block_tiles);
     TT_FATAL(
         sequence_length % (2U * block_rows) == 0U,

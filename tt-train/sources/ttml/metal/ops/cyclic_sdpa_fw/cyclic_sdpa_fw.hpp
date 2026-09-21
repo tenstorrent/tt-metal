@@ -41,4 +41,20 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_fw(
     const std::vector<uint32_t>& row_chunks = {},
     const std::vector<uint32_t>& col_chunks = {});
 
+// The fast variant of the same op (CyclicSDPAForwardParams::fast): bf16
+// destination registers and two matmul phases, ttnn-class accuracy, an
+// experiment on the design's speed without the exact statistics.
+std::tuple<ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_fw_fast(
+    const ttnn::Tensor& query,
+    const ttnn::Tensor& key,
+    const ttnn::Tensor& value,
+    uint32_t rows_per_block_tiles = 1U,
+    AttentionMaskType mask_type = AttentionMaskType::Causal,
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
+    const std::optional<ttnn::Tensor>& preallocated_intermediates = std::nullopt,
+    uint32_t max_groups = 0U,
+    uint32_t sequence_chunks = 1U,
+    const std::vector<uint32_t>& row_chunks = {},
+    const std::vector<uint32_t>& col_chunks = {});
+
 }  // namespace ttml::metal

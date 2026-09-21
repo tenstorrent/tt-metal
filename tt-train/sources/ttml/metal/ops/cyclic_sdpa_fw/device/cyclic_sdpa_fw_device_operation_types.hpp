@@ -28,6 +28,13 @@ struct CyclicSDPAForwardParams {
     // Cap on the number of groups running side by side (0 = as many as fit).
     uint32_t max_groups{0U};
 
+    // The fast variant: bf16 destination registers (16 tiles, so more of
+    // the FPU's work runs under the exponential), two matmul phases, the
+    // kernel cyclic_sdpa_fw_fast_compute.cpp; ttnn-class accuracy. An
+    // experiment on what the design reaches without the exact statistics;
+    // the default is the exact kernel, unchanged.
+    bool fast{false};
+
     // Sub-problems as chunk pairs of the local sequence; see the backward's
     // attributes. Sub-problem p attends the query rows of chunk row_chunks[p]
     // to the keys of chunk col_chunks[p]; each is one more slice. Two pairs

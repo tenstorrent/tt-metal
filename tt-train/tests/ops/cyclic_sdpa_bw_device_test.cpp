@@ -3303,7 +3303,10 @@ void check_cyclic_forward(
     const auto v = ttml::core::from_xtensor(V, device);
     const auto mask = causal ? ttml::metal::AttentionMaskType::Causal : ttml::metal::AttentionMaskType::None;
 
-    const auto [out_t, lse_t] = ttml::metal::cyclic_sdpa_fw(q, k, v, Bt, mask, std::nullopt, std::nullopt, max_groups);
+    // TTML_CYCLIC_FW_FAST=1 checks the fast (bf16-register) variant instead.
+    const bool fast = std::getenv("TTML_CYCLIC_FW_FAST") != nullptr;
+    const auto [out_t, lse_t] = fast ? ttml::metal::cyclic_sdpa_fw_fast(q, k, v, Bt, mask, std::nullopt, std::nullopt, max_groups)
+                                     : ttml::metal::cyclic_sdpa_fw(q, k, v, Bt, mask, std::nullopt, std::nullopt, max_groups);
     ASSERT_EQ(out_t.logical_shape(), ttnn::Shape({batch, heads, N, d}));
     ASSERT_EQ(lse_t.logical_shape(), ttnn::Shape({batch, heads, N, 32u}));
     ASSERT_EQ(out_t.dtype(), ttnn::DataType::BFLOAT16);
@@ -3378,9 +3381,21 @@ void check_cyclic_forward(
     // bf16 output of a Float32 accumulator: the rounding of the output alone
     // is 2e-3 RMS; sdpa_fw measures 5e-3 to 1e-2 at these shapes.
     EXPECT_LT(worst_rms, 1.5e-2F) << at;
-    EXPECT_LT(worst_lse, 1e-2F) << at;
+    // The fast variant's bf16 registers put its lse where ttnn's kernel is (a
+    // few 1e-2); the exact kernel's is under 1e-3.
+    EXPECT_LT(worst_lse, fast ? 1e-1F : 1e-2F) << at;
 }
 }  // namespace
+
+// The fast variant at a block height only its 16 registers hold; skipped
+// unless TTML_CYCLIC_FW_FAST=1 selects that variant.
+TEST(CyclicSdpaFwTest, FastTallBlocks) {
+    if (std::getenv("TTML_CYCLIC_FW_FAST") == nullptr) {
+        GTEST_SKIP() << "the fast variant only (TTML_CYCLIC_FW_FAST=1)";
+    }
+    check_cyclic_forward(1, 1, 1, /* N */ 2048, /* d */ 64, /* causal */ true, /* Bt */ 8);
+    check_cyclic_forward(1, 2, 1, /* N */ 4096, /* d */ 64, /* causal */ true, /* Bt */ 8);
+}
 
 TEST(CyclicSdpaFwTest, OneCoreCausal) {
     check_cyclic_forward(1, 1, 1, /* N */ 64, /* d */ 64, /* causal */ true, /* Bt */ 1);
@@ -3462,8 +3477,9 @@ TEST(CyclicSdpaFwTimingTest, DISABLED_TimeTheForward) {
         return samples[samples.size() / 2];
     };
     const double flop = (causal ? 2.0 : 4.0) * static_cast<double>(N) * N * d * heads;
+    const bool fast = std::getenv("TTML_CYCLIC_FW_FAST") != nullptr;
     const double cyc_s = time_it([&]() {
-        auto [o, l] = ttml::metal::cyclic_sdpa_fw(q, k, v, Bt, mask);
+        auto [o, l] = fast ? ttml::metal::cyclic_sdpa_fw_fast(q, k, v, Bt, mask) : ttml::metal::cyclic_sdpa_fw(q, k, v, Bt, mask);
         distributed::Finish(device->mesh_command_queue());
     });
     const char* experiment = std::getenv("TTML_CYCLIC_FW_EXPERIMENT");

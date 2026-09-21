@@ -146,6 +146,41 @@ timing (the results are then wrong); `NO_LAZY`, `LAZY_TAU=<x>` and
 `EXP_GUARD=<0|1|2>` are exact-result variants (0 is not: no underflow
 guard).
 
+## The fast variant: what the design reaches without the exact statistics
+
+`cyclic_sdpa_fw_fast` (`CyclicSDPAForwardParams::fast`, the kernel
+`cyclic_sdpa_fw_fast_compute.cpp`, a copy of the exact one) answers one
+question: how far the schedule itself is from ttnn's kernel once it gives up
+what the accuracy costs. It keeps the relay and the Float32 packet but runs
+bf16 destination registers (16 tiles instead of 8), two matmul phases, and
+so blocks of 8 tiles (256 rows), which the Float32 kernel's registers cannot
+hold. The exact op is unchanged; the variant is selected by name.
+
+One chip, 20/10 heads, 5632 rows, d 64, causal (ttnn with lse: 1.28 ms):
+
+| | time | output RMS | lse max error |
+|---|---|---|---|
+| the exact kernel, blocks of 4 | 3.75 ms | 1.7e-3 | 4.9e-4 |
+| fast, blocks of 4 | 3.66 ms | 6.8e-3 | 4.9e-2 |
+| fast, blocks of 8 | 2.51 ms (32 TFLOP/s) | 7.1e-3 | 6 to 9e-2 |
+| fast, blocks of 8, exponential removed (timing only) | 2.13 ms | | |
+
+So the registers alone buy nothing; the block height they allow buys a
+third; and even a free exponential would leave the design at 1.7x ttnn.
+What remains is on the FPU side and in the timestep's fixed passes: the
+matmuls stream one operand tile per tile product and run at about 50
+cycles a phase where the FPU could do 20 (a block that reuses both
+operands would help, and needs the registers the exponential's half of DST
+takes), the block maximum's 64 reductions a timestep, and the relay's
+synchronisation. ttnn's kernel has none of these because it has no relay:
+it re-reads K and V from DRAM per query chunk, which is the trade the
+schedule was built to avoid, and pays for it in bandwidth rather than in
+per-core time. The variant's accuracy is ttnn's on the output (7e-3 against
+2.5e-2, better) and a little worse on the lse (6e-2 against 2.6e-2), so it
+is not a forward to train with; it is the measurement. Tests: the forward's
+suite with `TTML_CYCLIC_FW_FAST=1` (looser lse grading) and
+`CyclicSdpaFwTest.FastTallBlocks`.
+
 ## Testing
 
 Single chip: `ttml_tests --gtest_filter='CyclicSdpaFwTest.*'` (8 tests,

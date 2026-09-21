@@ -37,7 +37,10 @@ CyclicLayout plan_layout(
     uint32_t sequence_length,
     uint32_t rows_per_block_tiles,
     uint32_t slices,
-    uint32_t max_groups = 0);
+    uint32_t max_groups = 0,
+    // The tallest block a kernel's destination registers hold: 4 for the
+    // Float32 kernels, 8 for the forward's fast (bf16-register) variant.
+    uint32_t max_block_tiles = 4);
 
 //: How many slices group g runs.
 inline uint32_t slices_of_group(const CyclicLayout& layout, uint32_t g) {

@@ -31,6 +31,8 @@ constexpr auto kWriterPath =
 constexpr auto kComputePath =
     "tt-train/sources/ttml/metal/ops/cyclic_sdpa_fw/device/kernels/compute/"
     "cyclic_sdpa_fw_compute.cpp";
+constexpr auto kFastComputePath =
+    "tt-train/sources/ttml/metal/ops/cyclic_sdpa_fw/device/kernels/compute/cyclic_sdpa_fw_fast_compute.cpp";
 
 constexpr uint32_t kTile = 32U;
 
@@ -76,7 +78,8 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
     const uint32_t d = static_cast<uint32_t>(shape[3]);
 
     auto layout = plan_layout(
-        device->compute_with_storage_grid_size(), N, args.rows_per_block_tiles, slices, args.max_groups);
+        device->compute_with_storage_grid_size(), N, args.rows_per_block_tiles, slices, args.max_groups,
+        args.fast ? 8U : 4U);
     std::vector<uint32_t> pair_table = {chunks, pairs, heads, kv_slices, q_heads, kv_heads, heads_per_group};
     for (uint32_t p = 0; p < pairs; ++p) {
         pair_table.push_back(args.row_chunks.empty() ? 0U : args.row_chunks[p]);
@@ -245,15 +248,23 @@ CyclicSDPAForwardProgramFactory::cached_program_t CyclicSDPAForwardProgramFactor
     // copies only. The FPU's operands -- S^T, P^T, the block maximum, the
     // plain views of m and l -- stay in the default mode (see the kernel).
     std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_mode[tt::CBIndex::c_13] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_mode[tt::CBIndex::c_14] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_mode[tt::CBIndex::c_20] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;
+    if (!args.fast) {
+        unpack_mode[tt::CBIndex::c_13] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_mode[tt::CBIndex::c_14] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_mode[tt::CBIndex::c_20] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_mode[tt::CBIndex::c_9] = UnpackToDestMode::UnpackToDestFp32;
+    } else {
+        // bf16 destination registers: no 32-bit unpack to them; two matmul
+        // phases unless an experiment says otherwise.
+        defines["FW_FAST"] = "1";
+        defines.try_emplace("FID_S", "2");
+        defines.try_emplace("FID_O", "2");
+    }
     const auto compute = CreateKernel(
-        program, kComputePath, region,
+        program, args.fast ? kFastComputePath : kComputePath, region,
         ComputeConfig{
-            .fp32_dest_acc_en = true,
+            .fp32_dest_acc_en = !args.fast,
             // Half-sync: every stage works in groups of at most three Float32
             // tiles, so the math and pack threads alternate halves of the file.
             .dst_full_sync_en = false,
