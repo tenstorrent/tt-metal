@@ -87,6 +87,121 @@ def _cache_path(layers: int) -> Path:
     return _CACHE_DIR / f"depth{layers}"
 
 
+# The census file this model already ships (written by the planner's Step-1 census). It records the
+# real checkpoint size and layer count, so the reference-precision decision is keyed to THIS model's
+# own numbers, not a value typed into source. Named, not hardcoded per instance.
+_CENSUS_FILE = "perf_target_inputs.json"
+
+
+def _mem_available_bytes():
+    """Host memory free for a new allocation right now, from MemAvailable, or None if unreadable.
+    Deliberately a few lines of /proc/meminfo rather than importing the perf-automation tool's
+    probe, so this model package carries no dependency on that tool. MemAvailable (not MemFree)
+    already accounts for reclaimable cache, which is what decides whether the next alloc succeeds."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except Exception:  # noqa: BLE001 -- unreadable => caller treats as "cannot size", keeps its default
+        return None
+    return None
+
+
+def _checkpoint_bf16_bytes_and_layers():
+    """(checkpoint bytes, total decoder layers) for THIS model, or (None, None) if unobtainable.
+
+    Sourced from the model's OWN facts, no architecture-specific arithmetic and no perf-tool import.
+    Two sources, both keyed to this checkpoint: first the census file a run may have written next to
+    the demo (cheap when present), then -- reliably, since it is always there at build time -- the
+    checkpoint the build is about to load from: total bytes from the safetensors index's
+    metadata.total_size, layer count from the model config. The second source matters because the
+    census file is a runtime artifact that a fresh build may not have yet."""
+    import json
+
+    try:
+        d = json.loads((_DEMO_DIR / _CENSUS_FILE).read_text())
+        wb = d.get("weight_bytes")
+        ly = d.get("layers") or (d.get("blocks") or {}).get("backbone", {}).get("layers")
+        if isinstance(wb, (int, float)) and wb > 0 and isinstance(ly, (int, float)) and ly > 0:
+            return (int(wb), int(ly))
+    except Exception:  # noqa: BLE001 -- fall through to the checkpoint itself
+        pass
+
+    try:
+        install_hf_compat()
+        from huggingface_hub import try_to_load_from_cache
+        from transformers import AutoConfig
+
+        total_layers = int(AutoConfig.from_pretrained(HF_MODEL_ID, trust_remote_code=True).num_hidden_layers)
+        idx = try_to_load_from_cache(HF_MODEL_ID, "model.safetensors.index.json")
+        if isinstance(idx, str):
+            total_size = json.loads(Path(idx).read_text()).get("metadata", {}).get("total_size")
+            if isinstance(total_size, (int, float)) and total_size > 0 and total_layers > 0:
+                return (int(total_size), total_layers)
+    except Exception:  # noqa: BLE001 -- unsized => caller keeps its default
+        pass
+    return (None, None)
+
+
+def _mem_safety_margin() -> float:
+    """Dimensionless multiplier from the checkpoint's steady-state bytes to a load's PEAK host use
+    (the from_pretrained transient sits above the resident weights). A ratio, not a byte count, and
+    tunable from measurement -- it assumes nothing about the machine. Default 1.7 is the measured
+    peak/model ratio on this box (fp32 full-depth build ~217 GB vs ~128 GB steady, 2026-09-21)."""
+    try:
+        return max(1.0, float(os.environ.get("PERF_MCP_MEM_SAFETY_MARGIN", "1.7")))
+    except Exception:  # noqa: BLE001
+        return 1.7
+
+
+def _mem_usable_fraction() -> float:
+    """Fraction of currently-available memory a build may plan to use, leaving the rest as headroom
+    for estimate error and for other processes growing while the build runs (a neighbor took ~74 GB
+    mid-run on 2026-09-21). A dimensionless ratio in (0, 1], tunable via PERF_MCP_MEM_USABLE_FRACTION;
+    default 0.8 leaves 20%. Not a byte count, so it makes no assumption about machine size."""
+    try:
+        return min(1.0, max(0.1, float(os.environ.get("PERF_MCP_MEM_USABLE_FRACTION", "0.8"))))
+    except Exception:  # noqa: BLE001
+        return 0.8
+
+
+def _fp32_reference_fits(layers):
+    """(fits, est_fp32_gb, usable_gb): would a float32 reference of `layers` blocks (None == all) fit
+    within the usable share of host memory? Depth-aware -- a shallow build's footprint is scaled by
+    its share of the layers, so a gate build fits where the full-depth build does not. The estimate
+    is the checkpoint's steady bytes x2 (fp32) x a peak/steady margin; it must fit inside available x
+    a usable fraction, not all of available, so a build that only just fits at idle is not attempted.
+    `fits` is None when the model cannot be sized or memory cannot be read (caller keeps default)."""
+    bf16_bytes, total_layers = _checkpoint_bf16_bytes_and_layers()
+    avail = _mem_available_bytes()
+    if not bf16_bytes or not total_layers or not avail:
+        return (None, None, None)
+    frac = 1.0 if layers is None else min(1.0, max(1, int(layers)) / total_layers)
+    fp32_need = bf16_bytes * 2 * frac * _mem_safety_margin()
+    usable = avail * _mem_usable_fraction()
+    return (fp32_need <= usable, fp32_need / 1e9, usable / 1e9)
+
+
+def choose_reference_dtype(layers):
+    """Pick the reference build's precision for `layers` blocks (None == all) and return
+    (torch dtype, one-line reason). fp32 when it fits host memory, else bf16 -- so a large full-depth
+    reference cannot OOM the host while a shallow gate build keeps full precision. Explicit signals
+    win: PERF_MCP_LOW_MEM_REFERENCE=1 forces bf16, PERF_MCP_FORCE_FP32_REFERENCE=1 forces fp32. When
+    the model cannot be sized, keep fp32 (the historical default) rather than invent a number."""
+    depth = "all" if layers is None else int(layers)
+    if os.environ.get("PERF_MCP_LOW_MEM_REFERENCE") == "1":
+        return torch.bfloat16, f"bf16 (PERF_MCP_LOW_MEM_REFERENCE=1; layers={depth})"
+    if os.environ.get("PERF_MCP_FORCE_FP32_REFERENCE") == "1":
+        return torch.float32, f"fp32 (PERF_MCP_FORCE_FP32_REFERENCE=1; layers={depth})"
+    fits, est_gb, avail_gb = _fp32_reference_fits(layers)
+    if fits is None:
+        return torch.float32, f"fp32 (model unsized; layers={depth}, no memory comparison)"
+    if fits:
+        return torch.float32, f"fp32 fits (layers={depth}, est {est_gb:.0f} GB <= usable {avail_gb:.0f} GB)"
+    return torch.bfloat16, f"bf16 to fit memory (layers={depth}, fp32 est {est_gb:.0f} GB > usable {avail_gb:.0f} GB)"
+
+
 def load_reference(layers: int | None = DEFAULT_GATE_LAYERS, dtype=torch.float32):
     """Return the HF reference model capped to `layers` blocks (None == all 52).
 

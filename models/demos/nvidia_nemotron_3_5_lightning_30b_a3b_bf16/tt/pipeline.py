@@ -841,12 +841,17 @@ def build_pipeline(device, model=None, layers=None, prefill_layers=None, decode_
     os.environ.setdefault("TT_HW_PLANNER_SHARD_RUN", "1")
 
     if model is None:
-        # PERF_MCP_LOW_MEM_REFERENCE: the tool's standard signal to shrink a reference build's own
-        # memory footprint (same shape as TT_PERF_LAYERS for depth), set on the retry after a
-        # full-fp32 load hit the tool's memory cap. bf16 halves the load and needs no fp32<-bf16
-        # conversion afterward, which is what made the fp32 build's OWN peak (loading bf16, then
-        # converting the whole model in place) worse than its steady-state size alone suggested.
-        _ref_dtype = torch.bfloat16 if os.environ.get("PERF_MCP_LOW_MEM_REFERENCE") == "1" else torch.float32
+        # Reference precision is DECIDED here, at the one point every reference build funnels
+        # through, from the model's own size versus live host memory -- not from a per-caller flag
+        # that some launch site can forget to set. It is depth-aware: a full-depth build that would
+        # not fit in fp32 (this model's is ~217 GB, more than the box has) loads bf16 instead of
+        # OOM-killing the host, while a shallow gate build still gets full fp32 precision. Explicit
+        # signals still win (PERF_MCP_LOW_MEM_REFERENCE / PERF_MCP_FORCE_FP32_REFERENCE); an unsized
+        # model keeps the historical fp32 default. BEHAVIOR CHANGE, called out: previously this was
+        # fp32 unless PERF_MCP_LOW_MEM_REFERENCE=1; now fp32 is dropped to bf16 only when fp32 would
+        # not fit -- a case that used to OOM the whole session.
+        _ref_dtype, _ref_why = _hf_ref.choose_reference_dtype(layers if layers is not None else None)
+        print(f"[ref] reference build precision -> {_ref_why}", flush=True)
         model = _hf_ref.load_reference(layers if layers is not None else None, dtype=_ref_dtype)
 
     return NemotronHPipeline(
