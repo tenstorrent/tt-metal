@@ -7,6 +7,7 @@
 #include <tt_stl/assert.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -18,45 +19,59 @@
 #include <core_coord.hpp>
 
 #include "impl/buffers/dram_sender_topology.hpp"
-#include "impl/buffers/prefetcher_pipe_dram_sender_internal.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include "impl/dataflow_buffer/prefetcher_pipe_dram_sender_internal.hpp"
 #include "mesh_device.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental {
 
+namespace {
+std::atomic<uint64_t> next_tensor_prefetcher_factory_id{1};
+}
+
 std::vector<std::shared_ptr<PrefetcherPipe>> CreatePrefetcherPipesForTensorPrefetcher(
-    distributed::MeshDevice& mesh_device,
+    PrefetcherPipeSpace& space,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
-    uint32_t entry_size,
-    uint32_t num_entries,
-    BufferType buffer_type,
     bool support_multi_receiver_shards) {
     TT_FATAL(!bank_to_receivers.empty(), "CreatePrefetcherPipesForTensorPrefetcher requires at least one DRAM bank");
-    TT_FATAL(entry_size > 0, "PrefetcherPipe entry_size must be > 0");
-    TT_FATAL(num_entries > 0, "PrefetcherPipe num_entries must be > 0");
-    // The ring is entry_size * num_entries and is sized in uint32. Catch the overflow here: a
-    // wrapped product can still be a legal, allocatable ring, so it would surface much later as a
-    // capacity error naming a size the caller never asked for.
-    TT_FATAL(
-        num_entries <= std::numeric_limits<uint32_t>::max() / entry_size,
-        "PrefetcherPipe ring size overflows: {} entries of {} B exceeds the {} B a ring can be",
-        num_entries,
-        entry_size,
-        std::numeric_limits<uint32_t>::max());
+    auto* mesh_device = space.get_device();
+    TT_FATAL(mesh_device != nullptr, "CreatePrefetcherPipesForTensorPrefetcher requires a live space");
 
     // Multi-receiver shards (the legacy interleaved layout) force one sender per bank; the
     // receiver-contiguous layout that disallows them is what lets a bank use two senders.
     const auto mapping = build_dram_sender_mapping(
-        &mesh_device,
+        mesh_device,
         bank_to_receivers,
         support_multi_receiver_shards ? DramSenderSplit::OnePerBank : DramSenderSplit::TwoPerBank);
-    validate_dram_senders_across_mesh(&mesh_device, mapping);
+    validate_dram_senders_across_mesh(mesh_device, mapping);
+    TT_FATAL(
+        mapping.size() <= space.num_dram_senders(),
+        "CreatePrefetcherPipesForTensorPrefetcher selected {} DRAM senders, but the space reserves capacity for {}",
+        mapping.size(),
+        space.num_dram_senders());
+    for (const auto& [_sender, receivers] : mapping) {
+        TT_FATAL(
+            space.receiver_domain().contains(receivers),
+            "CreatePrefetcherPipesForTensorPrefetcher receiver set {} is outside the space domain {}",
+            receivers.str(),
+            space.receiver_domain().str());
+    }
+    space.impl().validate_dram_carves(mapping);
 
     // Each sender's bank-local slab base, taken from the mapping while the whole bank's receiver
     // split is still in one place. Handing it to the pipe is what frees the queue path from
     // re-deriving it from list position.
     const auto bases = recv_index_bases_per_sender(mapping);
+
+    std::vector<CoreCoord> senders;
+    senders.reserve(mapping.size());
+    for (const auto& [sender, _receivers] : mapping) {
+        senders.push_back(sender);
+    }
+    // Selection and every capacity/domain check complete before either DRISC reservations or
+    // worker claims mutate the space.
+    set_dram_sender_cores(space, senders);
 
     // One pipe per sender, in mapping order: build_dram_sender_mapping emits a bank's senders
     // adjacently, in role order, and keeps the banks in input order. The returned list keeps that
@@ -64,16 +79,15 @@ std::vector<std::shared_ptr<PrefetcherPipe>> CreatePrefetcherPipesForTensorPrefe
     // carries slab numbering, which each pipe now holds itself.
     std::vector<std::shared_ptr<PrefetcherPipe>> pipes;
     pipes.reserve(mapping.size());
+    const uint64_t factory_id = next_tensor_prefetcher_factory_id.fetch_add(1, std::memory_order_relaxed);
     for (size_t s = 0; s < mapping.size(); ++s) {
         const auto& [sender_logical, receivers] = mapping[s];
-        pipes.push_back(prefetcher_pipe_dram_sender::PrefetcherPipeDramSenderInternals::make_dram_sender(
-            &mesh_device, sender_logical, receivers, entry_size * num_entries, entry_size, bases[s], buffer_type));
+        auto pipe = create_dram_sender_pipe(space, sender_logical, receivers, bases[s], factory_id);
+        pipes.push_back(std::make_shared<PrefetcherPipe>(std::move(pipe)));
     }
     return pipes;
 }
 
-DeviceAddr sender_state_drisc_l1_base(const PrefetcherPipe& pipe) {
-    return prefetcher_pipe_dram_sender::PrefetcherPipeDramSenderInternals::sender_state_drisc_l1_base(pipe);
-}
+DeviceAddr sender_state_drisc_l1_base(const PrefetcherPipe& pipe) { return pipe.impl().sender_state_drisc_l1_base(); }
 
 }  // namespace tt::tt_metal::experimental

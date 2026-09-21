@@ -82,7 +82,7 @@ void start_tensor_prefetcher(
 // its sender owns, so any order or subset of that call's pipes is accepted; pipes from two
 // different calls are not, since both would number a bank's slabs from 0. An empty list means no
 // pipe target. Keep the
-// pipes alive for as long as any program has Attached them or the prefetcher may still deliver into
+// pipes alive for as long as any program has bound them or the prefetcher may still deliver into
 // them -- dropping the last owner of one frees its ring and config pages.
 void queue_tensor_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
@@ -96,11 +96,8 @@ void queue_tensor_prefetcher_request(
 // the Tensor prefetcher. Sender placement matches create_global_circular_buffer_for_tensor_prefetcher.
 // One pipe per DRAM sender core, bank-major -- the order every layer that walks them must agree on.
 std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>> create_prefetcher_pipes_for_tensor_prefetcher(
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    tt::tt_metal::experimental::PrefetcherPipeSpace& space,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
-    uint32_t entry_size,
-    uint32_t num_entries,
-    tt::tt_metal::BufferType buffer_type = tt::tt_metal::BufferType::L1,
     bool support_multi_receiver_shards = false);
 
 // Fence the prefetcher against a command queue: every prefetch request queued after this

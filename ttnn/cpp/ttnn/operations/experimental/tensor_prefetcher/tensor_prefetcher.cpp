@@ -85,14 +85,10 @@ void queue_tensor_prefetcher_request(
 }
 
 std::vector<std::shared_ptr<metal_exp::PrefetcherPipe>> create_prefetcher_pipes_for_tensor_prefetcher(
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    metal_exp::PrefetcherPipeSpace& space,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
-    uint32_t entry_size,
-    uint32_t num_entries,
-    tt::tt_metal::BufferType buffer_type,
     bool support_multi_receiver_shards) {
-    return metal_exp::CreatePrefetcherPipesForTensorPrefetcher(
-        *mesh_device, bank_to_receivers, entry_size, num_entries, buffer_type, support_multi_receiver_shards);
+    return metal_exp::CreatePrefetcherPipesForTensorPrefetcher(space, bank_to_receivers, support_multi_receiver_shards);
 }
 
 void wait_for_cq_on_tensor_prefetcher(

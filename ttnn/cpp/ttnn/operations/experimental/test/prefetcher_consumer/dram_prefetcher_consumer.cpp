@@ -4,6 +4,8 @@
 
 #include "dram_prefetcher_consumer.hpp"
 
+#include <filesystem>
+
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -14,6 +16,9 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
 namespace ttnn::operations::experimental::test {
 
@@ -61,12 +66,23 @@ ttsl::hash::hash_t DramPrefetcherConsumerDeviceOperation::compute_program_hash(
     // addresses, so a same-geometry replacement must miss this cache. A pipe reflects its own
     // identity, so the pipe list hashes as the pipes themselves; the unset target contributes an
     // empty list, which is what keeps the two transports from colliding.
-    return ttsl::hash::hash_objects_with_default_seed(
+    auto hash = ttsl::hash::hash_objects_with_default_seed(
         ttsl::hash::type_hash<DramPrefetcherConsumerDeviceOperation>,
         attrs.num_iters,
         attrs.page_size_bytes,
-        attrs.global_cb.has_value() ? static_cast<uint64_t>(attrs.global_cb->config_address()) : 0ull,
-        attrs.prefetcher_pipes);
+        attrs.global_cb.has_value() ? static_cast<uint64_t>(attrs.global_cb->config_address()) : 0ull);
+    for (const auto& pipe : attrs.prefetcher_pipes) {
+        TT_FATAL(pipe != nullptr, "prefetcher_pipes contains a null pipe");
+        hash = ttsl::hash::hash_objects(
+            hash,
+            pipe->identity(),
+            pipe->sender_core(),
+            pipe->receiver_cores(),
+            pipe->ring_size(),
+            pipe->buffer_address(),
+            pipe->config_address());
+    }
+    return hash;
 }
 
 ttnn::device_operation::CachedProgram<DramPrefetcherConsumerDeviceOperation::ProgramFactory::shared_variables_t>
@@ -82,29 +98,37 @@ DramPrefetcherConsumerDeviceOperation::ProgramFactory::create_at(
     if (!operation_attributes.prefetcher_pipes.empty()) {
         const auto& pipes = operation_attributes.prefetcher_pipes;
         const CoreRangeSet receiver_cores = metal_exp::prefetcher_pipe_receiver_cores(pipes);
-
-        // No receiver-side CB: a PrefetcherPipe consumer Attaches instead, at the entry size the
-        // sender is pushing, and reads through the device-side class. The attach ids are positioned
-        // alongside the pipes, so a pipe's id shares its index with that pipe.
-        const std::vector<uint8_t> pipe_ids =
-            metal_exp::AttachPrefetcherPipes(program, pipes, operation_attributes.page_size_bytes);
-
-        const std::vector<uint32_t> compile_args = {operation_attributes.num_iters};
-        KernelHandle kernel_id = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/prefetcher_pipe_bench_discard_receiver.cpp",
-            receiver_cores,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0, .compile_args = compile_args});
-
-        // One kernel serves the receivers of every pipe, so which pipe a core belongs to is a
-        // runtime arg rather than a compile-time one.
-        for (uint32_t p = 0; p < pipes.size(); ++p) {
-            for (const CoreCoord& core : corerange_to_cores(pipes[p]->receiver_cores())) {
-                SetRuntimeArgs(program, kernel_id, core, std::vector<uint32_t>{pipe_ids[p]});
-            }
+        std::vector<metal_exp::PrefetcherPipeParamName> names;
+        std::vector<metal_exp::PrefetcherPipeParameter> parameters;
+        metal_exp::ProgramRunArgs run_args;
+        for (size_t i = 0; i < pipes.size(); ++i) {
+            metal_exp::PrefetcherPipeParamName name{fmt::format("pipe_{}", i)};
+            names.push_back(name);
+            parameters.push_back(
+                {.unique_id = name,
+                 .receivers = pipes[i]->receiver_cores(),
+                 .ring_size = pipes[i]->ring_size(),
+                 .entry_size = operation_attributes.page_size_bytes});
+            run_args.advanced_options.prefetcher_pipe_args.emplace(name, metal_exp::PrefetcherPipeArgument{*pipes[i]});
         }
-
+        metal_exp::KernelSpec receiver{
+            .unique_id = metal_exp::KernelSpecName{"receiver"},
+            .source = std::filesystem::path{
+                "tests/tt_metal/tt_metal/test_kernels/misc/prefetcher_pipe_bench_discard_receiver.cpp"}};
+        receiver.advanced_options.prefetcher_pipe_bindings = {{.pipe_parameter_names = names, .accessor_name = "in"}};
+        receiver.compile_time_args = {{"num_iters", operation_attributes.num_iters}};
+        receiver.hw_config =
+            metal_exp::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        metal_exp::ProgramSpec spec{
+            .name = "dram_prefetcher_pipe_consumer",
+            .kernels = {std::move(receiver)},
+            .work_units =
+                {{.name = "receiver_wu",
+                  .kernels = {metal_exp::KernelSpecName{"receiver"}},
+                  .target_nodes = receiver_cores}},
+            .advanced_options = {.prefetcher_pipe_parameters = std::move(parameters)}};
+        program = metal_exp::MakeProgramFromSpec(*operation_attributes.mesh_device, spec);
+        metal_exp::SetProgramRunArgs(program, run_args);
         return {std::move(program), shared_variables_t{}};
     }
 

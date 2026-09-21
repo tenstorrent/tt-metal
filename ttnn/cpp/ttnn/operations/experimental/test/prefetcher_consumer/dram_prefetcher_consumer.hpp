@@ -27,7 +27,7 @@ struct DramPrefetcherConsumerDeviceOperation {
     struct operation_attributes_t {
         uint32_t num_iters;
         // Per-receiver bytes one wait_front/pop_front covers: the GCB's receiver page size, or the
-        // entry size the PrefetcherPipes are Attached at. Either way it must be what the sender
+        // entry size the PrefetcherPipe program parameter uses. Either way it must be what the sender
         // pushes per receiver per block.
         uint32_t page_size_bytes;
         // Exactly one of these is set: a GCB, or a non-empty pipe list. global_cb is optional<>
@@ -80,8 +80,8 @@ void test_dram_prefetcher_consumer(
 
 // Same discard-only drain against a PrefetcherPipe target (bound as
 // `ttnn.experimental.test_tensor_prefetcher_pipe_consumer`), so the two transports can be benched
-// head to head. `num_iters` counts entries per receiver, and `page_size_bytes` is the entry size to
-// Attach at.
+// head to head. `num_iters` counts entries per receiver, and `page_size_bytes` is the entry size in
+// the consumer ProgramSpec.
 void test_tensor_prefetcher_pipe_consumer(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     uint32_t num_iters,

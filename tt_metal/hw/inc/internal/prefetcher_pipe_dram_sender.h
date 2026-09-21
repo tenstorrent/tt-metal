@@ -6,13 +6,13 @@
 //
 // The device-side experimental::PrefetcherPipe class cannot be used here: its constructor reads the
 // launch message to find its config slot, and DRAM cores are never dispatched to, so they have no
-// launch message and never Attach. Instead the host stamps a complete PrefetcherPipe sender config
+// launch message and never binds a Program slot. Instead the host stamps a complete sender config
 // page into DRISC L1 (see impl/buffers/prefetcher_pipe.cpp, initialize_dram_sender_config_page) and
 // this header works directly against that page. Deliberately depends only on headers a DRISC kernel already builds
 // with -- notably NOT prefetcher_pipe.h or prefetcher_pipe_init.h.
 //
 // The wire protocol is identical to the worker-sender PrefetcherPipe, so an ordinary receiver
-// (AttachPrefetcherPipe + the device PrefetcherPipe class) is the consumer:
+// (a ProgramSpec/ProgramRunArgs binding + the device PrefetcherPipe class) is the consumer:
 //
 //   * Credits are counted in L1_ALIGNMENT-byte units. A config page holds two credit blocks --
 //     SENT (word[7]) and ACKED (word[8]) -- each one L1_ALIGNMENT slot per receiver, on both the

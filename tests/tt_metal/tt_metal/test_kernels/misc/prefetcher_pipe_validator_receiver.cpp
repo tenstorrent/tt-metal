@@ -24,8 +24,10 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/prefetcher_pipe.h"
 #include "api/dataflow/noc.h"
+#include "api/scratchpad.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/debug/dprint.h"
+#include "experimental/kernel_args.h"
 
 #include "prefetcher_validator_common.h"
 
@@ -39,42 +41,36 @@ constexpr uint32_t kExtraPollCycles = 1u << 18;
 
 void kernel_main() {
     // ---- Compile-time args ----
-    constexpr uint32_t scratch_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t num_layers = get_compile_time_arg_val(1);
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t print_stride = get_compile_time_arg_val(3);
+    constexpr uint32_t num_layers = get_arg(args::num_layers);
+    constexpr uint32_t num_blocks = get_arg(args::num_blocks);
+    constexpr uint32_t print_stride = get_arg(args::print_stride);
     // Streaming mode: the prefetcher delivers each receiver's blocks ring-rotated, so the entry at
     // FIFO position `blk` is physical block (lead_block + blk) mod num_blocks. Batched delivery is
     // the identity.
-    constexpr uint32_t streaming = get_compile_time_arg_val(4);
-    // TensorAccessor compile-time args start at index 5.
-    constexpr auto tensor_args = TensorAccessorArgs<5>();
+    constexpr uint32_t streaming = get_arg(args::streaming);
 
     // ---- Runtime args ----
     // The host derives n_col_start (= ring_pos * n_per_recv_tiles) and total_n_tiles from the
     // pipes' topology and the tensor's padded shape, so this kernel stays layout-agnostic.
     uint32_t rt_idx = 0;
-    // One kernel serves the receivers of every pipe, and a core's pipe id depends on which sender
-    // drives it, so the id is a runtime arg rather than a compile-time one.
-    const uint8_t prefetcher_pipe_id = static_cast<uint8_t>(get_arg_val<uint32_t>(rt_idx++));
     const uint32_t bank_id = get_arg_val<uint32_t>(rt_idx++);           // sender's DRAM bank (diagnostic only)
     const uint32_t recv_idx_in_bank = get_arg_val<uint32_t>(rt_idx++);  // bank-local receiver index (diagnostic)
-    const uint32_t bank_base_addr = get_arg_val<uint32_t>(rt_idx++);    // source tensor base addr
     const uint32_t k_block_w_tiles = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t total_n_tiles = get_arg_val<uint32_t>(rt_idx++);  // N / TILE_WIDTH (full tensor)
     const uint32_t n_per_recv_tiles = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t n_col_start = get_arg_val<uint32_t>(rt_idx++);  // ring_pos * n_per_recv_tiles
     const uint32_t lead_block = get_arg_val<uint32_t>(rt_idx++);   // streaming: physical block at FIFO position 0
 
-    const auto accessor = TensorAccessor(tensor_args, bank_base_addr);
+    const auto accessor = TensorAccessor(tensor::source_tensor);
     const uint32_t tile_bytes = accessor.get_aligned_page_size();
     const uint32_t slice_bytes = n_per_recv_tiles * tile_bytes;
     const uint32_t page_bytes = k_block_w_tiles * slice_bytes;
 
-    const uint32_t scratch_addr = get_write_ptr(scratch_cb_id);
+    Scratchpad<uint32_t> scratchpad(scratch::expected);
+    const uint32_t scratch_addr = scratchpad.get_base_address();
 
     Noc noc;
-    experimental::PrefetcherPipe pipe(prefetcher_pipe_id);
+    experimental::PrefetcherPipe pipe(pipe::in);
 
     DPRINT(
         "PIPE_VALIDATOR_START bank={} recv_idx={} num_layers={} num_blocks={} page={} tile={}\n",

@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -30,6 +31,9 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -42,6 +46,7 @@
 #include "impl/buffers/prefetcher_pipe_dram_sender_internal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include "impl/dataflow_buffer/prefetcher_pipe_dram_sender_internal.hpp"
 #include "impl/kernels/kernel.hpp"  // DramConfig
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -65,6 +70,8 @@ constexpr uint32_t kRingDepth = 4;
 struct PipeSet {
     // One entry per pipe, bank-major: that pipe's sender core and its receivers.
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
+    // Declared before the pipes so it is destroyed after them: a space must outlive its pipes.
+    std::optional<experimental::PrefetcherPipeSpace> space;
     std::vector<std::shared_ptr<experimental::PrefetcherPipe>> pipes;
 };
 
@@ -75,12 +82,24 @@ PipeSet make_pipe_set(
     uint32_t entry_size = kEntrySize,
     uint32_t num_entries = kRingDepth) {
     PipeSet set;
-    set.pipes = experimental::CreatePrefetcherPipesForTensorPrefetcher(
+    CoreRangeSet receiver_domain;
+    uint32_t max_receivers = 0;
+    for (const auto& [_bank, receivers] : bank_to_receivers) {
+        receiver_domain = receiver_domain.merge(receivers);
+        max_receivers = std::max(max_receivers, receivers.num_cores());
+    }
+    set.space.emplace(experimental::CreatePrefetcherPipeSpace(
         mesh_device,
+        experimental::PrefetcherPipeSpaceConfig{
+            .sender_cores = {},
+            .num_dram_senders = static_cast<uint32_t>(2 * bank_to_receivers.size()),
+            .receiver_domain = receiver_domain,
+            .ring_size = entry_size * num_entries,
+            .max_receivers_per_pipe = max_receivers,
+            .buffer_type = BufferType::L1}));
+    set.pipes = experimental::CreatePrefetcherPipesForTensorPrefetcher(
+        *set.space,
         bank_to_receivers,
-        entry_size,
-        num_entries,
-        BufferType::L1,
         /*support_multi_receiver_shards=*/!dual_senders_per_bank);
     set.mapping = experimental::prefetcher_pipe_sender_receiver_mapping(set.pipes);
     return set;
@@ -159,44 +178,71 @@ void preload_pattern(
     write_drisc_l1(mesh_device, sender_logical, drisc_pattern_base(mesh_device), pattern);
 }
 
-// One push/pop cycle. The DRISC senders and the worker receivers go out in a single Program: a
-// receiver reads its Attach slot from the per-core dense index, which slow dispatch writes in
-// ConfigureDeviceWithProgram, while the senders take their config page address from DRISC L1 and
-// never Attach at all.
+// One push/pop cycle. The DRISC senders first fill at most one ring, then the worker receiver
+// Program drains it. Receivers get their generated pipe slots through ProgramSpec/ProgramRunArgs;
+// DRAM cores remain a legacy-program detail because Metal 2.0 WorkUnits target worker nodes.
 //
 // num_entries must fit the ring so a sender can publish its whole batch even if its receivers
 // start late.
 void run_push_and_pop(
     distributed::MeshDevice& mesh_device, const PipeSet& set, uint32_t num_entries, uint32_t entry_size = kEntrySize) {
-    Program program = CreateProgram();
+    std::vector<experimental::PrefetcherPipeParamName> pipe_names;
+    std::vector<experimental::PrefetcherPipeParameter> pipe_parameters;
+    experimental::ProgramRunArgs run_args;
+    for (size_t s = 0; s < set.pipes.size(); ++s) {
+        experimental::PrefetcherPipeParamName name{fmt::format("pipe_{}", s)};
+        pipe_names.push_back(name);
+        pipe_parameters.push_back(experimental::PrefetcherPipeParameter{
+            .unique_id = name,
+            .receivers = set.pipes[s]->receiver_cores(),
+            .ring_size = set.pipes[s]->ring_size(),
+            .entry_size = entry_size});
+        run_args.advanced_options.prefetcher_pipe_args.emplace(name, experimental::PrefetcherPipeArgument{*set.pipes[s]});
+    }
+    experimental::KernelSpec receiver{
+        .unique_id = experimental::KernelSpecName{"receiver"}, .source = std::filesystem::path{kReceiverKernel}};
+    receiver.advanced_options.prefetcher_pipe_bindings = {{.pipe_parameter_names = pipe_names, .accessor_name = "in"}};
+    receiver.compile_time_args = {{"num_entries", num_entries}};
+    receiver.hw_config =
+        experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+    experimental::ProgramSpec spec{
+        .name = "dram_sender_pipe_receiver",
+        .kernels = {std::move(receiver)},
+        .work_units =
+            {{.name = "receiver_wu",
+              .kernels = {experimental::KernelSpecName{"receiver"}},
+              .target_nodes = experimental::prefetcher_pipe_receiver_cores(set.pipes)}},
+        .advanced_options = {.prefetcher_pipe_parameters = std::move(pipe_parameters)}};
+    Program receiver_program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    experimental::SetProgramRunArgs(receiver_program, run_args);
 
     const uint32_t pattern_base = static_cast<uint32_t>(drisc_pattern_base(mesh_device));
-
+    Program sender_program = CreateProgram();
     for (size_t s = 0; s < set.pipes.size(); ++s) {
         experimental::PrefetcherPipe& pipe = *set.pipes[s];
         const auto config_page_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(pipe));
-        const uint8_t pipe_id = experimental::AttachPrefetcherPipe(program, pipe, set.mapping[s].second, entry_size);
         CreateKernel(
-            program,
+            sender_program,
             kSenderKernel,
             set.mapping[s].first,
             DramConfig{.noc = NOC::NOC_0, .compile_args = {config_page_addr, num_entries, pattern_base, entry_size}});
-        // One kernel per pipe rather than one for all receivers: the pipe id is a compile-time arg
-        // of the shared receiver kernel, and each pipe's receivers hold a different id.
-        CreateKernel(
-            program,
-            kReceiverKernel,
-            set.mapping[s].second,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = {pipe_id, entry_size, num_entries, 0u}});
     }
 
-    distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(program));
-    distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/false);
-    distributed::Finish(mesh_device.mesh_command_queue());
+    // The sender consumes receiver credits after the first entry, while the receiver waits for
+    // sender data. Queue both programs before waiting so those two sides can make progress
+    // concurrently under slow dispatch.
+    experimental::DispatchContext::get().enable_asynchronous_slow_dispatch(&mesh_device);
+    {
+        distributed::MeshWorkload sender_workload;
+        sender_workload.add_program(distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(sender_program));
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), sender_workload, /*blocking=*/false);
+
+        distributed::MeshWorkload receiver_workload;
+        receiver_workload.add_program(distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(receiver_program));
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), receiver_workload, /*blocking=*/false);
+        distributed::Finish(mesh_device.mesh_command_queue());
+    }
+    experimental::DispatchContext::get().disable_asynchronous_slow_dispatch(&mesh_device);
 }
 
 // Read one entry-sized slot out of a receiver's ring.
@@ -420,7 +466,68 @@ TEST_F(PrefetcherPipeDramSenderFixture, RejectsDuplicateBank) {
     EXPECT_ANY_THROW(make_pipe_set(*mesh_device_, {{0, first}, {0, second}}, /*dual_senders_per_bank=*/true));
 }
 
-TEST_F(PrefetcherPipeDramSenderFixture, AttachAcceptsAnyEntrySizeTheRingHolds) {
+TEST_F(PrefetcherPipeDramSenderFixture, InvalidBatchLeavesSpaceReusable) {
+    const CoreRangeSet receiver_domain(CoreRange({0, 0}, {1, 0}));
+    auto space = experimental::CreatePrefetcherPipeSpace(
+        *mesh_device_,
+        experimental::PrefetcherPipeSpaceConfig{
+            .sender_cores = {},
+            .num_dram_senders = 2,
+            .receiver_domain = receiver_domain,
+            .ring_size = kEntrySize * kRingDepth,
+            .max_receivers_per_pipe = 1,
+        });
+
+    const CoreRangeSet duplicated_receiver(CoreRange({0, 0}));
+    EXPECT_ANY_THROW(experimental::CreatePrefetcherPipesForTensorPrefetcher(
+        space,
+        {{0, duplicated_receiver}, {1, duplicated_receiver}},
+        /*support_multi_receiver_shards=*/true));
+
+    // The rejected two-bank plan must not have fixed this space to its sender set or claimed the
+    // receiver. A different one-bank plan can still reserve and carve it.
+    auto pipes = experimental::CreatePrefetcherPipesForTensorPrefetcher(
+        space,
+        {{0, CoreRangeSet(CoreRange({1, 0}))}},
+        /*support_multi_receiver_shards=*/true);
+    ASSERT_EQ(pipes.size(), 1u);
+    EXPECT_EQ(pipes[0]->receiver_cores(), CoreRangeSet(CoreRange({1, 0})));
+}
+
+TEST_F(PrefetcherPipeDramSenderFixture, DirectSenderReservationRejectsInvalidDramCoordinate) {
+    auto space = experimental::CreatePrefetcherPipeSpace(
+        *mesh_device_,
+        experimental::PrefetcherPipeSpaceConfig{
+            .sender_cores = {},
+            .num_dram_senders = 1,
+            .receiver_domain = CoreRangeSet(CoreRange({0, 0})),
+            .ring_size = kEntrySize * kRingDepth,
+            .max_receivers_per_pipe = 1,
+        });
+    const std::vector<CoreCoord> invalid_senders = {{999, 999}};
+    EXPECT_ANY_THROW(experimental::set_dram_sender_cores(space, invalid_senders));
+}
+
+TEST_F(PrefetcherPipeDramSenderFixture, DroppedPipesRecarveSameSpaceWithoutAllocation) {
+    const CoreRangeSet receivers(CoreRange({0, 0}, {1, 0}));
+    auto set = make_pipe_set(*mesh_device_, {{0, receivers}}, /*dual_senders_per_bank=*/false);
+    ASSERT_EQ(set.pipes.size(), 1u);
+    const uint32_t buffer_address = set.pipes[0]->buffer_address();
+    const uint32_t config_address = set.pipes[0]->config_address();
+    const DeviceAddr sender_state_address = experimental::sender_state_drisc_l1_base(*set.pipes[0]);
+    const uint64_t first_identity = set.pipes[0]->identity();
+
+    set.pipes.clear();
+    auto replacement = experimental::CreatePrefetcherPipesForTensorPrefetcher(
+        *set.space, {{0, receivers}}, /*support_multi_receiver_shards=*/true);
+    ASSERT_EQ(replacement.size(), 1u);
+    EXPECT_EQ(replacement[0]->buffer_address(), buffer_address);
+    EXPECT_EQ(replacement[0]->config_address(), config_address);
+    EXPECT_EQ(experimental::sender_state_drisc_l1_base(*replacement[0]), sender_state_address);
+    EXPECT_NE(replacement[0]->identity(), first_identity);
+}
+
+TEST_F(PrefetcherPipeDramSenderFixture, BindingAcceptsAnyEntrySizeTheRingHolds) {
     // An entry size the ring does not divide is legal: the remainder is a trailing gap holding no
     // entry, which both endpoints credit as padding at the wrap. Only a size the ring cannot hold
     // at all is rejected.
@@ -429,16 +536,39 @@ TEST_F(PrefetcherPipeDramSenderFixture, AttachAcceptsAnyEntrySizeTheRingHolds) {
         make_pipe_set(*mesh_device_, {{/*bank_id=*/0, receiver_cores}}, /*dual_senders_per_bank=*/false);
     const uint32_t ring_size = set.pipes[0]->ring_size();
 
-    Program program = CreateProgram();
+    const auto make_consumer = [&](uint32_t entry_size) {
+        const experimental::PrefetcherPipeParamName name{"pipe"};
+        experimental::KernelSpec receiver{
+            .unique_id = experimental::KernelSpecName{"receiver"}, .source = std::filesystem::path{kReceiverKernel}};
+        receiver.advanced_options.prefetcher_pipe_bindings = {{{name}, "in"}};
+        receiver.compile_time_args = {{"num_entries", 1u}};
+        receiver.hw_config =
+            experimental::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        experimental::ProgramSpec spec{
+            .name = "entry_size_consumer",
+            .kernels = {std::move(receiver)},
+            .work_units =
+                {{.name = "receiver_wu",
+                  .kernels = {experimental::KernelSpecName{"receiver"}},
+                  .target_nodes = receiver_cores}},
+            .advanced_options = {
+                .prefetcher_pipe_parameters = {
+                    {.unique_id = name,
+                     .receivers = receiver_cores,
+                     .ring_size = ring_size,
+                     .entry_size = entry_size}}}};
+        Program program = experimental::MakeProgramFromSpec(*mesh_device_, spec);
+        experimental::ProgramRunArgs args;
+        args.advanced_options.prefetcher_pipe_args.emplace(name, experimental::PrefetcherPipeArgument{*set.pipes[0]});
+        experimental::SetProgramRunArgs(program, args);
+    };
     // L1-aligned and well inside the ring, so only a divisibility rule could have rejected it.
     constexpr uint32_t kRingIndivisibleEntrySize = 48;
     ASSERT_NE(ring_size % kRingIndivisibleEntrySize, 0u);
-    EXPECT_NO_THROW(
-        experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kRingIndivisibleEntrySize));
-    EXPECT_NO_THROW(experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kEntrySize / 2));
-    EXPECT_NO_THROW(experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, kEntrySize));
-    EXPECT_ANY_THROW(
-        experimental::AttachPrefetcherPipe(program, *set.pipes[0], receiver_cores, ring_size + kEntrySize));
+    EXPECT_NO_THROW(make_consumer(kRingIndivisibleEntrySize));
+    EXPECT_NO_THROW(make_consumer(kEntrySize / 2));
+    EXPECT_NO_THROW(make_consumer(kEntrySize));
+    EXPECT_ANY_THROW(make_consumer(ring_size + kEntrySize));
 }
 
 TEST_F(PrefetcherPipeDramSenderFixture, EntrySizeNotDividingRingWrapsOnTheGap) {

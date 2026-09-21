@@ -13,6 +13,8 @@ divergence between the two paths surfaces immediately.
 See tt_metal/impl/buffers/prefetcher_matmul_design.md for the contract being validated.
 """
 
+import gc
+
 import pytest
 import torch
 import ttnn
@@ -546,22 +548,33 @@ def _setup_weight_and_pipes_recv_contig(
     distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
     row_offset=0,
     num_entries=_GCB_DEPTH_PAGES,
+    return_space=False,
 ):
     """PrefetcherPipe analogue of _setup_weight_and_gcb_recv_contig: same weight and the same
     bank->receiver pairing (see _recv_contig_weight_and_bank_map), differing only in the target
-    object. It is created at entry_size == the per-receiver block size, so `num_entries` is a depth
-    in whole blocks of this tensor; a later request may push any other block size the ring holds."""
+    object. The space ring is sized as `num_entries` whole blocks of this tensor; a later request
+    may push any other aligned block size the ring holds."""
     tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
         device, K, N, dtype, recv_per_bank, distribution_strategy=distribution_strategy, row_offset=row_offset
     )
-    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+    receiver_domain = ttnn.CoreRangeSet(
+        {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
+    )
+    pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
         device,
+        sender_cores=ttnn.CoreRangeSet(set()),
+        receiver_domain=receiver_domain,
+        ring_size=push_page_size * num_entries,
+        max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
+        num_dram_senders=2 * len(bank_to_receivers),
+    )
+    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+        pipe_space,
         bank_to_receivers,
-        entry_size=push_page_size,
-        num_entries=num_entries,
         support_multi_receiver_shards=not dual_senders,
     )
-    return tt_weight, pipes, push_page_size, ring_size
+    result = (tt_weight, pipes, push_page_size, ring_size)
+    return (*result, pipe_space) if return_space else result
 
 
 @pytest.mark.parametrize("streaming", [False, True], ids=["batched", "streaming"])
@@ -646,6 +659,92 @@ def test_validator_pipe_cursor_persists_across_requests(device, K, N, dtype, rec
 
 
 @pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+def test_pipe_consumer_cache_uses_pipe_identity(device, K, N, dtype, recv_per_bank):
+    """The same pipe hits the consumer cache, while a same-address recarve misses it.
+
+    Dropping and recarving from one space deliberately reproduces every piece of geometry and
+    every allocation address. The replacement still has fresh persistent sender state, so a
+    compiled program whose pipe slots are sticky must not be reused for it.
+    """
+    tt_weight, pipes, page_size, ring_size, pipe_space = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank, return_space=True
+    )
+    # CoreRangeSet is bound reference-internal from a pipe, so make an owning copy before dropping
+    # the handles. Otherwise this reconstruction data itself keeps every original pipe alive.
+    bank_to_receivers = [
+        (pipe.sender_core().x, ttnn.CoreRangeSet(set(pipe.receiver_cores().ranges()))) for pipe in pipes
+    ]
+    original_addresses = [(pipe.buffer_address(), pipe.config_address()) for pipe in pipes]
+
+    device.enable_program_cache()
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
+        before_first = device.num_program_cache_entries()
+        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+            device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=pipes
+        )
+        ttnn.synchronize_device(device)
+        after_first = device.num_program_cache_entries()
+        assert after_first == before_first + 1
+
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
+        before_second = device.num_program_cache_entries()
+        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+            device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=pipes
+        )
+        ttnn.synchronize_device(device)
+        assert device.num_program_cache_entries() == before_second
+
+    del pipes
+    gc.collect()
+    replacement = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+        pipe_space, bank_to_receivers, support_multi_receiver_shards=True
+    )
+    assert [(pipe.buffer_address(), pipe.config_address()) for pipe in replacement] == original_addresses
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(tt_weight, ring_size)], prefetcher_pipes=replacement
+        )
+        before_replacement = device.num_program_cache_entries()
+        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+            device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=replacement
+        )
+        ttnn.synchronize_device(device)
+        assert device.num_program_cache_entries() == before_replacement + 1
+
+
+def test_pipe_consumer_trace_replay(device):
+    """A cached pipe consumer can be captured and replayed while its sender runs persistently."""
+    num_dram_banks = device.dram_grid_size().x
+    K = 448
+    N = num_dram_banks * 2 * 2 * ttnn.TILE_SIZE
+    tt_weight, pipes, page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, ttnn.bfloat8_b, recv_per_bank=2
+    )
+    trace_repeats = 2
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(tt_weight, ring_size)] * (trace_repeats + 1), prefetcher_pipes=pipes
+        )
+        ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+            device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=pipes
+        )
+        ttnn.synchronize_device(device)
+
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        for _ in range(trace_repeats):
+            ttnn.experimental.test_tensor_prefetcher_pipe_consumer(
+                device, num_iters=ring_size, page_size_bytes=page_size, prefetcher_pipes=pipes
+            )
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(device)
+        ttnn.release_trace(device, trace_id)
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
 @pytest.mark.parametrize("num_entries", [5, 7], ids=["ring_2.5_blocks", "ring_3.5_blocks"])
 def test_validator_pipe_block_size_not_dividing_ring(device, K, N, dtype, recv_per_bank, num_entries):
     """A pushed block size need not divide the ring: the remainder becomes a trailing gap.
@@ -658,11 +757,20 @@ def test_validator_pipe_block_size_not_dividing_ring(device, K, N, dtype, recv_p
     tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
         device, K, N, dtype, recv_per_bank
     )
-    gapped_pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+    receiver_domain = ttnn.CoreRangeSet(
+        {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
+    )
+    pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
         device,
+        sender_cores=ttnn.CoreRangeSet(set()),
+        receiver_domain=receiver_domain,
+        ring_size=(push_page_size // 2) * num_entries,
+        max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
+        num_dram_senders=2 * len(bank_to_receivers),
+    )
+    gapped_pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+        pipe_space,
         bank_to_receivers,
-        entry_size=push_page_size // 2,
-        num_entries=num_entries,
         support_multi_receiver_shards=True,
     )
     with tensor_prefetcher_session(device):
@@ -687,11 +795,20 @@ def test_validator_pipe_ring_holds_one_block(device, K, N, dtype, recv_per_bank,
     tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
         device, K, N, dtype, recv_per_bank
     )
-    shallow_pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+    receiver_domain = ttnn.CoreRangeSet(
+        {core_range for _, receivers in bank_to_receivers for core_range in receivers.ranges()}
+    )
+    pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
         device,
+        sender_cores=ttnn.CoreRangeSet(set()),
+        receiver_domain=receiver_domain,
+        ring_size=(push_page_size // entry_divisor) * num_entries,
+        max_receivers_per_pipe=max(receivers.num_cores() for _, receivers in bank_to_receivers),
+        num_dram_senders=2 * len(bank_to_receivers),
+    )
+    shallow_pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+        pipe_space,
         bank_to_receivers,
-        entry_size=push_page_size // entry_divisor,
-        num_entries=num_entries,
         support_multi_receiver_shards=True,
     )
     with tensor_prefetcher_session(device):
@@ -821,9 +938,9 @@ def test_pipe_list_order_is_not_semantic(device, K, N, dtype, recv_per_bank, exp
         # Every pipe listed twice, so every receiver is delivered to twice.
         with expect_error(RuntimeError, "disjoint receiver sets"):
             queue(pipes + pipes)
-        # Each set's leading pipe for bank 0: disjoint receivers, but both own that bank's slabs
-        # from 0, so one DRISC sender would be told to deliver two sets into the same slabs.
-        with expect_error(RuntimeError, "disjoint bank-local"):
+        # Each set's leading pipe for bank 0: disjoint receivers, but the request may only combine
+        # pipes stamped by one factory call.
+        with expect_error(RuntimeError, "one CreatePrefetcherPipesForTensorPrefetcher call"):
             queue([pipes[0], pipes_b[0]])
         # Interleaved: no bank's two pipes are adjacent any more. Each keeps its own slab base, so
         # delivery is unchanged.

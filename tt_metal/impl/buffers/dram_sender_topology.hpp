@@ -46,7 +46,7 @@ enum class DramSenderSplit : uint8_t { OnePerBank, TwoPerBank };
 // it builds its senders, so the resulting order is a convention of what the factory returns and
 // not something a later caller has to reproduce.
 std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
-    distributed::MeshDevice* mesh_device,
+    const distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     DramSenderSplit split);
 
@@ -55,7 +55,7 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
 // it: a descriptor whose endpoint layout didn't reproduce the role would silently drive the wrong
 // DRISC core, and a sender that isn't provisioned for its bank would take credits nobody returns.
 void validate_dram_senders_across_mesh(
-    distributed::MeshDevice* mesh_device, const std::vector<std::pair<CoreCoord, CoreRangeSet>>& mapping);
+    const distributed::MeshDevice* mesh_device, const std::vector<std::pair<CoreCoord, CoreRangeSet>>& mapping);
 
 // Per-sender bank-local recv_index_base. Senders are ordered [bank b s0, bank b s1, bank b+1 s0,
 // ...] (sender_logical.x == bank_id); recv_index_base resets to 0 on a bank change and accumulates
@@ -73,7 +73,7 @@ std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<Co
 // it here lands the bytes somewhere harmless-looking instead of failing. The sender's virtual coord
 // is resolved per device because DRAM harvesting can place it differently on each.
 void write_dram_sender_l1(
-    distributed::MeshDevice& mesh_device,
+    const distributed::MeshDevice& mesh_device,
     IDevice* device,
     const CoreCoord& sender_logical,
     DeviceAddr local_addr,

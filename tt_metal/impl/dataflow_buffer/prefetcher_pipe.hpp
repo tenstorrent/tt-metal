@@ -18,6 +18,9 @@
 
 namespace tt::tt_metal {
 
+class DriscL1Allocation;
+class IDevice;
+
 namespace distributed {
 class MeshDevice;
 }
@@ -70,10 +73,19 @@ public:
 
     PrefetcherPipe create_pipe(CoreCoord sender, const CoreRangeSet& receivers);
     std::vector<PrefetcherPipe> create_pipes(std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes);
+    void set_dram_sender_cores(std::span<const CoreCoord> dram_senders);
+    void validate_dram_carves(std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes) const;
+    PrefetcherPipe create_dram_sender_pipe(
+        CoreCoord dram_sender,
+        const CoreRangeSet& receivers,
+        uint32_t recv_index_base = 0,
+        uint64_t tensor_prefetcher_factory_id = 0);
 
     // Used by PrefetcherPipeImpl. `pending` holds cores claimed earlier in the same create_pipes
     // batch (validation runs before any claim is taken).
     void validate_carve(
+        CoreCoord sender, const CoreRangeSet& receivers, const std::unordered_set<CoreCoord>* pending) const;
+    void validate_dram_carve(
         CoreCoord sender, const CoreRangeSet& receivers, const std::unordered_set<CoreCoord>* pending) const;
     // `owner` is the pipe taking / releasing the claim; the space tracks it so it can detach the
     // pipe if the space is destroyed first.
@@ -87,6 +99,7 @@ public:
     void write_pages(const std::unordered_map<CoreCoord, std::vector<uint32_t>>& pages) const;
 
 private:
+    friend class PrefetcherPipeImpl;
     void setup_reservation();
     void release_allocations() noexcept;
 
@@ -101,6 +114,8 @@ private:
     uint32_t config_address_ = 0;
     std::unordered_set<CoreCoord> claimed_;
     std::unordered_set<PrefetcherPipeImpl*> live_pipes_;
+    std::unordered_set<CoreCoord> claimed_dram_senders_;
+    std::unordered_map<CoreCoord, std::shared_ptr<DriscL1Allocation>> dram_sender_allocations_;
 };
 
 // Implementation of the PrefetcherPipe host object declared in
@@ -118,6 +133,13 @@ private:
 class PrefetcherPipeImpl {
 public:
     PrefetcherPipeImpl(PrefetcherPipeSpaceImpl& space, CoreCoord sender_core, const CoreRangeSet& receiver_cores);
+    PrefetcherPipeImpl(
+        PrefetcherPipeSpaceImpl& space,
+        CoreCoord dram_sender,
+        const CoreRangeSet& receiver_cores,
+        std::shared_ptr<DriscL1Allocation> drisc_config_page,
+        uint32_t recv_index_base,
+        uint64_t tensor_prefetcher_factory_id);
 
     PrefetcherPipeImpl(const PrefetcherPipeImpl&) = delete;
     PrefetcherPipeImpl& operator=(const PrefetcherPipeImpl&) = delete;
@@ -158,15 +180,23 @@ public:
     const distributed::MeshDevice* get_device() const { return space().get_device(); }
     // The space this pipe was carved from. Throws if that space has been destroyed.
     const PrefetcherPipeSpaceImpl& space() const;
+    SenderCoreType sender_core_type() const;
+    uint32_t initial_entry_size() const { return initial_entry_size_; }
+    uint64_t identity() const { return identity_; }
+    uint64_t tensor_prefetcher_factory_id() const { return tensor_prefetcher_factory_id_; }
+    uint32_t recv_index_base() const { return recv_index_base_; }
+    DeviceAddr sender_state_drisc_l1_base() const;
 
 private:
     friend class PrefetcherPipeSpaceImpl;
 
     void build_config_pages();
+    void build_dram_sender_config_pages();
     // Called by the space's destructor when it is destroyed while this pipe is still alive.
     void detach_from_space() noexcept;
 
     PrefetcherPipeSpaceImpl* space_ = nullptr;
+    uint64_t identity_ = 0;
     CoreCoord sender_core_;
     CoreRangeSet sender_cores_;
     CoreRangeSet receiver_cores_;
@@ -176,6 +206,11 @@ private:
     // receiver kernel's thread count when a Program binds the pipe.
     uint32_t active_credit_lanes_ = 1;
     std::unordered_map<CoreCoord, std::vector<uint32_t>> config_pages_;
+    SenderCoreType sender_core_type_{};
+    uint32_t initial_entry_size_ = 0;
+    uint32_t recv_index_base_ = 0;
+    uint64_t tensor_prefetcher_factory_id_ = 0;
+    std::shared_ptr<DriscL1Allocation> drisc_config_page_;
 };
 
 }  // namespace experimental

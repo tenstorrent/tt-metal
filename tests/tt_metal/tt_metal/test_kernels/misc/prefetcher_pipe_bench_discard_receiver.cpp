@@ -17,16 +17,13 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/prefetcher_pipe.h"
 #include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t num_iters = get_compile_time_arg_val(0);
-
-    // One kernel serves the receivers of every pipe, and a core's pipe id depends on which sender
-    // drives it, so the id is a runtime arg rather than a compile-time one.
-    const uint8_t prefetcher_pipe_id = static_cast<uint8_t>(get_arg_val<uint32_t>(0));
+    constexpr uint32_t num_iters = get_arg(args::num_iters);
 
     Noc noc;
-    experimental::PrefetcherPipe pipe(prefetcher_pipe_id);
+    experimental::PrefetcherPipe pipe(pipe::in);
 
     for (uint32_t i = 0; i < num_iters; ++i) {
         pipe.wait_front(1);
