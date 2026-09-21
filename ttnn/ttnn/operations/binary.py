@@ -119,7 +119,9 @@ def _copy_inplace_golden_result(input_tensor_a, output_tensor):
 
 def _has_float_scalar(input_tensor_a, input_tensor_b):
     """Whether either operand is a scalar of floating type. A Python float and a 0-d float tensor
-    both promote an INT32 tensor before division, so neither may be read as an integer divisor."""
+    both promote an INT32 tensor before division, so neither may be read as an integer divisor.
+    A 0-d tensor's dtype answers this question even though it does not set the arithmetic width
+    -- see _tensor_operand, which keys that off the shaped operand instead."""
     import torch
 
     def is_float_scalar(value):
@@ -132,12 +134,17 @@ def _has_float_scalar(input_tensor_a, input_tensor_b):
 
 
 def _tensor_operand(input_tensor_a, input_tensor_b):
-    """The shaped operand. Scalar-first overloads put a Python number in operand a, so
-    dtype-dependent branches must key off this rather than the argument position. Scalar-likeness
-    decides it, not tensor-ness: a 0-d tensor carries a dtype of its own but no element dtype to
-    key off, and treating it as the reference skips the unsigned path its partner needs."""
+    """The operand whose dtype the arithmetic runs in. Scalar-first overloads put a Python number
+    in operand a, so dtype-dependent branches must key off this rather than the argument position.
+    Scalar-likeness decides it, not tensor-ness: a 0-d tensor paired with a shaped one does not set
+    the width, and treating it as the reference skips the unsigned path its partner needs. When
+    neither operand is shaped, operand a still has to win -- a 0-d tensor there carries the only
+    dtype available, and returning the Python number instead leaves callers dereferencing .dtype
+    on an int."""
 
-    return input_tensor_b if _is_scalar_like(input_tensor_a) else input_tensor_a
+    if _is_scalar_like(input_tensor_a) and not _is_scalar_like(input_tensor_b):
+        return input_tensor_b
+    return input_tensor_a
 
 
 def _matched_operands(input_tensor_a, input_tensor_b, reference):

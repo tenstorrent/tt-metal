@@ -815,21 +815,41 @@ def test_scalar_tensor_golden_matches_device(device, op_name, ttnn_dtype, torch_
         assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
 
 
-@pytest.mark.parametrize("op_name", ("add", "subtract", "multiply", "div"))
-def test_scalar_tensor_comparison_mode_validates(device, op_name):
+@pytest.mark.parametrize(
+    "op_name",
+    (
+        "add",
+        "subtract",
+        "multiply",
+        # Comparison mode never grades scalar-first div: no threshold, however impossible, fails
+        # it. That is not this PR's doing -- tensor-tensor add and div skip grading on main too --
+        # so it is marked strict, to fail the day div starts being compared and this can go.
+        pytest.param("div", marks=pytest.mark.xfail(strict=True, reason="scalar-first div is not graded")),
+    ),
+)
+def test_scalar_tensor_comparison_mode_validates(device, op_name, expect_error):
     """Comparison mode must actually grade a scalar-first call, not skip it. A golden that raises
     is caught at decorators.py and downgraded to a warning, so the op looks validated while it is
     not; comparison_mode_should_raise_exception turns that silence into a failure.
 
     The threshold is relaxed from the 0.9999 default because bf16 add and subtract miss it against
     their goldens for tensor-first calls too -- a pre-existing tolerance gap this test is not
-    about. What is asserted here is that the comparison runs at all."""
+    about. What is asserted here is that the comparison runs at all, which only means something
+    once a threshold the call cannot meet is shown to fail it."""
     torch.manual_seed(0)
     torch_input = torch.rand((1, 1, 320, 384), dtype=torch.bfloat16) + 0.5
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    with ttnn.manage_config("enable_comparison_mode", True), ttnn.manage_config("comparison_mode_pcc", 0.99):
-        with ttnn.manage_config("comparison_mode_should_raise_exception", True):
+    with ttnn.manage_config("enable_comparison_mode", True), ttnn.manage_config(
+        "comparison_mode_should_raise_exception", True
+    ):
+        # An unreachable threshold first: if this does not raise, the comparison never ran and the
+        # 0.99 call below would pass for the same reason, proving nothing.
+        with ttnn.manage_config("comparison_mode_pcc", 1.0):
+            with expect_error(RuntimeError, "Comparing output tensor 0 against CPU locally failed"):
+                getattr(ttnn, op_name)(3.14, input_tensor)
+
+        with ttnn.manage_config("comparison_mode_pcc", 0.99):
             getattr(ttnn, op_name)(3.14, input_tensor)
 
 
@@ -877,6 +897,36 @@ def test_scalar_tensor_div_rounding_golden_matches_device(device, rounding_mode,
         assert_equal(expected, output)
 
 
+@pytest.mark.parametrize("rounding_mode", ("trunc", "floor"))
+@pytest.mark.parametrize("scalar_first", (True, False))
+def test_zero_dim_float_tensor_promotes_like_a_python_float(device, rounding_mode, scalar_first):
+    """_has_float_scalar reads a 0-d tensor's dtype to decide whether to promote its INT32 partner,
+    which is only correct if the device promotes for a 0-d operand the same way it does for a
+    Python float. On device that is a tensor-tensor call, so nothing about the scalar overloads
+    guarantees it."""
+    torch.manual_seed(0)
+    torch_input = torch.randint(1, 100, (1, 1, 320, 384), dtype=torch.int32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    torch_scalar = torch.tensor(2.5, dtype=torch.float32)
+    scalar_tensor = ttnn.from_torch(torch_scalar, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    golden_args = (torch_scalar, torch_input) if scalar_first else (torch_input, torch_scalar)
+    device_args = (scalar_tensor, input_tensor) if scalar_first else (input_tensor, scalar_tensor)
+    expected = ttnn.get_golden_function(ttnn.div)(*golden_args, rounding_mode=rounding_mode)
+    output = ttnn.to_torch(ttnn.div(*device_args, rounding_mode=rounding_mode))
+
+    assert expected.dtype == output.dtype, f"golden {expected.dtype} != device {output.dtype}"
+    assert_equal(expected, output)
+
+
+def test_tensor_operand_keeps_a_dtype_when_neither_operand_is_shaped():
+    """A 0-d tensor against a Python number leaves no shaped operand, and the dtype-dependent
+    branches still dereference whichever one is returned."""
+    golden = ttnn.get_golden_function(ttnn.add)
+
+    assert_equal(golden(torch.tensor(3, dtype=torch.int32), 2), torch.tensor(5, dtype=torch.int32))
+
+
 @pytest.mark.parametrize("op_name", ("add", "subtract", "multiply"))
 @pytest.mark.parametrize(
     "ttnn_dtype, torch_dtype, bit_width, scalar",
@@ -886,6 +936,14 @@ def test_scalar_tensor_div_rounding_golden_matches_device(device, rounding_mode,
         # above 2**24 would be rounded to the nearest float32 and the rounding, not the wrap,
         # would decide the result. 2**32 + 512 lands on a float32 boundary exactly.
         (ttnn.uint32, torch.uint32, 32, (1 << 32) + 512),
+        # A negative scalar reaches the operand width through a float-to-unsigned conversion whose
+        # truncated value is out of range, which C++ leaves undefined rather than defining as
+        # modulo. Both widths are measured to wrap here, so the golden matches what the hardware
+        # does; it is not a guarantee the standard makes.
+        (ttnn.uint16, torch.uint16, 16, -2.5),
+        (ttnn.uint32, torch.uint32, 32, -2.5),
+        (ttnn.uint16, torch.uint16, 16, -2),
+        (ttnn.uint32, torch.uint32, 32, -2),
     ),
 )
 def test_scalar_tensor_unsigned_out_of_range_scalar(device, op_name, ttnn_dtype, torch_dtype, bit_width, scalar):
