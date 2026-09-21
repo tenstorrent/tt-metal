@@ -126,6 +126,9 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_cyclic_sdpa_fw/ring_cyclic_sdpa_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_cyclic_sdpa_fw/device/ring_cyclic_sdpa_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_cyclic_sdpa_fw/device/ring_cyclic_sdpa_fw_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_shift_fused/ring_shift_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_shift_fused/device/ring_shift_fused_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_shift_fused/device/ring_shift_fused_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_cyclic_sdpa_bw/ring_cyclic_sdpa_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_cyclic_sdpa_bw/device/ring_cyclic_sdpa_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_cyclic_sdpa_bw/device/ring_cyclic_sdpa_bw_program_factory.cpp

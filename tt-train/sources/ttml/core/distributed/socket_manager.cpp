@@ -157,6 +157,13 @@ ttnn::Tensor SocketManager::recv_direct(
     return tensor;
 }
 
+std::pair<const tt::tt_metal::distributed::MeshSocket&, const tt::tt_metal::distributed::MeshSocket&>
+SocketManager::direct_socket_pair(
+    const InterHostParameters& inter_host_params, const IntraMeshParameters& intra_mesh_params) {
+    auto& pair = get_direct_socket(inter_host_params, intra_mesh_params);
+    return {pair.send_socket, pair.recv_socket};
+}
+
 SocketManager::DirectSocketPair& SocketManager::get_direct_socket(
     const InterHostParameters& inter_host_params, const IntraMeshParameters& intra_mesh_params) {
     TT_FATAL(
