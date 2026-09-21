@@ -23,8 +23,9 @@ struct MergedKernelSources {
 // The grid rendezvous the union kernels run between the passes, in NoC coordinates the merge
 // cannot derive on its own (it has no device to map logical cores through).
 //
-// `shared_semaphore_count` is how many ids the master zeroes before releasing; the barrier's own
-// id sits above them and must survive.
+// `shared_semaphore_count` is how many ids the master zeroes before releasing: pass B's own id
+// span, not the union of both halves'. Pass A's higher ids are never read again, and the
+// barrier's own id sits above everything and must survive.
 struct PassBarrierPlan {
     tt::tt_metal::CoreCoord master_logical;
     uint32_t master_noc_x = 0;

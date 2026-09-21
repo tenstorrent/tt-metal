@@ -406,7 +406,10 @@ tt::tt_metal::ProgramDescriptor merge_halves(
             /*is_coordinator_kernel=*/role ==
                 KernelDescriptor::ConfigDescriptor(tt::tt_metal::ReaderConfigDescriptor{}).index(),
             report.barrier_semaphore_id,
-            /*shared_semaphore_count=*/report.barrier_semaphore_id,
+            // Only what pass B can read. Its ids run 0..n-1 from its own counter, so its count is
+            // the whole span; anything above that belongs to pass A alone, which has finished by
+            // the time the master zeroes -- a stale value there is unobservable.
+            /*shared_semaphore_count=*/static_cast<uint32_t>(unified.semaphores.size()),
             *bases_it->second));
     }
     return merged;

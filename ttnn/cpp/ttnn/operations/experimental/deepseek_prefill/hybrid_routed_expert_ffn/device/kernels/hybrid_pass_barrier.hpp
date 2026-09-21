@@ -19,9 +19,10 @@
 // implicitly: compute's first pass-B action that touches shared L1 is packing an output, which
 // cannot happen until it has inputs, and those only arrive from a reader already past the barrier.
 //
-// The master also ZEROES the shared semaphore block before releasing. Pass A leaves those ids at
+// The master also ZEROES the semaphore ids pass B reads, before releasing. Pass A leaves them at
 // arbitrary values and pass B's waits assume they start at zero; doing it from the master, before
-// the release, means no core can observe a half-reset block.
+// the release, means no core can observe a half-reset block. Ids above pass B's own span belong
+// to pass A alone, which has finished -- a stale value there is never read again.
 
 #pragma once
 
