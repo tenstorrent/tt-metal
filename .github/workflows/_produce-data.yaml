@@ -43,7 +43,6 @@ on:
       - "(Single-card) Device perf regressions"
       - "(Single-card) Demo tests"
       - "(Single-card) Frequent model and ttnn tests"
-      - "(Single) Choose your pipeline"
       - "(T3K) T3000 demo tests"
       - "(T3K) T3000 integration tests"
       - "(T3K) T3000 perf tests"
