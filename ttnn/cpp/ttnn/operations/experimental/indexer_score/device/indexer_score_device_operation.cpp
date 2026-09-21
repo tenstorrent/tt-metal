@@ -548,6 +548,9 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
                     ttnn::operations::ccl::common::has_row_major_mesh_coordinates(w) &&
                     ttnn::operations::ccl::common::has_row_major_mesh_coordinates(kl),
                 "indexer_score fused full-mesh mode requires row-major tensor coordinates");
+            TT_FATAL(
+                is_replicated_across_complete_mesh(k),
+                "indexer_score fused full-mesh mode requires complete-mesh replicated gathered K");
             // Extents, not placements. A sharded activation can carry a shard dim naming the axis it was
             // created on rather than the one its rows now sit on, which makes a placement-derived factor
             // under-count; the distribution itself is the caller's contract, checked by coordinates above.
@@ -564,9 +567,6 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
                 "extent; got {} and {}",
                 q.logical_shape()[2],
                 w.logical_shape()[2]);
-            TT_FATAL(
-                is_replicated_across_complete_mesh(k),
-                "indexer_score fused full-mesh mode requires complete-mesh replicated gathered K");
             // Linear here is a full-mesh open path: same walk, no closing edge.
             TT_FATAL(
                 fused.topology == ttnn::ccl::Topology::Ring || fused.topology == ttnn::ccl::Topology::Linear,
@@ -1228,6 +1228,10 @@ ttnn::Tensor ring_indexer_score_dsa(
                 ttnn::operations::ccl::common::has_row_major_mesh_coordinates(k_local),
             "ring_indexer_score_dsa cluster_axis=None requires row-major mesh coordinates for Q, K, weights, and "
             "K-local");
+        TT_FATAL(
+            ttnn::operations::experimental::indexer_score::is_replicated_across_complete_mesh(k),
+            "ring_indexer_score_dsa cluster_axis=None requires the persistent gathered K buffer replicated "
+            "across the complete mesh");
         // Extents, not placements: see the matching check in the program factory. Row-major coordinates
         // above pin the device ORDER the snake walks; these pin the per-device sequence EXTENT.
         TT_FATAL(
@@ -1243,10 +1247,6 @@ ttnn::Tensor ring_indexer_score_dsa(
             "extent; got {} and {}",
             q.logical_shape()[2],
             weights.logical_shape()[2]);
-        TT_FATAL(
-            ttnn::operations::experimental::indexer_score::is_replicated_across_complete_mesh(k),
-            "ring_indexer_score_dsa cluster_axis=None requires the persistent gathered K buffer replicated "
-            "across the complete mesh");
         const auto fabric_config = tt::tt_fabric::GetFabricConfig();
         // A full mesh is gathered as one snake across both axes, which only a 2D fabric can route.
         TT_FATAL(
