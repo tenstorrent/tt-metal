@@ -33,6 +33,7 @@ from loguru import logger
 import ttnn
 
 from ....pipelines.minimax_h3.vsa_geometry import VSA_TILE_TOKENS, MiniMaxH3VSAGeometry
+from ....utils.matmul import get_sdpa_core_grid
 from ....utils.tensor import from_torch
 
 VSA_INDEX_SENTINEL = 0xFFFFFFFF
@@ -268,7 +269,7 @@ class MiniMaxH3VSACoarseStage:
         key = (m, k, n)
         cache = self.__dict__.setdefault("_pool_cfg", {})
         if key not in cache:
-            grid = self.mesh_device.compute_with_storage_grid_size()
+            grid = get_sdpa_core_grid(self.mesh_device)
             m_tiles, n_tiles, k_tiles = m // 32, n // 32, k // 32
             if min(m_tiles, n_tiles, k_tiles) == 0:  # sub-tile shapes (tiny tests): default matmul config
                 cache[key] = None
@@ -373,7 +374,7 @@ class MiniMaxH3VSACoarseStage:
             probs = ttnn.softmax(scores, dim=-1)
             # batched [H, slots, cols] @ [H, cols, d]: the default config ran on 32 cores (0.62 ms at
             # 15 s); splitting batch x M over the grid with 2 M-tiles per core measured 0.13 ms
-            grid = self.mesh_device.compute_with_storage_grid_size()
+            grid = get_sdpa_core_grid(self.mesh_device)
             m_tiles, n_tiles, k_tiles = probs.shape[2] // 32, v_c_g.shape[3] // 32, probs.shape[3] // 32
             o_c_cfg = ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=(grid.x, grid.y),

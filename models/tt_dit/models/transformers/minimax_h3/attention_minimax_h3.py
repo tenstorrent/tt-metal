@@ -17,6 +17,7 @@ from ....layers.module import Module, is_preparing_for_routing
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils.matmul import get_sdpa_core_grid
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
@@ -371,9 +372,7 @@ class MiniMaxH3Attention(Module):
             else:
                 q_chunk = max(tile, min(256, (seq_local // tile) * tile))
                 k_chunk = max(tile, min(512, (seq_local // tile) * tile))
-            grid = (
-                ttnn.CoreCoord(*self.sdpa_worker_grid) if ring else ttnn.CoreCoord(self.full_grid.x, self.full_grid.y)
-            )
+            grid = ttnn.CoreCoord(*self.sdpa_worker_grid) if ring else get_sdpa_core_grid(self.mesh_device)
             self._sdpa_program_configs[key] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=grid,
                 q_chunk_size=q_chunk,
@@ -483,7 +482,12 @@ class MiniMaxH3Attention(Module):
         tile = ttnn.TILE_SIZE
         rows = self.full_grid.y
         best = None
-        for cols in range(self.full_grid.x - 1, 1, -1):
+        # `cols + 1` is the grid this returns, so the widest column count is one below the
+        # rail cap's x -- not one below the device's. Rows are left alone: head segmentation
+        # is fitted to them (`passes = ceil(n_local_heads * segs / rows)`), so the cap is
+        # taken out of the columns.
+        max_cols = min(self.full_grid.x, get_sdpa_core_grid(self.mesh_device).x) - 1
+        for cols in range(max_cols, 1, -1):
             for segs in (1, 2, 3):
                 chunks = cols * segs
                 q_chunk = math.ceil(math.ceil(seq_local / chunks) / tile) * tile
