@@ -1041,3 +1041,25 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, error_msg, 
         assert torch.allclose(
             torch_result, ttnn_result, atol=atol, rtol=rtol, equal_nan=True
         ), f"torch: {torch_result}, ttnn: {ttnn_result}"
+
+
+@pytest.mark.parametrize("op_name", ["sum", "mean", "max", "min", "var", "std"])
+@pytest.mark.parametrize("scalar", [2.0, 0.5, -2.0])
+def test_generic_reduction_golden_applies_scalar(op_name, scalar):
+    # Regression for #57115: the registered golden for sum/mean/max/min/std/var used to drop
+    # `scalar` entirely (absorbed by `**_`), so it always returned the unscaled torch reduction
+    # while the device applies `scalar` as a pre-multiply (generic_reductions.cpp). Host-only:
+    # this pins the golden function itself, not the device kernel.
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, 32, 32, dtype=torch.float32)
+    scaled = x * scalar
+    expected = getattr(torch, op_name)(scaled, dim=-1, keepdim=False)
+    if op_name in ("max", "min"):
+        expected = expected.values  # torch.max/min with dim= returns a (values, indices) namedtuple
+
+    golden_function = ttnn.get_golden_function(getattr(ttnn, op_name))
+    golden = golden_function(x, dim=-1, keepdim=False, scalar=scalar)
+    if op_name in ("max", "min"):
+        golden = golden.values
+
+    torch.testing.assert_close(golden, expected)
