@@ -558,6 +558,15 @@ void process_write_linear(uint32_t num_mcast_dests) {
         cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
     }
 
+#ifdef ARCH_BLACKHOLE
+    // init_state just programmed MID from dst_addr. Carry that forward so each chunk knows what the register
+    // already holds and only rewrites it on a real 4GB carry, rather than reprogramming it every chunk.
+    uint32_t mid_shadow = (uint32_t)(dst_addr >> 32);
+    uint32_t* const mid_shadow_arg = &mid_shadow;
+#else
+    uint32_t* const mid_shadow_arg = nullptr;
+#endif
+
     while (length != 0) {
         // Transfer size is min(remaining_length, data_available_in_cb)
 #if defined(FABRIC_RELAY)
@@ -574,12 +583,17 @@ void process_write_linear(uint32_t num_mcast_dests) {
             } else {
                 cq_noc_async_wwrite_init_state<CQ_NOC_sNDl, false>(0, dst_noc, dst_addr);
             }
+#ifdef ARCH_BLACKHOLE
+            // The re-init reprogrammed MID from the current dst_addr.
+            mid_shadow = (uint32_t)(dst_addr >> 32);
+#endif
         }
 #else
         uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
         uint32_t xfer_size = length > available_data ? available_data : length;
 #endif
-        cq_noc_async_write_with_state_any_len(static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_mcast_dests);
+        cq_noc_async_write_with_state_any_len(
+            static_cast<uint32_t>(data_ptr), dst_addr, xfer_size, num_mcast_dests, noc_index, mid_shadow_arg);
         // Increment counters based on the number of packets that were written
         uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
         noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
@@ -587,11 +601,6 @@ void process_write_linear(uint32_t num_mcast_dests) {
         length -= xfer_size;
         data_ptr += xfer_size;
         dst_addr += xfer_size;
-#ifdef ARCH_BLACKHOLE
-        // This loop advances the destination between calls, and the call above leaves MID describing its own
-        // last burst, so reprogram it for the address the next call starts from.
-        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32));
-#endif
     }
 
     // Clear the host address bits a pinned destination leaves in RET_ADDR_MID. On-chip writes sharing the
