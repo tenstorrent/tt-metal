@@ -404,8 +404,11 @@ class QwenGenerator(Generator):
             length, start = prompt_lens[0], starts[0]
             if not 1 <= length <= tokens.shape[-1] or start < 0 or start + length > kv_cache.capacity:
                 raise ValueError("Invalid batched prompt length or prefix")
-            for offset in range(0, length, 4096):
-                count = min(4096, length - offset)
+            chunk_size = getattr(self, "batched_prefill_chunk_size", 4096)
+            if chunk_size < 32 or chunk_size % 32:
+                raise ValueError("Batched prefill chunk size must be a positive multiple of 32")
+            for offset in range(0, length, chunk_size):
+                count = min(chunk_size, length - offset)
                 ids = self.model.upload(
                     tokens[:, offset : offset + count].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
                 )

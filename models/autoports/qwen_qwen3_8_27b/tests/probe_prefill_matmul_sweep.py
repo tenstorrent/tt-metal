@@ -16,6 +16,11 @@ from models.autoports.qwen_qwen3_8_27b.tt.precision import decoder_policy
 
 VARIANTS = {
     "baseline": {},
+    "flat_projections": dict(flatten_prefill_batch=True),
+    "batched_cache_fill": dict(batched_prefill_cache_fill=True),
+    "chunk2048": dict(batched_prefill_chunk_size=2048),
+    "chunk8192": dict(batched_prefill_chunk_size=8192),
+    "chunk8192_inner": dict(batched_prefill_chunk_size=8192, chunk_size=8192),
     "compact_head": dict(prefill_compact_head=True),
     "batched_head": dict(prefill_batched_head=True),
     "skip_intermediate_head": dict(skip_intermediate_prefill_head=True),
@@ -67,20 +72,24 @@ def main():
     parser.add_argument("--full", action="store_true")
     parser.add_argument("--load-fused-mlp", action="store_true")
     parser.add_argument("--load-sharded-prefill", action="store_true")
+    parser.add_argument(
+        "--base-best", action="store_true", help="Start every arm with norm-preserving layout and heads"
+    )
+    parser.add_argument("--check-state", action="store_true", help="Compare all cache/state elements outside timing")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     torch.set_num_threads(8)
     configure_fabric()
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=134217728)
     gen = None
-    report = dict(batch=args.batch, length=args.length, full=args.full, rows=[])
+    report = dict(batch=args.batch, length=args.length, full=args.full, base_best=args.base_best, rows=[])
     try:
 
         def policy(precision, layer):
             return {
                 **decoder_policy(precision, layer),
                 "minimal_mlp": args.load_fused_mlp,
-                "prefill_sharded_residual": args.load_sharded_prefill,
+                "prefill_sharded_residual": args.load_sharded_prefill or args.base_best,
             }
 
         with patch("models.autoports.qwen_qwen3_8_27b.tt.model.decoder_policy", side_effect=policy):
@@ -95,13 +104,29 @@ def main():
         tokens = (torch.arange(args.length) % 256 + 100).repeat(args.batch, 1)
         tokens += torch.arange(args.batch)[:, None] * 13
         reference = None
+        reference_state = None
         for name in args.variants.split(","):
-            gen.model.prefill_sharded_residual = VARIANTS[name].get("prefill_sharded_residual", False)
-            gen.model.prefill_compact_head = VARIANTS[name].get("prefill_compact_head", False)
-            gen.model.prefill_batched_head = VARIANTS[name].get("prefill_batched_head", False)
-            gen.skip_intermediate_prefill_head = VARIANTS[name].get("skip_intermediate_prefill_head", False)
+            variant = {
+                **(
+                    dict(
+                        prefill_sharded_residual=True,
+                        prefill_replicated_norm=True,
+                        prefill_batched_head=True,
+                        skip_intermediate_prefill_head=True,
+                    )
+                    if args.base_best
+                    else {}
+                ),
+                **VARIANTS[name],
+            }
+            gen.model.prefill_sharded_residual = variant.get("prefill_sharded_residual", False)
+            gen.model.prefill_compact_head = variant.get("prefill_compact_head", False)
+            gen.model.prefill_batched_head = variant.get("prefill_batched_head", False)
+            gen.skip_intermediate_prefill_head = variant.get("skip_intermediate_prefill_head", False)
+            gen.batched_prefill_chunk_size = variant.get("batched_prefill_chunk_size", 4096)
             for layer, baseline in zip(gen.model.layers, policies):
-                layer.policy = {**baseline, **VARIANTS[name]}
+                layer.policy = {**baseline, **variant}
+                layer.CHUNK_SIZE = layer.policy["chunk_size"]
             for repeat in range(3):
                 gen.reset()
                 ttnn.synchronize_device(mesh)
@@ -123,6 +148,20 @@ def main():
                     exact=torch.equal(actual, reference),
                     top1_equal=torch.equal(actual.argmax(-1), reference.argmax(-1)),
                 )
+                if args.check_state:
+                    state = {
+                        f"{i}.{field}": ttnn.to_torch(
+                            tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)
+                        ).clone()
+                        for i, layer_state in enumerate(cache.layers)
+                        for field in ("key", "value", "conv", "recurrent")
+                        if (tensor := getattr(layer_state, field, None)) is not None
+                    }
+                    if reference_state is None:
+                        reference_state = state
+                    row["state_exact"] = {
+                        name: torch.equal(tensor, reference_state[name]) for name, tensor in state.items()
+                    }
                 report["rows"].append(row)
                 args.output.write_text(json.dumps(report, indent=2) + "\n")
                 print("PREFILL_MATMUL_SWEEP", json.dumps(row), flush=True)

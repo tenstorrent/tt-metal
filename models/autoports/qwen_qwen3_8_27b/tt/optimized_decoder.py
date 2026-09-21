@@ -796,14 +796,41 @@ class OptimizedDecoder(LightweightModule):
             k_chunk //= 2
         outputs = []
         grouped_sdpa = b > 1 and self.policy.get("batched_prefill_sdpa", False)
+        grouped_fill = b > 1 and self.policy.get("batched_prefill_cache_fill", False)
+        if grouped_fill:
+            indices = getattr(self, "_prefill_batch_indices", {})
+            if b not in indices:
+                indices[b] = ttnn.reshape(
+                    ttnn.arange(
+                        0,
+                        b,
+                        1,
+                        device=self.device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    ),
+                    [b],
+                )
+                self._prefill_batch_indices = indices
+            chunk_table = page_table[
+                :, start_pos // self.PAGE_SIZE : (start_pos + t + self.PAGE_SIZE - 1) // self.PAGE_SIZE
+            ]
+            for cache, update in ((state.key, k), (state.value, v)):
+                if update.dtype != cache.dtype:
+                    update = ttnn.typecast(update, cache.dtype)
+                ttnn.experimental.paged_fill_cache(cache, update, chunk_table, batch_idx_tensor=indices[b])
         for user in range(b):
             table = page_table[user : user + 1, :]
-            chunk_table = table[:, start_pos // self.PAGE_SIZE : (start_pos + t + self.PAGE_SIZE - 1) // self.PAGE_SIZE]
-            for cache, update in ((state.key, k), (state.value, v)):
-                part = update[user : user + 1, :, :, :]
-                if part.dtype != cache.dtype:
-                    part = ttnn.typecast(part, cache.dtype)
-                ttnn.experimental.paged_fill_cache(cache, part, chunk_table, batch_idx=0)
+            if not grouped_fill:
+                chunk_table = table[
+                    :, start_pos // self.PAGE_SIZE : (start_pos + t + self.PAGE_SIZE - 1) // self.PAGE_SIZE
+                ]
+                for cache, update in ((state.key, k), (state.value, v)):
+                    part = update[user : user + 1, :, :, :]
+                    if part.dtype != cache.dtype:
+                        part = ttnn.typecast(part, cache.dtype)
+                    ttnn.experimental.paged_fill_cache(cache, part, chunk_table, batch_idx=0)
             if grouped_sdpa:
                 continue
             outputs.append(
