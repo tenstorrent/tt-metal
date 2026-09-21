@@ -1,0 +1,427 @@
+(venv) uvelimirovic@tensix-l-06-special-uvelimirovic-for-reservation-197086:/localdev/uvelimirovic/tt-metal$ cd /localdev/uvelimirovic/tt-metal
+TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 \
+TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=1333 \
+./build/test/tt_metal/unit_tests_data_movement \
+  --gtest_filter="*QuasarNarrowRowUntilize.EngineComparison*:*QuasarNarrowRowUntilize.ChannelSweep*" \
+  2>&1 | tee /tmp/engines.log
+
+python3 tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/report_narrow_row_from_csv.py
+Running main() from gmock_main.cc
+Note: Google Test filter = *QuasarNarrowRowUntilize.EngineComparison*:*QuasarNarrowRowUntilize.ChannelSweep*
+[==========] Running 2 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 2 tests from QuasarNarrowRowUntilize
+[ RUN      ] QuasarNarrowRowUntilize.EngineComparison
+2026-09-21 15:06:41.071 | info     |           Metal | Disabling multi-erisc mode with simulator/emule target device (rtoptions.cpp:393)
+2026-09-21 15:06:41.071 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:223)
+2026-09-21 15:06:41.072 | info     |             UMD | Cluster constructor started. (cluster.cpp:408)
+2026-09-21 15:06:41.072 | info     |             UMD | Creating Simulation device (cluster.cpp:285)
+2026-09-21 15:06:41.072 | info     | EmulationDriver | Instantiating RTL simulation device (simulation_device_factory.cpp:33)
+2026-09-21 15:06:41.072 | info     | EmulationDriver | Instantiating RTL simulation TTDevice (rtl_simulation_tt_device.cpp:99)
+2026-09-21 15:06:41.072 | info     | EmulationDriver | Initializing RTL simulation communicator (rtl_sim_communicator.cpp:88)
+2026-09-21 15:06:41.072 | info     | EmulationDriver | Using specified NNG_SOCKET_LOCAL_PORT: 5555 (simulation_host.cpp:63)
+2026-09-21 15:06:41.072 | info     | EmulationDriver | Listening on: tcp://tensix-l-06-special-uvelimirovic-for-reservation-197086:5555 (simulation_host.cpp:89)
+2026-09-21 15:06:41.079 | info     | EmulationDriver | Simulator process spawned with PID: 2937886 (rtl_sim_communicator.cpp:117)
+2026-09-21 15:06:41.079 | info     | EmulationDriver | Server started, waiting for client to connect... (simulation_host.cpp:111)
+2026-09-21 15:06:41.079 | info     | EmulationDriver | Waiting for ack msg from remote... (rtl_sim_communicator.cpp:127)
+2026-09-21 15:07:24.962 | info     | EmulationDriver | Starting notification handler thread. (rtl_sim_communicator.cpp:136)
+2026-09-21 15:07:24.962 | info     | EmulationDriver | Notification handler thread started. (rtl_sim_communicator.cpp:327)
+2026-09-21 15:07:24.962 | info     |             UMD | Cluster constructor completed. (cluster.cpp:683)
+2026-09-21 15:07:24.963 | info     |             UMD | Starting devices in cluster (cluster.cpp:1289)
+2026-09-21 15:07:24.963 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1297)
+2026-09-21 15:07:25.059 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:436)
+2026-09-21 15:07:25.059 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:498)
+2026-09-21 15:07:25.060 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:3190)
+2026-09-21 15:07:25.060 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:3198)
+2026-09-21 15:07:25.497 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-09-21 15:07:25.546 | info     |           Metal | DFB size: 736 (tt_metal.cpp:1215)
+2026-09-21 15:07:25.546 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 736 (tt_metal.cpp:1231)
+2026-09-21 15:07:26.023 | info     |            Test | ct_dim=1 last_tile_w=16 matrix_w=16 (32 B/row, padded 64 B/row) engine=iDMA scatter-list ch=1: OK (test_pack_untilize_narrow_row.cpp:428)
+2026-09-21 15:07:26.024 | info     |           Metal | DFB size: 736 (tt_metal.cpp:1215)
+2026-09-21 15:07:26.024 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 736 (tt_metal.cpp:1231)
+2026-09-21 15:07:26.509 | info     |            Test | ct_dim=1 last_tile_w=16 matrix_w=16 (32 B/row, padded 64 B/row) engine=iDMA per-row ch=1: OK (test_pack_untilize_narrow_row.cpp:428)
+2026-09-21 15:07:26.511 | info     |           Metal | DFB size: 736 (tt_metal.cpp:1215)
+2026-09-21 15:07:26.511 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 736 (tt_metal.cpp:1231)
+2026-09-21 15:07:27.100 | info     |            Test | ct_dim=1 last_tile_w=16 matrix_w=16 (32 B/row, padded 64 B/row) engine=NOC per-row ch=1: OK (test_pack_untilize_narrow_row.cpp:428)
+Building trisc0, compile step:
+/localdev/uvelimirovic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-qsr32-tensix -fno-extern-tls-init -ftls-model=local-exec -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/uvelimirovic/tt-metal/ -I/localdev/uvelimirovic/tt-metal/ttnn -I/localdev/uvelimirovic/tt-metal/ttnn/cpp -I/localdev/uvelimirovic/tt-metal/tt_metal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/common -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tools/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/uvelimirovic/tt-metal/tt_metal/api/ -I/localdev/uvelimirovic/tt-metal/runtime/sfpi/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/common -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_io -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/noc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/common/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/ -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/llk_lib -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx -I/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels -include /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache/pch/65354b1ce5b7bbb9/pch.h -DLOG_BASE_2_OF_NUM_DRAM_BANKS=0 -DLOG_BASE_2_OF_NUM_L1_BANKS=0 -DNUM_DRAM_BANKS=1 -DNUM_L1_BANKS=1 -DPCIE_NOC_X=1 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=63984 -DROUTING_FW_ENABLED -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_QUASAR -DNOC_API_V2 -DDISPATCH_MESSAGE_ADDR=315232 -DKERNEL_BUILD -DFULL_KERNEL_NAME="narrow_row_untilize_compute/7315975171744617894/" -include named_ct_arg_map_generated.h -c -o /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/7315975171744617894/trisc0/trisck.4972590122237937456_2937851.o /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc -MF /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/7315975171744617894/trisc0/trisck.4972590122237937456_2937851.d
+In file included from /localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_io/llk_io_unpack.h:8,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer.inl:15,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_buffer.h:494,
+                 from ../kernel_bindings_generated.h:6,
+                 from ../chlkc_unpack.cpp:2,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/common/chlkc_list.h:25,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:14:
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc,109,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1046:5: note: in expansion of macro 'DO_PRAGMA'
+ 1046 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:109:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+  109 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/localdev/uvelimirovic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-qsr32-tensix -fno-extern-tls-init -ftls-model=local-exec -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/uvelimirovic/tt-metal/ -I/localdev/uvelimirovic/tt-metal/ttnn -I/localdev/uvelimirovic/tt-metal/ttnn/cpp -I/localdev/uvelimirovic/tt-metal/tt_metal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/common -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tools/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/uvelimirovic/tt-metal/tt_metal/api/ -I/localdev/uvelimirovic/tt-metal/runtime/sfpi/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/common -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_io -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/noc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/common/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/ -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/llk_lib -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx -I/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels -include /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache/pch/65354b1ce5b7bbb9/pch.h -DLOG_BASE_2_OF_NUM_DRAM_BANKS=0 -DLOG_BASE_2_OF_NUM_L1_BANKS=0 -DNUM_DRAM_BANKS=1 -DNUM_L1_BANKS=1 -DPCIE_NOC_X=1 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=63984 -DROUTING_FW_ENABLED -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_QUASAR -DNOC_API_V2 -DDISPATCH_MESSAGE_ADDR=315232 -DKERNEL_BUILD -DFULL_KERNEL_NAME="narrow_row_untilize_compute/7315975171744617894/" -include named_ct_arg_map_generated.h -c -o /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/7315975171744617894/trisc1/trisck.4972590122237937456_2937851.o /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc -MF /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/7315975171744617894/trisc1/trisck.4972590122237937456_2937851.d
+In file included from /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:16:
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc,109,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1046:5: note: in expansion of macro 'DO_PRAGMA'
+ 1046 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:109:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+  109 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/localdev/uvelimirovic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-qsr32-tensix -fno-extern-tls-init -ftls-model=local-exec -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/uvelimirovic/tt-metal/ -I/localdev/uvelimirovic/tt-metal/ttnn -I/localdev/uvelimirovic/tt-metal/ttnn/cpp -I/localdev/uvelimirovic/tt-metal/tt_metal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/common -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tools/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/uvelimirovic/tt-metal/tt_metal/api/ -I/localdev/uvelimirovic/tt-metal/runtime/sfpi/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/common -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_io -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/noc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/common/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/ -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/llk_lib -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx -I/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels -include /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache/pch/65354b1ce5b7bbb9/pch.h -DLOG_BASE_2_OF_NUM_DRAM_BANKS=0 -DLOG_BASE_2_OF_NUM_L1_BANKS=0 -DNUM_DRAM_BANKS=1 -DNUM_L1_BANKS=1 -DPCIE_NOC_X=1 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=63984 -DROUTING_FW_ENABLED -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_QUASAR -DNOC_API_V2 -DDISPATCH_MESSAGE_ADDR=315232 -DKERNEL_BUILD -DFULL_KERNEL_NAME="narrow_row_untilize_compute/7315975171744617894/" -include named_ct_arg_map_generated.h -c -o /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/7315975171744617894/trisc2/trisck.4972590122237937456_2937851.o /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc -MF /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/7315975171744617894/trisc2/trisck.4972590122237937456_2937851.d
+In file included from /localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_io/llk_io_pack.h:8,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer.inl:12,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_buffer.h:494,
+                 from ../kernel_bindings_generated.h:6,
+                 from ../chlkc_pack.cpp:2,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/common/chlkc_list.h:20,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:14:
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp: In function 'void kernel_main()':
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: PACK_UNTILIZE,/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp,62,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:987:5: note: in expansion of macro 'DO_PRAGMA'
+  987 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp:62:9: note: in expansion of macro 'DeviceZoneScopedN'
+   62 |         DeviceZoneScopedN("PACK_UNTILIZE");
+      |         ^~~~~~~~~~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: Test id,/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp,76,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:993:9: note: in expansion of macro 'DO_PRAGMA'
+  993 |         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |         ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp:76:5: note: in expansion of macro 'DeviceTimestampedData'
+   76 |     DeviceTimestampedData("Test id", get_arg(args::test_id));
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: Number of transactions,/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:993:9: note: in expansion of macro 'DO_PRAGMA'
+  993 |         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |         ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp:77:5: note: in expansion of macro 'DeviceTimestampedData'
+   77 |     DeviceTimestampedData("Number of transactions", loop_factor);
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: Tile columns,/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp,78,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:993:9: note: in expansion of macro 'DO_PRAGMA'
+  993 |         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |         ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp:78:5: note: in expansion of macro 'DeviceTimestampedData'
+   78 |     DeviceTimestampedData("Tile columns", CT_DIM);
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc,109,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1046:5: note: in expansion of macro 'DO_PRAGMA'
+ 1046 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:109:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+  109 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc3, compile step:
+/localdev/uvelimirovic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-qsr32-tensix -fno-extern-tls-init -ftls-model=local-exec -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/uvelimirovic/tt-metal/ -I/localdev/uvelimirovic/tt-metal/ttnn -I/localdev/uvelimirovic/tt-metal/ttnn/cpp -I/localdev/uvelimirovic/tt-metal/tt_metal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/common -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tools/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/uvelimirovic/tt-metal/tt_metal/api/ -I/localdev/uvelimirovic/tt-metal/runtime/sfpi/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/common -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_io -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/noc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/common/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/ -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/llk_lib -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx -I/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels -include /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache/pch/65354b1ce5b7bbb9/pch.h -DLOG_BASE_2_OF_NUM_DRAM_BANKS=0 -DLOG_BASE_2_OF_NUM_L1_BANKS=0 -DNUM_DRAM_BANKS=1 -DNUM_L1_BANKS=1 -DPCIE_NOC_X=1 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=63984 -DROUTING_FW_ENABLED -DUCK_CHLKC_ISOLATE_SFPU -DCOMPILE_FOR_TRISC=3 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_QUASAR -DNOC_API_V2 -DDISPATCH_MESSAGE_ADDR=315232 -DKERNEL_BUILD -DFULL_KERNEL_NAME="narrow_row_untilize_compute/7315975171744617894/" -include named_ct_arg_map_generated.h -c -o /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/7315975171744617894/trisc3/trisck.4972590122237937456_2937851.o /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc -MF /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/7315975171744617894/trisc3/trisck.4972590122237937456_2937851.d
+In file included from /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:16:
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc,109,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1046:5: note: in expansion of macro 'DO_PRAGMA'
+ 1046 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:109:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+  109 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-21 15:07:29.485 | info     |           Metal | DFB size: 768 (tt_metal.cpp:1215)
+2026-09-21 15:07:29.485 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 768 (tt_metal.cpp:1231)
+2026-09-21 15:07:30.029 | info     |            Test | ct_dim=4 last_tile_w=16 matrix_w=112 (224 B/row, padded 256 B/row) engine=iDMA scatter-list ch=1: OK (test_pack_untilize_narrow_row.cpp:428)
+2026-09-21 15:07:30.031 | info     |           Metal | DFB size: 768 (tt_metal.cpp:1215)
+2026-09-21 15:07:30.031 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 768 (tt_metal.cpp:1231)
+2026-09-21 15:07:30.567 | error    |            Test | ct_dim=4 last_tile_w=16 matrix_w=112 engine=iDMA scatter-list ch=8: 1680/3584 datums wrong (first at row 1 col 0: expected 0x4080, got 0x4000), 0 guard words clobbered (test_pack_untilize_narrow_row.cpp:416)
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/test_pack_untilize_narrow_row.cpp:564: Failure
+Value of: run_narrow_row( devices_[0], buffers, {.ct_dim = s.ct_dim, .last_tile_w = s.last_tile_w, .engine_mode = engine, .num_channels = CHANNELS_ALL})
+  Actual: false
+Expected: true
+engine=iDMA scatter-list ct_dim=4 ch=8
+2026-09-21 15:07:30.568 | info     |           Metal | DFB size: 768 (tt_metal.cpp:1215)
+2026-09-21 15:07:30.568 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 768 (tt_metal.cpp:1231)
+2026-09-21 15:07:31.137 | info     |            Test | ct_dim=4 last_tile_w=16 matrix_w=112 (224 B/row, padded 256 B/row) engine=iDMA per-row ch=1: OK (test_pack_untilize_narrow_row.cpp:428)
+2026-09-21 15:07:31.139 | info     |           Metal | DFB size: 768 (tt_metal.cpp:1215)
+2026-09-21 15:07:31.139 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 768 (tt_metal.cpp:1231)
+2026-09-21 15:07:31.663 | info     |            Test | ct_dim=4 last_tile_w=16 matrix_w=112 (224 B/row, padded 256 B/row) engine=iDMA per-row ch=8: OK (test_pack_untilize_narrow_row.cpp:428)
+2026-09-21 15:07:31.664 | info     |           Metal | DFB size: 768 (tt_metal.cpp:1215)
+2026-09-21 15:07:31.664 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 768 (tt_metal.cpp:1231)
+2026-09-21 15:07:32.269 | info     |            Test | ct_dim=4 last_tile_w=16 matrix_w=112 (224 B/row, padded 256 B/row) engine=NOC per-row ch=1: OK (test_pack_untilize_narrow_row.cpp:428)
+Building trisc0, compile step:
+/localdev/uvelimirovic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-qsr32-tensix -fno-extern-tls-init -ftls-model=local-exec -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/uvelimirovic/tt-metal/ -I/localdev/uvelimirovic/tt-metal/ttnn -I/localdev/uvelimirovic/tt-metal/ttnn/cpp -I/localdev/uvelimirovic/tt-metal/tt_metal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/common -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tools/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/uvelimirovic/tt-metal/tt_metal/api/ -I/localdev/uvelimirovic/tt-metal/runtime/sfpi/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/common -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_io -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/noc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/common/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/ -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/llk_lib -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx -I/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels -include /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache/pch/65354b1ce5b7bbb9/pch.h -DLOG_BASE_2_OF_NUM_DRAM_BANKS=0 -DLOG_BASE_2_OF_NUM_L1_BANKS=0 -DNUM_DRAM_BANKS=1 -DNUM_L1_BANKS=1 -DPCIE_NOC_X=1 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=63984 -DROUTING_FW_ENABLED -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_QUASAR -DNOC_API_V2 -DDISPATCH_MESSAGE_ADDR=315232 -DKERNEL_BUILD -DFULL_KERNEL_NAME="narrow_row_untilize_compute/16529589777776450058/" -include named_ct_arg_map_generated.h -c -o /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/16529589777776450058/trisc0/trisck.4972590122237937456_2937851.o /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc -MF /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/16529589777776450058/trisc0/trisck.4972590122237937456_2937851.d
+In file included from /localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_io/llk_io_unpack.h:8,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer.inl:15,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_buffer.h:494,
+                 from ../kernel_bindings_generated.h:6,
+                 from ../chlkc_unpack.cpp:2,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/common/chlkc_list.h:25,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:14:
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc,109,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1046:5: note: in expansion of macro 'DO_PRAGMA'
+ 1046 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:109:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+  109 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+/localdev/uvelimirovic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-qsr32-tensix -fno-extern-tls-init -ftls-model=local-exec -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/uvelimirovic/tt-metal/ -I/localdev/uvelimirovic/tt-metal/ttnn -I/localdev/uvelimirovic/tt-metal/ttnn/cpp -I/localdev/uvelimirovic/tt-metal/tt_metal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/common -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tools/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/uvelimirovic/tt-metal/tt_metal/api/ -I/localdev/uvelimirovic/tt-metal/runtime/sfpi/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/common -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_io -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/noc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/common/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/ -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/llk_lib -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx -I/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels -include /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache/pch/65354b1ce5b7bbb9/pch.h -DLOG_BASE_2_OF_NUM_DRAM_BANKS=0 -DLOG_BASE_2_OF_NUM_L1_BANKS=0 -DNUM_DRAM_BANKS=1 -DNUM_L1_BANKS=1 -DPCIE_NOC_X=1 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=63984 -DROUTING_FW_ENABLED -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_QUASAR -DNOC_API_V2 -DDISPATCH_MESSAGE_ADDR=315232 -DKERNEL_BUILD -DFULL_KERNEL_NAME="narrow_row_untilize_compute/16529589777776450058/" -include named_ct_arg_map_generated.h -c -o /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/16529589777776450058/trisc1/trisck.4972590122237937456_2937851.o /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc -MF /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/16529589777776450058/trisc1/trisck.4972590122237937456_2937851.d
+In file included from /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:16:
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc,109,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1046:5: note: in expansion of macro 'DO_PRAGMA'
+ 1046 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:109:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+  109 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+/localdev/uvelimirovic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-qsr32-tensix -fno-extern-tls-init -ftls-model=local-exec -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/uvelimirovic/tt-metal/ -I/localdev/uvelimirovic/tt-metal/ttnn -I/localdev/uvelimirovic/tt-metal/ttnn/cpp -I/localdev/uvelimirovic/tt-metal/tt_metal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/common -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tools/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/uvelimirovic/tt-metal/tt_metal/api/ -I/localdev/uvelimirovic/tt-metal/runtime/sfpi/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/common -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_io -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/noc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/common/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/ -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/llk_lib -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx -I/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels -include /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache/pch/65354b1ce5b7bbb9/pch.h -DLOG_BASE_2_OF_NUM_DRAM_BANKS=0 -DLOG_BASE_2_OF_NUM_L1_BANKS=0 -DNUM_DRAM_BANKS=1 -DNUM_L1_BANKS=1 -DPCIE_NOC_X=1 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=63984 -DROUTING_FW_ENABLED -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_QUASAR -DNOC_API_V2 -DDISPATCH_MESSAGE_ADDR=315232 -DKERNEL_BUILD -DFULL_KERNEL_NAME="narrow_row_untilize_compute/16529589777776450058/" -include named_ct_arg_map_generated.h -c -o /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/16529589777776450058/trisc2/trisck.4972590122237937456_2937851.o /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc -MF /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/16529589777776450058/trisc2/trisck.4972590122237937456_2937851.d
+In file included from /localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_io/llk_io_pack.h:8,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer.inl:12,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_buffer.h:494,
+                 from ../kernel_bindings_generated.h:6,
+                 from ../chlkc_pack.cpp:2,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/common/chlkc_list.h:20,
+                 from /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:14:
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp: In function 'void kernel_main()':
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: PACK_UNTILIZE,/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp,62,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:987:5: note: in expansion of macro 'DO_PRAGMA'
+  987 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp:62:9: note: in expansion of macro 'DeviceZoneScopedN'
+   62 |         DeviceZoneScopedN("PACK_UNTILIZE");
+      |         ^~~~~~~~~~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: Test id,/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp,76,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:993:9: note: in expansion of macro 'DO_PRAGMA'
+  993 |         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |         ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp:76:5: note: in expansion of macro 'DeviceTimestampedData'
+   76 |     DeviceTimestampedData("Test id", get_arg(args::test_id));
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: Number of transactions,/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp,77,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:993:9: note: in expansion of macro 'DO_PRAGMA'
+  993 |         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |         ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp:77:5: note: in expansion of macro 'DeviceTimestampedData'
+   77 |     DeviceTimestampedData("Number of transactions", loop_factor);
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: Tile columns,/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp,78,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:993:9: note: in expansion of macro 'DO_PRAGMA'
+  993 |         DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |         ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels/narrow_row_untilize_compute.cpp:78:5: note: in expansion of macro 'DeviceTimestampedData'
+   78 |     DeviceTimestampedData("Tile columns", CT_DIM);
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc,109,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1046:5: note: in expansion of macro 'DO_PRAGMA'
+ 1046 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:109:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+  109 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc3, compile step:
+/localdev/uvelimirovic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-qsr32-tensix -fno-extern-tls-init -ftls-model=local-exec -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/uvelimirovic/tt-metal/ -I/localdev/uvelimirovic/tt-metal/ttnn -I/localdev/uvelimirovic/tt-metal/ttnn/cpp -I/localdev/uvelimirovic/tt-metal/tt_metal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/common -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tools/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/uvelimirovic/tt-metal/tt_metal/api/ -I/localdev/uvelimirovic/tt-metal/runtime/sfpi/include -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/common -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_io -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/quasar_defines -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/inc/internal/tt-2xx/quasar/noc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/common/inc -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/ -I/localdev/uvelimirovic/tt-metal/tt_metal/tt-llk/tt_llk_quasar/llk_lib -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu -I/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx -I/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/kernels -include /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache/pch/65354b1ce5b7bbb9/pch.h -DLOG_BASE_2_OF_NUM_DRAM_BANKS=0 -DLOG_BASE_2_OF_NUM_L1_BANKS=0 -DNUM_DRAM_BANKS=1 -DNUM_L1_BANKS=1 -DPCIE_NOC_X=1 -DPCIE_NOC_Y=3 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=63984 -DROUTING_FW_ENABLED -DUCK_CHLKC_ISOLATE_SFPU -DCOMPILE_FOR_TRISC=3 -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_QUASAR -DNOC_API_V2 -DDISPATCH_MESSAGE_ADDR=315232 -DKERNEL_BUILD -DFULL_KERNEL_NAME="narrow_row_untilize_compute/16529589777776450058/" -include named_ct_arg_map_generated.h -c -o /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/16529589777776450058/trisc3/trisck.4972590122237937456_2937851.o /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc -MF /localdev/uvelimirovic/.tt-metal-cache/tt-metal-cache6195379787230797049/kernels/narrow_row_untilize_compute/16529589777776450058/trisc3/trisck.4972590122237937456_2937851.d
+In file included from /localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:16:
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:32:22: note: '#pragma message: TRISC-KERNEL,/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc,109,KERNEL_PROFILER'
+   32 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1046:5: note: in expansion of macro 'DO_PRAGMA'
+ 1046 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/uvelimirovic/tt-metal/tt_metal/hw/firmware/src/tt-2xx/trisck.cc:109:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+  109 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-09-21 15:07:34.625 | info     |           Metal | DFB size: 768 (tt_metal.cpp:1215)
+2026-09-21 15:07:34.625 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 768 (tt_metal.cpp:1231)
+2026-09-21 15:07:35.310 | info     |            Test | ct_dim=8 last_tile_w=28 matrix_w=252 (504 B/row, padded 512 B/row) engine=iDMA scatter-list ch=1: OK (test_pack_untilize_narrow_row.cpp:428)
+2026-09-21 15:07:35.311 | info     |           Metal | DFB size: 768 (tt_metal.cpp:1215)
+2026-09-21 15:07:35.311 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 768 (tt_metal.cpp:1231)
+2026-09-21 15:07:35.892 | error    |            Test | ct_dim=8 last_tile_w=28 matrix_w=252 engine=iDMA scatter-list ch=8: 1764/8064 datums wrong (first at row 1 col 0: expected 0x4100, got 0x4000), 0 guard words clobbered (test_pack_untilize_narrow_row.cpp:416)
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/test_pack_untilize_narrow_row.cpp:564: Failure
+Value of: run_narrow_row( devices_[0], buffers, {.ct_dim = s.ct_dim, .last_tile_w = s.last_tile_w, .engine_mode = engine, .num_channels = CHANNELS_ALL})
+  Actual: false
+Expected: true
+engine=iDMA scatter-list ct_dim=8 ch=8
+2026-09-21 15:07:35.893 | info     |           Metal | DFB size: 768 (tt_metal.cpp:1215)
+2026-09-21 15:07:35.893 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 768 (tt_metal.cpp:1231)
+2026-09-21 15:07:36.614 | info     |            Test | ct_dim=8 last_tile_w=28 matrix_w=252 (504 B/row, padded 512 B/row) engine=iDMA per-row ch=1: OK (test_pack_untilize_narrow_row.cpp:428)
+2026-09-21 15:07:36.615 | info     |           Metal | DFB size: 768 (tt_metal.cpp:1215)
+2026-09-21 15:07:36.615 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 768 (tt_metal.cpp:1231)
+2026-09-21 15:07:37.205 | info     |            Test | ct_dim=8 last_tile_w=28 matrix_w=252 (504 B/row, padded 512 B/row) engine=iDMA per-row ch=8: OK (test_pack_untilize_narrow_row.cpp:428)
+2026-09-21 15:07:37.206 | info     |           Metal | DFB size: 768 (tt_metal.cpp:1215)
+2026-09-21 15:07:37.206 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 768 (tt_metal.cpp:1231)
+2026-09-21 15:07:37.870 | info     |            Test | ct_dim=8 last_tile_w=28 matrix_w=252 (504 B/row, padded 512 B/row) engine=NOC per-row ch=1: OK (test_pack_untilize_narrow_row.cpp:428)
+[  FAILED  ] QuasarNarrowRowUntilize.EngineComparison (57038 ms)
+[ RUN      ] QuasarNarrowRowUntilize.ChannelSweep
+2026-09-21 15:07:38.532 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-09-21 15:07:38.536 | info     |           Metal | DFB size: 736 (tt_metal.cpp:1215)
+2026-09-21 15:07:38.536 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 736 (tt_metal.cpp:1231)
+2026-09-21 15:07:39.039 | info     |            Test | ct_dim=1 last_tile_w=16 matrix_w=16 (32 B/row, padded 64 B/row) engine=iDMA scatter-list ch=1: OK (test_pack_untilize_narrow_row.cpp:428)
+2026-09-21 15:07:39.040 | info     |           Metal | DFB size: 736 (tt_metal.cpp:1215)
+2026-09-21 15:07:39.041 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 736 (tt_metal.cpp:1231)
+2026-09-21 15:07:39.532 | error    |            Test | ct_dim=1 last_tile_w=16 matrix_w=16 engine=iDMA scatter-list ch=8: 240/512 datums wrong (first at row 1 col 0: expected 0x4020, got 0x4000), 0 guard words clobbered (test_pack_untilize_narrow_row.cpp:416)
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/test_pack_untilize_narrow_row.cpp:602: Failure
+Value of: run_narrow_row( devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = last_tile_w, .num_channels = CHANNELS_ALL})
+  Actual: false
+Expected: true
+ct_dim=1 ch=8 natural packets
+2026-09-21 15:07:39.533 | info     |           Metal | DFB size: 768 (tt_metal.cpp:1215)
+2026-09-21 15:07:39.533 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 768 (tt_metal.cpp:1231)
+2026-09-21 15:07:40.258 | error    |            Test | ct_dim=8 last_tile_w=28 matrix_w=252 engine=iDMA scatter-list ch=1: 3780/8064 datums wrong (first at row 1 col 0: expected 0x4100, got 0x4000), 0 guard words clobbered (test_pack_untilize_narrow_row.cpp:416)
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/test_pack_untilize_narrow_row.cpp:597: Failure
+Value of: run_narrow_row(devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = last_tile_w})
+  Actual: false
+Expected: true
+ct_dim=8 ch=1
+2026-09-21 15:07:40.260 | info     |           Metal | DFB size: 768 (tt_metal.cpp:1215)
+2026-09-21 15:07:40.260 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 768 (tt_metal.cpp:1231)
+2026-09-21 15:07:40.911 | error    |            Test | ct_dim=8 last_tile_w=28 matrix_w=252 engine=iDMA scatter-list ch=8: 2016/8064 datums wrong (first at row 8 col 0: expected 0x4800, got 0x4000), 0 guard words clobbered (test_pack_untilize_narrow_row.cpp:416)
+/localdev/uvelimirovic/tt-metal/tests/tt_metal/tt_metal/data_movement/quasar_narrow_row/test_pack_untilize_narrow_row.cpp:602: Failure
+Value of: run_narrow_row( devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = last_tile_w, .num_channels = CHANNELS_ALL})
+  Actual: false
+Expected: true
+ct_dim=8 ch=8 natural packets
+2026-09-21 15:07:40.912 | info     |           Metal | DFB size: 768 (tt_metal.cpp:1215)
+2026-09-21 15:07:40.912 | info     |           Metal | Writing DFB config to core 0-1 at addr 0x33c20 (kernel_config_base=0x33bc0, dfb_offset=0x60) size: 768 (tt_metal.cpp:1231)
+2026-09-21 15:07:41.679 | info     |            Test | ct_dim=8 last_tile_w=28 matrix_w=252 (504 B/row, padded 512 B/row) engine=iDMA scatter-list ch=8: OK (test_pack_untilize_narrow_row.cpp:428)
+[  FAILED  ] QuasarNarrowRowUntilize.ChannelSweep (3803 ms)
+[----------] 2 tests from QuasarNarrowRowUntilize (60842 ms total)
+
+[----------] Global test environment tear-down
+[==========] 2 tests from 1 test suite ran. (60842 ms total)
+[  PASSED  ] 0 tests.
+[  FAILED  ] 2 tests, listed below:
+[  FAILED  ] QuasarNarrowRowUntilize.EngineComparison
+[  FAILED  ] QuasarNarrowRowUntilize.ChannelSweep
+
+ 2 FAILED TESTS
+2026-09-21 15:07:41.913 | info     |    BuildKernels | JIT cache stats: 12/20 hits (60.0%) [12 cached, 50 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:268)
+2026-09-21 15:07:41.913 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:325)
+2026-09-21 15:07:41.918 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:519)
+2026-09-21 15:07:41.918 | info     |             UMD | Closing devices in cluster (cluster.cpp:1302)
+2026-09-21 15:07:41.918 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1311)
+2026-09-21 15:07:41.918 | info     |             UMD | Cluster destructor started. (cluster.cpp:1017)
+2026-09-21 15:07:41.918 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1020)
+2026-09-21 15:07:41.918 | info     | EmulationDriver | Stopping notification handler thread. (rtl_sim_communicator.cpp:144)
+2026-09-21 15:07:46.901 | info     | EmulationDriver | Notification handler thread stopped. (rtl_sim_communicator.cpp:374)
+2026-09-21 15:07:46.901 | info     | EmulationDriver | Sending exit signal to remote... (rtl_sim_communicator.cpp:153)
+=== stage 1: HW pack_untilize (PACK_UNTILIZE zone), 18 runs ===
+ ct_dim  passes    cycles  cyc/tile   vs tt-llk 77.4
+      1       1       216     216.0     2.79x
+      1       1       233     233.0     3.01x
+      1       1       233     233.0     3.01x
+      4       1       233      58.2     0.75x
+      4       1       233      58.2     0.75x
+      4       1       233      58.2     0.75x
+      4       1       233      58.2     0.75x
+      4       1       225      56.2     0.73x
+      8       1       233      29.1     0.38x
+      8       1       233      29.1     0.38x
+      8       1       237      29.6     0.38x
+      8       1       233      29.1     0.38x
+      8       1       233      29.1     0.38x
+      1       1       228     228.0     2.95x
+      1       1       233     233.0     3.01x
+      8       1       233      29.1     0.38x
+      8       1       233      29.1     0.38x
+      8       1       233      29.1     0.38x
+
+=== stage 2: row compaction (COMPACT zone), 18 runs ===
+            engine  rows   B/row  packet  ch  iters  cyc/pass  cyc/row   B/cyc
+ iDMA scatter-list    32      32      32   1     16     269.1     8.41    3.80
+      iDMA per-row    32      32      32   1     16     279.6     8.74    3.66
+       NOC per-row    32      32      32   1     16     786.9    24.59    1.30
+ iDMA scatter-list    32     224     224   1     16     538.9    16.84   13.30
+ iDMA scatter-list    32     224     224   8     16     275.5     8.61   26.02
+      iDMA per-row    32     224     224   1     16     538.4    16.82   13.31
+      iDMA per-row    32     224     224   8     16     295.0     9.22   24.30
+       NOC per-row    32     224     224   1     16     782.2    24.45    9.16
+ iDMA scatter-list    32     504     504   1     16    1125.1    35.16   14.33
+ iDMA scatter-list    32     504     504   8     16     302.9     9.46   53.25
+      iDMA per-row    32     504     504   1     16    1120.2    35.01   14.40
+      iDMA per-row    32     504     504   8     16     312.9     9.78   51.55
+       NOC per-row    32     504     504   1     16     785.1    24.54   20.54
+ iDMA scatter-list    32      32      32   1     16     272.1     8.50    3.76
+ iDMA scatter-list    32      32      32   8     16     262.5     8.20    3.90
+ iDMA scatter-list    32     504     504   1     16    1120.6    35.02   14.39
+ iDMA scatter-list    32     504     504   8     16     302.8     9.46   53.27
+ iDMA scatter-list    32     504      64   8     16    1396.1    43.63   11.55
+
+=== vs the current workaround (NOC per-row), grouped by shape ===
+  32 rows x 32 B = 1024 B
+    iDMA scatter-list ch=1                          270.6 cyc/pass    8.46 cyc/row (n=2)   2.91x vs NOC
+    iDMA scatter-list ch=8                          262.5 cyc/pass    8.20 cyc/row   3.00x vs NOC
+    iDMA per-row ch=1                               279.6 cyc/pass    8.74 cyc/row   2.81x vs NOC
+    NOC per-row ch=1                                786.9 cyc/pass   24.59 cyc/row   <- baseline
+  32 rows x 224 B = 7168 B
+    iDMA scatter-list ch=1                          538.9 cyc/pass   16.84 cyc/row   1.45x vs NOC
+    iDMA scatter-list ch=8                          275.5 cyc/pass    8.61 cyc/row   2.84x vs NOC
+    iDMA per-row ch=1                               538.4 cyc/pass   16.82 cyc/row   1.45x vs NOC
+    iDMA per-row ch=8                               295.0 cyc/pass    9.22 cyc/row   2.65x vs NOC
+    NOC per-row ch=1                                782.2 cyc/pass   24.45 cyc/row   <- baseline
+  32 rows x 504 B = 16128 B
+    iDMA scatter-list ch=1                         1122.9 cyc/pass   35.09 cyc/row (n=2)   0.70x vs NOC  (SLOWER)
+    iDMA scatter-list ch=8, split 64 B             1396.1 cyc/pass   43.63 cyc/row   0.56x vs NOC  (SLOWER)
+    iDMA scatter-list ch=8                          302.8 cyc/pass    9.46 cyc/row (n=2)   2.59x vs NOC
+    iDMA per-row ch=1                              1120.2 cyc/pass   35.01 cyc/row   0.70x vs NOC  (SLOWER)
+    iDMA per-row ch=8                               312.9 cyc/pass    9.78 cyc/row   2.51x vs NOC
+    NOC per-row ch=1                                785.1 cyc/pass   24.54 cyc/row   <- baseline
+
+=== end to end: stage 1 + stage 2, per narrow-row untilize of one tile-row ===
+ ct_dim  matrix_w             engine  ch  pack cyc   compact     total  cyc/tile   vs RV_PACR
+      1        16  iDMA scatter-list   1     216.0     269.1     485.1     485.1      3.0x faster
+      1        16       iDMA per-row   1     233.0     279.6     512.6     512.6      2.9x faster
+      1        16        NOC per-row   1     233.0     786.9    1019.9    1019.9      1.4x faster
+      4       112  iDMA scatter-list   1     233.0     538.9     771.9     193.0      7.6x faster
+      4       112  iDMA scatter-list   8     233.0     275.5     508.5     127.1     11.6x faster
+      4       112       iDMA per-row   1     233.0     538.4     771.4     192.8      7.6x faster
+      4       112       iDMA per-row   8     233.0     295.0     528.0     132.0     11.1x faster
+      4       112        NOC per-row   1     225.0     782.2    1007.2     251.8      5.8x faster
+      8       252  iDMA scatter-list   1     233.0    1125.1    1358.1     169.8      (no RV_PACR point)
+      8       252  iDMA scatter-list   8     233.0     302.9     535.9      67.0      (no RV_PACR point)
+      8       252       iDMA per-row   1     237.0    1120.2    1357.2     169.7      (no RV_PACR point)
+      8       252       iDMA per-row   8     233.0     312.9     545.9      68.2      (no RV_PACR point)
+      8       252        NOC per-row   1     233.0     785.1    1018.1     127.3      (no RV_PACR point)
+      1        16  iDMA scatter-list   1     228.0     272.1     500.1     500.1      2.9x faster
+      1        16  iDMA scatter-list   8     233.0     262.5     495.5     495.5      3.0x faster
+      8       252  iDMA scatter-list   1     233.0    1120.6    1353.6     169.2      (no RV_PACR point)
+      8       252  iDMA scatter-list   8     233.0     302.8     535.8      67.0      (no RV_PACR point)
+      8       252  iDMA scatter-list   8     233.0    1396.1    1629.1     203.6      (no RV_PACR point)
+
+RV_PACR reference (tt-llk, one 32x32 Float16 tile, loop_factor=32): w8=1439.5, w16=1470.4, w24=2418.0, w32=2029.6 cyc/tile; normal HW untilize 77.4 cyc/tile.
+Stage 1 here is measured single-shot (loop_factor 1), so it carries pipeline fill and reads high against that 77.4; the compaction is the part this test is about.
+(venv) uvelimirovic@tensix-l-06-special-uvelimirovic-for-reservation-197086:/localdev/uvelimirovic/tt-metal$

@@ -38,6 +38,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <vector>
 #include <tt-logger/tt-logger.hpp>
 #include "device_fixture.hpp"
@@ -113,6 +115,39 @@ constexpr std::uint32_t GUARD_FILL = 0xA5A5A5A5;
 // Fills the DRAM input buffer past the tiles this run actually uses. Never read by the
 // reader, so it should never appear anywhere; distinct from GUARD_FILL to tell the two apart.
 constexpr std::uint32_t SRC_PAD_FILL = 0xDEADBEEF;
+
+// The profiler CSV records timing but knows nothing about whether a run produced the right
+// answer, so a report built from it alone can present the cycle count of a wrong computation
+// as a result. (That is not hypothetical: every scatter-list 8-channel run so far has been
+// both fast and wrong.) Each run therefore appends its verdict here, in the same directory
+// and the same order as the profiler log, and the report joins the two.
+const char* RESULTS_CSV = "generated/profiler/.logs/narrow_row_results.csv";
+
+void record_result(
+    std::uint32_t ct_dim,
+    std::uint32_t last_tile_w,
+    std::uint32_t matrix_w,
+    std::uint32_t out_row_bytes,
+    std::uint32_t pad_row_bytes,
+    std::uint32_t engine_mode,
+    std::uint32_t num_channels,
+    std::uint32_t max_packet_bytes,
+    bool passed) {
+    // Truncate once per process so a rerun cannot be joined against a previous run's verdicts.
+    static bool first = true;
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(RESULTS_CSV).parent_path(), ec);
+    std::ofstream f(RESULTS_CSV, first ? std::ios::trunc : std::ios::app);
+    if (!f) {
+        return;  // reporting aid only -- never fail a test because the log could not be written
+    }
+    if (first) {
+        f << "ct_dim,last_tile_w,matrix_w,out_row_bytes,pad_row_bytes,engine,channels,packet,passed\n";
+        first = false;
+    }
+    f << ct_dim << ',' << last_tile_w << ',' << matrix_w << ',' << out_row_bytes << ',' << pad_row_bytes << ','
+      << engine_mode << ',' << num_channels << ',' << max_packet_bytes << ',' << (passed ? 1 : 0) << '\n';
+}
 
 bool should_skip_test() {
     const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -192,6 +227,10 @@ struct RunConfig {
     // packet per row, so 32 rows always give the round-robin more packets than it has
     // channels. Set this only to deliberately sub-split a row -- see ChannelSweep.
     std::uint32_t max_packet_bytes = 0;
+    // How many times the compaction repeats inside the timed zone. The default gives a
+    // steady-state rate; 1 removes the per-iteration re-arm, which is what
+    // ScatterListDrainProbe needs to tell a drain race apart from an addressing bug.
+    std::uint32_t compact_iterations = COMPACT_ITERATIONS;
 };
 
 // Builds and runs the two-stage program, then checks the dense output datum for datum.
@@ -348,7 +387,7 @@ bool run_narrow_row(
                  {"dest_coords", packed_coords},
                  {"max_packet_bytes", max_packet_bytes},
                  {"num_channels", cfg.num_channels},
-                 {"num_iterations", COMPACT_ITERATIONS},
+                 {"num_iterations", cfg.compact_iterations},
                  {"test_id", TEST_ID}}),
         },
     };
@@ -396,6 +435,17 @@ bool run_narrow_row(
             guard_bad++;
         }
     }
+
+    record_result(
+        ct_dim,
+        cfg.last_tile_w,
+        matrix_w,
+        out_row_bytes,
+        pad_row_bytes,
+        cfg.engine_mode,
+        cfg.num_channels,
+        max_packet_bytes,
+        bad == 0 && guard_bad == 0);
 
     if (bad != 0 || guard_bad != 0) {
         log_error(
@@ -617,6 +667,135 @@ TEST_F(QuasarNarrowRowUntilize, ChannelSweep) {
                 << "ct_dim=" << ct_dim << " ch=" << CHANNELS_ALL << " split packets of " << split << " B";
         }
     }
+}
+
+// THE FULL WORKAROUND COMPARISON. Everything above is either a correctness probe or a
+// three-point sample; this is the whole grid, and it is what the adoption decision should be
+// read off.
+//
+// Every (ct_dim, last_tile_w) pair is run three ways -- the workaround, and the verified iDMA
+// engine at one and at eight channels -- so each shape carries its own baseline and no
+// comparison is made across shapes. That matters because the two engines scale completely
+// differently with row length:
+//
+//   NOC per-row   measured FLAT at ~24.5 cyc/row for 32, 224 and 504 B rows. The workaround is
+//                 purely issue-bound; its payload is free. So its cost is ~785 cyc for a
+//                 32-row block at ANY width, and iDMA's advantage cannot grow with width.
+//   iDMA 1 ch     flat ~8.7 cyc/row while issue-bound, then ~14 B/cyc (one VC). It therefore
+//                 CROSSES the NOC somewhere near 350 B/row and is slower above it.
+//   iDMA 8 ch     stays under the issue floor (~9-10 cyc/row) across this whole grid, because
+//                 even a 504 B row is only 3.9 cyc of data time spread over 8 VCs.
+//
+// Both crossings are measured here rather than asserted -- the one-channel arm is run at every
+// width precisely so the point where it loses to the workaround is a data point and not an
+// extrapolation. Scatter-list is deliberately absent: it is 3% faster and does not reliably
+// produce correct output (see EngineComparison), so it has no place in an adoption grid.
+//
+// 48 runs. At ~0.8 s/run after simulator startup that is well under a minute.
+TEST_F(QuasarNarrowRowUntilize, WorkaroundSweep) {
+    using namespace unit_tests::dm::quasar_narrow_row;
+    if (should_skip_test()) {
+        GTEST_SKIP() << "Test requires Quasar simulator";
+    }
+    auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
+    for (std::uint32_t ct_dim : {1u, 2u, 4u, 8u}) {
+        for (std::uint32_t last_tile_w : {8u, 16u, 24u, 32u}) {
+            const RunConfig base{.ct_dim = ct_dim, .last_tile_w = last_tile_w};
+            auto go = [&](RunConfig cfg, const char* what) {
+                EXPECT_TRUE(run_narrow_row(devices_[0], buffers, cfg))
+                    << what << " ct_dim=" << ct_dim << " last_tile_w=" << last_tile_w;
+            };
+            RunConfig noc = base;
+            noc.engine_mode = ENGINE_NOC_PER_ROW;
+            go(noc, "workaround");
+
+            RunConfig idma1 = base;
+            idma1.engine_mode = ENGINE_IDMA_PER_ROW;
+            go(idma1, "iDMA ch1");
+
+            RunConfig idma8 = idma1;
+            idma8.num_channels = CHANNELS_ALL;
+            go(idma8, "iDMA ch8");
+        }
+    }
+}
+
+// The regime narrow-row actually exists for: most of the tile is padding.
+//
+// At ct_dim 1 / last_tile_w 1 the padded row is 32 datums and 31 of them are junk -- 97%
+// waste, where reading the padded buffer whole and discarding the tail is not an option. At
+// the other end, a 32x252 matrix wastes 4 datums in 256 (1.6%), and there the honest question
+// is whether compaction is needed at all. This test covers the end where it is, and where the
+// rows are short enough to sit deep in iDMA's flat issue-bound region -- so it should show the
+// largest margin over the workaround anywhere in this file.
+//
+// RV_PACR cannot place any of these widths: its output address is 16-byte granular, so 8
+// datums is its hard floor for a 16-bit format.
+TEST_F(QuasarNarrowRowUntilize, NarrowExtremes) {
+    using namespace unit_tests::dm::quasar_narrow_row;
+    if (should_skip_test()) {
+        GTEST_SKIP() << "Test requires Quasar simulator";
+    }
+    auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/2);
+    for (std::uint32_t ct_dim : {1u, 2u}) {
+        for (std::uint32_t last_tile_w : {1u, 2u, 4u, 8u}) {
+            for (std::uint32_t engine : {ENGINE_NOC_PER_ROW, ENGINE_IDMA_PER_ROW}) {
+                EXPECT_TRUE(run_narrow_row(
+                    devices_[0], buffers, {.ct_dim = ct_dim, .last_tile_w = last_tile_w, .engine_mode = engine}))
+                    << "engine=" << engine_name(engine) << " ct_dim=" << ct_dim << " last_tile_w=" << last_tile_w;
+            }
+        }
+    }
+}
+
+// Diagnostic for the scatter-list corruption, NOT a perf test.
+//
+// Scatter-list fails at 8 channels every time and at 1 channel about a quarter of the time,
+// while the per-row engine -- which differs only in issuing 32 times instead of once -- is
+// correct everywhere. The suspect is the drain: idma_acked_cmdbuf_0() is
+// `CMDBUF_IDMA_TR_ACK == 0`, an outstanding counter. The per-row loop registers 32 outstanding
+// before it polls, so the count cannot read zero early. A scatter-list transaction registers
+// ONE issue and then generates its packets as the hardware walks the list, so the counter can
+// legitimately read zero before the walk has produced anything -- the drain returns, and the
+// next iteration's set_scatter_list/set_dest yank SCATTER_INDEX back to 0 and DEST back to
+// base underneath a live transaction. Those are two separate register writes, which is exactly
+// how a row ends up holding its predecessor's data.
+//
+// num_iterations = 1 removes the re-arm entirely: one issue, one drain, then the program ends
+// and the host's read-back is separated by a full workload boundary. If this is reliably
+// correct while the 16-iteration version is not, the race is confirmed and the fix belongs in
+// the drain, not in the addressing.
+TEST_F(QuasarNarrowRowUntilize, ScatterListDrainProbe) {
+    using namespace unit_tests::dm::quasar_narrow_row;
+    if (should_skip_test()) {
+        GTEST_SKIP() << "Test requires Quasar simulator";
+    }
+    auto buffers = make_buffers(devices_[0], /*max_ct_dim=*/8);
+    std::uint32_t passes = 0, total = 0;
+    // Repeat each configuration: the failure is intermittent at one channel, so a single
+    // passing run would prove nothing.
+    for (std::uint32_t rep = 0; rep < 3; rep++) {
+        for (std::uint32_t channels : {1u, CHANNELS_ALL}) {
+            total++;
+            passes += run_narrow_row(
+                          devices_[0],
+                          buffers,
+                          {.ct_dim = 8,
+                           .last_tile_w = LAST_W_252,
+                           .engine_mode = ENGINE_IDMA_SCATTER,
+                           .num_channels = channels,
+                           .compact_iterations = 1})
+                          ? 1
+                          : 0;
+        }
+    }
+    log_info(
+        tt::LogTest,
+        "scatter-list with a single un-rearmed transaction: {}/{} correct "
+        "(16-iteration version fails 4/4 at 8 channels and ~1/4 at 1 channel)",
+        passes,
+        total);
+    EXPECT_EQ(passes, total) << "single-shot scatter-list is also wrong -- the bug is not the re-arm race";
 }
 
 }  // namespace tt::tt_metal
