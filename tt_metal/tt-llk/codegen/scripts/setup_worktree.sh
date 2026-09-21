@@ -123,7 +123,7 @@ setup_worktree() {
 
   # A resume is an explicit import from one immutable, reconciled checkpoint.
   # Revalidate the dashboard contract before creating any branch or worktree.
-  local resume_requested=false resume_env_present resume_name
+  local resume_requested=false resume_env_present resume_name resume_patch
   local -a resume_names=(
     CODEGEN_RESUME_RUN_DIR CODEGEN_RESUME_RUN_ID CODEGEN_RESUME_ATTEMPT_ID
     CODEGEN_RESUME_CHECKPOINT_DIGEST CODEGEN_RESUME_PATCH_SHA256
@@ -138,7 +138,7 @@ setup_worktree() {
         return 1
       fi
     done
-    python - "$base_ref" "$task_id" <<'PY'
+    resume_patch="$(python - "$base_ref" "$task_id" <<'PY'
 import hashlib
 import json
 import os
@@ -185,9 +185,10 @@ source_base = checkpoint.get("base_commit") or source.get("base_commit")
 if source_base != expected_base or not re.fullmatch(r"[0-9a-f]{40}", str(source_base or "")):
     raise SystemExit("[worktree] resume source base mismatch")
 patch_digest = str(checkpoint.get("patch_sha256") or "")
-patch_path = source_dir / "generated.patch"
-if checkpoint.get("artifact_patch") != "generated.patch" or not re.fullmatch(r"[0-9a-f]{64}", patch_digest):
+artifact = checkpoint.get("artifact_patch")
+if artifact not in {"generated.patch", "supervisor-checkpoint.patch"} or not re.fullmatch(r"[0-9a-f]{64}", patch_digest):
     raise SystemExit("[worktree] resume checkpoint patch identity is missing")
+patch_path = source_dir / artifact
 try:
     actual_patch_digest = hashlib.sha256(patch_path.read_bytes()).hexdigest()
 except OSError as exc:
@@ -200,7 +201,9 @@ expected_reason = "attempt_identity_changed" if checkpoint.get("completed_result
 if (os.environ["CODEGEN_RESUME_VERIFICATION_REUSE"] != expected_reuse
         or os.environ["CODEGEN_RESUME_INVALIDATION_REASON"] != expected_reason):
     raise SystemExit("[worktree] resume verification disposition mismatch")
+print(patch_path)
 PY
+)" || return 1
     resume_requested=true
   fi
 
@@ -364,7 +367,6 @@ print(json.dumps({
 PY
 
   if [[ "$resume_requested" == "true" ]]; then
-    local resume_patch="${CODEGEN_RESUME_RUN_DIR}/generated.patch"
     local resume_error="" candidate_digest=""
     if ! git -C "$WORKTREE_DIR" apply --check "$resume_patch"; then
       resume_error="retained checkpoint patch does not apply to the exact base"

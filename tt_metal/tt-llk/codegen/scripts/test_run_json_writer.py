@@ -2478,10 +2478,13 @@ resolve_worktree_base
     assert "queued launch requires an exact CODEGEN_BASE_COMMIT" in result.stderr
 
 
+@pytest.mark.parametrize(
+    "artifact", ["generated.patch", "supervisor-checkpoint.patch", "../escaped.patch"]
+)
 @pytest.mark.parametrize("timeout_classification", ["outer_timeout", "wall_timeout"])
 @pytest.mark.parametrize("legacy_abbreviated_patch", [False, True])
 def test_setup_worktree_records_exact_base_before_bootstrap(
-    tmp_path, timeout_classification, legacy_abbreviated_patch
+    tmp_path, timeout_classification, legacy_abbreviated_patch, artifact
 ):
     repo = tmp_path / "repo"
     llk_tests = repo / "tt_metal" / "tt-llk" / "tests"
@@ -2526,12 +2529,12 @@ def test_setup_worktree_records_exact_base_before_bootstrap(
     source_attempt = "source-attempt"
     source_dir = tmp_path / source_run_id
     source_dir.mkdir()
-    (source_dir / "generated.patch").write_bytes(patch)
+    (source_dir / artifact).write_bytes(patch)
     checkpoint = {
         "run_id": source_run_id,
         "attempt_id": source_attempt,
         "base_commit": base,
-        "artifact_patch": "generated.patch",
+        "artifact_patch": artifact,
         "patch_sha256": hashlib.sha256(patch).hexdigest(),
         "completed_results": {"tests_total": 1, "tests_passed": 1},
     }
@@ -2598,6 +2601,11 @@ setup_worktree "${5:-issue-5}"
         text=True,
     )
     worktree = worktrees / "issue-5-v1"
+    if artifact == "../escaped.patch":
+        assert proc.returncode != 0
+        assert "checkpoint patch identity is missing" in proc.stderr
+        assert not worktree.exists()
+        return
     if legacy_abbreviated_patch:
         assert proc.returncode != 0
         assert (
@@ -2651,7 +2659,7 @@ setup_worktree "${5:-issue-5}"
     assert "checkpoint digest mismatch" in bad_digest.stderr
     assert not (worktrees / "issue-5-v2").exists()
 
-    (source_dir / "generated.patch").write_bytes(patch + b"\nmutation\n")
+    (source_dir / artifact).write_bytes(patch + b"\nmutation\n")
     bad_patch = subprocess.run(
         [
             "bash",
@@ -2671,7 +2679,7 @@ setup_worktree "${5:-issue-5}"
     assert bad_patch.returncode != 0
     assert "patch digest mismatch" in bad_patch.stderr
     assert not (worktrees / "issue-5-v2").exists()
-    (source_dir / "generated.patch").write_bytes(patch)
+    (source_dir / artifact).write_bytes(patch)
 
     subprocess.run(
         ["git", "-C", str(repo), "commit", "--allow-empty", "-qm", "later base"],
