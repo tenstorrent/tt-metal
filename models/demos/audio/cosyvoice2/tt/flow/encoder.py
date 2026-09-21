@@ -74,7 +74,7 @@ import torch.nn.functional as F
 
 import ttnn
 
-from ..hifigan.conv import accurate_compute_config, safe_compute_config
+from ..hifigan.conv import accurate_compute_config, config_tensors_in_dram, safe_compute_config
 
 # The real checkpoint's verified encoder config (cosyvoice2.yaml's flow.encoder).
 D_MODEL = 512
@@ -518,7 +518,11 @@ class TtPaddedConv1d:
         self._bias = ttnn.from_torch(
             bias.detach().float().reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT
         )
-        self.conv_config = ttnn.Conv1dConfig(weights_dtype=weights_dtype, deallocate_activation=False)
+        self.conv_config = ttnn.Conv1dConfig(
+            weights_dtype=weights_dtype,
+            deallocate_activation=False,
+            config_tensors_in_dram=config_tensors_in_dram(),
+        )
         self._accurate = accurate_compute_config(device)
         self._safe = safe_compute_config(device)
         self._verified: dict = {}

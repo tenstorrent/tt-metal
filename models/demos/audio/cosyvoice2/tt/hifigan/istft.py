@@ -66,6 +66,8 @@ from loguru import logger
 
 import ttnn
 
+from .conv import config_tensors_in_dram
+
 
 def periodic_hann(n_fft: int) -> np.ndarray:
     """Exactly scipy.signal.get_window("hann", n_fft, fftbins=True).
@@ -164,7 +166,7 @@ class TtIStft:
 
         # prepare_conv_transpose2d_weights asserts conv_config.weights_dtype.has_value(),
         # so the config exists for preparation's sake even though we pass it again below.
-        self.conv_config = ttnn.Conv2dConfig(weights_dtype=dtype)
+        self.conv_config = ttnn.Conv2dConfig(weights_dtype=dtype, config_tensors_in_dram=config_tensors_in_dram())
 
         self._env_cache: dict[int, ttnn.Tensor] = {}
         self._prep_cache: dict[tuple[int, int], tuple] = {}

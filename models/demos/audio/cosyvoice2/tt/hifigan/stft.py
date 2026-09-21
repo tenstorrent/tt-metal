@@ -51,6 +51,7 @@ import torch
 
 import ttnn
 
+from .conv import config_tensors_in_dram
 from .istft import periodic_hann
 
 
@@ -103,7 +104,9 @@ class TtStft:
         w4 = torch.zeros(n_fft, 1, 1, n_fft, dtype=torch.float32)
         w4[torch.arange(n_fft), 0, 0, torch.arange(n_fft)] = torch.from_numpy(self.window)
         self._weight_4d = ttnn.from_torch(w4, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-        self.conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, deallocate_activation=False)
+        self.conv_config = ttnn.Conv1dConfig(
+            weights_dtype=dtype, deallocate_activation=False, config_tensors_in_dram=config_tensors_in_dram()
+        )
 
         # Reversal operator for reflect padding. TTNN has no `flip`, and
         # `ttnn.pad` offers only Replicate and Zeros -- no reflect mode -- so the

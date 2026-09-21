@@ -23,6 +23,7 @@ import ttnn
 from .conv import (
     AGREEMENT_TOLERANCE,
     accurate_compute_config,
+    config_tensors_in_dram,
     extract_conv_weights,
     pick_most_accurate,
     relative_error,
@@ -67,7 +68,9 @@ class TtConvTranspose1d:
         self._host_bias = bias.detach().float().clone() if bias is not None else None
         # prepare_conv_transpose2d_weights asserts conv_config.weights_dtype.has_value(),
         # so the config cannot be left to the op's default here.
-        self.conv_config = ttnn.Conv2dConfig(weights_dtype=weights_dtype)
+        self.conv_config = ttnn.Conv2dConfig(
+            weights_dtype=weights_dtype, config_tensors_in_dram=config_tensors_in_dram()
+        )
         self.bias = None
         if bias is not None:
             self.bias = ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)

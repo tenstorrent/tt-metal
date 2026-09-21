@@ -71,6 +71,7 @@ convention (conv.py). Upstream's `[B, C, T]` channel-dim concatenations
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 import torch.nn as nn
@@ -78,7 +79,7 @@ import torch.nn.functional as F
 
 import ttnn
 
-from ..hifigan.conv import accurate_compute_config, safe_compute_config
+from ..hifigan.conv import accurate_compute_config, config_tensors_in_dram, safe_compute_config
 
 # The real checkpoint's verified estimator config (cosyvoice2.yaml's
 # flow.decoder.estimator) -- see module docstring for why this is hardcoded rather
@@ -518,7 +519,11 @@ class TtCausalConv1d:
         self._bias = ttnn.from_torch(
             bias.detach().float().reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT
         )
-        self.conv_config = ttnn.Conv1dConfig(weights_dtype=weights_dtype, deallocate_activation=False)
+        self.conv_config = ttnn.Conv1dConfig(
+            weights_dtype=weights_dtype,
+            deallocate_activation=False,
+            config_tensors_in_dram=config_tensors_in_dram(),
+        )
         self._accurate = accurate_compute_config(device)
         self._safe = safe_compute_config(device)
         self._verified: dict = {}
@@ -589,6 +594,7 @@ class TtCausalResnetBlock1D:
     def __init__(self, device, module: CausalResnetBlock1DRef, dtype=ttnn.bfloat16):
         self.block1 = TtCausalBlock1D(device, module.block1, dtype=dtype)
         self.block2 = TtCausalBlock1D(device, module.block2, dtype=dtype)
+        self.cc = flow_matmul_config(device)
         mlp_linear = module.mlp[1]  # nn.Sequential(Mish, Linear)
         self.mlp_weight = _linear_weight(device, mlp_linear.weight, dtype)
         self.mlp_bias = _bias(device, mlp_linear.bias, dtype)
@@ -600,17 +606,71 @@ class TtCausalResnetBlock1D:
         against `h`'s `[2B, T, dim_out]` with no reshape needed."""
         h = self.block1(x, mask, length, batch_size)
         temb = ttnn.mish(time_emb)
-        temb = ttnn.linear(temb, self.mlp_weight, bias=self.mlp_bias)
+        temb = ttnn.linear(temb, self.mlp_weight, bias=self.mlp_bias, compute_kernel_config=self.cc)
         h = ttnn.add(h, temb)
         h = self.block2(h, mask, length, batch_size)
         skip = ttnn.multiply(x, mask)
-        skip = ttnn.linear(skip, self.res_weight, bias=self.res_bias)
+        skip = ttnn.linear(skip, self.res_weight, bias=self.res_bias, compute_kernel_config=self.cc)
         return ttnn.add(h, skip)
+
+
+def flow_matmul_config(device):
+    """Compute config for every linear / matmul / SDPA in the flow estimator.
+
+    `COSYVOICE2_FLOW_MATMUL_CC=accurate` -> HiFi4 + fp32 destination accumulation + packer L1 accumulation (the config
+    CosyVoice1's estimator uses, and this port's convs already use). Unset -> ttnn's default. The estimator stacks 56
+    transformer blocks x 10 Euler steps, so bf16 accumulation drift compounds, and the later Euler steps are where
+    it shows. Read at construction time."""
+    if os.environ.get("COSYVOICE2_FLOW_MATMUL_CC", "") == "accurate":
+        return accurate_compute_config(device)
+    return None
+
+
+def flow_fused_qkv() -> bool:
+    """One `[dim, 3*inner]` Q/K/V linear plus `split_query_key_value_and_split_heads`, instead of three
+    linears, three reshape+transpose head splits and a separate K transpose. Measured on device at
+    `[2, 660, 256]`: ~0.22 ms for the fused linear vs ~2.06 ms for the three linears + head splits (fp32).
+    Bit-identical to the three-linear form (mel max |diff| 0.0 on two sentences). On by default;
+    `COSYVOICE2_FLOW_FUSED_QKV=0` turns it off. Read at construction time."""
+    return os.environ.get("COSYVOICE2_FLOW_FUSED_QKV", "1") == "1"
+
+
+def flow_fused_sdpa() -> bool:
+    """`ttnn.transformer.scaled_dot_product_attention` in place of the explicit
+    matmul -> scale -> add-bias -> softmax -> matmul chain. Measured on device at `[2, 8, 660, 64]` (bf16):
+    0.33 ms vs 0.90 ms, and slightly more accurate. bf16-only (fp32 inputs fail a TT_FATAL), so q/k/v are
+    cast to bf16 for the call if they are not already, and the result cast back.
+
+    ASSUMES AN ALL-ONES ATTENTION MASK -- true for the whole non-streaming inference path (`CFM.forward`
+    checks it on the host and refuses otherwise). Padded or masked inputs need the masked chain
+    (`COSYVOICE2_FLOW_SDPA=0`) or a masked SDPA. On by default; `COSYVOICE2_FLOW_SDPA=0` turns it off. Read at
+    construction time."""
+    return os.environ.get("COSYVOICE2_FLOW_SDPA", "1") == "1"
+
+
+# SDPA chunking. The op's DEFAULT program config gets slower with sequence length (measured on device,
+# `[2, 8, T, 64]` bf16: 0.34 ms at T=660 and 1.46 ms at T=1500), while q_chunk=128 / k_chunk=256 measured 0.15 ms
+# and 0.35 ms -- 2.3x / 4.2x -- with the same accuracy at every T in 300..1500 (error vs float64 ~2.7e-2 either way,
+# which is bf16 input quantisation, not the op).
+SDPA_Q_CHUNK, SDPA_K_CHUNK = 128, 256
 
 
 class TtBasicTransformerBlock:
     def __init__(self, device, module: BasicTransformerBlockRef, dtype=ttnn.bfloat16):
         self.num_heads, self.head_dim = module.num_heads, module.head_dim
+        self.fused_qkv = flow_fused_qkv()
+        self.fused_sdpa = flow_fused_sdpa()
+        self.cc = flow_matmul_config(device)
+        self.sdpa_program_config = (
+            ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                q_chunk_size=SDPA_Q_CHUNK,
+                k_chunk_size=SDPA_K_CHUNK,
+                exp_approx_mode=False,
+            )
+            if self.fused_sdpa
+            else None
+        )
         self.norm1_w = ttnn.from_torch(
             module.norm1.weight.detach().float().reshape(1, 1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
         )
@@ -623,9 +683,15 @@ class TtBasicTransformerBlock:
         self.norm3_b = ttnn.from_torch(
             module.norm3.bias.detach().float().reshape(1, 1, -1), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
         )
-        self.wq = _linear_weight(device, module.to_q.weight, dtype)
-        self.wk = _linear_weight(device, module.to_k.weight, dtype)
-        self.wv = _linear_weight(device, module.to_v.weight, dtype)
+        if self.fused_qkv:
+            # [q | k | v] along the output dim, the order split_query_key_value_and_split_heads expects.
+            self.wqkv = _linear_weight(
+                device, torch.cat([module.to_q.weight, module.to_k.weight, module.to_v.weight], dim=0), dtype
+            )
+        else:
+            self.wq = _linear_weight(device, module.to_q.weight, dtype)
+            self.wk = _linear_weight(device, module.to_k.weight, dtype)
+            self.wv = _linear_weight(device, module.to_v.weight, dtype)
         self.wo = _linear_weight(device, module.to_out.weight, dtype)
         self.bo = _bias(device, module.to_out.bias, dtype)
         self.w_ff_in = _linear_weight(device, module.ff_in.weight, dtype)
@@ -638,26 +704,46 @@ class TtBasicTransformerBlock:
         x = ttnn.reshape(x, (b, t, self.num_heads, self.head_dim))
         return ttnn.transpose(x, 1, 2)  # [B, heads, T, head_dim]
 
+    def _sdpa(self, q, k, v):
+        """Fused attention. bf16-only op: cast in (and the result back) only if the activations are not bf16."""
+        dt = q.dtype
+        if dt != ttnn.bfloat16:
+            q, k, v = (ttnn.typecast(x, ttnn.bfloat16) for x in (q, k, v))
+        out = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, scale=self.scale, program_config=self.sdpa_program_config, compute_kernel_config=self.cc
+        )
+        return out if dt == ttnn.bfloat16 else ttnn.typecast(out, dt)
+
     def __call__(self, x, attn_bias):
         b, t, _ = x.shape
         h = ttnn.layer_norm(x, weight=self.norm1_w, bias=self.norm1_b, epsilon=1e-5)
-        q = self._heads(ttnn.linear(h, self.wq), b, t)
-        k = self._heads(ttnn.linear(h, self.wk), b, t)
-        v = self._heads(ttnn.linear(h, self.wv), b, t)
-        scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))
-        scores = ttnn.multiply(scores, self.scale)
-        scores = ttnn.add(scores, attn_bias)
-        attn = ttnn.softmax(scores, dim=-1)
-        out = ttnn.matmul(attn, v)  # [B, heads, T, head_dim]
+        if self.fused_qkv:
+            # The explicit chain wants K pre-transposed ([B, heads, head_dim, T]); SDPA wants it as [B, heads, T, head_dim].
+            q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+                ttnn.linear(h, self.wqkv, compute_kernel_config=self.cc), num_heads=self.num_heads, transpose_key=not self.fused_sdpa
+            )
+        else:
+            q = self._heads(ttnn.linear(h, self.wq, compute_kernel_config=self.cc), b, t)
+            k = self._heads(ttnn.linear(h, self.wk, compute_kernel_config=self.cc), b, t)
+            v = self._heads(ttnn.linear(h, self.wv, compute_kernel_config=self.cc), b, t)
+        if self.fused_sdpa:
+            out = self._sdpa(q, k, v)  # [B, heads, T, head_dim]
+        else:
+            k_t = k if self.fused_qkv else ttnn.transpose(k, -2, -1)
+            scores = ttnn.matmul(q, k_t, compute_kernel_config=self.cc)
+            scores = ttnn.multiply(scores, self.scale)
+            scores = ttnn.add(scores, attn_bias)
+            attn = ttnn.softmax(scores, dim=-1)
+            out = ttnn.matmul(attn, v, compute_kernel_config=self.cc)  # [B, heads, T, head_dim]
         out = ttnn.transpose(out, 1, 2)
         out = ttnn.reshape(out, (b, t, self.num_heads * self.head_dim))
-        out = ttnn.linear(out, self.wo, bias=self.bo)
+        out = ttnn.linear(out, self.wo, bias=self.bo, compute_kernel_config=self.cc)
         x = ttnn.add(x, out)
 
         h = ttnn.layer_norm(x, weight=self.norm3_w, bias=self.norm3_b, epsilon=1e-5)
-        h = ttnn.linear(h, self.w_ff_in, bias=self.b_ff_in)
+        h = ttnn.linear(h, self.w_ff_in, bias=self.b_ff_in, compute_kernel_config=self.cc)
         h = ttnn.gelu(h)
-        h = ttnn.linear(h, self.w_ff_out, bias=self.b_ff_out)
+        h = ttnn.linear(h, self.w_ff_out, bias=self.b_ff_out, compute_kernel_config=self.cc)
         return ttnn.add(x, h)
 
 
@@ -667,6 +753,7 @@ class TtCausalConditionalDecoder:
 
     def __init__(self, device, module: CausalConditionalDecoderRef, dtype=ttnn.bfloat16):
         self.device = device
+        self.cc = flow_matmul_config(device)
         self.time_embeddings_dim = module.time_embeddings_dim
         self.channels = module.channels
         self.time_mlp_w1 = _linear_weight(device, module.time_mlp.linear_1.weight, dtype)
@@ -707,9 +794,9 @@ class TtCausalConditionalDecoder:
 
     def __call__(self, x, mask, mu, t: torch.Tensor, spks, cond, length: int, batch_size: int):
         temb = self._sinusoidal_pos_emb(t)  # [2B, 1, time_embeddings_dim]
-        temb = ttnn.linear(temb, self.time_mlp_w1, bias=self.time_mlp_b1)
+        temb = ttnn.linear(temb, self.time_mlp_w1, bias=self.time_mlp_b1, compute_kernel_config=self.cc)
         temb = ttnn.silu(temb)
-        temb = ttnn.linear(temb, self.time_mlp_w2, bias=self.time_mlp_b2)  # [2B, 1, time_embed_dim]
+        temb = ttnn.linear(temb, self.time_mlp_w2, bias=self.time_mlp_b2, compute_kernel_config=self.cc)  # [2B, 1, time_embed_dim]
 
         h = ttnn.concat([x, mu], dim=-1)
         # spks arrives pre-shaped [2B, 1, spk_dim] (see TtCausalConditionalCFM --
@@ -740,7 +827,7 @@ class TtCausalConditionalDecoder:
         h = self.up_conv(ttnn.multiply(h, mask), length, batch_size)
 
         h = self.final_block(h, mask, length, batch_size)
-        out = ttnn.linear(ttnn.multiply(h, mask), self.final_weight, bias=self.final_bias)
+        out = ttnn.linear(ttnn.multiply(h, mask), self.final_weight, bias=self.final_bias, compute_kernel_config=self.cc)
         return ttnn.multiply(out, mask)
 
 
@@ -766,6 +853,11 @@ class TtCausalConditionalCFM:
         conditioning tensors (mu/spks/cond/mask) are uploaded once, CFG-doubled, and
         reused every Euler step; only x and t change per step.
         """
+        if flow_fused_sdpa() and not bool((mask_t != 0).all()):
+            raise ValueError(
+                "The fused flow SDPA (COSYVOICE2_FLOW_SDPA, on by default) assumes an all-ones attention mask; got a padded/partial mask. "
+                "Use COSYVOICE2_FLOW_SDPA=0 for masked inputs."
+            )
         t_len = mu_t.shape[1]
         z = self.rand_noise[:, :t_len, :].to(mu_t.dtype)
         t_span = torch.linspace(0, 1, n_timesteps + 1, dtype=mu_t.dtype)

@@ -19,10 +19,31 @@ collapses it at construction.
 
 from __future__ import annotations
 
+import os
+
 import torch
 from loguru import logger
 
 import ttnn
+
+
+def config_tensors_in_dram() -> bool:
+    """Whether conv/halo config tensors go to DRAM instead of the L1_SMALL bank.
+
+    Every ttnn conv-family op (conv, conv_transpose, pool, upsample) keeps small config tensors
+    (sliding-window / halo indices) in the L1_SMALL bank and NEVER frees them -- upstream calls this
+    by design (tenstorrent/tt-metal#33316: "allocate enough of it for the whole model in advance").
+    They are per input geometry, so every new utterance length adds another set and a bank sized for
+    one utterance (64 KB here) is exhausted after two or three different lengths. Placing them in
+    DRAM (`Conv*Config.config_tensors_in_dram`, PR #27753 / #33328) removes the reservation.
+
+    On by default for every conv in the port (HiFT convs, transposed convs, STFT/iSTFT, the flow encoder
+    and estimator); `COSYVOICE2_CONV_CONFIG_IN_DRAM=0` turns it off. Read at construction time, so set it
+    before the models are built. Measured: L1_SMALL stays at 0.00 KB across seven different utterance lengths
+    with no cache clearing, and outputs are bit-identical with it on or off (max |diff| 0.0 on all six conv
+    types).
+    """
+    return os.environ.get("COSYVOICE2_CONV_CONFIG_IN_DRAM", "1") == "1"
 
 
 def accurate_compute_config(device):
@@ -172,7 +193,11 @@ class TtConv1d:
         self.bias = None
         if bias is not None:
             self.bias = ttnn.from_torch(bias.reshape(1, 1, 1, -1), dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
-        self.conv_config = ttnn.Conv1dConfig(weights_dtype=weights_dtype, deallocate_activation=False)
+        self.conv_config = ttnn.Conv1dConfig(
+            weights_dtype=weights_dtype,
+            deallocate_activation=False,
+            config_tensors_in_dram=config_tensors_in_dram(),
+        )
         self.compute_config = accurate_compute_config(device) if high_fidelity else None
         self._safe_compute_config = safe_compute_config(device) if high_fidelity else None
         # Verify the fast path (prepared weight + accurate_compute_config)
