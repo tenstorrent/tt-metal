@@ -104,7 +104,7 @@ def chunk_gated_delta_rule_fused_adapter(
     if not _logged_path:
         logger.info(
             "[GDN] fused chunk_gated_delta_rule active: "
-            f"path={'PHASED (chunk-parallel prep + V-block scan)' if phased_enabled() else 'monolithic'}, "
+            f"path={'op-internal dispatch (QWEN_GDN_PATH override, else the fused/phased cost model)' if phased_enabled() else 'monolithic'}, "
             f"chunk_size={_FUSED_CHUNK_SIZE}, flat_qkv={flat_qkv_enabled()}, "
             f"input q/k/v dtype={q.dtype}/{k.dtype}/{v.dtype}"
         )
