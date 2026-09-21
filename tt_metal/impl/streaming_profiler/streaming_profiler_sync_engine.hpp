@@ -36,7 +36,7 @@ struct ClockSample {
     uint32_t role;
     uint64_t value;
     uint64_t ts;
-    uint64_t ref = 0;  // link records: the refclk read with ts
+    uint64_t ref = 0;    // link records: the refclk read with ts
     uint32_t spins = 0;  // link records: the bracketed read's spins to the caught refclk update, plus one
 };
 
@@ -97,8 +97,8 @@ public:
     // Instants of the wall clock on no line (k8 0): the pusher's own samples while it acquires a slope across a
     // glide, in refclk order. They bend the map through the seam they fall in.
     std::vector<std::pair<double, double>> raw;  // (refclk, wall)
-    uint64_t points = 0;    // points and closes received
-    uint64_t transitions = 0;  // segments after the first
+    uint64_t points = 0;                         // points and closes received
+    uint64_t transitions = 0;                    // segments after the first
 
     // A point of the open segment's line, or the segment's close. An older point than the newest is superseded.
     void add_point(uint64_t refclk, uint64_t wall, uint32_t k8, uint32_t n, bool close, uint32_t resid8 = 0) {
@@ -425,7 +425,7 @@ private:
 // Each chip's published placement series: its clock model's segments and its root transform turned into the
 // ClockMap's nodes. Nodes are frozen once published (consumers have placed records against them), so a publish
 // only appends beyond them: a node where the map bends (a segment boundary, the first sample) and the open
-// segment's frontier when it has left the frozen tangent.
+// segment's frontier at every publish. Records are placed only up to the newest node, on the chord to it.
 class SeriesPublisher {
 public:
     // A placement node: at eth wall tick H the chip sits at root refclk tick `root`; r is the chip's own refclk it
@@ -434,21 +434,17 @@ public:
     struct Node {
         double H, root, r, tangent;
     };
-    // One chip's series. `cover_H` is how far the newest node's tangent has been confirmed by the fit, `knots` how
-    // many run boundaries have their nodes, `last_r` the refclk of the newest node or cover.
+    // One chip's series. `knots` is how many run boundaries have their nodes, `last_r` the refclk of the newest node.
     struct Series {
         std::vector<Node> nodes;
         size_t knots = 0;
         double last_r = -1.0;
-        double cover_H = -1.0;
-        double cover_r = -1.0;
-        size_t dropped = 0;   // nodes refused: behind the frozen series, or not a correction below one ns per ns
-        size_t extended = 0;  // frontier samples that only advanced the cover
+        size_t dropped = 0;  // nodes refused: behind the frozen series, or not a correction below one ns per ns
     };
 
     explicit SeriesPublisher(ClockMap& map) : map_(map) {}
     void reset() { series_.clear(); }
-    // Publishes one chip's series from its fit and root transform as they stand; true when the chip's cover moved.
+    // Publishes one chip's series from its fit and root transform as they stand; true when a node was added.
     bool publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf, bool final = false);
     // A chip's series, null before its first publish.
     const Series* series(uint32_t dev) const {
@@ -468,18 +464,13 @@ private:
         size_t knots_after = 0;  // run boundaries consumed once the knots are placed
     };
     Fresh fresh_nodes(const Series& s, const LocalClockModel& fit, const RootXf& xf, bool final) const;
-    // Appends the knots and, if the frontier left the newest tangent by more than kFreezeNs, freezes the tangent where
-    // it stood and appends the frontier; otherwise advances the cover. True when the cover moved.
+    // Appends the knots, then the frontier. True when a node was added.
     bool advance(Series& s, uint32_t chip, Fresh fresh);
-    void freeze_append(Series& s, uint32_t chip, const Node& n);
+    void append_node(Series& s, uint32_t chip, const Node& n);
     void push_node(Series& s, uint32_t chip, const Node& n);
 
     ClockMap& map_;
     std::map<uint32_t, Series> series_;  // device index -> series
-    // A frontier within this much of the newest tangent extends the cover instead of freezing a node; the published
-    // map then sits within it of the fit's own estimate. A mature run's estimate moves ~0.02 ns per keepalive sample,
-    // so it adds a node every few hundred ms; a young run adds one per burst sample for its first ms.
-    static constexpr double kFreezeNs = 0.25;
 };
 
 // Device<->device sync from the PP_CLOCK samples the idle-eth pushers carry, and the correction it publishes.

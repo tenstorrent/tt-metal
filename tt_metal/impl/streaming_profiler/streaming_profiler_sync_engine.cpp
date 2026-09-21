@@ -732,6 +732,7 @@ SeriesPublisher::Fresh SeriesPublisher::fresh_nodes(
     Fresh out;
     out.knots_after = s.knots;
     double last_r = s.last_r;
+    const double end_r = s.nodes.empty() ? -1.0 : s.nodes.back().r;
     if (s.nodes.empty() && last_r < 0.0) {
         if (!runs.front().settled() || runs.front().slope() <= 0.0) {
             return out;
@@ -775,21 +776,21 @@ SeriesPublisher::Fresh SeriesPublisher::fresh_nodes(
         // knot leaves on b's tangent. The a-side node of a bridge is dropped when the frontier already passed it: a's
         // newest sample was handed to b after the tangent was frozen on it, and the frozen tangent's end is that node.
         if (const auto r_x = fit.knot(a, b); r_x && *r_x > last_r) {
-            if (*r_x < s.cover_r) {
+            if (*r_x < end_r) {
                 log_warning(
                     tt::LogMetal,
-                    "[streaming profiler] d2d sync: runs meet at refclk {:.0f}, {:.1f} us behind the frozen frontier "
+                    "[streaming profiler] d2d sync: runs meet at refclk {:.0f}, {:.1f} us behind the series' end "
                     "{:.0f}; records between them were placed on the earlier run",
                     *r_x,
-                    (s.cover_r - *r_x) / 50.0,
-                    s.cover_r);
+                    (end_r - *r_x) / 50.0,
+                    end_r);
             }
             Node k = node_at(a, *r_x);
             k.tangent = node_at(b, *r_x).tangent;
             out.knots.push_back(k);
             last_r = *r_x;
         } else {
-            if (a.r_last >= s.cover_r && a.r_last > last_r) {
+            if (a.r_last >= end_r && a.r_last > last_r) {
                 out.knots.push_back(node_at(a, a.r_last));
                 last_r = a.r_last;
             }
@@ -841,36 +842,28 @@ void SeriesPublisher::push_node(Series& s, uint32_t chip, const Node& n) {
         return;  // within the tick of the last node: the placement cannot differ measurably there
     }
     s.nodes.push_back(n);
-    s.cover_H = n.H;
-    s.cover_r = n.r;
     s.last_r = std::max(s.last_r, n.r);
     map_.append(chip, SyncNode{.at = wall, .value = n.root, .tangent = n.tangent});
 }
 
 // Frozen nodes never move (consumers have placed records against them), so a publish can only add beyond them, at
-// the newest estimate's values; a join carries whatever the estimate moved by since the tangent was frozen (kFreezeNs
-// at most on a frontier, a few ns at a knot). Shifting fresh nodes to meet the frozen tail and fading that shift over
-// a quarter second is worse: every discrepancy at a join becomes a level the map carries for 250 ms, 30-60 ns during
-// DVFS dithering at 1 ms.
-void SeriesPublisher::freeze_append(Series& s, uint32_t chip, const Node& n) {
-    const double frontier_H = std::max(s.nodes.empty() ? -1.0 : s.nodes.back().H, s.cover_H);
-    if (n.H >= frontier_H && n.H < frontier_H + 1.0) {
+// the newest estimate's values; a join carries whatever the estimate moved by since the last node (a few ns at a
+// knot). Shifting fresh nodes to meet the frozen tail and fading that shift over a quarter second is worse: every
+// discrepancy at a join becomes a level the map carries for 250 ms, 30-60 ns during DVFS dithering at 1 ms.
+void SeriesPublisher::append_node(Series& s, uint32_t chip, const Node& n) {
+    const double end_H = s.nodes.empty() ? -1.0 : s.nodes.back().H;
+    if (n.H >= end_H && n.H < end_H + 1.0) {
         return;  // the series' end re-derived, or a knot within the tick of it: the same node
     }
-    if (n.H < frontier_H) {
+    if (n.H < end_H) {
         log_warning(
             tt::LogMetal,
             "[streaming profiler] d2d sync: placement node at wall {:.0f} lies {:.0f} wall ticks behind the frozen "
             "series' end; the frozen node stands",
             n.H,
-            frontier_H - n.H);
+            end_H - n.H);
         s.dropped++;
         return;
-    }
-    // The tangent's confirmed stretch becomes a node first, so nothing placed on it changes.
-    if (!s.nodes.empty() && s.cover_H > s.nodes.back().H + 0.5) {
-        const Node& last = s.nodes.back();
-        push_node(s, chip, Node{s.cover_H, last.root + last.tangent * (s.cover_H - last.H), s.cover_r, last.tangent});
     }
     if (!std::isfinite(n.H) || !std::isfinite(n.root) || !std::isfinite(n.tangent) ||
         !(n.tangent > 0.0 && n.tangent < 1.0)) {
@@ -881,28 +874,16 @@ void SeriesPublisher::freeze_append(Series& s, uint32_t chip, const Node& n) {
 }
 
 bool SeriesPublisher::advance(Series& s, uint32_t chip, Fresh fresh) {
-    const double cover_before = s.cover_H;
+    const size_t before = s.nodes.size();
     for (const Node& k : fresh.knots) {
-        freeze_append(s, chip, k);
+        append_node(s, chip, k);
         s.last_r = std::max(s.last_r, k.r);
     }
     s.knots = fresh.knots_after;
     if (fresh.frontier) {
-        const Node& f = *fresh.frontier;
-        const Node* last = s.nodes.empty() ? nullptr : &s.nodes.back();
-        const double freeze_ticks = kFreezeNs * LocalClockModel::kRefclkHz * 1e-9;
-        if (last != nullptr && f.H > s.cover_H &&
-            std::abs(f.root - (last->root + last->tangent * (f.H - last->H))) <= freeze_ticks) {
-            s.cover_H = f.H;
-            s.cover_r = f.r;
-            s.last_r = std::max(s.last_r, f.r);
-            s.extended++;
-            map_.extend(chip, static_cast<int64_t>(std::llround(f.H)));
-        } else {
-            freeze_append(s, chip, f);
-        }
+        append_node(s, chip, *fresh.frontier);
     }
-    return s.cover_H > cover_before;
+    return s.nodes.size() > before;
 }
 
 bool SeriesPublisher::publish(uint32_t dev, uint32_t chip, const LocalClockModel& fit, const RootXf& xf, bool final) {
@@ -986,8 +967,7 @@ void SyncEngine::log_clock_models() const {
             tt::LogMetal,
             "[streaming profiler] d2d sync chip {}: local clock {} points in {} segments ({} steps); applied AICLK "
             "mean {:.5f} GHz (segment min {:.5f}, max {:.5f}; boot anchor {:.5f}), spread {:.1f} ppm; {} correction "
-            "nodes, the tangent extended {} times; samples within {:.2f} ns of their line at worst, {} points over "
-            "{:.1f} ns",
+            "nodes; samples within {:.2f} ns of their line at worst, {} points over {:.1f} ns",
             chip,
             l.points,
             nb,
@@ -998,7 +978,6 @@ void SyncEngine::log_clock_models() const {
             anchor_ghz,
             mean > 0.0 ? (smax - smin) / mean * 1e6 : 0.0,
             series_.series(dev) != nullptr ? series_.series(dev)->nodes.size() : 0,
-            series_.series(dev) != nullptr ? series_.series(dev)->extended : 0,
             l.max_resid_ticks / (mean * to_ghz),
             l.resid_warn_points,
             LocalClockModel::kResidWarnTicks / (mean * to_ghz));
