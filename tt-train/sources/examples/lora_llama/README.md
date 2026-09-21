@@ -25,6 +25,13 @@ python3 ./sources/examples/lora_llama/train_lora_llama.py \
     --batch 8 --steps 200
 ```
 
+The architecture and vocabulary come from the checkpoint's `config.json`. The YAML then only
+sets training-time knobs: `max_sequence_length`, `runner_type` and `dropout_prob`.
+
+Loading fails, rather than silently cropping or padding a weight, if a tensor in the checkpoint
+does not have the shape its `config.json` implies. It also fails if the tokenizer has more tokens
+than the checkpoint has embedding rows.
+
 ### Multi-device DDP (8 devices)
 
 DDP requires a mesh graph descriptor (MGD) file with ring topology on the DDP axis.
@@ -62,14 +69,15 @@ transformer_config:
   weight_tying: "disabled"
 ```
 
-Without `-m`, a small 6-layer model is used by default.
+Without `-m`, a small 6-layer model is used by default. With `--pretrained`, the architecture
+fields above (including `vocab_size`) are ignored in favour of the checkpoint's `config.json`.
 
 ## Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-m`, `--model_config` | None | Path to model config YAML |
-| `--pretrained` | None | HuggingFace repo ID or local path to `.safetensors` weights |
+| `--pretrained` | None | HuggingFace repo ID or local directory with `.safetensors` weights and `config.json`; decides the architecture |
 | `--batch` | 1 | Global batch size (must be divisible by `--ddp`) |
 | `--steps` | 500 | Number of training steps |
 | `--ddp` | 1 | Number of devices for distributed data parallel |

@@ -137,7 +137,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
         full ids, so a shard on the TP axis silently produces wrong embeddings.
         """
         placements = ttml.Sharding.from_tensor(x).placements
-        if placements is None or self.cluster_axis >= len(placements):
+        if self.cluster_axis >= len(placements):
             return
         p = placements[self.cluster_axis]
         if isinstance(p, ttnn.PlacementShard):
@@ -261,7 +261,7 @@ class FeatureParallelEmbedding(AbstractModuleBase):
         so each needs the complete ids; a TP shard would silently drop tokens.
         """
         placements = ttml.Sharding.from_tensor(x).placements
-        if placements is None or self.cluster_axis >= len(placements):
+        if self.cluster_axis >= len(placements):
             return
         p = placements[self.cluster_axis]
         if isinstance(p, ttnn.PlacementShard):
