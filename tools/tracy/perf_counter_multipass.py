@@ -37,6 +37,8 @@ PERF_COUNTER_MARKER_ID = "9090"
 PERF_COUNTER_TIMER_ID_COL = 4
 PERF_COUNTER_TIMESTAMP_COL = 5
 PERF_COUNTER_RUN_HOST_ID_COL = 7
+PERF_COUNTER_TRACE_ID_COL = 8
+PERF_COUNTER_TRACE_ID_COUNTER_COL = 9
 # Environment variables that name the device architecture without opening the device.
 ARCH_ENV_VARS = ("TT_METAL_DEVICE_ARCH", "TT_ARCH_NAME", "ARCH_NAME")
 
@@ -167,7 +169,7 @@ def _counter_row_fields(line):
     # column 4 is timer_id; perf-counter rows carry PERF_COUNTER_MARKER_ID there.
     fields = line.split(",")
     if (
-        len(fields) > PERF_COUNTER_RUN_HOST_ID_COL
+        len(fields) > PERF_COUNTER_TRACE_ID_COUNTER_COL
         and fields[PERF_COUNTER_TIMER_ID_COL].strip() == PERF_COUNTER_MARKER_ID
     ):
         return fields
@@ -175,7 +177,12 @@ def _counter_row_fields(line):
 
 
 def _op_key(fields):
-    return (fields[1].strip(), fields[2].strip(), fields[PERF_COUNTER_RUN_HOST_ID_COL].strip())
+    # device, core, run host id and the trace replay a traced op belongs to; every RISC of the core reads out the
+    # same op, so the RISC is not part of it
+    return tuple(
+        fields[c].strip()
+        for c in (0, 1, 2, PERF_COUNTER_RUN_HOST_ID_COL, PERF_COUNTER_TRACE_ID_COL, PERF_COUNTER_TRACE_ID_COUNTER_COL)
+    )
 
 
 def merge_perf_counter_device_logs(pass_csvs, out_csv):
