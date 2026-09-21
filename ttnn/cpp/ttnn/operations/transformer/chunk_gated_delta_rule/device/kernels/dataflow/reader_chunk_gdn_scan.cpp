@@ -95,6 +95,7 @@ void kernel_main() {
     constexpr uint32_t SEM_INIT = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 2);
     constexpr uint32_t CB_CREDIT = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 3);
     constexpr uint32_t CREDIT_OFF = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 4);
+    constexpr uint32_t NBUF = get_compile_time_arg_val(s0_a.next_compile_time_args_offset() + 5);  // hand-off slots
     (void)SEM_READY;  // superseded by the credit words on this variant
 #endif
 #endif
@@ -312,7 +313,6 @@ void kernel_main() {
     noc.async_atomic_barrier();
 
 #elif defined(GDN_FUSED_RECEIVER)
-    Semaphore<> valid(SEM_VALID);
     Semaphore<> init(SEM_INIT);
 
     // v_beta arrives as THIS receiver's V-slice: Vt here is the slice width (Vtl), so cv = Ct*Vtl
@@ -320,44 +320,63 @@ void kernel_main() {
     // declaration); the producer derives the matching slot from the global chunk index.
     constexpr uint32_t cv = Ct * Vt;
 
-    // The producers' per-head credit words sit in the last tile of the union-declared u/mask CB —
-    // the same L1 address on every core of the program — so this receiver can name head h's word
-    // on any producer without being told an address.
-    const uint32_t credit_word = CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF + 4 * h;
+    // Pipelined hand-off: D = NBUF-1 chunks are credited ahead of the one being
+    // waited for, each in its own slot with its own VALID flag (semaphore id SEM_VALID + slot) and its
+    // own credit word credit[h][slot] on the owning producer. The round trip credit -> VALID is thus
+    // hidden behind D receiver steps instead of sitting on the critical path.
+    constexpr uint32_t D = (NBUF > 1) ? NBUF - 1 : 1;
+
+    // The producers' credit words sit in the last tile of the union-declared u/mask CB — the same L1
+    // address on every core of the program — so this receiver can name head h's words on any
+    // producer without being told an address. Word (h, slot) is at CREDIT_OFF + 4*(h*NBUF + slot).
+    const uint32_t credit_base = CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF + 4 * h * NBUF;
 
     // Init barrier: dispatch re-initializes only Semaphore objects per launch, so the producers
     // zero their credit words themselves and then bump `init` here; crediting earlier could land
-    // an increment on a word about to be zeroed (a hang at credit[h] == NV).
+    // an increment on a word about to be zeroed (a hang at credit == NV).
     init.wait(N_INIT);
 
-    for (uint32_t c = 0; c < NC; c++) {
-        // Reserve this chunk's space in ALL SEVEN hand-off CBs FIRST — the credit is the producer's
-        // proof that every slot is writable (compute has popped the previous chunk).
+    // Issue the hand-off of chunk c: reserve, mark its slot INVALID, credit its owner.
+    // reserve_back does not remember earlier unpushed reservations, so ask for D chunks' worth: that
+    // holds iff compute has popped chunk c - NBUF, i.e. iff slot (c % NBUF) is free — exactly the
+    // condition the credit promises the producer. (The v_beta ring is NV*NBUF chunks deep for this
+    // slice and therefore free a fortiori.)
+    auto issue = [&](uint32_t c) {
         {
             DeviceZoneScopedN("rx_reserve");
-            CircularBuffer(cb_vbeta).reserve_back(cv);
-            CircularBuffer(cb_kd).reserve_back(ck);
-            CircularBuffer(cb_qdecay).reserve_back(ck);
-            CircularBuffer(cb_intra).reserve_back(cc);
-            CircularBuffer(cb_kdec_t).reserve_back(kc);
-            CircularBuffer(cb_dl).reserve_back(1);
-            CircularBuffer(cb_Tinv).reserve_back(cc);
+            CircularBuffer(cb_vbeta).reserve_back(D * cv);
+            CircularBuffer(cb_kd).reserve_back(D * ck);
+            CircularBuffer(cb_qdecay).reserve_back(D * ck);
+            CircularBuffer(cb_intra).reserve_back(D * cc);
+            CircularBuffer(cb_kdec_t).reserve_back(D * kc);
+            CircularBuffer(cb_dl).reserve_back(D * 1);
+            CircularBuffer(cb_Tinv).reserve_back(D * cc);
         }
-
-        // Reset our valid flag BEFORE crediting: a fast producer may mcast VALID immediately after
+        const uint32_t slot = c % NBUF;
+        // Reset the slot's flag BEFORE crediting: a fast producer may set VALID immediately after
         // the credit lands, and a late reset would overwrite it (lost wakeup -> deadlock).
-        valid.set(INVALID);
-        // Credit the owner of chunk c by incrementing ITS copy of credit[h].
-        // INVARIANT (design D6): at most one outstanding credit per receiver, always for the next
-        // chunk, and issued only after VALID for the previous chunk was observed — the per-head
-        // credit words are race-free only under this ordering. Do not credit ahead.
+        Semaphore<>(SEM_VALID + slot).set(INVALID);
+        // Credit the owner of chunk c by incrementing ITS copy of credit[h][slot]. INVARIANT: a slot
+        // is credited only after it was reserved, i.e. after compute popped the chunk
+        // that last used it — which the producer's VALID for that chunk preceded, which its reset of
+        // this very word preceded. Hence the word counts exactly one chunk at a time for any NP.
         const uint32_t pi = c % NP;
         const uint64_t dst = get_noc_addr(
-            get_arg_val<uint32_t>(6 + 2 * pi), get_arg_val<uint32_t>(7 + 2 * pi), credit_word, noc.get_noc_id());
+            get_arg_val<uint32_t>(6 + 2 * pi),
+            get_arg_val<uint32_t>(7 + 2 * pi),
+            credit_base + 4 * slot,
+            noc.get_noc_id());
         noc_semaphore_inc(dst, 1, noc.get_noc_id());
+    };
+
+    uint32_t next = 0;
+    for (; next < D && next < NC; next++) {
+        issue(next);
+    }
+    for (uint32_t c = 0; c < NC; c++) {
         {
             DeviceZoneScopedN("rx_wait_valid");
-            valid.wait(VALID);
+            Semaphore<>(SEM_VALID + (c % NBUF)).wait(VALID);
         }
 
         // The chunk's seven blocks are in our CBs; make them visible to compute.
@@ -368,9 +387,16 @@ void kernel_main() {
         CircularBuffer(cb_kdec_t).push_back(kc);
         CircularBuffer(cb_dl).push_back(1);
         CircularBuffer(cb_Tinv).push_back(cc);
+
+        if (next < NC) {
+            issue(next);
+            next++;
+        }
     }
 
-    valid.set(INVALID);  // local store: restore the initial value (the last wait left it VALID)
+    for (uint32_t s = 0; s < NBUF; s++) {
+        Semaphore<>(SEM_VALID + s).set(INVALID);  // local store: restore the initial values
+    }
     // Drain the credit atomics: no non-posted inc may be in flight at kernel exit.
     noc.async_atomic_barrier();
 

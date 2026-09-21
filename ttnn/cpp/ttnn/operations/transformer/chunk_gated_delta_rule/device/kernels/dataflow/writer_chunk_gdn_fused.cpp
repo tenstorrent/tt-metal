@@ -55,6 +55,9 @@ void kernel_main() {
     constexpr uint32_t CB_CREDIT = get_compile_time_arg_val(8);   // union-declared CB holding the credit words
     constexpr uint32_t CREDIT_OFF = get_compile_time_arg_val(9);  // byte offset of credit[0] in that CB
     constexpr bool UNICAST = get_compile_time_arg_val(10) != 0;   // A/B: NV unicast writes instead of multicasts
+    constexpr bool POSTED =
+        get_compile_time_arg_val(11) != 0;  // A/B (unicast only): posted data, ordered VALID, no barrier
+    static_assert(!POSTED || UNICAST, "posted hand-off requires the unicast transport");
     static_assert(Vtl * NV == Vt, "NV receivers must tile the full V width");
 
     const uint32_t NC = get_arg_val<uint32_t>(0);   // GLOBAL chunk count of this head
@@ -80,17 +83,46 @@ void kernel_main() {
     const uint32_t tb = get_tile_size(cb_vbeta);  // all hand-off CBs are fp32 -> same tile size
 
     Noc noc;
-    Semaphore<> valid(SEM_VALID);
+    UnicastEndpoint ucast_dst;  // unicast destination endpoint (VALID flags, unicast transport)
     Semaphore<> init(SEM_INIT);
-    // set_multicast sources its 4-byte value from this core's LOCAL copy of `valid` — read
-    // asynchronously, when the NIU processes the command. Preset it to VALID once; any later
-    // write to this word must be preceded by a barrier (see the teardown).
-    valid.set(VALID);
+    // Per-slot VALID flags: semaphore ids SEM_VALID + s, s = c % NBUF. The remote set
+    // (multicast or unicast) sources its 4-byte payload from this core's LOCAL copy of the SAME-id
+    // word — read asynchronously, when the NIU processes the command. Preset all NBUF to VALID once;
+    // any later write to these words must be preceded by a barrier (see the teardown).
+    for (uint32_t s = 0; s < NBUF; s++) {
+        Semaphore<>(SEM_VALID + s).set(VALID);
+    }
+    // Send chunk c's VALID to the head's receivers: their word for slot (c % NBUF).
+    auto set_valid = [&](uint32_t slot) {
+        if constexpr (POSTED) {
+            // Ordered behind this item's posted data writes: same NIU, same write command buffer, same
+            // VC (NOC_UNICAST_WRITE_VC), same destination => delivered in issue order. Non-posted, so
+            // the teardown barrier drains it.
+            const uint32_t word = get_semaphore(SEM_VALID + slot);
+            for (uint32_t v = 0; v < NV; v++) {
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(word),
+                    ucast_dst,
+                    4,
+                    {},
+                    {.noc_x = rcv_x(v), .noc_y = rcv_y(v), .addr = word});
+            }
+        } else if constexpr (UNICAST) {
+            const uint32_t word = get_semaphore(SEM_VALID + slot);  // same L1 offset on every core
+            for (uint32_t v = 0; v < NV; v++) {
+                noc_semaphore_set_remote(
+                    word, get_noc_addr(rcv_x(v), rcv_y(v), word, noc.get_noc_id()), noc.get_noc_id());
+            }
+        } else {
+            Semaphore<>(SEM_VALID + slot).set_multicast(noc, mx0, my0, mx1, my1, NV);  // unlinked: ends the chain
+        }
+    };
 
-    // Credit words: zero them, then tell every receiver of this head (init barrier).
+    // Credit words credit[h][slot] (BH x NBUF): zero them, then tell every receiver of this head
+    // (init barrier).
     volatile tt_l1_ptr uint32_t* credit =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CircularBuffer(CB_CREDIT).get_read_ptr() + CREDIT_OFF);
-    for (uint32_t i = 0; i < BH; i++) {
+    for (uint32_t i = 0; i < BH * NBUF; i++) {
         noc_semaphore_set(credit + i, 0);
     }
     for (uint32_t v = 0; v < NV; v++) {
@@ -109,14 +141,22 @@ void kernel_main() {
 
     MulticastEndpoint mcast_dst;
     // One LINKED multicast of a shared CB's front slot into the head's rectangle.
-    UnicastEndpoint ucast_dst;
     auto send_unicast = [&](uint32_t src_addr, uint32_t v, uint32_t n, uint32_t dst_addr) {
-        noc.async_write(
-            CoreLocalMem<uint32_t>(src_addr),
-            ucast_dst,
-            n * tb,
-            {},
-            {.noc_x = rcv_x(v), .noc_y = rcv_y(v), .addr = dst_addr});
+        if constexpr (POSTED) {
+            noc.async_write<NocOptions::POSTED>(
+                CoreLocalMem<uint32_t>(src_addr),
+                ucast_dst,
+                n * tb,
+                {},
+                {.noc_x = rcv_x(v), .noc_y = rcv_y(v), .addr = dst_addr});
+        } else {
+            noc.async_write(
+                CoreLocalMem<uint32_t>(src_addr),
+                ucast_dst,
+                n * tb,
+                {},
+                {.noc_x = rcv_x(v), .noc_y = rcv_y(v), .addr = dst_addr});
+        }
     };
     auto send_shared = [&](uint32_t cb_id, uint32_t n, uint32_t dst_addr) {
         const uint32_t addr = CircularBuffer(cb_id).get_read_ptr();
@@ -170,13 +210,16 @@ void kernel_main() {
             CircularBuffer(cb_dl).wait_front(1);
         }
 
-        // All NV receivers of head h have reserved chunk c's slots. Exactly NV — an over-credit
-        // would be a protocol bug and shows up as a hang here rather than as corrupt output.
+        // All NV receivers of head h have reserved chunk c's slot. Exactly NV — an over-credit
+        // would be a protocol bug and shows up as a hang here rather than as corrupt output. The
+        // word is per (head, slot): its next credit (chunk c + NBUF) can only follow this chunk's
+        // VALID -> pop -> reserve, so the reset below never races an increment.
+        volatile tt_l1_ptr uint32_t* credit_word = credit + h * NBUF + slot;
         {
             DeviceZoneScopedN("tx_wait_credit");
-            noc_semaphore_wait(credit + h, NV);
+            noc_semaphore_wait(credit_word, NV);
         }
-        noc_semaphore_set(credit + h, 0);
+        noc_semaphore_set(credit_word, 0);
 
         {
             DeviceZoneScopedN("tx_issue");
@@ -197,14 +240,21 @@ void kernel_main() {
             send_shared(cb_dl, 1, base_dl + slot * 1 * tb);
         }
         {
-            // Every write above must have LANDED before the flag: the slices are unlinked unicasts
-            // and could otherwise overtake the flag. The barrier waits for acks (a flush would not).
             DeviceZoneScopedN("tx_barrier");
-            noc.async_write_barrier();
+            if constexpr (POSTED) {
+                // Posted data: nothing to ack. The flag below is ordered behind the data by the NoC;
+                // the flush only guarantees the NIU has finished READING this item's CB slots, so
+                // the pops below may hand them back to compute.
+                noc.async_writes_flushed<NocOptions::POSTED>();
+            } else {
+                // Every write above must have LANDED before the flag: the slices are unlinked unicasts
+                // and could otherwise overtake the multicast flag. The barrier waits for acks.
+                noc.async_write_barrier();
+            }
         }
         {
             DeviceZoneScopedN("tx_valid");
-            valid.set_multicast(noc, mx0, my0, mx1, my1, NV);  // unlinked: ends the chain
+            set_valid(slot);
         }
 
         // Free the slots for compute's next chunk only now (the writes have completed).
@@ -222,9 +272,14 @@ void kernel_main() {
     // deadlock the receivers at valid.wait(VALID). Only after all nonposted writes are acked is
     // the local reset safe (payload-source rule).
     noc.async_write_barrier();
+    if constexpr (POSTED) {
+        noc.async_writes_flushed<NocOptions::POSTED>();  // no posted write may be in flight at kernel exit
+    }
     // Drain the init.up() atomics: non-posted increments, counted apart from writes, and no NoC
     // transaction may be outstanding at kernel exit. Their acks return on this NoC while the credits
     // that prove the increments landed arrive on the other, so only the barrier makes it a guarantee.
     noc.async_atomic_barrier();
-    valid.set(INVALID);  // restore the semaphore's initial value
+    for (uint32_t s = 0; s < NBUF; s++) {
+        Semaphore<>(SEM_VALID + s).set(INVALID);  // restore the semaphores' initial value
+    }
 }

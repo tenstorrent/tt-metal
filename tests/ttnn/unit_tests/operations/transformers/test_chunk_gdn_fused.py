@@ -72,6 +72,8 @@ def _clear_gdn_env(monkeypatch):
     # Hand-off CB depth and the unicast/multicast transport of the hand-off (fused prim only; hashed).
     monkeypatch.delenv("QWEN_GDN_HANDOFF_NBUF", raising=False)
     monkeypatch.delenv("QWEN_GDN_UNICAST", raising=False)
+    monkeypatch.delenv("QWEN_GDN_POSTED", raising=False)
+    monkeypatch.delenv("QWEN_GDN_PLACEMENT", raising=False)
     # Legacy selector — superseded by QWEN_GDN_PATH but still honored when PATH is unset.
     monkeypatch.delenv("QWEN_GDN_PHASED", raising=False)
     monkeypatch.delenv("QWEN_GDN_SCAN_SERIAL", raising=False)
@@ -449,17 +451,28 @@ def test_fused_vs_torch_golden(device, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _skip_unless_geometry_fits(device, bh, nv, np_req, nc):
-    """The fused factory's own feasibility predicates (design §6.1): nv | Vt, BH row rectangles of
-    width nv fit the grid, and BH*(nv+np) cores exist (np is clamped to nc by the op host)."""
+def _skip_unless_geometry_fits(device, bh, nv, np_req, nc, placement=0):
+    """The fused factory's own feasibility predicates (design §6.1): nv | Vt, the receiver rectangles
+    fit the grid (row-major or row-local placement), and BH*(nv+np) cores exist (np is clamped to nc
+    by the op host)."""
     grid = device.compute_with_storage_grid_size()
     vt = VDIM // 32
     if vt % nv != 0 or nv > grid.x:
         pytest.skip(f"NV={nv} does not divide Vt={vt} or exceeds the grid width")
-    hpr = grid.x // nv
-    if bh > hpr * grid.y:
-        pytest.skip(f"BH={bh} 1x{nv} receiver rectangles do not fit the {grid.x}x{grid.y} grid")
     np_eff = min(np_req, nc)
+    if placement == 0:
+        hpr = grid.x // nv
+        if bh > hpr * grid.y:
+            pytest.skip(f"BH={bh} 1x{nv} receiver rectangles do not fit the {grid.x}x{grid.y} grid")
+    else:
+        L = nv + np_eff
+        if L > grid.x:
+            pytest.skip(f"row-local placement needs NV+NP={L} <= grid.x={grid.x}")
+        if bh > grid.y:
+            wl = grid.x - L
+            rw = min(nv, wl) if wl else 0
+            if wl < 1 or nv % rw != 0 or (bh - grid.y) * (nv // rw + -(-np_eff // wl)) > grid.y:
+                pytest.skip(f"row-local placement: {bh - grid.y} leftover heads do not fit the {wl}-column block")
     if bh * (nv + np_eff) > grid.x * grid.y:
         pytest.skip(f"BH*(NV+NP)={bh * (nv + np_eff)} exceeds the {grid.x}x{grid.y} compute grid")
 
@@ -530,31 +543,88 @@ def test_fused_nv_bit_exact_vs_phased(device, monkeypatch, nv, np_producers, nc)
     assert torch.equal(fs_fu, fs_ph), f"fused NV={nv} NP={np_producers}: final_state differs from phased"
 
 
+@pytest.mark.parametrize("unicast", [1, 0])
 @pytest.mark.parametrize(
     "nv, np_producers, nc, nbuf",
     [
-        (2, 7, 64, 2),  # BH=12 NV=2 operating point (24 receivers + 84 producers)
-        (4, 5, 64, 2),  # BH=12 NV=4 operating point (48 + 60); the Phase 1 gate geometry
-        (4, 5, 8, 3),  # short chain + deeper ring: every slot index is exercised on both sides
-        (2, 3, 9, 4),  # NC not a multiple of NP or nbuf
+        (2, 7, 64, 3),  # BH=12 NV=2 operating point (24 receivers + 84 producers), default ring
+        (4, 5, 64, 2),  # BH=12 NV=4 gate geometry (48 + 60) at the shallowest pipelined ring (D = 1)
+        (4, 5, 8, 4),  # short chain + deeper ring: every slot index is exercised on both sides
+        (2, 3, 9, 3),  # NC not a multiple of NP or nbuf
+        (2, 1, 7, 3),  # single producer per head: the same word is credited for chunks c and c+nbuf
+        (4, 3, 5, 1),  # nbuf=1: one slot, D=1 — the pipelined reader degenerates to the Phase 1 loop
     ],
 )
-def test_fused_nv_unicast_bit_exact(device, monkeypatch, nv, np_producers, nc, nbuf):
-    """Phase 1 transport A/B (design D5): the hand-off shipped as NV plain unicast writes per item
-    (QWEN_GDN_UNICAST=1) instead of the linked multicast chain is bit-identical to phased. The
-    transport is hashed, so the fused program compiles fresh (delta == 1) rather than being served
-    from the multicast entry."""
+def test_fused_nv_transport_bit_exact(device, monkeypatch, nv, np_producers, nc, nbuf, unicast):
+    """Phase 1/1b transport x ring-depth matrix (design D5, D6 v0.3): the hand-off shipped as NV plain
+    unicast writes per item (QWEN_GDN_UNICAST=1, default) or as the linked multicast chain (0), with
+    nbuf-1 hand-offs in flight per receiver, is bit-identical to phased. Transport and depth are
+    hashed, so the fused program compiles fresh (delta == 1)."""
     hk, hv = NP_BH_KV_HEADS
     _skip_unless_geometry_fits(device, hv, nv, np_producers, nc)
-    monkeypatch.setenv("QWEN_GDN_UNICAST", "1")
+    monkeypatch.setenv("QWEN_GDN_UNICAST", str(unicast))
     monkeypatch.setenv("QWEN_GDN_HANDOFF_NBUF", str(nbuf))
     (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
         device, monkeypatch, hk, hv, nc, nv, np_producers, 20260921
     )
-    assert delta == 1, f"unicast fused(NV={nv},NP={np_producers},nbuf={nbuf}) compiled {delta} programs (expected 1)"
+    assert (
+        delta == 1
+    ), f"fused(NV={nv},NP={np_producers},nbuf={nbuf},unicast={unicast}) compiled {delta} programs (expected 1)"
     bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
-    assert not bad, f"unicast fused NV={nv} NP={np_producers}: o differs in (head, vblock) slices {bad}"
-    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), "unicast fused differs from phased"
+    assert (
+        not bad
+    ), f"fused NV={nv} NP={np_producers} nbuf={nbuf} unicast={unicast}: o differs in (head, vblock) slices {bad}"
+    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), "fused differs from phased (transport matrix)"
+
+
+@pytest.mark.parametrize(
+    "nv, np_producers, nc",
+    [
+        (2, 7, 64),  # one head per row (9 cores) + 2 heads as 2x5 blocks in columns 9-10 (1x2 receivers)
+        (4, 5, 16),  # same, the leftover heads' receivers as 2x2 rectangles
+        (2, 3, 9),  # L=5: leftover heads as 1x2 receivers over 6 columns, 2 rows each
+        (1, 9, 8),  # NV=1: L=10, leftover width 1
+    ],
+)
+def test_fused_nv_row_local_placement_bit_exact(device, monkeypatch, nv, np_producers, nc):
+    """Placement A/B (design D9 v0.3): row-local placement (QWEN_GDN_PLACEMENT=1) — one head per row,
+    leftover heads as column blocks with 2-D receiver rectangles — is bit-identical to phased. The
+    placement is hashed (delta == 1)."""
+    hk, hv = NP_BH_KV_HEADS
+    _skip_unless_geometry_fits(device, hv, nv, np_producers, nc, placement=1)
+    monkeypatch.setenv("QWEN_GDN_PLACEMENT", "1")
+    (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
+        device, monkeypatch, hk, hv, nc, nv, np_producers, 20260921
+    )
+    assert delta == 1, f"row-local fused(NV={nv},NP={np_producers}) compiled {delta} programs (expected 1)"
+    bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
+    assert not bad, f"row-local fused NV={nv} NP={np_producers}: o differs in (head, vblock) slices {bad}"
+    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), "row-local fused differs from phased"
+
+
+@pytest.mark.parametrize(
+    "nv, np_producers, nc, nbuf",
+    [
+        (2, 7, 64, 2),  # NV=2 operating point, the default ring depth
+        (4, 5, 8, 3),  # NV=4, short chain, D=2 in flight
+        (2, 1, 7, 3),  # single producer per head
+    ],
+)
+def test_fused_nv_posted_bit_exact(device, monkeypatch, nv, np_producers, nc, nbuf):
+    """Phase 1b transport A/B (design D5): posted unicast data writes with the VALID flag ordered
+    behind them by same-VC in-order delivery (no per-item barrier) are bit-identical to phased."""
+    hk, hv = NP_BH_KV_HEADS
+    _skip_unless_geometry_fits(device, hv, nv, np_producers, nc)
+    monkeypatch.setenv("QWEN_GDN_UNICAST", "1")
+    monkeypatch.setenv("QWEN_GDN_POSTED", "1")
+    monkeypatch.setenv("QWEN_GDN_HANDOFF_NBUF", str(nbuf))
+    (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
+        device, monkeypatch, hk, hv, nc, nv, np_producers, 20260921
+    )
+    assert delta == 1, f"posted fused(NV={nv},NP={np_producers},nbuf={nbuf}) compiled {delta} programs (expected 1)"
+    bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
+    assert not bad, f"posted fused NV={nv} NP={np_producers}: o differs in (head, vblock) slices {bad}"
+    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), "posted fused differs from phased"
 
 
 @pytest.mark.parametrize(

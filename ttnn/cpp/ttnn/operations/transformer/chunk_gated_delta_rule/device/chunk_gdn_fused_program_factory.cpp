@@ -139,36 +139,84 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     const CoreCoord grid = device->compute_with_storage_grid_size();
     const uint32_t n_cores = grid.x * grid.y;
     TT_FATAL(NV <= grid.x, "chunk_gdn_fused: nv={} exceeds the grid width {}", NV, grid.x);
-    const uint32_t HPR = grid.x / NV;  // heads per receiver row
+    const uint32_t HPR = grid.x / NV;  // heads per receiver row (placement 0)
     const uint32_t R = BH * NV;        // receiver cores
     const uint32_t P = BH * NP;        // producer cores
-    TT_FATAL(
-        BH <= HPR * grid.y,
-        "chunk_gdn_fused: BH={} 1x{} receiver rectangles do not fit a {}x{} grid ({} per row)",
-        BH,
-        NV,
-        grid.x,
-        grid.y,
-        HPR);
     TT_FATAL(R + P <= n_cores, "chunk_gdn_fused: R+P = {}+{} cores needed, grid has {}", R, P, n_cores);
 
-    // ---- Placement (mirrors gdnopt/fused_geometry.py::placement) ----
+    // ---- Placement (design D9; mode 0 mirrors gdnopt/fused_geometry.py::placement) ----
     std::vector<CoreCoord> rcv_cores(R);  // index h*NV + v
-    std::vector<bool> is_rcv(n_cores, false);
-    for (uint32_t h = 0; h < BH; h++) {
-        const uint32_t y0 = h / HPR;
-        const uint32_t x0 = (h % HPR) * NV;
-        for (uint32_t v = 0; v < NV; v++) {
-            rcv_cores[h * NV + v] = CoreCoord{x0 + v, y0};
-            is_rcv[y0 * grid.x + x0 + v] = true;
-        }
-    }
-    std::vector<CoreCoord> prod_cores;  // index p = h*NP + j
+    std::vector<CoreCoord> prod_cores;    // index p = h*NP + j
     prod_cores.reserve(P);
-    for (uint32_t y = 0; y < grid.y && prod_cores.size() < P; y++) {
-        for (uint32_t x = 0; x < grid.x && prod_cores.size() < P; x++) {
-            if (!is_rcv[y * grid.x + x]) {
-                prod_cores.push_back(CoreCoord{x, y});
+    if (attrs.placement == 0) {
+        TT_FATAL(
+            BH <= HPR * grid.y,
+            "chunk_gdn_fused: BH={} 1x{} receiver rectangles do not fit a {}x{} grid ({} per row)",
+            BH,
+            NV,
+            grid.x,
+            grid.y,
+            HPR);
+        std::vector<bool> is_rcv(n_cores, false);
+        for (uint32_t h = 0; h < BH; h++) {
+            const uint32_t y0 = h / HPR;
+            const uint32_t x0 = (h % HPR) * NV;
+            for (uint32_t v = 0; v < NV; v++) {
+                rcv_cores[h * NV + v] = CoreCoord{x0 + v, y0};
+                is_rcv[y0 * grid.x + x0 + v] = true;
+            }
+        }
+        for (uint32_t y = 0; y < grid.y && prod_cores.size() < P; y++) {
+            for (uint32_t x = 0; x < grid.x && prod_cores.size() < P; x++) {
+                if (!is_rcv[y * grid.x + x]) {
+                    prod_cores.push_back(CoreCoord{x, y});
+                }
+            }
+        }
+    } else {
+        // Row-local: head h < grid.y owns row h — receivers at columns 0..NV-1, producers at NV..L-1.
+        // NOC_1 routes -x then -y, so every producer's writes travel west inside the head's own row and
+        // never share a link with another head. Heads h >= grid.y live in the leftover columns [L, W)
+        // as vertical blocks: an rw x rh receiver rectangle on top, the producers row-major below it —
+        // their traffic is confined to the block's columns (short -x legs, then -y within the block).
+        const uint32_t L = NV + NP;
+        TT_FATAL(L <= grid.x, "chunk_gdn_fused: row-local placement needs NV+NP={} <= grid.x={}", L, grid.x);
+        const uint32_t n_row_heads = std::min<uint32_t>(BH, grid.y);
+        for (uint32_t h = 0; h < n_row_heads; h++) {
+            for (uint32_t v = 0; v < NV; v++) {
+                rcv_cores[h * NV + v] = CoreCoord{v, h};
+            }
+            for (uint32_t j = 0; j < NP; j++) {
+                prod_cores.push_back(CoreCoord{NV + j, h});
+            }
+        }
+        if (BH > n_row_heads) {
+            const uint32_t rem = BH - n_row_heads;
+            const uint32_t wl = grid.x - L;
+            TT_FATAL(wl >= 1, "chunk_gdn_fused: row-local placement: no leftover columns for {} extra heads", rem);
+            const uint32_t rw = std::min<uint32_t>(NV, wl);
+            TT_FATAL(
+                NV % rw == 0,
+                "chunk_gdn_fused: row-local placement: NV={} not a multiple of the leftover width {}",
+                NV,
+                rw);
+            const uint32_t rh = NV / rw;
+            const uint32_t block_h = rh + (NP + wl - 1) / wl;
+            TT_FATAL(
+                rem * block_h <= grid.y,
+                "chunk_gdn_fused: row-local placement: {} leftover heads need {} rows, grid has {}",
+                rem,
+                rem * block_h,
+                grid.y);
+            for (uint32_t kk = 0; kk < rem; kk++) {
+                const uint32_t h = n_row_heads + kk;
+                const uint32_t y_base = kk * block_h;
+                for (uint32_t v = 0; v < NV; v++) {
+                    rcv_cores[h * NV + v] = CoreCoord{L + (v % rw), y_base + v / rw};
+                }
+                for (uint32_t j = 0; j < NP; j++) {
+                    prod_cores.push_back(CoreCoord{L + (j % wl), y_base + rh + j / wl});
+                }
             }
         }
     }
@@ -217,8 +265,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     add_cb(union_set, fcb::dl, 1, kHandoffNbuf);
     add_cb(union_set, fcb::Tinv, cc, kHandoffNbuf);
     // (1b) The u/mask CB, ALSO on the union: 3 mask tiles (prep reads them once) + 1 credit tile whose
-    // BH leading words are the producer-side credit counters (design D6). Union-declared so the receivers
-    // can address a producer's credit word from their own copy of the CB base.
+    // BH x nbuf leading words are the producer-side credit counters credit[h][slot].
+    // Union-declared so the receivers can address a producer's credit word from their own CB base.
     const uint32_t u_tiles = std::max<uint32_t>(cv, 3) + 1;
     const uint32_t credit_off_bytes = (u_tiles - 1) * tile_f32;
     add_cb(union_set, fcb::u, u_tiles);
@@ -272,14 +320,18 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
 
     // Handshake semaphores, declared on the UNION so each id resolves to the same L1 address on
     // producer and receiver. Ids reach both kernels as trailing compile-time args.
-    //   id 0 = ready  — legacy F3a single counter; superseded by the credit words (kept so the shared
+    //   id 0 = ready  — legacy single counter; superseded by the credit words (kept so the shared
     //                   scan reader's trailing-arg layout is uniform across its variants)
-    //   id 1 = valid  — producer -> receivers: "this chunk's 7 tensors are in your CBs"
-    //   id 2 = init   — producer -> receivers: "my credit words are zeroed"; receivers wait for NP
+    //   id 1 = init   — producer -> receivers: "my credit words are zeroed"; receivers wait for NP
+    //   ids 2 .. 2+nbuf-1 = valid[slot] — producer -> receivers: "chunk c (slot c % nbuf) is in your
+    //                   CBs". One flag per hand-off slot lets a receiver keep nbuf-1 hand-offs in
+    //                   flight. Consecutive ids => consecutive L1 words, so the kernels
+    //                   address slot s as id (sem_valid_id + s). Program cap is 16 semaphores: nbuf <= 8.
     constexpr uint32_t sem_ready_id = 0;
-    constexpr uint32_t sem_valid_id = 1;
-    constexpr uint32_t sem_init_id = 2;
-    for (uint32_t id : {sem_ready_id, sem_valid_id, sem_init_id}) {
+    constexpr uint32_t sem_init_id = 1;
+    constexpr uint32_t sem_valid_id = 2;
+    TT_FATAL(sem_valid_id + kHandoffNbuf <= 16, "chunk_gdn_fused: nbuf {} needs too many semaphores", kHandoffNbuf);
+    for (uint32_t id = 0; id < sem_valid_id + kHandoffNbuf; id++) {
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = union_set, .initial_value = 0});
     }
@@ -325,7 +377,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         Vtl,
         fcb::u,
         credit_off_bytes,
-        attrs.unicast ? 1u : 0u};
+        attrs.unicast ? 1u : 0u,
+        attrs.posted ? 1u : 0u};
 
     // ---- Receiver-side CT args: the phased SCAN layout at the V-slice width, with Vt_full for strides ----
     const std::vector<uint32_t> ct_scan = {Ct, Kt, Vtl, has_s0, Vt};
@@ -339,6 +392,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     receiver_ct.push_back(sem_init_id);
     receiver_ct.push_back(fcb::u);
     receiver_ct.push_back(credit_off_bytes);
+    receiver_ct.push_back(kHandoffNbuf);
 
     std::vector<uint32_t> scan_writer_ct = ct_scan;
     TensorAccessorArgs(*outputs[0].buffer()).append_to(scan_writer_ct);
@@ -418,7 +472,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     auto* fs_buf = outputs[1].buffer();
 
     for (uint32_t h = 0; h < BH; h++) {
-        // Virtual worker coords of this head's NV receivers (contiguous in one row) and NP producers.
+        // Virtual worker coords of this head's NV receivers (a rectangle: 1xNV row in placement 0,
+        // rw x rh block for the leftover heads of placement 1) and NP producers.
         std::vector<CoreCoord> rv(NV), pv(NP);
         for (uint32_t v = 0; v < NV; v++) {
             rv[v] = device->worker_core_from_logical_core(rcv_cores[h * NV + v]);
@@ -426,8 +481,25 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
         for (uint32_t j = 0; j < NP; j++) {
             pv[j] = device->worker_core_from_logical_core(prod_cores[h * NP + j]);
         }
-        const CoreCoord& m_start = writer_on_noc1 ? rv[NV - 1] : rv[0];
-        const CoreCoord& m_end = writer_on_noc1 ? rv[0] : rv[NV - 1];
+        // Multicast rectangle = the receivers' bounding box. Density is checked in LOGICAL coords (no
+        // other worker of the program inside); the virtual box may additionally span non-worker
+        // columns (Blackhole's virtual grid skips the DRAM/ethernet columns: logical 7 -> virtual 10),
+        // which the multicast tolerates — the row-major 1xNV row rectangles crossed that gap all along.
+        CoreCoord l_tl = rcv_cores[h * NV], l_br = rcv_cores[h * NV];
+        for (uint32_t v = 0; v < NV; v++) {
+            const CoreCoord& c = rcv_cores[h * NV + v];
+            l_tl = CoreCoord{std::min(l_tl.x, c.x), std::min(l_tl.y, c.y)};
+            l_br = CoreCoord{std::max(l_br.x, c.x), std::max(l_br.y, c.y)};
+        }
+        TT_FATAL(
+            (l_br.x - l_tl.x + 1) * (l_br.y - l_tl.y + 1) == NV,
+            "chunk_gdn_fused: head {} receivers do not form a dense {}-core rectangle in logical coords",
+            h,
+            NV);
+        const CoreCoord m_tl = device->worker_core_from_logical_core(l_tl);
+        const CoreCoord m_br = device->worker_core_from_logical_core(l_br);
+        const CoreCoord& m_start = writer_on_noc1 ? m_br : m_tl;  // NOC_1: bottom-right -> top-left
+        const CoreCoord& m_end = writer_on_noc1 ? m_tl : m_br;
 
         // Producer j of head h owns the interleaved chunks c = j, j+NP, ... — as flat work-items
         // wi = h*NC + c that is start h*NC + j with stride NP (trailing reader arg). The op host

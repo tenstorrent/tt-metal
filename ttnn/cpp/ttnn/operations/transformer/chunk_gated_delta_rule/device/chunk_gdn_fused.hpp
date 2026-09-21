@@ -50,13 +50,27 @@ struct ChunkGdnFusedParams {
     // Hand-off CB depth (slots per CB): how many chunks a producer may run ahead of a receiver's
     // consumption, and how early a receiver can reserve+credit the next chunk. 2 = F2's value; deeper
     // rings hide more of the per-chunk handshake round trip at +76 KB of L1 per slot on every core.
-    // Read from QWEN_GDN_HANDOFF_NBUF at attrs construction (hashed).
-    uint32_t nbuf = 2;
+    // Read from QWEN_GDN_HANDOFF_NBUF at attrs construction (hashed). Phase 1b: the receiver keeps
+    // nbuf-1 hand-offs in flight (per-slot VALID flags, BH x nbuf credit words), so 3 hides the unicast
+    // round trip (5.8-6.1 us) behind two receiver steps at both NV=2 and NV=4.
+    uint32_t nbuf = 2;  // measured (v0.3 §10b): 3 and 4 are slower than 2 in every transport
     // Phase 1 A/B (design D5/D16): ship the six shared tensors and the v_beta slices as NV plain unicast
     // writes per item instead of a linked multicast chain. Multicasts reserve router ports along their
     // path; the zone captures show sporadic 20-120 us multicast-issue stalls on individual producers.
-    // Read from QWEN_GDN_UNICAST at attrs construction (hashed).
-    bool unicast = false;
+    // Read from QWEN_GDN_UNICAST at attrs construction (hashed). Default since Phase 1b (QWEN_GDN_UNICAST=0
+    // restores the multicast chain for A/B).
+    bool unicast = true;
+    // Phase 1b A/B (design D5): with the unicast transport, ship the data as POSTED writes (no acks,
+    // no per-item write barrier) and order the VALID flag behind them by the NoC's in-order delivery
+    // on one (source, destination, VC, command buffer) — the argument tt-metal's matmul multicast
+    // sender uses. Requires unicast. Read from QWEN_GDN_POSTED at attrs construction (hashed).
+    bool posted = false;
+    // Placement (design D9): 0 = receivers row-major from row 0, producers fill the rest (v0.2);
+    // 1 = ROW-LOCAL: one head per row (receivers in columns 0..NV-1, its NP producers to their east in
+    // the same row), heads beyond grid.y in the leftover columns as vertical blocks. NOC_1 routes -x
+    // then -y, so a head's hand-off traffic never leaves its own row (or column block) and heads do not
+    // share NoC links (v0.3 §10b). Read from QWEN_GDN_PLACEMENT at attrs construction (hashed).
+    uint32_t placement = 0;
     bool has_initial_state = false;
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;

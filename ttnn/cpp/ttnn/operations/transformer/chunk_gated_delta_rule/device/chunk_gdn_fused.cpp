@@ -71,16 +71,53 @@ void ChunkGdnFusedOperation::validate_on_program_cache_miss(
     TT_FATAL(Vt % attrs.nv == 0, "chunk_gdn_fused: nv ({}) must divide Vt ({})", attrs.nv, Vt);
     const auto grid = in.q.device()->compute_with_storage_grid_size();
     TT_FATAL(attrs.nv <= grid.x, "chunk_gdn_fused: nv ({}) exceeds the grid width {}", attrs.nv, grid.x);
-    const uint32_t hpr = grid.x / attrs.nv;
+    // Per-(head, slot) credit words live in one 4 KB tile of the u/mask CB.
     TT_FATAL(
-        attrs.BH <= hpr * grid.y,
-        "chunk_gdn_fused: BH={} heads need 1x{} receiver rectangles; the {}x{} grid holds only {} ({} per row)",
+        attrs.BH * attrs.nbuf <= 1024,
+        "chunk_gdn_fused: BH * nbuf ({} * {}) credit words exceed the 1024-word credit tile",
         attrs.BH,
-        attrs.nv,
-        grid.x,
-        grid.y,
-        hpr * grid.y,
-        hpr);
+        attrs.nbuf);
+    if (attrs.placement == 0) {
+        const uint32_t hpr = grid.x / attrs.nv;
+        TT_FATAL(
+            attrs.BH <= hpr * grid.y,
+            "chunk_gdn_fused: BH={} heads need 1x{} receiver rectangles; the {}x{} grid holds only {} ({} per row)",
+            attrs.BH,
+            attrs.nv,
+            grid.x,
+            grid.y,
+            hpr * grid.y,
+            hpr);
+    } else {
+        // Row-local: L = NV+NP cores per head in one row; heads beyond grid.y go to the
+        // leftover W-L columns as blocks of NV receivers (rw x rh rectangle) + NP producers.
+        const uint32_t L = attrs.nv + attrs.np;
+        TT_FATAL(L <= grid.x, "chunk_gdn_fused: row-local placement needs NV+NP={} <= grid.x={}", L, grid.x);
+        if (attrs.BH > grid.y) {
+            const uint32_t rem = attrs.BH - grid.y;
+            const uint32_t wl = grid.x - L;
+            TT_FATAL(
+                wl >= 1,
+                "chunk_gdn_fused: row-local placement: {} heads exceed the {} rows and no columns are left",
+                attrs.BH,
+                grid.y);
+            const uint32_t rw = std::min<uint32_t>(attrs.nv, wl);
+            TT_FATAL(
+                attrs.nv % rw == 0,
+                "chunk_gdn_fused: row-local placement: NV={} is not a multiple of the leftover width {}",
+                attrs.nv,
+                rw);
+            const uint32_t block_h = attrs.nv / rw + (attrs.np + wl - 1) / wl;
+            TT_FATAL(
+                rem * block_h <= grid.y,
+                "chunk_gdn_fused: row-local placement: {} leftover heads need {} rows of the {}-column block, grid has "
+                "{}",
+                rem,
+                rem * block_h,
+                wl,
+                grid.y);
+        }
+    }
     TT_FATAL(
         attrs.BH * (attrs.nv + attrs.np) <= grid.x * grid.y,
         "chunk_gdn_fused needs BH*(NV+NP) = {}*({}+{}) = {} cores, grid has {}x{}={}",
@@ -167,9 +204,21 @@ std::vector<Tensor> chunk_gdn_fused(
         TT_FATAL(v_nb >= 1 && v_nb <= 8, "QWEN_GDN_HANDOFF_NBUF must be in [1, 8] (got '{}')", e);
         nbuf = static_cast<uint32_t>(v_nb);
     }
-    bool unicast = false;
+    bool unicast = true;
     if (const char* e = std::getenv("QWEN_GDN_UNICAST")) {
         unicast = std::atoi(e) != 0;
+    }
+    bool posted = false;
+    if (const char* e = std::getenv("QWEN_GDN_POSTED")) {
+        posted = std::atoi(e) != 0;
+    }
+    TT_FATAL(
+        !posted || unicast, "chunk_gdn_fused: QWEN_GDN_POSTED requires the unicast transport (QWEN_GDN_UNICAST=1)");
+    uint32_t placement = 0;
+    if (const char* e = std::getenv("QWEN_GDN_PLACEMENT")) {
+        const int v_pl = std::atoi(e);
+        TT_FATAL(v_pl == 0 || v_pl == 1, "QWEN_GDN_PLACEMENT must be 0 (row-major) or 1 (row-local), got '{}'", e);
+        placement = static_cast<uint32_t>(v_pl);
     }
     auto attrs = ChunkGdnFusedOperation::operation_attributes_t{
         .BH = BH,
@@ -187,6 +236,8 @@ std::vector<Tensor> chunk_gdn_fused(
         .nv = nv,
         .nbuf = nbuf,
         .unicast = unicast,
+        .posted = posted,
+        .placement = placement,
         .has_initial_state = initial_state.has_value(),
         .output_final_state = output_final_state,
         .output_mem_config = output_mem_config,
