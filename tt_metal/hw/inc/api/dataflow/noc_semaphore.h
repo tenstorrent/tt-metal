@@ -46,8 +46,8 @@ class Semaphore {
     static __attribute__((always_inline)) inline uintptr_t sem_l1_offset(uint32_t id) {
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
         if constexpr (SCOPE == SemScope::DM_LOCAL_CACHED) {
-            ASSERT(id < MEM_DM_CACHED_SEM_SIZE / MEM_DM_CACHED_SEM_ROW);
-            return static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + id * MEM_DM_CACHED_SEM_ROW;
+            ASSERT(id < MEM_SEM_CACHED_POOL_SIZE / MEM_SEM_CACHED_POOL_ROW);
+            return static_cast<uintptr_t>(MEM_SEM_CACHED_POOL_BASE) + id * MEM_SEM_CACHED_POOL_ROW;
         }
 #endif
         return get_semaphore<core_type>(id);
@@ -59,15 +59,15 @@ class Semaphore {
     uint32_t external_lock_l1_offset() const {
         const uint32_t id =
             (static_cast<uint32_t>(l1_offset_) - static_cast<uint32_t>(get_semaphore<core_type>(0))) / L1_ALIGNMENT;
-        ASSERT(id * L1_ALIGNMENT < MEM_NOC_SEM_LOCK_SIZE);
-        return MEM_NOC_SEM_LOCK_BASE + id * L1_ALIGNMENT;
+        ASSERT(id * L1_ALIGNMENT < MEM_SEM_LOCK_SIZE);
+        return MEM_SEM_LOCK_BASE + id * L1_ALIGNMENT;
     }
     // This hart's private CAS-return slot.
     static uint32_t cas_ret_slot() {
         uint64_t hart;
         asm volatile("csrr %0, mhartid" : "=r"(hart));
-        ASSERT(static_cast<uint32_t>(hart) * 4 < MEM_NOC_CAS_RET_SIZE);
-        return MEM_NOC_CAS_RET_BASE + static_cast<uint32_t>(hart) * 4;
+        ASSERT(static_cast<uint32_t>(hart) * 4 < MEM_SEM_CAS_RET_SIZE);
+        return MEM_SEM_CAS_RET_BASE + static_cast<uint32_t>(hart) * 4;
     }
 #endif
 

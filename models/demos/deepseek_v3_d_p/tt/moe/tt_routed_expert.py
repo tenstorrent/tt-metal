@@ -22,6 +22,7 @@ from tracy import signpost
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 
@@ -43,11 +44,13 @@ def _fused_compute_config(config):
 
 
 # Model configs are torch-only and so name their activation as a string; this is the one place
-# that maps those names onto the kernel enum. Keys match the HF ``hidden_act`` spelling.
+# that maps those names onto the kernel enum. Keys are the TT activation name, not the HF
+# ``hidden_act``: DeepSeek-V4's ``hidden_act`` is "silu", with the clamp on ``swiglu_limit``.
 ROUTED_EXPERT_ACTIVATION_BY_NAME = {
     "silu": ttnn.RoutedExpertActivation.Silu,
     "swiglu_oai": ttnn.RoutedExpertActivation.SwiGluOai,
     "situ": ttnn.RoutedExpertActivation.SituGlu,
+    "clamped_silu_glu": ttnn.RoutedExpertActivation.ClampedSiluGlu,
 }
 
 # Activations allowed to carry expert biases. ClampedSiluGlu is excluded because
@@ -590,7 +593,8 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
         """
-        logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
         if is_blackhole():
             # Fused path. The composite op selects its strategy from the input
@@ -677,7 +681,8 @@ class TtRoutedExpert(LightweightModule):
                     up_biases=self.up_biases,
                     down_biases=self.down_biases,
                 )
-            logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
 
         if self.gate_biases is not None:
@@ -706,7 +711,8 @@ class TtRoutedExpert(LightweightModule):
                 local_expert_id=local_expert,
                 max_dispatched_tokens_per_expert=self.max_tokens,
             )
-            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
             output = ttnn.experimental.deepseek_prefill.routed_expert_ffn(
                 tokens,
@@ -716,7 +722,8 @@ class TtRoutedExpert(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config,
                 output=None,
             )
-            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
+            if DEBUG_LOGGING_ENABLED:
+                logger.debug(f"Expert {local_expert}: output shape {output.shape}")
 
             expert_outputs = ttnn.experimental.deepseek_prefill.insert(
                 expert_outputs,
@@ -727,5 +734,6 @@ class TtRoutedExpert(LightweightModule):
                 local_expert_id=local_expert,
             )
 
-        logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
+        if DEBUG_LOGGING_ENABLED:
+            logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
         return expert_outputs

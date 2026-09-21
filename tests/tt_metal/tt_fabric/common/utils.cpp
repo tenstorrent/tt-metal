@@ -9,6 +9,7 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
+#include <unistd.h>
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/distributed_context.hpp>
@@ -1317,6 +1318,12 @@ void expect_galaxy_corner_folding_check(const ControlPlane& control_plane) {
                 << "Fabric node (mesh=" << mesh_id << ", chip=" << chip_id << ") asic_location should be 1";
         }
     }
+}
+
+std::string write_temp_descriptor(const std::string& name, const std::string& text_proto) {
+    const auto path = std::filesystem::temp_directory_path() / (std::to_string(::getpid()) + "_" + name);
+    std::ofstream(path) << text_proto;
+    return path.string();
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
