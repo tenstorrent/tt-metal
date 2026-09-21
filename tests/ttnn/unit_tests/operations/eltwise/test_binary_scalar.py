@@ -946,16 +946,15 @@ def test_float_scalar_promotes_integer_tensor(device, ttnn_dtype, torch_dtype, s
         assert_equal(expected, output)
 
 
-@pytest.mark.xfail(strict=True, reason="the golden uses the exact scalar where the device rounds it")
-@pytest.mark.parametrize("op_name", ("add", "subtract"))
-def test_scalar_float32_rounds_into_range_before_the_exactness_check(device, op_name):
-    """A scalar too wide for either integer arm is bound as a float, and float32 has a spacing of
-    256 at 2**31 -- so the 128 integers in [-2**31 - 128, -2**31) round to exactly -2**31, clear
-    the range check that would otherwise reject them, and reach the kernel as -2**31. The golden
-    keeps the value Python passed it, so the two differ by the rounding. Only this band is
-    affected: one integer lower, float32 lands outside the range and the device rejects the call.
-    """
-    scalar = -(2**31) - 1
+@pytest.mark.parametrize("op_name", ("add", "subtract", "rsub"))
+@pytest.mark.parametrize("scalar", (-(2**31) - 1, -(2**31) - 128))
+def test_scalar_float32_rounds_into_range_before_the_exactness_check(device, op_name, scalar):
+    """A scalar too wide for either integer arm is bound as a float, and float32 is spaced 256
+    apart at 2**31 -- so the 128 integers in [-2**31 - 128, -2**31) round to exactly -2**31, clear
+    the range check that would otherwise reject them, and reach the kernel as -2**31. Taking the
+    unrounded value here does not cost a unit at the near edge: at the far one it wraps to the
+    opposite end of the range. One integer below the band, float32 lands out of range and the
+    device rejects the call instead."""
     torch_input = torch.tensor([[1, 2, 3, 4]], dtype=torch.int32).repeat(32, 8)
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -963,6 +962,17 @@ def test_scalar_float32_rounds_into_range_before_the_exactness_check(device, op_
     output = ttnn.to_torch(getattr(ttnn, op_name)(input_tensor, scalar))
 
     assert_equal(expected, output)
+
+
+@pytest.mark.parametrize("op_name", ("add", "subtract", "rsub"))
+def test_scalar_below_the_rounding_band_is_rejected(device, op_name, expect_error):
+    """One integer below the band the rounding lands outside the operand's range, and the integer
+    path refuses the call rather than packing a value it would change."""
+    torch_input = torch.tensor([[1, 2, 3, 4]], dtype=torch.int32).repeat(32, 8)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "cannot represent the scalar"):
+        getattr(ttnn, op_name)(input_tensor, -(2**31) - 129)
 
 
 @pytest.mark.parametrize("op_name", ("add", "subtract"))

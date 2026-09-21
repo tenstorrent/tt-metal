@@ -153,6 +153,29 @@ def _has_float_scalar(input_tensor_a, input_tensor_b):
     return is_float_scalar(input_tensor_a) or is_float_scalar(input_tensor_b)
 
 
+def _as_device_scalar(value):
+    """A scalar as the kernel receives it. An integer too wide for both integer arms is bound as a
+    float, and float32 is spaced 256 apart around 2**31, so the integers just below -2**31 reach
+    the kernel rounded to -2**31 -- far enough that the unrounded value wraps to the opposite end
+    of the range. Ops that promote get this rounding for free by casting the operand; the ones
+    that stay on the integer path have to apply it themselves."""
+    import torch
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        return value
+
+    low, high = _SCALAR_INT_ARM_RANGE
+    if low <= value < high:
+        return value
+
+    return int(torch.tensor(value, dtype=torch.float32).item())
+
+
+def _integer_path_scalars(input_tensor_a, input_tensor_b):
+    """Both operands with any float-bound integer scalar rounded as the binding rounds it."""
+    return _as_device_scalar(input_tensor_a), _as_device_scalar(input_tensor_b)
+
+
 def _promoted_for_float_scalar(input_tensor_a, input_tensor_b):
     """The operands as multiply and divide compute them. A float scalar against a 32-bit integer
     tensor promotes that tensor to float32 on device; the other ops reject the call instead, so
@@ -293,6 +316,7 @@ def _golden_function_add(
     # result activations afterward. Mirror that order in comparison-mode goldens.
     # Captured before activations, which materialize a scalar operand into a tensor.
     has_scalar_operand = _is_scalar_like(input_tensor_a) or _is_scalar_like(input_tensor_b)
+    input_tensor_a, input_tensor_b = _integer_path_scalars(input_tensor_a, input_tensor_b)
     input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
     tensor_operand = _tensor_operand(input_tensor_a, input_tensor_b)
@@ -347,6 +371,7 @@ def _golden_function_subtract(
 ):
     # Captured before activations, which materialize a scalar operand into a tensor.
     has_scalar_operand = _is_scalar_like(input_tensor_a) or _is_scalar_like(input_tensor_b)
+    input_tensor_a, input_tensor_b = _integer_path_scalars(input_tensor_a, input_tensor_b)
     input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
     tensor_operand = _tensor_operand(input_tensor_a, input_tensor_b)
@@ -401,6 +426,7 @@ def _golden_function_rsub(
 ):
     # Captured before activations, which materialize a scalar operand into a tensor.
     has_scalar_operand = _is_scalar_like(input_tensor_a) or _is_scalar_like(input_tensor_b)
+    input_tensor_a, input_tensor_b = _integer_path_scalars(input_tensor_a, input_tensor_b)
     input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations, input_tensor_b)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
     tensor_operand = _tensor_operand(input_tensor_a, input_tensor_b)
