@@ -853,9 +853,9 @@ jobs:
         timeout-minutes: 10
         run: |
           # ttnn must import on its declared dependencies alone.
-          python3 -m venv /tmp/wheel-smoke
-          /tmp/wheel-smoke/bin/pip install --quiet /work/wheelhouse/*.whl
-          cd / && /tmp/wheel-smoke/bin/python -c "import ttnn"
+          python3 -m venv "$RUNNER_TEMP/wheel-smoke"  # not /tmp: noexec in this image
+          "$RUNNER_TEMP/wheel-smoke/bin/pip" install --quiet /work/wheelhouse/*.whl
+          cd / && "$RUNNER_TEMP/wheel-smoke/bin/python" -c "import ttnn"
 
       - name: ☁️ Upload wheel package
         if: ${{ inputs.build-inplace-wheel }}
