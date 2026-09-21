@@ -115,7 +115,7 @@ def _request_kwargs(task: str) -> dict:
 
 
 @pytest.mark.timeout(5400)
-@pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"{d}s" for d in DURATIONS_S])
+@pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"dur{d}s" for d in DURATIONS_S])
 @pytest.mark.parametrize("task", ("t2va", "fl2va"))
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
 def test_hyperflow_end_to_end(mesh_device, reset_seeds, task, duration_s):
@@ -124,7 +124,7 @@ def test_hyperflow_end_to_end(mesh_device, reset_seeds, task, duration_s):
 
 
 @pytest.mark.timeout(5400)
-@pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"{d}s" for d in DURATIONS_S])
+@pytest.mark.parametrize("duration_s", DURATIONS_S, ids=[f"dur{d}s" for d in DURATIONS_S])
 @pytest.mark.parametrize(("mesh_device", "device_params"), REF2VA_MESHES, indirect=["mesh_device", "device_params"])
 def test_ref2va_hyperflow_end_to_end(mesh_device, reset_seeds, duration_s):
     """``ref2va``: the other partition, the fourth AdaLN level, and a smaller L1 pool."""
