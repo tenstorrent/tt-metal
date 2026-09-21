@@ -224,6 +224,13 @@ def main():
                 del outputs, decoded, output, samples, actual
             # Keep submesh lifetimes within the root mesh; release tensors first.
             del groups, layers, states, zeros, table, positions, group, layer, state
+            # Parent/child mesh CQs share hardware launch state. Synchronizing
+            # waits for work but does not transfer CQ ownership to a submesh.
+            for mesh in meshes:
+                mesh.quiesce_devices()
+            if mode == "tp2dp2":
+                for mesh in meshes:
+                    ttnn.close_mesh_device(mesh)
     finally:
         ttnn.close_mesh_device(root)
 
