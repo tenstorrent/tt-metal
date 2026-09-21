@@ -134,8 +134,8 @@ can't vanish from the console summary.
 - Two are held the other way: **`hostside_pcie_aer` and `hostside_kernel_log` record
   their WARN as PASS** (`TRIAGE_ADVISORY_WARN` in `diag_runner.py`). Both count host
   state accumulated over a boot, so they WARN on units everything else calls healthy,
-  and one phase WARN is a run WARN. FAIL is untouched and the finding still reaches
-  `details` and `data`, annotated `[advisory: WARN recorded as PASS]`.
+  and one phase WARN is a run WARN. FAIL continues to follow `--triage-gating`; the
+  finding still reaches `details` and `data`, annotated `[advisory: WARN recorded as PASS]`.
 
 The text reports land in `<output_dir>/logs/triage_<tool>.txt`, so
 `collect_run_artifacts()` attaches them to the JIRA ticket with no extra wiring.
