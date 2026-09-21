@@ -268,9 +268,32 @@ def create_moe_compute_config(
     output_height_shard_dim = 4
     output_width_shard_dim = auto_output_width_shard_dim(K, matmul_ring_size=effective_matmul_ring_size(mesh_device))
     # The fused combine needs num_links * neighbours mux cores (2 on a 2-link Blackhole ring).
-    # Placement is unconstrained -- the op positions the matmul/tilize/combine groups to avoid
-    # whatever cells mux takes -- so use the same small block the moe_compute suite uses.
-    mux_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(3, 3))])
+    # The op places its own matmul/tilize/combine groups around mux, but it knows nothing about
+    # what the *model* keeps in L1 -- and decode attention pins per-user state to one core per
+    # user: nlp_create_qkv_heads_decode writes user b's Q/K/V to core (b % 8, b // 8) and
+    # RotarySetup keeps that user's cos/sin there too (see ProgramConfig.get_decode_user_grid).
+    # For batch 32 that is the whole block cols 0-7, rows 0-3. Mux workers landing in it
+    # corrupt exactly those users, silently: with mux at (1,1)-(3,3) the users whose cores are
+    # (2,1), (2,2) and (2,3) -- within-row indices 10, 18, 26 -- diverged from their
+    # same-prompt peers on other rows.
+    #
+    # Keep mux clear of that block, of the DRAM-bank-adjacent matmul ring (columns 0 and 7 on
+    # Blackhole) and of the combine cores the op picks (cols 10-11, rows 0-3 here), by placing
+    # it in the lower-middle of the grid.
+    mux_y0 = max(4, compute_grid.y - 5)
+    mux_core_range_set = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(2, mux_y0), ttnn.CoreCoord(5, min(mux_y0 + 3, compute_grid.y - 2)))]
+    )
+    _per_user_cores = {(b % 8, b // 8) for b in range(max(1, tokens_per_device))}
+    _mux_cells = {
+        (c.x, c.y)
+        for cr in mux_core_range_set.ranges()
+        for c in ttnn.corerange_to_cores(ttnn.CoreRangeSet([cr]), row_wise=True)
+    }
+    assert not (_mux_cells & _per_user_cores), (
+        f"mux cores {sorted(_mux_cells & _per_user_cores)} overlap the decode per-user attention "
+        "grid; those users' Q/K/V and RoPE tables would be clobbered"
+    )
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
         mesh_device, output_height_shard_dim, output_width_shard_dim, K, mux_core_range_set=mux_core_range_set
     )
