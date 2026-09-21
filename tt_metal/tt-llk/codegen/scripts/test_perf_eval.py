@@ -114,6 +114,7 @@ def test_missing_baseline_is_not_comparable(tmp_path):
     cur = _csv(tmp_path / "c.csv", "MathOperation.Reciprocal", 600.0)
     r = _eval(cur, None, op="Reciprocal", goal="no_regress")
     assert r["verdict"] == "no_baseline"
+    assert r["reason_code"] == "baseline_rows_missing"
     assert r["exit_code"] == 2
 
 
@@ -123,6 +124,7 @@ def test_op_filter_excludes_other_ops(tmp_path):
     cur = _csv(tmp_path / "c.csv", "MathOperation.Reciprocal", 600.0)
     r = _eval(cur, base, op="Reciprocal", goal="no_regress")
     assert r["verdict"] == "no_baseline"
+    assert r["reason_code"] == "baseline_rows_missing"
     assert r["exit_code"] == 2
 
 
@@ -131,7 +133,20 @@ def test_no_current_rows_not_measured(tmp_path):
     empty.write_text("")
     r = _eval(empty, None, op=None, goal="no_regress")
     assert r["verdict"] == "not_measured"
+    assert r["reason_code"] == "current_rows_missing"
     assert r["exit_code"] == 2
+
+
+def test_empty_current_selection_is_a_plan_defect_not_missing_measurements(tmp_path):
+    cur = _csv(tmp_path / "current.csv", "MathOperation.Sqrt", 600.0)
+    base = _csv(tmp_path / "baseline.csv", "MathOperation.Reciprocal", 600.0)
+    result = _eval(cur, base, op="Reciprocal", goal="no_regress")
+    assert result["verdict"] == "not_measured"
+    assert result["reason_code"] == "current_selection_empty"
+    assert result["exit_code"] == 2
+    assert result["measured"] is False
+    assert result["coverage"]["current_rows"] == 0
+    assert result["coverage"]["comparison_complete"] is False
 
 
 # --- 0.5% noise floor (perf team) ------------------------------------------
@@ -333,6 +348,7 @@ def test_dest_acc_mismatch_is_not_a_comparable_variant(tmp_path):
     base = _variant_csv(tmp_path / "base.csv", [("No", 100)])
     result = _eval(cur, base, op=None, goal="no_regress")
     assert result["exit_code"] == 2 and result["verdict"] == "no_baseline"
+    assert result["reason_code"] == "no_matching_baseline_variants"
     assert result["coverage"]["matched_variants"] == 0
     assert result["coverage"]["current_only_variants"] == 1
     assert result["coverage"]["baseline_only_variants"] == 1
@@ -346,6 +362,7 @@ def test_new_current_variant_prevents_whole_sweep_success_without_claiming_regre
     base = _variant_csv(tmp_path / "base.csv", [("No", 100)])
     result = _eval(cur, base, op=None, goal=goal)
     assert result["exit_code"] == 2 and result["verdict"] == "no_baseline"
+    assert result["reason_code"] == "incomplete_baseline_coverage"
     assert result["measured"] is True
     assert result["matched_verdict"] in ("neutral", "not_improved")
     assert result["variants_compared"] == 1
@@ -378,6 +395,7 @@ def test_asymmetric_configuration_columns_cannot_certify_same_variant(
     )
     result = _eval(cur, base, op=None, goal="no_regress")
     assert result["exit_code"] == 2 and result["verdict"] == "no_baseline"
+    assert result["reason_code"] == "variant_schema_mismatch"
     assert "configuration columns differ" in result["reason"]
     assert result["coverage"]["matched_variants"] is None
     assert result["coverage"]["comparison_complete"] is False
@@ -399,6 +417,7 @@ def test_duplicate_variant_keys_are_rejected_independent_of_csv_order(
     )
     result = _eval(cur, base, op=None, goal="no_regress")
     assert result["exit_code"] == 2 and result["verdict"] == "no_baseline"
+    assert result["reason_code"] == "duplicate_variant_keys"
     assert "duplicate variant keys" in result["reason"]
     assert result["coverage"][f"duplicate_{source}_rows"] == 1
     assert result["coverage"]["comparison_complete"] is False
@@ -422,6 +441,7 @@ def test_partial_overlap_retains_proven_regression_without_full_coverage_claim(
     base = _variant_csv(tmp_path / "base.csv", [("No", 100)])
     result = _eval(cur, base, op=None, goal="no_regress")
     assert result["exit_code"] == 1 and result["verdict"] == "regressed"
+    assert result["reason_code"] == "incomplete_baseline_coverage"
     assert result["matched_verdict"] == "regressed"
     assert result["coverage"]["comparison_complete"] is False
     assert "no matching baseline" in result["reason"]
@@ -449,4 +469,6 @@ def test_cli_incomplete_coverage_is_exit_two_and_reports_counts(tmp_path):
     )
     assert result.returncode == 2
     assert "matched=1 current-only=1 baseline-only=0 complete=False" in result.stdout
-    assert json.loads(out.read_text())["verdict"] == "no_baseline"
+    saved = json.loads(out.read_text())
+    assert saved["verdict"] == "no_baseline"
+    assert saved["reason_code"] == "incomplete_baseline_coverage"

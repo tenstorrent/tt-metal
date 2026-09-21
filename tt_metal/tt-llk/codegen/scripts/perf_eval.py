@@ -145,6 +145,7 @@ def evaluate(
             "op": op,
             "primary_metric": primary_metric,
             "verdict": "not_measured",
+            "reason_code": "current_rows_missing",
             "reason": "no current perf rows",
             "exit_code": 2,
         }
@@ -171,17 +172,27 @@ def evaluate(
         "comparison_complete": False,
     }
 
-    def not_comparable(verdict: str, reason: str) -> dict[str, Any]:
+    def not_comparable(
+        verdict: str, reason: str, *, reason_code: str | None = None
+    ) -> dict[str, Any]:
         return {
             "measured": False,
             "goal": goal,
             "op": op,
             "primary_metric": primary_label,
             "verdict": verdict,
+            "reason_code": reason_code or verdict,
             "reason": reason,
             "exit_code": 2,
             "coverage": coverage,
         }
+
+    if not current_rows:
+        return not_comparable(
+            "not_measured",
+            "current perf rows do not match the requested operation/marker selection",
+            reason_code="current_selection_empty",
+        )
 
     for source, rows in (("current", current_rows), ("baseline", baseline_rows)):
         if rows and any(primary_metric not in row for row in rows):
@@ -195,6 +206,7 @@ def evaluate(
             return not_comparable(
                 "no_baseline",
                 f"{source} variant configuration columns differ from current schema",
+                reason_code="variant_schema_mismatch",
             )
 
     current_keys = [tuple(row.get(c, "") for c in key_cols) for row in current_rows]
@@ -213,6 +225,7 @@ def evaluate(
         return not_comparable(
             "no_baseline",
             "duplicate variant keys make current/baseline matching ambiguous",
+            reason_code="duplicate_variant_keys",
         )
     # A cached baseline may contain a wider sweep; those extra rows do not
     # weaken coverage of the selected current sweep and need not be rerun.
@@ -265,6 +278,11 @@ def evaluate(
             "test": None,
             "primary_metric": primary_label,
             "verdict": "no_baseline",
+            "reason_code": (
+                "no_matching_baseline_variants"
+                if baseline_rows
+                else "baseline_rows_missing"
+            ),
             "reason": "no matching baseline variants to compare against",
             "variants_measured": len(per_variant),
             "exit_code": 2,
@@ -358,7 +376,11 @@ def evaluate(
         "exit_code": exit_code,
     }
     if incomplete_reason:
-        result.update(reason=incomplete_reason, matched_verdict=matched_verdict)
+        result.update(
+            reason=incomplete_reason,
+            reason_code="incomplete_baseline_coverage",
+            matched_verdict=matched_verdict,
+        )
     return result
 
 

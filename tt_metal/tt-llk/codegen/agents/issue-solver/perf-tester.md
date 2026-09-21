@@ -398,8 +398,26 @@ Map the evaluator result:
 | `improved` or `neutral` | 0 | `PERF_OK` |
 | `regressed` | 1 | `PERF_REGRESSED` |
 | `not_improved` | 1 | `PERF_NOT_IMPROVED` |
-| `no_baseline`, `not_measured`, or `invalid_measurement` | 2 | `PERF_ENV_ERROR` |
+| `no_baseline` or `not_measured` | 2 | use the `reason_code` table below |
+| `invalid_measurement` | 2 | `PERF_ENV_ERROR` |
 | `missing_metric` | 2 | `PERF_ENV_ERROR` if the declared metric should exist; `PERF_PLAN_ERROR` if the plan contradicts test source |
+
+For exit 2 with `no_baseline` or `not_measured`, route by the structured
+`reason_code`, never by parsing the human-readable `reason`:
+
+| `reason_code` | Outcome |
+|---|---|
+| `variant_schema_mismatch`, `duplicate_variant_keys`, `incomplete_baseline_coverage`, `no_matching_baseline_variants`, `current_selection_empty` | `PERF_PLAN_ERROR` |
+| `baseline_rows_missing`, `current_rows_missing` | `PERF_ENV_ERROR` |
+| absent (legacy evaluator result) | `PERF_ENV_ERROR` |
+| any other value | `PERF_PLAN_ERROR` (unsupported evaluator contract) |
+
+Preserve `reason_code` and `coverage` in the result. A proven regression still
+maps to `PERF_REGRESSED` even when other variants lack baselines. New variants
+without baseline coverage are not regressions, but cannot certify a whole-plan
+no-regression claim. Return their plan error for correction and resealing; do
+not drop variants after seeing measurements. A wider baseline remains valid
+when every selected current variant has a unique comparable baseline.
 
 An applicable test that cannot produce comparable rows is not a successful or
 not-applicable measurement. Preserve the selected metric and failure evidence;
