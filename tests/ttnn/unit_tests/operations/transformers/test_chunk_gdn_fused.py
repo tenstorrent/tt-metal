@@ -468,11 +468,12 @@ def _skip_unless_geometry_fits(device, bh, nv, np_req, nc, placement=0):
         L = nv + np_eff
         if L > grid.x:
             pytest.skip(f"row-local placement needs NV+NP={L} <= grid.x={grid.x}")
-        if bh > grid.y:
-            wl = grid.x - L
+        k = grid.x // L
+        if bh > k * grid.y:
+            wl = grid.x - k * L
             rw = min(nv, wl) if wl else 0
-            if wl < 1 or nv % rw != 0 or (bh - grid.y) * (nv // rw + -(-np_eff // wl)) > grid.y:
-                pytest.skip(f"row-local placement: {bh - grid.y} leftover heads do not fit the {wl}-column block")
+            if wl < 1 or nv % rw != 0 or (bh - k * grid.y) * (nv // rw + -(-np_eff // wl)) > grid.y:
+                pytest.skip(f"row-local placement: {bh - k * grid.y} leftover heads do not fit the {wl}-column block")
     if bh * (nv + np_eff) > grid.x * grid.y:
         pytest.skip(f"BH*(NV+NP)={bh * (nv + np_eff)} exceeds the {grid.x}x{grid.y} compute grid")
 
@@ -599,6 +600,30 @@ def test_fused_nv_row_local_placement_bit_exact(device, monkeypatch, nv, np_prod
     assert delta == 1, f"row-local fused(NV={nv},NP={np_producers}) compiled {delta} programs (expected 1)"
     bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
     assert not bad, f"row-local fused NV={nv} NP={np_producers}: o differs in (head, vblock) slices {bad}"
+    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), "row-local fused differs from phased"
+
+
+@pytest.mark.parametrize(
+    "hk, hv, nv, np_producers, nc",
+    [
+        (4, 16, 1, 4, 16),  # 397B TP-4 shape (BH=16): the cost model's pick on 11x10 (L=5, 2 heads per row)
+        (4, 16, 2, 3, 16),  # BH=16 at NV=2: 2 heads per row, 30 idle cores
+        (8, 32, 1, 2, 8),  # BH=32 (397B TP-2): 3 heads per row + 2 heads in the leftover columns
+        (2, 8, 4, 7, 16),  # BH=8 (Galaxy2 TP-8): one head per row, NV=4 chain-bound geometry
+        (1, 4, 4, 7, 16),  # BH=4 (TP-16)
+    ],
+)
+def test_fused_nv_row_local_shapes_bit_exact(device, monkeypatch, hk, hv, nv, np_producers, nc):
+    """Row-local placement across the BH range the cost model dispatches (design D8/D9 v0.3, N12):
+    k heads per row plus leftover column blocks, bit-identical to phased."""
+    _skip_unless_geometry_fits(device, hv, nv, np_producers, nc, placement=1)
+    monkeypatch.setenv("QWEN_GDN_PLACEMENT", "1")
+    (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
+        device, monkeypatch, hk, hv, nc, nv, np_producers, 20260921 + hv
+    )
+    assert delta == 1, f"row-local fused(BH={hv},NV={nv},NP={np_producers}) compiled {delta} programs (expected 1)"
+    bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
+    assert not bad, f"row-local fused BH={hv} NV={nv} NP={np_producers}: o differs in (head, vblock) slices {bad}"
     assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), "row-local fused differs from phased"
 
 
