@@ -658,7 +658,7 @@ void kernel_main() {
                     }
 #endif  // FUSE_BIAS
 
-#ifndef OUT_SHARDED
+#if !defined(OUT_SHARDED) && !defined(WRITER_OFF_IN1)
                     // WRITER
                     const uint32_t num_blocks_w_dim_ =
                         bw >= last_num_blocks_w_dim - 1 ? last_num_blocks_w_dim : num_blocks_w_dim;
