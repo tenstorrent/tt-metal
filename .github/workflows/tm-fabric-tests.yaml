@@ -183,7 +183,7 @@ jobs:
       # Trailing commas are stripped by prepare_test_matrix.py's parse_enabled_skus.
       enabled-skus: >-
         ${{ github.event_name == 'workflow_dispatch' && format(
-              '{0}{1}{2}{3}{4}{5}{6}',
+              '{0}{1}{2}{3}{4}{5}',
               inputs.run-wh_n300_civ2             && 'wh_n300_civ2,'             || '',
               inputs.run-wh_llmbox_civ2           && 'wh_llmbox_civ2,'           || '',
               inputs.run-wh_galaxy                && 'wh_galaxy,'                || '',
