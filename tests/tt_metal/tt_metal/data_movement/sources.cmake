@@ -39,4 +39,5 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     quasar_examples/quasar_addrgen/test_addrgen_example.cpp
     quasar_examples/quasar_im2col/test_im2col_example.cpp
     quasar_examples/quasar_idma/test_idma_example.cpp
+    quasar_narrow_row/test_pack_untilize_narrow_row.cpp
 )
