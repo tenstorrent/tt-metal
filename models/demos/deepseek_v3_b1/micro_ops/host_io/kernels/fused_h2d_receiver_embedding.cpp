@@ -269,8 +269,6 @@ void kernel_main() {
 
     noc_async_write_barrier();
     noc_async_read_barrier();
-    // The chunked reads above left PCIe routing on read_cmd_buf, and on-chip reads no longer reprogram MID.
-    noc_async_read_clear_pcie_state(NOC_INDEX, read_cmd_buf);
 
     if constexpr (use_fabric) {
         downstream_fabric_connection.close();
