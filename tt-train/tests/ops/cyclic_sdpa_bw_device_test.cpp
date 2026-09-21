@@ -2936,7 +2936,20 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_CompareForwardsWithTtnn) {
     struct Shape {
         uint32_t heads, kv_heads, N, d;
     };
-    for (const auto sh : {Shape{4, 4, 4096, 64}, Shape{20, 10, 5632, 64}, Shape{32, 8, 5632, 128}}) {
+    // TTML_CYCLIC_FW_COMPARE_SHAPES="heads:kv:N:d,..." replaces the shapes (few heads, long sequences...).
+    std::vector<Shape> shapes{Shape{4, 4, 4096, 64}, Shape{20, 10, 5632, 64}, Shape{32, 8, 5632, 128}};
+    if (const char* env = std::getenv("TTML_CYCLIC_FW_COMPARE_SHAPES"); env != nullptr && *env != '\0') {
+        shapes.clear();
+        std::string spec(env);
+        for (size_t pos = 0; pos < spec.size();) {
+            const size_t end = spec.find(',', pos);
+            Shape sh{};
+            std::sscanf(spec.substr(pos, end - pos).c_str(), "%u:%u:%u:%u", &sh.heads, &sh.kv_heads, &sh.N, &sh.d);
+            shapes.push_back(sh);
+            pos = end == std::string::npos ? spec.size() : end + 1;
+        }
+    }
+    for (const auto sh : shapes) {
         for (const bool causal : {true, false}) {
             xt::xarray<float> Q = xt::zeros<float>({1u, sh.heads, sh.N, sh.d});
             xt::xarray<float> K = xt::zeros<float>({1u, sh.kv_heads, sh.N, sh.d});
