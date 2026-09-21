@@ -4449,3 +4449,82 @@ def test_setup_lock_reuses_existing_file_with_inherited_noclobber(
         path.read_bytes() == sentinel and path.stat().st_ino == inode
         for path, inode in lock_paths.items()
     )
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [None, "unset", "wrong_task", "wrong_branch", "foreign_repo", "locked", "symlink"],
+)
+def test_cleanup_removes_only_owned_attempt(tmp_path, invalid):
+    """Real Git: missing/mismatched identity and locks cannot delete either run."""
+    repo = tmp_path / "repo"
+    script = repo / "tt_metal/tt-llk/codegen/scripts/setup_worktree.sh"
+    script.parent.mkdir(parents=True)
+    script.write_bytes(SETUP_WORKTREE.read_bytes())
+
+    def git(*args, cwd=repo):
+        return subprocess.run(
+            ["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.name", "test")
+    git("config", "user.email", "test@example.com")
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    root = tmp_path / "worktrees"
+    own, other = root / "issue-5-v1", root / "issue-5-v2"
+    for wt, version in [(own, 1), (other, 2)]:
+        git("worktree", "add", "-b", f"llk_code_gen/issue-5-v{version}", str(wt))
+        (wt / "uncommitted.txt").write_text(f"attempt {version}")
+    env = dict(
+        os.environ,
+        CODEGEN_WORKTREE_ROOT=str(root),
+        CODEGEN_KEEP_WORKTREE="false",
+        WORKTREE_DIR=str(own),
+        WORKTREE_BRANCH="llk_code_gen/issue-5-v1",
+    )
+    task = "issue-5"
+    if invalid == "unset":
+        env.pop("WORKTREE_DIR")
+    elif invalid == "wrong_task":
+        task = "issue-6"
+    elif invalid == "wrong_branch":
+        env["WORKTREE_BRANCH"] = "llk_code_gen/issue-5-v2"
+    elif invalid == "locked":
+        git("worktree", "lock", str(own))
+    elif invalid == "symlink":
+        link = root / "alias"
+        link.symlink_to(own, target_is_directory=True)
+        env["WORKTREE_DIR"] = str(link)
+    elif invalid == "foreign_repo":
+        foreign = tmp_path / "foreign"
+        foreign.mkdir()
+        git("init", "-q", cwd=foreign)
+        git("config", "user.name", "test", cwd=foreign)
+        git("config", "user.email", "test@example.com", cwd=foreign)
+        git("commit", "--allow-empty", "-qm", "foreign", cwd=foreign)
+        foreign_wt = root / "issue-5-v3"
+        git(
+            "worktree",
+            "add",
+            "-b",
+            "llk_code_gen/issue-5-v3",
+            str(foreign_wt),
+            cwd=foreign,
+        )
+        env.update(
+            WORKTREE_DIR=str(foreign_wt), WORKTREE_BRANCH="llk_code_gen/issue-5-v3"
+        )
+    result = subprocess.run(
+        ["bash", "-c", 'source "$1"; cleanup_worktree "$2"', "_", str(script), task],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode == 0) is (invalid is None), result.stdout + result.stderr
+    assert own.exists() is (invalid is not None)
+    assert (other / "uncommitted.txt").read_text() == "attempt 2"
+    assert git("rev-parse", "--verify", "llk_code_gen/issue-5-v1")
+    if invalid == "foreign_repo":
+        assert foreign_wt.exists()

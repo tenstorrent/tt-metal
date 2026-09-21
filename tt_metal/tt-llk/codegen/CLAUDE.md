@@ -264,9 +264,14 @@ The worktree is removed after the run; set `CODEGEN_KEEP_WORKTREE=true` if the u
 
 ```bash
 source codegen/scripts/setup_worktree.sh
-cleanup_worktree {TASK_ID}          # removes ONLY this run's worktree (safe under concurrency)
-./codegen/scripts/setup_worktree.sh prune 14   # GC worktrees left behind by crashed runs (>14d)
+# Use the exact paths/branch saved for this attempt, including in a new shell.
+WORKTREE_DIR="{worktree_dir}" WORKTREE_BRANCH="{worktree_branch}" cleanup_worktree {TASK_ID}
 ```
+
+Cleanup validates the task, repository and branch before removing that single
+worktree. If ownership is missing or Git refuses removal, retain the worktree
+and report the cleanup failure. Do not run global `prune` as part of a solve;
+operator garbage collection is separate maintenance, outside the run's latency.
 
 After the cleanup we are left with:
 - `LOG_DIR` is the path the orchestrator set during its run — take the concrete path from the orchestrator's report.

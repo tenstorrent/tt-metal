@@ -423,30 +423,40 @@ cleanup_worktree() {
     return 0
   fi
 
-  if [[ -n "${WORKTREE_DIR:-}" ]]; then
-    # Normal path: only this run's worktree.
-    echo "[worktree] Removing worktree at $WORKTREE_DIR (fix preserved on branch + patch)"
-    git worktree remove --force "$WORKTREE_DIR" 2>/dev/null || true
-    [[ -d "$WORKTREE_DIR" ]] && rm -rf "$WORKTREE_DIR"
-  else
-    # Standalone admin (no WORKTREE_DIR): remove all of this task's worktrees
-    # (may hit a concurrent same-task run — prefer `prune` for routine GC).
-    echo "[worktree] WORKTREE_DIR unset — removing ALL worktrees for '$task_id' (may affect a concurrent same-task run)."
-    local wt
-    while IFS= read -r wt; do
-      case "$wt" in
-        "${CODEGEN_WORKTREE_ROOT}/${task_id}-v"*)
-          echo "[worktree] Removing worktree at $wt"
-          git worktree remove --force "$wt" 2>/dev/null || true
-          [[ -d "$wt" ]] && rm -rf "$wt" ;;
-      esac
-    done < <(codegen_worktree_dirs)
+  # Cleanup is per-attempt. Missing ownership must never turn into a task-wide
+  # search, especially when several retries of the same issue are still live.
+  if [[ -z "${WORKTREE_DIR:-}" || -z "${WORKTREE_BRANCH:-}" ]]; then
+    echo "[worktree] Cleanup requires this attempt's WORKTREE_DIR and WORKTREE_BRANCH" >&2
+    return 1
   fi
-  git worktree prune 2>/dev/null || true
+  local root wt suffix branch common expected_common
+  root="$(realpath -e -- "$CODEGEN_WORKTREE_ROOT")" || return 1
+  wt="$(realpath -e -- "$WORKTREE_DIR")" || return 1
+  case "$wt" in
+    "$root/$task_id-v"*) suffix="${wt#"$root/$task_id-v"}" ;;
+    *) echo "[worktree] Cleanup target does not belong to task '$task_id'" >&2; return 1 ;;
+  esac
+  if [[ ! "$suffix" =~ ^[1-9][0-9]*$ || -L "$WORKTREE_DIR" ]]; then
+    echo "[worktree] Cleanup requires a concrete versioned worktree" >&2
+    return 1
+  fi
+  branch="$(git -C "$wt" symbolic-ref --quiet --short HEAD)" || return 1
+  common="$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir)" || return 1
+  expected_common="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-common-dir)" || return 1
+  if [[ "$(git -C "$wt" rev-parse --show-toplevel)" != "$wt" \
+        || "$(realpath -e -- "$common")" != "$(realpath -e -- "$expected_common")" \
+        || "$branch" != "$WORKTREE_BRANCH" \
+        || "$branch" != "$GIT_USER/$task_id-v$suffix" ]]; then
+    echo "[worktree] Cleanup target repository or branch does not match this attempt" >&2
+    return 1
+  fi
+  echo "[worktree] Removing worktree at $wt (fix preserved on branch + patch)"
+  # Honor Git locks and errors. Do not recursively delete a target Git rejected.
+  git worktree remove --force -- "$wt" || return 1
 
-  if [[ "$delete_branch" == "true" && -n "${WORKTREE_BRANCH:-}" ]]; then
-    echo "[worktree] Deleting branch $WORKTREE_BRANCH"
-    git branch -D "$WORKTREE_BRANCH" 2>/dev/null || true
+  if [[ "$delete_branch" == "true" ]]; then
+    echo "[worktree] Deleting branch $branch"
+    git branch -D -- "$branch" || return 1
   fi
 
   echo "[worktree] Cleanup complete for $task_id"
