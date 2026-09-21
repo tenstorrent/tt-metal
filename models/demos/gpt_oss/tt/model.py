@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 from loguru import logger
 
@@ -397,6 +399,25 @@ class Model:
                 user_id=user_id,
                 batch_size=batch_size,
             )
+            # DIAGNOSTIC: dump each layer's decode output so the dense and moe_compute runs can
+            # be diffed layer by layer. GPT_OSS_DUMP_LAYERS=<dir>, only the first decode step.
+            _dump_dir = os.getenv("GPT_OSS_DUMP_LAYERS")
+            if _dump_dir and is_decode:
+                import torch as _torch
+
+                if not hasattr(self, "_dump_step"):
+                    self._dump_step = 0
+                # Skip the generator's compile/warmup invocations -- those run the model on
+                # placeholder state, so step 0 is not a representative decode.
+                _target = int(os.getenv("GPT_OSS_DUMP_STEP", "8"))
+                if self._dump_step == _target:
+                    _comp = ttnn.ConcatMesh2dToTensor(
+                        self.mesh_device, dims=(-2, -1), mesh_shape=tuple(self.mesh_device.shape)
+                    )
+                    _t = ttnn.to_torch(hidden_states, mesh_composer=_comp).float()
+                    _torch.save(_t, f"{_dump_dir}/layer_{i:02d}.pt")
+                if i == len(self.layers) - 1:
+                    self._dump_step += 1
         logits = hidden_states
 
         if get_last_token != -1:

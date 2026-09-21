@@ -6,6 +6,8 @@
 GPT-OSS specific implementation of create_tt_model that's compatible with tt_transformers
 """
 
+import os
+
 from loguru import logger
 
 import ttnn
@@ -57,6 +59,14 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+    # DIAGNOSTIC: cap layer count from the environment so the demo can be run at 1/4/12 layers
+    # without touching its parametrize, to separate per-layer correctness from cross-layer
+    # resource interaction (each layer holds its own semaphores/buffers but they share mux cores).
+    _env_layers = os.getenv("GPT_OSS_NUM_LAYERS")
+    if _env_layers:
+        num_layers = int(_env_layers)
+        logger.warning(f"GPT_OSS_NUM_LAYERS={num_layers}: truncating the model (diagnostic)")
+
     # Override num_layers if provided (useful for quick testing with fewer layers)
     if num_layers is not None:
         gpt_oss_model_args.hf_config.num_hidden_layers = num_layers
