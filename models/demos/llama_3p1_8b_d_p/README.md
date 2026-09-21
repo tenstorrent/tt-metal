@@ -1,48 +1,81 @@
 <!-- SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Llama-3.1-8B Prefill (`llama_3p1_8b_d_p`)
+# Llama-3.1-8B standalone prefill
 
-Disaggregated **prefill** for Llama-3.1-8B on **one 4×8 Blackhole Galaxy** (SP=4, TP=8), plugging
-into the model-agnostic `models/demos/common/prefill` engine. Decode runs separately in tt-blaze
-(the 40-stage ring, on SC4) and receives the KV through the migration data plane.
+TTNN prefill for the Llama-3.1-8B-Instruct checkpoint on one Blackhole Galaxy,
+with a 4×8 mesh: sequence parallelism (SP) across four rows and tensor parallelism
+(TP) across eight columns. The model runs all 32 decoder layers, embedding,
+final RMSNorm, and the vocabulary head. Calls process 1024-token chunks, with
+explicit valid ranges and two independent cache slots.
 
-Umbrella: [tt-blaze#4137](https://github.com/tenstorrent/tt-blaze/issues/4137) ·
-prefill: [#4138](https://github.com/tenstorrent/tt-blaze/issues/4138)
+## Model and cache
 
-## Configuration
+`tt/model.py::PrefillModel` owns weights and shared attention/RoPE resources.
+The caller owns token tensors, the cache returned by `allocate_kv_cache`, and
+each returned output. Calls through a model instance must be sequential.
+`upload_token_chunk` packs natural-order host IDs into SP-row order.
+`prefill_chunk(..., skip_lm_head=False)` returns vocabulary-sharded logits;
+the default returns hidden states. Call `model.close()` after use.
 
+Weights and activations are BF16. KV defaults to BF8_B, with BF16 also covered
+by the accuracy tests. Each TP column owns one KV head; SP rows own successive
+256-token stripes. The local cache shape is `[64, 1, max_seq_len / 4, 128]`,
+with user-major planes (`slot * 32 + layer`), 32-token round-robin DRAM pages,
+and Meta-interleaved K after RoPE. `max_seq_len` defaults to 2048; the model
+accepts a chunk-aligned capacity. Full-model book tests currently cover 2K and
+4K, with 8K–64K explicitly skipped.
+
+Attention gathers the selected cache prefix, restores natural token order,
+and applies standard SDPA with an absolute-position causal mask, accurate
+exponential mode, and FP32 destination accumulation. It requires the standard
+SDPA accurate-exponential prerequisite included in this branch's base.
+
+## Run the tests
+
+Use a built tt-metal environment and a local checkpoint containing config,
+tokenizer, safetensors index, and all shards. All checkpoint tests honor:
+
+```bash
+export LLAMA31_8B_CHECKPOINT=/mnt/models/meta-llama/Llama-3.1-8B-Instruct
+export OMP_NUM_THREADS=16
 ```
-SP = 4 (mesh rows)   sequence sharded block-cyclic; weights IDENTICAL down a column
-TP = 8 (mesh cols)   heads + MLP width sharded; weights DIFFER per column
 
-PREFILL_CHUNK_SIZE    1024      -> S_loc = 256 tokens/chip;  must satisfy % (SP*32) == 0
-PREFILL_MAX_SEQ_LEN   2048      -> cache depth 512/chip;     must satisfy % CHUNK_SIZE == 0
-PREFILL_NUM_LAYERS    32        runner defaults to 61 — PIN IT
-layers_per_chunk      32        engine defaults to 64 — PIN IT
-KV cache dtype        bfloat8_b (matches decode; compute is bf16)
+On an allocated Blackhole Galaxy with the SP/TP ring links available:
+
+```bash
+python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/unit -v
+python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/full_model/test_prefill_model_vs_ref.py -v
+python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/full_model/test_prefill_native_input_accuracy.py -v
+python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/full_model/test_prefill_book_top5.py -v
 ```
 
-TP=8 is not arbitrary: `num_key_value_heads = 8` over 8 columns puts **exactly one KV head per
-chip**, so a KV chunk lives on exactly one chip and the migration DeviceGroup degenerates to a
-single node. It also divides every width cleanly — 4096/8 = 512 (16 tiles), 14336/8 = 1792
-(56 tiles) — so none of the tile-alignment padding other models carry is needed here.
+The CI registration in `tests/pipeline_reorg/blaze_models_prefill_tests.yaml`
+separates CPU reference checks, components/decoder, full 2K accuracy, and book
+2K/4K. The host entry uses `--noconftest` so collection does not load device
+fixtures. Set `LLAMA_PREFILL_EVIDENCE_DIR` to a fresh directory to retain full
+accuracy reports; the native-input test creates one directory per prompt/dtype.
 
-## Layout
+## Accuracy contract
 
-```
-reference/llama_3p1_8b_config.py   dim SSOT (Llama31_8BConfig, exposes FABRIC_PAYLOAD_SIZE)
-tt/config.py                       MeshConfig — SP/TP validation + shard mappers
-tt/model_config.py                 ModelArgs — weights path, HF config cross-check
-tt/runners/adapters/llama_3p1_8b.py   PrefillModelAdapter subclass (the engine's only seam)
-tt/runners/manifests/llama_3p1_8b.json  model manifest (keeps rank bindings model-agnostic)
-reference/ scripts/ tests/ tests/unit/ utils/   placeholders for the stack above
-```
+- Component tests compare norm, QKV, RoPE, cache writes, attention, MLP, residual,
+  embedding, and vocabulary projection against independent Torch/HF references.
+  Decoder tests cover real layers, slot isolation, replay, and branch ablations.
+- The full 2K boundary test scores every layer and KV head. Layer-zero checks
+  and final logits are enforced. Later accumulated raw-FP32 hidden/KV drift is
+  recorded with its original PCC ≥ 0.99 and normalized L2 ≤ 0.15 limits;
+  those diagnostic rows are not all required to pass.
+- Full 2K acceptance also requires the native-input companion for both cache
+  dtypes and both prompts. It independently recomputes each layer from its actual
+  device input. KV requires PCC ≥ 0.9999 and normalized L2 ≤ 0.01 for BF16,
+  or PCC ≥ 0.999 and normalized L2 ≤ 0.02 for BF8_B. Hidden outputs require
+  PCC ≥ 0.999 and normalized L2 ≤ 0.025/0.05 respectively. Final logits,
+  cache boundaries, other slots, and uninstrumented replay remain enforced.
+- The book test runs 32 layers at 2048 and 4096 tokens and requires the independent
+  FP32 HF reference's top-1 token at the final position to appear in the device's
+  top five. The committed public-domain input and goldens pin text, token IDs,
+  checkpoint/tokenizer hashes, and reference settings. `scripts/generate_book_golden.py`
+  regenerates the reference on a compute host. There is no 4K cache comparison.
 
-## Correctness reference
-
-Bottom-up PCC against a self-contained torch/HF reference (`reference/model.py`, lands with
-[#4147](https://github.com/tenstorrent/tt-blaze/issues/4147)), plus CPU-generated golden KV for the
-full-model check. Thresholds: norm/rope ≥ 0.999, attention/MLP ≥ 0.99. Goldens must round-trip
-weights through the device dtype (bf8_b cache) before PCC, or a full-precision golden leaves a
-spurious ~0.94–0.96 gap that reads as a real bug.
+Test registrations and thresholds describe coverage; passing results must come
+from a run of the branch being reviewed.
