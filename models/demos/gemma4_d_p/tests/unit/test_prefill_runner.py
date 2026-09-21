@@ -1,15 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from dataclasses import replace
-from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
 from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, validate_params
-from models.demos.gemma4_d_p.tt.runners.prefill_producer import iter_chunks, wait_for_layers
+from models.demos.gemma4_d_p.tt.runners.prepare_prefill_inputs import write_producer_manifest
 from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
 
 
@@ -63,24 +62,17 @@ def test_slot_offsets_and_partial_final_chunk(expect_error):
             runtime.validate_chunk(*chunk)
 
 
-def test_producer_interleaves_slots_and_pads_only_the_tail():
-    prompts = [[11] * 8193, [22] * 8193]
-    chunks = list(iter_chunks(prompts, pad_token_id=0))
-    assert [chunk[:3] for chunk in chunks] == [(0, 0, 8192), (1, 0, 8192), (0, 8192, 8193), (1, 8192, 8193)]
-    final_chunk = chunks[-1][3]
-    assert final_chunk.shape == (8, 1, 1024)
-    assert final_chunk.dtype == np.uint32
-    assert final_chunk[0, 0, 0] == 22
-    assert np.count_nonzero(final_chunk) == 1
+def test_prepared_prompts_use_shared_producer_format(tmp_path):
+    from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids
 
-
-def test_completion_wait_requires_exactly_sixty_layers(expect_error):
-    counts = iter([20, 40])
-    wait_for_layers(SimpleNamespace(try_consume_all=lambda: next(counts)), timeout_s=1)
-    with expect_error(RuntimeError, "61 layer acknowledgments"):
-        wait_for_layers(SimpleNamespace(try_consume_all=lambda: 61), timeout_s=1)
-    with expect_error(TimeoutError, "0/60 layer acknowledgments"):
-        wait_for_layers(SimpleNamespace(try_consume_all=lambda: 0), timeout_s=0)
+    prompts = [[1, 2, 3], [4, 5]]
+    manifest = json.loads(write_producer_manifest(tmp_path, prompts).read_text())
+    assert manifest["env"]["PREFILL_MODEL"] == "gemma4_d_p"
+    assert manifest["env"]["PREFILL_NUM_USERS"] == "2"
+    assert manifest["workload"]["max_requests"] == 2
+    assert manifest["workload"]["interleave"] == "round_robin"
+    assert not manifest["workload"]["check_pcc"]
+    assert [load_trace_token_ids(path) for path in manifest["workload"]["slot_prompts"]] == prompts
 
 
 @pytest.mark.parametrize("prefill_override", [False, True])

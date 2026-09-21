@@ -4,6 +4,7 @@
 import os
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -13,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4_d_p.tt.runners.prefill_producer import load_prompts
+from models.demos.gemma4_d_p.tt.runners.prepare_prefill_inputs import load_prompts, write_producer_manifest
 from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
 
 
@@ -44,18 +45,17 @@ def read_slot_samples(runtime, kv_cache, slot):
 
 
 @contextmanager
-def producer_process(log_path, *args):
+def producer_process(log_path, manifest_path):
     with log_path.open("w") as log:
         producer = subprocess.Popen(
             [
                 sys.executable,
                 "-m",
-                "models.demos.gemma4_d_p.tt.runners.prefill_producer",
-                "--shutdown",
-                "--results",
-                str(log_path.with_suffix(".json")),
-                *args,
+                "models.demos.common.prefill.runners.prefill_producer",
+                "--manifest",
+                str(manifest_path),
             ],
+            env={**os.environ, "PREFILL_SEND_SHUTDOWN": "1"},
             stdout=log,
             stderr=subprocess.STDOUT,
         )
@@ -75,7 +75,9 @@ def test_prefill_service_six_slots(monkeypatch, tmp_path):
     monkeypatch.setenv("PREFILL_NUM_USERS", "6")
     from models.demos.common.prefill.runners import prefill_runner
 
-    prompts, pad_token_id = load_prompts(None, 6, 262144, Path("/tmp/gemma4_prefill_text"))
+    prompts = load_prompts(None, 6, 262144, Path("/tmp/gemma4_prefill_text"))
+    full_manifest = write_producer_manifest(tmp_path / "full", prompts)
+    reuse_manifest = write_producer_manifest(tmp_path / "reuse", [tokens[:8193] for tokens in prompts])
     snapshots = {}
     original_prefill = Gemma4PrefillRuntime.prefill_chunk
     original_loop = prefill_runner.run_request_loop
@@ -85,7 +87,7 @@ def test_prefill_service_six_slots(monkeypatch, tmp_path):
             shards = ttnn.get_device_tensors(input_tensor)
             received = torch.cat([ttnn.to_torch(shards[row * 4]).flatten() for row in range(8)]).tolist()
             expected = prompts[request["slot_id"]][request["actual_start"] : request["actual_end"]]
-            assert received == expected + [pad_token_id] * (8192 - len(expected))
+            assert received[: len(expected)] == expected
         original_prefill(runtime, input_tensor, kv_cache, **request)
         if request["actual_end"] in (8193, 262144):
             hidden = ttnn.to_torch(ttnn.get_device_tensors(runtime.output)[0]).float()
@@ -107,7 +109,20 @@ def test_prefill_service_six_slots(monkeypatch, tmp_path):
                 snapshots[request["slot_id"]] = read_slot_samples(runtime, kv_cache, request["slot_id"])
 
     def checked_loop(runtime, kv_cache, *args, **kwargs):
+        channel = ttnn.InterProcessCounterChannel.connect(
+            f"/tt_prefill_layer_acks_{os.environ['PREFILL_H2D_SERVICE_ID']}", connect_timeout_ms=30000
+        )
+
+        def check_ack_count(expected):
+            deadline = time.monotonic() + 30
+            count = 0
+            while count < expected and time.monotonic() < deadline:
+                count += channel.try_consume_all()
+                time.sleep(0.01)
+            assert count == expected
+
         original_loop(runtime, kv_cache, *args, **kwargs)
+        check_ack_count(192 * 60)
         assert runtime.slot_ends == [262144] * 6
         assert set(snapshots) == set(range(6))
         for slot, expected in snapshots.items():
@@ -115,11 +130,12 @@ def test_prefill_service_six_slots(monkeypatch, tmp_path):
             logger.info(f"Slot {slot}: {len(expected)} KV samples preserved across all 60 layers")
         for slot in range(1, 6):
             assert snapshots[slot] != snapshots[0], f"Slot {slot} contains slot 0's prompt"
-        with producer_process(tmp_path / "producer_reuse.log", "--tokens", "8193"):
+        with producer_process(tmp_path / "producer_reuse.log", reuse_manifest):
             original_loop(runtime, kv_cache, *args, **kwargs)
+        check_ack_count(12 * 60)
         assert runtime.slot_ends == [8193] * 6
 
     monkeypatch.setattr(Gemma4PrefillRuntime, "prefill_chunk", checked_prefill)
     monkeypatch.setattr(prefill_runner, "run_request_loop", checked_loop)
-    with producer_process(tmp_path / "producer.log"):
+    with producer_process(tmp_path / "producer.log", full_manifest):
         prefill_runner.main()
