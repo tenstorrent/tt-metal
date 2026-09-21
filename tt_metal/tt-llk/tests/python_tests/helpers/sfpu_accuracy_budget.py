@@ -10,6 +10,12 @@ attached by the golden and honoured by the comparator), as a table. Its own modu
 than ``sfpu_domains`` because a domain entry says what an op may be *fed* and a budget
 says how closely its output must match.
 
+**The table is data and lives in** ``sfpu_accuracy_budget.yaml``; this module is the
+interface to it. Hundreds of measured rows have no business being Python -- as YAML they
+diff one row at a time, regenerate wholesale from the sweep, and cannot smuggle in logic.
+Everything the rows are checked against is here: the enums a field may name, the contract
+invariants, and the matching rule.
+
 **Keyed on more than the op.** Approximation mode moves the error by orders of magnitude,
 and the output format decides what is even visible: a sub-ULP downward step at a LUT
 segment join is invisible in bfloat16 and large in float32, so one number across formats
@@ -42,7 +48,7 @@ from typing import Any, Dict, Optional, Tuple
 from .chip_architecture import ChipArchitecture
 from .format_config import DataFormat
 from .llk_params import ApproximationMode, DestAccumulation, MathOperation
-from .ulp import has_ulp_gate
+from .ulp import MANTISSA_BITS_FOR_ULP, MAX_MEANINGFUL_ULP, has_ulp_gate, ulp_dtype
 from .yaml_table import enum_member, load_yaml_table
 
 #: The architecture every measured budget in this table came from. An op resolves to the
@@ -148,6 +154,7 @@ TOLERANCE_CONTRACT = AccuracyContract(metric=Metric.TOLERANCE)
 #: asserts the two stay in step.
 _BUDGET_KEY_TYPES: Dict[str, type] = {
     "approx_mode": ApproximationMode,
+    "input_format": DataFormat,
     "output_format": DataFormat,
     "dest_acc": DestAccumulation,
     "arch": ChipArchitecture,
@@ -164,6 +171,7 @@ class BudgetKey:
     """
 
     approx_mode: Optional[ApproximationMode] = None
+    input_format: Optional[DataFormat] = None
     output_format: Optional[DataFormat] = None
     dest_acc: Optional[DestAccumulation] = None
     arch: Optional[ChipArchitecture] = None
@@ -193,6 +201,7 @@ class BudgetKey:
         self,
         *,
         approx_mode: Optional[ApproximationMode],
+        input_format: Optional[DataFormat],
         output_format: Optional[DataFormat],
         dest_acc: Optional[DestAccumulation],
         arch: Optional[ChipArchitecture],
@@ -204,6 +213,7 @@ class BudgetKey:
         """
         query = {
             "approx_mode": approx_mode,
+            "input_format": input_format,
             "output_format": output_format,
             "dest_acc": dest_acc,
             "arch": arch,
@@ -226,7 +236,6 @@ class BudgetKey:
 #: Matches every variant of an op. The right key for a budget that does not yet vary.
 DEFAULT = BudgetKey()
 
-
 #: One op's keyed budgets.
 _BudgetTable = Dict[BudgetKey, AccuracyContract]
 
@@ -238,12 +247,13 @@ BFP8_B_EXACT_INTEGER_DOMAIN = 128.0
 
 # ── Loading the table ───────────────────────────────────────────────────────
 
-#: The table itself. Data, not code: rows of measured numbers have no business being
+#: The table itself. Data, not code: 263 rows of measured numbers have no business being
 #: Python, and as YAML they diff one row at a time and can be regenerated wholesale.
 _TABLE_PATH = Path(__file__).with_name("sfpu_accuracy_budget.yaml")
 
 #: YAML row field -> :class:`BudgetKey` field. The short spellings keep a row on one line.
 _KEY_FIELDS: Dict[str, str] = {
+    "in": "input_format",
     "out": "output_format",
     "approx": "approx_mode",
     "dest": "dest_acc",
@@ -261,6 +271,7 @@ def _row_to_entry(
         raise ValueError(f"{where}: unknown field(s) {sorted(unknown)}")
 
     types = {
+        "in": DataFormat,
         "out": DataFormat,
         "approx": ApproximationMode,
         "dest": DestAccumulation,
@@ -327,13 +338,14 @@ def accuracy_contract(
     *,
     output_format: DataFormat,
     arch: ChipArchitecture,
+    input_format: Optional[DataFormat] = None,
     approx_mode: Optional[ApproximationMode] = None,
     dest_acc: Optional[DestAccumulation] = None,
 ) -> AccuracyContract:
     """The contract for one op variant, or :data:`TOLERANCE_CONTRACT` if it has none.
 
     Falling back rather than raising is what makes enrolment incremental. *arch* is
-    required, unlike the other three: it is the one dimension where the numbers
+    required, unlike the other four: it is the one dimension where the numbers
     explicitly do not transfer, so defaulting it would resolve an unknown chip straight
     against the Wormhole table.
     """
@@ -345,6 +357,7 @@ def accuracy_contract(
         table,
         label=op.name,
         approx_mode=approx_mode,
+        input_format=input_format,
         output_format=output_format,
         dest_acc=dest_acc,
         arch=arch,
@@ -359,7 +372,7 @@ def accuracy_contract(
         # Their block-aware lattice compares are already the stronger criterion.
         return TOLERANCE_CONTRACT
     if arch != MEASURED_ARCH and not _key_names_arch(
-        op, arch, output_format, approx_mode, dest_acc
+        op, arch, input_format, output_format, approx_mode, dest_acc
     ):
         # Every *unkeyed* number was measured on Wormhole with no headroom, so letting it
         # bind on an unswept architecture would make the "re-measure first" caveat
@@ -374,6 +387,7 @@ def accuracy_contract(
 def _key_names_arch(
     op: MathOperation,
     arch: ChipArchitecture,
+    input_format: Optional[DataFormat],
     output_format: DataFormat,
     approx_mode: Optional[ApproximationMode],
     dest_acc: Optional[DestAccumulation],
@@ -392,6 +406,7 @@ def _key_names_arch(
         for key in table
         if key.matches(
             approx_mode=approx_mode,
+            input_format=input_format,
             output_format=output_format,
             dest_acc=dest_acc,
             arch=arch,
@@ -408,6 +423,7 @@ def resolve_contract(
     *,
     label: str,
     output_format: DataFormat,
+    input_format: Optional[DataFormat] = None,
     approx_mode: Optional[ApproximationMode] = None,
     dest_acc: Optional[DestAccumulation] = None,
     arch: Optional[ChipArchitecture] = None,
@@ -420,6 +436,7 @@ def resolve_contract(
         for key, contract in table.items()
         if key.matches(
             approx_mode=approx_mode,
+            input_format=input_format,
             output_format=output_format,
             dest_acc=dest_acc,
             arch=arch,
@@ -433,12 +450,33 @@ def resolve_contract(
     if len(winners) > 1:
         raise ValueError(
             f"{label} has {len(winners)} equally specific budget keys matching "
-            f"output_format={output_format.name}, approx_mode={approx_mode}, "
+            f"input_format={input_format}, output_format={output_format.name}, "
+            f"approx_mode={approx_mode}, "
             f"dest_acc={dest_acc}, arch={arch}: "
             f"{', '.join(key.describe() for key, _ in winners)}. Make one of them more "
             "specific; the table's order must not decide a budget."
         )
     return winners[0][1]
+
+
+def usable_budget_ceiling(output_format: DataFormat) -> float:
+    """The largest budget that is still *stronger* than the gate it replaces.
+
+    ``MAX_MEANINGFUL_ULP`` is the wrong bound: ``2**mantissa_bits`` is roughly 100%
+    relative error, so it admits budgets that gate nothing -- and since ``passed_test``
+    returns on the ULP verdict and skips both ``isclose`` and PCC, such a budget *is* the
+    whole gate. Measured, approximate tanh on an fp32 output reached 2,949,120 steps,
+    about 35% relative error, on an op bounded in (-1, 1).
+
+    The real bound is the ``rtol`` half of the ``isclose`` this replaces, itself a step
+    budget at large magnitude: about 419,430 steps for fp32, 51 for fp16, 6 for bf16.
+    ``passed_test`` warns on the same line at runtime; no row here may cross it.
+    """
+    from .utils import tolerances
+
+    dtype = ulp_dtype(output_format)
+    by_rtol = tolerances[output_format].rtol * (1 << MANTISSA_BITS_FOR_ULP[dtype])
+    return min(by_rtol, float(MAX_MEANINGFUL_ULP[dtype]))
 
 
 def enrolled_ops() -> Tuple[MathOperation, ...]:
@@ -447,7 +485,7 @@ def enrolled_ops() -> Tuple[MathOperation, ...]:
 
 
 def validate_registry() -> None:
-    """Raise if any op can resolve ambiguously, or has an empty entry.
+    """Raise if any op can resolve ambiguously.
 
     Exhaustive over the variant space rather than a review convention: it is small, and
     an ambiguity that shows up for one format only is exactly what a reader misses.
@@ -462,20 +500,25 @@ def validate_registry() -> None:
     formats = gateable + [f for f in DataFormat if f not in gateable]
     approx_modes = list(ApproximationMode) + [None]
     dest_accs = list(DestAccumulation) + [None]
+    # The *input* axis comes from the table, not from the enum: a format no row pins
+    # reproduces the `None` iteration exactly, since an unset key matches any value. Four
+    # values today rather than 23, and it widens itself the moment a row pins a new one.
+    input_formats = sorted(
+        {key.input_format for table in _SFPU_ACCURACY_BUDGET.values() for key in table}
+        - {None},
+        key=lambda fmt: fmt.name,
+    ) + [None]
     for op, table in _SFPU_ACCURACY_BUDGET.items():
-        if not table:
-            raise ValueError(
-                f"{op.name} has an empty budget entry; remove it so the op falls back to "
-                "the tolerance metric explicitly"
-            )
         for approx_mode in approx_modes:
-            for output_format in formats:
-                for dest_acc in dest_accs:
-                    for arch in ChipArchitecture:
-                        accuracy_contract(
-                            op,
-                            output_format=output_format,
-                            approx_mode=approx_mode,
-                            dest_acc=dest_acc,
-                            arch=arch,
-                        )
+            for input_format in input_formats:
+                for output_format in formats:
+                    for dest_acc in dest_accs:
+                        for arch in ChipArchitecture:
+                            accuracy_contract(
+                                op,
+                                output_format=output_format,
+                                input_format=input_format,
+                                approx_mode=approx_mode,
+                                dest_acc=dest_acc,
+                                arch=arch,
+                            )
