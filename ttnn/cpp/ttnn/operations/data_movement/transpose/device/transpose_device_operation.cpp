@@ -58,6 +58,57 @@ TransposedShapes transposed_shapes(const Tensor& input_tensor, TransposeOpDim di
     return {output_shape, output_padded_shape};
 }
 
+// Reindex an ND shard shape for the given transpose dim, mirroring the same index swap
+// transposed_shapes() applies to the padded shape. HC on TILE is excluded: its padded-shape
+// contract is asymmetric (dim[1] = logical H, dim[2] = round_up(logical C, TILE_HEIGHT)) rather
+// than a plain swap, so a raw shard-extent swap wouldn't be sound there; callers must fall back to
+// fresh synthesis (see nd_shard_spec_from_legacy) for that case.
+std::optional<NdShardSpec> adjust_nd_shard_spec_for_transpose(
+    const NdShardSpec& nd_shard_spec, TransposeOpDim dim, Layout layout) {
+    auto shard_shape = nd_shard_spec.shard_shape;
+    const auto rank = static_cast<int>(shard_shape.rank());
+    switch (dim) {
+        case TransposeOpDim::CN:
+            if (rank < 2) {
+                return std::nullopt;
+            }
+            std::swap(shard_shape[0], shard_shape[1]);
+            break;
+        case TransposeOpDim::WH:
+            if (rank < 2) {
+                return std::nullopt;
+            }
+            std::swap(shard_shape[-2], shard_shape[-1]);
+            break;
+        case TransposeOpDim::HC:
+            if (layout != Layout::ROW_MAJOR || rank < 3) {
+                return std::nullopt;
+            }
+            std::swap(shard_shape[1], shard_shape[2]);
+            break;
+        default: return std::nullopt;
+    }
+    NdShardSpec adjusted = nd_shard_spec;
+    adjusted.shard_shape = std::move(shard_shape);
+    return adjusted;
+}
+
+// Wrap a freshly-synthesized legacy 2D ShardSpec into an equivalent NdShardSpec, matching the same
+// 2-element flatten TensorSpec::populate_nd_shard_spec_from_legacy() uses internally. Used to
+// re-derive ND-sharding provenance from fresh geometry rather than reusing a stale nd_shard_spec
+// that may not describe the transposed shape.
+NdShardSpec nd_shard_spec_from_legacy(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
+    NdShardSpec nd_shard_spec{
+        .shard_shape = ttnn::Shape({shard_spec.shape[0], shard_spec.shape[1]}),
+        .grid = shard_spec.grid,
+        .orientation = shard_spec.orientation,
+    };
+    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        nd_shard_spec.shard_distribution_strategy = ShardDistributionStrategy::GRID_2D;
+    }
+    return nd_shard_spec;
+}
+
 // Synthesize a shard_spec when the user asks for sharded output without one, so downstream
 // (select_program_factory, compute_output_specs) sees a fully-specified config. Falls back to a
 // fresh full-grid spec when input shard can't be scaled exactly.
@@ -70,9 +121,29 @@ MemoryConfig derive_effective_output_memory_config(
     }
     const auto& input_tensor = tensor_args.input;
     const auto output_padded_shape = transposed_shapes(input_tensor, operation_attributes.dim).padded;
+
+    // ND provenance: MemoryConfig only exposes a public constructor for ND-only configs
+    // (buffer_type, nd_shard_spec) — there's no public way to attach a legacy shard_spec
+    // alongside it, so TensorSpec's own population logic derives the legacy shard_spec (if any)
+    // downstream. Prefer reindexing the existing ND shard geometry for the specific transpose dim
+    // (keeps the same shard grid/placement, just reordered) over the legacy 2D scaling below,
+    // which doesn't model ND shard shapes at all.
+    const bool preserve_nd_provenance =
+        output_mem_config.created_with_nd_shard_spec() && output_mem_config.nd_shard_spec().has_value();
+    if (preserve_nd_provenance) {
+        if (auto adjusted_nd = adjust_nd_shard_spec_for_transpose(
+                *output_mem_config.nd_shard_spec(), operation_attributes.dim, input_tensor.layout())) {
+            return MemoryConfig(output_mem_config.buffer_type(), std::move(adjusted_nd));
+        }
+        // Fall through (e.g. TILE HC): can't reindex losslessly, so synthesize fresh legacy shard
+        // geometry below and re-wrap it as an NdShardSpec instead of dropping provenance outright.
+    }
+
     // adjust_shard_spec_to_shape preserves the sharding style — only reuse input geometry when
-    // requested output layout matches input's; otherwise generate_transpose_shard_spec builds fresh.
-    if (input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
+    // requested output layout matches input's; otherwise generate_transpose_shard_spec builds
+    // fresh. Skipped when preserving ND provenance: this branch requires a legacy shard_spec on
+    // the (ND-only) output_mem_config, which it doesn't have.
+    if (!preserve_nd_provenance && input_tensor.is_sharded() && input_tensor.shard_spec().has_value() &&
         input_tensor.memory_config().memory_layout() == output_mem_config.memory_layout()) {
         auto adjusted = adjust_shard_spec_to_shape(
             input_tensor.shard_spec().value(), input_tensor.padded_shape(), output_padded_shape);
@@ -91,6 +162,10 @@ MemoryConfig derive_effective_output_memory_config(
     }
     auto shard_spec =
         generate_transpose_shard_spec(input_tensor, output_padded_shape, output_mem_config.memory_layout());
+    if (preserve_nd_provenance) {
+        return MemoryConfig(
+            output_mem_config.buffer_type(), nd_shard_spec_from_legacy(shard_spec, output_mem_config.memory_layout()));
+    }
     return MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
 }
 

@@ -38,6 +38,18 @@ TensorSpec make_nd_sharded_tensor_spec(const ttnn::Shape& shape, const ttnn::Sha
         shape, TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::TILE), memory_config));
 }
 
+TensorSpec make_nd_sharded_dram_tensor_spec(
+    const ttnn::Shape& shape,
+    const ttnn::Shape& shard_shape,
+    tt::tt_metal::CoreCoord grid_end = tt::tt_metal::CoreCoord{0, 0}) {
+    const auto cores = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, 0}, grid_end));
+    const auto memory_config = tt::tt_metal::MemoryConfig(
+        tt::tt_metal::BufferType::DRAM,
+        tt::tt_metal::NdShardSpec{shard_shape, cores, tt::tt_metal::ShardOrientation::ROW_MAJOR});
+    return TensorSpec(
+        shape, TensorLayout(tt::tt_metal::DataType::BFLOAT16, PageConfig(tt::tt_metal::Layout::TILE), memory_config));
+}
+
 TensorSpec make_legacy_height_sharded_tensor_spec(const ttnn::Shape& shape) {
     const auto cores = tt::tt_metal::CoreRangeSet(
         tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}));
@@ -161,6 +173,72 @@ TEST_F(TestGraphCaptureArgumentsTranspose, PermuteImplicitOutputConfigPreservesN
     auto create_tensor_it = find_create_device_tensor(operations);
     ASSERT_NE(create_tensor_it, operations.end()) << "create_device_tensor operation not found";
     EXPECT_EQ(create_tensor_it->arguments[0], "Shape([1, 2, 2, 64, 32])");
+    EXPECT_EQ(create_tensor_it->arguments[2], "Layout::TILE");
+    ASSERT_EQ(create_tensor_it->arguments.size(), 5);
+    EXPECT_TRUE(has_nd_provenance(create_tensor_it->arguments[4])) << create_tensor_it->arguments[4];
+}
+
+TEST_F(
+    TestGraphCaptureArgumentsTranspose, TransposeImplicitOutputConfigPreservesNdProvenanceForNonNativeShardedFallback) {
+    // DRAM-sharded inputs are non-native for transpose (side_native() rejects DRAM), so this
+    // exercises the non-native sharded fallback in detail::transpose_(), which must preserve the
+    // input's ND-sharding provenance instead of rebuilding a legacy MemoryConfig from only
+    // memory_layout()/buffer_type(). This also covers the second boundary hole:
+    // TransposeDeviceOperation::derive_effective_output_memory_config() (called from
+    // compute_output_specs/select_program_factory) separately re-synthesizes the *final* shard
+    // spec, and must re-wrap it as an NdShardSpec (via nd_shard_spec_from_legacy /
+    // adjust_nd_shard_spec_for_transpose) instead of dropping provenance at that later stage — so
+    // we assert provenance on both operation_attributes and the final create_device_tensor spec.
+    auto tt_input = create_device_tensor(
+        make_nd_sharded_dram_tensor_spec(ttnn::Shape({1, 1, 64, 64}), ttnn::Shape({1, 1, 32, 32})), device_);
+
+    ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+    ttnn::transpose(tt_input, 2, 3);
+    auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
+    auto operations = ttnn::graph::extract_arguments(trace);
+
+    auto it = std::find_if(operations.begin(), operations.end(), [](const auto& op) {
+        return op.operation_name == "TransposeDeviceOperation";
+    });
+    ASSERT_NE(it, operations.end()) << "TransposeDeviceOperation not found";
+    EXPECT_TRUE(has_nd_provenance(it->arguments[0])) << it->arguments[0];
+
+    auto create_tensor_it = find_create_device_tensor(operations);
+    ASSERT_NE(create_tensor_it, operations.end()) << "create_device_tensor operation not found";
+    EXPECT_EQ(create_tensor_it->arguments[0], "Shape([1, 1, 64, 64])");
+    EXPECT_EQ(create_tensor_it->arguments[2], "Layout::TILE");
+    ASSERT_EQ(create_tensor_it->arguments.size(), 5);
+    EXPECT_TRUE(has_nd_provenance(create_tensor_it->arguments[4])) << create_tensor_it->arguments[4];
+}
+
+TEST_F(
+    TestGraphCaptureArgumentsTranspose,
+    TransposeImplicitOutputConfigReindexesNdShardShapeForAsymmetricNonNativeShardedFallback) {
+    // Asymmetric shard/tensor shape (unlike the 64x64 case above) so that a bug in
+    // adjust_nd_shard_spec_for_transpose (e.g. forgetting to swap the last two shard_shape entries
+    // for a WH transpose) would show up as a shape mismatch instead of trivially passing.
+    // 2 shards along H (32/16) x 2 shards along W (64/32) = 4 shards; grid must fit all of them.
+    auto tt_input = create_device_tensor(
+        make_nd_sharded_dram_tensor_spec(
+            ttnn::Shape({1, 1, 32, 64}), ttnn::Shape({1, 1, 16, 32}), tt::tt_metal::CoreCoord{1, 1}),
+        device_);
+
+    ttnn::graph::GraphProcessor::begin_graph_capture(tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH);
+    ttnn::transpose(tt_input, 2, 3);
+    auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
+    auto operations = ttnn::graph::extract_arguments(trace);
+
+    auto it = std::find_if(operations.begin(), operations.end(), [](const auto& op) {
+        return op.operation_name == "TransposeDeviceOperation";
+    });
+    ASSERT_NE(it, operations.end()) << "TransposeDeviceOperation not found";
+    EXPECT_TRUE(has_nd_provenance(it->arguments[0])) << it->arguments[0];
+    // Pre-transpose shard_shape was [1, 1, 16, 32]; a WH transpose must swap the last two entries.
+    EXPECT_TRUE(it->arguments[0].find("Shape([1, 1, 32, 16])") != std::string::npos) << it->arguments[0];
+
+    auto create_tensor_it = find_create_device_tensor(operations);
+    ASSERT_NE(create_tensor_it, operations.end()) << "create_device_tensor operation not found";
+    EXPECT_EQ(create_tensor_it->arguments[0], "Shape([1, 1, 64, 32])");
     EXPECT_EQ(create_tensor_it->arguments[2], "Layout::TILE");
     ASSERT_EQ(create_tensor_it->arguments.size(), 5);
     EXPECT_TRUE(has_nd_provenance(create_tensor_it->arguments[4])) << create_tensor_it->arguments[4];
