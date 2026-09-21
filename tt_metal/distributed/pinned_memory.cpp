@@ -338,13 +338,14 @@ void PinnedMemoryImpl::unlock() {}
 
 // PinnedMemory pimpl wrapper implementation
 PinnedMemory::PinnedMemory(
-    MetalEnvImpl& metal_env,
+    distributed::MeshDevice& mesh_device,
     const std::vector<IDevice*>& devices,
     void* host_buffer,
     size_t buffer_size,
     bool map_to_noc,
     PinnedMemoryDeviceAccess access) :
-    pImpl(std::make_unique<PinnedMemoryImpl>(metal_env, devices, host_buffer, buffer_size, map_to_noc, access)) {}
+    pImpl(std::make_unique<PinnedMemoryImpl>(
+        mesh_device.impl().metal_env(), devices, host_buffer, buffer_size, map_to_noc, access)) {}
 
 PinnedMemory::~PinnedMemory() = default;
 
@@ -419,7 +420,7 @@ std::shared_ptr<PinnedMemory> PinnedMemory::Create(
     size_t buffer_size = bytes.size();
 
     auto pinned_memory = std::shared_ptr<PinnedMemory>(
-        new PinnedMemory(mesh_device.impl().metal_env(), devices, host_ptr, buffer_size, map_to_noc, access));
+        new PinnedMemory(mesh_device, devices, host_ptr, buffer_size, map_to_noc, access));
     HostBufferSetPinnedMemory(host_buffer, pinned_memory);
     return pinned_memory;
 }
