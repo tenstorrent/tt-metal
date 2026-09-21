@@ -178,7 +178,7 @@ if (checkpoint.get("attempt_id") or source.get("attempt_id")) != source_attempt:
 if source_attempt == os.environ["CODEGEN_ATTEMPT_ID"]:
     raise SystemExit("[worktree] resume requires a distinct new attempt identity")
 if (source.get("status") != "failed" or not source.get("end_time")
-        or source.get("timeout_classification") not in {"outer_timeout", "supervisor_lost"}):
+        or source.get("timeout_classification") not in {"outer_timeout", "supervisor_lost", "wall_timeout"}):
     raise SystemExit("[worktree] resume source was not terminally reconciled")
 
 source_base = checkpoint.get("base_commit") or source.get("base_commit")

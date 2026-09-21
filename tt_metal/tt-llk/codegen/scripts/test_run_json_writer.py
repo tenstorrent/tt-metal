@@ -2195,7 +2195,10 @@ resolve_worktree_base
     assert "queued launch requires an exact CODEGEN_BASE_COMMIT" in result.stderr
 
 
-def test_setup_worktree_records_exact_base_before_bootstrap(tmp_path):
+@pytest.mark.parametrize("timeout_classification", ["outer_timeout", "wall_timeout"])
+def test_setup_worktree_records_exact_base_before_bootstrap(
+    tmp_path, timeout_classification
+):
     repo = tmp_path / "repo"
     llk_tests = repo / "tt_metal" / "tt-llk" / "tests"
     llk_tests.mkdir(parents=True)
@@ -2254,7 +2257,7 @@ def test_setup_worktree_records_exact_base_before_bootstrap(tmp_path):
                 "issue": {"number": 5},
                 "status": "failed",
                 "end_time": "2026-08-07T01:00:00Z",
-                "timeout_classification": "outer_timeout",
+                "timeout_classification": timeout_classification,
                 "base_commit": base,
                 "last_checkpoint": checkpoint,
             }
