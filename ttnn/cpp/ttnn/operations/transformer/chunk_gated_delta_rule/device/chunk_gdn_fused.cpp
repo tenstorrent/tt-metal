@@ -155,15 +155,20 @@ ChunkGdnFusedOperation::tensor_return_value_t ChunkGdnFusedOperation::create_out
 }
 
 namespace {
-// QB2 constants, measured 2026-09-21 (design doc v0.3 §5): producer item under load, receiver step
-// (period) per V-slice width, pipeline fill, and the phased wall-op reference at NC=64.
-constexpr float kWpUs = 34.0f;
+// QB2 constants, measured 2026-09-21: producer item under load, receiver step (period) per V-slice
+// width, pipeline fill, and the phased wall-op reference at NC=64.
 constexpr float kFillUs = 65.0f;
+// Producer item time depends on how many producers load the DRAM/NoC at once: 26 us with <= 28 of
+// them (BH=4), 34 us with >= 84 (BH=12); linear in between.
+float w_p_us(uint32_t producers) {
+    const float f = std::min(1.0f, std::max(0.0f, (static_cast<float>(producers) - 28.0f) / 56.0f));
+    return 26.0f + 8.0f * f;
+}
 float t_step_us(uint32_t Vtl) {
     switch (Vtl) {
-        case 1: return 3.7f;
-        case 2: return 5.07f;
-        case 4: return 7.9f;
+        case 1: return 3.5f;    // receiver period with the scan-step DST batching: 3.43 compute
+        case 2: return 4.9f;    // 4.82 compute
+        case 4: return 7.5f;    // 7.44 compute
         default: return -1.0f;  // unmeasured width
     }
 }
@@ -211,7 +216,7 @@ FusedGeometryChoice choose_fused_geometry(
         if (ts < 0.0f) {
             return;
         }
-        const float t = NC * std::max(kWpUs / np, ts) + kFillUs;
+        const float t = NC * std::max(w_p_us(BH * np) / np, ts) + kFillUs;
         // ties -> fewer cores, then smaller NV
         const bool better =
             !have || t < best.t_fused_us ||
