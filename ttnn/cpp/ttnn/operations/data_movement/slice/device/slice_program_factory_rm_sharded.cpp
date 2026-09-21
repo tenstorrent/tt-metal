@@ -4,11 +4,7 @@
 
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
 
-#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_stride.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_metal2_names.hpp"
 
 #include <map>
@@ -413,51 +409,19 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     };
 }
 
-// The per-dispatch run args of a cached slice program, for the factory that built it.
-// Shared with MeshPartition, which drives these same factories directly, so the argument set has
-// one home. Every shape-derived arg is keyed (both tensor specs, the slice params and
-// factory.index() are folded into compute_program_hash), so the tensor bindings are all that move
-// on a hit -- except on the two tile factories, whose per-core scalars are hash-excluded.
-tt::tt_metal::experimental::ProgramRunArgs slice_program_run_args(
-    const SliceDeviceOperation::program_factory_t& factory,
-    const SliceParams& operation_attributes,
-    const SliceInputs& tensor_args,
-    Tensor& output) {
+tt::tt_metal::experimental::ProgramRunArgs slice_row_major_run_args(const SliceInputs& tensor_args, Tensor& output) {
     using namespace ttnn::prim::slice_metal2;
-
     ProgramRunArgs run_args;
-    run_args.tensor_args = {
-        {INPUT, tensor_args.input.mesh_tensor()},
-        {OUTPUT, output.mesh_tensor()},
-    };
-
-    std::visit(
-        [&](auto&& f) {
-            using Factory = std::decay_t<decltype(f)>;
-            if constexpr (std::is_same_v<Factory, SliceTileProgramFactory>) {
-                // Divergent-partition hit leaves writer num_pages=0 -> all-zero output (#52651).
-                const uint32_t start_offset = ttnn::operations::data_movement::get_tiled_start_offset(
-                    tensor_args.input, operation_attributes.slice_start);
-                run_args.kernel_run_args = slice_tile_run_args(
-                    operation_attributes, tensor_args, output, start_offset, TILE_READER, TILE_WRITER);
-            } else if constexpr (std::is_same_v<Factory, SliceTileTensorArgsProgramFactory>) {
-                run_args.tensor_args.insert({START_TENSOR, tensor_args.start_tensor.value().mesh_tensor()});
-                run_args.tensor_args.insert({END_TENSOR, tensor_args.end_tensor.value().mesh_tensor()});
-                run_args.kernel_run_args = slice_tile_run_args(
-                    operation_attributes, tensor_args, output, /*start_offset=*/0u, TA_READER, TA_WRITER);
-            }
-        },
-        factory);
-
+    run_args.tensor_args = {{INPUT, tensor_args.input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
     return run_args;
 }
 
 tt::tt_metal::experimental::ProgramRunArgs SliceRmShardedProgramFactory::override_runtime_arguments(
-    const SliceParams& args,
+    const SliceParams& /*args*/,
     const SliceInputs& tensor_args,
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    return slice_program_run_args(SliceRmShardedProgramFactory{}, args, tensor_args, output);
+    return slice_row_major_run_args(tensor_args, output);
 }
 
 }  // namespace ttnn::prim

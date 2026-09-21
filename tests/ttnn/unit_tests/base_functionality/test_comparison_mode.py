@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from types import SimpleNamespace
+
 import pytest
 
 import torch
@@ -12,8 +14,8 @@ from models.common.utility_functions import torch_random
 
 
 def _compare_torch_tensors(golden, output, *, fail_on_bad_comparison=True):
-    ttnn.decorators.set_tensor_id(golden, force=True)
-    ttnn.decorators.set_tensor_id(output, force=True)
+    ttnn.decorators.set_tensor_id(ttnn.decorators.get_all_tensors(golden), force=True)
+    ttnn.decorators.set_tensor_id(ttnn.decorators.get_all_tensors(output), force=True)
     return ttnn.decorators.compare_tensors_using_pcc(
         "ttnn.test_operation",
         golden,
@@ -127,6 +129,153 @@ def test_comparison_policy_masks_matching_nonfinite_positions(expect_error):
     assert comparison_records[0]["matches"]
     with expect_error(RuntimeError, r"Comparing output tensor 0 against CPU locally failed"):
         _compare_torch_tensors(golden, torch.tensor([1.0, float("inf")]))
+
+
+def test_reduction_goldens_match_ttnn_output_contracts():
+    input_tensor = torch.tensor([[3, 1], [2, 4]], dtype=torch.int32)
+
+    max_output = ttnn.get_golden_function(ttnn.max)(input_tensor, dim=1)
+    std_output = ttnn.get_golden_function(ttnn.std)(input_tensor.float(), dim=0, correction=False)
+    argmax_output = ttnn.get_golden_function(ttnn.argmax)(input_tensor.to(torch.uint32), dim=1)
+
+    assert torch.equal(max_output, torch.tensor([3, 4], dtype=torch.int32))
+    assert torch.equal(std_output, torch.std(input_tensor.float(), dim=0, correction=False))
+    assert torch.equal(argmax_output, torch.tensor([0, 1]))
+
+
+def test_batch_norm_golden_accepts_ttnn_channel_shapes_and_one_running_stat():
+    input_tensor = torch.randn(2, 3, 4, 4)
+    running_mean = torch.zeros(1, 3, 1, 1)
+
+    output = ttnn.get_golden_function(ttnn.batch_norm)(
+        input_tensor,
+        running_mean=running_mean,
+        running_var=None,
+        training=True,
+    )
+
+    assert output.shape == input_tensor.shape
+
+
+def test_data_movement_goldens_cover_unsigned_inplace_fold_and_tied_sort():
+    plus_one_input = torch.tensor([0, 2**32 - 1], dtype=torch.int64).to(torch.uint32)
+    plus_one_output = ttnn.get_golden_function(ttnn.plus_one)(plus_one_input.clone())
+    assert torch.equal(plus_one_output, torch.tensor([1, 0], dtype=torch.int64).to(torch.uint32))
+
+    nchw_input = torch.arange(4, dtype=torch.float32).reshape(1, 1, 2, 2)
+    fold_output = ttnn.get_golden_function(ttnn.fold)(
+        nchw_input, 2, 2, use_transpose_as_fold=True, padding=[0, 0, 0, 0, 0, 0]
+    )
+    assert torch.equal(fold_output, torch.tensor([[[[0.0, 1.0, 2.0, 3.0]]]]))
+
+    _, indices = ttnn.get_golden_function(ttnn.sort)(torch.tensor([3.0, 1.0, 1.0, 2.0]), stable=False)
+    comparison_config = indices._ttnn_comparison_config
+    assert comparison_config.method == "allclose"
+    assert comparison_config.scope == "all"
+    assert comparison_config.rtol == 0.0
+    assert comparison_config.atol == 0.0
+    assert torch.equal(comparison_config.mask, torch.tensor([False, False, True, True]))
+
+
+def test_addmm_golden_ignores_invalid_addend_shape_when_beta_is_zero():
+    invalid_addend = torch.zeros(8, 8)
+    mat1 = torch.arange(16, dtype=torch.float32).reshape(4, 4)
+    mat2 = torch.eye(4)
+
+    output = ttnn.get_golden_function(ttnn.addmm)(invalid_addend, mat1, mat2, alpha=2.0, beta=0.0)
+
+    assert torch.equal(output, 2.0 * mat1)
+
+
+def test_unary_goldens_cover_unsigned_chain_integer_hardswish_and_gelu_policy():
+    unsigned_input = torch.tensor([0, 2**32 - 1], dtype=torch.int64).to(torch.uint32)
+    chain_output = ttnn.get_golden_function(ttnn.unary_chain)(
+        unsigned_input, [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]
+    )
+    hardswish_output = ttnn.get_golden_function(ttnn.hardswish)(torch.zeros(2, dtype=torch.int32))
+    gelu_output = ttnn.get_golden_function(ttnn.gelu)(torch.tensor([-1.0, 0.0, 1.0], dtype=torch.bfloat16))
+
+    assert torch.equal(chain_output, unsigned_input)
+    assert torch.equal(hardswish_output, torch.full((2,), 0x3F000000, dtype=torch.int32))
+    assert gelu_output._ttnn_comparison_config.method == "ulp"
+    assert gelu_output._ttnn_comparison_config.ulp_threshold == 10
+
+
+def test_moreh_dot_golden_uses_degenerate_allclose_policy():
+    golden_function = ttnn.get_golden_function(ttnn.moreh_dot)
+    golden = golden_function(torch.tensor([1.0]), torch.tensor([1.0]))
+    comparison_config = golden._ttnn_comparison_config
+
+    comparison_records = _compare_torch_tensors(golden, golden + 0.05)
+
+    assert comparison_config.method == "allclose"
+    assert comparison_config.scope == "degenerate"
+    assert comparison_config.rtol == 0.1
+    assert comparison_config.atol == 0.1
+    assert comparison_records[0]["matches"]
+
+
+def test_moreh_clip_grad_norm_golden_masks_matching_nonfinite_values():
+    golden_function = ttnn.get_golden_function(ttnn.moreh_clip_grad_norm)
+    golden = golden_function([torch.tensor([float("inf")])], max_norm=1.0)
+    comparison_config = golden._ttnn_comparison_config
+
+    comparison_records = _compare_torch_tensors(golden, torch.tensor([[float("nan")]]))
+
+    assert golden.shape == (1, 1)
+    assert comparison_config.method == "allclose"
+    assert comparison_config.scope == "degenerate"
+    assert comparison_config.rtol == 0.1
+    assert comparison_config.atol == 0.1
+    assert comparison_config.nonfinite == "mask"
+    assert comparison_records[0]["matches"]
+
+
+def test_moreh_layer_norm_golden_uses_allclose_policy_for_statistics():
+    golden_function = ttnn.get_golden_function(ttnn.moreh_layer_norm)
+    golden = golden_function(
+        torch.tensor([[0.0, 0.1], [0.1, 0.0]]),
+        1,
+        mean=torch.empty(2),
+        rstd=torch.empty(2),
+    )
+    output = [
+        golden[0].clone(),
+        golden[1] + torch.tensor([0.05, -0.05]),
+        golden[2] + torch.tensor([0.05, -0.05]),
+    ]
+
+    comparison_records = _compare_torch_tensors(golden, output)
+
+    for statistic in golden[1:]:
+        comparison_config = statistic._ttnn_comparison_config
+        assert comparison_config.method == "allclose"
+        assert comparison_config.scope == "all"
+        assert comparison_config.rtol == 0.1
+        assert comparison_config.atol == 0.1
+    assert all(record["matches"] for record in comparison_records)
+
+
+def test_moreh_adam_golden_skips_param_and_compares_optimizer_state():
+    golden_function = ttnn.get_golden_function(ttnn.moreh_adam)
+    golden = golden_function(
+        torch.ones(2),
+        torch.ones(2),
+        torch.zeros(2),
+        torch.zeros(2),
+        step=1,
+    )
+
+    comparison_records = _compare_torch_tensors(
+        golden,
+        [torch.full((2,), 100.0), golden[1].clone(), golden[2].clone(), None],
+    )
+
+    comparison_config = golden[0]._ttnn_comparison_config
+    assert comparison_config.method == "skip"
+    assert comparison_config.scope == "all"
+    assert len(comparison_records) == 2
+    assert all(record["matches"] for record in comparison_records)
 
 
 def test_prepare_backward_golden_inputs_clears_accumulated_gradients():
@@ -424,6 +573,341 @@ def test_assign_golden_uses_nanobind_argument_names_and_casts_dtype():
 
     assert torch.equal(allocating_result, expected)
     assert torch.equal(destination_result, expected)
+
+
+def test_copy_golden_propagates_positional_destination():
+    golden_function = ttnn.get_golden_function(ttnn.copy)
+    source = torch.tensor([1.25, -2.5], dtype=torch.float32)
+    destination = torch.zeros(2, dtype=torch.bfloat16)
+
+    output = golden_function(source, destination, _ttnn_global_golden=True)
+
+    assert golden_function._ttnn_mutates_global_inputs
+    assert output is destination
+    assert torch.equal(destination, source.to(torch.bfloat16))
+
+
+def test_copy_transfer_goldens_sync_positional_and_keyword_destinations():
+    host_to_device = ttnn.get_golden_function(ttnn.copy_host_to_device_tensor)
+    device_to_host = ttnn.get_golden_function(ttnn.copy_device_to_host_tensor)
+    source = torch.tensor([1.25, -2.5])
+
+    assert host_to_device._ttnn_mutates_global_inputs
+    assert device_to_host._ttnn_mutates_global_inputs
+
+    positional_destination = torch.zeros(2)
+    assert host_to_device(source, positional_destination, _ttnn_global_golden=True) is None
+    assert torch.equal(positional_destination, source)
+
+    keyword_destination = torch.zeros(2)
+    assert device_to_host(device_tensor=source, host_tensor=keyword_destination, _ttnn_global_golden=True) is None
+    assert torch.equal(keyword_destination, source)
+
+    # The local (non-global) path is a no-op and preserves the void return contract.
+    untouched = torch.zeros(2)
+    assert host_to_device(source, untouched) is None
+    assert torch.equal(untouched, torch.zeros(2))
+
+
+def test_ema_golden_matches_recurrence():
+    input_tensor = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
+
+    output = ttnn.get_golden_function(ttnn.ema)(input_tensor, 0.5)
+
+    torch.testing.assert_close(output, torch.tensor([[1.0, 1.5, 2.25, 3.125]]))
+
+
+def test_var_hw_and_std_hw_goldens_use_biased_correction():
+    input_tensor = torch.tensor([[[[1.0, 2.0], [3.0, 4.0]]]])
+
+    var_output = ttnn.get_golden_function(ttnn.var_hw)(input_tensor)
+    std_output = ttnn.get_golden_function(ttnn.std_hw)(input_tensor)
+
+    torch.testing.assert_close(var_output, torch.tensor([[[[1.25]]]]))
+    torch.testing.assert_close(std_output, torch.tensor([[[[1.25**0.5]]]]))
+
+
+def test_prod_golden_reduces_each_axis_in_dims():
+    input_tensor = torch.arange(24, dtype=torch.float32).reshape(2, 3, 4)
+
+    output = ttnn.get_golden_function(ttnn.prod)(input_tensor, dims=(2, 0))
+
+    expected = torch.prod(torch.prod(input_tensor, dim=0, keepdim=True), dim=2, keepdim=True)
+    assert torch.equal(output, expected)
+
+
+def test_quantize_goldens_support_scalar_and_per_channel_args():
+    input_tensor = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+
+    quantized = ttnn.get_golden_function(ttnn.quantize)(input_tensor, 0.5, 2.0)
+    assert quantized.dtype == torch.int32
+    assert torch.equal(quantized, torch.tensor([[4, 6], [8, 10]], dtype=torch.int32))
+
+    dequantized = ttnn.get_golden_function(ttnn.dequantize)(quantized.float(), 0.5, 2.0)
+    torch.testing.assert_close(dequantized, (quantized.float() - 2.0) * 0.5)
+
+    scale = torch.tensor([0.5, 2.0])
+    zero_point = torch.tensor([1.0, 0.0])
+    per_channel = ttnn.get_golden_function(ttnn.quantize)(input_tensor, scale, zero_point, axis=-1)
+    assert torch.equal(per_channel, torch.round(input_tensor / scale + zero_point).to(torch.int32))
+
+    requantized = ttnn.get_golden_function(ttnn.requantize)(input_tensor, 0.5, 2.0, 0.25, 1.0)
+    expected = torch.round((input_tensor - 2.0) * (0.5 / 0.25) + 1.0).to(torch.int32)
+    assert torch.equal(requantized, expected)
+
+
+def test_nonzero_golden_packs_count_and_flat_indices_with_masks(expect_error):
+    input_tensor = torch.tensor([[[[0.0, 5.0], [0.0, 7.0]]]])
+    golden_function = ttnn.get_golden_function(ttnn.nonzero)
+
+    count, indices = golden_function(input_tensor)
+
+    assert count.shape == (1, 1, 1, 8)
+    assert count[0, 0, 0, 0] == 2
+    assert count._ttnn_comparison_config.mask.sum() == 1
+    assert indices.shape == (1, 1, 1, 16)
+    assert torch.equal(indices[0, 0, 0, :8], torch.tensor([0, 0, 0, 1, 0, 0, 1, 1]))
+    assert indices._ttnn_comparison_config.mask.sum() == 8
+    with expect_error(ValueError, "requires rank-4 input"):
+        golden_function(torch.ones(2, 2))
+
+
+def test_sparse_matmul_golden_zeros_out_inactive_sparse_groups():
+    input_a = torch.randn(2, 3)
+    input_b = torch.randn(2, 3, 4)
+    sparsity = torch.tensor([1, 0])
+
+    output = ttnn.get_golden_function(ttnn.sparse_matmul)(input_a, input_b, sparsity=sparsity)
+
+    torch.testing.assert_close(output[0], input_a @ input_b[0])
+    assert torch.equal(output[1], torch.zeros(2, 4))
+
+
+def test_broadcast_golden_copies_sender_shard_to_cluster_group():
+    sender_shard = torch.tensor([[1.0, 2.0]])
+    other_shard = torch.tensor([[9.0, 9.0]])
+    golden_function = ttnn.get_golden_function(ttnn.broadcast)
+
+    output = golden_function(
+        [other_shard, sender_shard],
+        (0, 1),
+        cluster_axis=1,
+        _ttnn_golden_mesh_shape=(1, 2),
+        _ttnn_golden_mesh_shard_dims=(None, None),
+    )
+
+    assert torch.equal(output, sender_shard)
+    # Without mesh metadata the golden has no distributed context and declines to compare.
+    assert golden_function([other_shard], (0,)) is None
+
+
+def test_mesh_partition_golden_round_trips_replicated_input():
+    full = torch.arange(12, dtype=torch.float32).reshape(4, 3)
+    golden_function = ttnn.get_golden_function(ttnn.mesh_partition)
+
+    output = golden_function(
+        [full, full.clone()],
+        0,
+        cluster_axis=0,
+        _ttnn_golden_mesh_shape=(2, 1),
+        _ttnn_golden_mesh_shard_dims=(None, None),
+    )
+
+    assert torch.equal(output, full)
+    assert golden_function([full], 0) is None
+
+
+def test_allocate_tensor_goldens_return_skip_marked_uninitialized_storage():
+    shape_overload = ttnn.get_golden_function(ttnn.allocate_tensor_on_device)(
+        (2, 3), ttnn.bfloat16, ttnn.TILE_LAYOUT, None, None
+    )
+    assert shape_overload.shape == (2, 3)
+    assert shape_overload.dtype == torch.bfloat16
+    assert shape_overload._ttnn_comparison_config.method == "skip"
+
+    spec = ttnn.TensorSpec(ttnn.Shape([4, 5]), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT)
+    spec_overload = ttnn.get_golden_function(ttnn.allocate_tensor_on_host)(spec, None)
+    assert spec_overload.shape == (4, 5)
+    assert spec_overload.dtype == torch.float32
+    assert spec_overload._ttnn_comparison_config.method == "skip"
+
+
+def test_load_tensor_golden_round_trips_dumped_tensor(tmp_path):
+    source = torch.arange(6, dtype=torch.float32).reshape(2, 3)
+    file_name = str(tmp_path / "tensor.bin")
+    ttnn._ttnn.tensor.dump_tensor_flatbuffer(file_name, ttnn.from_torch(source, layout=ttnn.ROW_MAJOR_LAYOUT))
+
+    golden = ttnn.get_golden_function(ttnn.load_tensor)(file_name)
+
+    assert torch.equal(golden, source)
+
+
+def test_unary_chain_golden_applies_param_ops_in_order():
+    input_tensor = torch.tensor([0.5, -1.0, 2.0])
+    ops_chain = [
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.ADD_UNARY_SFPU, 2.0),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, 3.0),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.POWER, 2.0),
+    ]
+
+    output = ttnn.get_golden_function(ttnn.unary_chain)(input_tensor, ops_chain)
+
+    torch.testing.assert_close(output, ((input_tensor + 2.0) * 3.0) ** 2.0)
+
+
+def test_unary_chain_golden_shares_unsigned_and_hardswish_handling():
+    # The chain map and the standalone unary goldens share the canonical dtype-aware helpers.
+    unsigned_input = torch.tensor([0, 2**32 - 1], dtype=torch.int64).to(torch.uint32)
+    chain_output = ttnn.get_golden_function(ttnn.unary_chain)(
+        unsigned_input, [ttnn.UnaryWithParam(ttnn.UnaryOpType.GTZ)]
+    )
+    standalone_output = ttnn.get_golden_function(ttnn.gtz)(unsigned_input)
+    assert torch.equal(chain_output, torch.tensor([False, True]))
+    assert torch.equal(chain_output, standalone_output)
+
+    hardswish_input = torch.tensor([0.0, 1.0])
+    chain_hardswish = ttnn.get_golden_function(ttnn.unary_chain)(
+        hardswish_input, [ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDSWISH)]
+    )
+    torch.testing.assert_close(chain_hardswish, torch.nn.functional.hardswish(hardswish_input))
+
+    # Name-bridged ops resolve to the same callable as the standalone golden.
+    input_tensor = torch.tensor([0.5, -1.0])
+    chain_exp = ttnn.get_golden_function(ttnn.unary_chain)(input_tensor, [ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP)])
+    torch.testing.assert_close(chain_exp, ttnn.get_golden_function(ttnn.exp)(input_tensor))
+
+
+def test_snake_beta_golden_matches_activation_formula():
+    input_tensor = torch.tensor([0.5, -1.0, 2.0])
+
+    output = ttnn.get_golden_function(ttnn.snake_beta)(input_tensor, 2.0, 4.0)
+
+    torch.testing.assert_close(output, input_tensor + torch.sin(2.0 * input_tensor) ** 2 / 4.0)
+
+
+def test_complex_tensor_golden_combines_real_and_imag():
+    real = torch.tensor([1.0, -2.0])
+    imag = torch.tensor([0.5, 3.0])
+
+    output = ttnn.get_golden_function(ttnn.complex_tensor)(real, imag)
+
+    assert output.dtype == torch.complex64
+    assert torch.equal(output, torch.complex(real, imag))
+
+
+def test_embedding_bw_golden_scatters_output_grad_into_indexed_weight_rows():
+    input_tensor = torch.tensor([[0, 2], [0, 1]])
+    weight_tensor = torch.randn(3, 4)
+    output_gradient = torch.randn(2, 2, 4)
+
+    golden = ttnn.get_golden_function(ttnn.embedding_bw)(input_tensor, weight_tensor, output_gradient)
+
+    expected = torch.zeros(3, 4).index_add_(0, input_tensor.reshape(-1), output_gradient.reshape(-1, 4))
+    torch.testing.assert_close(golden, expected)
+
+
+def test_golden_function_output_tensor_kwargs_default_and_override():
+    default_operation = SimpleNamespace()
+    custom_operation = SimpleNamespace()
+
+    ttnn.attach_golden_function(default_operation, golden_function=torch.clone)
+    ttnn.attach_golden_function(
+        custom_operation,
+        golden_function=torch.clone,
+        output_tensor_kwarg_names=("input_grad", "bias_grad"),
+    )
+
+    assert default_operation.output_tensor_kwarg_names == ttnn.decorators.DEFAULT_OUTPUT_TENSOR_KWARG_NAMES
+    assert "bias_grad" not in default_operation.output_tensor_kwarg_names
+    assert custom_operation.output_tensor_kwarg_names == ("input_grad", "bias_grad")
+
+
+def test_custom_output_tensor_kwargs_preserve_golden_output_order(monkeypatch):
+    input_grad = SimpleNamespace(tensor_id=900_001)
+    bias_grad = SimpleNamespace(tensor_id=900_002)
+    input_tensor = SimpleNamespace(tensor_id=900_003)
+    golden_input_grad = torch.tensor([1.0, 2.0])
+    golden_bias_grad = torch.tensor([3.0, 4.0])
+    function_kwargs = {
+        "bias_grad": bias_grad,
+        "input": input_tensor,
+        "input_grad": input_grad,
+    }
+
+    monkeypatch.setattr(ttnn.decorators, "get_ttnn_tensors", lambda value: [value])
+    output_tensors = ttnn.decorators.get_inplace_output_tensors(
+        function_kwargs,
+        ("input_grad", "bias_grad"),
+    )
+
+    try:
+        ttnn.decorators.refresh_or_invalidate_global_goldens(
+            output_tensors,
+            (golden_input_grad, golden_bias_grad),
+        )
+
+        assert output_tensors == [input_grad, bias_grad]
+        assert torch.equal(
+            ttnn.decorators.TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[input_grad.tensor_id],
+            golden_input_grad,
+        )
+        assert torch.equal(
+            ttnn.decorators.TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[bias_grad.tensor_id],
+            golden_bias_grad,
+        )
+        assert input_tensor.tensor_id not in ttnn.decorators.TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR
+    finally:
+        for tensor in (input_grad, bias_grad, input_tensor):
+            ttnn.decorators.TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR.pop(tensor.tensor_id, None)
+
+
+@pytest.mark.parametrize(
+    "alias, operation_name",
+    [
+        ("abs", "moreh_abs_pow"),
+        ("adam", "moreh_adam"),
+        ("adamw", "moreh_adamw"),
+        ("arange", "moreh_arange"),
+        ("bmm", "moreh_bmm"),
+        ("bmm_backward", "moreh_bmm_backward"),
+        ("clip_grad_norm", "moreh_clip_grad_norm"),
+        ("cumsum", "moreh_cumsum"),
+        ("cumsum_backward", "moreh_cumsum_backward"),
+        ("dot", "moreh_dot"),
+        ("dot_backward", "moreh_dot_backward"),
+        ("fold", "moreh_fold"),
+        ("getitem", "moreh_getitem"),
+        ("group_norm", "moreh_group_norm"),
+        ("group_norm_backward", "moreh_group_norm_backward"),
+        ("layer_norm", "moreh_layer_norm"),
+        ("layer_norm_backward", "moreh_layer_norm_backward"),
+        ("linear", "moreh_linear"),
+        ("linear_backward", "moreh_linear_backward"),
+        ("logsoftmax", "moreh_logsoftmax"),
+        ("logsoftmax_backward", "moreh_logsoftmax_backward"),
+        ("matmul", "moreh_matmul"),
+        ("matmul_backward", "moreh_matmul_backward"),
+        ("mean", "moreh_mean"),
+        ("mean_backward", "moreh_mean_backward"),
+        ("nll_loss", "moreh_nll_loss"),
+        ("nll_loss_backward", "moreh_nll_loss_backward"),
+        ("nll_loss_unreduced_backward", "moreh_nll_loss_unreduced_backward"),
+        ("norm", "moreh_norm"),
+        ("norm_backward", "moreh_norm_backward"),
+        ("sgd", "moreh_sgd"),
+        ("softmax", "moreh_softmax"),
+        ("softmax_backward", "moreh_softmax_backward"),
+        ("softmin", "moreh_softmin"),
+        ("softmin_backward", "moreh_softmin_backward"),
+        ("sum", "moreh_sum"),
+        ("sum_backward", "moreh_sum_backward"),
+    ],
+)
+def test_moreh_alias_uses_registered_operation(alias, operation_name):
+    operation = getattr(ttnn, operation_name)
+
+    assert getattr(ttnn.operations.moreh, alias) is operation
+    assert operation.golden_function is not None
 
 
 @pytest.mark.parametrize("batch_size", [1])
