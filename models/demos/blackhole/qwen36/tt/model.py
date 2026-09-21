@@ -199,6 +199,10 @@ class Qwen36Model:
                 self.spec_norm = DistributedNorm(
                     self.norm.norm, args, tt_ccl=self.tt_ccl, TG=args.is_galaxy, enable_all_gather=False
                 )
+            elif self.num_devices == 1:
+                # TP=1 mode (the TP code path on one die): DistributedNorm degrades to the plain norm (no stats
+                # gather, no trailing all-gather), so its full-dim output already IS the dim/1 "fractured" form.
+                self.spec_norm = self.norm
         else:
             # Single device: the plain RMSNorm's full-dim output IS the fractured form.
             self.spec_norm = self.norm
