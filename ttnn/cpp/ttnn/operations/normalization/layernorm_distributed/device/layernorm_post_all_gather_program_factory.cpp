@@ -383,9 +383,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
              {"dfb_length", cb_length},
              {"Wt", tiles_per_core_y},
              {"reduce_factor", reduce_factor}},
-        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
+    if (use_2d_kernel) {
+        reader.compiler_options.defines.emplace("STRIDED_2D", "1");
+        reader.runtime_arg_schema.runtime_arg_names.push_back("row_stride");
+    }
     if (gamma.has_value()) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
             .dfb_spec_name = POST_GAMMA, .accessor_name = "gamma", .endpoint_type = m2::DFBEndpointType::PRODUCER});
@@ -409,6 +414,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
+    if (use_2d_kernel) {
+        writer.compiler_options.defines.emplace("STRIDED_2D", "1");
+        writer.runtime_arg_schema.runtime_arg_names.push_back("row_stride");
+        writer.runtime_arg_schema.runtime_arg_names.push_back("row_width");
+    }
 
     m2::KernelSpec compute{
         .unique_id = POST_COMPUTE,
@@ -530,12 +540,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     m2::KernelRunArgs compute_run{.kernel = POST_COMPUTE};
 
     if (use_2d_kernel) {
+        const uint32_t row_stride = Wt - tiles_per_core_y;
         for (uint32_t x = 0; x < cores_x; ++x) {
             for (uint32_t y = 0; y < cores_y; ++y) {
                 CoreCoord core = {x, y};
 
-                uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
-                uint32_t stats_offset = x * stats_tiles_cols;
+                uint32_t tile_offset = (x * tiles_per_core_x * Wt) + (y * tiles_per_core_y);
+                uint32_t stats_offset = x * tiles_per_core_x * stats_tiles_cols;
 
                 log_debug(
                     tt::LogOp,
@@ -550,12 +561,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
                      {"tile_offset", tile_offset},
                      {"stats_tile_offset", stats_offset},
                      {"eps", eps_u},
-                     {"y_offset", y * tiles_per_core_y}});
+                     {"y_offset", y * tiles_per_core_y},
+                     {"row_stride", row_stride}});
                 m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", tiles_per_core_x}});
                 m2::AddRuntimeArgsForNode(
                     writer_run.runtime_arg_values,
                     core,
-                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y}, {"tile_offset", tile_offset}});
+                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y},
+                     {"tile_offset", tile_offset},
+                     {"row_stride", row_stride},
+                     {"row_width", tiles_per_core_y}});
             }
         }
     } else {

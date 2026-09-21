@@ -17,6 +17,29 @@ from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
 pytestmark = pytest.mark.use_module_device
 
 
+def _assert_multi_row_2d_layout(device, seq_len, hidden_per_device):
+    """Verify that the test shape assigns multiple rows to each core."""
+    tile_size = 32
+    num_tile_rows = seq_len // tile_size
+    width_tiles = hidden_per_device // tile_size
+    max_cores_y = device.compute_with_storage_grid_size().y
+
+    cores_x = min(max_cores_y, num_tile_rows)
+    while num_tile_rows % cores_x != 0 and cores_x > 1:
+        cores_x -= 1
+    tiles_per_core_x = num_tile_rows // cores_x
+
+    cores_y = min(max_cores_y, width_tiles)
+    while width_tiles % cores_y != 0 and cores_y > 1:
+        cores_y -= 1
+    tiles_per_core_y = width_tiles // cores_y
+
+    assert cores_x > 1
+    assert cores_y > 1
+    assert tiles_per_core_x > 1
+    assert tiles_per_core_y < width_tiles
+
+
 def _run_distributed_rmsnorm_single_device(
     device,
     seq_len,
@@ -110,18 +133,24 @@ def _run_distributed_rmsnorm_single_device(
 
 
 @pytest.mark.parametrize(
-    "seq_len, hidden_dim_total, num_simulated_devices",
+    "seq_len, hidden_dim_total, num_simulated_devices, requires_multi_row_2d",
     [
         # LLaMA 70B Galaxy decode shape: hidden=8192, cluster_axis=1 with 4 devices.
         # The 2D-grid path activates when shape[-2] == 128.
-        (128, 8192, 4),
+        (128, 8192, 4, False),
         # Regression: cores_y > tiles_per_core_y (Wt=32 -> cores_y=8, tiles_per_core_y=4) exercises
         # the c_15 merge-gather CB OOB; fails unless c_15 is sized by cores_y.
-        (128, 4096, 4),
+        (128, 4096, 4, False),
+        # On an 8-row grid: Ht=12 -> 6 cores x 2 rows, Wt=20 -> 5 cores x 4 columns.
+        (384, 2560, 4, True),
     ],
 )
 @pytest.mark.parametrize("use_2d_core_grid", [False, True])
-def test_rmsnorm_2d_core_grid_single_device(device, seq_len, hidden_dim_total, num_simulated_devices, use_2d_core_grid):
+def test_rmsnorm_2d_core_grid_single_device(
+    device, seq_len, hidden_dim_total, num_simulated_devices, requires_multi_row_2d, use_2d_core_grid
+):
+    if use_2d_core_grid and requires_multi_row_2d:
+        _assert_multi_row_2d_layout(device, seq_len, hidden_dim_total // num_simulated_devices)
     passing, pcc_msg = _run_distributed_rmsnorm_single_device(
         device=device,
         seq_len=seq_len,

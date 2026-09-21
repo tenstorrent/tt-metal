@@ -63,6 +63,9 @@ void kernel_main() {
     // E(x^2) in the left most columns per tile.
     const auto stats_tile_offset = get_arg(args::stats_tile_offset);
     const auto y_offset = get_arg(args::y_offset);
+#ifdef STRIDED_2D
+    const auto row_stride = get_arg(args::row_stride);
+#endif
 
     constexpr auto blk = get_arg(args::blk);
     constexpr auto stats_tiles_cols = get_arg(args::stats_tiles_cols);
@@ -200,5 +203,8 @@ void kernel_main() {
 #endif
 #endif
         }
+#ifdef STRIDED_2D
+        inp_tile_idx += row_stride;
+#endif
     }  // ncht loop
 }

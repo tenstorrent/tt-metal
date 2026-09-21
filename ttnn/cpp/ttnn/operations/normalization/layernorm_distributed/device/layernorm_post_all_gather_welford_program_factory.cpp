@@ -109,9 +109,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
 
-    uint32_t block_size =
-        fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
-
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -139,69 +136,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     log_debug(tt::LogOp, "math_fidelity: {}", math_fidelity);
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
-
-    uint32_t cb_length = Wt;
-
-    const uint32_t available_L1 =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    if (static_cast<double>(cb_length * in_single_tile_size) > static_cast<double>(available_L1) * 0.95) {
-        cb_length = static_cast<uint32_t>(static_cast<double>(available_L1) * 0.95 / in_single_tile_size) / 7;
-    }
-    const uint32_t in0_tiles = cb_length;
-    const uint32_t in1_tiles = stats_tiles_cols;
-    const uint32_t in2_tiles = cb_length;
-    const uint32_t in3_tiles = cb_length;
-    const uint32_t in4_tiles = 1;  // epsilon
-    const uint32_t in5_tiles = 1;  // reduce scalar
-
-    const uint32_t intermed0_tiles = tile_cols_per_device;
-    const uint32_t intermed4_tiles = 1;
-    const uint32_t intermed5_tiles = cb_length;
-    const uint32_t intermed6_tiles = cb_length;
-    const uint32_t intermed7_tiles = cb_length;
-    const uint32_t out0_tiles = cb_length;
-
-    TT_FATAL(
-        W <= tile_width * in0_tiles,
-        "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now)",
-        W,
-        tile_width,
-        in0_tiles);
-    TT_FATAL(
-        in0_tiles % block_size == 0,
-        "Buffer size in0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        in0_tiles,
-        block_size);
-    TT_FATAL(
-        in2_tiles % block_size == 0,
-        "Buffer size in2_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        in2_tiles,
-        block_size);
-    TT_FATAL(
-        in3_tiles % block_size == 0,
-        "Buffer size in3_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        in3_tiles,
-        block_size);
-    TT_FATAL(
-        out0_tiles % block_size == 0,
-        "Buffer size out0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        out0_tiles,
-        block_size);
-    TT_FATAL(
-        intermed5_tiles % block_size == 0,
-        "Buffer size im0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        intermed5_tiles,
-        block_size);
-    TT_FATAL(
-        intermed6_tiles % block_size == 0,
-        "Buffer size im6_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        intermed6_tiles,
-        block_size);
-    TT_FATAL(
-        intermed7_tiles % block_size == 0,
-        "Buffer size im7_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
-        intermed7_tiles,
-        block_size);
 
     // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
     // UnpackToDest (set below). UnpackToDest is what bypasses the unpacker's
@@ -273,6 +207,82 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         log_debug(tt::LogOp, "core_group_2: {}", core_group_2.str());
         log_debug(tt::LogOp, "num_tile_rows_per_core_group_2: {}", num_tile_rows_per_core_group_2);
     }
+
+    // The shared post-all-gather reader and compute kernel each operate on a core's horizontal
+    // slice. In the 2D layout that slice is narrower than the tensor row, so size all streaming
+    // buffers and choose the blocking factor from the per-core width rather than the full row.
+    uint32_t block_size = fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(tiles_per_core_y, 4)
+                                           : tt::tt_metal::find_max_divisor(tiles_per_core_y, 8);
+    uint32_t cb_length = tiles_per_core_y;
+
+    const uint32_t available_L1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    if (static_cast<double>(cb_length * in_single_tile_size) > static_cast<double>(available_L1) * 0.95) {
+        cb_length = static_cast<uint32_t>(static_cast<double>(available_L1) * 0.95 / in_single_tile_size) / 7;
+    }
+    const uint32_t in0_tiles = cb_length;
+    const uint32_t in1_tiles = stats_tiles_cols;
+    const uint32_t in2_tiles = cb_length;
+    const uint32_t in3_tiles = cb_length;
+    const uint32_t in4_tiles = 1;  // epsilon
+    const uint32_t in5_tiles = 1;  // reduce scalar
+
+    const uint32_t intermed0_tiles = tile_cols_per_device;
+    const uint32_t intermed4_tiles = 1;
+    const uint32_t intermed5_tiles = cb_length;
+    const uint32_t intermed6_tiles = cb_length;
+    const uint32_t intermed7_tiles = cb_length;
+    const uint32_t out0_tiles = cb_length;
+
+    if (use_2d_kernel) {
+        TT_FATAL(
+            tiles_per_core_y <= in0_tiles,
+            "Per-core tile width ({}) exceeds the maximum supported size of tile buffer ({})",
+            tiles_per_core_y,
+            in0_tiles);
+    } else {
+        TT_FATAL(
+            W <= tile_width * in0_tiles,
+            "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now)",
+            W,
+            tile_width,
+            in0_tiles);
+    }
+    TT_FATAL(
+        in0_tiles % block_size == 0,
+        "Buffer size in0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in0_tiles,
+        block_size);
+    TT_FATAL(
+        in2_tiles % block_size == 0,
+        "Buffer size in2_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in2_tiles,
+        block_size);
+    TT_FATAL(
+        in3_tiles % block_size == 0,
+        "Buffer size in3_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        in3_tiles,
+        block_size);
+    TT_FATAL(
+        out0_tiles % block_size == 0,
+        "Buffer size out0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        out0_tiles,
+        block_size);
+    TT_FATAL(
+        intermed5_tiles % block_size == 0,
+        "Buffer size im0_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed5_tiles,
+        block_size);
+    TT_FATAL(
+        intermed6_tiles % block_size == 0,
+        "Buffer size im6_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed6_tiles,
+        block_size);
+    TT_FATAL(
+        intermed7_tiles % block_size == 0,
+        "Buffer size im7_t ({}) must be divisible by block_size ({}) for proper reader and compute kernel operation",
+        intermed7_tiles,
+        block_size);
 
     uint32_t gamma_stick_size = 0;
     uint32_t gamma_is_row_major = 0;
@@ -386,11 +396,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
              {"gamma_is_row_major", gamma_is_row_major},
              {"beta_is_row_major", beta_is_row_major},
              {"dfb_length", cb_length},
-             {"Wt", Wt},
+             {"Wt", tiles_per_core_y},
              {"reduce_factor", reduce_factor}},
-        .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"NCHt", "tile_offset", "stats_tile_offset", "eps", "y_offset"}},
         .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
     };
+    if (use_2d_kernel) {
+        reader.compiler_options.defines.emplace("STRIDED_2D", "1");
+        reader.runtime_arg_schema.runtime_arg_names.push_back("row_stride");
+    }
     // The shared reader always fills a reduce-scalar tile, but the Welford compute kernel derives
     // its own scaling and never reads it. The reader is then the buffer's only toucher, so it takes
     // both endpoint roles.
@@ -418,6 +433,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
         .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
     };
+    if (use_2d_kernel) {
+        writer.compiler_options.defines.emplace("STRIDED_2D", "1");
+        writer.runtime_arg_schema.runtime_arg_names.push_back("row_stride");
+        writer.runtime_arg_schema.runtime_arg_names.push_back("row_width");
+    }
 
     // Welford preserves the math fidelity selection and FP32 dst-acc setting from compute_kernel_config.
     m2::KernelSpec compute{
@@ -548,12 +568,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
     m2::KernelRunArgs compute_run{.kernel = POSTWF_COMPUTE};
 
     if (use_2d_kernel) {
+        const uint32_t row_stride = Wt - tiles_per_core_y;
         for (uint32_t x = 0; x < cores_x; ++x) {
             for (uint32_t y = 0; y < cores_y; ++y) {
                 CoreCoord core = {x, y};
 
-                uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
-                uint32_t stats_offset = x * stats_tiles_cols;
+                uint32_t tile_offset = (x * tiles_per_core_x * Wt) + (y * tiles_per_core_y);
+                uint32_t stats_offset = x * tiles_per_core_x * stats_tiles_cols;
 
                 log_debug(
                     tt::LogOp,
@@ -568,12 +589,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
                      {"tile_offset", tile_offset},
                      {"stats_tile_offset", stats_offset},
                      {"eps", eps},
-                     {"y_offset", y * tiles_per_core_y}});
+                     {"y_offset", y * tiles_per_core_y},
+                     {"row_stride", row_stride}});
                 m2::AddRuntimeArgsForNode(compute_run.runtime_arg_values, core, {{"NCHt", tiles_per_core_x}});
                 m2::AddRuntimeArgsForNode(
                     writer_run.runtime_arg_values,
                     core,
-                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y}, {"tile_offset", tile_offset}});
+                    {{"num_tiles", tiles_per_core_x * tiles_per_core_y},
+                     {"tile_offset", tile_offset},
+                     {"row_stride", row_stride},
+                     {"row_width", tiles_per_core_y}});
             }
         }
     } else {
