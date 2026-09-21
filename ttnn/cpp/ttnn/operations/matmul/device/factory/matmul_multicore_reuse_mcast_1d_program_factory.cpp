@@ -23,6 +23,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_unified.hpp"
 
 using namespace tt;
 
@@ -3164,29 +3165,20 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
 
     const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    const ttnn::kernel_lib::host::Mcast2D in0_mcast = [&]() {
-        const auto mcast_rect = CoreRangeSet(in0_mcast_rect);
-        if (in0_is_sharded) {
-            // The work and sender grids are row-major prefixes. If the work bounding box has inactive tail
-            // fillers, every sender is inside the active prefix and only the num_cores - 1 other active cores ack.
-            // Otherwise the helper derives the sender-inside/outside count from the dense receiver rectangle.
-            const std::optional<uint32_t> ack_count_override =
-                in0_mcast_rect.size() > num_cores ? std::make_optional(num_cores - 1) : std::nullopt;
-            return ttnn::kernel_lib::host::Mcast2D(
-                device,
-                mcast_rect,
-                ttnn::kernel_lib::host::Mcast2DRotatingSenderConfig{
-                    .sender_grid = in0_mcast_sender_cores,
-                    .sender_order = ttnn::kernel_lib::host::Mcast2DSenderOrder::RowMajor},
-                ttnn::kernel_lib::host::McastConfig{.noc = in0_noc, .ack_count_override = ack_count_override});
-        }
-        // The fixed sender is one of num_cores active participants; every other active core acknowledges it.
-        return ttnn::kernel_lib::host::Mcast2D(
-            device,
-            mcast_rect,
-            ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = start_core},
-            ttnn::kernel_lib::host::McastConfig{.noc = in0_noc, .ack_count_override = num_cores - 1});
-    }();
+    namespace mcast = ttnn::kernel_lib::host;
+    const CoreRangeSet in0_mcast_grid(in0_mcast_rect);
+    // Broadcast to the whole bounding box; unlaunched cores with no work do not participate handshake.
+    const CoreRangeSet in0_handshake_cores = all_cores.intersection(in0_mcast_grid);
+    mcast::McastSenderConfig in0_senders = mcast::McastFixedSenderConfig{};
+    if (in0_is_sharded) {
+        in0_senders = mcast::McastRotatingSenderConfig{.sender_grid = in0_mcast_sender_cores};
+    }
+    const mcast::Mcast in0_mcast(
+        device,
+        mcast::McastUnifiedConfig{.noc = in0_noc, .handshake_cores = &in0_handshake_cores},
+        in0_mcast_grid,
+        /*group_size=*/in0_mcast_grid.num_cores(),
+        in0_senders);
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -4123,12 +4115,13 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
-    // Mcast args — the helper owns semaphore IDs starting at 0.
-    const ttnn::kernel_lib::host::Mcast2D in1_mcast(
+    // Broadcast to the whole bounding box; inactive tail fillers do not acknowledge.
+    namespace mcast = ttnn::kernel_lib::host;
+    const mcast::Mcast in1_mcast(
         device,
+        mcast::McastUnifiedConfig{.noc = in1_noc, .handshake_cores = &all_cores},
         CoreRangeSet(in1_mcast_receiver_cores_bounding_box),
-        ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = start_core},
-        ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .ack_count_override = num_cores - 1});
+        /*group_size=*/in1_mcast_receiver_num_cores);
 
     const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
     const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();

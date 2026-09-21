@@ -23,6 +23,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host_unified.hpp"
 
 using ttnn::operations::matmul::utilities::create_mcast_dataflow_kernel;
 using ttnn::operations::unary::UnaryOpType;
@@ -42,12 +43,12 @@ namespace reuse_mcast_optimized_helpers {
 static tt::tt_metal::CoreRangeSet get_in0_rotating_sender_grid(
     const tt::tt_metal::CoreRangeSet& receiver_grid,
     const tt::tt_metal::CoreRangeSet& input_shard_grid,
-    ttnn::kernel_lib::host::Mcast1DShape shape) {
+    bool transpose_mcast) {
     const auto receiver_box = receiver_grid.bounding_box();
     const auto input_box = input_shard_grid.bounding_box();
     auto sender_start = receiver_box.start_coord;
     auto sender_end = receiver_box.end_coord;
-    if (shape == ttnn::kernel_lib::host::Mcast1DShape::PerRow) {
+    if (!transpose_mcast) {
         sender_start.x = input_box.start_coord.x;
         sender_end.x = input_box.end_coord.x;
     } else {
@@ -299,34 +300,28 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
 
     const tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
-    const auto in0_mcast_shape = transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerColumn
-                                                 : ttnn::kernel_lib::host::Mcast1DShape::PerRow;
-    const ttnn::kernel_lib::host::Mcast1D in0_mcast = [&]() {
-        const auto mcast_config = ttnn::kernel_lib::host::McastConfig{.noc = in0_noc};
-        if (in0_block_sharded) {
-            return ttnn::kernel_lib::host::Mcast1D(
-                device,
-                output_work_grid,
-                in0_mcast_shape,
-                ttnn::kernel_lib::host::Mcast1DRotatingSenderConfig{
-                    .sender_grid =
-                        get_in0_rotating_sender_grid(output_work_grid, in0_tensor.shard_spec()->grid, in0_mcast_shape)},
-                mcast_config);
-        }
-        return ttnn::kernel_lib::host::Mcast1D(
-            device,
-            output_work_grid,
-            in0_mcast_shape,
-            ttnn::kernel_lib::host::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
-            mcast_config);
-    }();
-    const ttnn::kernel_lib::host::Mcast1D in1_mcast(
+    namespace mcast = ttnn::kernel_lib::host;
+    mcast::McastSenderConfig in0_senders = mcast::McastFixedSenderConfig{};
+    if (in0_block_sharded) {
+        in0_senders = mcast::McastRotatingSenderConfig{
+            .sender_grid =
+                get_in0_rotating_sender_grid(output_work_grid, in0_tensor.shard_spec()->grid, transpose_mcast)};
+    }
+    // In0 broadcasts along rows and in1 along columns; transpose_mcast swaps the two.
+    const mcast::Mcast in0_mcast(
         device,
+        mcast::McastUnifiedConfig{.noc = in0_noc},
         output_work_grid,
-        transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerRow
-                        : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
-        ttnn::kernel_lib::host::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
-        ttnn::kernel_lib::host::McastConfig{.noc = in1_noc});
+        /*group_size=*/transpose_mcast ? num_cores_with_work_r : num_cores_with_work_c,
+        in0_senders,
+        transpose_mcast ? mcast::McastCoreOrder::ColumnMajor : mcast::McastCoreOrder::RowMajor);
+    const mcast::Mcast in1_mcast(
+        device,
+        mcast::McastUnifiedConfig{.noc = in1_noc},
+        output_work_grid,
+        /*group_size=*/transpose_mcast ? num_cores_with_work_c : num_cores_with_work_r,
+        mcast::McastFixedSenderConfig{},
+        transpose_mcast ? mcast::McastCoreOrder::RowMajor : mcast::McastCoreOrder::ColumnMajor);
     const CoreRangeSet all_cores = in0_mcast.participating_cores();
     const CoreRangeSet in0_mcast_cores_without_work = in0_mcast.sender_only_cores();
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, true);
@@ -1686,7 +1681,7 @@ create_program_mcast_in0_in1(
                 in0_mcast_shape,
                 ttnn::kernel_lib::host::Mcast1DRotatingSenderConfig{
                     .sender_grid =
-                        get_in0_rotating_sender_grid(output_work_grid, in0_tensor.shard_spec()->grid, in0_mcast_shape)},
+                        get_in0_rotating_sender_grid(output_work_grid, in0_tensor.shard_spec()->grid, transpose_mcast)},
                 mcast_config);
         }
         return ttnn::kernel_lib::host::Mcast1D(
