@@ -149,7 +149,8 @@ def compute_encoder_dims(height, width, h_factor, w_factor, encoder_t_chunk_size
 # Blockings are (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block).
 _BLOCKINGS = {
     # === LTX-2.3 22B, 1920x1088, 153 frames @ 25 fps (latent T=20) — swept 2026-08-19
-    # (h,w,C_in,C_out,kernel,T,H,W) -> (C_in_blk,C_out_blk,T_blk,H_blk,W_blk)
+    # NOTE: that sweep ran H/W two smaller than production (input/output dim mixup, since fixed);
+    # winners are valid at the true shapes but timings are approximate — re-sweep to confirm.
     (4, 8, 128, 128, (3, 3, 3), 155, 68, 60): (128, 64, 6, 2, 16),  # 5810us, 3.7x vs fallback
     (4, 8, 128, 48, (3, 3, 3), 155, 68, 60): (128, 64, 6, 2, 16),  # 2973us, 3.9x vs fallback
     (4, 8, 512, 512, (3, 3, 3), 79, 34, 30): (64, 256, 1, 16, 2),  # 8679us, 31.8x vs fallback
@@ -162,6 +163,11 @@ _BLOCKINGS = {
     (4, 8, 1024, 4096, (3, 3, 3), 22, 9, 8): (128, 64, 5, 4, 8),  # 3887us, 13.9x vs fallback
     (4, 8, 1024, 1024, (3, 3, 3), 22, 9, 8): (128, 64, 5, 4, 8),  # 1373us, 15.6x vs fallback
     (4, 8, 1024, 1024, (3, 3, 3), 22, 5, 4): (128, 128, 5, 2, 2),  # 485us, 6.9x vs fallback, partial sweep 350/500
+    # Unswept at 153f: carried from the 145f winners at identical spatial shape (T +1 only);
+    # without them these sites hit the worst-case fallbacks. Re-sweep to replace.
+    (4, 8, 1024, 4096, (1, 3, 3), 20, 5, 4): (256, 64, 1, 4, 4),  # ups_ups — 1235us @ T=19
+    (4, 8, 128, 1024, (3, 3, 3), 22, 9, 8): (64, 128, 7, 8, 4),  # ltx_s0_conv_in — 237us @ T=21
+    (4, 8, 128, 1024, (3, 3, 3), 22, 5, 4): (128, 128, 3, 2, 4),  # ups_initial — 95us @ T=21
     # === end LTX-2.3 153f ===
     # ===================================================================
     # BH Galaxy 6U 4x32, 480p, 81 frames full-T (latent T=21)

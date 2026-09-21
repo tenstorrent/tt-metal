@@ -219,9 +219,7 @@ grid_11_10_configs = {
     (2048, 6144, 4608): (4, 4, 15, (4, 1)),  # 462.3 μs  proj_mlp spatial
     (2048, 6144, 9216): (8, 8, 10, (2, 2)),  # 972.7 μs  ff1 / qkv spatial
     (64, 6144, 4608): (2, 8, 8, (2, 2)),  # 196.3 μs  proj_mlp prompt
-    # LTX-2.3 distilled 153f @ 25 fps, 1088x1920 — BH 4x8 sp1tp0, 11x10 grid.
-    # Swept 2026-09-15 with sweep_mm_block_sizes.py; these shapes previously hit the
-    # warned 8x8x8 fallback in get_matmul_config. Durations are device_kernel_duration.
+    # LTX-2.3 distilled 153f@25fps 1080p, BH 4x8 sp1tp0, 11x10 grid — swept 2026-09-15; was the 8x8x8 fallback.
     # Stage-1 audio branch and text-context matmuls (M=32).
     (32, 128, 512): (2, 2, 2, (2, 2)),  # 4.6 μs
     (32, 256, 2048): (2, 2, 6, (2, 2)),  # 11.4 μs
@@ -384,9 +382,7 @@ grid_12_9_configs = {
     (3424, 5376, 5376): (4, 7, 14, (2, 2)),  # qkv
     (3424, 7168, 1344): (9, 8, 5, (3, 1)),  # to_out
     (3424, 5376, 7168): (6, 7, 12, (2, 2)),  # ff1
-    # LTX-2.3 distilled 153f @ 25 fps, 1088x1920 — BH 4x8 sp1tp0, 12x9 AGMM grid.
-    # Swept 2026-09-15 with sweep_mm_block_sizes.py; these shapes previously fell through
-    # to the v3 rules or the warned generic fallback in get_agmm_config.
+    # LTX-2.3 distilled 153f@25fps 1080p, BH 4x8 sp1tp0, 12x9 AGMM grid — swept 2026-09-15; was v3 rules / generic fallback.
     (32, 2048, 544): (4, 8, 2, (2, 2)),  # 37.5 μs
     (32, 2048, 1568): (2, 8, 4, (2, 2)),  # 59.9 μs
     (1280, 2048, 1024): (4, 8, 6, (2, 2)),  # 99.3 μs
