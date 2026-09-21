@@ -835,9 +835,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     reader_desc.config = ReaderConfigDescriptor{};
     // A Blackhole DRAM endpoint accepts one read request per ~16 cycles per NoC, so K/V pages under 2 KB (bfp8,
     // bfp4) cannot fill the channel from one NoC. The reader then takes V on the second NoC, which puts both data
-    // movement kernels in dynamic NoC mode.
+    // movement kernels in dynamic NoC mode. The K multicast of the column major groups keeps its static NoC.
     const bool split_kv_noc = device->arch() == tt::ARCH::BLACKHOLE && input_tensor_k.buffer()->is_dram() &&
-                              k_tile_size < 2048 && v_tile_size < 2048;
+                              k_tile_size < 2048 && v_tile_size < 2048 && !use_col_major_group_indexing;
     if (split_kv_noc) {
         reader_desc.defines = {{"SPLIT_KV_NOC", "1"}};
         reader_desc.config = DataMovementConfigDescriptor{
