@@ -29,6 +29,10 @@ MAX_CHUNK_SIZE = 128
 # The decode kernel gets a 32-wide k-chunk wrong (https://github.com/tenstorrent/tt-metal/issues/56171),
 # so the cache length must be a multiple of the smallest chunk it gets right.
 WORKAROUND_MIN_DECODE_CHUNK_SIZE = 64
+# With two k-chunks that are masked everywhere, the decode kernel subtracts their maxima, -inf -
+# (-inf), which the SFPU does not evaluate to 0, and the output becomes all zeros. A finite value
+# avoids that.
+MASK_VALUE = -(2.0**127)
 
 LINEAR_DTYPE = ttnn.bfloat8_b
 WEIGHT_CACHE_DTYPE = "bf8"
@@ -281,7 +285,7 @@ class TransformerEncoder(Module):
             )
 
             bias_padding = padded_seq_len - seq_len
-            attn_bias = ttnn.pad(attn_bias, [(0, bias_padding), (0, bias_padding)], value=-math.inf)
+            attn_bias = ttnn.pad(attn_bias, [(0, bias_padding), (0, bias_padding)], value=MASK_VALUE)
         else:
             attn_bias = None
 
@@ -563,8 +567,9 @@ class TransformerEncoder(Module):
         row = ttnn.reshape(row, [1, 1, query_length, 1])
 
         causal = ttnn.typecast(ttnn.le(col, row), ttnn.bfloat16)
+        mask = ttnn.logical_and(causal, mask)
 
-        return (causal * mask - 1.0) * math.inf
+        return ttnn.where(mask, 0.0, MASK_VALUE)
 
     def generate(
         self,
