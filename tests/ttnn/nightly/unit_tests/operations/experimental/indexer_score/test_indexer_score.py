@@ -928,7 +928,10 @@ def run_indexer_short(device, heads):
     )
 
 
-INDEXER_PERF_MARGIN = 0.02  # symmetric +/- 2% band on the expected math util (catches regressions AND speedups)
+# Symmetric band on the expected math util, so it catches regressions and speedups. 8% covers board to board
+# variance: at the commit that set the bands a p100a delivers 3 to 6% (relative) less than the board they were
+# measured on for glm5, with 2 points of spread between runs.
+INDEXER_PERF_MARGIN = 0.08
 
 # indexer_score fills the full Blackhole 11x10 Tensix grid regardless of program config (QC=1 short chunks
 # get block-split across num_blocks=2 row-blocks to reach it). The real-time profiler record does not carry a
