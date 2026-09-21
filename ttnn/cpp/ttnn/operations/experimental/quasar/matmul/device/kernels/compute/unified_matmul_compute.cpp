@@ -33,35 +33,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-// Copies one subblock of partial sums from the C_partials ring back into DST so the next K chunk keeps
-// accumulating onto it. The unpacker is switched to the partials format for the copy and back to B's
-// format afterwards; the matmul MOP must be re-initialised after any copy_init.
-FORCE_INLINE void reload_partials_into_dst(
-    uint32_t subblock_tiles, uint32_t subblock_M_tiles, uint32_t subblock_N_tiles, uint32_t K_chunk_tiles) {
-    DataflowBuffer C_partials(dfb::C_partials);
-    reconfig_data_format_srca(dfb::B_slice, dfb::C_partials);
-    copy_init(dfb::C_partials);
-    C_partials.wait_front(subblock_tiles);
-    copy_block(dfb::C_partials, /*start_in_tile_index=*/0, /*start_dst_tile_index=*/0, subblock_tiles);
-    C_partials.pop_front(subblock_tiles);
-    reconfig_data_format_srca(dfb::C_partials, dfb::B_slice);
-    // Metalium API: matmul_block_init(A, B, transpose, ct_dim = N tiles, rt_dim = M tiles, kt_dim = K tiles).
-    matmul_block_init(dfb::A_slice, dfb::B_slice, /*transpose=*/0, subblock_N_tiles, subblock_M_tiles, K_chunk_tiles);
-}
-
-// With packer L1 accumulation the entries pushed to C_partials during a K chunk carry nothing new: the packer
-// added DST onto the partials already in L1. Pop them without reading so the ring is empty again and the next
-// K chunk's packs land on the same L1 addresses (the ring holds exactly one MN chunk). dummy_unpack orders the
-// pop after the wait on Quasar; it is a no-op elsewhere.
-FORCE_INLINE void pop_partials_without_reading(uint32_t MN_chunk_tiles, uint32_t subblock_tiles) {
-    DataflowBuffer C_partials(dfb::C_partials);
-    for (uint32_t popped = 0; popped < MN_chunk_tiles; popped += subblock_tiles) {
-        C_partials.wait_front(subblock_tiles);
-        dummy_unpack(dfb::C_partials);
-        C_partials.pop_front(subblock_tiles);
-    }
-}
-
 void kernel_main() {
     const uint32_t num_MN_chunks = get_arg(args::num_MN_chunks);  // this core's chunks, per batch
 
@@ -93,7 +64,7 @@ void kernel_main() {
             if constexpr (partials_format_differs && num_K_chunks > 1) {
                 if (batch > 0 || MN_chunk_index > 0) {
                     // The previous chunk's last K chunk left the packer on MN_chunk's format. (The unpacker needs
-                    // no fix-up: reload_partials_into_dst already restores SrcA to B's format.)
+                    // no fix-up: the partials reload already restores SrcA to B's format.)
                     pack_reconfig_data_format(dfb::C_partials);
                 }
             }
@@ -116,7 +87,24 @@ void kernel_main() {
                         const uint32_t B_subblock_first_tile = n_tile;  // B slice tile (0, n_tile)
                         tile_regs_acquire();
                         if (reload_partials) {
-                            reload_partials_into_dst(subblock_tiles, subblock_M_tiles, subblock_N_tiles, K_chunk_tiles);
+                            // Copy this subblock's partial sums from the C_partials ring back into DST and keep
+                            // accumulating onto them. The unpacker is switched to the partials format for the
+                            // copy and back to B's format afterwards; the matmul MOP must be re-initialised
+                            // after any copy_init.
+                            reconfig_data_format_srca(dfb::B_slice, dfb::C_partials);
+                            copy_init(dfb::C_partials);
+                            C_partials.wait_front(subblock_tiles);
+                            copy_block(
+                                dfb::C_partials, /*start_in_tile_index=*/0, /*start_dst_tile_index=*/0, subblock_tiles);
+                            C_partials.pop_front(subblock_tiles);
+                            reconfig_data_format_srca(dfb::C_partials, dfb::B_slice);
+                            matmul_block_init(
+                                dfb::A_slice,
+                                dfb::B_slice,
+                                /*transpose=*/0,
+                                subblock_N_tiles,
+                                subblock_M_tiles,
+                                K_chunk_tiles);
                         }
 
                         // Accumulate this subblock over the K chunk, one K tile per matmul_block call: each call
@@ -175,7 +163,13 @@ void kernel_main() {
                     // the second-to-last K chunk's entries are what the last K chunk reloads.
                     const bool second_to_last_K_chunk = K_chunk + 2 == num_K_chunks;
                     if (!last_K_chunk && !second_to_last_K_chunk) {
-                        pop_partials_without_reading(MN_chunk_tiles, subblock_tiles);
+                        // Pop without reading: dummy_unpack orders the pop after the wait on Quasar (a no-op
+                        // elsewhere).
+                        for (uint32_t popped = 0; popped < MN_chunk_tiles; popped += subblock_tiles) {
+                            C_partials.wait_front(subblock_tiles);
+                            dummy_unpack(dfb::C_partials);
+                            C_partials.pop_front(subblock_tiles);
+                        }
                     }
                 }
 
