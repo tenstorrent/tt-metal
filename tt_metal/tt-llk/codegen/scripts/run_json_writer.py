@@ -595,9 +595,25 @@ def cmd_finalize(args: argparse.Namespace) -> None:
     log_dir = Path(args.log_dir)
     now = args.end_time or _utcnow()
     patch = _json_arg(args.patch_json, {})
+    if not isinstance(patch, dict):
+        raise ValueError("finalize patch must be a JSON object")
+    # Identity and evidence belong to init/review/reduction, never a final
+    # metadata patch. Include dotted aliases accepted by _merge_patch.
+    protected = {
+        "run_id",
+        "attempt_id",
+        "runner_pool",
+        "required_verification",
+        "verification_reduction",
+        "review",
+    }
+    for key in patch:
+        parts = [part for part in key.split(".") if part]
+        if parts and parts[0] in protected:
+            raise ValueError(f"finalize patch cannot change {parts[0]}")
 
     with _run_json_transaction(log_dir) as doc:
-        _validate_audit_success(log_dir, doc, args)
+        _merge_patch(doc, patch)
 
         history = doc.setdefault("step_history", [])
         if history and history[-1].get("result") == "in_progress":
@@ -621,12 +637,13 @@ def cmd_finalize(args: argparse.Namespace) -> None:
             args.final_message or doc.get("current_step_message") or ""
         )
 
-        _merge_patch(doc, patch)
-
-        # Apply typed --solver-state last so it cannot be silently overridden by
-        # --patch-json (argparse choices otherwise bypass it via that escape hatch).
+        # Typed terminal flags are authoritative over the metadata patch.
         if args.solver_state is not None:
             doc["solver_state"] = args.solver_state
+
+        # Validate exactly the final record, while the transaction still holds
+        # the lock and before any write. Failure leaves the old record intact.
+        _validate_audit_success(log_dir, doc, args)
 
     print(f"finalize: status={args.status}")
 

@@ -1443,7 +1443,8 @@ def test_verification_reducer_is_repeatable_for_fixed_random_attempt_trees(
     assert choices == [replay.choice(cases) for _ in requirements]
 
 
-def test_audit_finalize_accepts_current_and_rejects_changed_patch(tmp_path):
+@pytest.fixture
+def audit_finalize_candidate(tmp_path):
     worktree = tmp_path / "worktree"
     worktree.mkdir()
     subprocess.run(["git", "init", "-q", str(worktree)], check=True)
@@ -1520,6 +1521,13 @@ def test_audit_finalize_accepts_current_and_rejects_changed_patch(tmp_path):
         "--worktree",
         str(worktree),
     ]
+    return finalize_args, worktree, source
+
+
+def test_audit_finalize_accepts_current_and_rejects_changed_patch(
+    tmp_path, audit_finalize_candidate
+):
+    finalize_args, worktree, source = audit_finalize_candidate
     finalized = subprocess.run(
         finalize_args, check=False, capture_output=True, text=True
     )
@@ -1535,6 +1543,157 @@ def test_audit_finalize_accepts_current_and_rejects_changed_patch(tmp_path):
     assert finalized.returncode != 0
     assert "candidate patch differs from verified patch" in finalized.stderr
     assert (tmp_path / "run.json").read_bytes() == finalized_bytes
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"run_id": "different-run"},
+        {".run_id.": "different-run"},
+        {"attempt_id": "different-attempt"},
+        {"runner_pool": "prod"},
+        {"required_verification.manifest_id": "f" * 64},
+        {"verification_reduction": {"reduction_id": "f" * 64}},
+        {"review": {"requirements_complete": True}},
+    ],
+)
+def test_audit_finalize_rejects_identity_and_evidence_patch(
+    tmp_path, audit_finalize_candidate, patch
+):
+    finalize_args, _, _ = audit_finalize_candidate
+    original = (tmp_path / "run.json").read_bytes()
+    result = subprocess.run(
+        [*finalize_args, "--patch-json", json.dumps(patch)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "finalize patch cannot change" in result.stderr
+    assert (tmp_path / "run.json").read_bytes() == original
+
+
+def test_audit_finalize_accepts_packaging_metrics(tmp_path, audit_finalize_candidate):
+    finalize_args, worktree, _ = audit_finalize_candidate
+    patch = {
+        "base_commit": json.loads(
+            (tmp_path / "required_verification_manifest.json").read_text()
+        )["expected_base_sha"],
+        "artifact_patch": "generated.patch",
+        "worktree_dir": str(worktree),
+        "debug_cycles": 2,
+        "arch_results": {"blackhole": {"perf": {"measured": False}}},
+    }
+    result = subprocess.run(
+        [*finalize_args, "--patch-json", json.dumps(patch)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    run = json.loads((tmp_path / "run.json").read_text())
+    assert run["status"] == "success"
+    assert run["artifact_patch"] == "generated.patch"
+    assert run["debug_cycles"] == 2
+    assert run["arch_results"]["blackhole"]["perf"] == {"measured": False}
+
+
+@pytest.mark.parametrize("dotted", [False, True])
+def test_finalize_typed_outcome_cannot_be_promoted_by_patch(tmp_path, dotted):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "audit-promotion",
+        "--kernel",
+        "issue_1",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "writer",
+        "--first-message",
+        "working",
+        "--start-time",
+        "2026-09-21T10:00:00Z",
+        "--patch-json",
+        '{"runner_pool":"audit"}',
+    )
+    values = {
+        "status": "success",
+        "final_result": "success",
+        "final_message": "passed",
+        "end_time": "2099-01-01T00:00:00Z",
+        "duration_seconds": 99999,
+        "solver_state": "working",
+    }
+    patch = {
+        key + (".override" if dotted else ""): value for key, value in values.items()
+    }
+    _run(
+        tmp_path,
+        "finalize",
+        "--status",
+        "failed",
+        "--final-result",
+        "test_failure",
+        "--final-message",
+        "compile failed",
+        "--solver-state",
+        "not_working",
+        "--end-time",
+        "2026-09-21T10:01:00Z",
+        "--patch-json",
+        json.dumps(patch),
+    )
+    run = json.loads((tmp_path / "run.json").read_text())
+    assert run["status"] == "failed"
+    assert run["final_result"] == "test_failure"
+    assert run["final_message"] == "compile failed"
+    assert run["solver_state"] == "not_working"
+    assert run["end_time"] == "2026-09-21T10:01:00Z"
+    assert run["duration_seconds"] == 60
+    assert run["step_history"][-1]["result"] == "test_failure"
+    assert not (tmp_path / "required_verification_manifest.json").exists()
+
+
+@pytest.mark.parametrize("patch", [[], None, "wrong-shape"])
+def test_finalize_rejects_non_object_patch_without_mutation(tmp_path, patch):
+    _run(
+        tmp_path,
+        "init",
+        "--run-id",
+        "r1",
+        "--kernel",
+        "issue_1",
+        "--arch",
+        "blackhole",
+        "--first-step",
+        "writer",
+        "--first-message",
+        "working",
+    )
+    original = (tmp_path / "run.json").read_bytes()
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "finalize",
+            "--log-dir",
+            str(tmp_path),
+            "--status",
+            "failed",
+            "--final-result",
+            "test_failure",
+            "--patch-json",
+            json.dumps(patch),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "finalize patch must be a JSON object" in result.stderr
+    assert (tmp_path / "run.json").read_bytes() == original
 
 
 def test_candidate_patch_digest_is_identical_from_llk_subdir_and_repo_root(tmp_path):
