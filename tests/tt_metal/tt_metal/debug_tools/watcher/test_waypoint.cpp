@@ -305,6 +305,12 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
         auto elapsed =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
         ASSERT_LT(elapsed, timeout_ms) << "Timed out waiting for watcher to log ETH waypoints";
+        // The simulator only advances when the host clocks it; no-op on silicon.
+        if (MetalContext::instance().rtoptions().get_simulator_enabled()) {
+            for (int i = 0; i < 10000; i++) {
+                MetalContext::instance().get_cluster().advance_device_execution(device->id());
+            }
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 
