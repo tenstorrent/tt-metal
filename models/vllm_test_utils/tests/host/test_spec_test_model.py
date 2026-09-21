@@ -871,9 +871,7 @@ def test_the_fixed_prefill_answers_ids_when_the_device_samples(monkeypatch):
         sampling_params=object(),
     )
 
-    assert ids.tolist() == [
-        int(model._fixed_choice(torch.tensor([[14]]), torch.tensor([[3]]))[0, 0])
-    ]
+    assert ids.tolist() == [int(model._fixed_choice(torch.tensor([[14]]), torch.tensor([[3]]))[0, 0])]
 
 
 def test_the_depth_target_prefill_is_untouched(monkeypatch):
