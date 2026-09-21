@@ -5,6 +5,9 @@
 #include "hybrid_routed_expert_ffn.hpp"
 
 #include "device/hybrid_routed_expert_ffn_device_operation.hpp"
+#include "device/hybrid_program_factory.hpp"
+#include "device/combine_fabric2d_placement.hpp"
+#include <tt-metalium/hal.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 
@@ -24,7 +27,24 @@ ttnn::Tensor hybrid_routed_expert_moe(
     RoutedExpertActivation activation,
     const std::optional<std::vector<ttnn::Tensor>>& gate_biases,
     const std::optional<std::vector<ttnn::Tensor>>& up_biases,
-    const std::optional<std::vector<ttnn::Tensor>>& down_biases) {
+    const std::optional<std::vector<ttnn::Tensor>>& down_biases,
+    bool overlap_combine,
+    const std::optional<ttnn::Tensor>& dispatched_metadata,
+    const std::optional<ttnn::Tensor>& expert_offsets,
+    const std::optional<ttnn::Tensor>& combine_output,
+    uint32_t num_experts_per_tok,
+    uint32_t seq_len_per_chip,
+    uint32_t cluster_axis,
+    uint32_t num_links,
+    tt::tt_fabric::Topology topology) {
+    // The combine half is off by default, so its tensors are optional here and unconditional in the
+    // attributes: everything past this point reads them as plain tensors, and only this check stands
+    // between that and a default-constructed one.
+    TT_FATAL(
+        !overlap_combine ||
+            (dispatched_metadata.has_value() && expert_offsets.has_value() && combine_output.has_value()),
+        "overlap_combine needs combine's tensors: dispatched_metadata, expert_offsets and combine_output");
+
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -74,11 +94,26 @@ ttnn::Tensor hybrid_routed_expert_moe(
     // every path -- seeding a distinct output with a copy of x would take a second program.
     const bool x_is_row_major = dispatched_buffer.layout() == tt::tt_metal::Layout::ROW_MAJOR;
     const bool fused_half_runs = hybrid_token_threshold > 0;
+
+    // The combine half moves whole tokens from this output into its own, and sizes its ring slot,
+    // fabric payload and output pages off one token size, so the two have to agree on bytes per
+    // element. Its output is bf16, so the overlap costs this op a bf16 output where it would
+    // otherwise emit bf8 -- twice the write bytes here and twice the read bytes in combine's
+    // untilizer. That is the price of the merge, not an oversight.
+    //
+    // It also pins x to ROW_MAJOR. A tiled x is bf8, and the unified half only tolerates an
+    // output dtype different from x's on the row-major path, so a bf16 output over a tiled x
+    // would be rejected there instead -- with a message about dtypes rather than about overlap.
+    TT_FATAL(
+        !overlap_combine || x_is_row_major,
+        "overlap_combine needs a ROW_MAJOR dispatched_buffer: the combine half requires a bf16 output, which "
+        "this op only produces on the row-major path");
+
     ttnn::Tensor output = dispatched_buffer;
     if (x_is_row_major) {
         output = ttnn::empty(
             dispatched_buffer.logical_shape(),
-            tt::tt_metal::DataType::BFLOAT8_B,
+            overlap_combine ? tt::tt_metal::DataType::BFLOAT16 : tt::tt_metal::DataType::BFLOAT8_B,
             tt::tt_metal::Layout::TILE,
             dispatched_buffer.device(),
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM});
@@ -91,19 +126,73 @@ ttnn::Tensor hybrid_routed_expert_moe(
             dispatched_buffer.memory_config());
     }
 
-    // The L1 arena both halves' circular buffers are laid over, allocated here rather than
-    // inside the op: the program keeps a raw pointer to this buffer and re-reads its address on
-    // every program-cache hit, so it must be owned by something that outlives the program. One
-    // shard per worker core, which gives every core an arena at one common L1 address.
-    std::optional<ttnn::Tensor> l1_arena;
-    if (fused_half_runs) {
+    using OperationType = HybridRoutedExpertFfnDeviceOperation;
+    OperationType::operation_attributes_t attributes{
+        .m_tiles = m_tiles,
+        .experts_per_chip = experts_per_chip,
+        .x_is_row_major = x_is_row_major,
+        .activation = activation,
+        .fuse_bias = has_bias,
+        .compute_kernel_config = compute_kernel_config.has_value()
+                                     ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
+                                     : std::nullopt,
+        .hybrid_token_threshold = hybrid_token_threshold,
+        .overlap_combine = overlap_combine,
+        .num_experts_per_tok = num_experts_per_tok,
+        .seq_len_per_chip = seq_len_per_chip,
+        .cluster_axis = cluster_axis,
+        .num_links = num_links,
+        .topology = topology};
+
+    OperationType::tensor_args_t tensors{
+        .x = dispatched_buffer,
+        .gate_projs = gate_projs,
+        .up_projs = up_projs,
+        .down_projs = down_projs,
+        .counts = expert_token_counts,
+        .global_expert_idx_table = global_expert_idx_table,
+        .output = output,
+        .expert_region_offsets = expert_region_offsets,
+        .gate_biases = has_bias ? *gate_biases : std::vector<ttnn::Tensor>{},
+        .up_biases = has_bias ? *up_biases : std::vector<ttnn::Tensor>{},
+        .down_biases = has_bias ? *down_biases : std::vector<ttnn::Tensor>{},
+        .l1_arena = std::nullopt,
+        .dispatched_metadata = dispatched_metadata,
+        .expert_offsets = expert_offsets,
+        .combine_output = combine_output};
+
+    // The L1 arena both halves' circular buffers are laid over, allocated here rather than inside
+    // the op: the program keeps a raw pointer to this buffer and re-reads its address on every
+    // program-cache hit, so it must be owned by something that outlives the program. One shard per
+    // core, which gives every core an arena at one common L1 address.
+    //
+    // Overlapping widens it to combine's rows as well, because combine's untilizer binds its
+    // circular buffers into the same arena. That is what keeps the merged program to ONE L1
+    // allocation: the allocator hands out addresses device-wide, so two halves each claiming the
+    // base on their own rows collide in its bookkeeping even though they never touch.
+    if (fused_half_runs || overlap_combine) {
         auto* device = dispatched_buffer.device();
-        const uint32_t arena_bytes = hybrid_l1_arena_bytes(device);
+
+        // Combine also hand-places a ring and control tables on its stream-worker cores, which
+        // carry no circular buffers and so are invisible to every framework check. The arena has
+        // to start above them, and above where its ring semaphores will land.
+        // One 64-byte block per ring semaphore -- the coarsest alignment the L1 allocator applies,
+        // not l1_alignment, which under-reserves and lands the semaphores inside combine's ring.
+        // At the MAX untilizer count so the reservation does not move with
+        // CMBF2D_UNTILIZERS_PER_GROUP. A shortfall is caught by combine's own sem_floor check.
+        constexpr uint32_t kSemaphoreBlock = 64;
+        const uint32_t semaphore_bytes = (3 + combine::MAX_UNTILIZERS_PER_GROUP + num_links) * kSemaphoreBlock;
+        const uint32_t floor = overlap_combine ? hybrid_combine_l1_floor(attributes, tensors, semaphore_bytes) : 0;
+        const uint32_t arena_bytes = hybrid_l1_arena_bytes(device) - floor;
         const uint32_t cols = arena_bytes / 2;  // bfloat16 elements
+
+        const uint32_t origin_y = overlap_combine ? 0 : kOriginY;
+        const uint32_t rows = kOriginY + kGridY - origin_y;
         const tt::tt_metal::CoreRangeSet grid(tt::tt_metal::CoreRange(
-            tt::tt_metal::CoreCoord{0, kOriginY}, tt::tt_metal::CoreCoord{kGridX - 1, kOriginY + kGridY - 1}));
-        l1_arena = ttnn::empty(
-            ttnn::Shape({kGridX * kGridY, cols}),
+            tt::tt_metal::CoreCoord{0, origin_y}, tt::tt_metal::CoreCoord{kGridX - 1, kOriginY + kGridY - 1}));
+
+        tensors.l1_arena = ttnn::empty(
+            ttnn::Shape({kGridX * rows, cols}),
             tt::tt_metal::DataType::BFLOAT16,
             tt::tt_metal::Layout::ROW_MAJOR,
             device,
@@ -113,31 +202,7 @@ ttnn::Tensor hybrid_routed_expert_moe(
                 tt::tt_metal::ShardSpec{grid, {1, cols}, tt::tt_metal::ShardOrientation::ROW_MAJOR}});
     }
 
-    using OperationType = HybridRoutedExpertFfnDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .m_tiles = m_tiles,
-            .experts_per_chip = experts_per_chip,
-            .x_is_row_major = x_is_row_major,
-            .activation = activation,
-            .fuse_bias = has_bias,
-            .compute_kernel_config = compute_kernel_config.has_value()
-                                         ? std::optional<ttnn::DeviceComputeKernelConfig>(*compute_kernel_config)
-                                         : std::nullopt,
-            .hybrid_token_threshold = hybrid_token_threshold},
-        OperationType::tensor_args_t{
-            .x = dispatched_buffer,
-            .gate_projs = gate_projs,
-            .up_projs = up_projs,
-            .down_projs = down_projs,
-            .counts = expert_token_counts,
-            .global_expert_idx_table = global_expert_idx_table,
-            .output = output,
-            .expert_region_offsets = expert_region_offsets,
-            .gate_biases = has_bias ? *gate_biases : std::vector<ttnn::Tensor>{},
-            .up_biases = has_bias ? *up_biases : std::vector<ttnn::Tensor>{},
-            .down_biases = has_bias ? *down_biases : std::vector<ttnn::Tensor>{},
-            .l1_arena = l1_arena});
+    return ttnn::device_operation::launch<OperationType>(std::move(attributes), std::move(tensors));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

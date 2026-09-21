@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <variant>
+
 #include "hybrid_routed_expert_ffn_types.hpp"
+#include "hybrid_program_factory.hpp"
 
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
@@ -15,7 +18,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert
 
 // ONE device operation carrying both routed-expert implementations, so a layer dispatches once.
 //
-// This is not two ops behind one entry point: create_descriptor builds both halves into a single
+// This is not two ops behind one entry point: the program factory builds both halves into a single
 // ProgramDescriptor with three merged kernels, one per RISC-V. A program holds at most one kernel
 // per processor per core and both halves want the same 88, so side-by-side placement is rejected
 // by the framework outright -- the halves have to share binaries.
@@ -30,10 +33,10 @@ struct HybridRoutedExpertFfnDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output);
+    // A workload rather than a single descriptor: the combine half this op can carry is
+    // coord-dependent, and its GlobalSemaphores need somewhere to live for as long as the cached
+    // workload does. See HybridRoutedExpertFfnProgramFactory.
+    using program_factory_t = std::variant<HybridRoutedExpertFfnProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);

@@ -41,6 +41,9 @@
 #include "api/debug/assert.h"
 #include "../adaptive_chunk.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/weight_runs.hpp"
+// At FILE scope, ahead of the namespace: both halves of the union call it and #pragma once
+// gives them one copy, at global scope where each can see it.
+#include "../hybrid_expert_ready.hpp"  // the RE -> combine per-expert handoff, empty without the overlap
 // Under HYB_NS this body is one half of the union kernel: everything below is namespaced so
 // the two halves cannot collide at file scope, and the shims rebase its argument indices into
 // the concatenated lists. Without HYB_NS it is the standalone kernel, unchanged.
@@ -503,6 +506,13 @@ void kernel_main() {
                 }
             }
         }  // end chunk loop
+#ifdef HYB_EXPERT_READY_TARGETS
+        // The chunk loop only flushes (departed sender), which is enough to reuse the L1 slot but
+        // not to claim the rows are readable. Combine reads them from DRAM as soon as it sees the
+        // count, so the increment has to sit behind a real barrier.
+        noc.async_write_barrier();
+        hybrid_expert_ready_signal();
+#endif
     }  // end per-local-expert loop
     // Ensure all outstanding writes complete at the destination before the
     // kernel returns (the next dispatched op may read this output).

@@ -28,6 +28,9 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         Each expert is routed at runtime from the device-resident token counts against
         hybrid_token_threshold: at or below it the expert runs on the fused implementation,
         above it on the unified one. One program, so the layer can be overlapped with combine.
+
+        overlap_combine: also carry the combine op's kernels in this program, on grid rows 0-1,
+        gated per expert on this op's output. The two halves never share a core.
         )doc",
         &hybrid_routed_expert_moe,
         nb::arg("dispatched_buffer").noconvert(),
@@ -44,7 +47,16 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("activation") = RoutedExpertActivation::Silu,
         nb::arg("gate_biases") = nb::none(),
         nb::arg("up_biases") = nb::none(),
-        nb::arg("down_biases") = nb::none());
+        nb::arg("down_biases") = nb::none(),
+        nb::arg("overlap_combine") = false,
+        nb::arg("dispatched_metadata") = nb::none(),
+        nb::arg("expert_offsets") = nb::none(),
+        nb::arg("combine_output") = nb::none(),
+        nb::arg("num_experts_per_tok") = 2,
+        nb::arg("seq_len_per_chip") = 0,
+        nb::arg("cluster_axis") = 0,
+        nb::arg("num_links") = 2,
+        nb::arg("topology") = tt::tt_fabric::Topology::Mesh);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::detail

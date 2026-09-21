@@ -4,8 +4,10 @@
 #pragma once
 
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 #include "hybrid_routed_expert_ffn_types.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
@@ -22,5 +24,24 @@ void validate_arguments(const HybridRoutedExpertFfnParams& op, const HybridRoute
 // and folded into one binary per RISC-V that runs them as ordered passes.
 tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t, ttnn::Tensor& output);
+
+// The op dispatches as a workload rather than one replicated program because the combine half it
+// can carry is coord-dependent -- each chip's compile-time args name its ring neighbour -- and
+// because only a WorkloadDescriptor has somewhere to park combine's GlobalSemaphores so they
+// outlive the cached workload. With the combine half off this still emits one program per
+// coordinate RANGE, so a mesh-wide op is a single entry exactly as before.
+// L1 above the allocator base that the shared arena must leave alone when combine is overlapped:
+// its stream-worker cores hand-place a ring and control tables there and carry no circular
+// buffers, so nothing else would catch an arena that descended into them.
+uint32_t hybrid_combine_l1_floor(
+    const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t, uint32_t semaphore_bytes);
+
+struct HybridRoutedExpertFfnProgramFactory {
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+        const HybridRoutedExpertFfnParams& operation_attributes,
+        const HybridRoutedExpertFfnInputs& tensor_args,
+        ttnn::Tensor& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+};
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

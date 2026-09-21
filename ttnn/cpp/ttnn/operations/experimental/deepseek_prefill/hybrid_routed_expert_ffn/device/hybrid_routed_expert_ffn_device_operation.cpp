@@ -25,9 +25,4 @@ HybridRoutedExpertFfnDeviceOperation::tensor_return_value_t HybridRoutedExpertFf
     return t.output;
 }
 
-tt::tt_metal::ProgramDescriptor HybridRoutedExpertFfnDeviceOperation::create_descriptor(
-    const operation_attributes_t& op, const tensor_args_t& t, tensor_return_value_t& output) {
-    return create_hybrid_program_descriptor(op, t, output);
-}
-
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

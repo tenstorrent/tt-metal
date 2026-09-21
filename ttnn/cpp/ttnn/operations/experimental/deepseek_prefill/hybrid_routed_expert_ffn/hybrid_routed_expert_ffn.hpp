@@ -39,7 +39,16 @@ ttnn::Tensor hybrid_routed_expert_moe(
     RoutedExpertActivation activation = RoutedExpertActivation::Silu,
     const std::optional<std::vector<ttnn::Tensor>>& gate_biases = std::nullopt,
     const std::optional<std::vector<ttnn::Tensor>>& up_biases = std::nullopt,
-    const std::optional<std::vector<ttnn::Tensor>>& down_biases = std::nullopt);
+    const std::optional<std::vector<ttnn::Tensor>>& down_biases = std::nullopt,
+    bool overlap_combine = false,
+    const std::optional<ttnn::Tensor>& dispatched_metadata = std::nullopt,
+    const std::optional<ttnn::Tensor>& expert_offsets = std::nullopt,
+    const std::optional<ttnn::Tensor>& combine_output = std::nullopt,
+    uint32_t num_experts_per_tok = 2,
+    uint32_t seq_len_per_chip = 0,
+    uint32_t cluster_axis = 0,
+    uint32_t num_links = 2,
+    tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn
 

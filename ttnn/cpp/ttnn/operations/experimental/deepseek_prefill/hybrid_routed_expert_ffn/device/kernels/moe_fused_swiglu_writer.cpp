@@ -31,6 +31,9 @@
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/moe_fused_swiglu_dataflow.hpp"  // the transport vocabulary shared with the reader
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/moe_fused_swiglu_common.hpp"  // the ONE definition of the mailbox word layout
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/moe_fused_swiglu_ct_args.hpp"  // the ONE definition of the compile-time arg order
+// At FILE scope, ahead of the namespace: both halves of the union call it and #pragma once
+// gives them one copy, at global scope where each can see it.
+#include "hybrid_expert_ready.hpp"  // the RE -> combine per-expert handoff, empty without the overlap
 // Under HYB_NS this body is one half of the union kernel: everything below is namespaced so
 // the two halves cannot collide at file scope, and the shims rebase its argument indices into
 // the concatenated lists. Without HYB_NS it is the standalone kernel, unchanged.
@@ -600,6 +603,18 @@ void kernel_main() {
                 out_pending = OUT_FULL;
             }
         }
+#ifdef HYB_EXPERT_READY_TARGETS
+        // The deferred drain has to be forced at the expert boundary when combine is watching.
+        // Rolling it into the next expert's first M-block is what makes it free normally, but it
+        // would put the increment that says "expert done" ahead of that expert's last write
+        // landing, and combine reads those rows out of DRAM the moment it sees the count.
+        if (out_pending) {
+            noc.async_write_barrier();
+            out_buf.pop_front(out_pending);
+            out_pending = 0;
+        }
+        hybrid_expert_ready_signal();
+#endif
     }
 
     if (out_pending) {

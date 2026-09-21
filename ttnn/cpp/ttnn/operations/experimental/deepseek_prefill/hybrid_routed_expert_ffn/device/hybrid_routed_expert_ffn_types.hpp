@@ -23,6 +23,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
 // The worker rectangle both passes run on. Rows 0-1 are reserved for the combine op and one
@@ -218,6 +219,11 @@ struct OperationArguments {
     // a cached program -- the kernels select the bias adds with a compile-time FUSE_BIAS define.
     bool fuse_bias = false;
     tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::BFLOAT8_B;
+    // The arena this half lays its circular buffers into, in bytes, read off the tensor the entry
+    // point allocated. Carried rather than recomputed because overlapping with combine shrinks it,
+    // and a builder that recomputed the full-size figure would block against an arena that is not
+    // there.
+    uint32_t l1_arena_bytes = 0;
     tt::tt_metal::MemoryConfig output_memory_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
@@ -303,6 +309,26 @@ struct HybridRoutedExpertFfnParams {
     // so the merged binaries are the same shape either way.
     uint32_t hybrid_token_threshold = 0;
 
+    // Carry the combine op's kernels in this program, on rows 0-1, and gate them on a per-expert
+    // ready signal from this op's writers. The two halves never share a core -- the routed-expert
+    // rectangle starts at kOriginY precisely to leave those rows free -- so the merge is a
+    // concatenation of kernels, circular buffers and semaphores, not a union like the two
+    // routed-expert halves.
+    //
+    // It changes the program's shape, so it is an attribute: two values cache as two programs.
+    bool overlap_combine = false;
+
+    // The combine half's geometry. Carried unconditionally rather than behind an optional: the
+    // dispatch stage upstream produces all of it either way, and a field that only sometimes holds
+    // a value would put the same branch in the hash, the validation and every read site. They are
+    // part of the cache key regardless, so a program built with the combine half off is still a
+    // different program from one built with it on.
+    uint32_t num_experts_per_tok = 2;
+    uint32_t seq_len_per_chip = 0;
+    uint32_t cluster_axis = 0;
+    uint32_t num_links = 2;
+    tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -310,7 +336,13 @@ struct HybridRoutedExpertFfnParams {
         "activation",
         "fuse_bias",
         "compute_kernel_config",
-        "hybrid_token_threshold");
+        "hybrid_token_threshold",
+        "overlap_combine",
+        "num_experts_per_tok",
+        "seq_len_per_chip",
+        "cluster_axis",
+        "num_links",
+        "topology");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -320,7 +352,13 @@ struct HybridRoutedExpertFfnParams {
             activation,
             fuse_bias,
             compute_kernel_config,
-            hybrid_token_threshold);
+            hybrid_token_threshold,
+            overlap_combine,
+            num_experts_per_tok,
+            seq_len_per_chip,
+            cluster_axis,
+            num_links,
+            topology);
     }
 };
 
@@ -346,6 +384,18 @@ struct HybridRoutedExpertFfnInputs {
     // Owned by the caller because the program keeps a raw pointer to it that must stay valid
     // across program-cache hits.
     std::optional<Tensor> l1_arena;
+
+    // The combine half's extra tensors. It also reads `x`, `counts` and `expert_region_offsets`,
+    // which the routed-expert halves already carry under those names. `combine_output` is the
+    // combine result the caller allocates: this op returns the routed-expert output, so combine's
+    // has to be handed in rather than returned.
+    //
+    // Optional and not plain tensors because the framework reflects over every field here to
+    // collect buffers, and its Tensor leaf calls `.buffer()` unconditionally -- a default
+    // constructed one has no storage and faults. Only the optional leaf checks has_value().
+    std::optional<Tensor> dispatched_metadata;
+    std::optional<Tensor> expert_offsets;
+    std::optional<Tensor> combine_output;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

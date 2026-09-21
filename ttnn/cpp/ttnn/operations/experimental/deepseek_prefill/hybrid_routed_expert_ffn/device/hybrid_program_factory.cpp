@@ -12,6 +12,8 @@
 // Order matters: each half is defined before the glue that converts into it and folds it.
 
 #include "hybrid_program_factory.hpp"
+#include "combine_fabric2d_program_factory.hpp"
+#include "combine_fabric2d_types.hpp"
 
 // Each half's own types, which its body below is written against. The headers that used to carry
 // these were the per-half program factory headers; the interface they declared is now one call.
@@ -21,6 +23,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <set>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -452,7 +455,7 @@ void append_to_descriptor(
     // budget: it is what a core actually owns, it already excludes the kernel-config ring, and the
     // merge lays these buffers into it. Budgeting against anything else lets the blocking pick a
     // size the arena cannot hold.
-    const uint32_t l1_budget = hybrid_l1_arena_bytes(device);
+    const uint32_t l1_budget = operation_arguments.l1_arena_bytes;
     TT_FATAL(l1_budget > 0, "moe_fused_swiglu: the shared L1 arena is empty");
 
     geo::Blocking blocking(
@@ -2878,7 +2881,7 @@ MergedKernelSources merged_kernel_sources() {
 constexpr uint32_t kDefaultWorkerL1Size = 1'461'248;
 constexpr uint32_t kMinAllocatorBase = 111'616;
 
-uint32_t arena_bytes_for(tt::tt_metal::IDevice* device) {
+uint32_t arena_bytes_for(tt::tt_metal::IDevice* device, uint32_t reserved_for_combine) {
     // Everything above the allocator base, and nothing held back. The fused half sizes its
     // blocking against hal::get_max_worker_l1_unreserved_size() less L1_CB_RESERVE when it runs
     // standalone, and at the default worker_l1_size that is the SAME number as this -- the
@@ -2893,7 +2896,13 @@ uint32_t arena_bytes_for(tt::tt_metal::IDevice* device) {
         "unexpected L1 geometry: l1_size_per_core ({}) <= reserved base ({})",
         device->l1_size_per_core(),
         reserved);
-    const uint32_t usable = static_cast<uint32_t>(device->l1_size_per_core()) - reserved;
+    uint32_t usable = static_cast<uint32_t>(device->l1_size_per_core()) - reserved;
+    TT_FATAL(
+        usable > reserved_for_combine,
+        "the combine half needs {} B of L1 but only {} B are usable above the allocator base",
+        reserved_for_combine,
+        usable);
+    usable -= reserved_for_combine;
     // Whole 64B units, so the arena tensor's shard shape is exact.
     return usable & ~static_cast<uint32_t>(63);
 }
@@ -2936,7 +2945,8 @@ std::optional<ttnn::DeviceComputeKernelConfig> fused_compute_config(
     return cleared;
 }
 
-fused::OperationArguments fused_attributes(const HybridRoutedExpertFfnParams& op) {
+fused::OperationArguments fused_attributes(
+    const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t) {
     return fused::OperationArguments{
         .experts_per_chip = op.experts_per_chip,
         .m_tiles = op.m_tiles,
@@ -2951,6 +2961,14 @@ fused::OperationArguments fused_attributes(const HybridRoutedExpertFfnParams& op
         .max_active_tokens = op.hybrid_token_threshold,
         .activation = op.activation,
         .fuse_bias = op.fuse_bias,
+        // Read off the tensor rather than defaulted: this half validates that the two agree, and
+        // the dtype is not fixed -- overlapping with combine makes the output bf16 where it is
+        // otherwise bf8.
+        .output_dtype = t.output.dtype(),
+        // Off the tensor, not recomputed: this IS the arena the circular buffers will be laid into.
+        .l1_arena_bytes = t.l1_arena.has_value()
+                              ? static_cast<uint32_t>(t.l1_arena->logical_shape()[-1]) * t.l1_arena->element_size()
+                              : 0,
         .compute_kernel_config = fused_compute_config(op.compute_kernel_config),
     };
 }
@@ -3016,11 +3034,44 @@ unified::UnifiedRoutedExpertFfnInputs unified_inputs(const HybridRoutedExpertFfn
 }  // namespace
 
 void validate_arguments(const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t) {
+    if (op.overlap_combine) {
+        // Everything combine_inputs dereferences, checked here because that adapter runs inside
+        // the factory where a missing tensor is a crash rather than a diagnosis.
+        TT_FATAL(
+            t.expert_region_offsets.has_value(),
+            "hybrid_routed_expert_ffn: overlap_combine needs expert_region_offsets -- the combine half reads it");
+        TT_FATAL(
+            t.dispatched_metadata.has_value() && t.expert_offsets.has_value() && t.combine_output.has_value(),
+            "hybrid_routed_expert_ffn: overlap_combine needs dispatched_metadata, expert_offsets and "
+            "combine_output");
+        TT_FATAL(op.seq_len_per_chip > 0, "hybrid_routed_expert_ffn: overlap_combine needs seq_len_per_chip, got 0");
+
+        // combine_output is supplied by the caller rather than allocated by this op, and the
+        // combine half's own validator does not run on the merged path -- only its program
+        // factory does. Nothing else stands between a mis-shaped tensor here and kernels writing
+        // past the end of it, so the spec the standalone op would have created is checked here.
+        // Mirrors CombineFabric2dDeviceOperation::compute_output_specs.
+        const auto& combined = *t.combine_output;
+        const uint32_t emb_dim = static_cast<uint32_t>(t.x.logical_shape()[-1]);
+        const ttnn::Shape expected({1, 1, op.seq_len_per_chip, op.num_experts_per_tok, emb_dim});
+        TT_FATAL(
+            combined.logical_shape() == expected,
+            "hybrid_routed_expert_ffn: combine_output must be {}, got {}",
+            expected,
+            combined.logical_shape());
+        TT_FATAL(
+            combined.dtype() == tt::tt_metal::DataType::BFLOAT16 &&
+                combined.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "hybrid_routed_expert_ffn: combine_output must be BFLOAT16 ROW_MAJOR, got {} {}",
+            combined.dtype(),
+            combined.layout());
+    }
+
     // Each half validates what it will actually be handed, including its own band, so a merged
     // dispatch cannot pass a configuration either op alone would reject.
     unified::validate(unified_attributes(op), unified_inputs(t));
     if (op.hybrid_token_threshold > 0) {
-        fused::validate(fused_attributes(op), fused_inputs(t));
+        fused::validate(fused_attributes(op, t), fused_inputs(t));
 
         // A union program carries BOTH halves' kernel binaries, so its config is far larger than
         // either op's alone, and the kernel-config ring has to hold it. It fits the ring the
@@ -3070,7 +3121,7 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     // to one: the fold has to see them separately to pair their kernels by processor class and to
     // join each pair's argument lists behind the right base.
     tt::tt_metal::ProgramDescriptor fused_descriptor;
-    fused::append_to_descriptor(fused_descriptor, fused_attributes(op), fused_inputs(t), output);
+    fused::append_to_descriptor(fused_descriptor, fused_attributes(op, t), fused_inputs(t), output);
 
     TT_FATAL(
         t.l1_arena.has_value(),
@@ -3105,6 +3156,232 @@ tt::tt_metal::ProgramDescriptor create_hybrid_program_descriptor(
     return merged;
 }
 
-uint32_t hybrid_l1_arena_bytes(tt::tt_metal::IDevice* device) { return arena_bytes_for(device); }
+uint32_t hybrid_l1_arena_bytes(tt::tt_metal::IDevice* device) { return arena_bytes_for(device, 0); }
+
+namespace {
+
+// The combine half reads three of its five tensors under the names the routed-expert halves
+// already use for them, so only two are carried separately.
+combine::CombineFabric2dParams combine_attributes(const HybridRoutedExpertFfnParams& op, ttnn::MeshDevice* device) {
+    return combine::CombineFabric2dParams{
+        .device = device,
+        .experts_per_chip = op.experts_per_chip,
+        .num_experts_per_tok = op.num_experts_per_tok,
+        .seq_len_per_chip = op.seq_len_per_chip,
+        .axis = op.cluster_axis,
+        .num_links = op.num_links,
+        .topology = op.topology,
+    };
+}
+
+// Every dereference here is guarded by validate_arguments, which runs before any of this.
+//
+// `dispatched_buffer` is the routed expert's OUTPUT, not its input x. Combine ships what the
+// experts produced; x is what they consumed. The two are the same buffer only on the TILE path
+// with the fused half off, where the unified half writes in place -- everywhere else aliasing them
+// would send the layer's input around the ring and the expert-ready gate would be guarding nothing.
+combine::CombineFabric2dInputs combine_inputs(const HybridRoutedExpertFfnInputs& t) {
+    return combine::CombineFabric2dInputs{
+        .dispatched_buffer = t.output,
+        .dispatched_metadata = *t.dispatched_metadata,
+        .expert_token_counts = t.counts,
+        .expert_region_offsets = *t.expert_region_offsets,
+        .expert_offsets = *t.expert_offsets,
+    };
+}
+
+// The kernels the handoff joins, by source file. A rename that misses this list would silently
+// drop the gate and leave a data race, so every lookup below is checked rather than defaulted.
+constexpr std::string_view kReWriterSources[] = {"hybrid_writer.cpp", "unified_routed_expert_ffn_writer.cpp"};
+constexpr std::string_view kCombineConsumerSources[] = {
+    "reader_combine_fabric2d.cpp", "untilizer_combine_fabric2d.cpp"};
+
+bool source_is(const tt::tt_metal::KernelDescriptor& kernel, std::string_view leaf) {
+    return kernel.kernel_source.size() >= leaf.size() &&
+           std::string_view(kernel.kernel_source).substr(kernel.kernel_source.size() - leaf.size()) == leaf;
+}
+
+// Wire the per-expert handoff into one coord's merged program: a semaphore on combine's gating
+// cores, the target list on the routed-expert writer, and the defines that switch
+// hybrid_expert_ready.hpp on at both ends. Done here, after the merge, rather than inside either
+// factory, because it is the only place that can see both halves at once -- and it has to be per
+// coord, since the gating cores are the ones on THIS chip.
+void wire_expert_ready(
+    tt::tt_metal::ProgramDescriptor& merged, const HybridRoutedExpertFfnParams& op, IDevice* device) {
+    tt::tt_metal::KernelDescriptor* re_writer = nullptr;
+    std::vector<tt::tt_metal::KernelDescriptor*> consumers;
+    std::array<uint32_t, std::size(kCombineConsumerSources)> found_per_source{};
+    for (auto& kernel : merged.kernels) {
+        for (const auto leaf : kReWriterSources) {
+            if (source_is(kernel, leaf)) {
+                TT_FATAL(re_writer == nullptr, "two routed-expert writers in one merged program");
+                re_writer = &kernel;
+            }
+        }
+        for (size_t leaf = 0; leaf < std::size(kCombineConsumerSources); ++leaf) {
+            if (source_is(kernel, kCombineConsumerSources[leaf])) {
+                consumers.push_back(&kernel);
+                ++found_per_source[leaf];
+            }
+        }
+    }
+    TT_FATAL(re_writer != nullptr, "no routed-expert writer to signal from; kReWriterSources is stale");
+    // A count, not an identity: combine declares one untilizer kernel PER CORE, because they
+    // differ by their index within the group. Every one of them stages token data and every one
+    // has to be gated, so what is checked is that each source turned up at all.
+    for (size_t leaf = 0; leaf < std::size(kCombineConsumerSources); ++leaf) {
+        TT_FATAL(
+            found_per_source[leaf] > 0,
+            "no kernel in the merged program is {}; kCombineConsumerSources is stale and the gate would be "
+            "silently dropped",
+            kCombineConsumerSources[leaf]);
+    }
+
+    // Only the cores that read token data wait, which is exactly the cores those two kernels run
+    // on. Taken from the kernels rather than from combine's placement so it cannot drift from the
+    // set that actually spins.
+    std::vector<tt::tt_metal::CoreRange> gating;
+    for (const auto* consumer : consumers) {
+        for (const auto& range : consumer->core_ranges.ranges()) {
+            gating.push_back(range);
+        }
+    }
+    const tt::tt_metal::CoreRangeSet gating_cores = tt::tt_metal::CoreRangeSet(std::move(gating)).merge_ranges();
+    TT_FATAL(gating_cores.num_cores() > 0, "the combine half gates nothing; there is no handoff to wire");
+
+    // One id, free on EVERY gating core -- not the framework's per-core lookup, which answers for
+    // one core only. The cores here are not uniform: fabric gives each stream's sender worker a
+    // flow-control semaphore of its own, so a probe core with none says 0 is free while the
+    // sender beside it already holds 0.
+    std::set<uint32_t> used;
+    for (const auto& sem : merged.semaphores) {
+        if (sem.core_type != tt::CoreType::WORKER) {
+            continue;
+        }
+        for (const auto& range : gating_cores.ranges()) {
+            if (sem.core_ranges.intersects(range)) {
+                used.insert(sem.id);
+                break;
+            }
+        }
+    }
+    uint32_t sem_id = 0;
+    while (used.contains(sem_id)) {
+        ++sem_id;
+    }
+    // Mirrors tt_metal's NUM_SEMAPHORES, which is not in a public header. Checked here so the
+    // failure names the handoff rather than surfacing as a bare id-range error from Program.
+    constexpr uint32_t kMaxSemaphoreId = 16;
+    TT_FATAL(
+        sem_id < kMaxSemaphoreId,
+        "no semaphore id free on all {} of combine's gating cores for the expert-ready handoff ({} already in "
+        "use there)",
+        gating_cores.num_cores(),
+        used.size());
+    merged.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+        .id = sem_id,
+        .core_type = tt::CoreType::WORKER,
+        .core_ranges = gating_cores,
+        .initial_value = 0,
+    });
+
+    // Both halves walk every expert index, so a carried fused half doubles the increments and the
+    // consumer's target starts a full walk in. See hybrid_expert_ready.hpp.
+    const uint32_t writers = static_cast<uint32_t>(re_writer->core_ranges.num_cores());
+    const uint32_t passes = op.hybrid_token_threshold > 0 ? 2 : 1;
+    const uint32_t prior = writers * op.experts_per_chip * (passes - 1);
+
+    for (auto* consumer : consumers) {
+        consumer->defines.emplace_back("HYB_EXPERT_READY_SEM_ID", std::to_string(sem_id));
+        consumer->defines.emplace_back("HYB_EXPERT_READY_WRITERS", std::to_string(writers));
+        consumer->defines.emplace_back("HYB_EXPERT_READY_PRIOR", std::to_string(prior));
+    }
+
+    // The target list, appended after every block the writer already carries -- both halves' and
+    // the pass barrier's. Positions below the base keep their meaning, which is what lets the
+    // buffer bindings stay where they are.
+    TT_FATAL(
+        re_writer->runtime_args.size() == re_writer->core_ranges.num_cores(),
+        "the routed-expert writer has runtime args for {} of its {} cores; the ones without would read "
+        "the target list out of an empty block",
+        re_writer->runtime_args.size(),
+        re_writer->core_ranges.num_cores());
+    size_t base = 0;
+    for (const auto& [core, args] : re_writer->runtime_args) {
+        base = std::max(base, args.size());
+    }
+    std::vector<uint32_t> targets;
+    targets.reserve(gating_cores.num_cores() * 2);
+    for (const auto& range : gating_cores.ranges()) {
+        for (const auto& core : range) {
+            const auto noc = device->worker_core_from_logical_core(core);
+            targets.push_back(static_cast<uint32_t>(noc.x));
+            targets.push_back(static_cast<uint32_t>(noc.y));
+        }
+    }
+    for (auto& [core, args] : re_writer->runtime_args) {
+        args.resize(base, 0);
+        args.insert(args.end(), targets.begin(), targets.end());
+    }
+    re_writer->defines.emplace_back("HYB_EXPERT_READY_SEM_ID", std::to_string(sem_id));
+    re_writer->defines.emplace_back("HYB_EXPERT_READY_TARGETS", std::to_string(gating_cores.num_cores()));
+    re_writer->defines.emplace_back("HYB_EXPERT_READY_RT_BASE", std::to_string(base));
+}
+
+}  // namespace
+
+uint32_t hybrid_combine_l1_floor(
+    const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t, uint32_t semaphore_bytes) {
+    return combine::stream_worker_l1_bytes(combine_attributes(op, t.x.device()), combine_inputs(t)) + semaphore_bytes;
+}
+
+tt::tt_metal::WorkloadDescriptor HybridRoutedExpertFfnProgramFactory::create_workload_descriptor(
+    const HybridRoutedExpertFfnParams& op,
+    const HybridRoutedExpertFfnInputs& t,
+    ttnn::Tensor& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    // Nothing in the routed-expert program names another chip, so one descriptor serves the mesh.
+    auto routed_expert = create_hybrid_program_descriptor(op, t, tensor_return_value);
+
+    if (!op.overlap_combine) {
+        tt::tt_metal::WorkloadDescriptor workload;
+        workload.programs.reserve(tensor_coords.ranges().size());
+        for (const auto& range : tensor_coords.ranges()) {
+            workload.programs.push_back({range, routed_expert});
+        }
+        return workload;
+    }
+
+    // The combine half owns the per-coord split, because only it needs one: its compile-time args
+    // name the neighbour across the cable. It also owns the GlobalSemaphores, which is why this is
+    // a workload -- a ProgramDescriptor has nowhere to keep them alive past this call.
+    ttnn::Tensor combine_output = *t.combine_output;
+    // The arena is the routed-expert half's, but combine's untilizer binds its circular buffers
+    // into it too: one allocation for the merged program instead of two halves both claiming the
+    // allocator base on their own rows.
+    TT_FATAL(t.l1_arena.has_value(), "overlap_combine needs the shared L1 arena for combine's untilizer buffers");
+    const uint32_t arena_bytes_per_core =
+        static_cast<uint32_t>(t.l1_arena->logical_shape()[-1]) * t.l1_arena->element_size();
+    auto workload = combine::CombineFabric2dProgramFactory::create_workload_descriptor(
+        combine_attributes(op, t.x.device()),
+        combine_inputs(t),
+        combine_output,
+        tensor_coords,
+        t.l1_arena->buffer(),
+        arena_bytes_per_core);
+
+    // A concatenation, not a union like the two routed-expert halves: the rectangles are disjoint
+    // -- kOriginY exists to leave combine its rows -- and circular-buffer indices and semaphore
+    // ids are per core, so neither can collide across them. merge_program_descriptors is what
+    // proves the disjointness rather than assuming it.
+    for (auto& per_coord : workload.programs) {
+        per_coord.descriptor =
+            tt::tt_metal::merge_program_descriptors({std::move(per_coord.descriptor), routed_expert});
+        // After the merge, because this is the one point that can see both halves -- and per
+        // coord, because the cores it names are the ones on that chip.
+        wire_expert_ready(per_coord.descriptor, op, t.x.device());
+    }
+    return workload;
+}
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn
