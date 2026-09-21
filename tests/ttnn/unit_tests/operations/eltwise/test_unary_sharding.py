@@ -241,6 +241,37 @@ def test_unary_nd_sharded_fallback(ttnn_op, input_shape, buffer_type, grid, devi
     assert torch.equal(ttnn_output, golden_tensor)
 
 
+def test_unary_nd_sharded_preallocated_output(device):
+    """A preallocated ND-sharded output has no 2D shard spec for the worker grid to read."""
+    torch.manual_seed(42)
+    torch_input = torch.empty(torch.Size([1, 1, 128, 32]), dtype=torch.bfloat16).uniform_(-100, 100)
+
+    nd_shard_config = ttnn.MemoryConfig(
+        ttnn.BufferType.DRAM,
+        ttnn.NdShardSpec(
+            shard_shape=ttnn.Shape([1, 1, 64, 64]),
+            grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 0))}),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=nd_shard_config
+    )
+    ttnn_output = ttnn.from_torch(
+        torch.zeros_like(torch_input),
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=nd_shard_config,
+    )
+    assert ttnn_output.memory_config().shard_spec is None
+
+    ttnn.relu(ttnn_input, output_tensor=ttnn_output)
+    assert torch.equal(ttnn.to_torch(ttnn_output), torch.relu(torch_input))
+
+
 @pytest.mark.parametrize(
     "input_shape, shard_shape, core_grid, strategy",
     [

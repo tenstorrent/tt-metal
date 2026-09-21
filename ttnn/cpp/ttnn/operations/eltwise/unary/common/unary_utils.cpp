@@ -157,7 +157,8 @@ CoreRangeSet get_worker_grid(
         __builtin_unreachable();
     };
 
-    if (output_tensor.has_value() && output_tensor->is_sharded()) {
+    // is_sharded() is true for an ND_SHARDED output but shard_spec() is empty
+    if (output_tensor.has_value() && output_tensor->is_sharded() && output_tensor->shard_spec().has_value()) {
         log_debug(
             tt::LogOp, "Unary: Using output tensor grid for worker grid {}", output_tensor->shard_spec()->grid.str());
         return get_tensor_grid(*output_tensor);

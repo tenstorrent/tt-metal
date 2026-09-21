@@ -12,9 +12,10 @@ The unary operation uses 3 ProgramFactory variants:
   - UnaryShardedProgramFactory (sharded input)
 
 compute_program_hash() hashes:
-  TILE layout:  args, input tensor_layout, output tensor_layout, src/dst shard volumes
+  TILE layout:  args, input tensor_layout, output tensor_layout,
+                input/output resolved sharding geometry, src/dst shard volumes
   ROW_MAJOR:    args, input tensor_layout, output tensor_layout, padded_shape,
-                src/dst shard volumes
+                input/output resolved sharding geometry, src/dst shard volumes
 
 Where args = entire operation_attributes_t via to_hash() (op_chain, output_dtype,
 memory_config, fp32_dest_acc_en, preserve_fp32_precision, bfp8_pack_precise,
@@ -22,6 +23,12 @@ sub_core_grids, worker_grid), and tensor_layout is (dtype, page_config -- and so
 Tile -- memory_config, alignment). The whole tensor_layout is hashed rather than its
 parts because a Metal 2.0 TensorParameter relaxation requires it to be exactly equal
 and cannot relax any component of it.
+
+For sharded tensors, the cache key uses the squeezed shard shape in pages and the resolved
+core list from the BufferDistributionSpec, which is passed to TensorAccessor compile-time
+args. Since neither of these can be determined from the shard spec, the tensor and shard
+shapes are squeezed together and for GRID_2D the bank list is trimmed from the unsqueezed
+shape. This gives different geometries for the same shard spec but with different shapes.
 
 On a program-cache HIT the descriptor is NOT rebuilt; override_runtime_arguments()
 re-derives ALL per-dispatch state for the current tensors from the same shared
@@ -587,6 +594,66 @@ def test_unary_cache_miss_width_sharded_different_geometry(device, buffer_type):
         )
         with device.cache_entries_counter.measure():
             tt_out = ttnn.relu(tt_a)
+        assert_equal(torch.relu(a), ttnn.to_torch(tt_out))
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_unary_cache_miss_block_sharded_different_cores(device):
+    """Same shard geometry, different resolved core list -> different cache entries."""
+    device.cache_entries_counter.reset()
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+            (64, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    for seed, shape in enumerate(([64, 128], [64, 192])):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_a = ttnn.from_torch(
+            a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+        with device.cache_entries_counter.measure():
+            tt_out = ttnn.relu(tt_a)
+        assert_equal(torch.relu(a), ttnn.to_torch(tt_out))
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_unary_cache_miss_block_sharded_same_core_count_different_layout(device):
+    """Same resolved core COUNT, different core coordinates -> different cache entries.
+
+    The test above separates two shapes by how many banks they span. This one holds the
+    count fixed so only the coordinates differ, which is the case a core list hashed by a
+    coordinate-collapsing function (e.g. x ^ (y << 1)) would miss. GRID_2D trims the configured
+    4x4 grid from the unsqueezed shape, so with one 64x64 shard spec:
+        [64, 256]  -> 4 wide, 1 tall -> [(0,0), (1,0), (2,0), (3,0)]
+        [128, 128] -> 2 wide, 2 tall -> [(0,0), (1,0), (0,1), (1,1)]
+    """
+    device.cache_entries_counter.reset()
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
+            (64, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    for seed, shape in enumerate(([64, 256], [128, 128])):
+        torch.manual_seed(seed)
+        a = torch.rand(shape, dtype=torch.bfloat16) + 0.1
+        tt_a = ttnn.from_torch(
+            a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+        with device.cache_entries_counter.measure():
+            tt_out = ttnn.relu(tt_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         assert_equal(torch.relu(a), ttnn.to_torch(tt_out))
 
     assert device.cache_entries_counter.total == 2

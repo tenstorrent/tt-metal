@@ -299,25 +299,37 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
-    // On cache hit, the dispatched tensor_layout must equal the one built by cached program and no relaxation
-    // is applied. Anything omitted from the hash can give different config and fail validation. The output
-    // layout needs its own hash term because its spec is returned with only the layout enum compared against
-    // the input.
+    // On cache hit, the descriptor is not rebuilt and no relaxation is applied. The dispatched
+    // tensor_layout must be the same as the one built for the cached program.  Anything omitted
+    // from this key can give different config and fail validation (wrong data now and a hard TT_FATAL
+    // once the Metal 2.0 port declares TensorParameter relaxations). The output layout needs its
+    // own term because compute_output_specs can hand back a caller-supplied preallocated spec and
+    // validation only compares its Layout enum against the input's.
     //
-    // Hashing tensor_layout does not ignore shape. Alignment is a part tensor_layout and for overpadded TILE
-    // tensors, legacyShapeToAlignment uses {padded_h, padded_w} instead oftile dims. So differently padded H/W values
-    // produce different keys.
+    // Hashing tensor_layout does not ignore shape. Alignment is part of tensor_layout and since
+    // legacyShapeToAlignment returns {padded_h, padded_w} for an overpadded TILE tensor instead of tile
+    // dims, differently padded H/W values produce different keys. Tile-aligned tensors are unaffected.
     //
-    // Hashing shard shape since shape and shard are squeezed together which can make the same shard spec resolve
-    // differently for different shapes (eg: [64,64] -> [4] vs [64,128] -> [2,2]) and a shared cache entry will
-    // throw after the Metal 2.0 port.
-    const auto squeezed_shard_shape = [](const tt::tt_metal::TensorSpec& spec) -> std::optional<Shape> {
-        const auto sharding_args = spec.compute_buffer_sharding_args();
-        const auto& distribution = sharding_args.buffer_distribution_spec();
+    // Sharded distribution needs its own term. Since shape and shard squeeze together, one shard spec resolves
+    // per shape ({64,64} over two cores: [64,64] -> [4], [64,128] -> [2,2]) and GRID_2D trims the bank list
+    // from the unsqueezed shape ([64,128] and [64,192] over two and three banks). The accessor passes both as
+    // compile-time args. Use the Buffer's stored sharding_args since they describe the actual buffer layout
+    // used by the factory. A reshaped view keeps its parent tensor's sharding_args. A null buffer means the
+    // output has not been allocated yet and its buffer will come from output_spec.
+    //
+    // TODO(port): When TensorParameter replaces TensorAccessorArgs, TensorSpec becomes the authoritative source.
+    // Swap the Buffer branch for the spec on both sides since Metal 2.0 validation reads
+    // spec.compute_buffer_sharding_args().
+    const auto distribution_key =
+        [](const tt::tt_metal::TensorSpec& spec,
+           const tt::tt_metal::Buffer* buffer) -> std::optional<std::pair<Shape, std::vector<CoreCoord>>> {
+        const auto computed = buffer == nullptr ? std::optional{spec.compute_buffer_sharding_args()} : std::nullopt;
+        const auto& distribution =
+            buffer != nullptr ? buffer->buffer_distribution_spec() : computed->buffer_distribution_spec();
         if (!distribution.has_value()) {
             return std::nullopt;
         }
-        return distribution->shard_shape_in_pages();
+        return std::pair{distribution->shard_shape_in_pages(), distribution->cores()};
     };
 
     return operation::hash_operation<UnaryDeviceOperation>(
@@ -328,8 +340,9 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         // different widths get separate cache entries. Consider hashing only the last
         // dimension to allow cache reuse when only height differs
         input_tensor.layout() == Layout::ROW_MAJOR ? std::optional{input_tensor.padded_shape()} : std::nullopt,
-        squeezed_shard_shape(input_tensor.tensor_spec()),
-        squeezed_shard_shape(output_spec),
+        distribution_key(input_tensor.tensor_spec(), input_tensor.buffer()),
+        distribution_key(
+            output_spec, tensor_args.output_tensor.has_value() ? tensor_args.output_tensor->buffer() : nullptr),
         src_shard_vol,
         dst_shard_vol);
 }
