@@ -327,3 +327,39 @@ def test_cumsum_fp32_long_scan_accuracy(size, dim, signal, device):
         f"max error is {worst:.1f}x the compensated-summation bound 8*eps*sum|x| (signal={signal}); "
         "plain sequential fp32 sits near 216x on the piecewise-constant signal"
     )
+
+
+def test_cumsum_disable_compensated_sum(device):
+    """`disable_compensated_sum=True` must actually fall back to the plain sequential sum.
+
+    Uses the discriminating signal from the accuracy test above (piecewise-constant, where
+    consecutive rounding errors share a sign). The default compensated path stays within the
+    8*eps*sum|x| bound; the plain path is expected well outside it (~216x on this signal). If the
+    flag did nothing, both would pass the bound and the escape hatch would be a silent no-op.
+    """
+    torch.manual_seed(29112024)
+    n = 72192
+    along = torch.randn(n // 256 + 1, dtype=torch.float32).repeat_interleave(256)[:n]
+    torch_input = along.view(1, n, 1).expand(1, n, 9).contiguous()
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    compensated = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=1)).to(torch.float64)
+    plain = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=1, disable_compensated_sum=True)).to(torch.float64)
+
+    x64 = torch_input.to(torch.float64)
+    reference = torch.cumsum(x64, dim=1)
+    bound = 8.0 * 2.0**-23 * torch.cumsum(x64.abs(), dim=1)
+
+    comp_err = (compensated - reference).abs()
+    plain_err = (plain - reference).abs()
+
+    assert torch.isfinite(compensated).all() and torch.isfinite(plain).all()
+    # Default keeps the guarantee.
+    assert (
+        comp_err <= bound
+    ).all(), f"compensated path exceeded its own bound at {(comp_err / bound).max().item():.1f}x"
+    # Disabling it must degrade accuracy on the discriminating signal -- otherwise the flag is inert.
+    assert (plain_err / bound).max().item() > 4.0, (
+        "disable_compensated_sum=True did not change the result: the plain path stayed within the "
+        "compensated bound, so the flag is not reaching the accumulation kernel"
+    )

@@ -129,8 +129,10 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
     // is exact already, cumprod has no additive error to compensate, and bf16 keeps the single-op
     // path: its output rounding dominates any accumulation error and bf16 cumsum already matches
     // torch (the compensated path costs ~2x on long thin bf16 scans for no accuracy gain).
-    const bool compensated_sum =
-        operation_attributes.op == AccumulationOp::CUMSUM && dst_cb_data_format == DataFormat::Float32;
+    // disable_compensation is the deprecated opt-out exposed on the cumsum binding (parity/debug/CI).
+    const bool compensated_sum = operation_attributes.op == AccumulationOp::CUMSUM &&
+                                 dst_cb_data_format == DataFormat::Float32 &&
+                                 !operation_attributes.disable_compensation;
 
     auto acc_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
     if (!is_integer_format(acc_dataformat)) {
