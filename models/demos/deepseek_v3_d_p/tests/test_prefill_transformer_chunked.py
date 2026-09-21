@@ -28,6 +28,7 @@ import json
 import os
 import statistics
 import time
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -190,6 +191,63 @@ LAYER_PCC_THRESHOLD = 0.88
 # (glm_5_1 @L52; glm_5_1 captures all 78 layers, glm_5_2's 0-2+every-4th subsample only reaches 0.980).
 KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
+# Determinism: every iteration must reproduce iteration 0 exactly (same bar as
+# test_prefill_transformer.py and test_prefill_block.py).
+DETERMINISM_PCC_THRESHOLD = 1.0
+
+
+@dataclass(frozen=True)
+class CacheHalfThresholds:
+    """Separate floors for the two halves of a cache row, replacing a min() over them.
+
+    Fields are positional because the families disagree on row order: KVPE is [nope | pe],
+    indexer-K is [rope | nope] (see cache_half_pccs). The labels name them per family.
+    """
+
+    first: float
+    second: float
+    first_label: str = "first"
+    second_label: str = "second"
+
+
+def _half_thresholds(value, template: CacheHalfThresholds):
+    """None -> record-only; a float -> both halves at that floor, which is the same predicate as the
+    old min(first, second) >= value; a CacheHalfThresholds -> itself."""
+    if value is None or isinstance(value, CacheHalfThresholds):
+        return value
+    return replace(template, first=float(value), second=float(value))
+
+
+KV_CACHE_HALF_THRESHOLDS = CacheHalfThresholds(KV_CACHE_PCC_THRESHOLD, KV_CACHE_PCC_THRESHOLD, "nope", "pe")
+INDEXER_K_HALF_THRESHOLDS = CacheHalfThresholds(INDEXER_K_PCC_THRESHOLD, INDEXER_K_PCC_THRESHOLD, "rope", "nope")
+DETERMINISM_HALF_THRESHOLDS = CacheHalfThresholds(DETERMINISM_PCC_THRESHOLD, DETERMINISM_PCC_THRESHOLD, "nope", "pe")
+
+# How many times the whole n_chunks prefill is replayed. Two roles, named apart so a -k says which:
+# perf_median_runsNN are the timing samples print_duration_table takes the median over (iteration 0 is
+# the compile pass), stressNNNN are the soak counts inherited from test_prefill_transformer.py's
+# num_iterations=[1, 2, 5, 25, 2000]. Zero-padded for the same reason as chunks01..chunks51 below:
+# unpadded, `-k perf_median_runs1` would also match perf_median_runs10, and `-k stress2` would match
+# stress25 and stress2000.
+_PERF_MEDIAN_RUNS = [1, 2, 10, 20, 25]
+_PERF_MEDIAN_RUNS_IDS = [f"perf_median_runs{n:02d}" for n in _PERF_MEDIAN_RUNS]
+_STRESS_RUNS = [1, 2, 5, 25, 2000]
+_STRESS_RUNS_IDS = [f"stress{n:04d}" for n in _STRESS_RUNS]
+# The two roles stay separately addressable, so 1/2/25 appear under both names: `-k stress0025` is a
+# 25-iteration soak, `-k perf_median_runs25` is a 25-sample timing run. Same count, different intent,
+# and only one of them belongs in a perf -k.
+_CHUNKED_ITERS = _PERF_MEDIAN_RUNS + _STRESS_RUNS
+_CHUNKED_ITERS_IDS = _PERF_MEDIAN_RUNS_IDS + _STRESS_RUNS_IDS
+
+
+def _ci_unsupported_stress_combos(**params):
+    iters = params["num_iters"]
+    if params["determinism_check"] and iters < 2:
+        return True  # iteration 0 is the baseline
+    if not (params["is_ci_env"] or params["is_ci_v2_env"]):
+        return False
+    # CI takes one cheap row per arm; the long soaks are driven manually (scripts/stress.sh).
+    return iters != 2 if params["determinism_check"] else iters != 1
+
 
 # Per-chunk baseline medians (seconds) for the perf gate, derived from completed Galaxy runs. Keyed by
 # (num_layers, n_chunks, num_iters) so only exact configs with CI numbers are gated; every other combo
@@ -201,7 +259,7 @@ INDEXER_K_PCC_THRESHOLD = 0.95
 # are different regimes: traced follows the KV-depth ramp, while untraced also pays host-dispatch
 # overhead, which can dominate the early chunks and obscure that ramp.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
+    # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-perf_median_runs10-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
     # then re-cut twice. Recentered to CI run 34492835936 / job 102927415897.
     (61, 11, 10): [
@@ -219,7 +277,7 @@ KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
-    # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
+    # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-perf_median_runs10-notrace]
     # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
     # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%.
     (61, 11, 10): [0.62842, 0.61427, 0.61065, 0.60118, 0.60427, 0.60544, 0.60353, 0.61104, 0.65888, 0.69774, 0.73711],
@@ -328,16 +386,18 @@ def _record_kv_cache_pcc(
     Kimi-K3 writes a slab only on its full-attention layers, so 24 layers occupy 6 slots holding
     layers 3/7/11/15/19/23. None means the dense identity mapping.
 
-    Returns the min PCC across all layers (or `(min, per_layer_dict)` with return_per_layer). The min
-    is asserted >= `assert_threshold`; pass None to make the check record-only. With
+    Returns the min PCC across all layers (or `(min, per_layer_dict)` with return_per_layer). The two
+    halves are asserted SEPARATELY against `assert_threshold`, which is a float (same floor for both,
+    identical to the old min(nope, pe) gate), a CacheHalfThresholds, or None for record-only. With
     `assert_layer_depth` set, only layers 0..assert_layer_depth (inclusive) are asserted — deeper
     layers are recorded only, mirroring the decoder-output GATED_LAYER_DEPTH policy (deep KV PCC
     drifts under bf8_b). Under tp_shard_kv the gather flattens the TP shards into linear chip order and
     the un-rotation runs over sp*tp stripes."""
     logger.info("Device KV cache vs golden kv_post_transform:")
+    th = _half_thresholds(assert_threshold, KV_CACHE_HALF_THRESHOLDS)
     cache_full, stripes = gather_cache_natural(tt_kvpe_cache.storage, mesh_device, tp_shard_kv)  # [layers, S, kvpe]
     p = blockcyclic_positions(stripes, CHUNK, seq_len_cache)
-    cache_min_pcc = {}
+    cache_min_pcc, cache_nope_pcc, cache_pe_pcc = {}, {}, {}
     slots = list(range(num_layers)) if slot_layer_ids is None else list(range(len(slot_layer_ids)))
     for slot in slots:
         layer = slot if slot_layer_ids is None else slot_layer_ids[slot]
@@ -346,13 +406,20 @@ def _record_kv_cache_pcc(
             trace_dir, layout, "kv_cache", layer, f"kv_post_transform_layer_{layer}", 0, total_len
         )
         pcc_nope, pcc_pe = cache_half_pccs(g_post, dev_cache, kv_lora, pe_interleave=pe_interleave)
+        cache_nope_pcc[layer], cache_pe_pcc[layer] = pcc_nope, pcc_pe
         cache_min_pcc[layer] = min(pcc_nope, pcc_pe)
         logger.info(f"  cache slot {slot} (layer {layer}) PCC: nope={pcc_nope:.6f} pe(interleaved)={pcc_pe:.6f}")
-        if assert_threshold is not None and cache_min_pcc[layer] < assert_threshold:
-            logger.warning(f"  KV cache layer {layer} PCC {cache_min_pcc[layer]:.6f} below {assert_threshold}")
+        if th is not None:
+            for half, pcc, bar in ((th.first_label, pcc_nope, th.first), (th.second_label, pcc_pe, th.second)):
+                if pcc < bar:
+                    logger.warning(f"  KV cache layer {layer} {half} PCC {pcc:.6f} below {bar}")
     kv_min = min(cache_min_pcc.values())
     logger.info(f"KV cache min PCC across layers: {kv_min:.6f}")
-    if assert_threshold is not None:
+    logger.info(
+        f"KV cache min {th.first_label if th else 'nope'} PCC: {min(cache_nope_pcc.values()):.6f}, "
+        f"min {th.second_label if th else 'pe'} PCC: {min(cache_pe_pcc.values()):.6f}"
+    )
+    if th is not None:
         if assert_layer_depth is not None:
             # Keyed by MODEL layer, not slot index, so on a hybrid stack (Kimi-K3 writes a slab only
             # on layers 3, 7, 11, ...) a depth below the first full-attention layer selects nothing
@@ -367,11 +434,17 @@ def _record_kv_cache_pcc(
                 f"KV cache min PCC over asserted layers 0..{assert_layer_depth}: {gated_min:.6f} "
                 f"(layers >{assert_layer_depth} recorded only)"
             )
-            assert (
-                gated_min >= assert_threshold
-            ), f"KV cache min PCC {gated_min:.6f} (layers 0..{assert_layer_depth}) < {assert_threshold}"
+            scope = f" (layers 0..{assert_layer_depth})"
+            keep = [i for i in cache_min_pcc if i <= assert_layer_depth]
         else:
-            assert kv_min >= assert_threshold, f"KV cache min PCC {kv_min:.6f} < {assert_threshold}"
+            scope = ""
+            keep = list(cache_min_pcc)
+        for half, per_layer, bar in (
+            (th.first_label, cache_nope_pcc, th.first),
+            (th.second_label, cache_pe_pcc, th.second),
+        ):
+            got = min(per_layer[i] for i in keep)
+            assert got >= bar, f"KV cache min {half} PCC {got:.6f}{scope} < {bar}"
     if return_per_layer:
         return kv_min, cache_min_pcc
     return kv_min
@@ -388,6 +461,7 @@ def _record_indexer_k_cache_pcc(
     total_len,
     config,
     tp_shard_kv=False,
+    assert_thresholds=INDEXER_K_PCC_THRESHOLD,
 ):
     """Gather the device DSA indexer-K cache, un-rotate the block-cyclic layout, and PCC each captured
     layer's valid region [:total_len] against the golden dsa/indexer_k trace. The index_head_dim key is
@@ -398,6 +472,7 @@ def _record_indexer_k_cache_pcc(
     indexer_k is captured for a subset of layers (glm_5_1: all; glm_5_2: 0-2 + every 4th) — layers without
     a golden are skipped. GLM DSA variants only."""
     logger.info("Device indexer-K cache vs golden dsa/indexer_k:")
+    th = _half_thresholds(assert_thresholds, INDEXER_K_HALF_THRESHOLDS)
     cache_full, stripes = gather_cache_natural(tt_index_kv_cache, mesh_device, tp_shard_kv)  # [slots, T, D]
     layers = [i for i in range(num_layers) if (trace_dir / "dsa" / f"indexer_k_layer_{i}").exists()]
     if not layers:
@@ -406,7 +481,7 @@ def _record_indexer_k_cache_pcc(
     p = blockcyclic_positions(stripes, CHUNK, seq_len_cache)
     rope = config.index_head_dim // 2  # [rope | nope]
     index_hadamard = normalized_hadamard_matrix(config.index_head_dim).float()
-    idx_min_pcc = {}
+    idx_min_pcc, idx_rope_pcc, idx_nope_pcc = {}, {}, {}
     for i in layers:
         # Compact index cache (GLM-5.2 cross-layer reuse): layer i's slot is its full-indexer rank, not i
         # (rank == i for glm_5_1, where every layer is full). Matches the indexer's own write addressing.
@@ -414,13 +489,52 @@ def _record_indexer_k_cache_pcc(
         dev_cache = (dev_cache.float() @ index_hadamard).to(torch.bfloat16)
         g = _load_layer_rows(trace_dir, layout, "dsa", i, f"indexer_k_layer_{i}", 0, total_len)
         pcc_rope, pcc_nope = cache_half_pccs(g, dev_cache, rope, pe_interleave=False)
+        idx_rope_pcc[i], idx_nope_pcc[i] = pcc_rope, pcc_nope
         idx_min_pcc[i] = min(pcc_nope, pcc_rope)
         logger.info(f"  indexer cache layer {i} PCC: nope={pcc_nope:.6f} rope={pcc_rope:.6f}")
-        if idx_min_pcc[i] < INDEXER_K_PCC_THRESHOLD:
-            logger.warning(f"  indexer-K cache layer {i} PCC {idx_min_pcc[i]:.6f} below {INDEXER_K_PCC_THRESHOLD}")
+        if th is not None:
+            for half, pcc, bar in ((th.first_label, pcc_rope, th.first), (th.second_label, pcc_nope, th.second)):
+                if pcc < bar:
+                    logger.warning(f"  indexer-K cache layer {i} {half} PCC {pcc:.6f} below {bar}")
     idx_min = min(idx_min_pcc.values())
     logger.info(f"Indexer-K cache min PCC across {len(layers)} captured layers: {idx_min:.6f}")
-    assert idx_min >= INDEXER_K_PCC_THRESHOLD, f"Indexer-K cache min PCC {idx_min:.6f} < {INDEXER_K_PCC_THRESHOLD}"
+    if th is not None:
+        for half, per_layer, bar in (
+            (th.first_label, idx_rope_pcc, th.first),
+            (th.second_label, idx_nope_pcc, th.second),
+        ):
+            got = min(per_layer.values())
+            assert got >= bar, f"Indexer-K cache min {half} PCC {got:.6f} < {bar}"
+
+
+def _read_chunk_kv_band(tt_kvpe_cache, mesh_device, sp, tp, tp_shard_kv, seq_cache, kv_actual):
+    """Host copy of ONLY the KV rows the CHUNK-aligned chunk at `kv_actual` just wrote.
+
+    Returns [slots, CHUNK, width] float32 whose row j holds global position kv_actual + j. No
+    un-rotation needed: inside one block-cyclic slab, chip-major concatenation IS natural order
+    (blockcyclic_positions reduces to slab*CHUNK + j there).
+
+    Slices the seq dim on device rather than gathering the whole cache -- the band is CHUNK/seq_cache
+    of it. memory_config is NOT optional: the cache is ND-sharded ROUND_ROBIN_1D and slicing into
+    another ND-shard miscomputes the DRAM core on host read-back (see tt_prefill_runtime.read_slot_kv).
+    """
+    storage = tt_kvpe_cache.storage
+    stripes = sp * tp if tp_shard_kv else sp
+    band_local, seq_local = CHUNK // stripes, seq_cache // stripes
+    assert kv_actual % CHUNK == 0, f"kv_actual {kv_actual} must be CHUNK-aligned"
+    assert band_local % 32 == 0, f"band {band_local} must be a multiple of the 32-token DRAM bank"
+    slot_count, unit, rows, width = (int(d) for d in storage.shape)
+    assert rows == seq_local, f"cache rows {rows} != seq_cache/stripes {seq_local}"
+    lo = (kv_actual // CHUNK) * band_local
+    hi = lo + band_local
+    assert hi <= seq_local, f"band [{lo}:{hi}) runs past the {seq_local}-row cache"
+    band = ttnn.slice(storage, [0, 0, lo, 0], [slot_count, unit, hi, width], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    try:
+        host, got = gather_cache_natural(band, mesh_device, tp_shard_kv)
+    finally:
+        ttnn.deallocate(band)
+    assert got == stripes and host.shape[1] == CHUNK, f"band gather returned {tuple(host.shape)} over {got} stripes"
+    return host
 
 
 def _to_tp_stripe_major(bc, sp, tp, local, head_dim, seq_len_cache):
@@ -1287,8 +1401,10 @@ def test_mistral4_prefill_transformer_chunked_padded(
     )
 
 
+@pytest.mark.parametrize("num_iters", _CHUNKED_ITERS, ids=_CHUNKED_ITERS_IDS)
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.uncollect_if(pred=_ci_unsupported_stress_combos)
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
-@pytest.mark.parametrize("num_iters", [2], ids=["two_iters"])
 # Zero-padded: `-k chunks5` would substring-match chunks51 (the rows below hack around the same
 # collision with the ad-hoc id `chunks_eleven`).
 @pytest.mark.parametrize(
@@ -1331,6 +1447,7 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
     n_chunks,
     num_iters,
     use_trace,
+    determinism_check,
     num_links,
 ):
     """Long-context chunked-prefill TIMING at n_chunks x CHUNK tokens: no PCC and no golden trace
@@ -1355,12 +1472,16 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
         num_iters,
         routing_use_l1_small_for_semaphores=True,
         use_trace=use_trace,
+        determinism_check=determinism_check,
         # chunks51 is 261,120 tokens; sized per-row so the longest sweep needs no env var and the
         # other variants' baselines keep the 100k default.
         seq_cache=max(SEQ_CACHE_NOPCC, n_chunks * CHUNK),
     )
 
 
+@pytest.mark.parametrize("num_iters", _CHUNKED_ITERS, ids=_CHUNKED_ITERS_IDS)
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.uncollect_if(pred=_ci_unsupported_stress_combos)
 # GLM variants
 # ---------------------------------------------------------------------------
 # Same chunked-prefill validation as the DeepSeek/Kimi tests, for the glm_5_1 / glm_5_2 variants and the
@@ -1439,9 +1560,11 @@ def test_glm_prefill_transformer_chunked(
     weight_cache_path,
     num_layers,
     n_chunks,
+    num_iters,
     preload_isl,
     num_links,
     use_trace,
+    determinism_check,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer_updated(
@@ -1454,12 +1577,15 @@ def test_glm_prefill_transformer_chunked(
         GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
-        1,  # num_iters: accuracy, not timing
+        num_iters,
         routing_use_l1_small_for_semaphores=True,
         preload_isl=preload_isl,
         check_pcc=True,
-        check_layer_pcc=not use_trace,  # per-layer PCC needs a host readback, impossible under capture
+        # The per-layer PCC is a host readback per layer per chunk: illegal under capture, and it would
+        # dominate a soak. Keep it for the single-iteration untraced row only.
+        check_layer_pcc=not use_trace and num_iters == 1,
         use_trace=use_trace,
+        determinism_check=determinism_check,
         kv_pcc_threshold=KV_CACHE_PCC_THRESHOLD,
         seq_cache=SEQ_CACHE,  # golden-trace length; changing it moves the indexer's key width
     )
@@ -1526,6 +1652,12 @@ def run_chunked_transformer_updated(
     `check_pcc` asserts the two CACHE PCCs (KVPE and, when the variant has one, the DSA indexer-K cache)
     after the run. Works identically traced and untraced, because the caches are read back once the run
     is over rather than mid-forward.
+
+    `determinism_check` re-runs the same chunks `num_iters` times and requires each chunk's KV band to
+    be bit-identical (torch.equal) to the SAME chunk's band on iteration 0; the nope/pe PCCs are computed
+    only on a mismatch, to say which half drifted. It reads a band back per chunk, so `iter N done in Xs`
+    includes that cost while the per-chunk medians do not. Unlike the old whole-cache compare it does not
+    cover rows no chunk writes, but it is strictly more sensitive inside the written region.
 
     `check_layer_pcc` additionally asserts the per-layer decoder-output PCC against the golden trace, by
     running the forward with return_intermediates=True. UNTRACED ONLY, and not by choice: that flag
@@ -2043,11 +2175,48 @@ def run_chunked_transformer_updated(
 
     if determinism_check and num_iters < 2:
         pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
-    det_baseline = None
+    # Baseline is PER CHUNK: n_chunks bands of CHUNK rows, so at most the written region and never
+    # more than the old whole-cache snapshot (the runner asserts preload_isl + n_chunks*CHUNK <= seq_cache).
+    det_baselines = {}
     det_failures = []
+    det_log_every = 100 if num_iters > 100 else 1
+
+    def _determinism_chunk(it, c, kv_actual):
+        """Compare the band this chunk just wrote against iteration 0's band for the SAME chunk."""
+        band = _read_chunk_kv_band(tt_kvpe_cache, mesh_device, sp, tp, tp_shard_kv, seq_cache, kv_actual)
+        if it == 0:
+            # Both halves of an all-zero band compare bit-identical to themselves forever, which would
+            # report a determinism the run never measured.
+            assert torch.isfinite(band).all() and band.any(), f"iter 0 chunk {c} band is degenerate"
+            det_baselines[c] = band
+            logger.info(
+                f"[determinism] iter 0 chunk {c} baseline band {tuple(band.shape)} @ kv[{kv_actual}:{kv_actual + CHUNK})"
+            )
+            return
+        if torch.equal(det_baselines[c], band):
+            if it % det_log_every == 0 or it == num_iters - 1:
+                logger.info(f"[determinism] iter {it} chunk {c} band bit-identical to iter 0")
+            return
+        # Only on mismatch: comp_pcc short-circuits torch.equal -> 1.0, so on the passing path both
+        # halves are exactly 1.0 by construction and a Pearson pass would buy nothing.
+        base = det_baselines[c]
+        diff = (base - band).abs()
+        w = base.shape[-1]
+        pcc_nope, pcc_pe = cache_half_pccs(
+            base.reshape(-1, w), band.reshape(-1, w), config.kv_lora_rank, pe_interleave=False
+        )
+        det_failures.append((it, c, int((diff > 0).sum()), float(diff.max()), pcc_nope, pcc_pe))
+        logger.error(
+            f"[determinism] iter {it} chunk {c} band DIFFERS from iter 0 @ kv[{kv_actual}:{kv_actual + CHUNK}): "
+            f"{det_failures[-1][2]} element(s), max abs delta {det_failures[-1][3]:.3e}, "
+            f"{DETERMINISM_HALF_THRESHOLDS.first_label} PCC {pcc_nope:.9f} "
+            f"{DETERMINISM_HALF_THRESHOLDS.second_label} PCC {pcc_pe:.9f}"
+        )
 
     profiler.start("tt_forward")
     for it in range(num_iters):
+        # Marker the scripts/ soak harness counts (common.sh, parse_iteration_times.py).
+        logger.info(f"Starting iteration: {it}")
         # Unconditional. The carry is the one piece of state an iteration MUTATES, so iteration N
         # otherwise starts where N-1 finished: a false failure under determinism_check, and worse
         # under check_pcc, where the post-loop KV PCC then scores a cache conditioned on the prefix
@@ -2080,6 +2249,8 @@ def run_chunked_transformer_updated(
                 # unrecoverable (only its total is logged) -- and the traced path reaches no other
                 # timing log at all. Emitted identically in both modes so the two are comparable.
                 logger.info(f"[chunk timing] iter={it} chunk={c} {chunk_seconds * 1000:.2f} ms")
+                if determinism_check:
+                    _determinism_chunk(it, c, kv_actual)
                 continue
             tt_tokens = ttnn.from_torch(
                 chunk_tok_host[c],
@@ -2141,39 +2312,36 @@ def run_chunked_transformer_updated(
                     f"host_submit={fused_host_seconds * 1000:.2f} ms "
                     f"({fused_host_seconds / chunk_seconds * 100:.1f}% of {chunk_seconds * 1000:.2f} ms chunk)"
                 )
+            if determinism_check:
+                _determinism_chunk(it, c, kv_actual)
         iter_total = time.time() - iter_start
         iteration_chunk_times.append(chunk_times)
         logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
-        if determinism_check:
-            # Compare the whole cache the iteration just wrote, bit-exactly. PCC rounds away a single
-            # flipped element in num_layers x seq x kvpe; torch.equal does not. The cache is the right
-            # surface because it is what every later chunk attends to, so a write landing out of order
-            # inside the replay shows up here even when the final hidden state looks fine.
-            cache_now, _ = gather_cache_natural(tt_kvpe_cache.storage, mesh_device)
-            if det_baseline is None:
-                det_baseline = cache_now
-                logger.info(f"[determinism] iter {it} baseline KV cache {tuple(cache_now.shape)}")
-            elif torch.equal(det_baseline, cache_now):
-                logger.info(f"[determinism] iter {it} KV cache bit-identical to iter 0")
-            else:
-                diff = (det_baseline - cache_now).abs()
-                det_failures.append((it, int((diff > 0).sum()), float(diff.max())))
-                logger.error(
-                    f"[determinism] iter {it} KV cache DIFFERS from iter 0: "
-                    f"{det_failures[-1][1]} element(s), max abs delta {det_failures[-1][2]:.3e}"
-                )
+        # A 2000-iteration run diverging on every chunk would otherwise stall in comp_pcc.
+        if len(det_failures) >= 10:
+            logger.error("[determinism] 10 failures recorded; stopping the run early")
+            break
         # Drop iter 0's per-layer MLA/FFN samples (the compile iteration), same as the chunk-time table.
         if it == 0:
             reset_block_timings()
     profiler.end("tt_forward")
 
     if determinism_check:
-        assert not det_failures, "captured-trace replay is not deterministic: " + "; ".join(
-            f"iter {it}: {n} element(s), max abs delta {mx:.3e}" for it, n, mx in det_failures
-        )
+        if det_failures:
+            pytest.fail(
+                "determinism (baseline=iter0) failed: "
+                + "; ".join(
+                    f"iter {it} chunk {c}: {n} element(s), max abs delta {mx:.3e}, "
+                    f"{DETERMINISM_HALF_THRESHOLDS.first_label} PCC {pn:.9f} "
+                    f"(floor {DETERMINISM_HALF_THRESHOLDS.first}), "
+                    f"{DETERMINISM_HALF_THRESHOLDS.second_label} PCC {pp:.9f} "
+                    f"(floor {DETERMINISM_HALF_THRESHOLDS.second})"
+                    for it, c, n, mx, pn, pp in det_failures
+                )
+            )
         logger.success(
-            f"[determinism] replay bit-identical across {num_iters} iterations "
-            f"(num_layers={num_layers}, n_chunks={n_chunks}, use_trace={use_trace})"
+            f"[determinism] every chunk's KV band bit-identical to iter 0 across {num_iters} iterations "
+            f"x {n_chunks} chunks (num_layers={num_layers}, use_trace={use_trace})"
         )
 
     if profile_call_counts is not None:
@@ -2467,9 +2635,7 @@ def glm_chunked_perf_gate(variant, use_trace, num_layers, n_chunks, num_iters, p
 # None = take the band from the mode (TRACED_PERF_MARGIN / UNTRACED_PERF_MARGIN, resolved by
 # kimi_chunked_perf_gate). The two bands differ by more than 3x, so no single literal serves both.
 @pytest.mark.parametrize("perf_margin", [None], ids=["margin_auto"])
-@pytest.mark.parametrize(
-    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
-)
+@pytest.mark.parametrize("num_iters", _PERF_MEDIAN_RUNS, ids=_PERF_MEDIAN_RUNS_IDS)
 @pytest.mark.parametrize(
     "n_chunks",
     [1, 2, 5, 10, 11, 20],
@@ -2553,15 +2719,15 @@ def test_kimi_prefill_transformer_chunked_perf(
     )
 
 
+@pytest.mark.parametrize("num_iters", _CHUNKED_ITERS, ids=_CHUNKED_ITERS_IDS)
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.uncollect_if(pred=_ci_unsupported_stress_combos)
 # ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
 # modes and silently double a CI job. Matches the padded test's convention.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
 # None = take the band from the mode (TRACED_PERF_MARGIN / UNTRACED_PERF_MARGIN, resolved by
 # kimi_chunked_perf_gate). The two bands differ by more than 3x, so no single literal serves both.
 @pytest.mark.parametrize("perf_margin", [None], ids=["margin_auto"])
-@pytest.mark.parametrize(
-    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
-)
 @pytest.mark.parametrize(
     "n_chunks",
     [1, 2, 5, 10, 11, 20],
@@ -2610,6 +2776,7 @@ def test_kimi_prefill_transformer_chunked(
     num_links,
     perf_margin,
     use_trace,
+    determinism_check,
     preload_isl,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
@@ -2641,6 +2808,7 @@ def test_kimi_prefill_transformer_chunked(
         preload_isl=preload_isl,
         check_pcc=True,  # this test exists for the KV PCC; the timing table is incidental
         use_trace=use_trace,
+        determinism_check=determinism_check,
     )
 
 
@@ -2664,10 +2832,11 @@ def test_kimi_prefill_transformer_chunked(
 # Needs num_iters >= 2; iteration 0 is the baseline.
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("perf_margin", [None], ids=["margin_auto"])
-# ten_iters exists for determinism: two iterations only prove the second replay matches the first,
-# and a reordering that depends on queue depth or a race needs more attempts to show up. A replay
-# iteration is ~29 s at L24/11 chunks, nearly free next to the weight load.
-@pytest.mark.parametrize("num_iters", [1, 2, 10], ids=["iters1", "two_iters", "ten_iters"])
+# Determinism wants more than two replays: two only prove the second matches the first, and a
+# reordering that depends on queue depth or a race needs more attempts to surface. stress0025 (or
+# perf_median_runs10) is the cheap one for that -- a replay is ~29 s at L24/11 chunks.
+@pytest.mark.parametrize("num_iters", _CHUNKED_ITERS, ids=_CHUNKED_ITERS_IDS)
+@pytest.mark.uncollect_if(pred=_ci_unsupported_stress_combos)
 @pytest.mark.parametrize("n_chunks", [2, 11], ids=["chunks2", "chunks_eleven"])
 @pytest.mark.parametrize("preload_isl", [0], ids=["preload0"])
 # Depths must END on a full-attention layer. The driver builds the last layer kv_only (a
@@ -2732,12 +2901,12 @@ def test_kimi_k3_prefill_transformer_chunked(
     )
 
 
+@pytest.mark.parametrize("num_iters", _CHUNKED_ITERS, ids=_CHUNKED_ITERS_IDS)
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.uncollect_if(pred=_ci_unsupported_stress_combos)
 # DeepSeek counterpart of the no-PCC perf sweep above: same chunked driver, deepseek_v3_d_p variant
 # (DeepSeekV3Config fabric payload, no L1_SMALL routing semaphores). Used to compare DeepSeek vs Kimi
 # chunked-prefill perf at matched ISL (n_chunks x CHUNK) and num_layers.
-@pytest.mark.parametrize(
-    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
-)
 @pytest.mark.parametrize(
     "n_chunks",
     [1, 2, 5, 10, 11, 20],
@@ -2770,6 +2939,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
     n_chunks,
     num_iters,
     num_links,
+    determinism_check,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     run_chunked_transformer_updated(
@@ -2784,6 +2954,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         topology,
         num_iters,
         routing_use_l1_small_for_semaphores=False,
+        determinism_check=determinism_check,
     )
 
 
@@ -2795,9 +2966,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 # DSA cross-layer indexer reuse per chunk. Requires the GLM TTNN weight cache (set the variant's cache env).
 # notrace/traced, not trace: "notrace" CONTAINS "trace", so `-k trace` would select both modes.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
-@pytest.mark.parametrize(
-    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
-)
+@pytest.mark.parametrize("num_iters", _PERF_MEDIAN_RUNS, ids=_PERF_MEDIAN_RUNS_IDS)
 @pytest.mark.parametrize(
     "n_chunks",
     [1, 2, 5, 10, 11, 20],
