@@ -218,6 +218,22 @@ def test_residual_block():
     _assert_same(ref(x), up(x))
 
 
+def test_input_patch_embedding_weights():
+    """Lock the reference model's input_patch_embedding ResidualBlock to the submodule."""
+    assert (DUMMY_MODEL_PATH / "config.json").is_file()
+    up = UpModel.from_pretrained(DUMMY_MODEL_PATH).eval()
+    ref = RefModel.from_pretrained(DUMMY_MODEL_PATH).eval()
+    ref_sd = ref.input_patch_embedding.state_dict()
+    up_sd = up.input_patch_embedding.state_dict()
+    assert set(ref_sd) == set(up_sd)
+    for key in ref_sd:
+        _assert_same(ref_sd[key], up_sd[key])
+    torch.manual_seed(SEED)
+    in_dim = ref.chronos_config.input_patch_size * 3
+    x = torch.randn(B, 4, in_dim)
+    _assert_same(ref.input_patch_embedding(x), up.input_patch_embedding(x))
+
+
 def test_patch():
     up, ref = UpPatch(patch_size=PATCH_SIZE, patch_stride=PATCH_SIZE), RefPatch(
         patch_size=PATCH_SIZE, patch_stride=PATCH_SIZE
