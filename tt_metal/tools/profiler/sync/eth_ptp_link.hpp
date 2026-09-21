@@ -44,7 +44,10 @@ using LinkSession = StampSession<kLinkTxq, kLinkHeaderRow, kLinkTcamRow, kLinkLa
 // so the stamps average to the same offset however they are spread. Every stamp is quantised to the timer's 20 ns
 // tick and a round's mean gains from its frames sitting at different phases of it, so frame j is issued
 // (j * kFramePhaseStep mod 256) / 256 of a tick past its slot, the slots themselves on the refclk: an exact grid over
-// the tick whatever the cadence or AICLK, and the mean's rounding noise falls to ~0.4 ns per round. The stamp
+// the tick whatever the cadence or AICLK, and the mean's rounding noise falls to ~0.4 ns per round. The pacer lands
+// a frame on a wall cycle, so the grid has as many distinct phases as the tick has cycles, and where that comb sits
+// against the timer's edge would otherwise be fixed for the session; each burst shifts it by a pseudo-random part of
+// a tick, so the comb's origin averages out over the round as its phases do. The stamp
 // request is armed once per burst, and the queue's counters tell the frames' stamps from those of a keepalive the
 // queue had waiting (arm_burst, collect_burst). Each side sums its stamps unpaired, so a round counts only if every
 // frame produced both of a side's stamps.
@@ -380,6 +383,7 @@ struct SenderLink {
     // one wall-clock read where the refclk costs two, and nothing a stamp depends on is timed by it.
     uint32_t slot_wall = 0, pre_wall = 0;
     uint32_t next_round = 0, diag_addr = 0;
+    uint32_t walk = 1;  // the bursts' comb origins, phase_walk's state
     Instant start_at{}, pre{};
     Pacer pacer;
     StopDiag diag;
@@ -403,6 +407,7 @@ struct SenderLink {
         }
         pacer.calibrate();
         start_at = read_instant();
+        walk = start_at.wall_lo | 1u;
         slot_cfr = start_at.refclk + kFrameTicks;
         schedule(start_at);
     }
@@ -490,7 +495,9 @@ private:
         } else {
             const uint32_t spacing = (kFrameTicks * c16) >> 4;
             const uint32_t phase0 = frame_phase_cycles(j0, c16);
-            const uint32_t w0 = rd(kWallClockLo) + 32 + phase0;
+            phase_walk(walk);
+            // walk's top 16 bits scale into [0, cycles per tick): one multiply, no division routine in a router's text.
+            const uint32_t w0 = rd(kWallClockLo) + 32 + phase0 + (((walk >> 16) * (c16 >> 4)) >> 16);
             for (uint32_t i = 0; i < kBurstFrames; i++) {
                 const uint32_t j = j0 + i;
                 volatile eth_channel_sync_t* s = slot(slot_base, i);
