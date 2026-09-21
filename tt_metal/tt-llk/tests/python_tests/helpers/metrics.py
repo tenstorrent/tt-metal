@@ -141,14 +141,18 @@ def export_metrics(
             for col in metrics_df.columns:
                 if not _exportable(col):
                     continue
+                # Always emit the column. A metric whose denominator counted nothing (srcB metrics on a
+                # kernel that never writes srcB) is None on every run; leaving its column out made the
+                # column set depend on the variant, and the report schema check then rejected the whole
+                # file once one worker had seen both kinds of variant.
                 values = metrics_df[col].dropna()
-                if len(values) >= 2:
-                    row[metric_column(run_type_name, stat_column(col, MEAN))] = float(
-                        values.mean()
-                    )
-                    row[metric_column(run_type_name, stat_column(col, STD))] = float(
-                        values.std()
-                    )
+                enough = len(values) >= 2
+                row[metric_column(run_type_name, stat_column(col, MEAN))] = (
+                    float(values.mean()) if enough else float("nan")
+                )
+                row[metric_column(run_type_name, stat_column(col, STD))] = (
+                    float(values.std()) if enough else float("nan")
+                )
         else:
             for k, v in zone_metrics[0].items():
                 if not _exportable(k):
