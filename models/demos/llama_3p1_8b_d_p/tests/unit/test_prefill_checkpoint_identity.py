@@ -3,8 +3,8 @@
 
 """CPU-only real-checkpoint identity gate before allocating the full model."""
 
-import os
 import json
+import os
 from pathlib import Path
 
 import pytest

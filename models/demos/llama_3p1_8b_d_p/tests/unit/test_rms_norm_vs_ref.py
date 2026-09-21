@@ -4,8 +4,8 @@
 
 """Galaxy correctness tests for plain Llama-3.1 RMSNorm."""
 
-import os
 import json
+import os
 from pathlib import Path
 
 import pytest

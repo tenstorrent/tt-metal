@@ -4,6 +4,7 @@
 """All-chip embedding and terminal projection gates before the full prefill wrapper."""
 
 import os
+
 import pytest
 import torch
 import torch.nn.functional as F

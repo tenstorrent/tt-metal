@@ -3,15 +3,14 @@
 
 """Full 32-layer book-continuation top-5 gate against independent CPU/HF goldens."""
 
-from functools import lru_cache
 import hashlib
 import json
 import os
-from pathlib import Path
 import time
+from functools import lru_cache
+from pathlib import Path
 
 import pytest
-
 
 FIXTURES = Path(__file__).parent / "fixtures/book"
 CHECKPOINT = Path(os.environ.get("LLAMA31_8B_CHECKPOINT", "/mnt/models/meta-llama/Llama-3.1-8B-Instruct"))
@@ -82,8 +81,8 @@ def test_prefill_book_top5(context_length, request, record_property):
     ids, golden = _load_book_golden(context_length)
 
     import torch
-    import ttnn
 
+    import ttnn
     from models.demos.llama_3p1_8b_d_p.tt.input import upload_token_chunk
     from models.demos.llama_3p1_8b_d_p.tt.kv_cache import allocate_kv_cache
     from models.demos.llama_3p1_8b_d_p.tt.model import PrefillModel
@@ -101,12 +100,20 @@ def test_prefill_book_top5(context_length, request, record_property):
         for start in range(0, context_length, 1024):
             end = min(start + 1024, context_length)
             tokens = upload_token_chunk(
-                mesh_device, ids[start:end], actual_start=start, actual_end=end, max_seq_len=context_length,
+                mesh_device,
+                ids[start:end],
+                actual_start=start,
+                actual_end=end,
+                max_seq_len=context_length,
             )
             output = None
             try:
                 output = model.prefill_chunk(
-                    tokens, cache, slot_idx=0, actual_start=start, actual_end=end,
+                    tokens,
+                    cache,
+                    slot_idx=0,
+                    actual_start=start,
+                    actual_end=end,
                     skip_lm_head=end != context_length,
                 )
                 if end == context_length:
@@ -116,9 +123,7 @@ def test_prefill_book_top5(context_length, request, record_property):
                     row = (last_position - start) % 256
                     shards = ttnn.get_device_tensors(output)
                     assert len(shards) == 32
-                    logits = torch.cat([
-                        ttnn.to_torch(shards[sp * 8 + tp])[0, 0, row].float() for tp in range(8)
-                    ])
+                    logits = torch.cat([ttnn.to_torch(shards[sp * 8 + tp])[0, 0, row].float() for tp in range(8)])
             finally:
                 if output is not None:
                     output.deallocate(True)
@@ -132,16 +137,17 @@ def test_prefill_book_top5(context_length, request, record_property):
 
         tokenizer = AutoTokenizer.from_pretrained(CHECKPOINT, local_files_only=True)
         result = {
-            "context_length": context_length, "final_position": context_length - 1,
-            "num_layers": 32, "vocab_size": logits.numel(),
+            "context_length": context_length,
+            "final_position": context_length - 1,
+            "num_layers": 32,
+            "vocab_size": logits.numel(),
             "reference_top1_id": golden["reference_top1_id"],
             "reference_top1_token": tokenizer.decode(
-                [golden["reference_top1_id"]], clean_up_tokenization_spaces=False,
+                [golden["reference_top1_id"]],
+                clean_up_tokenization_spaces=False,
             ),
             "tt_top5_ids": top5,
-            "tt_top5_tokens": [
-                tokenizer.decode([token], clean_up_tokenization_spaces=False) for token in top5
-            ],
+            "tt_top5_tokens": [tokenizer.decode([token], clean_up_tokenization_spaces=False) for token in top5],
             "forward_and_readback_seconds": forward_and_readback_seconds,
         }
         record_property("book_top5", json.dumps(result))

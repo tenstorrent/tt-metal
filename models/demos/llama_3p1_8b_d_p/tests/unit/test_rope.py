@@ -4,9 +4,9 @@
 
 """Device-free numerical contract tests for Llama-3.1 RoPE."""
 
-import os
 import importlib
 import math
+import os
 
 import pytest
 import torch

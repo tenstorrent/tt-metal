@@ -13,9 +13,9 @@ import argparse
 import hashlib
 import json
 import os
-from pathlib import Path
 import platform
 import time
+from pathlib import Path
 
 
 # Stream large checkpoint files without keeping another copy of the weights.
@@ -46,7 +46,8 @@ def main():
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument(
-        "--fixture-dir", type=Path,
+        "--fixture-dir",
+        type=Path,
         default=Path(__file__).resolve().parents[1] / "tests/full_model/fixtures/book",
     )
     args = parser.parse_args()
@@ -88,21 +89,36 @@ def main():
         assert Path(name).name == name, "Checkpoint shards must be local filenames"
         checkpoint_hashes[name] = sha256(args.checkpoint / name)
     run = {
-        "model_id": fixture["model_id"], "checkpoint_path": str(args.checkpoint.resolve()),
-        "host": platform.node(), "cpu_affinity": sorted(os.sched_getaffinity(0)),
-        "cpu_threads": torch.get_num_threads(), "interop_threads": torch.get_num_interop_threads(),
-        "dtype": "float32", "device": "cpu", "attention_implementation": "sdpa",
-        "torch_version": torch.__version__, "transformers_version": transformers.__version__,
+        "model_id": fixture["model_id"],
+        "checkpoint_path": str(args.checkpoint.resolve()),
+        "host": platform.node(),
+        "cpu_affinity": sorted(os.sched_getaffinity(0)),
+        "cpu_threads": torch.get_num_threads(),
+        "interop_threads": torch.get_num_interop_threads(),
+        "dtype": "float32",
+        "device": "cpu",
+        "attention_implementation": "sdpa",
+        "torch_version": torch.__version__,
+        "transformers_version": transformers.__version__,
         "checkpoint_files_sha256": checkpoint_hashes,
-        "generator_sha256": sha256(__file__), "fixture": fixture,
-        "preparation_seconds": time.perf_counter() - started, "results": [],
+        "generator_sha256": sha256(__file__),
+        "fixture": fixture,
+        "preparation_seconds": time.perf_counter() - started,
+        "results": [],
     }
     save_json(args.output_dir / "run.json", run)
     print(json.dumps({"event": "loading", "preparation_seconds": run["preparation_seconds"]}), flush=True)
     load_started = time.perf_counter()
-    model = AutoModelForCausalLM.from_pretrained(
-        args.checkpoint, torch_dtype=torch.float32, attn_implementation="sdpa", local_files_only=True,
-    ).eval().to("cpu")
+    model = (
+        AutoModelForCausalLM.from_pretrained(
+            args.checkpoint,
+            torch_dtype=torch.float32,
+            attn_implementation="sdpa",
+            local_files_only=True,
+        )
+        .eval()
+        .to("cpu")
+    )
     run["load_seconds"] = time.perf_counter() - load_started
     assert len(model.model.layers) == 32 and model.config.vocab_size == 128256
     assert all(parameter.device.type == "cpu" and parameter.dtype == torch.float32 for parameter in model.parameters())
@@ -120,9 +136,11 @@ def main():
             assert logits.shape == (128256,) and torch.isfinite(logits).all()
             values, indices = logits.topk(5)
             result = {
-                "context_length": length, "final_position": length - 1,
+                "context_length": length,
+                "final_position": length - 1,
                 "input_ids_sha256": token_digest(ids[:length]),
-                "reference_top1_id": int(indices[0]), "reference_top5_ids": indices.tolist(),
+                "reference_top1_id": int(indices[0]),
+                "reference_top5_ids": indices.tolist(),
                 "reference_top5_logits": values.tolist(),
                 "reference_top5_tokens": [tokenizer.decode([int(token)]) for token in indices],
                 "forward_seconds": forward_seconds,
@@ -130,17 +148,20 @@ def main():
             }
             torch.save(logits.cpu(), args.output_dir / f"logits_{length}.pt")
             # This portable result is the only generated payload needed by pytest.
-            golden = {
-                key: value for key, value in result.items()
-                if key not in ("forward_seconds", "total_seconds")
-            }
-            golden.update({
-                "model_id": fixture["model_id"], "num_layers": 32, "vocab_size": 128256,
-                "reference": "transformers.AutoModelForCausalLM.model + final-row lm_head",
-                "dtype": "float32", "attention_implementation": "sdpa",
-                "torch_version": torch.__version__, "transformers_version": transformers.__version__,
-                "checkpoint_files_sha256": checkpoint_hashes,
-            })
+            golden = {key: value for key, value in result.items() if key not in ("forward_seconds", "total_seconds")}
+            golden.update(
+                {
+                    "model_id": fixture["model_id"],
+                    "num_layers": 32,
+                    "vocab_size": 128256,
+                    "reference": "transformers.AutoModelForCausalLM.model + final-row lm_head",
+                    "dtype": "float32",
+                    "attention_implementation": "sdpa",
+                    "torch_version": torch.__version__,
+                    "transformers_version": transformers.__version__,
+                    "checkpoint_files_sha256": checkpoint_hashes,
+                }
+            )
             save_json(args.output_dir / f"golden_{length}.json", golden)
             run["results"].append(result)
             save_json(args.output_dir / "run.json", run)
