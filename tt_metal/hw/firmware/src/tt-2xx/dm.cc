@@ -119,6 +119,8 @@ __attribute__((interrupt)) void fds_go_interrupt_handler() {
 inline void init_go_signalling() {
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     register_handler_for_interrupt(MACHINE_EXTERNAL_INTERRUPT_OFFSET, fds_go_interrupt_handler);
+    // Registering a handler stores a jump instruction into the trap vector table, so the icache has
+    // to be invalidated before the first go interrupt fetches through that entry.
     invalidate_l1_icache();
     overlay::fds_signalling::worker_disable_auto_dispatch();
     overlay::fds_signalling::worker_config_filter_length(overlay::fds_signalling::filter_length);
