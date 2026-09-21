@@ -17,6 +17,14 @@ from dataclasses import dataclass
 
 import ttnn
 
+# Track A optimized kernels (batched-barrier reader+writer).
+TRACKA_READER_KERNEL_REL_PATH = (
+    "models/demos/wormhole/bge_m3/tt/custom_ops/fused_qkv_heads/kernels/" "reader_qkv_heads_batched.cpp"
+)
+TRACKA_WRITER_KERNEL_REL_PATH = (
+    "models/demos/wormhole/bge_m3/tt/custom_ops/fused_qkv_heads/kernels/" "writer_qkv_heads_batched.cpp"
+)
+
 # Head-split kernels (work units split by (batch, seq_tile, head_group)
 # instead of just (batch, seq_tile)). Ported from Qwen3-Embedding-0.6B PR.
 HEADSPLIT_READER_KERNEL_REL_PATH = (
@@ -307,3 +315,234 @@ def bge_qkv_heads_headsplit(
         v_tensor = converted
 
     return q_tensor, k_tensor, v_tensor
+
+
+def bge_qkv_heads_stock(
+    qkv_fused: ttnn.Tensor,
+    *,
+    num_heads: int,
+    out_memcfg: ttnn.MemoryConfig | None = None,
+) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    """Stock baseline: ``ttnn.experimental.nlp_create_qkv_heads``.
+
+    Matches the current ``BgeM3Attention.forward`` call:
+    https://github.com/tenstorrent/tt-metal/.../bge_m3/tt/attention.py
+
+    Args:
+        qkv_fused: Tensor with shape ``[B, 1, S, 3*num_heads*head_dim]`` in
+            TILE_LAYOUT, BFP8 or BF16, DRAM or L1 interleaved.
+        num_heads: BGE-M3 uses 16 (16 Q heads, 16 KV heads).
+        out_memcfg: Output memory config. Default mirrors production:
+            ``ttnn.DRAM_MEMORY_CONFIG`` (or ``ttnn.L1_MEMORY_CONFIG`` for
+            short sequences — caller decides).
+
+    Returns:
+        ``(q, k, v)`` each shape ``[B, num_heads, S, head_dim]``.
+    """
+    if out_memcfg is None:
+        out_memcfg = ttnn.DRAM_MEMORY_CONFIG
+    q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        qkv_fused,
+        num_heads=num_heads,
+        num_kv_heads=num_heads,  # BGE-M3: full attention, K/V heads == Q heads
+        transpose_k_heads=False,
+        memory_config=out_memcfg,
+    )
+    return q, k, v
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Track A: drop-in `bge_qkv_heads_tracka` with batched-barrier kernels
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def bge_qkv_heads_tracka(
+    qkv_fused: ttnn.Tensor,
+    *,
+    num_heads: int,
+    out_memcfg: ttnn.MemoryConfig | None = None,
+) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    """Track A: stock-equivalent QKV head-split with batched-barrier kernels.
+
+    Drop-in replacement for ``bge_qkv_heads_stock``. Same external contract
+    (input layout, output shapes, memory config); internally uses two custom
+    .cpp kernels that batch CB reservations and NoC barriers per Q/K/V chunk
+    instead of per-tile.
+
+    PCC must be bit-equivalent (or near-equivalent within BFP8 quantization)
+    with the stock op — the math is the same; only the dispatch pattern
+    differs.
+    """
+    if out_memcfg is None:
+        out_memcfg = ttnn.DRAM_MEMORY_CONFIG
+
+    device = qkv_fused.device()
+    plan = _TrackAPlan.from_input(qkv_fused, num_heads)
+
+    # ---- Pre-allocate Q/K/V outputs (host-side) ----
+    out_shape = (plan.batch, num_heads, plan.seq_len, plan.head_dim)
+    out_dtype = qkv_fused.dtype
+    q_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
+    k_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
+    v_tensor = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), out_dtype, ttnn.TILE_LAYOUT, device, out_memcfg)
+
+    # ---- Pick a core grid matching the stock op's behavior (full compute grid). ----
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    num_cores, per_core = _split_work_to_cores(plan.num_blocks_total, grid_x, grid_y)
+    if num_cores == 0:
+        raise RuntimeError("bge_qkv_heads_tracka: nothing to do (num_blocks=0)")
+
+    # CoreRangeSet for *all participating* cores (not the whole grid — stock
+    # creates kernels on `all_cores = split_work_to_cores_output.all_cores`).
+    used_cores = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for (cx, cy, _) in per_core]
+    )
+
+    # ---- CB: shared cb_id=1 between reader and writer. Size must hold one full
+    # Q (or K, V) chunk so a single reserve/push covers the whole batched read. ----
+    cb_id = 1
+    chunk_tiles = max(plan.q_num_tiles, plan.kv_num_tiles)
+    # Double-buffer so reader can produce next chunk while writer drains current.
+    cb_total_tiles = chunk_tiles * 2
+    tile_size = _tile_size_bytes(out_dtype)
+    cb_desc = ttnn.CBDescriptor(
+        total_size=cb_total_tiles * tile_size,
+        core_ranges=used_cores,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=cb_id,
+                data_format=out_dtype,
+                page_size=tile_size,
+            )
+        ],
+    )
+
+    # ---- Reader kernel descriptor ----
+    reader_ct_args = [plan.q_num_tiles, plan.kv_num_tiles]
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(qkv_fused).get_compile_time_args())
+
+    reader_rt_per_core: list[tuple[tuple[int, int], list[int]]] = []
+    num_blocks_written = 0
+    for cx, cy, n_blocks in per_core:
+        reader_rt_per_core.append(
+            (
+                (cx, cy),
+                [
+                    qkv_fused.buffer_address(),  # in0_tensor_addr
+                    0,  # in1_tensor_addr (unused)
+                    n_blocks,  # num_blocks
+                    num_blocks_written * plan.in_w_tiles,  # in0_tensor_tile_id
+                    0,  # in1_tensor_tile_id (unused)
+                ],
+            )
+        )
+        num_blocks_written += n_blocks
+
+    reader_kd = ttnn.KernelDescriptor(
+        kernel_source=TRACKA_READER_KERNEL_REL_PATH,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=used_cores,
+        compile_time_args=reader_ct_args,
+        runtime_args=reader_rt_per_core,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    # ---- Writer kernel descriptor ----
+    writer_ct_args = [
+        plan.q_out_h_tiles,
+        plan.q_out_w_tiles,
+        plan.q_out_HtWt,
+        num_heads,
+        num_heads,  # num_kv_heads (BGE: same as num_q_heads)
+    ]
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(q_tensor).get_compile_time_args())
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(k_tensor).get_compile_time_args())
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(v_tensor).get_compile_time_args())
+
+    writer_rt_per_core: list[tuple[tuple[int, int], list[int]]] = []
+    num_blocks_written = 0
+    for cx, cy, n_blocks in per_core:
+        q_out_h_dim = num_blocks_written % plan.q_out_h_tiles
+        q_out_tile_id = (num_blocks_written // plan.q_out_h_tiles) * plan.q_out_CHtWt + q_out_h_dim * plan.q_out_w_tiles
+        v_out_tile_id = (
+            num_blocks_written // plan.q_out_h_tiles
+        ) * plan.kv_out_CHtWt + q_out_h_dim * plan.q_out_w_tiles
+        k_out_tile_id = v_out_tile_id  # transpose_k_heads=False path
+        writer_rt_per_core.append(
+            (
+                (cx, cy),
+                [
+                    q_tensor.buffer_address(),
+                    k_tensor.buffer_address(),
+                    v_tensor.buffer_address(),
+                    n_blocks,
+                    q_out_h_dim,
+                    q_out_tile_id,
+                    k_out_tile_id,
+                    v_out_tile_id,
+                ],
+            )
+        )
+        num_blocks_written += n_blocks
+
+    writer_kd = ttnn.KernelDescriptor(
+        kernel_source=TRACKA_WRITER_KERNEL_REL_PATH,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=used_cores,
+        compile_time_args=writer_ct_args,
+        runtime_args=writer_rt_per_core,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    program_descriptor = ttnn.ProgramDescriptor(
+        kernels=[reader_kd, writer_kd],
+        cbs=[cb_desc],
+    )
+
+    # io_tensors order: inputs first, then outputs. The order is what binds
+    # buffer addresses to the kernel's TensorAccessor compile-time args.
+    io_tensors = [qkv_fused, q_tensor, k_tensor, v_tensor]
+    ttnn.generic_op(io_tensors, program_descriptor)
+    return q_tensor, k_tensor, v_tensor
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Head-split variant — finer-grained work split for higher core utilization
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def bge_qkv_heads_scatter(
+    hidden_states: ttnn.Tensor,  # noqa: ARG001 (stub)
+    wqkv: ttnn.Tensor,  # noqa: ARG001
+    bqkv: ttnn.Tensor | None,  # noqa: ARG001
+    *,
+    num_heads: int,  # noqa: ARG001
+    head_dim: int,  # noqa: ARG001
+    qkv_compute_kernel_cfg,  # noqa: ARG001
+    qkv_program_config,  # noqa: ARG001
+    out_dtype: ttnn.DataType,  # noqa: ARG001
+    out_memcfg: ttnn.MemoryConfig | None = None,  # noqa: ARG001
+) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    """Stub: fused QKV-matmul-with-scatter-writer.
+
+    Not implemented in the scaffold pass. The sweep file calls this and
+    catches NotImplementedError to record a `skipped` row.
+
+    The implementation plan, once baseline timing is locked:
+      1. Fork the matmul `in1_receiver_writer_padding_block_sharded.cpp`
+         (the writer used by `MatmulMultiCoreReuseMultiCast2dProgramConfig`).
+      2. Replace the single output `TensorAccessor` with three
+         (Q, K, V), routing tiles by their N-column index.
+      3. Wrap as a `ttnn.generic_op` with `ttnn.ProgramDescriptor` mirroring
+         the production matmul's CB layout, reader CTs, and runtime args.
+      4. Verify Q/K/V are bit-equivalent to
+         `qkv_matmul → nlp_create_qkv_heads` on the same inputs.
+
+    See `SCATTER_WRITER_KERNEL_REL_PATH` for the eventual kernel location.
+    """
+    raise NotImplementedError(
+        "bge_qkv_heads_scatter: scatter writer not yet implemented. "
+        "Implement after baseline sweep confirms timing baseline. "
+        f"Future kernel path: {SCATTER_WRITER_KERNEL_REL_PATH}"
+    )
