@@ -224,6 +224,9 @@ class TTMSDeformableAttention:
         folded_weight = ttnn.mul(weight, scale_tt)
         folded_bias = ttnn.mul(bias, scale_tt) if bias is not None else None
         ttnn.deallocate(scale_tt)
+        ttnn.deallocate(weight)
+        if bias is not None:
+            ttnn.deallocate(bias)
         return folded_weight, folded_bias
 
     def forward(
