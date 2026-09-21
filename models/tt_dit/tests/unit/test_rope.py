@@ -18,7 +18,7 @@ import transformers
 
 import ttnn
 from models.tt_dit.blocks.rope import RopeConfig, RotaryEmbedding
-from models.tt_dit.encoders.qwen3vl.model_qwen3vl import mrope_position_ids, vision_position_ids
+from models.tt_dit.encoders.qwen3vl.model_qwen3vl_v2 import mrope_position_ids, vision_position_ids
 from models.tt_dit.utils import tensor
 
 HEAD_SIZE = 128
