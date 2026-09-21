@@ -436,6 +436,9 @@ void kernel_main() {
         if constexpr (row_major_weights) {
             // Compute still packs a BF16 tile. Write each row's one or two face segments
             // directly to the row-major output; no extra conversion program or scratch CB.
+            // A BF16 tile stores four 16x16 faces in a 2x2 grid, each with contiguous rows.
+            // Select the face by (row / 16, col / 16), then the row within that face.
+            // Host validation limits n_activated_experts to 32, so each output row spans at most two faces.
             constexpr uint32_t seq_len = (seq_len_tiles - 1) * tile_height + remainder_tokens_per_tile;
             const uint32_t first_row =
                 (height_tile / seq_len_tiles) * seq_len + (height_tile % seq_len_tiles) * tile_height;

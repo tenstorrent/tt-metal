@@ -47,9 +47,6 @@ void bind_moe_grouped_topk(nb::module_& mod) {
                 stable_sort (bool): Use stable sorting in topk to maintain relative order of equal-valued elements. Defaults to False.
                 score_func (str): Router affinity activation applied to the logits. "sigmoid" (DeepSeek-V3 / Kimi, default) or "sqrtsoftplus" (DeepSeek-V4, sqrt(softplus(x))).
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to None, which results in auto-selection.
-                weights_layout (ttnn.Layout, optional): Layout of the BFLOAT16 weights. Defaults to TILE.
-                    ROW_MAJOR supports interleaved L1/DRAM output and at most 32 activated experts.
-                    Indices remain TILE in either case.
                 padding_config (ttnn.Tensor, optional): ROW_MAJOR UINT32 tensor with per-device [num_real_tokens, pad_side].
                     pad_side is 0 for right padding and 1 for left padding. Defaults to None, which treats all tokens as real.
                 biased_scores (ttnn.Tensor, optional): Test-only debug output. A pre-allocated FLOAT32 TILE tensor with
@@ -57,6 +54,9 @@ void bind_moe_grouped_topk(nb::module_& mod) {
                     (score_activation(logits) + bias, before top-k selection) into it. This is the exact tensor top-k
                     operates on, so it can be compared against a reference implementation without top-k tie-break
                     ambiguity. Defaults to None (no debug output, zero overhead).
+                weights_layout (ttnn.Layout, optional): Layout of the BFLOAT16 weights. Defaults to TILE.
+                    ROW_MAJOR supports interleaved L1/DRAM output and at most 32 activated experts.
+                    Indices remain TILE in either case.
 
             Returns:
                 Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the scaled expert scores (dtype BFLOAT16) and selected expert indices (dtype UINT16). The shape of the scores tensor should be [N, B, S, 8]. The shape of the indices tensor should be [N, B, S, 8]. N, B and S can be any value. 8 is the number of experts in the final selected groups.
