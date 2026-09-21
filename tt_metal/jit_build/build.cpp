@@ -333,6 +333,11 @@ void JitBuildEnv::init(
             "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC "
             "drainer, which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
         this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
+        if (rtoptions.get_profiler_sync_events_enabled()) {
+            // Enable synchronization-event instrumentation (tools/profiler/synchronization_event_profiler.hpp)
+            // Note: only enabled with streaming profiler.
+            this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
+        }
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
         // force profiler on if noc events are being profiled
@@ -538,6 +543,14 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         for (const auto& include : jit_build_query.includes(params)) {
             fmt::format_to(it, "-I{}{} ", env_.root_, include);
         }
+    }
+    if (build_config.is_fw && build_config.core_type == HalProgrammableCoreType::TENSIX &&
+        build_config.processor_class == HalProcessorClassType::DM && build_config.processor_id == 0 &&
+        env_.get_rtoptions().get_brisc_firmware_variant() == llrt::BriscFirmwareVariant::Blaze) {
+        fmt::format_to(
+            std::back_inserter(this->includes_),
+            "-I{} ",
+            std::filesystem::path(env_.get_rtoptions().get_brisc_firmware_header()).parent_path().string());
     }
     // Defines
     {
