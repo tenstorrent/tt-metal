@@ -82,7 +82,6 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
     const auto& sub_core_grid = operation_attributes.sub_core_grid;
 
     // get datum size
-    tt::DataFormat dfb_data_format = datatype_to_dataformat_converter(input.dtype());
     const uint32_t data_size = input.element_size();
     IDevice* device = input.device();
     // Multi device pre-computation
@@ -139,20 +138,20 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
 
     // ---- Metal 2.0 spec construction ----
     // Resource names. The RM source is instantiated as two KernelSpecs over the SAME node set (a
-    // dual-instance work-split): the reader-config instance touches src0/src1 as scratch, the
-    // writer-config instance touches src2/src3. The two instances touch DISJOINT DFBs, so each DFB
-    // has a single toucher and is self-looped (its owning kernel bound PRODUCER + CONSUMER).
+    // dual-instance work-split): the reader-config instance uses src0/src1 as private scratch, the
+    // writer-config instance uses src2/src3. The two instances touch DISJOINT scratchpads, so each
+    // scratchpad serves a single kernel instance.
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
-    const DFBSpecName SRC0{"src0"};
-    const DFBSpecName SRC1{"src1"};
-    const DFBSpecName SRC2{"src2"};
-    const DFBSpecName SRC3{"src3"};
+    const ScratchpadSpecName SRC0{"src0"};
+    const ScratchpadSpecName SRC1{"src1"};
+    const ScratchpadSpecName SRC2{"src2"};
+    const ScratchpadSpecName SRC3{"src3"};
     const TensorParamName SRC{"src"};
     const TensorParamName DST{"dst"};
 
-    // Named CTAs — identical for both instances. The per-instance difference is the DFB binding
-    // (src0/src1 vs src2/src3), not a compile-time arg, so a single CTA table serves both.
+    // Named CTAs — identical for both instances. The per-instance difference is the scratchpad
+    // binding (src0/src1 vs src2/src3), not a compile-time arg, so a single CTA table serves both.
     const KernelSpec::CompileTimeArgs cta = {
         {"src_aligned_to_64", (source_page_size_bytes % 64 == 0) ? 1u : 0u},
         {"src_aligned_to_16", (source_page_size_bytes % 16 == 0) ? 1u : 0u},
@@ -173,21 +172,19 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
              "nop"},
     };
 
-    // Both instances read `tensor::src` and write `tensor::dst`; each self-loops its own scratch DFBs
-    // (accessor_names in0/in1, mapped to distinct DFB specs per instance).
+    // Both instances read `tensor::src` and write `tensor::dst`; each uses its own private scratch
+    // regions (accessor_names in0/in1, mapped to distinct scratchpad specs per instance).
     auto make_rm_kernel = [&](const KernelSpecName& id,
                               DataMovementHardwareConfig hw,
-                              const DFBSpecName& d0,
-                              const DFBSpecName& d1) {
+                              const ScratchpadSpecName& d0,
+                              const ScratchpadSpecName& d1) {
         return KernelSpec{
             .unique_id = id,
             .source = "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/rm_reshape_interleaved.cpp",
-            .dfb_bindings =
+            .scratchpad_bindings =
                 {
-                    DFBBinding{.dfb_spec_name = d0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::PRODUCER},
-                    DFBBinding{.dfb_spec_name = d0, .accessor_name = "in0", .endpoint_type = DFBEndpointType::CONSUMER},
-                    DFBBinding{.dfb_spec_name = d1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::PRODUCER},
-                    DFBBinding{.dfb_spec_name = d1, .accessor_name = "in1", .endpoint_type = DFBEndpointType::CONSUMER},
+                    ScratchpadBinding{.scratchpad_spec_name = d0, .accessor_name = "in0"},
+                    ScratchpadBinding{.scratchpad_spec_name = d1, .accessor_name = "in1"},
                 },
             .tensor_bindings =
                 {
@@ -200,24 +197,23 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
         };
     };
 
-    auto make_scratch_dfb = [&](const DFBSpecName& id, uint32_t entry_size, uint32_t num_entries) {
-        return DataflowBufferSpec{
+    // size_per_node is the whole region the former DFB reserved on each node: entry_size * num_entries.
+    auto make_scratch = [&](const ScratchpadSpecName& id, uint32_t entry_size, uint32_t num_entries) {
+        return ScratchpadSpec{
             .unique_id = id,
-            .entry_size = entry_size,
-            .num_entries = num_entries,
-            .data_format_metadata = dfb_data_format,
+            .size_per_node = entry_size * num_entries,
         };
     };
 
     ProgramSpec spec;
     spec.name = "reshape_view_rm";
     spec.kernels.push_back(make_rm_kernel(READER, create_reader_datamovement_config(device->arch()), SRC0, SRC1));
-    spec.dataflow_buffers.push_back(make_scratch_dfb(SRC0, dfb_size0, 2));
-    spec.dataflow_buffers.push_back(make_scratch_dfb(SRC1, dfb_size1, 1));
+    spec.scratchpads.push_back(make_scratch(SRC0, dfb_size0, 2));
+    spec.scratchpads.push_back(make_scratch(SRC1, dfb_size1, 1));
     if (can_use_dual_kernel) {
         spec.kernels.push_back(make_rm_kernel(WRITER, create_writer_datamovement_config(device->arch()), SRC2, SRC3));
-        spec.dataflow_buffers.push_back(make_scratch_dfb(SRC2, dfb_size0, 2));
-        spec.dataflow_buffers.push_back(make_scratch_dfb(SRC3, dfb_size1, 1));
+        spec.scratchpads.push_back(make_scratch(SRC2, dfb_size0, 2));
+        spec.scratchpads.push_back(make_scratch(SRC3, dfb_size1, 1));
     }
     spec.tensor_parameters = {
         TensorParameter{.unique_id = SRC, .spec = input_mt.tensor_spec()},
