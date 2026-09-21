@@ -893,7 +893,7 @@ class Attention(Module):
             dtype=LINEAR_DTYPE,
         )
 
-        self._sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        self._hifi_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
@@ -1008,9 +1008,9 @@ class Attention(Module):
         # v shape: batch_size num_local_kv_heads padded_q_seq_len head_size
 
         if self.q_norm is not None:
-            q = self.q_norm.forward(q, compute_kernel_config=self._sdpa_compute_kernel_config)
+            q = self.q_norm.forward(q, compute_kernel_config=self._hifi_compute_kernel_config)
         if self.k_norm is not None:
-            k = self.k_norm.forward(k, compute_kernel_config=self._sdpa_compute_kernel_config)
+            k = self.k_norm.forward(k, compute_kernel_config=self._hifi_compute_kernel_config)
 
         if pos_embeds is not None:
             cos, sin = pos_embeds
@@ -1039,7 +1039,7 @@ class Attention(Module):
             attn_mask=attn_bias,
             is_causal=attn_bias is None,
             program_config=self._sdpa_program_config(padded_q_seq_len, padded_kv_seq_len),
-            compute_kernel_config=self._sdpa_compute_kernel_config,
+            compute_kernel_config=self._hifi_compute_kernel_config,
         )
         del q, k, v
 
@@ -1093,9 +1093,9 @@ class Attention(Module):
         # v shape: 1 batch_size num_local_kv_heads head_size
 
         if self.q_norm is not None:
-            q = _norm_in_dram(self.q_norm, q, compute_kernel_config=self._sdpa_compute_kernel_config)
+            q = _norm_in_dram(self.q_norm, q, compute_kernel_config=self._hifi_compute_kernel_config)
         if self.k_norm is not None:
-            k = _norm_in_dram(self.k_norm, k, compute_kernel_config=self._sdpa_compute_kernel_config)
+            k = _norm_in_dram(self.k_norm, k, compute_kernel_config=self._hifi_compute_kernel_config)
 
         if pos_embeds is not None:
             cos, sin = pos_embeds
@@ -1118,7 +1118,7 @@ class Attention(Module):
             attn_mask=attn_bias,
             is_causal=attn_bias is None,
             program_config=self._sdpa_decode_program_config(k.shape[2]),
-            compute_kernel_config=self._sdpa_compute_kernel_config,
+            compute_kernel_config=self._hifi_compute_kernel_config,
         )
         del q, k, v
 
