@@ -1901,11 +1901,15 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::RSHFT)
     {
+        // INT32, not INT32_2S_COMP, to match binary_shift.h: native Int32 tiles hold 2's complement
+        // in Dst, so the shift operates on the bits directly. INT32_2S_COMP would ask for a
+        // sign-magnitude conversion that no Blackhole caller wants and that the load/store mode
+        // does not perform there anyway. Drive these ops with twos_complement=True.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binary_right_shift,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32_2S_COMP, false),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -1917,7 +1921,8 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binary_left_shift,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32_2S_COMP, false),
+            // See the RSHFT branch above for why this is INT32 rather than INT32_2S_COMP.
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -1929,7 +1934,8 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_logical_right_shift,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32_2S_COMP, false),
+            // See the RSHFT branch above for why this is INT32 rather than INT32_2S_COMP.
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
