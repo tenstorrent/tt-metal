@@ -5,7 +5,7 @@
 // Unified matmul writer: stores this cluster's finished MN chunks.
 //
 // GEMM view, all sizes in 32x32 tiles: C[M x N], batch_size times. An MN chunk is the MN_chunk_M_tiles x
-// MN_chunk_N_tiles tiles of C at origin (MN_chunk_M_tile, MN_chunk_N_tile). This cluster owns num_MN_chunks
+// MN_chunk_N_tiles tiles of C at origin (MN_chunk_first_M_tile, MN_chunk_first_N_tile). This cluster owns num_MN_chunks
 // consecutive chunks of the row-major walk over C (across N, then down M) starting at
 // (first_MN_chunk_M_tile, first_MN_chunk_N_tile), and writes them for every batch, exactly as the reader
 // walks them.
@@ -56,20 +56,21 @@ void kernel_main() {
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
         const uint32_t C_batch_first_tile = batch * C_tiles_per_batch;
 
-        uint32_t MN_chunk_M_tile = first_MN_chunk_M_tile;  // origin of the current chunk, in tiles
-        uint32_t MN_chunk_N_tile = first_MN_chunk_N_tile;
-        for (uint32_t MN_chunk_index = 0; MN_chunk_index < num_MN_chunks; ++MN_chunk_index) {
+        uint32_t MN_chunk_first_M_tile = first_MN_chunk_M_tile;  // origin of the current chunk, in tiles
+        uint32_t MN_chunk_first_N_tile = first_MN_chunk_N_tile;
+        for (uint32_t MN_chunk = 0; MN_chunk < num_MN_chunks; ++MN_chunk) {
             // Same subblock walk as the compute kernel: (m_tile, n_tile) is the subblock's first tile within
             // the chunk.
             for (uint32_t m_tile = 0; m_tile < MN_chunk_M_tiles; m_tile += subblock_M_tiles) {
                 for (uint32_t n_tile = 0; n_tile < MN_chunk_N_tiles; n_tile += subblock_N_tiles) {
                     C_slice.wait_front(subblock_tiles);
                     uint32_t slot_offset = 0;
-                    for (uint32_t tile_row = 0; tile_row < subblock_M_tiles; ++tile_row) {
-                        const uint32_t C_m_tile = MN_chunk_M_tile + m_tile + tile_row;  // tile position in C
-                        for (uint32_t tile_column = 0; tile_column < subblock_N_tiles;
-                             ++tile_column, slot_offset += C_tile_bytes) {
-                            const uint32_t C_n_tile = MN_chunk_N_tile + n_tile + tile_column;
+                    for (uint32_t subblock_m_tile = 0; subblock_m_tile < subblock_M_tiles; ++subblock_m_tile) {
+                        const uint32_t C_m_tile =
+                            MN_chunk_first_M_tile + m_tile + subblock_m_tile;  // tile position in C
+                        for (uint32_t subblock_n_tile = 0; subblock_n_tile < subblock_N_tiles;
+                             ++subblock_n_tile, slot_offset += C_tile_bytes) {
+                            const uint32_t C_n_tile = MN_chunk_first_N_tile + n_tile + subblock_n_tile;
                             if (C_m_tile < M_tiles && C_n_tile < N_tiles) {
                                 noc.async_write(
                                     C_slice,
@@ -86,10 +87,10 @@ void kernel_main() {
             }
 
             // Next chunk: across N, then down M.
-            MN_chunk_N_tile += MN_chunk_N_tiles;
-            if (MN_chunk_N_tile >= N_tiles) {
-                MN_chunk_N_tile = 0;
-                MN_chunk_M_tile += MN_chunk_M_tiles;
+            MN_chunk_first_N_tile += MN_chunk_N_tiles;
+            if (MN_chunk_first_N_tile >= N_tiles) {
+                MN_chunk_first_N_tile = 0;
+                MN_chunk_first_M_tile += MN_chunk_M_tiles;
             }
         }
     }

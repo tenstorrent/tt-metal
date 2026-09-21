@@ -60,7 +60,7 @@ void kernel_main() {
     matmul_block_init(dfb::A_slice, dfb::B_slice, /*transpose=*/0, subblock_N_tiles, subblock_M_tiles, K_chunk_tiles);
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
-        for (uint32_t MN_chunk_index = 0; MN_chunk_index < num_MN_chunks; ++MN_chunk_index) {
+        for (uint32_t MN_chunk = 0; MN_chunk < num_MN_chunks; ++MN_chunk) {
             for (uint32_t K_chunk = 0; K_chunk < num_K_chunks; ++K_chunk) {
                 const bool last_K_chunk = K_chunk == num_K_chunks - 1;
                 // Partials exist once a previous K chunk has packed them. Without packer L1 accumulation every
@@ -119,21 +119,21 @@ void kernel_main() {
                         // subblock_N_tiles products onto DST tiles 0..subblock_tiles-1. The LLK has no
                         // multi-K-tile call: kt_dim is only the row stride of the A slice
                         // ([MN_chunk_M_tiles][K_chunk_tiles] tiles), so the k loop lives here.
-                        uint32_t A_tile = A_subblock_first_tile;
-                        uint32_t B_tile = B_subblock_first_tile;
+                        uint32_t A_slice_tile = A_subblock_first_tile;
+                        uint32_t B_slice_tile = B_subblock_first_tile;
                         for (uint32_t k_tile = 0; k_tile < K_chunk_tiles; ++k_tile) {
                             matmul_block(
                                 dfb::A_slice,
                                 dfb::B_slice,
-                                A_tile,
-                                B_tile,
+                                A_slice_tile,
+                                B_slice_tile,
                                 /*idst=*/0,
                                 /*transpose=*/0,
                                 subblock_N_tiles,
                                 subblock_M_tiles,
                                 K_chunk_tiles);
-                            A_tile += 1;                 // next K tile along the A slice row
-                            B_tile += MN_chunk_N_tiles;  // next K row of the B slice
+                            A_slice_tile += 1;                 // next K tile along the A slice row
+                            B_slice_tile += MN_chunk_N_tiles;  // next K row of the B slice
                         }
                         tile_regs_commit();
 
