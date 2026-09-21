@@ -172,23 +172,22 @@ def test_block_sharded_group_norm_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 74907  # Measured: ~74.9μs for GroupNorm SDXL block sharded
+    # Wormhole measured 73.090 and 73.106 us; preserve the other architectures' target.
+    expected_duration_ns = 73_100 if is_wormhole_b0() else 74_907
 
     # Log the performance result
     print(
         f"Block Sharded GroupNorm SDXL Device Kernel Duration: {device_kernel_duration:.2f} ns (expected: {expected_duration_ns} ns)"
     )
 
-    # Wormhole CI measures ~73.1 us; relax only its lower bound, retaining the
-    # existing upper limit and the original bounds on other architectures.
-    lower_margin = 0.03 if is_wormhole_b0() else MARGIN
-    lower_bound = expected_duration_ns * (1 - lower_margin)
+    # Performance validation with 1.5% margin
+    lower_bound = expected_duration_ns * (1 - MARGIN)
     upper_bound = expected_duration_ns * (1 + MARGIN)
 
     # Performance validation - assert if outside expected range
     assert (
         lower_bound <= device_kernel_duration <= upper_bound
-    ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {lower_bound:.2f}-{upper_bound:.2f} ns"
+    ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± {MARGIN * 100}% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
 
 
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
