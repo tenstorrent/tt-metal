@@ -238,6 +238,7 @@ class Transformer(LightweightModule):
             weight_cache_path=weight_cache_path,
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
             prefetcher=self.lm_head_prefetcher,
+            runtime_prefetcher=prefetcher,
         )
 
         # Initialize on-device sampling if supported

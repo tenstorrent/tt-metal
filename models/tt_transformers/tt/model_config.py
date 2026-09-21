@@ -3866,9 +3866,8 @@ class ModelArgs:
             assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
 
         out_subblock_h = 1
-        # For Blackhole with fp32_dest_acc_en=True, out_subblock_h * out_subblock_w must be <= 4
-        # For Wormhole/Grayskull with fp32_dest_acc_en=False, the limit is 8
-        max_subblock_w = 8
+        # Blackhole limits out_subblock_h * out_subblock_w to 4; older architectures allow 8.
+        max_subblock_w = 4 if is_blackhole() else 8
         out_subblock_w = max_subblock_w
         while out_block_w % out_subblock_w != 0:
             out_subblock_w -= 1
@@ -3997,9 +3996,11 @@ class ModelArgs:
         """Helper function to create LayerNormShardedMultiCoreProgramConfig for RMS NORM.
 
         Args:
-            grid (ttnn.CoreGrid): Grid specification for the norm operation
+            grid (ttnn.CoreGrid | ttnn.CoreRangeSet): Grid specification for the norm operation
         """
-        block_w = self.dim // grid.num_cores // ttnn.TILE_SIZE
+        num_cores = grid.num_cores() if callable(grid.num_cores) else grid.num_cores
+        grid_size = grid.bounding_box().grid_size() if hasattr(grid, "bounding_box") else grid
+        block_w = self.dim // num_cores // ttnn.TILE_SIZE
         # Find largest value <= 4 that evenly divides block_w
         subblock_w = 4
         while subblock_w > 0:
@@ -4007,7 +4008,7 @@ class ModelArgs:
                 break
             subblock_w -= 1
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[grid.x, grid.y],
+            compute_with_storage_grid_size=[grid_size.x, grid_size.y],
             subblock_w=subblock_w,
             block_h=self.tile_padded_batch_rows // ttnn.TILE_SIZE,
             block_w=block_w,

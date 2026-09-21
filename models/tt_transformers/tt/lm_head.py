@@ -43,6 +43,7 @@ class LMHead(LightweightModule):
         weight_cache_path,
         max_columns_per_device,  # too many columns per device lead to L1 OOM
         prefetcher=None,
+        runtime_prefetcher=None,
     ):
         super().__init__()
         self.args = args
@@ -53,6 +54,7 @@ class LMHead(LightweightModule):
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
         self.prefetcher = prefetcher
+        self.runtime_prefetcher = runtime_prefetcher
         self.use_galaxy_no_prefetch = args.is_galaxy and prefetcher is None
 
         vocab_shards = args.cluster_shape[0] if self.use_galaxy_no_prefetch else self.num_devices
@@ -238,6 +240,12 @@ class LMHead(LightweightModule):
     def forward(self, x: ttnn.Tensor, debug_input_torch=None, debug_weight_torch=None):
         outputs = []
         use_prefetcher = self.prefetcher is not None and self.prefetcher.mode == Mode.DECODE
+        tensor_prefetcher_active = (
+            not use_prefetcher
+            and self.runtime_prefetcher is not None
+            and getattr(self.runtime_prefetcher, "uses_tensor_prefetcher", False)
+            and self.runtime_prefetcher.mode == Mode.DECODE
+        )
         split_sizes = self.split_sizes_ring_mm if use_prefetcher else self.split_sizes_dram_sharded
         program_configs = [
             self.args.get_lm_head_program_config(split_size, self.prefetcher if use_prefetcher else None)
@@ -248,27 +256,52 @@ class LMHead(LightweightModule):
 
         if self.use_galaxy_no_prefetch:
             x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        elif tensor_prefetcher_active:
+            worker_grid = self.runtime_prefetcher.dynamic_worker_core_grid(self.args.lm_head_core_grid.num_cores)
+            x = ttnn.to_memory_config(
+                x,
+                ttnn.create_sharded_memory_config(
+                    shape=(
+                        self.args.tile_padded_batch_rows,
+                        math.ceil(self.args.dim / (ttnn.TILE_SIZE * self.args.lm_head_core_grid.num_cores))
+                        * ttnn.TILE_SIZE,
+                    ),
+                    core_grid=worker_grid,
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                ),
+            )
 
         self.lm_head_output_memory_config = self.args.get_lm_head_output_mem_config(
             Mode.DECODE if use_prefetcher else Mode.PREFILL, self.prefetcher if use_prefetcher else None
         )
 
         for i, (weight, pc) in enumerate(zip(output_weights, program_configs)):
+            output_memory_config = self.lm_head_output_memory_config
+            if tensor_prefetcher_active:
+                output_memory_config = ttnn.create_sharded_memory_config(
+                    shape=(self.args.tile_padded_batch_rows, pc.per_core_N * ttnn.TILE_SIZE),
+                    core_grid=worker_grid,
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
             output = ttnn.linear(
                 x,
                 weight,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=None if self.use_galaxy_no_prefetch else pc,
-                memory_config=(
-                    ttnn.DRAM_MEMORY_CONFIG if self.use_galaxy_no_prefetch else self.lm_head_output_memory_config
-                ),
+                memory_config=(ttnn.DRAM_MEMORY_CONFIG if self.use_galaxy_no_prefetch else output_memory_config),
                 dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
                 sub_device_id=self.prefetcher.worker_sub_device_id if use_prefetcher else None,
             )
             output = ttnn.to_memory_config(
                 output,
-                memory_config=self.args.get_lm_head_sharded_output_mem_config(
-                    self.prefetcher if use_prefetcher else None
+                memory_config=(
+                    ttnn.DRAM_MEMORY_CONFIG
+                    if tensor_prefetcher_active
+                    else self.args.get_lm_head_sharded_output_mem_config(self.prefetcher if use_prefetcher else None)
                 ),
             )
 
@@ -284,9 +317,9 @@ class LMHead(LightweightModule):
             outputs,
             dim=-1,
             memory_config=(
-                self.args.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
-                if not use_prefetcher
-                else ttnn.DRAM_MEMORY_CONFIG
+                ttnn.DRAM_MEMORY_CONFIG
+                if use_prefetcher or tensor_prefetcher_active
+                else self.args.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
             ),
             sub_core_grids=self.prefetcher.all_worker_cores_range_set if use_prefetcher else None,
         )
