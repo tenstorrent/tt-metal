@@ -31,6 +31,9 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "mock_psd_builder.hpp"
+
+using namespace tt::tt_fabric::test;
 
 namespace tt::tt_metal::experimental::tt_fabric {
 namespace {
@@ -55,10 +58,6 @@ protected:
     }
 };
 }  // namespace
-
-static tt::tt_metal::PhysicalSystemDescriptor load_mock_psd(const char* relative_path) {
-    return tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(relative_path);
-}
 
 static void fill_hosts_from_psd(TopologyMappingConfig& config, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
@@ -194,7 +193,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoLinked1x2Meshes_OnFour
 
     auto pgd = unspecified_line_1x2_pgd();
     auto mgd = two_1x2_meshes_mgd(/*linked=*/true);
-    auto psd = load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), line_edges(4));
 
     TopologyMappingConfig config;
     config.disable_rank_bindings = true;
@@ -212,7 +211,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoMeshes_Succeeds) {
 
     auto pgd = unspecified_line_1x2_pgd();
     auto mgd = two_1x2_meshes_mgd(/*linked=*/false);
-    auto psd = load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {2, 3}});
 
     TopologyMappingConfig config;
     config.disable_rank_bindings = true;
@@ -227,7 +226,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoMeshes_Succeeds) {
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_IncompatibleTopology_Fails) {
     using namespace ::tt::tt_fabric;
 
-    auto psd = load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2x2_hosts_by_column.textproto");
+    auto psd = build_grid_mock_psd(2, 2, {"host0", "host1", "host0", "host1"});
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
   name: "2x2_Mesh"
@@ -261,7 +260,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ImpossibleIntraMeshConstraints_2x2OnLine_Fails) {
     using namespace ::tt::tt_fabric;
 
-    auto psd = load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), line_edges(4));
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
   name: "2x2_Mesh"
@@ -297,7 +296,7 @@ TEST_F(TopologyMapperUtilsTest, Pinning_MapMultiMeshToPhysical_MeshLevelPinnings
 
     auto pgd = unspecified_line_1x2_pgd();
     auto mgd = two_1x2_meshes_mgd(/*linked=*/false);
-    auto psd = load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {2, 3}});
 
     TopologyMappingConfig config;
     config.disable_rank_bindings = true;
@@ -312,7 +311,7 @@ TEST_F(TopologyMapperUtilsTest, Pinning_MapMultiMeshToPhysical_MeshLevelPinnings
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_2x2Mesh_HostsByColumn) {
     using namespace ::tt::tt_fabric;
 
-    auto psd = load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2x2_hosts_by_column.textproto");
+    auto psd = build_grid_mock_psd(2, 2, {"host0", "host1", "host0", "host1"});
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
   name: "2x2_Mesh"
@@ -358,7 +357,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_NoHostRankAssigned_2x2) {
     using namespace ::tt::tt_fabric;
 
-    auto psd = load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2x2_hosts_by_column.textproto");
+    auto psd = build_grid_mock_psd(2, 2, {"host0", "host1", "host0", "host1"});
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
   name: "2x2_Mesh"
@@ -408,7 +407,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHostExplicitOthersUnset_Succeeds) {
     using namespace ::tt::tt_fabric;
 
-    auto psd = load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2x2_hosts_by_column.textproto");
+    auto psd = build_grid_mock_psd(2, 2, {"host0", "host1", "host0", "host1"});
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
   name: "2x2_Mesh"
@@ -459,7 +458,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoHostsSplitAcrossFourRanks_EachRankWithinOneHost) {
     using namespace ::tt::tt_fabric;
 
-    auto psd = load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2x2_hosts_by_column.textproto");
+    auto psd = build_grid_mock_psd(2, 2, {"host0", "host1", "host0", "host1"});
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
   name: "2x2_Mesh"
@@ -508,7 +507,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FourNodesFourHosts_NoHostRankAssigned) {
     using namespace ::tt::tt_fabric;
 
-    auto psd = load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_four_hosts_by_column.textproto");
+    auto psd = build_grid_mock_psd(2, 4, {"host0", "host1", "host2", "host3", "host0", "host1", "host2", "host3"});
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
   name: "2x4_Mesh"
@@ -569,7 +568,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoHostsTwoAsicsEach_SameHostSameRank) {
     using namespace ::tt::tt_fabric;
 
-    auto psd = load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+    auto psd = build_grid_mock_psd(2, 4, {"host0", "host0", "host1", "host1", "host0", "host0", "host1", "host1"});
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
   name: "2x4_Mesh"
@@ -630,7 +629,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FourNodesFourHosts_PartialAsicRankBinding_Host0Rank1Only) {
     using namespace ::tt::tt_fabric;
 
-    auto psd = load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2x2_hosts_by_column.textproto");
+    auto psd = build_grid_mock_psd(2, 2, {"host0", "host1", "host0", "host1"});
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
   name: "2x2_Mesh"
@@ -687,8 +686,25 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_NoHostRankAssigned_4x4FourHosts) {
     using namespace ::tt::tt_fabric;
 
-    auto psd =
-        load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_16asic_4x4_four_hosts_by_quadrant.textproto");
+    auto psd = build_grid_mock_psd(
+        4,
+        4,
+        {"host0",
+         "host0",
+         "host1",
+         "host1",
+         "host0",
+         "host0",
+         "host1",
+         "host1",
+         "host2",
+         "host2",
+         "host3",
+         "host3",
+         "host2",
+         "host2",
+         "host3",
+         "host3"});
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
   name: "4x4_Mesh"
@@ -773,7 +789,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_NoHostRankAssigned_2x3TwoHosts) {
     using namespace ::tt::tt_fabric;
 
-    auto psd = load_mock_psd("tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_2x3_hosts_by_row.textproto");
+    auto psd = build_grid_mock_psd(2, 3, {"host0", "host0", "host0", "host1", "host1", "host1"});
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
   name: "2x3_Mesh"

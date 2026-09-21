@@ -18,7 +18,6 @@
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
-#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 
@@ -64,12 +63,6 @@ inline void merge_pinnings_by_mesh(PinningsByMesh& dest, const std::vector<Pinni
             dest[group.fabric_nodes.front().mesh_id].push_back(group);
         }
     }
-}
-
-inline PinningsByMesh pinnings_by_mesh_from_groups(const std::vector<PinningConstraint>& groups) {
-    PinningsByMesh by_mesh;
-    merge_pinnings_by_mesh(by_mesh, groups);
-    return by_mesh;
 }
 
 // Galaxy corner pinnings for a single mesh, ensuring QSFP links align with the fabric mesh corner nodes
@@ -131,13 +124,8 @@ struct TopologyMappingResult {
     std::map<tt::tt_metal::AsicID, FabricNodeId> asic_to_fabric_node;
 };
 
-/**
- * @brief Represents a mesh node in a 2-layer adjacency graph
- *
- * Simplified to just be a MeshId. The internal adjacency graph is accessed via
- * LogicalMultiMeshGraph::get_internal_graph().
- */
 using LogicalMeshNode = MeshId;
+using PhysicalMeshNode = MeshId;
 
 /**
  * @brief Represents a logical exit node that can be at either the mesh level or fabric node level
@@ -148,7 +136,7 @@ using LogicalMeshNode = MeshId;
  * point)
  */
 struct LogicalExitNode {
-    MeshId mesh_id;
+    LogicalMeshNode mesh_id;
     std::optional<FabricNodeId> fabric_node_id;
 
     bool operator<(const LogicalExitNode& other) const {
@@ -183,7 +171,7 @@ struct LogicalExitNode {
  * Each physical exit node has a mesh_id (which mesh it belongs to) and an asic_id (the ASIC identifier).
  */
 struct PhysicalExitNode {
-    MeshId mesh_id;
+    PhysicalMeshNode mesh_id;
     tt::tt_metal::AsicID asic_id;
 
     bool operator<(const PhysicalExitNode& other) const {
@@ -206,93 +194,45 @@ struct PhysicalExitNode {
  *
  * Efficient representation that avoids duplicating adjacency graphs:
  * - Stores each mesh's internal adjacency graph once in a map
- * - Stores mesh-level connectivity as lightweight AdjacencyGraph<MeshId>
+ * - Stores mesh-level connectivity as lightweight AdjacencyGraph<LogicalMeshNode>
  *
  * This type represents a hierarchical adjacency graph:
  * - Top layer: adjacency graph of mesh IDs (which meshes connect to which meshes)
  * - Bottom layer: for each mesh, its internal adjacency graph (which fabric nodes connect within the mesh)
  */
 struct LogicalMultiMeshGraph {
-    // Map from MeshId to its internal adjacency graph (stored once, no duplication)
-    std::map<MeshId, AdjacencyGraph<FabricNodeId>> mesh_adjacency_graphs_;
+    // Map from LogicalMeshNode to its internal adjacency graph (stored once, no duplication)
+    std::map<LogicalMeshNode, AdjacencyGraph<FabricNodeId>> mesh_adjacency_graphs_;
 
-    // Mesh-level adjacency graph using MeshIds (lightweight, no graph duplication)
-    AdjacencyGraph<MeshId> mesh_level_graph_;
+    // Mesh-level adjacency graph using LogicalMeshNodes (lightweight, no graph duplication)
+    AdjacencyGraph<LogicalMeshNode> mesh_level_graph_;
 
-    // Map from MeshId to exit node adjacency graph for that mesh (optional, only populated if specified)
+    // Map from LogicalMeshNode to exit node adjacency graph for that mesh (optional, only populated if specified)
     // Contains exit nodes (LogicalExitNode structs) that can represent either:
     // - Mesh-level exit nodes (mesh_id set, fabric_node_id empty) - the entire mesh serves as an exit point
     // - Fabric node-level exit nodes (both mesh_id and fabric_node_id set) - specific fabric nodes serve as exit points
     // and their connections to exit nodes in other meshes as edges.
     // Multiple channels between the same pair are represented by duplicate entries.
     // Only populated when strict mode intermesh ports are specified.
-    std::map<MeshId, AdjacencyGraph<LogicalExitNode>> mesh_exit_node_graphs_;
+    std::map<LogicalMeshNode, AdjacencyGraph<LogicalExitNode>> mesh_exit_node_graphs_;
 };
 
-/**
- * @brief Build a logical multi-mesh adjacency graph from a MeshGraph
- *
- * Used by TopologyMapper consume when the MeshGraph was generated (no MeshGraphDescriptor).
- */
-LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fabric::MeshGraph& mesh_graph);
-
-/**
- * @brief Build a logical multi-mesh adjacency graph from a MeshGraphDescriptor
- */
 LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
     const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor);
 
-/**
- * @brief Throw unless every descriptor about to be merged states the same inter-mesh channel policy
- *
- * Temporary restriction, and merging is what forces it. The merged solve applies one policy to every seam,
- * as does the mapper's single inter_mesh_validation_mode, so a mixed set would quietly have one
- * descriptor's policy applied to the other's seams -- the same reason MGD validation rejects mixing within
- * a single descriptor. Rejecting it is the honest option until per-seam policy is supported.
- *
- * Descriptors that state no policy abstain rather than conflict, so a single-mesh MGD with no inter-mesh
- * connection to carry one can still be merged with a descriptor that does state one.
- *
- * Multi-MGD mapping calls this before merging descriptors. Exposed for callers that
- * assemble descriptors earlier and would rather fail then, while the paths the user named are still in
- * hand. Consumers downstream of the merge assume it has passed.
- * https://github.com/tenstorrent/tt-metal/issues/49960
- */
-void validate_shared_inter_mesh_policy(
-    const std::vector<const ::tt::tt_fabric::MeshGraphDescriptor*>& mesh_graph_descriptors);
-
-/**
- * @brief Merge logical multi-mesh graphs into one with automatic MeshId renumbering
- *
- * Inputs are processed in order. For each part, all distinct MeshIds in that part (in fabric
- * adjacency, mesh-level graph, and exit maps) are collected, sorted, and assigned consecutive
- * global ids starting at a running base. If \p per_part_local_to_global_mesh_ids is set, it is filled
- * with one map per input part: MGD-local mesh id -> merged global mesh id (for pinnings, validation, rank
- * bindings, etc.).
- *
- * A single input is returned unchanged; the optional vector contains one identity map for that graph.
- */
 LogicalMultiMeshGraph merge_logical_multi_mesh_adjacency_graphs(
     const std::vector<LogicalMultiMeshGraph>& logical_multi_mesh_graphs,
     std::vector<std::map<MeshId, MeshId>>* per_part_local_to_global_mesh_ids = nullptr);
 
-/**
- * @brief Represents a physical mesh node in a 2-layer adjacency graph
- *
- * Simplified to just be a MeshId. The internal adjacency graph is accessed via
- * PhysicalMultiMeshGraph::mesh_adjacency_graphs_.
- */
-using PhysicalMeshNode = MeshId;
-
-// Note: Exit node information is now stored as an AdjacencyGraph in PhysicalMultiMeshGraph
-// No separate MeshExitNodeInfo struct needed - the adjacency graph itself represents exit nodes
+PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
 
 /**
  * @brief Multi-mesh adjacency graph for physical ASICs where meshes are nodes
  *
  * Efficient representation that avoids duplicating adjacency graphs:
  * - Stores each mesh's internal adjacency graph once in a map
- * - Stores mesh-level connectivity as lightweight AdjacencyGraph<MeshId>
+ * - Stores mesh-level connectivity as lightweight AdjacencyGraph<PhysicalMeshNode>
  * - Tracks exit node information as an adjacency graph (only exit nodes and their intermesh connections)
  *
  * This type represents a hierarchical adjacency graph:
@@ -303,20 +243,20 @@ using PhysicalMeshNode = MeshId;
  *   duplicate entries in the neighbor vector (matching AdjacencyGraph's channel representation).
  */
 struct PhysicalMultiMeshGraph {
-    // Map from MeshId to its internal adjacency graph (stored once, no duplication)
-    std::map<MeshId, AdjacencyGraph<tt::tt_metal::AsicID>> mesh_adjacency_graphs_;
+    // Map from PhysicalMeshNode to its internal adjacency graph (stored once, no duplication)
+    std::map<PhysicalMeshNode, AdjacencyGraph<tt::tt_metal::AsicID>> mesh_adjacency_graphs_;
 
-    // Mesh-level adjacency graph using MeshIds (lightweight, no graph duplication)
-    AdjacencyGraph<MeshId> mesh_level_graph_;
+    // Mesh-level adjacency graph using PhysicalMeshNodes (lightweight, no graph duplication)
+    AdjacencyGraph<PhysicalMeshNode> mesh_level_graph_;
 
     // Map from MeshId to exit node adjacency graph for that mesh
     // Contains only exit nodes (PhysicalExitNode structs representing ASICs that connect to ASICs in other meshes) as
     // nodes, and their connections to PhysicalExitNodes in other meshes as edges. Each PhysicalExitNode includes the
     // mesh_id (which mesh it belongs to) and asic_id (the ASIC identifier). Multiple channels between the same pair are
     // represented by duplicate entries.
-    std::map<MeshId, AdjacencyGraph<PhysicalExitNode>> mesh_exit_node_graphs_;
+    std::map<PhysicalMeshNode, AdjacencyGraph<PhysicalExitNode>> mesh_exit_node_graphs_;
 
-    // PGD-derived intra-mesh pinning: physical MeshId (this graph's own mesh index, same key space as
+    // PGD-derived intra-mesh pinning: physical mesh (this graph's own mesh index, same key space as
     // mesh_adjacency_graphs_) -> (row-major logical chip id -> AsicPosition). Captured from the PGD<->MGD match
     // during grouping selection and carried through PSD placement, so later intra-mesh mapping can follow the PGD
     // layout instead of re-solving it. The inner resolution is purely logical-chip-id -> physical ASIC position
@@ -324,26 +264,8 @@ struct PhysicalMultiMeshGraph {
     // positions and resolved back to ASIC(s) at consume time. It deliberately does NOT bake a logical mesh
     // assignment into the key (that decision is made later during the multi-mesh solve). Populated when the graph
     // was built from a PhysicalGroupingDescriptor, or by the rank-bound PGD pinning fast path; empty otherwise.
-    std::map<MeshId, std::map<LogicalChipId, AsicPosition>> mesh_pgd_pinnings_;
+    std::map<PhysicalMeshNode, std::map<LogicalChipId, AsicPosition>> mesh_pgd_pinnings_;
 };
-
-/** Default cap on distinct physical graphs from adjacency-guided placement when max_graphs is 0. */
-inline constexpr std::size_t kPhysicalMultiMeshGraphEnumerationCap = 64;
-
-/**
- * @brief Map a MeshGraph onto the PSD.
- *
- * Graphs with an attached MeshGraphDescriptor (file-loaded or auto-discovered) use PGD SAT seating.
- * Rank maps constrain that seating.
- */
-TopologyMappingResult map_multi_mesh_to_physical(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
-    const ::tt::tt_fabric::MeshGraph& mesh_graph,
-    const TopologyMappingConfig& config,
-    const std::optional<PinningsByMesh>& pinnings = {},
-    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
-    const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
 
 /**
  * @brief Map logical meshes onto the PSD using PGD SAT seating and identity intra-mesh.
@@ -381,24 +303,11 @@ TopologyMappingResult map_multi_mesh_to_physical(
  * If intra-mesh fails against a seated candidate, that (mesh, footprint) is forbidden and the next
  * seating is tried.
  *
- * The MeshGraph constructor requires a MeshGraphDescriptor and delegates to the MGD path so
- * seating always goes through SatPlacementEnumerationSession.
- *
- * Lifetime: the PSD, PGD, MeshGraph, and MeshGraphDescriptor(s) passed to the constructor must outlive
+ * Lifetime: the PSD, PGD, and MeshGraphDescriptor(s) passed to the constructor must outlive
  * the enumerator.
  */
 class MultiMeshSolutionEnumerator {
 public:
-    MultiMeshSolutionEnumerator(
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
-        const ::tt::tt_fabric::MeshGraph& mesh_graph,
-        const TopologyMappingConfig& config,
-        bool unique_shapes = false,
-        const std::optional<PinningsByMesh>& pinnings = {},
-        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
-        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
-
     MultiMeshSolutionEnumerator(
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         const tt::tt_fabric::PhysicalGroupingDescriptor& physical_grouping_descriptor,
@@ -453,10 +362,6 @@ private:
 
     void fill_host_and_asic_positions_from_psd();
 };
-
-/** Log inter-mesh and per-mesh intra-mesh degree histograms at INFO (one line each). */
-void log_logical_multi_mesh_adjacency_histograms(const LogicalMultiMeshGraph& multi_mesh_graph);
-void log_physical_multi_mesh_adjacency_histograms(const PhysicalMultiMeshGraph& multi_mesh_graph);
 
 // Choose one (exit, peer) FabricNodeId pair per candidate set ("hop") such that no FabricNodeId is
 // reused across sets. `candidates[i]` are the candidate pairs for position i; returns the chosen pairs

@@ -519,8 +519,8 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             mesh_graph_descriptor,
             config,
             pinnings_by_mesh,
-            asic_id_to_mesh_rank,
-            fabric_node_id_to_mesh_rank);
+            config.disable_rank_bindings ? decltype(asic_id_to_mesh_rank){} : asic_id_to_mesh_rank,
+            config.disable_rank_bindings ? decltype(fabric_node_id_to_mesh_rank){} : fabric_node_id_to_mesh_rank);
 
         // Check if mapping succeeded
         TT_FATAL(
@@ -1628,17 +1628,10 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     // Get the total number of chips in the physical system descriptor
     const auto total_number_of_chips = physical_system_descriptor.get_asic_descriptors().size();
 
-    // Extract ASIC IDs from the descriptors map
-    std::vector<tt::tt_metal::AsicID> all_asic_ids;
-    all_asic_ids.reserve(total_number_of_chips);
-    for (const auto& [asic_id, _] : physical_system_descriptor.get_asic_descriptors()) {
-        all_asic_ids.push_back(asic_id);
-    }
-
-    // Form physical adjacency matrix from physical system descriptor
     std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
     asic_id_to_mesh_rank[MeshId{0}] = std::map<tt::tt_metal::AsicID, MeshHostRankId>();
-    for (const auto& asic_id : all_asic_ids) {
+    for (const auto& [asic_id, unused_desc] : physical_system_descriptor.get_asic_descriptors()) {
+        (void)unused_desc;
         asic_id_to_mesh_rank[MeshId{0}][asic_id] = MeshHostRankId{0};
     }
 
@@ -1709,8 +1702,8 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         }
         for (const auto& fabric_type : fabric_type_candidates) {
             // A torus candidate with no genuine axis at this shape (every wrapped dimension has
-            // extent <= 2) demands nothing a MESH doesn't: generate_mesh_graph_of_shape gates its
-            // wrap edges away, so it would map vacuously and mislabel a plain mesh as a torus.
+            // extent <= 2) demands nothing a MESH doesn't: the generated descriptor's RING on a
+            // short axis is not a wrap, so it would map vacuously and mislabel a plain mesh as a torus.
             // Skip it and let MESH win honestly.
             if (fabric_type != FabricType::MESH && !has_genuine_torus_axis(fabric_type, mesh_shape, 0) &&
                 !has_genuine_torus_axis(fabric_type, mesh_shape, 1)) {

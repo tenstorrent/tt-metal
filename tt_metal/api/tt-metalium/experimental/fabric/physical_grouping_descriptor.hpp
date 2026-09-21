@@ -286,57 +286,6 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::size_t max_solutions = 1) const;
 
-    // SAT joint placement. Production path for build_physical_multi_mesh_adjacency_graph.
-    //
-    // Places one chip-disjoint physical region per mesh *instance*, so a descriptor that instantiates
-    // the same mesh definition N times gets N regions rather than one. The descriptor is what supplies
-    // that instance count, via build_logical_multi_mesh_adjacency_graph: its mesh-level graph has a
-    // node per mesh instance and an edge per inter-mesh connection. `valid_groupings` only supplies
-    // which PGD groupings each mesh definition accepts.
-    //
-    // valid_groupings must come from get_valid_groupings_for_mgd(s) over the same descriptor(s), since
-    // it is looked up by mesh definition name (and by "mgd{i}_" prefix in the multi-descriptor case).
-    //
-    // Returns one PlacedMesh per mesh instance. An empty vector means placement failed; no error is
-    // surfaced to the caller.
-    //
-    // stats_out, when non-null, is filled with timings and SAT counters for this solve.
-    AssignedMeshes solve_adjacency_guided_placement(
-        const MeshGraphDescriptor& mesh_graph_descriptor,
-        const ValidGroupingsMap& valid_groupings,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        PlacementSolveStats* stats_out = nullptr,
-        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt) const;
-
-    // Multi-MGD overload; per_mgd_pinnings forwarded for MGD placement fallback embed checks.
-    AssignedMeshes solve_adjacency_guided_placement(
-        const std::vector<const MeshGraphDescriptor*>& mesh_graph_descriptors,
-        const ValidGroupingsMap& valid_groupings,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        PlacementSolveStats* stats_out = nullptr,
-        const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings = {})
-        const;
-
-    // Same as solve_adjacency_guided_placement, but returns up to max_solutions footprint-distinct seatings.
-    // max_solutions defaults to 1. 0 means as many as exist, capped by the caller's enumeration limit
-    // (see kPhysicalMultiMeshGraphEnumerationCap in topology_mapper_utils.hpp).
-    std::vector<AssignedMeshes> solve_adjacency_guided_placement_n(
-        const MeshGraphDescriptor& mesh_graph_descriptor,
-        const ValidGroupingsMap& valid_groupings,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        std::size_t max_solutions = 1,
-        PlacementSolveStats* stats_out = nullptr,
-        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt) const;
-
-    std::vector<AssignedMeshes> solve_adjacency_guided_placement_n(
-        const std::vector<const MeshGraphDescriptor*>& mesh_graph_descriptors,
-        const ValidGroupingsMap& valid_groupings,
-        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        std::size_t max_solutions = 1,
-        PlacementSolveStats* stats_out = nullptr,
-        const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings = {})
-        const;
-
     // Build flattened adjacency meshes - one per possibility based on possible groupings that can be formed
     // Returns vector of GroupingInfo objects, each with adjacency_graph populated and node metadata maps filled
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
@@ -464,7 +413,8 @@ private:
     static void validate_grouping_structure(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
 };
 
-// Incremental SAT joint placement. Physical identity of a seat is the ASIC footprint on PlacedMesh.
+// Incremental SAT joint placement used by MultiMeshSolutionEnumerator.
+// Physical identity of a seat is the ASIC footprint on PlacedMesh.
 // Column growth stays inside next(); extra constraints applied on the subsequent next().
 class SatPlacementEnumerationSession {
 public:
@@ -473,11 +423,24 @@ public:
 
     SatPlacementEnumerationSession(
         const PhysicalGroupingDescriptor& physical_grouping_descriptor,
-        const std::vector<const MeshGraphDescriptor*>& mesh_graph_descriptors,
+        const MeshGraphDescriptor& mesh_graph_descriptor,
         const ValidGroupingsMap& valid_groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         PlacementSolveStats* stats,
-        const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings,
+        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
+        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
+        bool unique_shapes = false);
+
+    // Already-merged logical graph and per-mesh groupings (global MeshIds). Used when
+    // MultiMeshSolutionEnumerator has remapped several MGDs into one seating.
+    SatPlacementEnumerationSession(
+        const tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& logical,
+        std::map<MeshId, std::vector<GroupingInfo>> groupings_by_mesh,
+        std::map<MeshId, GroupingInfo> mgd_fallback_by_mesh,
+        std::map<MeshId, ConnectionValidationMode> sat_intra_mesh_mode_by_mesh,
+        bool relaxed_inter_mesh_policy,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        PlacementSolveStats* stats,
         const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
         bool unique_shapes = false);
 
@@ -520,6 +483,7 @@ private:
     std::vector<std::pair<MeshId, std::unordered_set<tt::tt_metal::AsicID>>> extra_required_;
     std::vector<std::map<MeshId, std::unordered_set<tt::tt_metal::AsicID>>> yielded_footprints_;
 
+    void finish_init(const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
     void invalidate_pending_solve();
     std::set<const Candidate*> seats_matching(
         MeshId mesh_id, const std::unordered_set<tt::tt_metal::AsicID>& asics) const;

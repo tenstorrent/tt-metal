@@ -25,6 +25,9 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "mock_psd_builder.hpp"
+
+using namespace tt::tt_fabric::test;
 
 using namespace tt::tt_fabric;
 
@@ -1778,7 +1781,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     ASSERT_TRUE(valid_groupings.contains("MESH")) << "2x4 MGD should match a MESH grouping in this PGD";
     ASSERT_TRUE(valid_groupings.at("MESH").contains("M0"));
     ASSERT_FALSE(valid_groupings.at("MESH").at("M0").empty());
-    const auto sat_placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto sat_placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
     ASSERT_EQ(sat_placements.size(), 1u) << "SAT joint placement should seat the 2x4 mesh on the SP4 mock";
     EXPECT_EQ(sat_placements.front().placement.asics.size(), 8u) << "2x4 seating covers 8 ASICs";
 
@@ -2527,7 +2530,7 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
     EXPECT_FALSE(committed.mgd_fallback.has_value());
     EXPECT_FALSE(pgd.get_mgd_placement_fallbacks_for_mgd(mgd, psd).at("MESH").at("M0").empty());
 
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "SAT joint placement should seat the single 4x4 mesh";
     EXPECT_EQ(placements.front().placement.asics.size(), 16u) << "the 4x4 seating should cover 16 ASICs";
     EXPECT_EQ(count_distinct_hosts_for_asics(psd, placements.front().placement.asics), 1u)
@@ -2694,8 +2697,25 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_WithManyToManyPinn
 // constraint, which simply finds no seating. QuadrantSplitPsdFinerSplitInsideEachQuadrantCommits is this
 // machine with a host level that agrees with it, and is where the aligned split is checked.
 TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_RanksCoarserThanTheDescriptorsOwnHostsCommitNothing) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_16asic_4x4_four_hosts_by_quadrant.textproto");
+    auto psd = build_grid_mock_psd(
+        4,
+        4,
+        {"host0",
+         "host0",
+         "host1",
+         "host1",
+         "host0",
+         "host0",
+         "host1",
+         "host1",
+         "host2",
+         "host2",
+         "host3",
+         "host3",
+         "host2",
+         "host2",
+         "host3",
+         "host3"});
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -2799,8 +2819,25 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 //     108 109 | 110 111    h2 h2 h3 h3           ef | gh     a boundary the machine drew
 //     112 113 | 114 115    h2 h2 h3 h3           ef | gh
 TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_QuadrantSplitPsdFinerSplitInsideEachQuadrantCommits) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_16asic_4x4_four_hosts_by_quadrant.textproto");
+    auto psd = build_grid_mock_psd(
+        4,
+        4,
+        {"host0",
+         "host0",
+         "host1",
+         "host1",
+         "host0",
+         "host0",
+         "host1",
+         "host1",
+         "host2",
+         "host2",
+         "host3",
+         "host3",
+         "host2",
+         "host2",
+         "host3",
+         "host3"});
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -2956,8 +2993,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 //     104 105 | 106 107                  hh | ii     one real host
 //      host0  |  host1
 TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PgdHostsThatMatchThePsdAreAccepted) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+    auto psd = build_grid_mock_psd(2, 4, {"host0", "host0", "host1", "host1", "host0", "host0", "host1", "host1"});
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -3047,10 +3083,9 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 // split meeting the machine's hosts, and not by anything to do with the PGD's own hosts, which this
 // descriptor does not declare and so is never asked about.
 TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PgdWithoutDeclaredHostsIsNotChecked) {
-    auto undivided_machine = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_one_host.textproto");
-    auto machine_cut_by_column = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+    auto undivided_machine = build_grid_mock_psd(2, 4, std::vector<std::string>(8, "host0"));
+    auto machine_cut_by_column =
+        build_grid_mock_psd(2, 4, {"host0", "host0", "host1", "host1", "host0", "host0", "host1", "host1"});
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -3431,14 +3466,13 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), line_edges(4));
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 2u) << "both meshes should be placed on the 4-chip line";
 
     // place and map
@@ -3532,14 +3566,13 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {2, 3}});
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
 
     // Placement fails, so there is no physical graph to build and nothing to map.
     EXPECT_TRUE(placements.empty()) << "no link joins the two pairs, so the seam cannot be satisfied";
@@ -3615,14 +3648,13 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {2, 3}});
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 2u) << "both meshes should be placed when nothing forces them to touch";
 
     // place and map
@@ -3773,8 +3805,7 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_ring.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(6, "host0"), ring_edges(6));
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -3782,7 +3813,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
 
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 4u) << "all four meshes should be placed on the 6-chip ring";
 
     // place and map
@@ -3905,14 +3936,13 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_line.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(6, "host0"), line_edges(6));
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
 
     // Placement fails, so there is no physical graph to build and nothing to map.
     EXPECT_TRUE(placements.empty()) << "the ring cannot close on a line, so no placement is valid";
@@ -4106,14 +4136,16 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_10asic_square_fork.textproto");
+    auto psd = build_mock_psd(
+        std::vector<std::string>(10, "host0"),
+        std::vector<std::pair<int, int>>{
+            {0, 1}, {0, 3}, {1, 2}, {2, 3}, {2, 4}, {4, 5}, {4, 7}, {5, 6}, {7, 8}, {8, 9}});
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 4u) << "all four meshes should be placed on the 10 chips";
 
     // place and map
@@ -4309,14 +4341,27 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_12asic_star.textproto");
+    auto psd = build_mock_psd(
+        std::vector<std::string>(12, "host0"),
+        std::vector<MockLink>{
+            {0, 1, 2},
+            {0, 2, 2},
+            {1, 3, 2},
+            {1, 4, 2},
+            {2, 3, 2},
+            {2, 10, 3},
+            {3, 7, 4},
+            {4, 5, 2},
+            {5, 6, 2},
+            {7, 8, 2},
+            {8, 9, 2},
+            {10, 11, 2}});
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 4u) << "the hub and all three spokes should be placed";
 
     // place and map
@@ -4476,8 +4521,8 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter"));
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_5asic_dumbbell.textproto");
+    auto psd = build_mock_psd(
+        std::vector<std::string>(5, "host0"), std::vector<MockLink>{{0, 1, 2}, {1, 2, 4}, {2, 3, 1}, {3, 4, 3}});
 
     // get valid groupings
     // Merged keys carry the descriptor index, so the two same-named instances stay distinct and each
@@ -4496,22 +4541,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     EXPECT_EQ(meshes.at("mgd1_M0").front().adjacency_graph.get_nodes().size(), 1u)
         << "the second descriptor's M0 is a single chip, despite sharing the name";
 
-    // place
     const std::vector<const MeshGraphDescriptor*> descriptors{&mgds[0], &mgds[1]};
-    const auto placements = pgd.solve_adjacency_guided_placement(descriptors, valid_groupings, psd);
-    ASSERT_EQ(placements.size(), 4u) << "two meshes from each descriptor";
-
-    const auto placed = footprints_of(placements);
-    EXPECT_THAT(
-        placed,
-        ::testing::ElementsAre(std::set<uint64_t>({100, 101}), std::set<uint64_t>({102}), ::testing::_, ::testing::_))
-        << "the first descriptor's meshes come first, on the left of the pinch";
-    EXPECT_THAT(
-        std::vector<std::set<uint64_t>>(placed.begin() + 2, placed.end()),
-        ::testing::UnorderedElementsAre(std::set<uint64_t>({103}), std::set<uint64_t>({104})))
-        << "and the second descriptor's take the right, in either order";
-
-    // place and map
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
     const auto mapping = utils::map_multi_mesh_to_physical(psd, pgd, descriptors, config);
@@ -4669,26 +4699,11 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter"));
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_dumbbell.textproto");
+    auto psd = build_mock_psd(
+        std::vector<std::string>(6, "host0"),
+        std::vector<MockLink>{{0, 1, 2}, {1, 2, 4}, {2, 3, 1}, {3, 4, 3}, {4, 5, 2}});
 
-    // get valid groupings
-    const auto valid_groupings = pgd.get_valid_groupings_for_mgds(mgds, psd);
-
-    // place
     const std::vector<const MeshGraphDescriptor*> descriptors{&mgds[0], &mgds[1]};
-    const auto placements = pgd.solve_adjacency_guided_placement(descriptors, valid_groupings, psd);
-    ASSERT_EQ(placements.size(), 4u) << "two meshes from each descriptor";
-    ASSERT_THAT(
-        footprints_of(placements),
-        ::testing::ElementsAre(
-            std::set<uint64_t>({100, 101}),
-            std::set<uint64_t>({102}),
-            std::set<uint64_t>({103}),
-            std::set<uint64_t>({104, 105})))
-        << "placement should seat each descriptor on the side whose link is wide enough for its seam";
-
-    // place and map
     utils::TopologyMappingConfig config;
     config.disable_rank_bindings = true;
     config.inter_mesh_validation_mode = ::tt::tt_fabric::ConnectionValidationMode::STRICT;
@@ -4788,14 +4803,13 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(3, "host0"), std::vector<MockLink>{{0, 1, 2}, {1, 2, 4}});
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 2u) << "both meshes should be placed";
     EXPECT_THAT(
         footprints_of(placements),
@@ -4882,15 +4896,14 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(3, "host0"), std::vector<MockLink>{{0, 1, 2}, {1, 2, 4}});
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
     ASSERT_FALSE(valid_groupings.at("MESH").empty()) << "the shapes themselves are placeable; only the seam is not";
 
     // place
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
     EXPECT_TRUE(placements.empty())
         << "no link carries the 8 channels a STRICT seam requires, so there should be no placement at all";
 }
@@ -4971,14 +4984,13 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(3, "host0"), std::vector<MockLink>{{0, 1, 2}, {1, 2, 4}});
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 2u)
         << "a RELAXED count is a preference, so an unmeetable one should not stop the meshes being placed";
     EXPECT_THAT(
@@ -5102,13 +5114,14 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter"));
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(3, "host0"), std::vector<MockLink>{{0, 1, 2}, {1, 2, 4}});
 
     ASSERT_NE(mgds[0].is_inter_mesh_policy_relaxed(), mgds[1].is_inter_mesh_policy_relaxed())
         << "the two descriptors have to disagree for this test to mean anything";
 
-    EXPECT_ANY_THROW(utils::validate_shared_inter_mesh_policy({&mgds[0], &mgds[1]}))
+    utils::TopologyMappingConfig config;
+    EXPECT_ANY_THROW(utils::map_multi_mesh_to_physical(
+        psd, pgd, std::vector<const MeshGraphDescriptor*>{&mgds[0], &mgds[1]}, config))
         << "a RELAXED descriptor and a STRICT one cannot be merged into one topology";
 }
 
@@ -5169,7 +5182,28 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 
     EXPECT_FALSE(single.is_inter_mesh_policy_relaxed()) << "no inter-mesh connections defaults to STRICT";
     EXPECT_TRUE(relaxed.is_inter_mesh_policy_relaxed());
-    EXPECT_ANY_THROW(utils::validate_shared_inter_mesh_policy({&relaxed, &single}))
+
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [ { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } } ]
+  row_major_mesh { dims: [1, 1] }
+}
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+)delimiter")};
+    auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), line_edges(4));
+    utils::TopologyMappingConfig config;
+    EXPECT_ANY_THROW(
+        utils::map_multi_mesh_to_physical(psd, pgd, std::vector<const MeshGraphDescriptor*>{&relaxed, &single}, config))
         << "STRICT default and RELAXED cannot be merged into one topology";
 }
 
@@ -5227,8 +5261,7 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {2, 3}});
 
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
     const auto& committed = valid_groupings.at("MESH").at("M0");
@@ -5249,7 +5282,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     EXPECT_THAT(grouping_graph.get_neighbors(1u), ::testing::ElementsAre(0u));
 
     // place, and build the flat ASIC adjacency
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u);
 
     // place and map
@@ -5316,8 +5349,7 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), line_edges(4));
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -5331,7 +5363,7 @@ top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
     EXPECT_FALSE(pgd.get_mgd_placement_fallbacks_for_mgd(mgd, psd).at("MESH").at("M0").empty());
 
     // place, and build the flat ASIC adjacency
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "the single mesh should place";
     EXPECT_FALSE(placements.front().placement.mesh_node_to_asic_position.empty())
         << "the PGD grouping carries pinning and must win; an empty map means the MGD fallback was used";
@@ -5427,14 +5459,13 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), line_edges(4));
 
     // get valid groupings
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     // place
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, nullptr, {}).next();
     EXPECT_EQ(placements.size(), 2u)
         << "one instance can take the pinned pair and the other the MGD grouping, so both should place";
 
@@ -5534,12 +5565,11 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), line_edges(4));
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     PlacementSolveStats stats;
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, &stats);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, &stats, {}).next();
     ASSERT_EQ(placements.size(), 2u) << stats.to_string();
     EXPECT_THAT(
         footprints_of(placements),
@@ -5616,12 +5646,11 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(4, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {2, 3}});
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     PlacementSolveStats stats;
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, &stats);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, &stats, {}).next();
     EXPECT_TRUE(placements.empty()) << "no link joins the two pairs, so the seam cannot be satisfied";
     EXPECT_TRUE(stats.master_solve_attempted) << stats.to_string();
     EXPECT_FALSE(stats.master_solve_success) << stats.to_string();
@@ -5701,12 +5730,11 @@ graph_descriptors {
 
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
 )delimiter")};
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
+    auto psd = build_mock_psd(std::vector<std::string>(3, "host0"), std::vector<MockLink>{{0, 1, 2}, {1, 2, 4}});
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
 
     PlacementSolveStats stats;
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, &stats);
+    const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, &stats, {}).next();
     ASSERT_EQ(placements.size(), 2u) << stats.to_string();
     EXPECT_THAT(
         footprints_of(placements),
@@ -5734,7 +5762,7 @@ TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, StrainManyMeshesPlacesInO
         ASSERT_TRUE(valid_groupings.contains("MESH")) << label;
 
         PlacementSolveStats stats;
-        const auto placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd, &stats);
+        const auto placements = SatPlacementEnumerationSession(pgd, mgd, valid_groupings, psd, &stats, {}).next();
 
         const std::size_t expected_meshes = fabric_rows * fabric_cols;
         EXPECT_EQ(placements.size(), expected_meshes) << label << "\n" << stats.to_string();
@@ -5845,8 +5873,7 @@ ValidGroupingsMap without_mgd_fallback(ValidGroupingsMap valid_groupings, const 
 //     104 105 106 107                aa bb     boundary here for either to straddle
 //          host0
 TEST(PhysicalGroupingDescriptorTestsHostSplit, SingleHostPsdColumnSplitMgdCommits) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_one_host.textproto");
+    auto psd = build_grid_mock_psd(2, 4, std::vector<std::string>(8, "host0"));
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -5927,7 +5954,8 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     // Placement. The split is encoded as constraints inside
     // enumerate_distinct_placements_for_grouping.
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+    const auto placements =
+        SatPlacementEnumerationSession(pgd, mgd, without_mgd_fallback(valid_groupings, "M0"), psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -5963,8 +5991,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 //     -----------------------          ----
 //     104 105 106 107   host1          bbbb      b is host1
 TEST(PhysicalGroupingDescriptorTestsHostSplit, RowSplitPsdRowSplitMgdCommits) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_row.textproto");
+    auto psd = build_grid_mock_psd(2, 4, {"host0", "host0", "host0", "host0", "host1", "host1", "host1", "host1"});
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -6055,7 +6082,8 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     // Placement. The split is encoded as constraints inside
     // enumerate_distinct_placements_for_grouping.
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+    const auto placements =
+        SatPlacementEnumerationSession(pgd, mgd, without_mgd_fallback(valid_groupings, "M0"), psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -6104,8 +6132,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 // it makes the refusal come back as an empty result rather than a throw. What is under test is whether
 // the grouping survives the host constraint, not what an unplaceable mesh does to its caller.
 TEST(PhysicalGroupingDescriptorTestsHostSplit, LengthwiseSplitOnWidthwiseSplitHostsIsRejected) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+    auto psd = build_grid_mock_psd(2, 4, {"host0", "host0", "host1", "host1", "host0", "host0", "host1", "host1"});
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -6199,8 +6226,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 // 4x4 fails the same way, LINE/LINE or RING/RING, and a torus has more orientations to come back with
 // since wrapping an axis adds translations to the automorphisms.
 TEST(PhysicalGroupingDescriptorTestsHostSplit, LengthwiseSplitOnWidthwiseSplitHostsIsTurnedToFitOnASquareMesh) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2x2_hosts_by_column.textproto");
+    auto psd = build_grid_mock_psd(2, 2, {"host0", "host1", "host0", "host1"});
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -6287,7 +6313,8 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     // Placement. The split is encoded as constraints inside
     // enumerate_distinct_placements_for_grouping.
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+    const auto placements =
+        SatPlacementEnumerationSession(pgd, mgd, without_mgd_fallback(valid_groupings, "M0"), psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -6329,8 +6356,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 // land inside a host; these do not. The third column also makes the mesh oblong, so there is no quarter
 // turn to escape with.
 TEST(PhysicalGroupingDescriptorTestsHostSplit, FinerSplitAcrossTheHostBoundaryIsRejected) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_2x3_hosts_by_row.textproto");
+    auto psd = build_grid_mock_psd(2, 3, {"host0", "host0", "host0", "host1", "host1", "host1"});
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -6406,8 +6432,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 // half of the pair with CoarserSplitAcrossATwoAxisHostGridIsRejected below: same mesh, and the host grid
 // and declared grid exchanged.
 TEST(PhysicalGroupingDescriptorTestsHostSplit, TwoAxisSplitInsideRowSplitHostsCommits) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_row.textproto");
+    auto psd = build_grid_mock_psd(2, 4, {"host0", "host0", "host0", "host0", "host1", "host1", "host1", "host1"});
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -6501,7 +6526,8 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     // Placement. The split is encoded as constraints inside
     // enumerate_distinct_placements_for_grouping.
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+    const auto placements =
+        SatPlacementEnumerationSession(pgd, mgd, without_mgd_fallback(valid_groupings, "M0"), psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -6541,8 +6567,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 // Which is the one-rank-owns-chips-it-cannot-reach violation again, and the direction that has to stay
 // hard however the machine is divided: a 2D host grid can carve a declared split as readily as a 1D one.
 TEST(PhysicalGroupingDescriptorTestsHostSplit, CoarserSplitAcrossATwoAxisHostGridIsRejected) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_four_hosts_by_quadrant.textproto");
+    auto psd = build_grid_mock_psd(2, 4, {"host0", "host0", "host1", "host1", "host2", "host2", "host3", "host3"});
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -6626,8 +6651,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 // The mesh fits the machine twice over on chip count, so the rejection here is about the host boundary
 // and nothing else.
 TEST(PhysicalGroupingDescriptorTestsHostSplit, SingleHostMgdOnSplitPsdIsRejected) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+    auto psd = build_grid_mock_psd(2, 4, {"host0", "host0", "host1", "host1", "host0", "host0", "host1", "host1"});
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -6712,8 +6736,27 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 //     112 113 | 114 115     automorphisms as well     aa | bb    asking twice gives the same
 //      host0  |  host1      as the reflections                   orientation twice
 TEST(PhysicalGroupingDescriptorTestsHostSplit, AlignedSplitOnASymmetricTorusCommits) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_16asic_4x4_torus_hosts_by_column.textproto");
+    auto psd = build_grid_mock_psd(
+        4,
+        4,
+        {"host0",
+         "host0",
+         "host1",
+         "host1",
+         "host0",
+         "host0",
+         "host1",
+         "host1",
+         "host0",
+         "host0",
+         "host1",
+         "host1",
+         "host0",
+         "host0",
+         "host1",
+         "host1"},
+        2,
+        std::vector<std::pair<int, int>>{{0, 3}, {4, 7}, {8, 11}, {12, 15}, {0, 12}, {1, 13}, {2, 14}, {3, 15}});
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 groupings {
@@ -6822,7 +6865,8 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     // Placement. The split is encoded as constraints inside
     // enumerate_distinct_placements_for_grouping.
-    const auto placements = pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+    const auto placements =
+        SatPlacementEnumerationSession(pgd, mgd, without_mgd_fallback(valid_groupings, "M0"), psd, nullptr, {}).next();
     ASSERT_EQ(placements.size(), 1u) << "the mesh should be placed";
     for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
         std::set<std::string> hosts;
@@ -6886,8 +6930,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 // does not have, and no declared host of it can hold that node -- so the check refuses them and the mesh keeps
 // one of its places instead of all of them. The solve tolerates such a pairing, which is what let this hide.
 TEST(PhysicalGroupingDescriptorTestsHostSplit, HostSplitIsHeldAgainstEveryPlaceAGroupingSits) {
-    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
-        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_one_host.textproto");
+    auto psd = build_grid_mock_psd(2, 4, std::vector<std::string>(8, "host0"));
 
     PhysicalGroupingDescriptor pgd{std::string(R"(
 # "QUAD" is named twice, once per quadrant of the host, so the mesh below sits in either of them.

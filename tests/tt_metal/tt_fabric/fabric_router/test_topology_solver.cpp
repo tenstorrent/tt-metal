@@ -20,6 +20,7 @@
 #include "tt_cluster.hpp"
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
+#include "mock_psd_builder.hpp"
 
 namespace tt::tt_fabric {
 
@@ -320,17 +321,9 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor2) {
 }
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
-    // Load PSD from pre-written test file
-    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
-    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
-    const std::filesystem::path psd_file_path =
-        std::filesystem::path(tt_metal_home) / "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto";
-
-    // Verify the file exists
-    ASSERT_TRUE(std::filesystem::exists(psd_file_path)) << "PSD test file not found: " << psd_file_path.string();
-
-    // Load PhysicalSystemDescriptor from file
-    tt::tt_metal::PhysicalSystemDescriptor physical_system_descriptor(psd_file_path.string());
+    // Two disconnected 1x2 meshes: ASICs 100-101 and 102-103.
+    auto physical_system_descriptor = tt::tt_fabric::test::build_mock_psd(
+        std::vector<std::string>(4, "host0"), std::vector<std::pair<int, int>>{{0, 1}, {2, 3}});
 
     // Hand-craft the asic_id_to_mesh_rank mapping
     // Mesh 0: ASICs 100, 101 (connected)

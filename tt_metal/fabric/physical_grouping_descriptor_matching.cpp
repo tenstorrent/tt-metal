@@ -39,13 +39,6 @@
 
 #include <google/protobuf/text_format.h>
 
-namespace tt::tt_metal::experimental::tt_fabric {
-LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(
-    const ::tt::tt_fabric::MeshGraphDescriptor& mesh_graph_descriptor);
-PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor);
-}  // namespace tt::tt_metal::experimental::tt_fabric
-
 using namespace tt::tt_fabric;
 
 // Split of candidate-enumeration wall time within one placement solve (file scope so both the enumerate
@@ -2724,128 +2717,103 @@ constexpr std::size_t kMaxGrowthCycles = 4;
 
 SatPlacementEnumerationSession::SatPlacementEnumerationSession(
     const PhysicalGroupingDescriptor& physical_grouping_descriptor,
-    const std::vector<const MeshGraphDescriptor*>& mesh_graph_descriptors,
+    const MeshGraphDescriptor& mesh_graph_descriptor,
     const ValidGroupingsMap& valid_groupings,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     PlacementSolveStats* stats,
-    const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings,
+    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
     bool unique_shapes) :
     physical_system_descriptor_(&physical_system_descriptor), stats_(stats) {
     unique_shapes_ = unique_shapes;
     using tt::tt_metal::experimental::tt_fabric::build_logical_multi_mesh_adjacency_graph;
-    using tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph;
-    using tt::tt_metal::experimental::tt_fabric::merge_logical_multi_mesh_adjacency_graphs;
 
-    if (mesh_graph_descriptors.empty()) {
-        return;
-    }
-    // NOTE: For now, only MESH groupings are supported, we will need to include support for hierarchical groupings in
-    // the future.
     const auto mesh_it = valid_groupings.find("MESH");
     if (mesh_it == valid_groupings.end() || mesh_it->second.empty()) {
         return;
     }
 
-    // Per-MGD logical multi-mesh adjacency graphs (chip-level + mesh-level graphs for one descriptor each).
-    std::vector<LogicalMultiMeshGraph> parts;
-    parts.reserve(mesh_graph_descriptors.size());
-    for (const MeshGraphDescriptor* descriptor : mesh_graph_descriptors) {
-        parts.push_back(build_logical_multi_mesh_adjacency_graph(*descriptor));
-    }
-    // Local-to-global mesh ID maps produced while merging parts (one map per MGD index).
-    // Unified logical topology: global mesh-level adjacency plus merged per-mesh chip graphs.
-    std::vector<std::map<MeshId, MeshId>> local_to_global_mesh_ids;
-    const LogicalMultiMeshGraph merged = merge_logical_multi_mesh_adjacency_graphs(parts, &local_to_global_mesh_ids);
-    if (merged.mesh_adjacency_graphs_.empty()) {
+    const auto logical = build_logical_multi_mesh_adjacency_graph(mesh_graph_descriptor);
+    if (logical.mesh_adjacency_graphs_.empty()) {
         return;
     }
-    mesh_level_graph_ = merged.mesh_level_graph_;
-    if (stats_ != nullptr) {
-        stats_->meshes_total = mesh_level_graph_.get_nodes().size();
-    }
+    mesh_level_graph_ = logical.mesh_level_graph_;
 
-    // Flat ASIC adjacency graph of the physical system (search domain for placement).
-    physical_graph_ = AdjacencyGraph<AsicID>(
-        tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd(*physical_system_descriptor_));
-
-    const std::size_t mgd_count = mesh_graph_descriptors.size();
-
-    // PGD-committed variants only; MGD-native fallbacks are held separately until SAT grow exhausts PGD.
-    std::vector<MeshGraphDescriptor> mgd_owned;
-    mgd_owned.reserve(mgd_count);
-    for (const MeshGraphDescriptor* descriptor : mesh_graph_descriptors) {
-        mgd_owned.push_back(*descriptor);
-    }
-    const ValidGroupingsMap mgd_fallbacks_by_key = physical_grouping_descriptor.get_mgd_placement_fallbacks_for_mgds(
-        mgd_owned, *physical_system_descriptor_, per_mgd_pinnings);
+    const ValidGroupingsMap mgd_fallbacks_by_key = physical_grouping_descriptor.get_mgd_placement_fallbacks_for_mgd(
+        mesh_graph_descriptor, physical_system_descriptor, pinnings);
     const std::unordered_map<InstanceName, std::vector<GroupingInfo>>* mgd_fallback_mesh = nullptr;
     if (mgd_fallbacks_by_key.contains("MESH")) {
         mgd_fallback_mesh = &mgd_fallbacks_by_key.at("MESH");
     }
 
-    // Instance-name keyed grouping variants from valid_groupings["MESH"].
-    // Global mesh ID -> grouping variants, remapped from mesh_groupings via local_to_global_mesh_ids.
     const std::unordered_map<InstanceName, std::vector<GroupingInfo>>& mesh_groupings = mesh_it->second;
-    for (std::size_t mgd_index = 0; mgd_index < local_to_global_mesh_ids.size(); ++mgd_index) {
-        if (mgd_index >= mgd_count) {
-            break;
-        }
-        const MeshGraphDescriptor& mgd = *mesh_graph_descriptors[mgd_index];
-        const auto mesh_id_to_instance_name = mgd.mesh_id_to_instance_name();
-        for (const auto& [local_mesh_id, global_mesh_id] : local_to_global_mesh_ids[mgd_index]) {
-            // Every mesh must be placeable. Skipping one here would drop it from the search silently and
-            // still report success, since it would be missing from the completeness check too.
-            const auto name_it = mesh_id_to_instance_name.find(local_mesh_id);
-            TT_FATAL(
-                name_it != mesh_id_to_instance_name.end(),
-                "Internal error: Adjacency-guided placement: mesh {} of descriptor {} has no instance name, "
-                "so its grouping variants cannot be looked up",
-                *local_mesh_id,
-                mgd_index);
-            const InstanceName grouping_key = merged_instance_key(mgd_index, mgd_count, name_it->second);
-            const auto groupings_it = mesh_groupings.find(grouping_key);
-            const bool has_pgd = groupings_it != mesh_groupings.end() && !groupings_it->second.empty();
-            std::optional<GroupingInfo> mgd_fallback;
-            if (mgd_fallback_mesh != nullptr) {
-                const auto mgd_fb_it = mgd_fallback_mesh->find(grouping_key);
-                if (mgd_fb_it != mgd_fallback_mesh->end() && !mgd_fb_it->second.empty()) {
-                    mgd_fallback = mgd_fb_it->second.front();
-                    mgd_fallback_by_mesh_.emplace(global_mesh_id, *mgd_fallback);
-                }
+    const auto mesh_id_to_instance_name = mesh_graph_descriptor.mesh_id_to_instance_name();
+    for (const auto& [mesh_id, unused_graph] : logical.mesh_adjacency_graphs_) {
+        (void)unused_graph;
+        const auto name_it = mesh_id_to_instance_name.find(mesh_id);
+        TT_FATAL(
+            name_it != mesh_id_to_instance_name.end(),
+            "Internal error: SAT placement: mesh {} has no instance name, so its grouping variants cannot be looked up",
+            *mesh_id);
+        const InstanceName& grouping_key = name_it->second;
+        const auto groupings_it = mesh_groupings.find(grouping_key);
+        const bool has_pgd = groupings_it != mesh_groupings.end() && !groupings_it->second.empty();
+        std::optional<GroupingInfo> mgd_fallback;
+        if (mgd_fallback_mesh != nullptr) {
+            const auto mgd_fb_it = mgd_fallback_mesh->find(grouping_key);
+            if (mgd_fb_it != mgd_fallback_mesh->end() && !mgd_fb_it->second.empty()) {
+                mgd_fallback = mgd_fb_it->second.front();
+                mgd_fallback_by_mesh_.emplace(mesh_id, *mgd_fallback);
             }
-            TT_FATAL(
-                has_pgd || mgd_fallback.has_value(),
-                "Internal error: Adjacency-guided placement: mesh '{}' (global mesh {}) has no PGD grouping and "
-                "no embeddable MGD fallback",
-                grouping_key,
-                *global_mesh_id);
-            // PGD variants are preferred. If matching committed none, start the pool on the MGD
-            // fallback so a single-chip / unmatched shape is still enumerated.
-            global_mesh_groupings_.emplace(
-                global_mesh_id, has_pgd ? groupings_it->second : std::vector<GroupingInfo>{*mgd_fallback});
         }
+        TT_FATAL(
+            has_pgd || mgd_fallback.has_value(),
+            "Internal error: SAT placement: mesh '{}' (mesh {}) has no PGD grouping and no embeddable MGD fallback",
+            grouping_key,
+            *mesh_id);
+        global_mesh_groupings_.emplace(
+            mesh_id, has_pgd ? groupings_it->second : std::vector<GroupingInfo>{*mgd_fallback});
+        sat_intra_mesh_mode_by_mesh_.emplace(
+            mesh_id,
+            mesh_graph_descriptor.is_intra_mesh_policy_relaxed(mesh_id) ? ConnectionValidationMode::RELAXED
+                                                                        : ConnectionValidationMode::STRICT);
     }
+    relaxed_inter_mesh_policy_ = mesh_graph_descriptor.is_inter_mesh_policy_relaxed();
+    finish_init(asic_id_to_mesh_rank);
+}
 
-    // Channel validation policy for the whole solve. Descriptors merged together must agree on
-    // inter-mesh policy (validate_shared_inter_mesh_policy); every MGD defaults to STRICT when it states none.
-    relaxed_inter_mesh_policy_ = mesh_graph_descriptors.front()->is_inter_mesh_policy_relaxed();
-    for (std::size_t mgd_index = 0; mgd_index < local_to_global_mesh_ids.size() && mgd_index < mgd_count; ++mgd_index) {
-        const MeshGraphDescriptor& mgd = *mesh_graph_descriptors[mgd_index];
-        for (const auto& [local_mesh_id, global_mesh_id] : local_to_global_mesh_ids[mgd_index]) {
-            sat_intra_mesh_mode_by_mesh_.emplace(
-                global_mesh_id,
-                mgd.is_intra_mesh_policy_relaxed(local_mesh_id) ? ConnectionValidationMode::RELAXED
-                                                                : ConnectionValidationMode::STRICT);
-        }
+SatPlacementEnumerationSession::SatPlacementEnumerationSession(
+    const tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& logical,
+    std::map<MeshId, std::vector<GroupingInfo>> groupings_by_mesh,
+    std::map<MeshId, GroupingInfo> mgd_fallback_by_mesh,
+    std::map<MeshId, ConnectionValidationMode> sat_intra_mesh_mode_by_mesh,
+    bool relaxed_inter_mesh_policy,
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    PlacementSolveStats* stats,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+    bool unique_shapes) :
+    physical_system_descriptor_(&physical_system_descriptor),
+    stats_(stats),
+    mesh_level_graph_(logical.mesh_level_graph_),
+    global_mesh_groupings_(std::move(groupings_by_mesh)),
+    mgd_fallback_by_mesh_(std::move(mgd_fallback_by_mesh)),
+    sat_intra_mesh_mode_by_mesh_(std::move(sat_intra_mesh_mode_by_mesh)),
+    relaxed_inter_mesh_policy_(relaxed_inter_mesh_policy) {
+    unique_shapes_ = unique_shapes;
+    if (logical.mesh_adjacency_graphs_.empty() || global_mesh_groupings_.empty()) {
+        return;
     }
+    finish_init(asic_id_to_mesh_rank);
+}
 
-    // SAT joint placement: enumerate each grouping variant against the whole fabric, then one
-    // seating is chosen per mesh. The mesh-level graph seeds a node per mesh before adding
-    // connection edges, so a mesh with no intermesh links is still placed.
+void SatPlacementEnumerationSession::finish_init(
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     if (stats_ != nullptr) {
+        stats_->meshes_total = mesh_level_graph_.get_nodes().size();
         stats_->master_solve_attempted = true;
     }
+    physical_graph_ = AdjacencyGraph<AsicID>(
+        tt::tt_metal::experimental::tt_fabric::build_flat_adjacency_map_from_psd(*physical_system_descriptor_));
     g_enum_host_match_elapsed = std::chrono::microseconds{};
     g_enum_candidate_find_elapsed = std::chrono::microseconds{};
 
@@ -2856,10 +2824,9 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
         }
     }
 
-    // 1. Create pools. Rank maps are flattened here to an optional ASIC limit per mesh; the pool
-    // only sees that list (or none) and does not know about ranks or logical chip IDs.
     std::map<GlobalMeshId, std::set<AsicID>> allowed_asics_by_mesh;
-    for (const auto& [mesh_id, _] : global_mesh_groupings_) {
+    for (const auto& [mesh_id, unused_groupings] : global_mesh_groupings_) {
+        (void)unused_groupings;
         const auto asic_it = asic_id_to_mesh_rank.find(mesh_id);
         if (asic_it == asic_id_to_mesh_rank.end() || asic_it->second.empty()) {
             continue;
@@ -2881,8 +2848,6 @@ SatPlacementEnumerationSession::SatPlacementEnumerationSession(
         *physical_system_descriptor_,
         sat_intra_mesh_mode_by_mesh_,
         allowed_asics_by_mesh));
-
-    // 2. Grow pools
     grow_sat_placement_pools(*pools_, kGrowBudgetPerVariant, stats_);
     ready_ = true;
 }
@@ -3034,9 +2999,17 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     if (!ready_) {
         return {};
     }
+    auto record_success = [&](const AssignedMeshes& assigned) {
+        if (stats_ != nullptr) {
+            stats_->meshes_placed = assigned.size();
+            stats_->success = stats_->meshes_total != 0 && stats_->meshes_placed == stats_->meshes_total;
+        }
+    };
     if (pending_index_ < pending_.size()) {
         remember_yielded(pending_[pending_index_]);
-        return pending_[pending_index_++];
+        AssignedMeshes assigned = pending_[pending_index_++];
+        record_success(assigned);
+        return assigned;
     }
     if (solved_) {
         return {};
@@ -3117,7 +3090,9 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
         }
         log_info(tt::LogFabric, "SAT joint placement: enumerated {} seating(s)", pending_.size());
         remember_yielded(pending_[pending_index_]);
-        return pending_[pending_index_++];
+        AssignedMeshes assigned = pending_[pending_index_++];
+        record_success(assigned);
+        return assigned;
     }
 
     solved_ = true;
@@ -3156,102 +3131,6 @@ std::vector<AssignedMeshes> SatPlacementEnumerationSession::all() {
         solutions.push_back(std::move(assigned));
     }
     return solutions;
-}
-
-std::vector<AssignedMeshes> PhysicalGroupingDescriptor::solve_adjacency_guided_placement_n(
-    const MeshGraphDescriptor& mesh_graph_descriptor,
-    const ValidGroupingsMap& valid_groupings,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    std::size_t max_solutions,
-    PlacementSolveStats* stats_out,
-    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings) const {
-    std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>> per_mgd_pinnings;
-    if (pinnings.has_value()) {
-        per_mgd_pinnings.push_back(*pinnings);
-    }
-    return solve_adjacency_guided_placement_n(
-        {&mesh_graph_descriptor},
-        valid_groupings,
-        physical_system_descriptor,
-        max_solutions,
-        stats_out,
-        per_mgd_pinnings);
-}
-
-AssignedMeshes PhysicalGroupingDescriptor::solve_adjacency_guided_placement(
-    const MeshGraphDescriptor& mesh_graph_descriptor,
-    const ValidGroupingsMap& valid_groupings,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    PlacementSolveStats* stats_out,
-    const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings) const {
-    auto all = solve_adjacency_guided_placement_n(
-        mesh_graph_descriptor,
-        valid_groupings,
-        physical_system_descriptor,
-        /*max_solutions=*/1,
-        stats_out,
-        pinnings);
-    if (all.empty()) {
-        return {};
-    }
-    return std::move(all.front());
-}
-
-AssignedMeshes PhysicalGroupingDescriptor::solve_adjacency_guided_placement(
-    const std::vector<const MeshGraphDescriptor*>& mesh_graph_descriptors,
-    const ValidGroupingsMap& valid_groupings,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    PlacementSolveStats* stats_out,
-    const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings) const {
-    auto all = solve_adjacency_guided_placement_n(
-        mesh_graph_descriptors,
-        valid_groupings,
-        physical_system_descriptor,
-        /*max_solutions=*/1,
-        stats_out,
-        per_mgd_pinnings);
-    if (all.empty()) {
-        return {};
-    }
-    return std::move(all.front());
-}
-
-std::vector<AssignedMeshes> PhysicalGroupingDescriptor::solve_adjacency_guided_placement_n(
-    const std::vector<const MeshGraphDescriptor*>& mesh_graph_descriptors,
-    const ValidGroupingsMap& valid_groupings,
-    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-    std::size_t max_solutions,
-    PlacementSolveStats* stats_out,
-    const std::vector<std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>>& per_mgd_pinnings) const {
-    const auto total_start = std::chrono::steady_clock::now();
-    // Stats are always collected and logged; the caller's object is filled when one is supplied.
-    PlacementSolveStats local_stats;
-    PlacementSolveStats* stats = stats_out != nullptr ? stats_out : &local_stats;
-    *stats = PlacementSolveStats{};
-    auto finish_stats = [&](std::size_t meshes_placed) {
-        stats->meshes_placed = meshes_placed;
-        stats->success = stats->meshes_total != 0 && meshes_placed == stats->meshes_total;
-        stats->total_elapsed =
-            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - total_start);
-        log_info(tt::LogFabric, "{}", stats->to_string());
-    };
-
-    SatPlacementEnumerationSession session(
-        *this, mesh_graph_descriptors, valid_groupings, physical_system_descriptor, stats, per_mgd_pinnings);
-    const std::size_t cap = max_solutions == 0
-                                ? tt::tt_metal::experimental::tt_fabric::kPhysicalMultiMeshGraphEnumerationCap
-                                : max_solutions;
-    std::vector<AssignedMeshes> all_placements;
-    while (all_placements.size() < cap) {
-        AssignedMeshes assigned = session.next();
-        if (assigned.empty()) {
-            break;
-        }
-        all_placements.push_back(std::move(assigned));
-    }
-
-    finish_stats(all_placements.empty() ? 0 : all_placements.front().size());
-    return all_placements;
 }
 
 }  // namespace tt::tt_fabric
