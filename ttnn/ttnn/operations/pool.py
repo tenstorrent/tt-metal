@@ -357,12 +357,57 @@ def golden_upsample(
 ttnn.attach_golden_function(ttnn.upsample, golden_upsample)
 
 
+def _grid_sample_precomputed_reference(input_tensor, grid, mode, N, H_grid, total_W, C):
+    """Reference for ttnn.grid_sample(..., use_precomputed_grid=True).
+
+    Mirrors the device reader (grid_sample_reader_common.hpp): read the corner indices back out of
+    the bfloat16 payload as int16, read the interpolation weights as bfloat16, zero the weight of
+    every corner that falls outside the image, and accumulate.
+    """
+    import torch
+
+    if grid.dtype != torch.bfloat16:
+        raise ValueError(
+            f"a precomputed grid must be BFLOAT16 (its corner indices are int16 bit patterns), got {grid.dtype}"
+        )
+
+    H_in, W_in = input_tensor.shape[1], input_tensor.shape[2]
+    elements_per_point = 2 if mode == "nearest" else 6
+    packed = grid.reshape(N, H_grid, total_W, elements_per_point)
+    indices = packed.view(torch.int16).to(torch.int64)
+    h0, w0 = indices[..., 0], indices[..., 1]
+
+    flat_input = input_tensor.reshape(N, H_in * W_in, C).float()
+
+    def gather(h, w):
+        """input[n, h, w, :] with out-of-image points returned as zero."""
+        valid = (h >= 0) & (h < H_in) & (w >= 0) & (w < W_in)
+        idx = (h.clamp(0, H_in - 1) * W_in + w.clamp(0, W_in - 1)).reshape(N, -1, 1).expand(-1, -1, C)
+        vals = torch.gather(flat_input, 1, idx).reshape(N, H_grid, total_W, C)
+        return vals * valid.unsqueeze(-1)
+
+    if mode == "nearest":
+        # Invalid points are stored as the sentinel -1 in both indices, which `gather` zeroes.
+        output_nhwc = gather(h0, w0)
+    else:
+        weights = packed[..., 2:6].float()
+        output_nhwc = (
+            weights[..., 0:1] * gather(h0, w0)
+            + weights[..., 1:2] * gather(h0, w0 + 1)
+            + weights[..., 2:3] * gather(h0 + 1, w0)
+            + weights[..., 3:4] * gather(h0 + 1, w0 + 1)
+        )
+
+    return output_nhwc.to(input_tensor.dtype)
+
+
 def golden_grid_sample(
     input_tensor: ttnn.Tensor,
     grid: ttnn.Tensor,
     mode: str = "bilinear",
     padding_mode: str = "zeros",
     align_corners: bool = False,
+    use_precomputed_grid: bool = False,
     batch_output_channels: bool = False,
     grid_batching_factor: int = None,
     **_,
@@ -378,6 +423,11 @@ def golden_grid_sample(
         mode: Interpolation mode ("bilinear" or "nearest")
         padding_mode: Padding mode ("zeros", "border", or "reflection")
         align_corners: Whether to align corners
+        use_precomputed_grid: Whether `grid` holds precomputed corner indices and interpolation
+            weights (as produced by ttnn.prepare_grid_sample_grid) rather than normalized
+            coordinates. A precomputed grid has 6*K elements per point for "bilinear" and 2*K for
+            "nearest", must be BFLOAT16, and already has align_corners and padding_mode baked in,
+            so those two arguments are ignored in this mode.
         batch_output_channels: Controls how grid batching factor K affects output dimensions.
             When False (default): extend W dimension - output shape (N, H_out, total_W // K, C).
             When True: batch output channels - output shape (N, H_out, total_W // K, C*K).
@@ -394,22 +444,38 @@ def golden_grid_sample(
     from tests.sweep_framework.sweep_utils.pool2d_common import prepare_grid_batching_expected_output
 
     N, H_grid, W_grid, last_dim = grid.shape
-    K_grid = last_dim // 2
 
     input_nchw = input_tensor.permute(0, 3, 1, 2)
     C = input_nchw.shape[1]
 
-    # Unpack K_grid coordinate sets from last dim into the W dimension:
-    # (N, H_grid, W_grid, 2*K_grid) -> (N, H_grid, W_grid*K_grid, 2)
-    total_W = W_grid * K_grid
-    grid_unpacked = grid.reshape(N, H_grid, total_W, 2)
+    if use_precomputed_grid:
+        # A precomputed grid is not coordinates: elements 0 and 1 are the corner indices as int16
+        # bit patterns reinterpreted as bfloat16, and (bilinear) elements 2..5 are the four
+        # interpolation weights. Reading them as normalized coordinates yields NaN for every
+        # out-of-bounds corner, whose index is stored as -1 == 0xFFFF == a bfloat16 NaN.
+        # See grid_sample_prepare_grid.cpp and grid_sample_reader_common.hpp.
+        elements_per_point = 2 if mode == "nearest" else 6
+        K_grid = last_dim // elements_per_point
+        total_W = W_grid * K_grid
+        output_nhwc = _grid_sample_precomputed_reference(input_tensor, grid, mode, N, H_grid, total_W, C)
+    else:
+        K_grid = last_dim // 2
 
-    output_nchw = torch.nn.functional.grid_sample(
-        input_nchw.float(), grid_unpacked.float(), mode=mode, padding_mode=padding_mode, align_corners=align_corners
-    )
+        # Unpack K_grid coordinate sets from last dim into the W dimension:
+        # (N, H_grid, W_grid, 2*K_grid) -> (N, H_grid, W_grid*K_grid, 2)
+        total_W = W_grid * K_grid
+        grid_unpacked = grid.reshape(N, H_grid, total_W, 2)
 
-    # Convert to NHWC: (N, C, H_grid, total_W) -> (N, H_grid, total_W, C)
-    output_nhwc = output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)
+        output_nchw = torch.nn.functional.grid_sample(
+            input_nchw.float(),
+            grid_unpacked.float(),
+            mode=mode,
+            padding_mode=padding_mode,
+            align_corners=align_corners,
+        )
+
+        # Convert to NHWC: (N, C, H_grid, total_W) -> (N, H_grid, total_W, C)
+        output_nhwc = output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)
 
     # Use explicit grid_batching_factor if provided, otherwise use K_grid from grid shape
     effective_K = grid_batching_factor if grid_batching_factor is not None else K_grid
