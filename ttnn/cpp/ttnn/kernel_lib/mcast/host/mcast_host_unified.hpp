@@ -30,19 +30,21 @@ struct McastFixedSenderConfig {
     uint32_t sender_index = 0;
     McastSenderPlacement placement = McastSenderPlacement::Uniform;
 };
-struct McastRotatingSenderConfig {};
-struct McastSenderGridConfig {
-    tt::tt_metal::CoreRangeSet sender_cores;
-    std::optional<McastCoreOrder> sender_order;  // Defaults to receiver order.
+struct McastRotatingSenderConfig {
+    // Defaults to each receiver group. A separate grid inherits receiver order
+    // and is split evenly across receiver groups.
+    std::optional<tt::tt_metal::CoreRangeSet> sender_grid = std::nullopt;
 };
 struct McastExplicitSenderConfig {
     std::vector<std::vector<tt::tt_metal::CoreCoord>> senders_per_group;
 };
-using McastSenderConfig =
-    std::variant<McastFixedSenderConfig, McastRotatingSenderConfig, McastSenderGridConfig, McastExplicitSenderConfig>;
+using McastSenderConfig = std::variant<McastFixedSenderConfig, McastRotatingSenderConfig, McastExplicitSenderConfig>;
 
-// Equal consecutive receiver groups sharing a protocol. Construction prepares
-// an owned family snapshot; the device is not consulted afterward. Legacy
+// A group is a set of receiver cores sharing the same data and the same sender,
+// or the same ordered set of senders when the sender rotates.
+// Mcast partitions the ordered receiver cores into consecutive groups of equal
+// size, all using the same protocol. Construction prepares an owned family
+// snapshot; the device is not consulted afterward. Legacy
 // McastFamily remains available for custom partitions or unequal receiver populations.
 class Mcast {
 public:
@@ -51,8 +53,8 @@ public:
         const McastUnifiedConfig& config,
         const tt::tt_metal::CoreRangeSet& receivers,
         uint32_t receiver_group_size,
-        McastCoreOrder receiver_order,
-        const McastSenderConfig& sender_config = McastFixedSenderConfig{});
+        const McastSenderConfig& sender_config = McastFixedSenderConfig{},
+        McastCoreOrder receiver_order = McastCoreOrder::RowMajor);
 
     void attach(
         tt::tt_metal::ProgramDescriptor& descriptor,

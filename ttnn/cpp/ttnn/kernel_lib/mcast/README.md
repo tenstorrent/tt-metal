@@ -85,8 +85,8 @@ faces are compile errors. `can_send()` and `can_receive()` remain member queries
 ## Unified host frontend
 
 Include `host/mcast_host_unified.hpp` for the additive `Mcast` frontend. Existing
-`McastFamily`, `Mcast1D`, `Mcast2D`, `McastConfig`, and operation call sites are
-unchanged. The new constructor prepares an owned family immediately and delegates
+`McastFamily`, `Mcast1D`, `Mcast2D`, and `McastConfig` remain available. The new
+constructor prepares an owned family immediately and delegates
 all descriptor, ProgramSpec, direct-Program, and topology interfaces to it.
 
 ```cpp
@@ -95,11 +95,11 @@ Mcast channel(
     McastUnifiedConfig{.noc = noc},
     receivers,
     4,  // Four consecutive receivers per independent group.
-    McastCoreOrder::RowMajor,
     McastRotatingSenderConfig{});
 channel.attach(descriptor, "input", std::array{std::ref(kernel)});
 ```
 
+The optional final `receiver_order` argument defaults to `McastCoreOrder::RowMajor`.
 Receiver sets are sorted row-major (y,x) or column-major (x,y), then split into
 equal consecutive groups. Empty receivers, zero group size, and incomplete final
 groups are rejected. Custom receiver partitions remain available through
@@ -107,11 +107,13 @@ groups are rejected. Custom receiver partitions remain available through
 
 Fixed senders use a group-local index. Uniform placement requires that index
 to be in range; Staggered uses `(sender_index + group_index) % group_size`, with
-overflow-safe addition. Rotating selects all group receivers in their order.
-`McastSenderGridConfig` sorts a separate grid and divides it evenly among groups;
-this does not infer spatial alignment. `McastExplicitSenderConfig` supplies one
-ordered list per group. All lists must have the same nonzero length. Independent
-group footprints may not overlap, including external sender cores.
+overflow-safe addition. `McastRotatingSenderConfig{}` selects all group receivers
+in their order. Its optional `sender_grid` selects a separate grid, sorted in
+receiver order and divided evenly among groups; this does not infer spatial
+alignment. There is no separate sender-order option. `McastExplicitSenderConfig`
+supplies one ordered list per group, including singleton lists for external fixed
+senders or custom rotating schedules. All lists must have the same nonzero length.
+Independent group footprints may not overlap, including external sender cores.
 
 `McastUnifiedConfig::handshake_cores` is copied during construction. With
 handshaking enabled, null means all receivers and an explicitly empty set means

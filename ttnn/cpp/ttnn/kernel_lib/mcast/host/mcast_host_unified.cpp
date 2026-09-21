@@ -41,8 +41,8 @@ Mcast::Mcast(
     const McastUnifiedConfig& config,
     const CoreRangeSet& receivers,
     uint32_t receiver_group_size,
-    McastCoreOrder receiver_order,
-    const McastSenderConfig& sender_config) :
+    const McastSenderConfig& sender_config,
+    McastCoreOrder receiver_order) :
     family_(
         device,
         family_config(config),
@@ -56,7 +56,8 @@ Mcast::Mcast(
         "Mcast: receiver groups must divide the receiver list exactly");
     const size_t num_groups = receiver_cores.size() / receiver_group_size;
     const auto* fixed = std::get_if<McastFixedSenderConfig>(&sender_config);
-    const auto* grid = std::get_if<McastSenderGridConfig>(&sender_config);
+    const auto* rotating = std::get_if<McastRotatingSenderConfig>(&sender_config);
+    const CoreRangeSet* sender_grid = rotating && rotating->sender_grid ? &*rotating->sender_grid : nullptr;
     const auto* explicit_senders = std::get_if<McastExplicitSenderConfig>(&sender_config);
     std::vector<CoreCoord> grid_senders;
     if (fixed) {
@@ -66,8 +67,8 @@ Mcast::Mcast(
         TT_FATAL(
             fixed->placement == McastSenderPlacement::Staggered || fixed->sender_index < receiver_group_size,
             "Mcast: uniform sender_index is outside its receiver group");
-    } else if (grid) {
-        grid_senders = ordered_cores(grid->sender_cores, grid->sender_order.value_or(receiver_order));
+    } else if (sender_grid) {
+        grid_senders = ordered_cores(*sender_grid, receiver_order);
         TT_FATAL(!grid_senders.empty(), "Mcast: sender grid must not be empty");
         TT_FATAL(grid_senders.size() % num_groups == 0, "Mcast: sender grid must divide evenly across receiver groups");
     } else if (explicit_senders) {
@@ -90,7 +91,7 @@ Mcast::Mcast(
                                      ? (uint64_t(fixed->sender_index) + group_index) % receiver_group_size
                                      : fixed->sender_index;
             senders.push_back(*(begin + index));
-        } else if (grid) {
+        } else if (sender_grid) {
             const size_t count = grid_senders.size() / num_groups;
             const auto first = grid_senders.begin() + group_index * count;
             senders.assign(first, first + count);
