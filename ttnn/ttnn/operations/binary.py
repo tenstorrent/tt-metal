@@ -121,8 +121,13 @@ def _copy_inplace_golden_result(input_tensor_a, output_tensor):
 # union of the two integer arms is bound as a float and carries their promotion with it.
 _SCALAR_INT_ARM_RANGE = (-(1 << 31), 1 << 32)
 
-# Promotion is scoped to the dtypes whose bits binary_ng would otherwise reinterpret as float.
-_PROMOTABLE_INTEGER_DTYPES = ("int32", "uint32")
+
+def _promotable_integer_dtypes():
+    """The dtypes whose bits binary_ng would otherwise reinterpret as float. Built lazily because
+    ttnn forbids importing torch at module scope, and tolerant of a Torch without uint32."""
+    import torch
+
+    return {dtype for dtype in (torch.int32, getattr(torch, "uint32", None)) if dtype is not None}
 
 
 def _has_float_scalar(input_tensor_a, input_tensor_b):
@@ -155,15 +160,15 @@ def _promoted_for_float_scalar(input_tensor_a, input_tensor_b):
     materializing the scalar into the integer dtype, which would truncate it first."""
     import torch
 
+    promotable = _promotable_integer_dtypes()
     tensor_operand = _tensor_operand(input_tensor_a, input_tensor_b)
-    promotable = torch.is_tensor(tensor_operand) and str(tensor_operand.dtype).endswith(_PROMOTABLE_INTEGER_DTYPES)
-    if not promotable or not _has_float_scalar(input_tensor_a, input_tensor_b):
+    if not torch.is_tensor(tensor_operand) or tensor_operand.dtype not in promotable:
+        return input_tensor_a, input_tensor_b
+    if not _has_float_scalar(input_tensor_a, input_tensor_b):
         return input_tensor_a, input_tensor_b
 
     return tuple(
-        operand.to(torch.float32)
-        if torch.is_tensor(operand) and str(operand.dtype).endswith(_PROMOTABLE_INTEGER_DTYPES)
-        else operand
+        operand.to(torch.float32) if torch.is_tensor(operand) and operand.dtype in promotable else operand
         for operand in (input_tensor_a, input_tensor_b)
     )
 

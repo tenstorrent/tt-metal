@@ -946,6 +946,25 @@ def test_float_scalar_promotes_integer_tensor(device, ttnn_dtype, torch_dtype, s
         assert_equal(expected, output)
 
 
+@pytest.mark.xfail(strict=True, reason="the golden uses the exact scalar where the device rounds it")
+@pytest.mark.parametrize("op_name", ("add", "subtract"))
+def test_scalar_float32_rounds_into_range_before_the_exactness_check(device, op_name):
+    """A scalar too wide for either integer arm is bound as a float, and float32 has a spacing of
+    256 at 2**31 -- so the 128 integers in [-2**31 - 128, -2**31) round to exactly -2**31, clear
+    the range check that would otherwise reject them, and reach the kernel as -2**31. The golden
+    keeps the value Python passed it, so the two differ by the rounding. Only this band is
+    affected: one integer lower, float32 lands outside the range and the device rejects the call.
+    """
+    scalar = -(2**31) - 1
+    torch_input = torch.tensor([[1, 2, 3, 4]], dtype=torch.int32).repeat(32, 8)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    expected = ttnn.get_golden_function(getattr(ttnn, op_name))(torch_input, scalar)
+    output = ttnn.to_torch(getattr(ttnn, op_name)(input_tensor, scalar))
+
+    assert_equal(expected, output)
+
+
 @pytest.mark.parametrize("op_name", ("add", "subtract"))
 @pytest.mark.parametrize(
     "scalar",
@@ -970,13 +989,16 @@ def test_uint32_scalar_the_integer_path_cannot_represent_is_rejected(device, op_
         getattr(ttnn, op_name)(scalar, input_tensor)
 
 
-@pytest.mark.parametrize("rounding_mode", ("trunc", "floor"))
+@pytest.mark.parametrize(
+    "op_name, rounding_mode", (("div", "trunc"), ("div", "floor"), ("div", None), ("multiply", None))
+)
 @pytest.mark.parametrize("scalar_first", (True, False))
-def test_zero_dim_float_tensor_promotes_like_a_python_float(device, rounding_mode, scalar_first):
+def test_zero_dim_float_tensor_promotes_like_a_python_float(device, op_name, rounding_mode, scalar_first):
     """_has_float_scalar reads a 0-d tensor's dtype to decide whether to promote its INT32 partner,
     which is only correct if the device promotes for a 0-d operand the same way it does for a
     Python float. On device that is a tensor-tensor call, so nothing about the scalar overloads
-    guarantees it."""
+    guarantees it. Both ops sharing the helper are covered: promotion moves the operand to float32
+    and so decides which branch each of them takes afterwards."""
     torch.manual_seed(0)
     torch_input = torch.randint(1, 100, (1, 1, 320, 384), dtype=torch.int32)
     input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -985,11 +1007,18 @@ def test_zero_dim_float_tensor_promotes_like_a_python_float(device, rounding_mod
 
     golden_args = (torch_scalar, torch_input) if scalar_first else (torch_input, torch_scalar)
     device_args = (scalar_tensor, input_tensor) if scalar_first else (input_tensor, scalar_tensor)
-    expected = ttnn.get_golden_function(ttnn.div)(*golden_args, rounding_mode=rounding_mode)
-    output = ttnn.to_torch(ttnn.div(*device_args, rounding_mode=rounding_mode))
+    # multiply has no rounding_mode, and promotion is what decides its output dtype just the same.
+    kwargs = {"rounding_mode": rounding_mode} if op_name == "div" else {}
+    op = getattr(ttnn, op_name)
+    expected = ttnn.get_golden_function(op)(*golden_args, **kwargs)
+    output = ttnn.to_torch(op(*device_args, **kwargs))
 
     assert expected.dtype == output.dtype, f"golden {expected.dtype} != device {output.dtype}"
-    assert_equal(expected, output)
+    assert expected.dtype == torch.float32, f"promotion did not happen: {expected.dtype}"
+    if rounding_mode is None:
+        assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD)
+    else:
+        assert_equal(expected, output)
 
 
 def test_tensor_operand_keeps_a_dtype_when_neither_operand_is_shaped():
