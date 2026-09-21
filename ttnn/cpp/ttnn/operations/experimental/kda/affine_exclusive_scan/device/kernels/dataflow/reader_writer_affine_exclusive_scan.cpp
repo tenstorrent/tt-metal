@@ -114,7 +114,7 @@ FORCE_INLINE void issue_affine_pair_loopback(
         {.noc_x = local_x, .noc_y = local_y, .addr = local_b.get_write_ptr()});
 }
 
-template <uint32_t G, typename ArrivalSem, typename ReleaseSem>
+template <typename ArrivalSem, typename ReleaseSem>
 FORCE_INLINE void synchronize_head_stage(
     uint32_t worker_index,
     uint32_t group,
@@ -286,7 +286,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         // Each head is an independent scan. Do not release its next NoC stage until all active workers have
         // consumed their remote buffers and produced the next prefix; otherwise that head can overwrite a mailbox
         // while compute is still reading it. Arrival and release semaphore targets stay monotonic across stages.
-        synchronize_head_stage<G>(worker_index, group, active, completed_stages, noc, arrival, release);
+        synchronize_head_stage(worker_index, group, active, completed_stages, noc, arrival, release);
     }
 
     to_remote_a.wait_front(affine_a_tiles);
