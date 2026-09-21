@@ -299,53 +299,41 @@ void bind_fabric_api(nb::module_& mod) {
                 List of runtime args to extend into per-core NCRISC runtime args.
         )");
 
+    nb::enum_<tt::tt_metal::internal::WorkerSemArgs>(mod, "WorkerSemArgs", R"(
+        What a caller's per-connection fabric semaphore values are.
+        Values:
+            Ids: program semaphore IDs; the kernel resolves them with get_semaphore().
+            L1Addresses: raw L1 addresses, for callers keeping these semaphores outside the
+                program semaphore table. Both must be 16 B aligned.
+        )")
+        .value("Ids", tt::tt_metal::internal::WorkerSemArgs::Ids)
+        .value("L1Addresses", tt::tt_metal::internal::WorkerSemArgs::L1Addresses);
+
     mod.def(
         "compute_fabric_connection_rt_args",
         &tt::tt_metal::internal::compute_fabric_connection_rt_args,
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_nodes"),
         nb::arg("connection_link_indices"),
-        nb::arg("teardown_sem_ids"),
-        nb::arg("buffer_index_sem_ids"),
+        nb::arg("teardown_sem_args"),
+        nb::arg("buffer_index_sem_args"),
+        nb::arg("kind") = tt::tt_metal::internal::WorkerSemArgs::Ids,
         R"(
             Compute fabric connection RT args without any PD mutation.
-            Pure computation — resolves routing and assembles the flat RT args vector
-            using caller-provided semaphore IDs. No PD needed.
+            Pure computation — resolves routing and assembles the flat RT args vector from
+            the caller's semaphore values. No PD needed.
+
+            The two semaphore values are copied through verbatim; `kind` says what they are,
+            so they can be validated here, and the kernel's resolution policy is what reads
+            them. With kind=L1Addresses both must be 16 B aligned.
 
             Args:
                 src_fabric_node_id: FabricNodeId of the source chip
                 dst_nodes: List of FabricNodeIds of destination chips
                 connection_link_indices: List of link indices (empty for auto-select)
-                teardown_sem_ids: Pre-allocated semaphore IDs (one per connection)
-                buffer_index_sem_ids: Pre-allocated semaphore IDs (one per connection)
-
-            Returns:
-                List of runtime args for RoutingPlaneConnectionManager::build_from_args().
-        )");
-
-    mod.def(
-        "compute_fabric_connection_rt_args_with_sem_addresses",
-        &tt::tt_metal::internal::compute_fabric_connection_rt_args_with_sem_addresses,
-        nb::arg("src_fabric_node_id"),
-        nb::arg("dst_nodes"),
-        nb::arg("connection_link_indices"),
-        nb::arg("teardown_sem_addresses"),
-        nb::arg("buffer_index_sem_addresses"),
-        R"(
-            Compute fabric connection RT args from raw L1 semaphore addresses.
-
-            Same as compute_fabric_connection_rt_args, but the two per-connection semaphores
-            are given as L1 addresses rather than program semaphore IDs — for callers that
-            keep them outside the program semaphore table. Both addresses must be 16 B
-            aligned. The kernel must build those connections with
-            the L1AddressArg policy.
-
-            Args:
-                src_fabric_node_id: FabricNodeId of the source chip
-                dst_nodes: List of FabricNodeIds of destination chips
-                connection_link_indices: List of link indices (empty for auto-select)
-                teardown_sem_addresses: L1 addresses (one per connection)
-                buffer_index_sem_addresses: L1 addresses (one per connection)
+                teardown_sem_args: One per connection — IDs, or addresses under L1Addresses
+                buffer_index_sem_args: One per connection — same interpretation
+                kind: WorkerSemArgs.Ids (default) or WorkerSemArgs.L1Addresses
 
             Returns:
                 List of runtime args for RoutingPlaneConnectionManager::build_from_args().
