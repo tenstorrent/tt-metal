@@ -253,26 +253,38 @@ def test_fused_bit_exact_vs_phased(device, monkeypatch, with_initial_state):
     assert torch.equal(fs_fu, fs_ph), "fused path changed final_state (must be bit-identical to phased)"
 
 
+def _cost_model_path(device, bh, nc):
+    """The op's default path per its calibrated geometry cost model: fused iff a
+    fused geometry fits the grid and its predicted time beats the phased reference."""
+    from ttnn._ttnn.operations import transformer as _t
+
+    grid = device.compute_with_storage_grid_size()
+    nv, np_, pl, t_f, t_ph, pays = _t.chunk_gdn_fused_geometry(grid.x, grid.y, bh, nc, VDIM // 32)
+    return "fused" if (nv >= 1 and pays) else "phased"
+
+
 @pytest.mark.parametrize(
-    "num_k_heads, num_v_heads, expected_path",
+    "num_k_heads, num_v_heads",
     [
-        (16, 48, "fused"),  # BH=48 >= 24 and 2*BH=96 cores fit -> default engages fused (F2 gate cleared)
-        (4, 12, "phased"),  # BH=12 < 24 -> default falls back to phased
+        (16, 48),  # BH=48: fits (96 cores) and pays -> fused
+        (4, 12),  # BH=12: the 27B TP-4 shape -> fused since Phase 2 (390 vs 706 us)
+        (1, 4),  # BH=4: chain-bound, fused
+        (16, 64),  # BH=64: no fused geometry on 110 cores (needs 128) -> phased
     ],
-    ids=["bh48_fused", "bh12_phased"],
+    ids=["bh48", "bh12", "bh4", "bh64"],
 )
-def test_fused_default_dispatch(device, monkeypatch, num_k_heads, num_v_heads, expected_path):
-    """With NO path env set, the dispatcher must pick fused iff (BH >= 24 and 2*BH fits the grid),
-    else phased. Since fused and phased are bit-exact, torch.equal cannot discriminate paths: the
-    proof that the default took the expected path is a program-cache delta of ZERO after warming
-    exactly that path explicitly (any other path would compile at least one new prim program)."""
+def test_fused_default_dispatch(device, monkeypatch, num_k_heads, num_v_heads):
+    """With NO path env set, the dispatcher must pick what the calibrated cost model says (N7): fused
+    iff a fused geometry fits this grid and beats the phased reference. Since fused and phased are
+    bit-exact, torch.equal cannot discriminate paths: the proof that the default took the expected
+    path is a program-cache delta of ZERO after warming exactly that path explicitly (any other path
+    would compile at least one new prim program)."""
     B = 1
     BH = B * num_v_heads
     grid = device.compute_with_storage_grid_size()
     if BH > grid.x * grid.y:
         pytest.skip(f"BH={BH} exceeds the {grid.x}x{grid.y} compute grid (scan needs a core per head)")
-    if expected_path == "fused":
-        _skip_unless_fused_fits(device, BH)  # on smaller grids the default itself falls back to phased
+    expected_path = _cost_model_path(device, BH, T_SMALL // CHUNK)
     _clear_gdn_env(monkeypatch)
 
     _, tensors, s0 = _make_inputs(device, B, T_SMALL, num_k_heads, num_v_heads, True, seed=20260821)
