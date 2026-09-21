@@ -943,6 +943,17 @@ def test_gpt_oss_demo(
                     sampling_params=None,
                 )
                 out_tok = torch.argmax(logits, dim=-1).view(-1)
+                # DIAGNOSTIC: on the host-sampling path the pre-sampling logits are visible, so
+                # record them for the first few steps. With one prompt broadcast to all users a
+                # correct decode must produce bit-identical logits for every user; comparing this
+                # against the on-device-sampled tokens separates a model-compute divergence from
+                # a defect in the sampling block.
+                _lg_dir = os.getenv("GPT_OSS_DUMP_LOGITS")
+                if _lg_dir and iteration < int(os.getenv("GPT_OSS_DUMP_LOGITS_STEPS", "3")):
+                    torch.save(
+                        logits.detach().cpu().float().view(global_batch_size, -1).clone(),
+                        f"{_lg_dir}/logits_step{iteration}.pt",
+                    )
 
             # DIAGNOSTIC: record the per-step token for every user. Works with the trace ON,
             # unlike a hidden-state dump, because out_tok comes back to host each step.
