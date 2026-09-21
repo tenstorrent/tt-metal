@@ -38,7 +38,6 @@ constexpr uint32_t kStreamDepth = 18;  // KV blocks in flight (two window halves
                                        // with the cheap lazy-max decision (2026-09-09): 2x10 19.1 ms, 2x9 19.6,
                                        // 2x8 19.7; depth 20 clashes with the model's live L1 buffers in the traced
                                        // block by 15-25 KB (TT_VSA_DEPTH=20 standalone only), 24 overflows L1.
-constexpr uint32_t kLogDepth = 16;     // leader arrival-log ring (> leader depth + sentinel slack)
 constexpr uint32_t kMaxWorkers = 16;   // leader runtime-arg array bound
 constexpr uint32_t kRowChunk = 4;      // contiguous rows per placement chunk (matches the kernels)
 constexpr uint32_t kMaxPeers = 16;     // distributed kernel: peers per head group (ackbox / ready board words)
