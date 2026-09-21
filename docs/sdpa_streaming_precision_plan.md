@@ -1,8 +1,10 @@
 # Streaming SDPA precision integration — PR 1
 
-Status: recipe/evidence freeze and clean branch setup. Production implementation
-is not yet ported or qualified by this document. Public enum/helper names below
-are intentionally not prescribed until the interface implementation is reviewed.
+Status: recipe/evidence freeze, clean branch setup, and internal numerical-policy
+and compatibility-resolver foundation implemented. Device implementations are
+not yet ported or qualified. No new public recipe interface or dispatch is
+enabled. Public enum/helper names below are intentionally not prescribed until
+the interface implementation is reviewed.
 
 ## Immutable inputs to the port
 
@@ -88,7 +90,7 @@ complete and should remain separate reviewable commits within PR 1:
 
 - [ ] Refresh the affected main-side dispatch/default tests and establish a
   current-main device baseline. The September 16 usage audit is historical.
-- [ ] Introduce numerical-policy types, validation and compatibility resolver;
+- [x] Introduce numerical-policy types, validation and compatibility resolver;
   test omitted versus explicitly constructed configs and conflicting knobs.
 - [ ] Extract shared streaming primitives and FP32 state support; integrate
   D/C with their exact exp/subtraction/normalization decisions.
@@ -110,6 +112,44 @@ Current-main checks at branch creation:
   `!fp32_dest_acc_en`; FP32 streaming is substantive new integration work.
 - Main contains newer dynamic logical-length and profiler changes. Preserve
   these rather than overwriting the current kernel with an older research copy.
+
+### Foundation implementation and validation (2026-09-21)
+
+`sdpa_precision_policy.hpp` records the seven frozen numerical identities.
+`sdpa_numerics.cpp` resolves either the existing compute configuration or an
+internal explicit recipe. The ordinary dense entry point uses only its legacy
+branch. Other entry points, program configuration, public signatures and device
+dispatch are unchanged. Explicit recipe resolution is not proof of feature or
+geometry support and is not reachable from the public operation yet.
+
+The compatibility branch preserves the difference between omitted config
+(HiFi2) and an explicitly empty `ComputeKernelConfig` (LoFi), every existing
+compute-config field, and the independent exponential-approximation setting.
+Explicit recipes reject a simultaneous compute config or `exp_approx_mode=false`
+instead of silently overriding it. C retains separate QK/PV fidelity intent;
+D's accurate softmax cannot be represented by simply flipping the generic
+approximation booleans. Device policy integration remains required for both.
+
+Validation completed:
+
+- All six policy GoogleTests passed on macOS with pinned GoogleTest v1.13.0.
+- New resolver and resolver tests passed a C++20 syntax check with warnings
+  treated as errors.
+- All twelve policy/resolver GoogleTests passed in the reserved Blackhole
+  Linux container, compiling the new sources with clang 20 and warnings as
+  errors. This standalone executable linked the existing `_ttnncpp.so` for
+  `init_device_compute_kernel_config`; it is partial host validation, not a
+  complete build or device validation of this branch.
+- `git diff --check` passed.
+
+Fresh full configuration used this branch's exact base and pinned submodules
+in an independent remote worktree. It failed downloading Boost because of
+container DNS/connectivity. Transferring the SHA256-verified pinned Boost archive
+locally advanced configuration, which then failed fetching protobuf. No new-base
+full build or device smoke result is claimed. The changed dense entry point
+still needs compilation and device regression testing once dependency access
+is restored. These tests are registered in the normal TTNN smoke target for
+that build; the standalone test is not a replacement for it.
 
 ## Merge gates
 

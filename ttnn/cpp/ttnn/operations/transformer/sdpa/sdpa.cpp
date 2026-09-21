@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ttnn/operations/transformer/sdpa/sdpa.hpp"
+#include "ttnn/operations/transformer/sdpa/sdpa_numerics.hpp"
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -50,8 +51,14 @@ ttnn::Tensor scaled_dot_product_attention(
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
+    // Only the legacy branch is wired here until explicit recipe kernels and
+    // their input/geometry validation have been integrated and qualified.
+    auto numerics = operations::transformer::sdpa::detail::resolve_numerics(
+        input_tensor_q.device()->arch(),
+        std::nullopt,
+        compute_kernel_config,
+        program_config ? program_config->exp_approx_mode : std::nullopt);
+    auto kernel_config_val = numerics.compute;
 
     // PyTorch semantics: softmax(Q·Kᵀ * scale + mask) · V, where `scale` applies
     // to Q·Kᵀ only and the mask is added unscaled.
