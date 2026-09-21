@@ -4,9 +4,11 @@
 """Compare exported Gemma4 KV against the row-sharded GPU trace."""
 
 import json
+import math
 import os
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import torch
 from loguru import logger
@@ -82,25 +84,54 @@ def golden_cache_heads(key, value, layer, real_len):
     return {**{4 + head: key[head] for head in range(16)}, **{20 + head: value[head] for head in range(16)}}
 
 
-def cache_pcc(expected, actual):
-    """Compute whole-head PCC with a bounded FP32 workspace."""
+class CacheComparison(NamedTuple):
+    squared_error_sum: float
+    reference_squared_sum: float
+    numel: int
+    mean: torch.Tensor
+    covariance: torch.Tensor
+    identical: bool
+
+    @property
+    def pcc(self):
+        return correlation(self.covariance, self.identical)
+
+
+def correlation(covariance, identical):
+    if identical:
+        return 1.0
+    scale = covariance[0, 0].sqrt() * covariance[1, 1].sqrt()
+    pcc = float(covariance[0, 1] / scale) if scale != 0 else 0.0
+    if not math.isfinite(pcc):
+        raise ValueError("KV correlation is not finite")
+    return max(-1.0, min(1.0, pcc))
+
+
+def cache_metrics(expected, actual):
+    """Compute whole-head PCC and squared errors with a bounded FP32 workspace."""
     if expected.shape != actual.shape or expected.numel() == 0:
         raise ValueError("KV comparison requires matching nonempty shapes")
     expected = expected.reshape(expected.shape[0], -1)
     actual = actual.reshape(actual.shape[0], -1)
     rows_per_block = max(1, 1024 * 1024 // expected.shape[1])
-    buffer = torch.empty((2, min(rows_per_block, expected.shape[0]), expected.shape[1]), dtype=torch.float32)
+    buffer = torch.empty((3, min(rows_per_block, expected.shape[0]), expected.shape[1]), dtype=torch.float32)
     count = 0
     mean = torch.zeros(2, dtype=torch.float32)
     covariance = torch.zeros(2, 2, dtype=torch.float32)
+    error_sums = torch.zeros(2, dtype=torch.float32)
     identical = True
     for start in range(0, expected.shape[0], rows_per_block):
         end = min(start + rows_per_block, expected.shape[0])
-        values = buffer[:, : end - start]
+        values = buffer[:2, : end - start]
         values[0].copy_(expected[start:end])
         values[1].copy_(actual[start:end])
         values = values.reshape(2, -1)
         identical = identical and torch.equal(values[0], values[1])
+        difference = buffer[2, : end - start].reshape(-1)
+        torch.sub(values[1], values[0], out=difference)
+        error_sums[0] += difference.square_().sum()
+        torch.mul(values[0], values[0], out=difference)
+        error_sums[1] += difference.sum()
         block_count = values.shape[1]
         block_mean = values.mean(dim=1, keepdim=True)
         values.sub_(block_mean)
@@ -115,17 +146,31 @@ def cache_pcc(expected, actual):
         covariance += block_covariance + torch.outer(delta, delta) * (count * block_count / total_count)
         mean += delta * (block_count / total_count)
         count = total_count
-    if not torch.isfinite(covariance).all():
+    if not torch.isfinite(covariance).all() or not torch.isfinite(error_sums).all():
         raise ValueError("KV comparison requires finite values")
-    if identical:
-        return 1.0
-    scale = covariance[0, 0].sqrt() * covariance[1, 1].sqrt()
-    if scale == 0:
-        return 0.0
-    pcc = covariance[0, 1] / scale
-    if not torch.isfinite(pcc):
-        raise ValueError("KV correlation is not finite")
-    return float(pcc.clamp(-1, 1))
+    return CacheComparison(float(error_sums[0]), float(error_sums[1]), count, mean, covariance, identical)
+
+
+def summarize_metrics(comparisons):
+    squared_error_sum = sum(comparison.squared_error_sum for comparison in comparisons)
+    reference_squared_sum = sum(comparison.reference_squared_sum for comparison in comparisons)
+    numel = 0
+    mean = torch.zeros(2, dtype=torch.float32)
+    covariance = torch.zeros(2, 2, dtype=torch.float32)
+    for comparison in comparisons:
+        delta = comparison.mean - mean
+        total_count = numel + comparison.numel
+        covariance += comparison.covariance + torch.outer(delta, delta) * (numel * comparison.numel / total_count)
+        mean += delta * (comparison.numel / total_count)
+        numel = total_count
+    return dict(
+        pcc=correlation(covariance, all(comparison.identical for comparison in comparisons)),
+        rmse=math.sqrt(squared_error_sum / numel),
+        relative_rmse=math.sqrt(squared_error_sum / reference_squared_sum) if reference_squared_sum else None,
+        squared_error_sum=squared_error_sum,
+        reference_squared_sum=reference_squared_sum,
+        numel=numel,
+    )
 
 
 def read_cache_head(table, device_map, layer, slot_id, config_id, real_len, width):
@@ -230,39 +275,50 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
     minima = {"global_k_rotary": 1.0, "global_v": 1.0, "sliding_k": 1.0, "sliding_v": 1.0}
     measurements = []
     layer_timings = []
+    all_comparisons = []
+    layer_metrics = []
     for layer in range(Gemma4ServiceConfig.NUM_LAYERS):
         previous_timings = timings.copy()
         start = time.perf_counter()
         expected_heads = load_gpu_cache_heads(trace_dir, layer, real_len)
         timings["reference_seconds"] += time.perf_counter() - start
         layer_minima = {}
+        layer_comparisons = []
         start = time.perf_counter()
         for config_id, actual in read_heads(layer):
             timings["readback_seconds"] += time.perf_counter() - start
             start = time.perf_counter()
             expected = expected_heads[config_id]
             if config_id < 4:
-                scores = {
-                    "global_k_rotary": cache_pcc(expected[:, :128], actual[:, :128]),
-                    "global_v": cache_pcc(expected[:, 128:], actual[:, 128:]),
+                comparisons = {
+                    "global_k_rotary": cache_metrics(expected[:, :128], actual[:, :128]),
+                    "global_v": cache_metrics(expected[:, 128:], actual[:, 128:]),
                 }
             else:
-                scores = {"sliding_k" if config_id < 20 else "sliding_v": cache_pcc(expected, actual)}
+                comparisons = {"sliding_k" if config_id < 20 else "sliding_v": cache_metrics(expected, actual)}
+            layer_comparisons.extend(comparisons.values())
+            scores = {name: comparison.pcc for name, comparison in comparisons.items()}
             for name, score in scores.items():
                 minima[name] = min(minima[name], score)
                 layer_minima[name] = min(layer_minima.get(name, 1.0), score)
             measurements.append(dict(layer=layer, config=CONFIG_NAMES[config_id], pcc=scores))
             timings["comparison_seconds"] += time.perf_counter() - start
             start = time.perf_counter()
+        all_comparisons.extend(layer_comparisons)
+        layer_summary = summarize_metrics(layer_comparisons)
+        layer_metrics.append(dict(layer=layer, **layer_summary))
         layer_seconds = {name: timings[name] - previous_timings[name] for name in previous_timings}
         layer_timings.append(dict(layer=layer, **layer_seconds))
         logger.info(
             f"[Gemma4 KV PCC] slot={slot_id} layer={layer} layer_minima={layer_minima} "
             f"running_min_pcc={min(minima.values()):.8f} "
+            f"layer_pcc={layer_summary['pcc']:.8f} "
+            f"rmse={layer_summary['rmse']:.8f} relative_rmse={layer_summary['relative_rmse']} "
             f"reference={layer_seconds['reference_seconds']:.2f}s "
             f"readback={layer_seconds['readback_seconds']:.2f}s "
-            f"pcc={layer_seconds['comparison_seconds']:.2f}s"
+            f"comparison={layer_seconds['comparison_seconds']:.2f}s"
         )
+    overall_metrics = summarize_metrics(all_comparisons)
     timings["total_seconds"] = time.perf_counter() - started
     if summary_dir := os.getenv("PREFILL_PCC_SUMMARY_DIR"):
         directory = Path(summary_dir)
@@ -275,7 +331,12 @@ def compare_slot_cache(read_heads, slot_id, real_len, trace_dir):
             timings=timings,
             layer_timings=layer_timings,
             measurements=measurements,
+            error_metrics=dict(overall=overall_metrics, layers=layer_metrics),
         )
         (directory / f"gemma4_slot{slot_id}.json").write_text(json.dumps(result, indent=2) + "\n")
-    logger.info(f"[Gemma4 KV PCC] slot={slot_id} final_min_pcc={min(minima.values()):.8f} timings={timings}")
+    logger.info(
+        f"[Gemma4 KV PCC] slot={slot_id} final_min_pcc={min(minima.values()):.8f} "
+        f"overall_pcc={overall_metrics['pcc']:.8f} "
+        f"rmse={overall_metrics['rmse']:.8f} relative_rmse={overall_metrics['relative_rmse']} timings={timings}"
+    )
     return minima
