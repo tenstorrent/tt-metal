@@ -85,6 +85,10 @@ runs; otherwise use `TARGET_ARCH`.
    speedup; use `measure` when the requested deliverable is benchmark infrastructure
    or establishing measurements without a required speedup. Otherwise use `maintain`.
    Measurement intent still requires functional correctness and actual cycle evidence.
+For host-only checks, predeclare `execution: host` only for explicitly
+`pytest.mark.llk_host` modules/nodes. Device execution remains the default; host
+checks cannot replace hardware requirements or cycle measurements.
+
 5. Determine `fix_layer` from `.claude/references/metal-integration.md`:
 
    | Value | Scope |

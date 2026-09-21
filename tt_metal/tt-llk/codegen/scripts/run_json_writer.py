@@ -1866,12 +1866,16 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
                         "cycle_measurement requires predeclared perf_intent: measure"
                     )
                 try:
-                    requirement["measurement_contract"] = json.loads(
-                        item.get("measurement_contract", "")
+                    from perf_eval import canonical_measurement_contract
+
+                    requirement["measurement_contract"] = (
+                        canonical_measurement_contract(
+                            json.loads(item.get("measurement_contract", ""))
+                        )
                     )
                 except ValueError as exc:
                     raise ValueError(
-                        "measurement_contract must be a JSON object"
+                        "measurement_contract must be a valid JSON measurement contract"
                     ) from exc
             elif item.get("measurement_contract"):
                 raise ValueError("measurement_contract requires cycle_measurement")
@@ -1918,6 +1922,8 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
             )
         if not args.supersedes_reason:
             raise ValueError("a superseding manifest requires --supersedes-reason")
+        from perf_eval import canonical_measurement_contract
+
         for prior in previous["requirements"]:
             matches = [
                 r
@@ -1927,7 +1933,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
             if "cycle_measurement" in prior["required_measurements"] and (
                 len(matches) != 1
                 or matches[0].get("measurement_contract")
-                != prior["measurement_contract"]
+                != canonical_measurement_contract(prior["measurement_contract"])
                 or "cycle_measurement" not in matches[0]["required_measurements"]
             ):
                 raise ValueError(
@@ -2719,17 +2725,22 @@ def _load_verification_result(path: Path) -> dict[str, Any]:
         "classification",
         "reason_codes",
     }
+    perf_receipt = isinstance(result, dict) and result.get("version") == 4
+    if perf_receipt:
+        fields.add("measurement_artifacts")
     if (
         not isinstance(result, dict)
         or set(result) != fields
         or result["schema"] != "tt.issue-solver.verification-result"
-        or result["version"] not in {2, 3}
+        or result["version"] not in (2, 3, 4)
         or result["result_id"]
         != _canonical_digest(
             {key: value for key, value in result.items() if key != "result_id"}
         )
     ):
-        raise ValueError("verification result does not match the exact v2/v3 schema")
+        raise ValueError(
+            "verification result does not match its exact versioned schema"
+        )
     for field in (
         "result_id",
         "requirement_id",
@@ -2744,6 +2755,25 @@ def _load_verification_result(path: Path) -> dict[str, Any]:
             raise ValueError(f"verification result {field} must be nonempty")
     if not _SHA256_RE.fullmatch(result["result_id"]):
         raise ValueError("verification result result_id is invalid")
+    if perf_receipt:
+        if result["backend"] != "silicon" or result["suite"] != "perf":
+            raise ValueError("v4 measurement receipts require silicon perf")
+        artifacts = result["measurement_artifacts"]
+        if not isinstance(artifacts, dict) or set(artifacts) != {
+            "current",
+            "raw_current",
+        }:
+            raise ValueError("measurement artifact schema is invalid")
+        for artifact in artifacts.values():
+            if (
+                not isinstance(artifact, dict)
+                or set(artifact) != {"sha256", "size"}
+                or not isinstance(artifact["sha256"], str)
+                or not _SHA256_RE.fullmatch(artifact["sha256"])
+                or type(artifact["size"]) is not int
+                or artifact["size"] <= 0
+            ):
+                raise ValueError("measurement artifact hash/size is invalid")
     selector = result["selector"]
     if (
         not isinstance(selector, dict)
@@ -3181,23 +3211,38 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
     latest_perf = _load_perf_measurements(
         Path(args.perf_result) if args.perf_result else None
     )
-    perf_by_arch: dict[str, dict[str, Any]] = {}
+    perf_by_requirement: dict[str, dict[str, Any]] = {}
+
+    def retain_perf(document):
+        if not isinstance(document, dict):
+            return
+        if document.get("schema") == "tt.issue-solver.perf-results":
+            if (
+                set(document) != {"schema", "version", "results"}
+                or document.get("version") != 1
+                or not isinstance(document.get("results"), dict)
+            ):
+                global_reasons.append("malformed_perf_results")
+                return
+            for identity, result in document["results"].items():
+                if (
+                    not isinstance(result, dict)
+                    or result.get("requirement_id") != identity
+                ):
+                    global_reasons.append("malformed_perf_result_identity")
+                    continue
+                perf_by_requirement[identity] = result
+        elif isinstance(document.get("requirement_id"), str):
+            # Legacy single result retains its explicit requirement identity.
+            perf_by_requirement[document["requirement_id"]] = document
+
     if _run_json_path(log_dir).is_file():
         run_evidence = _load(log_dir)
-        top_level_perf = run_evidence.get("perf")
-        if isinstance(top_level_perf, dict) and isinstance(
-            top_level_perf.get("arch"), str
-        ):
-            perf_by_arch[top_level_perf["arch"]] = top_level_perf
-        for architecture, arch_result in (
-            run_evidence.get("arch_results") or {}
-        ).items():
-            if isinstance(arch_result, dict) and isinstance(
-                arch_result.get("perf"), dict
-            ):
-                perf_by_arch[architecture] = arch_result["perf"]
-    if isinstance(latest_perf.get("arch"), str):
-        perf_by_arch[latest_perf["arch"]] = latest_perf
+        retain_perf(run_evidence.get("perf"))
+        for arch_result in (run_evidence.get("arch_results") or {}).values():
+            if isinstance(arch_result, dict):
+                retain_perf(arch_result.get("perf"))
+    retain_perf(latest_perf)
     leaves = []
     patch_digests = set()
     for requirement in requirements:
@@ -3293,7 +3338,7 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
             patch_digests.add(result["provenance"]["patch_sha256"])
 
         if classification == "success" and requirement["required_measurements"]:
-            perf = perf_by_arch.get(requirement["architecture"], {})
+            perf = perf_by_requirement.get(identity, {})
             if (
                 perf.get("outcome") != "PERF_OK"
                 or perf.get("measured") is not True
@@ -3320,7 +3365,7 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
                     continue
                 if measurement == "cycle_measurement":
                     try:
-                        from perf_eval import _read_csv, evaluate_measurement
+                        from perf_eval import evaluate_bound_measurement
 
                         paths = []
                         for prefix in ("current", "raw_current"):
@@ -3338,10 +3383,19 @@ def cmd_reduce_verification(args: argparse.Namespace) -> int:
                             ):
                                 raise ValueError("measurement artifact digest mismatch")
                             paths.append(path)
-                        checked = evaluate_measurement(
-                            _read_csv(paths[0], strict=True),
-                            _read_csv(paths[1], strict=True),
+                        if (
+                            perf.get("verification_result_id")
+                            != selected_result["result_id"]
+                            or perf.get("job_id") != selected_result["job_id"]
+                        ):
+                            raise ValueError(
+                                "measurement does not belong to selected hardware receipt"
+                            )
+                        checked = evaluate_bound_measurement(
+                            paths[0],
+                            paths[1],
                             requirement["measurement_contract"],
+                            selected_result,
                         )
                         if (
                             perf.get("goal") != "measure"

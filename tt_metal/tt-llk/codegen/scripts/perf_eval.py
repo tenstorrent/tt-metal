@@ -58,6 +58,7 @@ import math
 import re
 import statistics
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -73,10 +74,14 @@ CONTEXT_METRICS = (
 SUPPORTED_PRIMARY_METRICS = (PRIMARY_METRIC, *CONTEXT_METRICS)
 
 
-def _read_csv(path: Path, *, strict: bool = False) -> list[dict[str, str]]:
-    if not path or not path.exists():
-        return []
-    text = path.read_text().strip()
+def _read_csv(
+    path: Path, *, strict: bool = False, data: bytes | None = None
+) -> list[dict[str, str]]:
+    if data is None:
+        if not path or not path.exists():
+            return []
+        data = path.read_bytes()
+    text = data.decode("utf-8").strip()
     if not text:
         return []
     reader = csv.DictReader(text.splitlines())
@@ -146,6 +151,37 @@ def _measurement_key_columns(fieldnames: list[str]) -> list[str]:
     ]
 
 
+def _canonical_measurement_variant(variant: dict[str, str]) -> dict[str, str]:
+    """Only loop/tile counts have numeric identity; other CSV keys stay exact."""
+    normalized = dict(variant)
+    for field in ("loop_factor", "tile_cnt"):
+        try:
+            value = Decimal(variant[field])
+            if (
+                not value.is_finite()
+                or value <= 0
+                or value != value.to_integral_value()
+                or not math.isfinite(float(value))
+            ):
+                raise ValueError(
+                    f"measurement {field} must be a positive finite integer"
+                )
+            normalized[field] = str(int(value))
+        except (InvalidOperation, TypeError, KeyError) as exc:
+            raise ValueError(
+                f"measurement {field} must be a positive finite integer"
+            ) from exc
+    return normalized
+
+
+def canonical_measurement_contract(contract: Any) -> dict[str, Any]:
+    validate_measurement_contract(contract)
+    return {
+        **contract,
+        "variants": [_canonical_measurement_variant(v) for v in contract["variants"]],
+    }
+
+
 def validate_measurement_contract(contract: Any) -> None:
     """Validate a predeclared current-only benchmark, never infer its coverage."""
     if (
@@ -175,16 +211,11 @@ def validate_measurement_contract(contract: Any) -> None:
             raise ValueError(
                 "measurement_contract variants must contain exact CSV keys"
             )
-        for field in ("loop_factor", "tile_cnt"):
-            value = _to_float(variant[field])
-            if value is None or value <= 0 or not value.is_integer():
-                raise ValueError(
-                    f"measurement_contract {field} must be a positive integer"
-                )
+        normalized = _canonical_measurement_variant(variant)
         if keys is not None and set(variant) != keys:
             raise ValueError("measurement_contract variant schemas differ")
         keys = set(variant)
-        identity = tuple(sorted(variant.items()))
+        identity = tuple(sorted(normalized.items()))
         if identity in seen:
             raise ValueError("measurement_contract contains duplicate variants")
         seen.add(identity)
@@ -192,7 +223,7 @@ def validate_measurement_contract(contract: Any) -> None:
 
 def evaluate_measurement(current_rows, raw_rows, contract) -> dict[str, Any]:
     """Validate exact coverage and raw-to-per-tile normalization, without a baseline."""
-    validate_measurement_contract(contract)
+    contract = canonical_measurement_contract(contract)
     result = {
         "goal": "measure",
         "measured": False,
@@ -215,7 +246,11 @@ def evaluate_measurement(current_rows, raw_rows, contract) -> dict[str, Any]:
                 or metric not in row
             ):
                 return {**result, "reason": f"{label}_measurement_schema_mismatch"}
-            key = tuple(row[k] for k in keys)
+            try:
+                normalized = _canonical_measurement_variant(row)
+            except ValueError:
+                return {**result, "reason": f"{label}_invalid_measurement_divisor"}
+            key = tuple(normalized[k] for k in keys)
             value = _to_float(row[metric])
             if key in index:
                 return {**result, "reason": f"{label}_duplicate_measurement_variant"}
@@ -250,6 +285,58 @@ def evaluate_measurement(current_rows, raw_rows, contract) -> dict[str, Any]:
         "variants": variants,
         "measurements": {"cycle_measurement": {"measured": True}},
     }
+
+
+def evaluate_bound_measurement(
+    current_path: Path, raw_path: Path, contract, receipt
+) -> dict[str, Any]:
+    """Parse exactly the CSV bytes attested by the selected hardware receipt."""
+    if (
+        receipt.get("version") != 4
+        or receipt.get("suite") != "perf"
+        or receipt.get("backend") != "silicon"
+        or receipt.get("classification") != "success"
+    ):
+        raise ValueError("measurement requires a successful v4 silicon perf receipt")
+    rows, digests = [], {}
+    for name, path in (("current", current_path), ("raw_current", raw_path)):
+        data = path.read_bytes()
+        expected = receipt["measurement_artifacts"][name]
+        digest = hashlib.sha256(data).hexdigest()
+        if len(data) != expected["size"] or digest != expected["sha256"]:
+            raise ValueError(f"{name} CSV differs from selected hardware receipt")
+        rows.append(_read_csv(path, strict=True, data=data))
+        digests[f"{name}_sha256"] = digest
+    return {**evaluate_measurement(rows[0], rows[1], contract), **digests}
+
+
+def _record_measurement_result(path: Path, result: dict[str, Any]) -> None:
+    """Preserve independent leaves in the existing per-run perf result artifact."""
+    document = {"schema": "tt.issue-solver.perf-results", "version": 1, "results": {}}
+    if path.exists():
+        previous = json.loads(path.read_text())
+        if (
+            isinstance(previous, dict)
+            and previous.get("schema") == document["schema"]
+            and previous.get("version") == 1
+            and set(previous) == set(document)
+            and isinstance(previous.get("results"), dict)
+        ):
+            document = previous
+        elif isinstance(previous, dict) and isinstance(
+            previous.get("requirement_id"), str
+        ):
+            document["results"][previous["requirement_id"]] = previous
+        else:
+            raise ValueError(
+                "existing perf results have no valid requirement-keyed identity"
+            )
+    document["results"][result["requirement_id"]] = result
+    # Existing atomic writer; role dispatch is serial, so no independent writer
+    # is permitted to update the envelope concurrently.
+    from run_json_writer import _atomic_write
+
+    _atomic_write(path.parent, document, destination=path)
 
 
 def evaluate(
@@ -597,6 +684,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--requirement-id", help="Exact measurement leaf in the manifest")
     p.add_argument(
+        "--verification-result", help="Exact copied hardware receipt (measure only)"
+    )
+    p.add_argument(
+        "--results-out",
+        help="Retain measurement by requirement in this per-run perf result JSON",
+    )
+    p.add_argument(
         "--primary-metric",
         choices=SUPPORTED_PRIMARY_METRICS,
         default=PRIMARY_METRIC,
@@ -627,23 +721,36 @@ def main(argv: list[str] | None = None) -> int:
         if not math.isfinite(value) or value < 0:
             p.error(f"--{name.replace('_', '-')} must be finite and non-negative")
 
+    if (
+        args.results_out
+        and args.json_out
+        and Path(args.results_out).resolve() == Path(args.json_out).resolve()
+    ):
+        p.error("--results-out must differ from the per-leaf --json-out")
     try:
-        current_rows = _read_csv(Path(args.current), strict=args.goal == "measure")
+        current_rows = [] if args.goal == "measure" else _read_csv(Path(args.current))
     except ValueError as exc:
         p.error(str(exc))
     baseline_rows = _read_csv(Path(args.baseline)) if args.baseline else []
 
     if args.goal == "measure":
         if (
-            not all((args.raw_current, args.required_manifest, args.requirement_id))
+            not all(
+                (
+                    args.raw_current,
+                    args.required_manifest,
+                    args.requirement_id,
+                    args.verification_result,
+                )
+            )
             or args.baseline
             or args.op
         ):
             p.error(
-                "measure requires --raw-current, --required-manifest, --requirement-id and forbids baseline/op filtering"
+                "measure requires --raw-current, --required-manifest, --requirement-id, --verification-result and forbids baseline/op filtering"
             )
         # Reuse the sealer's strict schema/identity validation, including v2 fields.
-        from run_json_writer import _load_required_manifest
+        from run_json_writer import _load_required_manifest, _load_verification_result
 
         manifest = _load_required_manifest(Path(args.required_manifest))
         leaves = [
@@ -659,12 +766,31 @@ def main(argv: list[str] | None = None) -> int:
         leaf = leaves[0]
         if args.test and args.test != leaf["selector"]["test"]:
             p.error("test does not match sealed measurement selector")
+        receipt = _load_verification_result(Path(args.verification_result))
+        if (
+            any(receipt[k] != manifest[k] for k in ("run_id", "attempt_id"))
+            or receipt["requirement_id"] != leaf["requirement_id"]
+            or receipt["architecture"] != leaf["architecture"]
+            or receipt["selector"] != leaf["selector"]
+            or receipt["provenance"]["expected_base_sha"]
+            != manifest["expected_base_sha"]
+            or receipt["provenance"]["actual_base_sha"] != manifest["expected_base_sha"]
+        ):
+            p.error("hardware receipt does not match sealed measurement identity")
         try:
-            raw_rows = _read_csv(Path(args.raw_current), strict=True)
-        except ValueError as exc:
+            result = evaluate_bound_measurement(
+                Path(args.current),
+                Path(args.raw_current),
+                leaf["measurement_contract"],
+                receipt,
+            )
+        except (ValueError, OSError, KeyError) as exc:
             p.error(str(exc))
-        result = evaluate_measurement(
-            current_rows, raw_rows, leaf["measurement_contract"]
+        result.update(
+            outcome="PERF_OK" if result["exit_code"] == 0 else "PERF_ENV_ERROR",
+            job_id=receipt["job_id"],
+            verification_result_id=receipt["result_id"],
+            patch_sha256=receipt["provenance"]["patch_sha256"],
         )
         result.update(
             {
@@ -676,20 +802,16 @@ def main(argv: list[str] | None = None) -> int:
                 "base_commit": manifest["expected_base_sha"],
                 "current_source": str(Path(args.current).resolve()),
                 "raw_current_source": str(Path(args.raw_current).resolve()),
-                "current_sha256": (
-                    hashlib.sha256(Path(args.current).read_bytes()).hexdigest()
-                    if Path(args.current).is_file()
-                    else None
-                ),
-                "raw_current_sha256": (
-                    hashlib.sha256(Path(args.raw_current).read_bytes()).hexdigest()
-                    if Path(args.raw_current).is_file()
-                    else None
-                ),
             }
         )
     else:
-        if args.raw_current or args.required_manifest or args.requirement_id:
+        if (
+            args.raw_current
+            or args.required_manifest
+            or args.requirement_id
+            or args.verification_result
+            or args.results_out
+        ):
             p.error("measurement contract arguments require --goal measure")
         result = evaluate(
             current_rows,
@@ -709,7 +831,10 @@ def main(argv: list[str] | None = None) -> int:
     exit_code = int(result.pop("exit_code", 0))
 
     if args.json_out:
+        Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json_out).write_text(json.dumps(result, indent=2) + "\n")
+    if args.results_out:
+        _record_measurement_result(Path(args.results_out), result)
     print(_format_summary(result))
     # Also emit the JSON to stderr so a caller can capture it without a temp file.
     print(json.dumps(result), file=sys.stderr)

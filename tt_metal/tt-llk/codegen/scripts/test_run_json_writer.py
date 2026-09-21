@@ -4603,6 +4603,9 @@ def test_measurement_intent_cannot_be_inferred_or_replace_comparison(tmp_path, i
         "outside_run",
         "wrong_goal",
         "fake_flag",
+        "rehashed_forgery",
+        "wrong_job",
+        "raw_swapped",
     ],
 )
 def test_measurement_reducer_rechecks_exact_artifacts_not_model_flags(tmp_path, defect):
@@ -4626,6 +4629,16 @@ def test_measurement_reducer_rechecks_exact_artifacts_not_model_flags(tmp_path, 
     raw = tmp_path / "current.csv"
     current.write_text(header + "copy,TILE_LOOP,16,8,2.5\n")
     raw.write_text(header + "copy,TILE_LOOP,16,8,320\n")
+    receipt["version"] = 4
+    receipt["measurement_artifacts"] = {
+        name: {
+            "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+            "size": artifact.stat().st_size,
+        }
+        for name, artifact in (("current", current), ("raw_current", raw))
+    }
+    receipt["result_id"] = _content_id(receipt, {"result_id"})
+    (results / "perf.json").write_text(json.dumps(receipt))
     output = tmp_path / "perf_result.json"
     proc = subprocess.run(
         [
@@ -4641,6 +4654,8 @@ def test_measurement_reducer_rechecks_exact_artifacts_not_model_flags(tmp_path, 
             str(path),
             "--requirement-id",
             requirement["requirement_id"],
+            "--verification-result",
+            str(results / "perf.json"),
             "--json-out",
             str(output),
         ],
@@ -4668,6 +4683,22 @@ def test_measurement_reducer_rechecks_exact_artifacts_not_model_flags(tmp_path, 
         perf["goal"] = "improve"
     elif defect == "fake_flag":
         perf["measurements"]["cycle_measurement"]["measured"] = False
+    elif defect == "rehashed_forgery":
+        current.write_text(header + "copy,TILE_LOOP,16,8,5\n")
+        raw.write_text(header + "copy,TILE_LOOP,16,8,640\n")
+        for prefix, artifact in (("current", current), ("raw_current", raw)):
+            perf[f"{prefix}_sha256"] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    elif defect == "wrong_job":
+        perf["job_id"] = "different-hardware-job"
+    elif defect == "raw_swapped":
+        perf["current_source"], perf["raw_current_source"] = (
+            perf["raw_current_source"],
+            perf["current_source"],
+        )
+        perf["current_sha256"], perf["raw_current_sha256"] = (
+            perf["raw_current_sha256"],
+            perf["current_sha256"],
+        )
     output.write_text(json.dumps(perf))
     _reduce(tmp_path, path, perf_result=output)
     reduced = json.loads((tmp_path / "verification_reduction.json").read_text())
@@ -5170,3 +5201,39 @@ def test_host_approved_pytest_fixture_and_exact_node_selection(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert result["selector"]["test_id"] == "test_host.py::test_safe"
     assert result["provenance"]["observed_nodeids"] == ["test_host.py::test_safe"]
+
+
+def test_measurement_counts_are_canonical_before_manifest_hash(tmp_path):
+    analysis, plan, _ = _measurement_plan()
+    plan = plan.replace('"tile_cnt": "8"', '"tile_cnt": "8.0"').replace(
+        '"loop_factor": "16"', '"loop_factor": "16.0"'
+    )
+    _, path = _required_manifest(tmp_path, analysis, plan)
+    manifest = json.loads(path.read_text())
+    variant = manifest["requirements"][-1]["measurement_contract"]["variants"][0]
+    assert variant["tile_cnt"] == "8" and variant["loop_factor"] == "16"
+    assert manifest["manifest_id"] == _content_id(manifest, {"manifest_id"})
+
+
+def test_legacy_v2_integer_spelling_load_and_reseal_preserve_old_manifest(tmp_path):
+    analysis, plan, _ = _measurement_plan()
+    _, path = _required_manifest(tmp_path, analysis, plan)
+    old = json.loads(path.read_text())
+    old["requirements"][-1]["measurement_contract"]["variants"][0]["tile_cnt"] = "8.0"
+    old["manifest_id"] = _content_id(old, {"manifest_id"})
+    old_bytes = (json.dumps(old) + "\n").encode()
+    revision = tmp_path / "required_verification_manifests/revision-001.json"
+    path.write_bytes(old_bytes)
+    revision.write_bytes(old_bytes)
+    _reduce(tmp_path, path)
+    assert path.read_bytes() == old_bytes
+    _, output = _required_manifest(
+        tmp_path, analysis, plan, "--supersedes-reason", "retry unchanged scope"
+    )
+    resealed = json.loads(output.read_text())
+    assert resealed["parent_manifest_id"] == old["manifest_id"]
+    assert (
+        resealed["requirements"][-1]["measurement_contract"]["variants"][0]["tile_cnt"]
+        == "8"
+    )
+    assert revision.read_bytes() == old_bytes

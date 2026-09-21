@@ -331,6 +331,10 @@ or `added`. These markers mean ready for verification, not that the issue is
 solved. Include requirement IDs, remaining verification, production and test
 files, checks, and plan path.
 
+Use `execution: host` on a planned selector only when its module/node is
+explicitly `pytest.mark.llk_host`; predeclare it before sealing. Default device
+execution, required hardware coverage and cycle measurements remain unchanged.
+
 The Test Strategy is executable input, not explanatory prose. Keep explanations
 in surrounding fields; each `test` value must be one exact selector accepted by
 `run_test.sh`. Each architecture/suite/selector tuple may appear only once

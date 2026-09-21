@@ -588,3 +588,100 @@ def test_measurement_csv_rejects_duplicate_headers(tmp_path):
     path.write_text("marker,mean(L1_TO_L1),mean(L1_TO_L1)\nTILE_LOOP,1,2\n")
     with pytest.raises(ValueError, match="duplicate headers"):
         perf_eval._read_csv(path, strict=True)
+
+
+def test_bound_measurement_parses_the_attested_buffers_even_if_paths_change(
+    tmp_path, monkeypatch
+):
+    import hashlib
+
+    contract, current_rows, raw_rows = _measurement_fixture()
+    current, raw = tmp_path / "post.csv", tmp_path / "raw.csv"
+    fields = list(current_rows[0])
+    for path, rows in ((current, current_rows), (raw, raw_rows)):
+        with path.open("w") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
+    receipt = {
+        "version": 4,
+        "suite": "perf",
+        "backend": "silicon",
+        "classification": "success",
+        "measurement_artifacts": {
+            name: {
+                "size": path.stat().st_size,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+            for name, path in (("current", current), ("raw_current", raw))
+        },
+    }
+    original = perf_eval._read_csv
+    parsed = []
+
+    def replace_then_parse(path, *, strict=False, data=None):
+        assert data is not None
+        parsed.append(data)
+        path.write_text("replacement after receipt validation")
+        return original(path, strict=strict, data=data)
+
+    monkeypatch.setattr(perf_eval, "_read_csv", replace_then_parse)
+    result = perf_eval.evaluate_bound_measurement(current, raw, contract, receipt)
+    assert result["exit_code"] == 0
+    assert result["variants"][0]["current_cycles"] == 2.5
+    assert (
+        result["current_sha256"]
+        == receipt["measurement_artifacts"]["current"]["sha256"]
+    )
+    assert len(parsed) == 2
+    # A subsequent reducer reopen rejects the now-mutated files.
+    with pytest.raises(ValueError, match="differs from selected hardware receipt"):
+        perf_eval.evaluate_bound_measurement(current, raw, contract, receipt)
+
+
+def test_measurement_integer_key_spelling_matches_mixed_marker_pandas_export():
+    # Pinned postprocess_tile_loop + to_csv promotes these columns to floats
+    # when INIT has missing counts; source-planned integers keep their identity.
+    contract, current, raw = _measurement_fixture()
+    for row in (current[0], raw[0]):
+        row["loop_factor"], row["tile_cnt"] = "16.0", "8.0"
+    raw.append(
+        {
+            "mathop": "init",
+            "marker": "INIT",
+            "loop_factor": "",
+            "tile_cnt": "",
+            "mean(L1_TO_L1)": "1",
+        }
+    )
+    current.append(
+        {
+            "mathop": "init",
+            "marker": "INIT",
+            "loop_factor": "1.0",
+            "tile_cnt": "1.0",
+            "mean(L1_TO_L1)": "1",
+        }
+    )
+    assert perf_eval.evaluate_measurement(current, raw, contract)["exit_code"] == 0
+    current[0]["mathop"] = "datacopy.0"
+    assert perf_eval.evaluate_measurement(current, raw, contract)["exit_code"] == 2
+
+
+@pytest.mark.parametrize(
+    "value", ["NaN", "inf", "0", "-1", "8.5", "8.00000000000000000001"]
+)
+def test_measurement_integer_keys_reject_nonintegral_or_invalid_numbers(value):
+    contract, current, raw = _measurement_fixture()
+    current[0]["tile_cnt"] = value
+    assert perf_eval.evaluate_measurement(current, raw, contract)["exit_code"] == 2
+    contract["variants"][0]["tile_cnt"] = value
+    with pytest.raises(ValueError):
+        perf_eval.validate_measurement_contract(contract)
+
+
+def test_measurement_equivalent_integer_spellings_cannot_duplicate_coverage():
+    contract, _, _ = _measurement_fixture()
+    contract["variants"].append({**contract["variants"][0], "tile_cnt": "8.0"})
+    with pytest.raises(ValueError, match="duplicate"):
+        perf_eval.validate_measurement_contract(contract)
