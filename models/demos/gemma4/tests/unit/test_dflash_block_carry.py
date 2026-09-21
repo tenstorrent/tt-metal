@@ -233,6 +233,58 @@ def test_releasing_the_owner_still_tears_the_session_down(monkeypatch):
     assert m._spec_owner_slot is None
 
 
+def test_the_owner_slot_follows_a_runner_gather(monkeypatch):
+    """The runner permutes per-slot state between decode steps and then releases
+    by the CURRENT slot, so the recorded owner has to move with it.
+
+    Without this the runner had to release by the slot the request was PREFILLED
+    into, and that is ambiguous: slots are reused, so one request's prefill slot
+    can be another live request's owner slot and the release clears the wrong
+    session (vllm-tt-plugin#118 review, finding 1).
+    """
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8)
+    m._spec_owner_slot = 1
+    m._spec_active = True
+    m._spec_pending = ("taps", 10)
+
+    # Row 0 reads slot 1 and row 1 reads slot 0: the whole permutation arrives at
+    # once, because applying the pairs in sequence would move the owner twice.
+    DF.note_state_slots_moved(m, {1: 0, 0: 1})
+
+    assert m._spec_owner_slot == 0, "the owner followed its state to slot 0"
+    assert m._spec_active is True, "a gather is not a release"
+
+    # Releasing the pre-move slot is now somebody else's release.
+    DF.release_request(m, 1)
+    assert m._spec_active is True, "slot 1 is no longer this session's identity"
+
+    # Releasing the current slot tears it down.
+    DF.release_request(m, 0)
+    assert m._spec_active is False
+    assert m._spec_owner_slot is None
+
+
+def test_a_gather_that_does_not_touch_the_owner_leaves_it_alone(monkeypatch):
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8)
+    m._spec_owner_slot = 3
+    m._spec_active = True
+
+    DF.note_state_slots_moved(m, {1: 0, 0: 1})
+
+    assert m._spec_owner_slot == 3
+    assert m._spec_active is True
+
+
+def test_a_gather_with_no_session_is_a_no_op(monkeypatch):
+    """Nothing armed, so there is no owner to move."""
+    m = _model(monkeypatch, [[21, 22]] * 8, block=8)
+    m._spec_owner_slot = None
+
+    DF.note_state_slots_moved(m, {1: 0, 0: 1})
+
+    assert m._spec_owner_slot is None
+
+
 def test_an_unknown_owner_slot_keeps_the_old_unconditional_behaviour(monkeypatch):
     """The runner may supply no empty_slots; that is the pre-existing
     single-session case and must not start leaking sessions."""

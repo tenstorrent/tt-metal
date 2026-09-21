@@ -2456,6 +2456,19 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         "tt_adaptive_block_max_prompt_tokens": (
             int(os.environ.get("GEMMA4_DFLASH_MAX_SPEC_ISL", "0")) if _SPEC_BLOCK > 1 else 0
         ),
+        # Total KV positions ONE solo block step may touch, which is NOT the
+        # emitted width: the loop commits up to _SPEC_BLOCK tokens and the final
+        # iteration additionally writes _SPEC_N = V+1 physical verification rows
+        # past them (carried accepted tokens are inside that same extent).
+        #
+        # The plugin's own fallback is twice the emitted width, which bounds this
+        # only while the block is at least as wide as the verification -- true at
+        # the shipped default (64 vs 8), false at e.g. SERVE_BLOCK=2 with
+        # VERIFY=7, where the step emits 2 and writes 8 rows and the fallback
+        # reserves 4. Declaring the real extent is what keeps a narrow block from
+        # writing KV positions that have no request block
+        # (vllm-tt-plugin#118 review, finding 2).
+        "tt_block_kv_extent_tokens": (_SPEC_BLOCK + _SPEC_N) if _SPEC_BLOCK > 1 else 0,
     }
 
     # -- plugin speculative contract (vllm-tt-plugin#110 s.2) -----------------
@@ -3316,6 +3329,25 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         return super().read_decode_output(tt_out, async_read, *_, **__)
 
     # -- plugin lifecycle hooks (block-output contract) -----------------------
+    def note_state_slots_moved(self, moves) -> None:
+        """The runner gathered per-slot state: ``moves`` is slot ``old -> new``.
+
+        The B=1 session's owner slot is the identity ``release_request`` compares
+        against, and the runner permutes slots between steps, so it has to follow
+        the move or a release stops matching its own request. The runner passes
+        the whole permutation at once because applying pairs one at a time can
+        move the same owner twice (vllm-tt-plugin#118 review, finding 1).
+        """
+        owner = getattr(self, "_spec_owner_slot", None)
+        if owner is None or not moves:
+            return
+        try:
+            moved = moves.get(int(owner))
+        except (AttributeError, TypeError, ValueError):
+            return
+        if moved is not None:
+            self._spec_owner_slot = int(moved)
+
     def release_request(self, row: int) -> None:
         """Request finished. KEEP the cached fused decoder
         alive so the next request in the same packed-verify width bucket reuses
@@ -3871,6 +3903,14 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         # conc-1, baseline batched above it -- instead of pinning max_num_seqs=1.
         # Speculation only pays bandwidth-bound / low batch anyway.
         "tt_adaptive_block_output": _SPEC_N > 1,
+        # One fused draft+verify iteration writes exactly the _SPEC_N rows it
+        # emits, so here the physical extent EQUALS the emitted width and the
+        # plugin's twice-the-width fallback already covers it. Declared anyway so
+        # the bound is explicit rather than incidental: dFlash gets this wrong the
+        # moment its block is narrower than its verify (vllm-tt-plugin#118 review,
+        # finding 2), and MTP would too if a future step emitted less than it
+        # verified.
+        "tt_block_kv_extent_tokens": _SPEC_N if _SPEC_N > 1 else 0,
     }
 
     def __init__(self, *args, **kwargs):
@@ -4370,6 +4410,25 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
             pass
 
     # -- plugin lifecycle hooks (block-output contract) -----------------------
+    def note_state_slots_moved(self, moves) -> None:
+        """The runner gathered per-slot state: ``moves`` is slot ``old -> new``.
+
+        The B=1 session's owner slot is the identity ``release_request`` compares
+        against, and the runner permutes slots between steps, so it has to follow
+        the move or a release stops matching its own request. The runner passes
+        the whole permutation at once because applying pairs one at a time can
+        move the same owner twice (vllm-tt-plugin#118 review, finding 1).
+        """
+        owner = getattr(self, "_spec_owner_slot", None)
+        if owner is None or not moves:
+            return
+        try:
+            moved = moves.get(int(owner))
+        except (AttributeError, TypeError, ValueError):
+            return
+        if moved is not None:
+            self._spec_owner_slot = int(moved)
+
     def release_request(self, row: int) -> None:
         owner_slot = getattr(self, "_spec_owner_slot", None)
         if owner_slot is not None and row is not None and int(row) != int(owner_slot):
