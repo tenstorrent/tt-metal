@@ -1321,9 +1321,15 @@ class ModelArgs:
 
         LoFi where it has been measured against the full-model accuracy gate, HiFi2
         everywhere else. On P150x4 Llama-3.1-8B the LoFi head is 8x(76.8 -> 56.0) us
-        per token with no top-1/top-5 loss against the pinned baseline.
+        per token with no top-1/top-5 loss against the pinned baseline. Gated on
+        `_measured_fidelity_applies` for the same reason as the decoder overlay: the
+        `accuracy` level is a correctness reference and must keep HiFi2.
         """
-        if self.base_model_name == "Llama-3.1-8B" and self.device_name == "P150x4":
+        if (
+            self.base_model_name == "Llama-3.1-8B"
+            and self.device_name == "P150x4"
+            and self._measured_fidelity_applies()
+        ):
             return self.compute_kernel_config_lofi
         return self.compute_kernel_config_hifi2
 

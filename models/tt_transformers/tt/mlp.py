@@ -309,15 +309,16 @@ class MLP(LightweightModule):
         # P150x4 for 32x3584 bf16 x bf16 -> bfp8, mul plus the following reshard:
         #   mul on the 16-core FF1/FF3 grid 13.6 us | mul L1-interleaved 9.3 us
         # (mul on 56 cores is 6.1 us but needs a 2.9 us reshard back, for 9.4 us total).
-        # SKU-gated like every other measured knob in this path: the 13.6 -> 9.3 us win was
-        # measured on P150x4 against the 16-core FF1/FF3 output grid this SKU uses. On a SKU
-        # whose FF1/FF3 output grid already equals the FF2 input grid the following
-        # to_memory_config is a no-op today, and forcing an interleaved mul output would turn
-        # it into a real reshard, so other SKUs keep the pinned output.
-        reshard_w2_in = (
-            mode == Mode.DECODE
-            and not TG
-            and self.prefetcher is None
+        # Two separate conditions. `convert_w2_in` is the pre-existing one: in decode the w2
+        # matmul may use a different core grid, and this conversion is a no-op when the grids
+        # already match. `interleave_swiglu_out` is this stage's measured change and is
+        # SKU-gated: writing the SwiGLU combine L1-interleaved lets it auto-grid instead of
+        # being pinned to the FF1/FF3 output shard (13.6 -> 9.3 us including the conversion
+        # below, measured on P150x4). Gating them together would silently drop the conversion
+        # on every other SKU, which is only safe while mlp_core_grid == mlp2_core_grid there.
+        convert_w2_in = mode == Mode.DECODE and not TG and self.prefetcher is None
+        interleave_swiglu_out = (
+            convert_w2_in
             and self.args.base_model_name == "Llama-3.1-8B"
             and self.args.device_name == "P150x4"
         )
@@ -326,10 +327,10 @@ class MLP(LightweightModule):
             w3_out,
             input_tensor_a_activations=[self.activation_type],
             dtype=activation_dtype or ttnn.bfloat8_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG if reshard_w2_in else w1_out.memory_config(),
+            memory_config=ttnn.L1_MEMORY_CONFIG if interleave_swiglu_out else w1_out.memory_config(),
         )
 
-        if reshard_w2_in:
+        if convert_w2_in:
             # w2 uses its own core grid; this also re-shards the interleaved mul output
             w2_in = ttnn.to_memory_config(w2_in, self.args.get_mlp_binary_mult_mem_config(mode))
 
