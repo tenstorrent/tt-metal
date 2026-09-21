@@ -136,6 +136,43 @@ def _verdict_from_output(out: str, threshold: float) -> dict:
     )
 
 
+def _inside_repo(resolved: Path, model_root, repo) -> Path:
+    """Keep the correctness gate in the SAME tree the perf gate measures.
+
+    THE GATE AND THE MEASUREMENT HAD DIFFERENT TREES. A run started with an ABSOLUTE
+    `--pcc-test` keeps that absolute path in the manifest, and when the run is later driven
+    from a git WORKTREE the perf test (a model-root-relative path) resolves into the worktree
+    while the PCC test still resolves into the ORIGINAL checkout. pytest then imports
+    `models.demos.<model>...` from the original checkout -- so every edit was measured in one
+    tree and PCC'd in another, and a gate that never saw the edit answered "ok" for all of them.
+    Measured on voxtral_4b_tts_2603 2026-09-21: the two trees were on different branches, and a
+    residual-add rewrite in the worktree did not execute one line of the code the gate ran.
+
+    A test file that escapes the repo under measurement is therefore relocated to its in-repo
+    twin when there is exactly one, and only then. No twin means the caller really did point
+    outside on purpose, and the path is left alone rather than guessed at.
+    """
+    try:
+        repo_root = Path(repo).resolve()
+        if repo_root in resolved.resolve().parents:
+            return resolved
+    except OSError:
+        return resolved
+    twins = [
+        cand
+        for base in (Path(model_root), repo_root)
+        for cand in sorted(Path(base).rglob(resolved.name))
+        if cand.is_file()
+    ]
+    seen, unique = set(), []
+    for cand in twins:
+        key = str(cand.resolve())
+        if key not in seen:
+            seen.add(key)
+            unique.append(cand)
+    return unique[0] if len(unique) == 1 else resolved
+
+
 def run_pcc(ctx) -> dict:
     """Run the e2e PCC test, parse the measured PCC, compare the manifest threshold.
 
@@ -150,6 +187,7 @@ def run_pcc(ctx) -> dict:
         (b / file_part for b in (Path(ctx.model_root()), Path(repo)) if (b / file_part).is_file()),
         Path(ctx.model_root()) / file_part,
     )
+    resolved = _inside_repo(resolved, ctx.model_root(), repo)
     test = str(resolved) + (sep + fn)
     threshold = entry["threshold"]
     env = dict(os.environ)
