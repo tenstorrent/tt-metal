@@ -1,4 +1,4 @@
-# Producer manifest: GPT-OSS Gate 1 (mock migration) — prefill both slots, then PCC them; no copy.
+# Producer manifest: GPT-OSS Gate 1 (disk table) — prefill both slots, then PCC them; no copy.
 #
 # MODEL-SPECIFIC transport: SP=4 TP=8 (TP cols == num_kv_heads). Pair with
 # gpt_oss_binding_mock_migration.yaml.
