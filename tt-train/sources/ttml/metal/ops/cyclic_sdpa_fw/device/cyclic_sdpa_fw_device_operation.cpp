@@ -133,7 +133,8 @@ void CyclicSDPAForwardDeviceOperation::validate_on_program_cache_miss(
         N / chunks,
         args.rows_per_block_tiles,
         static_cast<uint32_t>(shape[0]) * q_heads * pairs,
-        args.max_groups);
+        args.max_groups,
+        args.fast ? 8U : 4U);
 }
 
 CyclicSDPAForwardDeviceOperation::spec_return_value_t CyclicSDPAForwardDeviceOperation::compute_output_specs(
@@ -197,13 +198,15 @@ ttml_cyclic_sdpa_fw(
     uint32_t max_groups,
     uint32_t sequence_chunks,
     const std::vector<uint32_t>& row_chunks,
-    const std::vector<uint32_t>& col_chunks) {
+    const std::vector<uint32_t>& col_chunks,
+    bool fast) {
     using OperationType = ttml::metal::ops::cyclic_sdpa_fw::device::CyclicSDPAForwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .rows_per_block_tiles = rows_per_block_tiles,
         .mask_type = mask_type,
         .max_groups = max_groups,
+        .fast = fast,
         .sequence_chunks = sequence_chunks,
         .row_chunks = row_chunks,
         .col_chunks = col_chunks};

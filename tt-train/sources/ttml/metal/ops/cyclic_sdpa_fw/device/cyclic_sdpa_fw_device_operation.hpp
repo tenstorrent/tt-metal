@@ -45,6 +45,7 @@ ttml_cyclic_sdpa_fw(
     uint32_t max_groups = 0U,
     uint32_t sequence_chunks = 1U,
     const std::vector<uint32_t>& row_chunks = {},
-    const std::vector<uint32_t>& col_chunks = {});
+    const std::vector<uint32_t>& col_chunks = {},
+    bool fast = false);
 
 }  // namespace ttnn::prim
