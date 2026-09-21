@@ -289,8 +289,9 @@ void FabricBuilder::create_kernels() {
     for (auto& [eth_chan, router_builder] : routers_) {
         router_builder->create_kernel(program_, ctx);
     }
+}
 
-    // Build the fabric debug instances for each router.
+void FabricBuilder::publish_debug_instances() {
     std::vector<FabricRouterDebugInstance> debug_instances;
     debug_instances.reserve(routers_.size());
     for (const auto& [eth_chan, router_builder] : routers_) {
