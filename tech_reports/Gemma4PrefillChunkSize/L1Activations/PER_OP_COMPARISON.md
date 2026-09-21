@@ -58,6 +58,59 @@ The single-cell tables these are built from are in `reports/` — see the index 
 - **chunk 8192: layer total 5.195 ms first chunk → 13.299 ms at depth** (+156.0%)
 
 
+## Which layer type owns the floor — 85 / 15, and it is the layer count
+
+The two tables above look comparably bad, and reading them side by side is misleading: **there
+are 50 sliding layers and 10 global ones.** Per layer the chunk-invariant cost is nearly the
+same; the 5x count is the whole story.
+
+| layer | count | `F` per layer | `F` x count | scaled to the e2e fit | share |
+|---|---|---|---|---|---|
+| **sliding** | 50 | 1.866 ms | 93.3 ms | **84.7 ms** | **84.9%** |
+| global | 10 | 1.666 ms | 16.7 ms | 15.1 ms | 15.1% |
+| | | | 110.0 ms | 99.8 ms | (per-op sum overstates by 10%) |
+
+**So debug effort belongs in the sliding layer.** The same fix is worth 5x more there.
+
+### Per-op `F`, split by layer type
+
+Scaled to the e2e fit. This is the table to pick work from:
+
+| op | sliding x50 | global x10 | total | share |
+|---|---|---|---|---|
+| Matmul `_x5376x5376` | **24.7 ms** | 4.9 ms | 29.6 | 29.7% |
+| LayerNorm | **20.1 ms** | 4.0 ms | 24.1 | 24.1% |
+| RingJointSDPA | **17.6 ms** | **−1.7 ms** | 15.9 | 15.9% |
+| Matmul `_x5376x4096` | **7.4 ms** | 0.0 ms | 7.4 | 7.4% |
+| NlpCreateHeads | 2.5 ms | 0.6 ms | 3.1 | 3.1% |
+| Matmul `_x2048x5376` | 2.7 ms | 0.0 ms | 2.7 | 2.7% |
+| GatherCodegen | 1.5 ms | 1.0 ms | 2.5 | 2.5% |
+| RotaryEmbeddingLlama | 1.9 ms | 0.2 ms | 2.1 | 2.1% |
+
+Three things follow that the ratio tables above do not show:
+
+1. **The top three ops are 70% of the floor, and 62.4 of their 69.6 ms is in the sliding
+   layer.** Fix any of them and it pays five times over.
+2. **The global SDPA's contribution to the floor is NEGATIVE (−1.7 ms)** — see below.
+3. **`_x5376x4096` is sliding-only** (7.4 ms, zero in global): it is the sliding attention's
+   qkv shape. Small overall but exclusively in the 50x layer, so better value than 7.4% looks.
+
+### Why the global SDPA's floor ratio is 0.144, i.e. *better* than ideal
+
+It is not a typo and it is not a contradiction. **That op has two different problems and only
+one of them is a floor problem.**
+
+- **At the floor (chunk index 0) there is no history**, so it computes only the causal diagonal
+  block of the chunk against itself. That work is roughly quadratic in the chunk, not linear,
+  so quartering the chunk cuts it by more than 4x — hence 0.144 against a linear ideal of
+  0.250, and hence a *negative* contribution to the chunk-invariant cost.
+- **At depth it is the dominant cost in the model**, ~100% of the global layer's growth, and
+  that is where its 71%-idle-grid problem lives (see the occupancy note above).
+
+So: **do not target this op for floor work** — it is already better than linear there. Target it
+for *prefix* work, at chunk 2048, where it is 1.9x off C^2 scaling. The ⚠️ marks in the tables
+above are on `r2048 > 0.45` and correctly skip this row.
+
 ## How to read it
 
 **⚠️ marks `r2048 > 0.45`** — ops that are nowhere near scaling with chunk width. Those are the
