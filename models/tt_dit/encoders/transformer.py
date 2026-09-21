@@ -574,6 +574,7 @@ class TransformerEncoder(Module):
         vision_mask: torch.Tensor | None = None,
         deepstack_embeds: Sequence[ttnn.Tensor] = (),
         max_length: int,
+        cache_length: int | None = None,
         eos_tokens: int | Sequence[int] | None,
         top_k: int | None = None,
         top_p: float = 1,
@@ -596,6 +597,8 @@ class TransformerEncoder(Module):
             deepstack_embeds: One tensor like `vision_embeds` per leading layer, added to the
                 vision rows after that layer.
             max_length: Length of the prompt and the generated tokens together.
+            cache_length: Length the k/v cache and the decode trace are sized for, `max_length`
+                when omitted. A fixed value keeps one trace across calls of different lengths.
             eos_tokens: Ids that end a sequence; generation stops once every sequence has ended.
             top_k: Number of most likely tokens to sample among, or all of them when omitted.
             top_p: Probability mass of the most likely tokens to sample among.
@@ -624,7 +627,13 @@ class TransformerEncoder(Module):
         batch_size, input_length = tokens.shape
         device = self._device
 
-        padded_seq_len = _padded_sequence_length(max_length - 1)
+        if cache_length is None:
+            cache_length = max_length
+        elif cache_length < max_length:
+            msg = f"cache_length {cache_length} is shorter than max_length {max_length}"
+            raise ValueError(msg)
+
+        padded_seq_len = _padded_sequence_length(cache_length - 1)
         padded_seq_len = -(-padded_seq_len // WORKAROUND_MIN_DECODE_CHUNK_SIZE) * WORKAROUND_MIN_DECODE_CHUNK_SIZE
 
         if mask is not None:
