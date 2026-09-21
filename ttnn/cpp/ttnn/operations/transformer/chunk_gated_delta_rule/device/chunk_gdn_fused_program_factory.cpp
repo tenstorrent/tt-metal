@@ -206,7 +206,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     // (v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv). Double-buffered: the producer runs one chunk
     // ahead of the receivers' consumption. The writer's explicit destination slots (global c % nbuf, and
     // the v_beta ring) are computed against THIS depth, so kHandoffNbuf travels to the writer as a CT arg.
-    constexpr uint32_t kHandoffNbuf = 2;
+    const uint32_t kHandoffNbuf = attrs.nbuf;
     add_cb(union_set, fcb::vbeta, cv, kHandoffNbuf);
     add_cb(union_set, fcb::kd, ck, kHandoffNbuf);
     add_cb(union_set, fcb::qdecay, ck, kHandoffNbuf);

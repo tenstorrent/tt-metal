@@ -47,6 +47,11 @@ struct ChunkGdnFusedParams {
     // V-slice of Vt/NV tiles (the phased scan's V-block split, fed over the NoC). Read from QWEN_GDN_NV
     // at attrs construction (hashed); default 1 until the cost model (Phase 2) chooses it.
     uint32_t nv = 1;
+    // Hand-off CB depth (slots per CB): how many chunks a producer may run ahead of a receiver's
+    // consumption, and how early a receiver can reserve+credit the next chunk. 2 = F2's value; deeper
+    // rings hide more of the per-chunk handshake round trip at +76 KB of L1 per slot on every core.
+    // Read from QWEN_GDN_HANDOFF_NBUF at attrs construction (hashed).
+    uint32_t nbuf = 2;
     bool has_initial_state = false;
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;

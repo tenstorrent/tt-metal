@@ -161,6 +161,12 @@ std::vector<Tensor> chunk_gdn_fused(
         TT_FATAL(v_nv >= 1, "QWEN_GDN_NV must be a positive integer (got '{}')", e);
         nv = static_cast<uint32_t>(v_nv);
     }
+    uint32_t nbuf = 2;
+    if (const char* e = std::getenv("QWEN_GDN_HANDOFF_NBUF")) {
+        const int v_nb = std::atoi(e);
+        TT_FATAL(v_nb >= 1 && v_nb <= 8, "QWEN_GDN_HANDOFF_NBUF must be in [1, 8] (got '{}')", e);
+        nbuf = static_cast<uint32_t>(v_nb);
+    }
     auto attrs = ChunkGdnFusedOperation::operation_attributes_t{
         .BH = BH,
         .num_chunks = num_chunks,
@@ -175,6 +181,7 @@ std::vector<Tensor> chunk_gdn_fused(
         .scale = scale,
         .np = np,
         .nv = nv,
+        .nbuf = nbuf,
         .has_initial_state = initial_state.has_value(),
         .output_final_state = output_final_state,
         .output_mem_config = output_mem_config,
