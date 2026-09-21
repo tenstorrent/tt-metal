@@ -13,6 +13,7 @@ on:
         type: choice
         options:
           - all
+          - galaxy-transfer-corruption
           - llama3.2-1b
           - llama3.2-3b
           - llama3.2-11b-vision
@@ -94,6 +95,11 @@ on:
         type: boolean
         default: true
         description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access)"
+      use-artifacts-from-run:
+        required: false
+        type: string
+        default: ""
+        description: "Reuse build artifacts from a successful run of this exact commit/config (skips compilation)"
 
 permissions:
   packages: write
@@ -132,10 +138,11 @@ jobs:
   build-artifact:
     needs: check-harbor
     if: ${{ !cancelled() }}
-    uses: ./.github/workflows/build-artifact.yaml
+    uses: ./.github/workflows/models-build-or-reuse.yaml
     permissions:
       contents: read
       packages: write
+      actions: read # Download artifacts when use-artifacts-from-run is set.
     secrets: inherit
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
@@ -143,6 +150,7 @@ jobs:
       build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}
   # Bakes the source tree and this run's build output into one image the test legs
   # run in, so they need no artifact download and no recursive checkout.
   # PROFILE=full because the legs read /work/build; the dev base is the same image

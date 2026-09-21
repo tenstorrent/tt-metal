@@ -61,6 +61,8 @@ repos:
       entry: python3 scripts/check_file_size.py
       language: system
       types: [file]
+      # Fixed, SHA-256-verified activation/reference fixture for the Galaxy repro.
+      exclude: ^tests/ttnn/integration_tests/galaxy_transfer_corruption/repro/55041-read-fixture-v86\.pt\.gz$
     - id: validate-metalium-api
       name: validate-metalium-api
       entry: python3 scripts/validate_api/validate_api.py tt_metal/api

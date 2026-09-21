@@ -13,6 +13,17 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
+- name: Galaxy transfer corruption repro
+  cmd: bash tests/scripts/run_galaxy_transfer_corruption.sh
+  model: galaxy-transfer-corruption
+  skus:
+    wh_galaxy_perf:
+      timeout: 15
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  budget_type: unit
+
 - name: Llama 3.1-8B unit tests
   cmd: |
     export TT_METAL_WATCHER=15

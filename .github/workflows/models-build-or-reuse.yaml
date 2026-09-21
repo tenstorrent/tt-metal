@@ -1,0 +1,112 @@
+name: "[internal] Build or reuse model test artifacts"
+
+on:
+  workflow_call:
+    inputs:
+      use-artifacts-from-run:
+        type: string
+        default: ""
+      harbor-prefix:
+        type: string
+        default: ""
+      build-type:
+        type: string
+        default: Release
+      build-inplace-wheel:
+        type: boolean
+        default: true
+      platform:
+        type: string
+        default: "Ubuntu 22.04"
+      enable-lto:
+        type: boolean
+        default: false
+    outputs:
+      dev-docker-image:
+        value: ${{ jobs.build.outputs.dev-docker-image || jobs.resolve-images.outputs.dev-tag }}
+      build-artifact-name:
+        value: ${{ jobs.build.outputs.build-artifact-name || jobs.reuse.outputs.build-artifact-name }}
+      wheel-artifact-name:
+        value: ${{ jobs.build.outputs.wheel-artifact-name || jobs.reuse.outputs.wheel-artifact-name }}
+
+permissions:
+  contents: read
+  packages: write
+  actions: read
+
+jobs:
+  build:
+    if: ${{ inputs.use-artifacts-from-run == '' }}
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ inputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type }}
+      build-inplace-wheel: ${{ inputs.build-inplace-wheel }}
+      platform: ${{ inputs.platform }}
+      enable-lto: ${{ inputs.enable-lto }}
+
+  resolve-images:
+    if: ${{ inputs.use-artifacts-from-run != '' }}
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform }}
+      architecture: amd64
+      harbor-prefix: ${{ inputs.harbor-prefix }}
+
+  reuse:
+    if: ${{ inputs.use-artifacts-from-run != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      build-artifact-name: ${{ steps.download.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ steps.download.outputs.wheel-artifact-name }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: true
+      - name: Require a successful build of this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.use-artifacts-from-run }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > source-run.json
+          jq -e --arg sha "$GITHUB_SHA" '.head_sha == $sha and .conclusion == "success"' source-run.json
+      - name: Download build and wheel
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        uses: ./.github/actions/download-artifacts-from-run
+        with:
+          workflow_run_id: ${{ inputs.use-artifacts-from-run }}
+          working-directory: ${{ github.workspace }}/artifacts
+          tracy: false
+      - name: Require the matching build configuration and in-place wheel
+        env:
+          BUILD_NAME: ${{ steps.download.outputs.build-artifact-name }}
+          WHEEL_NAME: ${{ steps.download.outputs.wheel-artifact-name }}
+          BUILD_TYPE: ${{ inputs.build-type }}
+        run: |
+          set -euo pipefail
+          [[ "$BUILD_NAME" == *"$BUILD_TYPE"* ]]
+          [[ -n "$WHEEL_NAME" ]]
+      - name: Make the build available to this run
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ steps.download.outputs.build-artifact-name }}
+          path: ${{ github.workspace }}/artifacts/ttm_any.tar.zst
+          if-no-files-found: error
+          retention-days: 1
+      - name: Make the wheel available to this run
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ steps.download.outputs.wheel-artifact-name }}
+          path: ${{ github.workspace }}/artifacts/*.whl
+          if-no-files-found: error
+          retention-days: 1
