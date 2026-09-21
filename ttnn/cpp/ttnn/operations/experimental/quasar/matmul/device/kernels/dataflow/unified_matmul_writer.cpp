@@ -38,7 +38,7 @@ void kernel_main() {
     constexpr uint32_t subblock_N_tiles = get_arg(args::subblock_N_tiles);
     constexpr bool C_borrowed = get_arg(args::C_borrowed) != 0;  // C's shard is the C_slice
 
-    constexpr uint32_t C_tiles_per_batch = M_tiles * N_tiles;
+    constexpr uint32_t C_batch_stride_tiles = M_tiles * N_tiles;
     constexpr uint32_t subblock_tiles = subblock_M_tiles * subblock_N_tiles;  // what the compute packs at once
 
     DataflowBuffer C_slice(dfb::C_slice);
@@ -54,7 +54,7 @@ void kernel_main() {
     const uint32_t C_tile_bytes = C_slice.get_entry_size();
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
-        const uint32_t C_batch_first_tile = batch * C_tiles_per_batch;
+        const uint32_t C_batch_first_tile = batch * C_batch_stride_tiles;
 
         uint32_t C_slice_first_M_tile = first_C_slice_M_tile;  // origin of the current C slice, in tiles
         uint32_t C_slice_first_N_tile = first_C_slice_N_tile;

@@ -32,8 +32,10 @@ struct UnifiedMatmulPlan {
     uint32_t M_tiles = 0;
     uint32_t K_tiles = 0;
     uint32_t N_tiles = 0;
-    uint32_t batch_size = 0;             // batches of A (and of C)
-    bool broadcast_B_over_batch = true;  // one B for every batch, or a B per batch
+    uint32_t batch_size = 0;  // batches of A (and of C)
+    // Tiles from one batch of B to the next: K_tiles * N_tiles when B has a [K x N] per batch, 0 when B is a
+    // single [K x N] (or [1 x K x N]) that every batch of A multiplies. A's stride is always M_tiles * K_tiles.
+    uint32_t B_batch_stride_tiles = 0;
 
     // Blocking, after the config's auto fields are resolved.
     uint32_t C_slice_M_tiles = 0;
