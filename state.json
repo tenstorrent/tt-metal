@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": "35549609194",
-    "timestamp": "2026-09-20T18:57:00Z"
+    "run_id": "35570168855",
+    "timestamp": "2026-09-21T06:53:00Z"
   },
-  "run_id": "35549609194",
+  "run_id": "35570168855",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -164,7 +164,7 @@
     "56808_typecast_int32_negative": "opened this run (test-only fix, branch repo-assist/fix-issue-56808-typecast-int32-negative-stimuli); adds test_eltwise_unary_typecast_int32_negative parametrized over Int32-input typecast pairs, sampling [-255,255] (or [-15,15] w/ block-float output) packed via pack_int32's sign-magnitude default; verified against current ckernel_sfpu_typecast.h (WH/BH/Quasar) that Int32 typecast kernels expect sign-magnitude Dest, matching the issue's own diagnosis. CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally.",
     "56817": {
       "issue": 56808,
-      "status": "CI FAILED on original commit (Int32->Float32 dest_acc=Yes typecast_int32_negative test found a real kernel bug: calculate_typecast_int32_to_fp32/_to_fp16b on WH/BH used SFPABS_MOD1_INT two's-complement abs on sign-magnitude Int32 data). Pushed a fix commit switching to SFPABS_MOD1_FLOAT (clear sign bit) in both WH and BH kernels; verified mod1 semantics against ISA docs via DeepWiki and against tt_llk_quasar's own calculate_abs which already uses the named constant with the same caution comment. Posted explanatory comment on PR. CI re-running on new commit, check next run."
+      "status": "REGRESSION FOUND AND FIXED: Repo Assist's prior kernel change (d65278e93a, switching WH/BH Int32 typecast SFPABS from MOD1_INT to MOD1_FLOAT) was itself wrong -- contradicted #56808's own diagnosis and disproven by maintainer AJ0070's on-device N150 measurement (switching to MOD1_FLOAT corrupts every negative case; original two's-complement kernels were correct). Reverted that commit and instead fixed the real bug: test harness packed Int32 negative stimuli as sign-magnitude via pack_int32's default -- now passes twos_complement=True through StimuliConfig for test_eltwise_unary_typecast_int32_negative, matching #56808's own suggested fix. Verified SFPLOAD INT32 load-mode and SFPABS mod1 semantics against tt-isa-documentation via DeepWiki before making the change. Pushed 2 commits + posted PR comment. CI run pending check next run."
     },
     "56827_concat_width": {
       "issue": 56827,
@@ -1160,7 +1160,7 @@
     }
   },
   "backlog_cursor": {
-    "task1_task2_latest": "2026-09-20 run: reviewed newest ~50 issues from #57103 down through #56904 (continuation of prior scan). Confirmed #56976 (matmul L1 4x perf regression) as a fresh, well-documented, root-cause-verified defect -- labeled performance monitoring and commented. Reviewed #57028 (SFPI back-to-back cast elim), #57011 (SFPU restricted-range results), #56914/#56913 (weight-upload perf ideas, no design yet) -- left unlabeled, feature-ish/perf notes not yet actionable defects. Cursor continues below #56904 next run.",
+    "task1_task2_latest": "2026-09-21 run: labeled 9 fresh unlabeled issues from the newest-30 scan: #57139/#57135/#57112/#57102/#57095 bug (all confirmed defects from issue text: fp32 rescale/accumulator bugs, KDA slot duplication, shutdown sentinel host alloc, profiler L1 marker identity), #57119 ci-bug (bh_sc1 multihost chip-init failures draining Blaze queue), #57122/#57117/#57103 performance monitoring (VAE/audio decoder timing push, k3_contracts host-only test runtime, kimi_moe_perf midpoint staleness). Did not comment substantively this run (focused on Task5 CI/regression fix on PR #56817). Cursor continues below #57026 next run.",
     "task6_latest": "2026-09-20: nudged 3 never-previously-nudged stale PRs (oldest-updated, non-repo-assist, draft:false): #52375 (softplus golden beta/threshold, author checkin), #50598 (sdpa_decode fp32_dest_acc_en, author checkin re earlier CHANGES_REQUESTED), #51447 (VibeVoice1.5B bring-up, author checkin). Hit 3-action cap. Remaining never-nudged candidates further down oldest-updated list: #41596 (aarch64 support, behind main, very old), #40339 (Gentoo support, behind main, very old) -- both look abandoned/low-priority, consider for closure discussion rather than nudge next time."
   },
   "labeled_issues": {
@@ -1445,7 +1445,16 @@
       "label": "performance monitoring",
       "date": "2026-09-20",
       "note": "matmul ~4x slower with L1 operand/output; verified all_dram_interleaved gate against current matmul_program_config.cpp (L1129-1133, L1183); commented with citations; no fix attempted"
-    }
+    },
+    "57139": "bug",
+    "57135": "bug",
+    "57122": "performance monitoring",
+    "57119": "ci-bug",
+    "57117": "performance monitoring",
+    "57112": "bug",
+    "57103": "performance monitoring",
+    "57102": "bug",
+    "57095": "bug"
   },
   "issues_commented": {
     "53922": {
@@ -1642,6 +1651,9 @@
       "note": "verified 0 merged PRs, 0 issues, exactly 1 PR authored (this one)"
     }
   },
-  "task8_last_update": "2026-09-20T18:57:00Z",
-  "ci_pattern_note": "2026-09-20: PR #56195 shows RTL Sim CI failure with details_url=github.com/tenstorrernt (typo domain) -- same broken-placeholder pattern already seen on #55434/#51868, treating as infra noise not a code defect until a real job log can be fetched."
+  "task8_last_update": "2026-09-21T06:53:00Z",
+  "ci_pattern_note": "2026-09-20: PR #56195 shows RTL Sim CI failure with details_url=github.com/tenstorrernt (typo domain) -- same broken-placeholder pattern already seen on #55434/#51868, treating as infra noise not a code defect until a real job log can be fetched.",
+  "lessons_learned": [
+    "2026-09-21: PR #56817 case study -- a prior Repo Assist 'root cause' diagnosis (sign-magnitude vs two's-complement for Int32 SFPABS) was WRONG despite citing DeepWiki/ISA docs, and was only caught by a maintainer's real on-device measurement. Always weight a contributor's device-measured counter-evidence over a prior confident-sounding root-cause comment, even one from Repo Assist itself; re-verify the ISA claim from scratch rather than trusting the earlier chain of reasoning."
+  ]
 }
