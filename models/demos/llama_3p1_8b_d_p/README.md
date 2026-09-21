@@ -18,7 +18,8 @@ each returned output. Calls through a model instance must be sequential.
 `prefill_chunk(..., skip_lm_head=False)` returns vocabulary-sharded logits;
 the default returns hidden states. Call `model.close()` after use.
 
-Weights and activations are BF16. KV defaults to BF8_B, with BF16 also covered
+Weights and activations are BF16. Indexed RoPE uses FP32 destination accumulation
+to limit rotation rounding error; its tables and outputs remain BF16. KV defaults to BF8_B, with BF16 also covered
 by the accuracy tests. Each TP column owns one KV head; SP rows own successive
 256-token stripes. The local cache shape is `[64, 1, max_seq_len / 4, 128]`,
 with user-major planes (`slot * 32 + layer`), 32-token round-robin DRAM pages,

@@ -839,6 +839,8 @@ def test_real_weight_attention_composition_all_raw_scenarios(mesh_device):
 
 # Derive repeated-BOS stress and BOS-once normal token streams from real checkpoint embedding rows and
 # layer-0 RMSNorm, then verify first-chunk and continuation heads/output in both cache dtypes.
+# The repeated-BOS case also catches excess RoPE accumulation error before accurate SDPA;
+# acceptance uses the original source-reference PCC/NL2 limits, not a relaxed readback oracle.
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [pytest.param(MESH_SHAPE, id="galaxy-4x8")], indirect=True)
 def test_real_token_derived_attention_composition(mesh_device):
