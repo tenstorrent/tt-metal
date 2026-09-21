@@ -19,6 +19,8 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/device/sdpa_program_factory.cpp
     sdpa/sdpa.cpp
     sdpa/sdpa_numerics.cpp
+    sdpa/sdpa_recipe.cpp
+    sdpa/sdpa_input_preparation.cpp
     sdpa/device/sparse_sdpa_device_operation.cpp
     sdpa/device/sparse_sdpa_program_factory.cpp
     sdpa/sparse_sdpa.cpp

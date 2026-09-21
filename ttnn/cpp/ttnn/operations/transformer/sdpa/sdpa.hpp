@@ -15,6 +15,15 @@
 
 namespace ttnn::transformer {
 
+// Explicit numerical recipes. Omit precision to preserve the legacy API's
+// independent compute/program controls and broader platform/feature support.
+enum class SDPAPrecision : uint8_t { FAST, COMPENSATED, BALANCED, ACCURATE, LOW_PRECISION };
+
+// Explicit, out-of-place preparation for LOW_PRECISION. Apply Q preparation
+// after Q transforms and KV preparation before caching/communication. A cast
+// to BF16/BFP8/BFP4 is not a substitute for this rounding operation.
+ttnn::Tensor prepare_sdpa_input(const ttnn::Tensor& input, bool is_query, DataType dtype = DataType::BFLOAT16);
+
 // A logical (unpadded) sequence length: a host scalar, or a single-valued device tensor read on-device so
 // the value can change between replays of one captured trace.
 using LogicalLength = std::variant<std::size_t, ttnn::Tensor>;
@@ -39,7 +48,9 @@ ttnn::Tensor scaled_dot_product_attention(
     /// Windowed mode only. Per-device form of the offset above: a 1-element int32/uint32 ROW_MAJOR device
     /// tensor, read at runtime rather than baked into the program. Shard it on the sequence-parallel axis
     /// so every device runs the SAME program yet sees its own origin. Overrides the scalar when set.
-    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt,
+    std::optional<SDPAPrecision> precision = std::nullopt,
+    bool inputs_prepared = false);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
