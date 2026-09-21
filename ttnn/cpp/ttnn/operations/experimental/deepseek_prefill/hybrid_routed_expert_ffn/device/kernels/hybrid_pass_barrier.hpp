@@ -53,21 +53,24 @@ enum Arg : uint32_t {
     TOTAL_ARRIVALS,
     BARRIER_SEM_ID,
     SHARED_SEM_COUNT,
+    RELEASE_SEM_ID,
     COUNT,
 };
 
 inline uint32_t arg(uint32_t which) { return get_arg_val<uint32_t>(HYB_BARRIER_RT_BASE + which); }
 
-// Above any arrival count, so a core cannot mistake the tail of the arrival phase for the release.
-inline constexpr uint32_t kReleased = 0xB417u;
-
 }  // namespace hybrid_pass_barrier_detail
 
-inline void hybrid_pass_barrier() {
+// `round` counts this call, from 1. Arrivals accumulate on the master and are compared against
+// total * round; the release word carries the round itself. Neither is ever reset, which is what
+// makes a second call work -- one semaphore could not do both, because set_multicast sources from
+// the very word the arrivals accumulate in.
+inline void hybrid_pass_barrier(uint32_t round) {
     namespace d = hybrid_pass_barrier_detail;
 
     Noc noc;
-    Semaphore<> barrier_sem(d::arg(d::BARRIER_SEM_ID));
+    Semaphore<> arrive_sem(d::arg(d::BARRIER_SEM_ID));
+    Semaphore<> release_sem(d::arg(d::RELEASE_SEM_ID));
 
     // Everything this kernel issued for pass A must have landed before it claims to be done: an
     // increment that overtakes an outstanding transaction would release the grid over data still
@@ -77,17 +80,21 @@ inline void hybrid_pass_barrier() {
     noc.async_read_barrier();
     noc_async_atomic_barrier();
 
-    barrier_sem.up(noc, d::arg(d::MASTER_NOC_X), d::arg(d::MASTER_NOC_Y), 1);
+    arrive_sem.up(noc, d::arg(d::MASTER_NOC_X), d::arg(d::MASTER_NOC_Y), 1);
 
     if (d::arg(d::IS_MASTER) != 0) {
-        barrier_sem.wait_min(d::arg(d::TOTAL_ARRIVALS));
+        arrive_sem.wait_min(d::arg(d::TOTAL_ARRIVALS) * round);
 
         // Hand pass B a zeroed block. Done per id through the public set/multicast pair rather
         // than as one write over the semaphore region, so the barrier's own id -- which must
         // survive -- cannot be caught by a range that grows later.
         const uint32_t shared = d::arg(d::SHARED_SEM_COUNT);
         const uint32_t receivers = d::arg(d::NUM_RECEIVERS);
+        const uint32_t release_id = d::arg(d::RELEASE_SEM_ID);
         for (uint32_t id = 0; id < shared; ++id) {
+            if (id == release_id) {
+                continue;
+            }
             Semaphore<> shared_sem(id);
             shared_sem.set(0);
             if (receivers > 0) {
@@ -108,9 +115,9 @@ inline void hybrid_pass_barrier() {
         // receiver.
         noc.async_write_barrier();
 
-        barrier_sem.set(d::kReleased);
+        release_sem.set(round);
         if (receivers > 0) {
-            barrier_sem.set_multicast<NocOptions::DEFAULT>(
+            release_sem.set_multicast<NocOptions::DEFAULT>(
                 noc,
                 d::arg(d::RECT_X_START),
                 d::arg(d::RECT_Y_START),
@@ -120,12 +127,12 @@ inline void hybrid_pass_barrier() {
         }
     }
 
-    barrier_sem.wait_min(d::kReleased);
+    release_sem.wait_min(round);
 }
 
 #else
 
 // Pass A is not run, or this is a compute kernel with no NoC of its own.
-inline void hybrid_pass_barrier() {}
+inline void hybrid_pass_barrier(uint32_t) {}
 
 #endif

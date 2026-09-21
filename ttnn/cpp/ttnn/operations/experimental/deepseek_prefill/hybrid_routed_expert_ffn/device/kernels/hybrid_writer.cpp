@@ -72,7 +72,7 @@ void kernel_main() {
     hyb_fused::kernel_main();
     // Both halves' buffers and semaphores share this core's L1, so pass B cannot start anywhere
     // until pass A has finished everywhere.
-    hybrid_pass_barrier();
+    hybrid_pass_barrier(/*round=*/1);
 #endif
     // Pass B: the rest.
     hyb_unified::kernel_main();

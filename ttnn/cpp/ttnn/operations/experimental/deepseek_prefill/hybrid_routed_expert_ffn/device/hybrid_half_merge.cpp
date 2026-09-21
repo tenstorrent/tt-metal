@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hybrid_half_merge.hpp"
+#include "hybrid_routed_expert_ffn_types.hpp"
 
 #include <algorithm>
 #include <map>
@@ -65,10 +66,20 @@ uint32_t merge_semaphores(const ProgramDescriptor& fused, const ProgramDescripto
     barrier.id = barrier_id;
     barrier.initial_value = 0;
 
+    // The release word. It sits on the id both halves skip rather than above the arrival
+    // semaphore, because the arrival id is already the highest a core has room for.
+    SemaphoreDescriptor release = barrier;
+    release.id = kHybridReservedSemaphoreId;
+    TT_FATAL(
+        by_id.find(kHybridReservedSemaphoreId) == by_id.end(),
+        "semaphore {} is meant to be free for the barrier's release word but a half declared it",
+        kHybridReservedSemaphoreId);
+
     for (const auto& [id, sem] : by_id) {
         out.semaphores.push_back(sem);
     }
     out.semaphores.push_back(barrier);
+    out.semaphores.push_back(release);
     return barrier_id;
 }
 
@@ -333,6 +344,7 @@ KernelDescriptor merge_kernel(
             args.push_back(barrier.total_arrivals);
             args.push_back(barrier_semaphore_id);
             args.push_back(shared_semaphore_count);
+            args.push_back(kHybridReservedSemaphoreId);
         }
     }
     return merged;
