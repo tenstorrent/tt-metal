@@ -33,6 +33,19 @@ inline bool fused_matmul_bias_row_broadcastable(const std::optional<const Tensor
     return shape[-2] == 1;
 }
 
+// Sharded out CB is the shard buffer and is never drained, so B>1 would overflow it.
+inline void validate_block_sharded_output_batch(
+    bool output_is_sharded, uint32_t B, uint32_t per_core_M, uint32_t per_core_N) {
+    TT_FATAL(
+        !(output_is_sharded && B > 1),
+        "Block-sharded output is incompatible with batch > 1 (B={}). The output CB is backed by the shard buffer "
+        "which only holds per_core_M * per_core_N = {} tiles, but the kernel would produce B * per_core_M * per_core_N "
+        "= {} tiles without draining. Use fuse_batch=True.",
+        B,
+        per_core_M * per_core_N,
+        B * per_core_M * per_core_N);
+}
+
 uint32_t get_estimated_size_of_cbs(
     uint32_t per_core_M,
     uint32_t per_core_N,

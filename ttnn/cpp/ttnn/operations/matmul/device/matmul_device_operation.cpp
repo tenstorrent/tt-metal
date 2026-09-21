@@ -1268,18 +1268,6 @@ void validate_output_subblock_block_divides_per_core_n(
         out_block_h);
 }
 
-// Sharded out CB is the shard buffer and is never drained, so B>1 would overflow it.
-void validate_block_sharded_output_batch(uint32_t B, uint32_t per_core_M, uint32_t per_core_N) {
-    TT_FATAL(
-        !(B > 1),
-        "Block-sharded output is incompatible with batch > 1 (B={}). The output CB is backed by the shard buffer "
-        "which only holds per_core_M * per_core_N = {} tiles, but the kernel would produce B * per_core_M * "
-        "per_core_N = {} tiles without draining. Use fuse_batch=True.",
-        B,
-        per_core_M * per_core_N,
-        B * per_core_M * per_core_N);
-}
-
 // ===========================================================================
 // PROGRAM CONFIG SPECIFIC VALIDATIONS: one function per program config, holding the
 // checks that fire for that config only. Dispatched from validate_on_program_cache_miss
@@ -1658,7 +1646,8 @@ void validate_matmul_mcast2d_config(
             per_core_N);
 
         const uint32_t B = program_config.fuse_batch ? 1u : get_batch_size(a_shape_padded);
-        validate_block_sharded_output_batch(B, program_config.per_core_M, per_core_N);
+        operations::matmul::utilities::validate_block_sharded_output_batch(
+            true, B, program_config.per_core_M, per_core_N);
     }
 }
 
@@ -2623,7 +2612,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         tile_width_ratio);
 
                     const uint32_t B = program_config.fuse_batch ? 1u : get_batch_size(a_shape_padded);
-                    validate_block_sharded_output_batch(B, per_core_M, per_core_N);
+                    operations::matmul::utilities::validate_block_sharded_output_batch(true, B, per_core_M, per_core_N);
 
                     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
