@@ -48,10 +48,27 @@ inline constexpr bool kGdnHoistReconfig = true;
 inline constexpr bool kGdnHoistReconfig = false;
 #endif
 
+// Sub-step device zones for the Tracy device profiler (design D16). Only in profiled builds where the
+// profiler header was included BEFORE this one; otherwise nothing (production binaries unchanged).
+#if defined(PROFILE_KERNEL) && defined(DeviceZoneScopedN)
+#define GDN_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define GDN_ZONE(name)
+#endif
+
 inline void WAIT(uint32_t cb, uint32_t n) { CircularBuffer(cb).wait_front(n); }
 inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
 
 // out[Mt,Nt] = A[Mt,Kt] @ (tr ? B[Nt,Kt]^T : B[Kt,Nt]). Inputs must be available.
+// Output tiles per DST acquire. With fp32 accumulation DST holds 8 tiles and the math/pack half-sync
+// gives each side 4, so four independent output tiles ride one acquire/commit/wait/release round trip
+// instead of four (the per-tile handshake was ~half of the receiver step, design §10e). Bit-exact:
+// each output tile's math is unchanged, only the packing is batched.
+#ifndef GDN_DST_TILES
+#define GDN_DST_TILES 1  // the prep kernel keeps the per-tile form: its Ct=2 binary sits at the 70,656 B limit
+#endif
+inline constexpr uint32_t kDstTiles = GDN_DST_TILES;
+
 inline void mm(
     uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr, bool skip_reconfig = false) {
     cb_reserve_back(o, Mt * Nt);
@@ -64,27 +81,53 @@ inline void mm(
         reconfig_data_format(b, a);
     }
     matmul_init(a, b, tr ? 1 : 0);
-    for (uint32_t mi = 0; mi < Mt; mi++) {
-        for (uint32_t ni = 0; ni < Nt; ni++) {
-            tile_regs_acquire();
+    if constexpr (kDstTiles == 1) {  // original per-tile form (byte-identical code for the prep kernel)
+        for (uint32_t mi = 0; mi < Mt; mi++) {
+            for (uint32_t ni = 0; ni < Nt; ni++) {
+                tile_regs_acquire();
+                for (uint32_t ki = 0; ki < Kt; ki++) {
+                    uint32_t bi = tr ? (ni * Kt + ki) : (ki * Nt + ni);
+                    matmul_tiles(a, b, mi * Kt + ki, bi, 0);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, o, mi * Nt + ni);
+                tile_regs_release();
+            }
+        }
+        cb_push_back(o, Mt * Nt);
+        return;
+    }
+    const uint32_t n_out = Mt * Nt;
+    for (uint32_t t0 = 0; t0 < n_out; t0 += kDstTiles) {
+        const uint32_t nb = (n_out - t0 < kDstTiles) ? (n_out - t0) : kDstTiles;
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < nb; j++) {
+            const uint32_t t = t0 + j;
+            const uint32_t mi = t / Nt;
+            const uint32_t ni = t - mi * Nt;
             for (uint32_t ki = 0; ki < Kt; ki++) {
                 uint32_t bi = tr ? (ni * Kt + ki) : (ki * Nt + ni);
-                matmul_tiles(a, b, mi * Kt + ki, bi, 0);
+                matmul_tiles(a, b, mi * Kt + ki, bi, j);
             }
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(0, o, mi * Nt + ni);
-            tile_regs_release();
         }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < nb; j++) {
+            pack_tile(j, o, t0 + j);
+        }
+        tile_regs_release();
     }
     cb_push_back(o, Mt * Nt);
 }
 
 // out = A (op) B elementwise, n tiles. op: 0 add, 1 sub, 2 mul.
-inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
+inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op, bool skip_reconfig = false) {
     cb_reserve_back(o, n);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(a, b);  // binary(a,b): a->srcA, b->srcB
+    if (!skip_reconfig) {
+        pack_reconfig_data_format(o);
+        reconfig_data_format(a, b);  // binary(a,b): a->srcA, b->srcB
+    }
     if (op == 0) {
         add_init(a, b);
     } else if (op == 1) {
@@ -92,18 +135,41 @@ inline void ew(uint32_t a, uint32_t b, uint32_t o, uint32_t n, int op) {
     } else {
         mul_init(a, b);
     }
-    for (uint32_t i = 0; i < n; i++) {
+    if constexpr (kDstTiles == 1) {
+        for (uint32_t i = 0; i < n; i++) {
+            tile_regs_acquire();
+            if (op == 0) {
+                add_tiles(a, b, i, i, 0);
+            } else if (op == 1) {
+                sub_tiles(a, b, i, i, 0);
+            } else {
+                mul_tiles(a, b, i, i, 0);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, o, i);
+            tile_regs_release();
+        }
+        cb_push_back(o, n);
+        return;
+    }
+    for (uint32_t i0 = 0; i0 < n; i0 += kDstTiles) {
+        const uint32_t nb = (n - i0 < kDstTiles) ? (n - i0) : kDstTiles;
         tile_regs_acquire();
-        if (op == 0) {
-            add_tiles(a, b, i, i, 0);
-        } else if (op == 1) {
-            sub_tiles(a, b, i, i, 0);
-        } else {
-            mul_tiles(a, b, i, i, 0);
+        for (uint32_t j = 0; j < nb; j++) {
+            if (op == 0) {
+                add_tiles(a, b, i0 + j, i0 + j, j);
+            } else if (op == 1) {
+                sub_tiles(a, b, i0 + j, i0 + j, j);
+            } else {
+                mul_tiles(a, b, i0 + j, i0 + j, j);
+            }
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, o, i);
+        for (uint32_t j = 0; j < nb; j++) {
+            pack_tile(j, o, i0 + j);
+        }
         tile_regs_release();
     }
     cb_push_back(o, n);
@@ -166,17 +232,36 @@ inline void bcast_rows_sub(uint32_t a, uint32_t row, uint32_t o, uint32_t Mt, ui
 }
 
 // out = A * scalar, n tiles. scalar is the [0,0] element of the single `scal` tile.
-inline void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n) {
+inline void bcast_scalar_mul(uint32_t a, uint32_t scal, uint32_t o, uint32_t n, bool skip_reconfig = false) {
     cb_reserve_back(o, n);
-    pack_reconfig_data_format(o);
-    reconfig_data_format(a, scal);  // bcast(a,scal): a->srcA, scal->srcB
+    if (!skip_reconfig) {
+        pack_reconfig_data_format(o);
+        reconfig_data_format(a, scal);  // bcast(a,scal): a->srcA, scal->srcB
+    }
     mul_bcast_scalar_init(a, scal);
-    for (uint32_t i = 0; i < n; i++) {
+    if constexpr (kDstTiles == 1) {
+        for (uint32_t i = 0; i < n; i++) {
+            tile_regs_acquire();
+            mul_tiles_bcast_scalar(a, scal, i, 0, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, o, i);
+            tile_regs_release();
+        }
+        cb_push_back(o, n);
+        return;
+    }
+    for (uint32_t i0 = 0; i0 < n; i0 += kDstTiles) {
+        const uint32_t nb = (n - i0 < kDstTiles) ? (n - i0) : kDstTiles;
         tile_regs_acquire();
-        mul_tiles_bcast_scalar(a, scal, i, 0, 0);
+        for (uint32_t j = 0; j < nb; j++) {
+            mul_tiles_bcast_scalar(a, scal, i0 + j, 0, j);
+        }
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, o, i);
+        for (uint32_t j = 0; j < nb; j++) {
+            pack_tile(j, o, i0 + j);
+        }
         tile_regs_release();
     }
     cb_push_back(o, n);
@@ -709,52 +794,86 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
     constexpr uint32_t cv = Ct * Vt;
     constexpr uint32_t kv = Kt * Vt;
     constexpr uint32_t kc = Kt * Ct;
+    // Every CB the scan touches is fp32 (hand-off intermediates, state, scratch, o), so the
+    // unpacker/packer formats set once at kernel start (compute_kernel_hw_startup on fp32 CBs) hold
+    // for the whole step: skip the per-call reconfigs (the producer does the same under
+    // GDN_HOIST_RECONFIG). Formats are identical either way => bit-exact.
+    constexpr bool H = true;
 
     // v_new = T_inv @ (v_beta - kd@S)  -- apply the inverse AFTER the subtraction so the WY
     // inverse's fp error is not amplified by the cancellation (vs the u - w@S form).
-    WAIT(cb.kd, ck);
-    WAIT(cur_S, kv);
-    mm(cb.kd, cur_S, cb.scr1, Ct, Kt, Vt, false);  // kdS = kd @ S -> scr1
-    WAIT(cb.scr1, cv);
-    POP(cb.kd, ck);
-    WAIT(cb.vbeta, cv);
-    ew(cb.vbeta, cb.scr1, cb.ointer, cv, 1);  // diff = v_beta - kdS -> ointer
-    WAIT(cb.ointer, cv);
-    POP(cb.vbeta, cv);
-    POP(cb.scr1, cv);
-    WAIT(cb.Tinv, cc);
-    mm(cb.Tinv, cb.ointer, cb.vnew, Ct, Ct, Vt, false);  // v_new = T_inv @ diff -> vnew
-    WAIT(cb.vnew, cv);
-    POP(cb.Tinv, cc);
-    POP(cb.ointer, cv);
+    {
+        GDN_ZONE("st_kdS");
+        WAIT(cb.kd, ck);
+        WAIT(cur_S, kv);
+        mm(cb.kd, cur_S, cb.scr1, Ct, Kt, Vt, false, H);  // kdS = kd @ S -> scr1
+        WAIT(cb.scr1, cv);
+        POP(cb.kd, ck);
+    }
+    {
+        GDN_ZONE("st_diff");
+        WAIT(cb.vbeta, cv);
+        ew(cb.vbeta, cb.scr1, cb.ointer, cv, 1, H);  // diff = v_beta - kdS -> ointer
+        WAIT(cb.ointer, cv);
+        POP(cb.vbeta, cv);
+        POP(cb.scr1, cv);
+    }
+    {
+        GDN_ZONE("st_vnew");
+        WAIT(cb.Tinv, cc);
+        mm(cb.Tinv, cb.ointer, cb.vnew, Ct, Ct, Vt, false, H);  // v_new = T_inv @ diff -> vnew
+        WAIT(cb.vnew, cv);
+        POP(cb.Tinv, cc);
+        POP(cb.ointer, cv);
+    }
 
-    // o = q_decay @ S + intra @ v_new
-    WAIT(cb.qdecay, ck);
-    mm(cb.qdecay, cur_S, cb.ointer, Ct, Kt, Vt, false);  // o_inter = q_decay @ S
-    WAIT(cb.ointer, cv);
-    POP(cb.qdecay, ck);
-    WAIT(cb.intra, cc);
-    mm(cb.intra, cb.vnew, cb.scr1, Ct, Ct, Vt, false);  // intra_v = intra @ v_new
-    WAIT(cb.scr1, cv);
-    POP(cb.intra, cc);
-    ew(cb.ointer, cb.scr1, cb.out, cv, 0);  // o -> cb_out (drained by writer)
-    POP(cb.ointer, cv);
-    POP(cb.scr1, cv);
-
+    // The three remaining matmuls are independent of each other (all inputs ready): issue them
+    // back to back so the FPU stays in matmul mode, then the three FPU eltwise ops.
+    // o_inter = q_decay @ S
+    {
+        GDN_ZONE("st_qS");
+        WAIT(cb.qdecay, ck);
+        mm(cb.qdecay, cur_S, cb.ointer, Ct, Kt, Vt, false, H);
+        WAIT(cb.ointer, cv);
+        POP(cb.qdecay, ck);
+    }
+    // intra_v = intra @ v_new
+    {
+        GDN_ZONE("st_intra");
+        WAIT(cb.intra, cc);
+        mm(cb.intra, cb.vnew, cb.scr1, Ct, Ct, Vt, false, H);
+        WAIT(cb.scr1, cv);
+        POP(cb.intra, cc);
+    }
     // s_upd = k_dec_t @ v_new
-    WAIT(cb.kdec_t, kc);
-    mm(cb.kdec_t, cb.vnew, cb.supd, Kt, Ct, Vt, false);
-    WAIT(cb.supd, kv);
-    POP(cb.kdec_t, kc);
-    POP(cb.vnew, cv);
-
+    {
+        GDN_ZONE("st_supd");
+        WAIT(cb.kdec_t, kc);
+        mm(cb.kdec_t, cb.vnew, cb.supd, Kt, Ct, Vt, false, H);
+        WAIT(cb.supd, kv);
+        POP(cb.kdec_t, kc);
+        POP(cb.vnew, cv);
+    }
+    // o = o_inter + intra_v -> cb_out (drained by writer)
+    {
+        GDN_ZONE("st_o");
+        ew(cb.ointer, cb.scr1, cb.out, cv, 0, H);
+        POP(cb.ointer, cv);
+        POP(cb.scr1, cv);
+    }
     // S_new = cur_S * dl + s_upd  (dl scalar in cb_dl tile [0,0])
-    WAIT(cb.dl, 1);
-    bcast_scalar_mul(cur_S, cb.dl, cb.stmp, kv);
-    WAIT(cb.stmp, kv);
-    POP(cb.dl, 1);
-    POP(cur_S, kv);
-    ew(cb.stmp, cb.supd, dst, kv, 0);
-    POP(cb.stmp, kv);
-    POP(cb.supd, kv);
+    {
+        GDN_ZONE("st_decay");
+        WAIT(cb.dl, 1);
+        bcast_scalar_mul(cur_S, cb.dl, cb.stmp, kv, H);
+        WAIT(cb.stmp, kv);
+        POP(cb.dl, 1);
+        POP(cur_S, kv);
+    }
+    {
+        GDN_ZONE("st_snew");
+        ew(cb.stmp, cb.supd, dst, kv, 0, H);
+        POP(cb.stmp, kv);
+        POP(cb.supd, kv);
+    }
 }

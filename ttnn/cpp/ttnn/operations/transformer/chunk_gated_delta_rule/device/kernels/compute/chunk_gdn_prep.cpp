@@ -19,8 +19,8 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
-#include "chunk_gdn_math.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "chunk_gdn_math.hpp"
 
 namespace {
 
