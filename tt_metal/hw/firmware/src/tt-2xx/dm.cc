@@ -89,7 +89,7 @@ __attribute__((interrupt)) void fds_go_interrupt_handler() {
         return;
     }
 
-    const uint32_t group_id = overlay::quasar::go_group_from_plic_source(claimed_source);
+    const uint32_t group_id = overlay::fds_signalling::go_group_from_plic_source(claimed_source);
     if (overlay::fds_signalling::sub_device_from_go_group(group_id) >= fds_num_go_groups) {
         overlay::quasar::plic_complete(claimed_source);
         return;
@@ -109,6 +109,47 @@ __attribute__((interrupt)) void fds_go_interrupt_handler() {
     if (group_id == overlay::fds_signalling::go_group_for_sub_device(mailboxes->go_message_index)) {
         mailboxes->go_messages[overlay::fds_signalling::sub_device_from_go_group(group_id)].signal = RUN_MSG_GO;
     }
+}
+#endif
+
+// Brings up the NOC and whichever go-signal transport this build uses, then publishes the
+// firmware-ready RUN_MSG_DONE. The host's wait on that DONE is the only barrier before the dispatch
+// cores launch, so the FDS body must publish it last: after the go interrupt is armed.
+#ifdef FDS_SIGNALLING
+inline void init_go_signalling() {
+    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+    register_handler_for_interrupt(MACHINE_EXTERNAL_INTERRUPT_OFFSET, fds_go_interrupt_handler);
+    invalidate_l1_icache();
+    overlay::fds_signalling::worker_disable_auto_dispatch();
+    overlay::fds_signalling::worker_config_filter_length(overlay::fds_signalling::filter_length);
+    overlay::fds_signalling::worker_config_interrupt_enable(overlay::fds_signalling::interrupts_disabled);
+    overlay::fds_signalling::worker_clear_done();
+    for (uint32_t dispatch_lane = 0; dispatch_lane < overlay::fds_signalling::num_dispatch_lanes; ++dispatch_lane) {
+        overlay::fds_signalling::worker_clear_dispatch_status(dispatch_lane);
+    }
+    for (uint32_t go_group_id = overlay::fds_signalling::idle_group_id + 1; go_group_id <= fds_num_go_groups;
+         ++go_group_id) {
+        overlay::fds_signalling::worker_config_group(
+            go_group_id, overlay::fds_signalling::dispatch_lane_mask, overlay::fds_signalling::worker_go_threshold);
+    }
+    overlay::quasar::plic_set_threshold(overlay::quasar::plic_threshold_allow_all);
+    for (uint32_t go_group_id = overlay::fds_signalling::idle_group_id + 1; go_group_id <= fds_num_go_groups;
+         ++go_group_id) {
+        const uint32_t plic_source = overlay::fds_signalling::plic_source_for_go_group(go_group_id);
+        overlay::quasar::plic_set_priority(plic_source, overlay::fds_signalling::plic_fds_priority);
+        overlay::quasar::plic_enable_source(plic_source, true);
+    }
+    overlay::quasar::plic_drain_pendings();
+    // Thresholds and PLIC enables must be set before arming the FDS interrupt level at reset.
+    overlay::fds_signalling::worker_config_interrupt_enable(fds_go_interrupt_mask);
+    asm volatile("csrrs zero, mie, %0" : : "r"(uint32_t{1} << MACHINE_EXTERNAL_INTERRUPT_OFFSET));
+    asm volatile("csrrs zero, mstatus, %0" : : "r"(uint32_t{1} << 3));
+    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+}
+#else
+inline void init_go_signalling() {
+    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 }
 #endif
 
@@ -266,6 +307,8 @@ inline void wait_subordinates() {
 
 inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
+// Claims this round's FDS completion group, clearing any stale done from the previous round. Returns
+// the group (sub-device index + 1), or 0 when the round completes over the NOC instead.
 #ifdef FDS_SIGNALLING
 inline uint32_t begin_worker_completion_round(launch_msg_t* launch_message, bool wait_for_go) {
     if (launch_message->kernel_config.mode != DISPATCH_MODE_DEV) {
@@ -275,25 +318,30 @@ inline uint32_t begin_worker_completion_round(launch_msg_t* launch_message, bool
     const uint32_t go_message_index = mailboxes->go_message_index;
     if (wait_for_go) {
         WAYPOINT("FGW");
-        while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO) {
-        }
+        while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO);
         WAYPOINT("FGD");
     }
 
     overlay::fds_signalling::worker_clear_done();
     return go_message_index + 1;
 }
+
+inline void signal_worker_completion_group_done(uint32_t worker_completion_group) {
+    overlay::fds_signalling::worker_signal_done(worker_completion_group);
+}
+#else
+inline uint32_t begin_worker_completion_round(launch_msg_t*, bool) { return 0; }
+
+inline void signal_worker_completion_group_done(uint32_t) { ASSERT(0); }
 #endif
 
 // Publishes RUN_MSG_DONE and tells the dispatcher. worker_completion_group is the FDS group for this
 // round, or 0 when the round is on the NOC.
 inline void signal_dispatch_core_done(uint32_t go_message_index, uint32_t worker_completion_group) {
     if (worker_completion_group != 0) {
-#ifdef FDS_SIGNALLING
         DPRINT("DM0-FW: completion FDS\n");
         mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-        overlay::fds_signalling::worker_signal_done(worker_completion_group);
-#endif
+        signal_worker_completion_group_done(worker_completion_group);
     } else {
         DPRINT("DM0-FW: completion NOC\n");
         mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
@@ -355,42 +403,7 @@ extern "C" uint32_t _start1() {
         deassert_trisc();
         DPRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
-#ifndef FDS_SIGNALLING
-        mailboxes->go_messages[0].signal = RUN_MSG_DONE;
-#endif
-
-        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-#ifdef FDS_SIGNALLING
-        register_handler_for_interrupt(MACHINE_EXTERNAL_INTERRUPT_OFFSET, fds_go_interrupt_handler);
-        invalidate_l1_icache();
-        overlay::fds_signalling::worker_disable_auto_dispatch();
-        overlay::fds_signalling::worker_config_filter_length(overlay::fds_signalling::filter_length);
-        overlay::fds_signalling::worker_config_interrupt_enable(overlay::fds_signalling::interrupts_disabled);
-        overlay::fds_signalling::worker_clear_done();
-        for (uint32_t dispatch_lane = 0; dispatch_lane < overlay::fds_signalling::num_dispatch_lanes; ++dispatch_lane) {
-            overlay::fds_signalling::worker_clear_dispatch_status(dispatch_lane);
-        }
-        for (uint32_t go_group_id = overlay::fds_signalling::idle_group_id + 1; go_group_id <= fds_num_go_groups;
-             ++go_group_id) {
-            overlay::fds_signalling::worker_config_group(
-                go_group_id, overlay::fds_signalling::dispatch_lane_mask, overlay::fds_signalling::worker_go_threshold);
-        }
-        overlay::quasar::plic_set_threshold(overlay::quasar::plic_threshold_allow_all);
-        for (uint32_t go_group_id = overlay::fds_signalling::idle_group_id + 1; go_group_id <= fds_num_go_groups;
-             ++go_group_id) {
-            const uint32_t plic_source = overlay::quasar::plic_source_for_go_group(go_group_id);
-            overlay::quasar::plic_set_priority(plic_source, overlay::quasar::plic_fds_priority);
-            overlay::quasar::plic_enable_source(plic_source, true);
-        }
-        overlay::quasar::plic_drain_pendings();
-        // Thresholds and PLIC enables must be set before arming the FDS interrupt level at reset.
-        overlay::fds_signalling::worker_config_interrupt_enable(fds_go_interrupt_mask);
-        asm volatile("csrrs zero, mie, %0" : : "r"(uint32_t{1} << MACHINE_EXTERNAL_INTERRUPT_OFFSET));
-        asm volatile("csrrs zero, mstatus, %0" : : "r"(uint32_t{1} << 3));
-        // Publish DONE only after FDS can take a go interrupt: the host's wait on DONE is the only
-        // barrier before the dispatch cores launch.
-        mailboxes->go_messages[0].signal = RUN_MSG_DONE;
-#endif
+        init_go_signalling();
         trigger_sync_register_init();
 
         DeviceProfilerInit();
@@ -431,14 +444,8 @@ extern "C" uint32_t _start1() {
 
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
-#ifdef FDS_SIGNALLING
-            uint32_t worker_completion_group = 0;
-            if (go_message_signal == RUN_MSG_GO) {
-                worker_completion_group = begin_worker_completion_round(launch_msg_address, false);
-            }
-#else
-            constexpr uint32_t worker_completion_group = 0;
-#endif
+            uint32_t worker_completion_group =
+                go_message_signal == RUN_MSG_GO ? begin_worker_completion_round(launch_msg_address, false) : 0;
             {
                 // Only include this iteration in the device profile if the launch message is valid. This is because all
                 // workers get a go signal regardless of whether they're running a kernel or not. We don't want to
@@ -495,11 +502,9 @@ extern "C" uint32_t _start1() {
                 setup_dfb_implicit_sync(dfb_l1_base, num_local_dfbs);
                 WAYPOINT("D");
 
-#ifdef FDS_SIGNALLING
                 if (worker_completion_group == 0 && go_message_signal != RUN_MSG_GO) {
                     worker_completion_group = begin_worker_completion_round(launch_msg_address, true);
                 }
-#endif
                 wait_subordinates();
 
                 trigger_sync_register_init();
