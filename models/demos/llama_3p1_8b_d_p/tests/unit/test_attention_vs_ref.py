@@ -6,6 +6,7 @@
 import json
 import math
 import os
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -18,11 +19,15 @@ from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import addresses as _addresses
+from models.demos.llama_3p1_8b_d_p.tests.utils import metrics, read_raw_weights
 from models.demos.llama_3p1_8b_d_p.tt.attention import AttentionOutputProjection, FullCausalAttention
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import allocate_kv_cache, write_kv_chunk
 from models.demos.llama_3p1_8b_d_p.tt.qkv import QKVProjection
 from models.demos.llama_3p1_8b_d_p.tt.rope import apply_indexed_rope, build_indexed_rope, build_transformation_mat
+
+_metrics = partial(metrics, error_type=ValueError)
 
 HF_MODEL = Path(os.environ.get("LLAMA31_8B_CHECKPOINT", "/mnt/models/meta-llama/Llama-3.1-8B-Instruct"))
 MESH_SHAPE = (4, 8)
@@ -58,13 +63,7 @@ WEIGHT_NAMES = {
 
 
 def _load_layer_zero_attention_weights():
-    with (HF_MODEL / "model.safetensors.index.json").open() as index_file:
-        weight_map = json.load(index_file)["weight_map"]
-    weights = {}
-    for local_name, checkpoint_name in WEIGHT_NAMES.items():
-        with safe_open(HF_MODEL / weight_map[checkpoint_name], framework="pt", device="cpu") as checkpoint:
-            weights[local_name] = checkpoint.get_tensor(checkpoint_name)
-    return weights
+    return read_raw_weights(HF_MODEL, WEIGHT_NAMES)
 
 
 def _owned_positions(start):
@@ -127,28 +126,6 @@ def _positive_pulse_fixture(kind, prompt, heads, positions):
 
 def _physical_fixture(kind, prompt, heads, start, fixture_fn=_fixture):
     return fixture_fn(kind, prompt, heads, _device_major_positions(start))
-
-
-def _metrics(expected, actual):
-    expected = expected.double().flatten()
-    actual = actual.double().flatten()
-    if expected.numel() == 0 or actual.numel() == 0:
-        raise ValueError("metrics require at least one expected and actual element")
-    if expected.numel() != actual.numel():
-        raise ValueError(f"metrics shape mismatch: {expected.numel()} expected vs {actual.numel()} actual")
-    if not torch.isfinite(expected).all() or not torch.isfinite(actual).all():
-        raise ValueError("metrics require finite expected and actual tensors")
-    expected_centered = expected - expected.mean()
-    actual_centered = actual - actual.mean()
-    pcc_denominator = torch.linalg.vector_norm(expected_centered) * torch.linalg.vector_norm(actual_centered)
-    nl2_denominator = torch.linalg.vector_norm(expected)
-    if pcc_denominator == 0 or nl2_denominator == 0:
-        raise ValueError("metrics require nonzero centered and reference norms")
-    pcc = (torch.dot(expected_centered, actual_centered) / pcc_denominator).item()
-    nl2 = (torch.linalg.vector_norm(actual - expected) / nl2_denominator).item()
-    if not math.isfinite(pcc) or not math.isfinite(nl2):
-        raise ValueError(f"metrics must be finite, got PCC={pcc}, NL2={nl2}")
-    return pcc, nl2
 
 
 def _reference_attention(q, k, v, query_positions):
@@ -214,10 +191,6 @@ def _to_q(mesh_device, values, *, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
 
 def _to_kv(mesh_device, values):
     return _to_q(mesh_device, values)
-
-
-def _addresses(tensor):
-    return tuple(int(shard.buffer_address()) for shard in ttnn.get_device_tensors(tensor))
 
 
 def _persistent_attention_addresses(attention):

@@ -1421,37 +1421,8 @@
 
 # ===== Llama-3.1-8B ===================================================================================
 
-# Standalone model accuracy on one BH Galaxy. Timeouts include checkpoint I/O, CPU references,
+# Disaggregated-prefill model accuracy on one BH Galaxy. Timeouts include checkpoint I/O, CPU references,
 # device JIT and readbacks; these are scheduling budgets, not performance claims.
-- name: "(Llama-3.1-8B) prefill host reference accuracy"
-  fabric_profile: torus_xy
-  cmd: |
-    export LLAMA31_8B_CHECKPOINT=/mnt/models/meta-llama/Llama-3.1-8B-Instruct
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      set -e
-      export OMP_NUM_THREADS=16
-      python3 -m pytest --noconftest -v \
-        models/demos/llama_3p1_8b_d_p/tests/unit/test_rope.py \
-        models/demos/llama_3p1_8b_d_p/tests/unit/test_prefill_host.py \
-        models/demos/llama_3p1_8b_d_p/tests/unit/test_prefill_capacity_host.py \
-        models/demos/llama_3p1_8b_d_p/tests/unit/test_prefill_checkpoint_identity.py \
-        models/demos/llama_3p1_8b_d_p/tests/full_model/test_native_input_mapping.py \
-        models/demos/llama_3p1_8b_d_p/tests/full_model/test_native_input_metric_policy.py \
-        models/demos/llama_3p1_8b_d_p/tests/full_model/test_native_input_mutations.py
-    '
-  test_type: llama31_prefill_host
-  test_tags: [llama31, transformer]
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 5
-      tier: 2
-      release_ready: false
-  owner_id: U053W15B6JF # Djordje Ivanovic
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
 - name: "(Llama-3.1-8B) prefill components and decoder accuracy"
   fabric_profile: torus_xy
   cmd: |
@@ -1459,18 +1430,15 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=16
-      python3 -m pytest --timeout=600 -v models/demos/llama_3p1_8b_d_p/tests/unit \
-        --ignore=models/demos/llama_3p1_8b_d_p/tests/unit/test_rope.py \
-        --ignore=models/demos/llama_3p1_8b_d_p/tests/unit/test_prefill_host.py \
-        --ignore=models/demos/llama_3p1_8b_d_p/tests/unit/test_prefill_capacity_host.py \
-        --ignore=models/demos/llama_3p1_8b_d_p/tests/unit/test_prefill_checkpoint_identity.py
+      python3 -m pytest --noconftest -v models/demos/llama_3p1_8b_d_p/tests/host
+      python3 -m pytest --timeout=600 -v models/demos/llama_3p1_8b_d_p/tests/unit
     '
   test_type: llama31_prefill_components
   test_tags: [llama31, transformer]
   test_group: module
   skus:
     bh_sc1:
-      timeout: 20
+      timeout: 25
       tier: 2
       release_ready: false
   owner_id: U053W15B6JF # Djordje Ivanovic
@@ -1482,12 +1450,12 @@
   fabric_profile: torus_xy
   cmd: |
     export LLAMA31_8B_CHECKPOINT=/mnt/models/meta-llama/Llama-3.1-8B-Instruct
-    mpirun --bind-to none --pernode --tag-output bash -lc '
+    mpirun -x PREFILL_SUMMARIES --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=16
       python3 -m pytest --timeout=1200 -v \
-        models/demos/llama_3p1_8b_d_p/tests/full_model/test_prefill_model_vs_ref.py \
-        models/demos/llama_3p1_8b_d_p/tests/full_model/test_prefill_native_input_accuracy.py
+        models/demos/llama_3p1_8b_d_p/tests/model/test_prefill_model_vs_ref.py \
+        models/demos/llama_3p1_8b_d_p/tests/model/test_prefill_native_input_accuracy.py
     '
   test_type: llama31_prefill_full_2k
   test_tags: [llama31, transformer]
@@ -1509,7 +1477,7 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=16
-      python3 -m pytest --timeout=600 -v models/demos/llama_3p1_8b_d_p/tests/full_model/test_prefill_book_top5.py
+      python3 -m pytest --timeout=600 -v models/demos/llama_3p1_8b_d_p/tests/model/test_prefill_book_top5.py
     '
   test_type: llama31_prefill_book_top5
   test_tags: [llama31, transformer]

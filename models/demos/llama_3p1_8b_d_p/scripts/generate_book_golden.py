@@ -48,7 +48,7 @@ def main():
     parser.add_argument(
         "--fixture-dir",
         type=Path,
-        default=Path(__file__).resolve().parents[1] / "tests/full_model/fixtures/book",
+        default=Path(__file__).resolve().parents[1] / "tests/model/fixtures/book",
     )
     args = parser.parse_args()
     if args.threads < 1:

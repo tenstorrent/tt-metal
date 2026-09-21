@@ -3,7 +3,6 @@
 
 """Independent raw-HF oracle and all-chip gates for one chunked prefill decoder."""
 
-import json
 import math
 import os
 import time
@@ -14,11 +13,15 @@ import pytest
 import torch
 import torch.nn.functional as F
 from loguru import logger
-from safetensors import safe_open
 from transformers import AutoConfig, LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
 
 import ttnn
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import addresses as _addresses
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import assert_unchanged as _assert_unchanged
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import snapshot as _snapshot
+from models.demos.llama_3p1_8b_d_p.tests.utils import metrics as _metrics
+from models.demos.llama_3p1_8b_d_p.tests.utils import read_raw_weights
 from models.demos.llama_3p1_8b_d_p.tt.attention import FullCausalAttention
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.decoder import DecoderLayer
@@ -40,14 +43,8 @@ WEIGHT_NAMES = (
 
 
 def _load_weights(layer_idx):
-    with (HF_MODEL / "model.safetensors.index.json").open() as handle:
-        index = json.load(handle)["weight_map"]
-    weights = {}
-    for name in WEIGHT_NAMES:
-        key = f"model.layers.{layer_idx}.{name}"
-        with safe_open(HF_MODEL / index[key], framework="pt", device="cpu") as shard:
-            weights[name] = shard.get_tensor(key).bfloat16()
-    return weights
+    names = {name: f"model.layers.{layer_idx}.{name}" for name in WEIGHT_NAMES}
+    return {name: value.bfloat16() for name, value in read_raw_weights(HF_MODEL, names).items()}
 
 
 def _stream(slot, length=3072):
@@ -110,21 +107,6 @@ def _reference_chunk(reference, start, end, eps):
     return output
 
 
-def _metrics(expected, actual):
-    expected, actual = expected.double().flatten(), actual.double().flatten()
-    assert expected.numel() and expected.shape == actual.shape
-    assert torch.isfinite(expected).all() and torch.isfinite(actual).all()
-    e, a = expected - expected.mean(), actual - actual.mean()
-    denominator = torch.linalg.vector_norm(e) * torch.linalg.vector_norm(a)
-    assert denominator > 0, "PCC requires nonconstant reference and output"
-    reference_norm = torch.linalg.vector_norm(expected)
-    assert reference_norm > 0
-    pcc = (torch.dot(e, a) / denominator).item()
-    nl2 = (torch.linalg.vector_norm(actual - expected) / reference_norm).item()
-    assert math.isfinite(pcc) and math.isfinite(nl2)
-    return pcc, nl2
-
-
 def _check_metrics(expected, actual, limits, label):
     pcc, nl2 = _metrics(expected, actual)
     logger.info(f"{label}: PCC={pcc:.8f}, NL2={nl2:.8f}")
@@ -142,20 +124,6 @@ def _upload(mesh_device, values, start, *, dtype=ttnn.bfloat16, layout=ttnn.TILE
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(4, 8), dims=(2, None)),
     )
-
-
-def _addresses(tensor):
-    return tuple(int(shard.buffer_address()) for shard in ttnn.get_device_tensors(tensor))
-
-
-def _snapshot(cache):
-    return [[ttnn.to_torch(shard).clone() for shard in ttnn.get_device_tensors(t)] for t in (cache.k, cache.v)]
-
-
-def _assert_unchanged(cache, before):
-    for tensor, snapshots in zip((cache.k, cache.v), before):
-        for shard, snapshot in zip(ttnn.get_device_tensors(tensor), snapshots):
-            assert torch.equal(ttnn.to_torch(shard), snapshot)
 
 
 def _check_cache(cache, before, reference, slot, layer, start, end, dtype):

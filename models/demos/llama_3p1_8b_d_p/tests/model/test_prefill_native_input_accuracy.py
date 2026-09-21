@@ -16,23 +16,29 @@ import torch.nn.functional as F
 from transformers import AutoConfig
 
 import ttnn
-from models.demos.llama_3p1_8b_d_p.tests.full_model import test_prefill_model_vs_ref as original
-from models.demos.llama_3p1_8b_d_p.tests.full_model.native_input_test_utils import (
-    CHUNKS,
-    LAYER_NAMES,
-    assemble_head,
-    full_hidden,
-    join_hidden_tp_replicas,
-    local_limits,
-    score_row,
-    validate_observer_order,
-    windows,
-)
-from models.demos.llama_3p1_8b_d_p.tests.full_model.reference import (
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import free_cache, snapshot
+from models.demos.llama_3p1_8b_d_p.tests.model import device_utils
+from models.demos.llama_3p1_8b_d_p.tests.model.reference import (
     chat_tokens,
     read_raw_weights,
     reference_layer,
     reference_prefill,
+)
+from models.demos.llama_3p1_8b_d_p.tests.utils import (
+    CHUNKS,
+    FULL_LIMITS,
+    LAYER_NAMES,
+    assemble_head,
+    check_metric,
+    full_hidden,
+    join_hidden_tp_replicas,
+    local_limits,
+    metrics,
+    score_row,
+    selected_logit_positions,
+    validate_observer_order,
+    windows,
+    write_pcc_summary,
 )
 from models.demos.llama_3p1_8b_d_p.tt.input import upload_token_chunk
 from models.demos.llama_3p1_8b_d_p.tt.model import PrefillModel
@@ -75,12 +81,9 @@ def llama_checkpoint():
 def _make_reference(checkpoint, slot, length, num_layers, *, user_text=None):
     ids, prompt = chat_tokens(checkpoint, slot=slot, length=length, user_text=user_text)
     length = len(ids)
-    # At 2048, use 256 evenly distributed positions plus exact boundaries and all short-tail rows.
-    # The union guarantees meaningful whole-prompt token agreement and tiny continuation coverage.
-    positions = set(range(length)) if length <= 65 else set(range(0, length, 8))
-    positions.update(p for p in [31, 32, 255, 256, 511, 512, 1023, 1024, 1535, 1536, length - 1] if p < length)
-    positions.update(range(1024, min(1033, length)))
-    reference = reference_prefill(checkpoint, ids, num_layers=num_layers, selected_logit_positions=sorted(positions))
+    reference = reference_prefill(
+        checkpoint, ids, num_layers=num_layers, selected_logit_positions=selected_logit_positions(length)
+    )
     return ids, reference, prompt
 
 
@@ -167,7 +170,7 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
         assert model.num_layers == len(model.layers) == 32
         assert [layer.layer_idx for layer in model.layers] == list(range(32))
         assert len({id(layer) for layer in model.layers}) == 32
-        cache = original._seed_cache(mesh_device, model, cache_dtype)
+        cache = device_utils.seed_cache(mesh_device, model, cache_dtype)
         # Baseline precedes capture. Its forward has no embedding hook or layer observer.
         for slot, start, end in CHUNKS:
             ids, golden, _ = references[slot]
@@ -182,10 +185,10 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
                     expected = golden["layers"][-1]["hidden"][start + sp * 256 : start + (sp + 1) * 256]
                     report["final_global_rows"].append(
                         score_row(
-                            original.metrics,
+                            metrics,
                             expected,
                             actual[sp * 256 : (sp + 1) * 256],
-                            original.FULL_LIMITS,
+                            FULL_LIMITS,
                             phase="baseline",
                             slot=slot,
                             start=start,
@@ -196,7 +199,7 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
                 torch.save(actual, directory / f"baseline-hidden-s{slot}-c{start}.pt")
                 logits_device = model.head(output)
                 try:
-                    logits = original._check_logits(
+                    logits = device_utils.check_logits(
                         logits_device,
                         golden,
                         start=start,
@@ -216,10 +219,10 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
                 if tokens is not None:
                     tokens.deallocate(True)
                     tokens = None
-        baseline_cache = dict(zip(("k", "v"), original._snapshot(cache)))
-        original._free_cache(cache)
+        baseline_cache = dict(zip(("k", "v"), snapshot(cache)))
+        free_cache(cache)
         cache = None
-        cache = original._seed_cache(mesh_device, model, cache_dtype)
+        cache = device_utils.seed_cache(mesh_device, model, cache_dtype)
         original_embedding_call = type(model.embedding).__call__
 
         def capture_embedding(instance, *args, **kwargs):
@@ -239,7 +242,7 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
                 ids, golden, _ = references[slot]
                 tokens = upload_token_chunk(mesh_device, ids[start:end], actual_start=start, actual_end=end)
                 input_before = [ttnn.to_torch(shard).clone() for shard in ttnn.get_device_tensors(tokens)]
-                before = original._snapshot(cache)
+                before = snapshot(cache)
                 observed = []
 
                 def observe(layer_idx, hidden):
@@ -252,10 +255,10 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
                         )
                     for sp in range(4):
                         sl = slice(sp * 256, (sp + 1) * 256)
-                        original._check_metric(
+                        check_metric(
                             golden["layers"][layer_idx]["hidden"][start + sp * 256 : start + (sp + 1) * 256],
                             actual[sl],
-                            original._hidden_limits(layer_idx + 1, cache_dtype),
+                            device_utils.hidden_limits(layer_idx + 1, cache_dtype),
                             f"layer output slot={slot} layer={layer_idx} chip={sp*8}",
                             report["records"],
                             enforce=layer_idx == 0,
@@ -283,7 +286,7 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
                     validate_observer_order(observed)
                     for actual, expected in zip(ttnn.get_device_tensors(tokens), input_before):
                         assert torch.equal(ttnn.to_torch(actual), expected)
-                    original._check_cache(
+                    device_utils.check_cache(
                         cache,
                         before,
                         golden,
@@ -293,7 +296,7 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
                         records=report["records"],
                         enforce_accumulated=False,
                     )
-                    logits = original._check_logits(
+                    logits = device_utils.check_logits(
                         output,
                         golden,
                         start=start,
@@ -325,7 +328,7 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
                         tokens = None
                 dump(directory / "report.json", report)
 
-        native_cache = dict(zip(("k", "v"), original._snapshot(cache)))
+        native_cache = dict(zip(("k", "v"), snapshot(cache)))
         assert all(torch.equal(a, b) for kind in ("k", "v") for a, b in zip(native_cache[kind], baseline_cache[kind]))
         report["baseline_cache_equal"] = True
         del baseline_cache
@@ -335,9 +338,9 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
 
         # Run the same calls after removing capture hooks. A fresh sentinel cache prevents stale
         # cache reuse from concealing a missing write. There are no inside-forward host readbacks.
-        original._free_cache(cache)
+        free_cache(cache)
         cache = None
-        cache = original._seed_cache(mesh_device, model, cache_dtype)
+        cache = device_utils.seed_cache(mesh_device, model, cache_dtype)
         for slot, start, end in CHUNKS:
             ids, golden, _ = references[slot]
             tokens = upload_token_chunk(mesh_device, ids[start:end], actual_start=start, actual_end=end)
@@ -353,10 +356,10 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
                     wanted = golden["layers"][-1]["hidden"][start + sp * 256 : start + (sp + 1) * 256]
                     report["final_global_rows"].append(
                         score_row(
-                            original.metrics,
+                            metrics,
                             wanted,
                             actual_final[sp * 256 : (sp + 1) * 256],
-                            original.FULL_LIMITS,
+                            FULL_LIMITS,
                             phase="after",
                             slot=slot,
                             start=start,
@@ -366,7 +369,7 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
                     )
                 logits_device = model.head(output)
                 try:
-                    replay_logits = original._check_logits(
+                    replay_logits = device_utils.check_logits(
                         logits_device,
                         golden,
                         start=start,
@@ -390,11 +393,11 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
                 if tokens is not None:
                     tokens.deallocate(True)
                     tokens = None
-        replay_cache = dict(zip(("k", "v"), original._snapshot(cache)))
+        replay_cache = dict(zip(("k", "v"), snapshot(cache)))
         assert all(torch.equal(a, b) for kind in ("k", "v") for a, b in zip(native_cache[kind], replay_cache[kind]))
         report["replay_cache_equal"] = True
         del replay_cache
-        original._free_cache(cache)
+        free_cache(cache)
         cache = None
         model.close()
         model = None
@@ -433,20 +436,20 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
                     limits = local_limits(dtype_name, kind)
                     coords = dict(slot=slot, layer=layer_idx, kind=kind, head=head)
                     report["local_rows"].append(
-                        score_row(original.metrics, expected, actual, limits, scope="full", start=0, end=2048, **coords)
+                        score_row(metrics, expected, actual, limits, scope="full", start=0, end=2048, **coords)
                     )
                     raw_limits = (
-                        original._hidden_limits(layer_idx + 1, cache_dtype)
+                        device_utils.hidden_limits(layer_idx + 1, cache_dtype)
                         if kind == "hidden"
-                        else original._kv_limits(layer_idx, cache_dtype)
+                        else device_utils.kv_limits(layer_idx, cache_dtype)
                     )
                     report["raw_global_summary_rows"].append(
-                        score_row(original.metrics, raw_global, actual, raw_limits, scope="full", **coords)
+                        score_row(metrics, raw_global, actual, raw_limits, scope="full", **coords)
                     )
                     for chunk, sp, begin, end in windows():
                         report["local_rows"].append(
                             score_row(
-                                original.metrics,
+                                metrics,
                                 expected[begin:end],
                                 actual[begin:end],
                                 limits,
@@ -509,6 +512,8 @@ def test_prefill_all_layers_from_native_inputs(llama_checkpoint, mesh_device, ca
         if tokens is not None:
             tokens.deallocate(True)
         if cache is not None:
-            original._free_cache(cache)
+            free_cache(cache)
         if model is not None:
             model.close()
+        if summary_root := os.environ.get("PREFILL_SUMMARIES"):
+            write_pcc_summary(report, summary_root)

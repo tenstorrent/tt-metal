@@ -11,16 +11,15 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.demos.llama_3p1_8b_d_p.tests.full_model.reference import chat_tokens, metrics, read_raw_weights, rms
+from models.demos.llama_3p1_8b_d_p.tests.model.reference import chat_tokens, rms
+from models.demos.llama_3p1_8b_d_p.tests.utils import metrics
+from models.demos.llama_3p1_8b_d_p.tests.utils import positions as _positions
+from models.demos.llama_3p1_8b_d_p.tests.utils import read_raw_weights
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.input import upload_token_chunk
 from models.demos.llama_3p1_8b_d_p.tt.model import FinalNormHead, TokenEmbedding
 
 CHECKPOINT = os.environ.get("LLAMA31_8B_CHECKPOINT", "/mnt/models/meta-llama/Llama-3.1-8B-Instruct")
-
-
-def _positions(start, sp):
-    return torch.tensor([p for p in range(start, start + 1024) if (p // 256) % 4 == sp])
 
 
 def _assert_metric(expected, actual, label):

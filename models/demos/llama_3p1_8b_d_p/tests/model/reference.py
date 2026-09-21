@@ -3,25 +3,15 @@
 
 """Independent float32 HF-frame oracle. No production numerical helpers are imported."""
 
-import json
+
 import math
-from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from safetensors import safe_open
 from transformers import AutoConfig, AutoTokenizer
 from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
 
-
-def read_raw_weights(checkpoint_path, names):
-    path = Path(checkpoint_path)
-    index = json.loads((path / "model.safetensors.index.json").read_text())["weight_map"]
-    result = {}
-    for name in names:
-        with safe_open(path / index[name], framework="pt", device="cpu") as shard:
-            result[name] = shard.get_tensor(name)
-    return result
+from models.demos.llama_3p1_8b_d_p.tests.utils import read_raw_weights
 
 
 def rms(x, weight, epsilon):
@@ -139,17 +129,3 @@ def reference_prefill(checkpoint_path, token_ids, *, num_layers=32, selected_log
     logits = F.linear(norm[selected_logit_positions], final["lm_head.weight"].float())
     assert torch.isfinite(logits).all()
     return {"layers": layers, "normalized": norm, "logit_positions": selected_logit_positions, "logits": logits}
-
-
-def metrics(expected, actual):
-    expected, actual = expected.double().flatten(), actual.double().flatten()
-    assert expected.numel() and expected.shape == actual.shape
-    assert torch.isfinite(expected).all() and torch.isfinite(actual).all()
-    e, a = expected - expected.mean(), actual - actual.mean()
-    denominator = torch.linalg.vector_norm(e) * torch.linalg.vector_norm(a)
-    norm = torch.linalg.vector_norm(expected)
-    assert denominator > 0 and norm > 0
-    pcc = (torch.dot(e, a) / denominator).item()
-    nl2 = (torch.linalg.vector_norm(actual - expected) / norm).item()
-    assert math.isfinite(pcc) and math.isfinite(nl2)
-    return pcc, nl2

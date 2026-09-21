@@ -4,18 +4,19 @@
 
 """Galaxy correctness tests for plain Llama-3.1 RMSNorm."""
 
-import json
 import os
 from pathlib import Path
 
 import pytest
 import torch
 from loguru import logger
-from safetensors import safe_open
 from transformers.models.llama.modeling_llama import LlamaRMSNorm
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import addresses as _device_addresses
+from models.demos.llama_3p1_8b_d_p.tests.utils import metrics as _metrics
+from models.demos.llama_3p1_8b_d_p.tests.utils import read_raw_weights
 from models.demos.llama_3p1_8b_d_p.tt.rms_norm import RMSNorm
 
 HF_MODEL = Path(os.environ.get("LLAMA31_8B_CHECKPOINT", "/mnt/models/meta-llama/Llama-3.1-8B-Instruct"))
@@ -35,18 +36,7 @@ REAL_WEIGHT_NAMES = (
 
 
 def _load_selected_checkpoint_weights():
-    index_path = HF_MODEL / "model.safetensors.index.json"
-    assert index_path.is_file(), f"required checkpoint index is unavailable: {index_path}"
-    with index_path.open() as index_file:
-        weight_map = json.load(index_file)["weight_map"]
-
-    weights = {}
-    for name in REAL_WEIGHT_NAMES:
-        shard_path = HF_MODEL / weight_map[name]
-        assert shard_path.is_file(), f"required checkpoint shard is unavailable: {shard_path}"
-        with safe_open(shard_path, framework="pt", device="cpu") as checkpoint:
-            weights[name] = checkpoint.get_tensor(name)
-    return weights
+    return read_raw_weights(HF_MODEL, REAL_WEIGHT_NAMES)
 
 
 def _synthetic_gamma():
@@ -59,24 +49,6 @@ def _reference_rms_norm(host_input, weight):
     with torch.no_grad():
         reference.weight.copy_(rounded_weight)
     return reference(host_input.to(torch.bfloat16).float())
-
-
-def _metrics(expected, actual):
-    # Accumulate in float64: an SP shard repeats constant-case rows 256 times, and a million-value
-    # float32 dot can lose enough reduction precision to under-report PCC despite a near-zero NL2.
-    expected = expected.double().flatten()
-    actual = actual.double().flatten()
-    expected_centered = expected - expected.mean()
-    actual_centered = actual - actual.mean()
-    pcc = torch.dot(expected_centered, actual_centered) / (
-        torch.linalg.vector_norm(expected_centered) * torch.linalg.vector_norm(actual_centered)
-    )
-    nl2 = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected)
-    return pcc.item(), nl2.item()
-
-
-def _device_addresses(tt_tensor):
-    return tuple(int(shard.buffer_address()) for shard in ttnn.get_device_tensors(tt_tensor))
 
 
 def _run_case(mesh_device, norm, weight, host_input, *, label):

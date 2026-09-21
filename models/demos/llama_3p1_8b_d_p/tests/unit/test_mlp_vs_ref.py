@@ -4,7 +4,6 @@
 
 """Galaxy correctness tests for the dense Llama-3.1 SwiGLU MLP."""
 
-import json
 import os
 from pathlib import Path
 
@@ -12,12 +11,14 @@ import pytest
 import torch
 import torch.nn.functional as F
 from loguru import logger
-from safetensors import safe_open
 from transformers import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaMLP
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import addresses as _device_addresses
+from models.demos.llama_3p1_8b_d_p.tests.utils import metrics as _metrics
+from models.demos.llama_3p1_8b_d_p.tests.utils import read_raw_weights
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.mlp import MLP
 
@@ -40,18 +41,7 @@ MUL_L1_BYTES_PER_CORE = 14_336
 
 
 def _load_layer_zero_mlp_weights():
-    index_path = HF_MODEL / "model.safetensors.index.json"
-    assert index_path.is_file(), f"required checkpoint index is unavailable: {index_path}"
-    with index_path.open() as index_file:
-        weight_map = json.load(index_file)["weight_map"]
-
-    weights = {}
-    for local_name, checkpoint_name in MLP_WEIGHT_NAMES.items():
-        shard_path = HF_MODEL / weight_map[checkpoint_name]
-        assert shard_path.is_file(), f"required checkpoint shard is unavailable: {shard_path}"
-        with safe_open(shard_path, framework="pt", device="cpu") as checkpoint:
-            weights[local_name] = checkpoint.get_tensor(checkpoint_name)
-    return weights
+    return read_raw_weights(HF_MODEL, MLP_WEIGHT_NAMES)
 
 
 def _structured_weights():
@@ -115,22 +105,6 @@ def _reference_mlp(host_input, state_dict):
     reference.eval()
     with torch.no_grad():
         return reference(host_input.to(torch.bfloat16).float())
-
-
-def _metrics(expected, actual):
-    expected = expected.double().flatten()
-    actual = actual.double().flatten()
-    expected_centered = expected - expected.mean()
-    actual_centered = actual - actual.mean()
-    pcc = torch.dot(expected_centered, actual_centered) / (
-        torch.linalg.vector_norm(expected_centered) * torch.linalg.vector_norm(actual_centered)
-    )
-    nl2 = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected)
-    return pcc.item(), nl2.item()
-
-
-def _device_addresses(tt_tensor):
-    return tuple(int(shard.buffer_address()) for shard in ttnn.get_device_tensors(tt_tensor))
 
 
 def _to_device_input(mesh_device, host_input, *, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):

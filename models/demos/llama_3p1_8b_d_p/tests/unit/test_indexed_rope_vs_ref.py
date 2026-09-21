@@ -5,6 +5,7 @@
 """Galaxy correctness tests for Llama-3.1 indexed RoPE."""
 
 import os
+from functools import partial
 
 import pytest
 import torch
@@ -13,7 +14,10 @@ from transformers import AutoConfig
 from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding, apply_rotary_pos_emb
 
 import ttnn
+from models.demos.llama_3p1_8b_d_p.tests.utils import metrics
 from models.demos.llama_3p1_8b_d_p.tt import rope
+
+_metrics = partial(metrics, dtype=torch.float32)
 
 HF_MODEL = os.environ.get("LLAMA31_8B_CHECKPOINT", "/mnt/models/meta-llama/Llama-3.1-8B-Instruct")
 MESH_SHAPE = (4, 8)
@@ -40,18 +44,6 @@ def _owned_positions(start):
         owned[(position // LOCAL_CHUNK) % SP].append(position)
     assert all(len(rows) == LOCAL_CHUNK for rows in owned)
     return owned
-
-
-def _metrics(expected, actual):
-    expected = expected.float().flatten()
-    actual = actual.float().flatten()
-    expected_centered = expected - expected.mean()
-    actual_centered = actual - actual.mean()
-    pcc = torch.dot(expected_centered, actual_centered) / (
-        torch.linalg.vector_norm(expected_centered) * torch.linalg.vector_norm(actual_centered)
-    )
-    nl2 = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected)
-    return pcc.item(), nl2.item()
 
 
 def _assert_all_device_shards(tt_tensor, expected_meta, owned, *, heads_per_tp, label, start):

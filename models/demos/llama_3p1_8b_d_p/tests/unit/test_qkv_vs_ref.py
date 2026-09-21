@@ -3,7 +3,6 @@
 
 """Galaxy correctness tests for Llama-3.1 Q/K/V projection and head splitting."""
 
-import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,10 +11,12 @@ import pytest
 import torch
 import torch.nn.functional as F
 from loguru import logger
-from safetensors import safe_open
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import addresses as _addresses
+from models.demos.llama_3p1_8b_d_p.tests.utils import metrics as _metrics
+from models.demos.llama_3p1_8b_d_p.tests.utils import read_raw_weights
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.qkv import QKVProjection
 
@@ -40,15 +41,7 @@ QKV_MATMUL_L1_BYTES_PER_CORE = 196_608
 
 
 def _load_layer_zero_qkv_weights():
-    with (HF_MODEL / "model.safetensors.index.json").open() as index_file:
-        weight_map = json.load(index_file)["weight_map"]
-    weights = {}
-    for local_name, checkpoint_name in QKV_WEIGHT_NAMES.items():
-        shard_path = HF_MODEL / weight_map[checkpoint_name]
-        assert shard_path.is_file(), f"required checkpoint shard is unavailable: {shard_path}"
-        with safe_open(shard_path, framework="pt", device="cpu") as checkpoint:
-            weights[local_name] = checkpoint.get_tensor(checkpoint_name)
-    return weights
+    return read_raw_weights(HF_MODEL, QKV_WEIGHT_NAMES)
 
 
 def _structured_projection(out_features, *, multiplier, offset, sign_period):
@@ -117,22 +110,6 @@ def _packed_local_weights_independent(state_dict, tp_coord):
     k_local = k[tp_coord].reshape(HEAD_DIM, HIDDEN_SIZE)
     v_local = v.reshape(NUM_KV_HEADS, HEAD_DIM, HIDDEN_SIZE)[tp_coord]
     return torch.cat((q_local, k_local, v_local), dim=0).transpose(-2, -1).contiguous()
-
-
-def _metrics(expected, actual):
-    expected = expected.double().flatten()
-    actual = actual.double().flatten()
-    expected_centered = expected - expected.mean()
-    actual_centered = actual - actual.mean()
-    pcc = torch.dot(expected_centered, actual_centered) / (
-        torch.linalg.vector_norm(expected_centered) * torch.linalg.vector_norm(actual_centered)
-    )
-    nl2 = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected)
-    return pcc.item(), nl2.item()
-
-
-def _addresses(tt_tensor):
-    return tuple(int(shard.buffer_address()) for shard in ttnn.get_device_tensors(tt_tensor))
 
 
 def _to_input(mesh_device, host_input, *, dtype=ttnn.bfloat16):

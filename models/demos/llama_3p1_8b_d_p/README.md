@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-# Llama-3.1-8B standalone prefill
+# Llama-3.1-8B disaggregated prefill
 
 TTNN prefill for the Llama-3.1-8B-Instruct checkpoint on one Blackhole Galaxy,
 with a 4×8 mesh: sequence parallelism (SP) across four rows and tensor parallelism
@@ -45,23 +45,28 @@ export OMP_NUM_THREADS=16
 On an allocated Blackhole Galaxy with the SP/TP ring links available:
 
 ```bash
+python3 -m pytest --noconftest models/demos/llama_3p1_8b_d_p/tests/host -v
 python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/unit -v --timeout=600
-python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/full_model/test_prefill_model_vs_ref.py -v --timeout=1200
-python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/full_model/test_prefill_native_input_accuracy.py -v --timeout=1200
-python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/full_model/test_prefill_book_top5.py -v --timeout=600
+python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/model/test_prefill_model_vs_ref.py -v --timeout=1200
+python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/model/test_prefill_native_input_accuracy.py -v --timeout=1200
+python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/model/test_prefill_book_top5.py -v --timeout=600
 ```
 
 The CI registration in `tests/pipeline_reorg/blaze_models_prefill_tests.yaml`
-separates CPU reference checks, components/decoder, full 2K accuracy, and book
-2K/4K. The host entry uses `--noconftest` so collection does not load device
-fixtures. Set `LLAMA_PREFILL_EVIDENCE_DIR` to a fresh directory to retain full
+runs CPU reference checks first in the components/decoder allocation, followed
+by separate full 2K accuracy and book 2K/4K jobs. CPU checks use `--noconftest`
+so collection does not load device fixtures. Shared CPU helpers are in
+`tests/utils.py`; TTNN helpers are in `tests/device_utils.py` and
+`tests/model/device_utils.py`. CI retains compact per-layer PCC reports in its
+prefill summaries. Set `LLAMA_PREFILL_EVIDENCE_DIR` to a fresh directory to retain full
 accuracy reports; the native-input test creates one directory per prompt/dtype.
 
 ## Accuracy contract
 
-- Component tests compare norm, QKV, RoPE, cache writes, attention, MLP, residual,
+- Component tests compare norm, QKV, RoPE, cache writes, attention, MLP,
   embedding, and vocabulary projection against independent Torch/HF references.
-  Decoder tests cover real layers, slot isolation, replay, and branch ablations.
+  Decoder tests cover residual composition, real layers, slot isolation, replay,
+  and branch ablations.
 - Real-token attention composition separately gates rotated Q (PCC ≥ 0.9999,
   normalized L2 ≤ 0.01), source-to-stored K/V (PCC ≥ 0.9999/0.999 and normalized
   L2 ≤ 0.01/0.02 for BF16/BF8_B), and SDPA against an independent CPU reference

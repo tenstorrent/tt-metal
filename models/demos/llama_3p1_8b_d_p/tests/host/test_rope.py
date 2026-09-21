@@ -4,7 +4,6 @@
 
 """Device-free numerical contract tests for Llama-3.1 RoPE."""
 
-import importlib
 import math
 import os
 
@@ -13,16 +12,10 @@ import torch
 from transformers import AutoConfig
 from transformers.models.llama.modeling_llama import ROPE_INIT_FUNCTIONS, LlamaRotaryEmbedding, apply_rotary_pos_emb
 
+from models.demos.llama_3p1_8b_d_p.tt import rope
+
 HF_MODEL = os.environ.get("LLAMA31_8B_CHECKPOINT", "/mnt/models/meta-llama/Llama-3.1-8B-Instruct")
 BOUNDARY_POSITIONS = (0, 31, 32, 255, 256, 1023, 1024, 8191, 8192)
-
-
-def _rope_module():
-    """Import lazily so the initial TDD run is an assertion failure, not a collection error."""
-    try:
-        return importlib.import_module("models.demos.llama_3p1_8b_d_p.tt.rope")
-    except ModuleNotFoundError:
-        pytest.fail("Llama RoPE host helpers are not implemented")
 
 
 def _hf_config():
@@ -40,7 +33,6 @@ def _rotate_meta(x):
 # Compare every Llama3 scaling band with HF; exact agreement catches a wrong scaling formula or branch.
 def test_llama3_inv_freq_matches_hf_in_all_wavelength_bands():
     """Catches default/linear/YaRN scaling or an incorrect smoothing branch."""
-    rope = _rope_module()
     config = _hf_config()
     expected, attention_factor = ROPE_INIT_FUNCTIONS["llama3"](config, device=torch.device("cpu"))
     actual = rope.llama3_inv_freq()
@@ -73,7 +65,6 @@ def test_llama3_inv_freq_matches_hf_in_all_wavelength_bands():
 # Sample tile, chunk, and context edges against HF; matching Meta-pair tables catch bad origins and layout.
 def test_cos_sin_tables_match_hf_at_tile_chunk_and_context_boundaries():
     """Catches half-split tables, wrong position origin, and off-by-one table construction."""
-    rope = _rope_module()
     config = _hf_config()
     position_ids = torch.tensor([BOUNDARY_POSITIONS], dtype=torch.long)
     hf_cos, hf_sin = LlamaRotaryEmbedding(config)(torch.empty(1, dtype=torch.float32), position_ids)
@@ -94,7 +85,6 @@ def test_cos_sin_tables_match_hf_at_tile_chunk_and_context_boundaries():
 # Convert a hand-written vector to Meta order and back; exact literals catch a reversible but wrong permutation.
 def test_hf_meta_conversion_has_known_adjacent_pair_coordinates():
     """Catches a half-split table accidentally treated as already Meta-interleaved."""
-    rope = _rope_module()
     hf = torch.tensor([[[0, 1, 2, 3, 10, 11, 12, 13]]], dtype=torch.float64)
     expected_meta = torch.tensor([[[0, 10, 1, 11, 2, 12, 3, 13]]], dtype=torch.float64)
 
@@ -107,7 +97,6 @@ def test_hf_meta_conversion_has_known_adjacent_pair_coordinates():
 # Apply the same coordinate conversion to full Q and K head counts; both must preserve the intended pair mapping.
 def test_projection_conversion_covers_q_and_k_head_counts():
     """Catches omitting or differently permuting either projected Q or projected K."""
-    rope = _rope_module()
     q_hf = torch.arange(32 * 128, dtype=torch.float32).reshape(1, 32, 1, 128)
     k_hf = (10000 + torch.arange(8 * 128, dtype=torch.float32)).reshape(1, 8, 1, 128)
 
@@ -120,7 +109,6 @@ def test_projection_conversion_covers_q_and_k_head_counts():
 # Rotate random full-size Q and K through both frames; matching HF catches frame-compatible-looking math errors.
 def test_meta_rotation_of_random_q_and_k_matches_hf_llama():
     """Catches a coordinate conversion that is reversible but incompatible with HF rotation."""
-    rope = _rope_module()
     torch.manual_seed(20260915)
     positions = torch.tensor([BOUNDARY_POSITIONS], dtype=torch.long)
     q_hf = torch.randn(1, 32, len(BOUNDARY_POSITIONS), 128)
@@ -145,7 +133,6 @@ def test_meta_rotation_of_random_q_and_k_matches_hf_llama():
 @pytest.mark.parametrize("dtype", (torch.float16, torch.float32, torch.float64))
 def test_coordinate_conversion_round_trip_preserves_tensor_properties(dtype):
     """Catches lossy reshaping, dtype conversion, or loss of arbitrary leading dimensions."""
-    rope = _rope_module()
     source = torch.randn(2, 3, 5, 128, dtype=dtype)
     restored = rope.meta_to_hf(rope.hf_to_meta(source))
 
@@ -159,7 +146,6 @@ def test_coordinate_conversion_round_trip_preserves_tensor_properties(dtype):
 @pytest.mark.parametrize("name", ("hf_to_meta", "meta_to_hf"))
 def test_coordinate_conversion_rejects_odd_head_dimension(name):
     """Catches silent truncation of the unpaired final coordinate."""
-    rope = _rope_module()
     with pytest.raises(ValueError, match="even"):  # allow-pytest.raises: pure-host test uses --noconftest
         getattr(rope, name)(torch.zeros(2, 3, 127))
 
@@ -167,7 +153,6 @@ def test_coordinate_conversion_rejects_odd_head_dimension(name):
 # Reject odd dimensions in both frequency builders; this prevents constructing incomplete rotary pairs.
 def test_frequency_and_table_builders_reject_odd_head_dimension():
     """Catches construction of an incomplete rotary pair."""
-    rope = _rope_module()
     with pytest.raises(ValueError, match="even"):  # allow-pytest.raises: pure-host test uses --noconftest
         rope.llama3_inv_freq(head_dim=127)
     with pytest.raises(ValueError, match="even"):  # allow-pytest.raises: pure-host test uses --noconftest
@@ -177,7 +162,6 @@ def test_frequency_and_table_builders_reject_odd_head_dimension():
 # Size tables for a full padded tail and round to chunks; 3072 rows catch accidental logical-only allocation.
 def test_indexed_rope_table_capacity_covers_the_last_physical_chunk():
     """Catches sizing tables only to the logical KV limit instead of the kernel's padded reads."""
-    rope = _rope_module()
 
     assert rope.indexed_rope_table_capacity(max_seq_len=2048, chunk_size=1024) == 3072
     assert rope.indexed_rope_table_capacity(max_seq_len=2049, chunk_size=1024) == 4096
@@ -196,7 +180,6 @@ def test_indexed_rope_table_capacity_covers_the_last_physical_chunk():
 )
 def test_indexed_rope_setup_rejects_unsupported_geometry(mesh_shape, max_seq_len, chunk_size, sp_axis, match):
     """Catches malformed SP geometry reaching TTNN as wrong or non-tile table shards."""
-    rope = _rope_module()
     fake_mesh = type("FakeMesh", (), {"shape": mesh_shape})()
 
     with pytest.raises(ValueError, match=match):  # allow-pytest.raises: validation runs before local TTNN import

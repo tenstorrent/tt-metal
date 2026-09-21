@@ -11,164 +11,23 @@ from pathlib import Path
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
-from models.demos.llama_3p1_8b_d_p.tests.full_model.reference import chat_tokens, metrics, reference_prefill
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import addresses as _addresses
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import assert_unchanged as _assert_unchanged
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import free_cache as _free_cache
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import snapshot as _snapshot
+from models.demos.llama_3p1_8b_d_p.tests.model.device_utils import check_cache as _check_cache
+from models.demos.llama_3p1_8b_d_p.tests.model.device_utils import check_hidden as _check_hidden
+from models.demos.llama_3p1_8b_d_p.tests.model.device_utils import check_logits as _check_logits
+from models.demos.llama_3p1_8b_d_p.tests.model.device_utils import hidden_limits as _hidden_limits
+from models.demos.llama_3p1_8b_d_p.tests.model.device_utils import seed_cache as _seed_cache
+from models.demos.llama_3p1_8b_d_p.tests.model.reference import chat_tokens, reference_prefill
+from models.demos.llama_3p1_8b_d_p.tests.utils import selected_logit_positions
 from models.demos.llama_3p1_8b_d_p.tt.input import upload_token_chunk
-from models.demos.llama_3p1_8b_d_p.tt.kv_cache import allocate_kv_cache
 from models.demos.llama_3p1_8b_d_p.tt.model import PrefillModel
 
 CHECKPOINT = os.environ.get("LLAMA31_8B_CHECKPOINT", "/mnt/models/meta-llama/Llama-3.1-8B-Instruct")
-# Full-model final logits retain these composition bounds. Accumulated raw hidden/KV drift is
-# recorded in the 2K boundary case; strict same-native-input coverage is required in its companion.
-FULL_LIMITS = (0.99, 0.15)
-
-
-def _positions(start, sp):
-    return torch.tensor([p for p in range(start, start + 1024) if (p // 256) % 4 == sp])
-
-
-def _cache_positions(sp):
-    return torch.tensor([p for p in range(2048) if (p // 256) % 4 == sp])
-
-
-def _addresses(tensor):
-    return tuple(int(shard.buffer_address()) for shard in ttnn.get_device_tensors(tensor))
-
-
-def _snapshot(cache):
-    return [[ttnn.to_torch(shard).clone() for shard in ttnn.get_device_tensors(t)] for t in (cache.k, cache.v)]
-
-
-def _assert_unchanged(cache, before):
-    for tensor, snapshots in zip((cache.k, cache.v), before):
-        for shard, snapshot in zip(ttnn.get_device_tensors(tensor), snapshots):
-            assert torch.equal(ttnn.to_torch(shard), snapshot)
-
-
-def _seed_cache(mesh_device, model, dtype):
-    cache = allocate_kv_cache(mesh_device, model.mesh_config, cache_dtype=dtype)
-    for name, sign in (("k", 1), ("v", -1)):
-        previous = getattr(cache, name)
-        sentinel = (torch.arange(64).reshape(64, 1, 1, 1) % 7 + 1).expand(64, 1, 512, 128) * (sign / 8)
-        setattr(
-            cache,
-            name,
-            ttnn.from_torch(
-                sentinel.contiguous(),
-                device=mesh_device,
-                dtype=dtype,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=previous.memory_config(),
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            ),
-        )
-        previous.deallocate(True)
-    return cache
-
-
-def _check_metric(expected, actual, limits, label, records, *, enforce=True):
-    pcc, nl2 = metrics(expected, actual)
-    within_limits = pcc >= limits[0] and nl2 <= limits[1]
-    records.append(
-        {"label": label, "pcc": pcc, "nl2": nl2, "limits": limits, "within_limits": within_limits, "enforced": enforce}
-    )
-    logger.info(f"{label}: PCC={pcc:.9f}, NL2={nl2:.9f}")
-    if enforce:
-        assert within_limits, (label, pcc, nl2, limits)
-
-
-def _hidden_limits(num_layers, dtype):
-    return ((0.999, 0.025) if dtype == ttnn.bfloat16 else (0.999, 0.05)) if num_layers == 1 else FULL_LIMITS
-
-
-def _kv_limits(layer_idx, dtype):
-    # Layer0 has no preceding device error accumulation, so it retains the strict composed gate.
-    if layer_idx == 0:
-        return (0.9999, 0.01) if dtype == ttnn.bfloat16 else (0.999, 0.02)
-    return FULL_LIMITS
-
-
-def _check_hidden(hidden, expected, *, start, end, limits, label, records, enforce=True):
-    assert tuple(hidden.shape) == (1, 1, 256, 4096)
-    assert hidden.dtype == ttnn.bfloat16 and hidden.layout == ttnn.TILE_LAYOUT
-    assert hidden.memory_config() == ttnn.DRAM_MEMORY_CONFIG
-    for chip, shard in enumerate(ttnn.get_device_tensors(hidden)):
-        positions = _positions(start, chip // 8)
-        valid = positions < end
-        actual = ttnn.to_torch(shard)[0, 0]
-        assert torch.isfinite(actual).all()
-        if valid.any():
-            _check_metric(
-                expected[positions[valid]], actual[valid], limits, f"{label} chip={chip}", records, enforce=enforce
-            )
-
-
-def _check_cache(cache, before, reference, *, slot, start, end, records, enforce_accumulated=True):
-    layers = reference["layers"]
-    for name, tensor, snapshots in zip(("k", "v"), (cache.k, cache.v), before):
-        for chip, (shard, snapshot) in enumerate(zip(ttnn.get_device_tensors(tensor), snapshots)):
-            actual = ttnn.to_torch(shard)
-            assert torch.isfinite(actual).all()
-            sp, head = divmod(chip, 8)
-            positions = _cache_positions(sp)
-            written = (positions >= start) & (positions < end)
-            padding = (positions >= end) & (positions < (end + 31) // 32 * 32)
-            untouched = ~(written | padding)
-            changed_planes = set(range(slot * 32, slot * 32 + len(layers)))
-            for plane in range(64):
-                if plane not in changed_planes:
-                    assert torch.equal(actual[plane], snapshot[plane]), (name, chip, plane, "other plane")
-                    continue
-                layer_idx = plane - slot * 32
-                assert torch.equal(actual[plane, 0, untouched], snapshot[plane, 0, untouched]), (
-                    name,
-                    chip,
-                    plane,
-                    "outside chunk",
-                )
-                assert torch.count_nonzero(actual[plane, 0, padding]) == 0, (name, chip, plane, "padding")
-                if written.any():
-                    _check_metric(
-                        layers[layer_idx][name][head, positions[written]],
-                        actual[plane, 0, written],
-                        _kv_limits(layer_idx, cache.k.dtype),
-                        f"cache {name} slot={slot} layer={layer_idx} chip={chip} head={head}",
-                        records,
-                        enforce=enforce_accumulated or layer_idx == 0,
-                    )
-
-
-def _check_logits(logits, reference, *, start, end, num_layers, dtype, records):
-    assert tuple(logits.shape) == (1, 1, 256, 16032)
-    shards = [ttnn.to_torch(shard)[0, 0].float() for shard in ttnn.get_device_tensors(logits)]
-    assert all(torch.isfinite(shard).all() for shard in shards)
-    positions = reference["logit_positions"]
-    selected = positions[(positions >= start) & (positions < end)]
-    assert selected.numel(), "every tested chunk needs reference logit positions"
-    expected_rows, actual_rows = [], []
-    lookup = {int(position): row for row, position in enumerate(positions)}
-    for absolute in selected.tolist():
-        sp = (absolute // 256) % 4
-        row = _positions(start, sp).tolist().index(absolute)
-        # TP columns are exact adjacent 16032-wide vocabulary intervals. No logits from padded
-        # query rows or a different SP owner may enter token comparisons.
-        actual_rows.append(torch.cat([shards[sp * 8 + tp][row] for tp in range(8)]))
-        expected_rows.append(reference["logits"][lookup[absolute]])
-    expected, actual = torch.stack(expected_rows), torch.stack(actual_rows)
-    assert actual.shape[1] == 128256
-    limits = _hidden_limits(num_layers, dtype)
-    _check_metric(expected, actual, limits, f"logits range=[{start},{end})", records, enforce=True)
-    wanted = expected.argmax(dim=-1)
-    top1 = (actual.argmax(dim=-1) == wanted).float().mean().item()
-    top5 = (actual.topk(5, dim=-1).indices == wanted[:, None]).any(dim=-1).float().mean().item()
-    records.append(
-        {"label": "teacher-forced token agreement", "positions": selected.tolist(), "top1": top1, "top5": top5}
-    )
-    logger.info(f"teacher-forced {len(selected)} positions: top1={top1:.6f}, top5={top5:.6f}")
-    assert top1 >= 0.90 and top5 >= 0.99
-    return actual
 
 
 def _resource_identity(model):
@@ -267,12 +126,9 @@ def _run(model, cache, ids, reference, *, slot, start, end, records, logits=True
 def _make_reference(slot, length, num_layers):
     ids, prompt = chat_tokens(CHECKPOINT, slot=slot, length=length)
     length = len(ids)
-    # At 2048, use 256 evenly distributed positions plus exact boundaries and all short-tail rows.
-    # The union guarantees meaningful whole-prompt token agreement and tiny continuation coverage.
-    positions = set(range(length)) if length <= 65 else set(range(0, length, 8))
-    positions.update(p for p in [31, 32, 255, 256, 511, 512, 1023, 1024, 1535, 1536, length - 1] if p < length)
-    positions.update(range(1024, min(1033, length)))
-    reference = reference_prefill(CHECKPOINT, ids, num_layers=num_layers, selected_logit_positions=sorted(positions))
+    reference = reference_prefill(
+        CHECKPOINT, ids, num_layers=num_layers, selected_logit_positions=selected_logit_positions(length)
+    )
     return ids, reference, prompt
 
 
@@ -284,11 +140,6 @@ def _save_report(name, records, prompts):
         (target / f"{name}.json").write_text(
             json.dumps({"records": records, "prompts": prompts}, indent=2, allow_nan=False)
         )
-
-
-def _free_cache(cache):
-    cache.k.deallocate(True)
-    cache.v.deallocate(True)
 
 
 # The reduced wrapper adds the real embedding and terminal path around the accepted layer. A

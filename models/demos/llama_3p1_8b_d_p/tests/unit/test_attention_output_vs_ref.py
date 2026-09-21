@@ -3,7 +3,6 @@
 
 """Galaxy correctness tests for Llama-3.1 attention output projection."""
 
-import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,10 +11,12 @@ import pytest
 import torch
 import torch.nn.functional as F
 from loguru import logger
-from safetensors import safe_open
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import addresses as _addresses
+from models.demos.llama_3p1_8b_d_p.tests.utils import metrics as _metrics
+from models.demos.llama_3p1_8b_d_p.tests.utils import read_raw_weights
 from models.demos.llama_3p1_8b_d_p.tt.attention import AttentionOutputProjection
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 
@@ -34,11 +35,7 @@ CONCAT_L1_BYTES_PER_CORE = 65_536
 
 
 def _load_layer_zero_o_weight():
-    with (HF_MODEL / "model.safetensors.index.json").open() as index_file:
-        weight_map = json.load(index_file)["weight_map"]
-    shard_path = HF_MODEL / weight_map[O_PROJ_CHECKPOINT_NAME]
-    with safe_open(shard_path, framework="pt", device="cpu") as checkpoint:
-        return {"o_proj.weight": checkpoint.get_tensor(O_PROJ_CHECKPOINT_NAME)}
+    return read_raw_weights(HF_MODEL, {"o_proj.weight": O_PROJ_CHECKPOINT_NAME})
 
 
 def _structured_weight():
@@ -76,22 +73,6 @@ def _reference(host_heads, state_dict):
     concatenated = rounded_heads.transpose(1, 2).reshape(1, 1, GLOBAL_CHUNK, HIDDEN_SIZE)
     weight = state_dict["o_proj.weight"].to(torch.bfloat16).float()
     return F.linear(concatenated, weight)
-
-
-def _metrics(expected, actual):
-    expected = expected.double().flatten()
-    actual = actual.double().flatten()
-    expected_centered = expected - expected.mean()
-    actual_centered = actual - actual.mean()
-    pcc = torch.dot(expected_centered, actual_centered) / (
-        torch.linalg.vector_norm(expected_centered) * torch.linalg.vector_norm(actual_centered)
-    )
-    nl2 = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected)
-    return pcc.item(), nl2.item()
-
-
-def _addresses(tensor):
-    return tuple(int(shard.buffer_address()) for shard in ttnn.get_device_tensors(tensor))
 
 
 def _to_heads(mesh_device, host_heads, *, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):

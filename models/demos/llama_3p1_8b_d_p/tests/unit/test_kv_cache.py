@@ -3,7 +3,6 @@
 
 """Galaxy correctness tests for Llama-3.1 packed K/V caches."""
 
-import json
 import math
 import os
 from pathlib import Path
@@ -13,12 +12,14 @@ import pytest
 import torch
 import torch.nn.functional as F
 from loguru import logger
-from safetensors import safe_open
 from transformers import AutoConfig
 from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding, apply_rotary_pos_emb
 
 import ttnn
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
+from models.demos.llama_3p1_8b_d_p.tests.device_utils import addresses as _addresses
+from models.demos.llama_3p1_8b_d_p.tests.utils import metrics as _metrics
+from models.demos.llama_3p1_8b_d_p.tests.utils import read_raw_weights
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import LlamaKVCache, allocate_kv_cache, write_kv_chunk
 from models.demos.llama_3p1_8b_d_p.tt.qkv import QKVProjection
@@ -48,34 +49,12 @@ QKV_WEIGHT_NAMES = {
 
 
 def _load_layer_zero_qkv_weights():
-    with (HF_MODEL / "model.safetensors.index.json").open() as index_file:
-        weight_map = json.load(index_file)["weight_map"]
-    weights = {}
-    for local_name, checkpoint_name in QKV_WEIGHT_NAMES.items():
-        with safe_open(HF_MODEL / weight_map[checkpoint_name], framework="pt", device="cpu") as checkpoint:
-            weights[local_name] = checkpoint.get_tensor(checkpoint_name)
-    return weights
+    return read_raw_weights(HF_MODEL, QKV_WEIGHT_NAMES)
 
 
 def _half_split_to_adjacent_independent(tensor):
     half = tensor.shape[-1] // 2
     return torch.stack((tensor[..., :half], tensor[..., half:]), dim=-1).reshape(tensor.shape)
-
-
-def _metrics(expected, actual):
-    expected = expected.double().flatten()
-    actual = actual.double().flatten()
-    expected_centered = expected - expected.mean()
-    actual_centered = actual - actual.mean()
-    pcc = torch.dot(expected_centered, actual_centered) / (
-        torch.linalg.vector_norm(expected_centered) * torch.linalg.vector_norm(actual_centered)
-    )
-    nl2 = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected)
-    return pcc.item(), nl2.item()
-
-
-def _addresses(tt_tensor):
-    return tuple(int(shard.buffer_address()) for shard in ttnn.get_device_tensors(tt_tensor))
 
 
 def _owned_positions(start):
