@@ -34,8 +34,17 @@ namespace experimental {
 
 class GlobalCircularBuffer;
 
-// Reserved for future prefetcher-wide options.
-struct TensorPrefetcherConfig {};
+struct TensorPrefetcherConfig {
+    // Blackhole GDDR MPFE round-robin weights. Lower values receive more service.
+    uint32_t free_sender_mpfe_weight = 0;
+    uint32_t noc1_sender_mpfe_weight = 1;
+    uint32_t ordinary_mpfe_weight = 5;
+
+    // Static mode holds the active L/M/H tuple for the prefetcher's lifetime.
+    // Dynamic mode idles both prefetch senders at H and independently lowers each
+    // sender to its active weight only while that sender processes a request.
+    bool dynamic_mpfe_weighting = false;
+};
 
 // Returns true if the Tensor prefetcher is supported on `mesh_device`. Both must hold:
 //   - programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0), and

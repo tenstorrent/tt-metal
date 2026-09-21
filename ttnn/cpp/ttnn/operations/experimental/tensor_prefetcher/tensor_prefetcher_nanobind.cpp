@@ -48,12 +48,26 @@ void bind_tensor_prefetcher(nb::module_& mod) {
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device to launch on.
+                free_sender_mpfe_weight (Optional[int]): active free-sender MPFE weight.
+                    None uses the Metal default.
+                noc1_sender_mpfe_weight (Optional[int]): active NOC1-sender MPFE weight.
+                    None uses the Metal default.
+                ordinary_mpfe_weight (Optional[int]): ordinary-operation MPFE weight.
+                    None uses the Metal default.
+                dynamic_mpfe_weighting (Optional[bool]): when True, idle both prefetch senders
+                    at the ordinary weight and lower each private sender slot only while it
+                    handles a request. None uses the Metal default.
 
             Two sender kernels are provisioned per DRAM bank. Each queued GCB selects one
             or both senders per bank; unused senders remain parked on their sockets.
         )doc",
         &start_tensor_prefetcher,
-        nb::arg("mesh_device"));
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("free_sender_mpfe_weight") = std::nullopt,
+        nb::arg("noc1_sender_mpfe_weight") = std::nullopt,
+        nb::arg("ordinary_mpfe_weight") = std::nullopt,
+        nb::arg("dynamic_mpfe_weighting") = std::nullopt);
 
     ttnn::bind_function<"queue_tensor_prefetcher_request", "ttnn.experimental.">(
         mod,
