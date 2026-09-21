@@ -539,6 +539,14 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
             fmt::format_to(it, "-I{}{} ", env_.root_, include);
         }
     }
+    if (build_config.is_fw && build_config.core_type == HalProgrammableCoreType::TENSIX &&
+        build_config.processor_class == HalProcessorClassType::DM && build_config.processor_id == 0 &&
+        env_.get_rtoptions().get_brisc_firmware_variant() == llrt::BriscFirmwareVariant::Blaze) {
+        fmt::format_to(
+            std::back_inserter(this->includes_),
+            "-I{} ",
+            std::filesystem::path(env_.get_rtoptions().get_brisc_firmware_header()).parent_path().string());
+    }
     // Defines
     {
         auto it = std::back_inserter(this->defines_);
