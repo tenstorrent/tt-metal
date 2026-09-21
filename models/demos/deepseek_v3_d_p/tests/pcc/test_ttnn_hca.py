@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
 )
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import V4_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtHCACompressor
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -95,30 +95,9 @@ _MODEL_CONFIGS_LONG = [pytest.param(cfg, long, id=name) for name, cfg, _, long, 
 _MODEL_CONFIGS_FORWARD = [pytest.param(cfg, fwd, id=name) for name, cfg, _, _, fwd in _VARIANTS]
 
 
-# Blackhole runs a mesh config only when it uses every chip, so one shape per box class.
-_MESH_CONFIGS = [
-    pytest.param(
-        (2, 2),
-        fabric2d_device_params(),
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
-        id="fabric2d-mesh-2x2",
-    ),
-    pytest.param(
-        (4, 2),
-        fabric2d_device_params(),
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-        id="fabric2d-mesh-4x2",
-    ),
-    pytest.param(
-        (8, 4),
-        torus_xy_device_params(),
-        ttnn.Topology.Ring,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="torus-xy-8x4",
-    ),
-]
+# Shared with CSA and with the perf leg; see mesh_configs.V4_MESH_CONFIGS. Aliased rather than
+# imported under its own name because test_ttnn_hca_perf.py imports _MESH_CONFIGS from here.
+_MESH_CONFIGS = V4_MESH_CONFIGS
 
 
 def _report_chunk_pccs(pccs, floor):
