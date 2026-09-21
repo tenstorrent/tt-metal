@@ -300,6 +300,9 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
     prep_compute.config = fused_compute_cfg();
     // Fused-only perf: hoisted WY-path reconfigs (see chunk_gdn_math.hpp kGdnHoistReconfig).
     prep_compute.defines = {{"GDN_HOIST_RECONFIG", "1"}};
+    if (Ct > 1) {  // same size-vs-limit rule as the phased prep factory (test-only shape)
+        prep_compute.opt_level = KernelBuildOptLevel::Os;
+    }
     prep_compute.runtime_args.reserve(BH * NP);
 
     KernelDescriptor fused_writer;
