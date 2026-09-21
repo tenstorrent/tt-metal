@@ -257,7 +257,8 @@ enum class EnvVarID {
     // JIT BUILD CONFIGURATION
     // ========================================
     TT_METAL_DISABLE_PRECOMPILED_FW,  // Disable use of pre-compiled firmware
-    TT_METAL_FW_SRC_BRISC,            // BRISC firmware variant to JIT-build instead of the in-tree one
+    TT_METAL_FW_SRC_BRISC,            // BRISC firmware feature variant to JIT-build
+    TT_METAL_FW_HEADER_BRISC,         // Header supplied by the selected BRISC firmware variant
     TT_METAL_BACKEND_DUMP_RUN_CMD,    // Dump JIT build commands to stdout
 
     // ========================================
@@ -980,7 +981,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // TT_METAL_STREAMING_PROFILER
         // Boots the streaming profiler at MeshDevice bring-up. Records go to registered callbacks
         // (RegisterCallback and the TT_METAL_STREAMING_PROFILER_*_CSV writers); add
-        // TT_METAL_STREAMING_PROFILER_TRACY=1 for the Tracy sink. Needs a Tracy-enabled build and TT_METAL_DEVICE_PROFILER off.
+        // TT_METAL_STREAMING_PROFILER_TRACY=1 for the Tracy sink. Needs a Tracy-enabled build and
+        // TT_METAL_DEVICE_PROFILER off.
 
         // Default: false
         // Usage: export TT_METAL_STREAMING_PROFILER=1
@@ -1879,8 +1881,8 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_DISABLE_PRECOMPILED_FW: this->set_disable_precompiled_fw(is_env_enabled(value)); break;
 
         // TT_METAL_FW_SRC_BRISC
-        // Select a supported BRISC firmware variant instead of
-        // tt_metal/hw/firmware/src/tt-1xx/brisc.cc. A non-empty value also disables the precompiled firmware.
+        // Select a BRISC firmware extension.
+        // A non-empty value also disables the precompiled firmware.
         // Default: unset
         // Usage: export TT_METAL_FW_SRC_BRISC=blaze
         case EnvVarID::TT_METAL_FW_SRC_BRISC: {
@@ -1890,6 +1892,24 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                     variant == "blaze", "Unsupported TT_METAL_FW_SRC_BRISC value '{}'; supported values: blaze", value);
                 this->brisc_firmware_variant = BriscFirmwareVariant::Blaze;
                 this->set_disable_precompiled_fw(true);
+            }
+            break;
+        }
+
+        // TT_METAL_FW_HEADER_BRISC
+        // Absolute or working-directory-relative header supplied by the selected BRISC firmware variant.
+        // Default: unset
+        // Usage: export TT_METAL_FW_HEADER_BRISC=/path/to/blaze/firmware/runtime_reload.h
+        case EnvVarID::TT_METAL_FW_HEADER_BRISC: {
+            const std::string header = trim_copy(value);
+            if (!header.empty()) {
+                const auto path = std::filesystem::absolute(header).lexically_normal();
+                TT_FATAL(
+                    std::filesystem::is_regular_file(path),
+                    "TT_METAL_FW_HEADER_BRISC '{}' is not a file",
+                    path.string());
+                TT_FATAL(path.filename() == "runtime_reload.h", "TT_METAL_FW_HEADER_BRISC must name runtime_reload.h");
+                this->brisc_firmware_header = path.string();
             }
             break;
         }
@@ -1951,6 +1971,12 @@ void RunTimeOptions::InitializeFromEnvVars() {
         if (value) {
             HandleEnvVar(id, value);
         }
+    }
+
+    if (this->brisc_firmware_variant == BriscFirmwareVariant::Blaze) {
+        TT_FATAL(!this->brisc_firmware_header.empty(), "TT_METAL_FW_SRC_BRISC=blaze requires TT_METAL_FW_HEADER_BRISC");
+    } else {
+        TT_FATAL(this->brisc_firmware_header.empty(), "TT_METAL_FW_HEADER_BRISC requires TT_METAL_FW_SRC_BRISC=blaze");
     }
 
     // Validate emulated mode configuration

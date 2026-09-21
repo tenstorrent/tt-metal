@@ -319,6 +319,7 @@ class TtMoe(LightweightModule):
         self.num_routed_experts = num_routed_experts
         self.num_experts_per_tok = num_experts_per_tok
         self.seq_len_per_chip = seq_len_per_chip
+        self.layer_idx = layer_idx  # GLOBAL index; only consumed by the env-gated routing dump
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
         self.routed_emb_dim = emb_dim if routed_emb_dim is None else routed_emb_dim
@@ -599,6 +600,86 @@ class TtMoe(LightweightModule):
             self.mesh_device.remove_sub_device_manager(self.sd_manager_id)
             self.sd_manager_id = None
 
+    _dump_traced_warned = False  # see the traced-path branch below; warn once per process
+
+    def _dump_routing(
+        self,
+        indices: ttnn.Tensor,
+        scores: ttnn.Tensor,
+        actual_start: int,
+        cache_user_id: int,
+        traced: bool,
+    ) -> None:
+        """Env-gated (PREFILL_DUMP_ROUTING_DIR) host dump of the gate's per-token top-k selection.
+
+        A no-op unless the var is set. The routing tensors never otherwise leave the device, so this
+        costs a full device sync plus a [tokens, topk] readback per layer per chunk: a debug tool, not
+        a production path. The file name carries the GLOBAL layer index, the KV slot and the chunk's
+        absolute KV start, because start is what lets the analysis script invert the rotated
+        block-cyclic chip->token mapping back to global token order (see rotated_chip_positions).
+
+        The ids written are GLOBAL expert ids (0..num_routed_experts-1), plus the pad sentinel
+        num_routed_experts: the gate matmul is TP-sharded on K and all-reduced, so every chip runs the
+        top-k over the FULL expert axis. Expert parallelism only enters later, in dispatch.
+        """
+        dump_dir = os.environ.get("PREFILL_DUMP_ROUTING_DIR")
+        if not dump_dir:
+            return
+        # Every dumped layer costs a device sync, so a 93-layer x 11-chunk run pays ~1000 of them and
+        # writes ~700 MB. PREFILL_DUMP_ROUTING_LAYERS narrows it to the layers actually being chased
+        # (e.g. the ones that already have a KV dump). Unset = every MoE layer.
+        wanted = os.environ.get("PREFILL_DUMP_ROUTING_LAYERS")
+        if wanted and str(self.layer_idx) not in {s.strip() for s in wanted.split(",") if s.strip()}:
+            return
+        if traced:
+            # A device->host readback is illegal inside a trace capture, and a capture recorded with
+            # one would be wrong for every replay. Stay off and say so rather than corrupt the run.
+            # Once per process, not once per MoE layer per chunk -- that would be ~69 x N identical
+            # lines on Kimi-K3 and would bury everything else in the log.
+            if not TtMoe._dump_traced_warned:
+                TtMoe._dump_traced_warned = True
+                logger.warning(
+                    "[TtMoe] PREFILL_DUMP_ROUTING_DIR is set but this is the traced path; "
+                    "routing dump skipped for all layers (run with use_trace=False to collect it)"
+                )
+            return
+        try:
+            # SP is mesh axis 0 and the gate output is TP-replicated (the logits all-reduce), so concat
+            # along axis 0 over the SP rows and collapse the TP columns -- the same composition
+            # TtMoEGatePrefill._compose_logits_to_host uses.
+            composer = ttnn.create_mesh_composer(
+                self.mesh_device,
+                config=ttnn.MeshComposerConfig(
+                    dims=(0, -1),
+                    mesh_shape_override=ttnn.MeshShape(self.mesh_device.shape[0], 1),
+                ),
+            )
+            host_indices = ttnn.to_torch(indices, mesh_composer=composer).reshape(-1, self.num_experts_per_tok)
+            host_scores = ttnn.to_torch(scores, mesh_composer=composer).reshape(-1, self.num_experts_per_tok)
+            sp_factor = int(self.mesh_device.shape[0])
+            os.makedirs(dump_dir, exist_ok=True)
+            torch.save(
+                {
+                    # int32, not int16: the sentinel is num_routed_experts and a wider expert space
+                    # would not fit int16. The file is written once and read offline; size is not the
+                    # constraint here.
+                    "expert_ids": host_indices.to(torch.int32),
+                    "expert_weights": host_scores.to(torch.float32),
+                    "layer_idx": self.layer_idx,
+                    "slot_id": int(cache_user_id),
+                    "actual_start": int(actual_start),
+                    "sp_factor": sp_factor,
+                    "tokens_per_chip": int(host_indices.shape[0]) // sp_factor,
+                    "num_routed_experts": int(self.num_routed_experts),
+                },
+                os.path.join(
+                    dump_dir,
+                    f"routing_layer{self.layer_idx}_slot{int(cache_user_id)}_start{int(actual_start)}.pt",
+                ),
+            )
+        except Exception as exc:  # diagnostics must never fail a run
+            logger.warning(f"[TtMoe] routing dump for layer {self.layer_idx} failed: {exc}")
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -608,6 +689,7 @@ class TtMoe(LightweightModule):
         actual_start: Optional[int] = None,
         metadata: Optional[tuple] = None,
         input_ids: Optional[torch.Tensor] = None,
+        cache_user_id: int = 0,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -708,6 +790,8 @@ class TtMoe(LightweightModule):
             actual_start=actual_start or 0,
             input_ids=input_ids,
         )
+
+        self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
 
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
