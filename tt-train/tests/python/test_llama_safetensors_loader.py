@@ -233,8 +233,11 @@ class TestHelpers:
                 assert np.array_equal(got[base + 2 * i + 1], w[base + half + i])
 
 
-def save_checkpoint(directory, tensors: dict[str, np.ndarray]) -> None:
-    pytest.importorskip("safetensors.numpy").save_file(tensors, str(directory / "model.safetensors"))
+def save_checkpoint(directory, *shards: dict[str, np.ndarray]) -> None:
+    """Each dict as one HF-named shard file."""
+    save_file = pytest.importorskip("safetensors.numpy").save_file
+    for i, shard in enumerate(shards, 1):
+        save_file(shard, str(directory / f"model-{i:05d}-of-{len(shards):05d}.safetensors"))
 
 
 class TestReadCheckpoint:
@@ -256,6 +259,12 @@ class TestReadCheckpoint:
     def test_rejects_two_spellings_of_one_tensor(self, tmp_path, expect_error):
         zeros = np.zeros((2, 2), np.float32)
         save_checkpoint(tmp_path, {"model.wte.weight": zeros, "embed_tokens.weight": zeros})
+        with expect_error(RuntimeError, "collides with another tensor"):
+            _Checkpoint(tmp_path)
+
+    def test_rejects_a_tensor_present_in_two_shards(self, tmp_path, expect_error):
+        zeros = np.zeros((2, 2), np.float32)
+        save_checkpoint(tmp_path, {"norm.weight": zeros}, {"norm.weight": zeros})
         with expect_error(RuntimeError, "collides with another tensor"):
             _Checkpoint(tmp_path)
 
@@ -428,7 +437,7 @@ def e2e_config(use_tp: bool, placement: EmbeddingPlacement, **overrides) -> Llam
     )
 
 
-def write_hf_checkpoint(directory, vocab: int = VOCAB, dtype=np.float32) -> dict[str, np.ndarray]:
+def hf_tensors(vocab: int = VOCAB, dtype=np.float32) -> dict[str, np.ndarray]:
     """A synthetic HF Llama checkpoint; real ones are bf16, so *dtype* covers that read path."""
     rng = np.random.default_rng(99)
 
@@ -458,7 +467,14 @@ def write_hf_checkpoint(directory, vocab: int = VOCAB, dtype=np.float32) -> dict
                 f"{pfx}.mlp.down_proj.weight": w(MODEL_HIDDEN, INTERMEDIATE),
             }
         )
-    save_checkpoint(directory, tensors)
+    return tensors
+
+
+def write_hf_checkpoint(directory, vocab: int = VOCAB, dtype=np.float32) -> dict[str, np.ndarray]:
+    """``hf_tensors`` on disk as two shards with every fused group straddling them, as large checkpoints ship."""
+    tensors = hf_tensors(vocab, dtype)
+    items = list(tensors.items())
+    save_checkpoint(directory, dict(items[0::2]), dict(items[1::2]))
     return tensors
 
 
@@ -600,8 +616,7 @@ class TestLoadIntoModel:
 
     def test_rejects_a_checkpoint_missing_a_fused_source(self, tmp_path, expect_error):
         """A fused parameter needs all of its sources; a partial group must not load silently."""
-        tensors = {k: v for k, v in write_hf_checkpoint(tmp_path).items() if "v_proj" not in k}
-        save_checkpoint(tmp_path, tensors)
+        save_checkpoint(tmp_path, {k: v for k, v in hf_tensors().items() if "v_proj" not in k})
 
         config = e2e_config(False, EmbeddingPlacement.Replicated)
         with expect_error(RuntimeError, "the checkpoint has no"):
