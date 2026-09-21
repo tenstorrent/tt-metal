@@ -4,6 +4,8 @@
 """
 MoE MLP: Router + Experts with minimal abstraction
 """
+import os
+
 import ttnn
 from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
 from models.demos.gpt_oss.utils.general_utils import fused_moe_kernels_supported_on_arch, get_cache_file_name
@@ -72,8 +74,19 @@ class MLP:
             # Blackhole takes moe_compute, the arch-agnostic successor to moe_gpt: it sizes its
             # matmul ring from the live DRAM-bank count instead of assuming Wormhole's 12, and
             # folds the combine and the routing-score multiply into the kernel.
+            # OPT-IN ONLY. moe_compute is ~1.8x faster end to end (34.0 vs 19.6 tok/s/user at
+            # batch 128 on a Blackhole Galaxy) and its per-layer PCC is good -- experts 0.983,
+            # MLP 0.977, decoder 0.990 against the dense flow's 0.984/0.978/0.992 -- but full
+            # 36-layer generation is not yet trustworthy: users on different mesh rows given
+            # the same prompt diverge, and some prompts collapse into repetition or gibberish.
+            # The dense flow produces 128 coherent, row-identical outputs. Default stays dense
+            # until that is root-caused; set GPT_OSS_MOE_COMPUTE=1 to exercise this path.
             moe_compute_config = None
-            if not fused_moe_kernels_supported_on_arch() and mesh_device.shape[0] > 1:
+            if (
+                os.getenv("GPT_OSS_MOE_COMPUTE") == "1"
+                and not fused_moe_kernels_supported_on_arch()
+                and mesh_device.shape[0] > 1
+            ):
                 moe_compute_config = create_moe_compute_config(
                     mesh_device=mesh_device,
                     config=throughput_expert_config,
