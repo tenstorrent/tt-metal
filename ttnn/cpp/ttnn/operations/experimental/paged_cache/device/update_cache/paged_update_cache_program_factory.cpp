@@ -460,11 +460,14 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
 
     // ---------------- Compute ----------------
 
-    // to_compute_hardware_config selects the arch's alternative (ComputeGen2Config on Quasar, else
-    // ComputeGen1Config) from the op's compute_kernel_config and maps the common knobs, leaving the
-    // per-DFB unpack_modes default for us to set below. A KernelSpec holds one generation and
-    // ValidateProgramSpec rejects a Gen1 config on Quasar. This op resolves the default config
-    // (HiFi4 / precise / double-buffered dest), so the mapped knobs match what legacy left at default.
+    // Select the compute hardware-config generation for the target arch and map the caller's common
+    // knobs (leaving the per-DFB unpack_modes default for us to set below). Required on Quasar, where a
+    // KernelSpec holds one generation and ValidateProgramSpec rejects a Gen1 config. Unlike the previous
+    // bare ComputeGen1Config (which set only enable_32_bit_dest and otherwise took the struct defaults,
+    // HiFi4/precise), this preserves the caller's compute_kernel_config — whose no-arg TTNN default maps
+    // to LoFi/approximate/double-buffered Dest. That differs only in the fidelity/approx knobs, which do
+    // not affect this op: it untilizes cache/input, patches a row, and re-tilizes (data-format moves) —
+    // there is no fidelity-sensitive FPU or SFPU math, and bfp_pack_precision_mode is left default either way.
     auto compute_hw_cfg = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
         // A 32-bit Dest requires an explicit unpack mode for every Float32 buffer the compute kernel

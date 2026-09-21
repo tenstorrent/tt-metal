@@ -7,6 +7,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -69,12 +70,25 @@ void kernel_main() {
     }
 
     DataflowBuffer dfb_in(dfb::in);
+    // On Quasar the metadata buffers are node-local scratchpads (Gen2 forbids self-loop DFBs on DM
+    // kernels — the writer NoC-reads each stick and reads it straight back, never pushing). Elsewhere
+    // they stay self-loop DFBs. Same accessor names, so this selects scratch::… vs dfb::….
+#ifdef ARCH_QUASAR
+    Scratchpad<uint32_t> page_table_scratch(scratch::page_table);
+#ifdef USE_BATCH_IDX_TENSOR
+    Scratchpad<uint32_t> batch_idx_scratch(scratch::batch_idx);
+#endif
+#ifdef USE_VALID_SEQ_LEN
+    Scratchpad<uint32_t> valid_seq_len_scratch(scratch::valid_seq_len);
+#endif
+#else
     DataflowBuffer dfb_page_table(dfb::page_table);
 #ifdef USE_BATCH_IDX_TENSOR
     DataflowBuffer dfb_batch_idx(dfb::batch_idx);
 #endif
 #ifdef USE_VALID_SEQ_LEN
     DataflowBuffer dfb_valid_seq_len(dfb::valid_seq_len);
+#endif
 #endif
 
     // Resolve batch_idx source. With a batch_idx tensor we load the (small) 1D tensor into an SRAM
@@ -83,16 +97,24 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* batch_idx_arr = nullptr;
     {
         const auto batch_idx_gen = TensorAccessor(tensor::batch_idx);
-        dfb_batch_idx.reserve_back(1);
-        const uint32_t batch_idx_wr_ptr = dfb_batch_idx.get_write_ptr();
         // The tensor is a contiguous 1D int (uint32/int32) tensor in DRAM with
         // `batch_idx_num_elements` entries; one TensorAccessor stick covers it.
+#ifdef ARCH_QUASAR
+        // Quasar: read into the scratchpad (pass the object so the NoC uses the cached L1 address),
+        // then read back through its base address.
+        const uint32_t batch_idx_wr_ptr = batch_idx_scratch.get_base_address();
+        noc.async_read(
+            batch_idx_gen, batch_idx_scratch, batch_idx_stick_size * batch_idx_num_elements, {.page_id = 0}, {});
+#else
+        dfb_batch_idx.reserve_back(1);
+        const uint32_t batch_idx_wr_ptr = dfb_batch_idx.get_write_ptr();
         noc.async_read(
             batch_idx_gen,
             CoreLocalMem<uint32_t>(batch_idx_wr_ptr),
             batch_idx_stick_size * batch_idx_num_elements,
             {.page_id = 0},
             {});
+#endif
         noc.async_read_barrier();
         batch_idx_arr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_idx_wr_ptr);
     }
@@ -106,9 +128,14 @@ void kernel_main() {
 #ifdef USE_VALID_SEQ_LEN
     {
         const auto valid_gen = TensorAccessor(tensor::valid_seq_len);
+#ifdef ARCH_QUASAR
+        const uint32_t valid_wr_ptr = valid_seq_len_scratch.get_base_address();
+        noc.async_read(valid_gen, valid_seq_len_scratch, valid_seq_len_stick_size, {.page_id = 0}, {});
+#else
         dfb_valid_seq_len.reserve_back(1);
         const uint32_t valid_wr_ptr = dfb_valid_seq_len.get_write_ptr();
         noc.async_read(valid_gen, CoreLocalMem<uint32_t>(valid_wr_ptr), valid_seq_len_stick_size, {.page_id = 0}, {});
+#endif
         noc.async_read_barrier();
         const uint32_t valid_seq_len_tokens = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_wr_ptr);
         // Round the real length up to a whole tile (TILE_HEIGHT == 32, >> 5) and then
@@ -131,8 +158,12 @@ void kernel_main() {
     const auto out_gen = TensorAccessor(tensor::cache);
     const auto page_table_gen = TensorAccessor(tensor::page_table);
 
+#ifdef ARCH_QUASAR
+    const uint32_t page_table_wr_ptr = page_table_scratch.get_base_address();
+#else
     dfb_page_table.reserve_back(1);
     const uint32_t page_table_wr_ptr = dfb_page_table.get_write_ptr();
+#endif
     volatile tt_l1_ptr uint32_t* page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_wr_ptr);
 
     // Cache the last batch for which page_table was loaded. Legacy path loads
@@ -192,12 +223,16 @@ void kernel_main() {
 
         // Reload page_table row only on batch boundary.
         if (batch_idx != cached_batch) {
+#ifdef ARCH_QUASAR
+            noc.async_read(page_table_gen, page_table_scratch, page_table_stick_size, {.page_id = batch_idx}, {});
+#else
             noc.async_read(
                 page_table_gen,
                 CoreLocalMem<uint32_t>(page_table_wr_ptr),
                 page_table_stick_size,
                 {.page_id = batch_idx},
                 {});
+#endif
             noc.async_read_barrier();
             cached_batch = batch_idx;
         }
