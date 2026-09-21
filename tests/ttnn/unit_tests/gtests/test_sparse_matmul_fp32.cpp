@@ -140,7 +140,7 @@ TEST_F(SparseMatmulFp32Test, PartialReloadPreservesFp32) {
     // CPU reference. Use double so our reference itself does not reproduce
     // the precision loss we're trying to detect.
     //
-    double max_abs_error = 0.0;
+    double max_abs_error = -1.0;
     std::size_t worst_index = 0;
     double worst_expected = 0.0;
     for (std::size_t k = 0; k < K; ++k) {
