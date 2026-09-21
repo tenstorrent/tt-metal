@@ -296,7 +296,12 @@ class Gemma4Attention:
 
         # Concat heads + apply out proj + all_reduce
         tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        projected = ttnn.linear(tt_out, self.weights.o_proj)
+        # DIAG: GEMMA4_ATTN_MM_CFG -- same core_grid mechanism as mmanzoor's MLP change.
+        _cg = None
+        if __import__("os").environ.get("GEMMA4_ATTN_MM_CFG", "0").lower() in ("1", "true", "yes"):
+            _g = self.mesh_device.compute_with_storage_grid_size()
+            _cg = ttnn.CoreGrid(y=_g.y, x=_g.x)
+        projected = ttnn.linear(tt_out, self.weights.o_proj, **({"core_grid": _cg} if _cg is not None else {}))
         tt_out.deallocate(True)
         tt_out = ccl_allreduce(projected, self.mesh_config, self.ccl_manager)
 

@@ -29,10 +29,27 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
     return ttnn.DRAM_MEMORY_CONFIG
 
 
+def _attn_mm_grid(t):  # DIAG: GEMMA4_ATTN_MM_CFG
+    """Full compute grid for an attention projection, or None to keep ttnn's default.
+
+    Same mechanism mmanzoor's MLP change uses: ttnn only builds a good matmul program
+    config when it is handed a user grid. The attention projections never got it.
+    """
+    if os.environ.get("GEMMA4_ATTN_MM_CFG", "0").lower() not in ("1", "true", "yes"):
+        return None
+    try:
+        g = t.device().compute_with_storage_grid_size()
+        return ttnn.CoreGrid(y=g.y, x=g.x)
+    except Exception:
+        return None
+
+
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
     """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
     w_tensor = weights.wqk if kv_tied else weights.wqkv
-    return ttnn.linear(hidden_states, w_tensor, memory_config=memory_config)
+    _cg = _attn_mm_grid(hidden_states)  # DIAG
+    _kw = {"core_grid": _cg} if _cg is not None else {}
+    return ttnn.linear(hidden_states, w_tensor, memory_config=memory_config, **_kw)
 
 
 def split_qkv_heads_prefill(
