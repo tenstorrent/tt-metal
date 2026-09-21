@@ -67,6 +67,10 @@ Collection:
     --collect-timeout <duration>            Kill the collection stage after this long
                                             (default: $COLLECT_TIMEOUT_DEFAULT; any \`timeout\` duration)
     --reason <text>                         Free text recorded in each dump's envelope, e.g. a repro id
+    --use-ipmi                              Read the QSFP cages over I2C with ipmitool on each host (needs
+                                            passwordless sudo there) instead of the BMC API. By default the
+                                            collector asks the API named by \$TT_BMC_API_URL with the token in
+                                            \$TT_BMC_API_TOKEN; both are passed through to the hosts.
 
 Output:
     --output <directory>                    Output directory. Must be on a mount every host shares,
@@ -110,6 +114,7 @@ PARALLELIZE=false
 QSFP_BUDGET=""
 COLLECT_TIMEOUT="$COLLECT_TIMEOUT_DEFAULT"
 REASON=""
+USE_IPMI=false
 OUTPUT_DIR=""
 CLUSTER_NAME="cluster_debug_dump"
 SHARED_MOUNT=true
@@ -137,6 +142,7 @@ while [[ $# -gt 0 ]]; do
         --qsfp-budget)              require_value "$1" "$2"; QSFP_BUDGET="$2"; shift 2 ;;
         --collect-timeout)          require_value "$1" "$2"; COLLECT_TIMEOUT="$2"; shift 2 ;;
         --reason)                   require_value "$1" "$2"; REASON="$2"; shift 2 ;;
+        --use-ipmi)                 USE_IPMI=true; shift ;;
         --output)                   require_value "$1" "$2"; OUTPUT_DIR="$2"; shift 2 ;;
         --cluster-name)             require_value "$1" "$2"; CLUSTER_NAME="$2"; shift 2 ;;
         --no-shared-mount)          SHARED_MOUNT=false; shift ;;
@@ -303,8 +309,10 @@ echo "Tool: $TOOL"
 echo "Factory descriptor: ${FACTORY_DESCRIPTOR_PATH:-${DESCRIPTOR_NOTE:-none}}"
 if [[ "$SKIP_QSFP" == true ]]; then
     echo "QSFP cage sweep: skipped"
+elif [[ "$USE_IPMI" == true ]]; then
+    echo "QSFP cage sweep: over I2C with ipmitool$([[ "$PARALLELIZE" == true ]] && echo ", all UBBs at once")${QSFP_BUDGET:+, budget ${QSFP_BUDGET}s}"
 else
-    echo "QSFP cage sweep: included$([[ "$PARALLELIZE" == true ]] && echo ", all UBBs at once")${QSFP_BUDGET:+, budget ${QSFP_BUDGET}s}"
+    echo "QSFP cage sweep: over the BMC API at ${TT_BMC_API_URL:-<unset: set TT_BMC_API_URL, or pass --use-ipmi>}"
 fi
 echo "Collection timeout: $COLLECT_TIMEOUT"
 echo "MPI interface: $MPI_IF"
@@ -516,6 +524,8 @@ echo "  all $NUM_HOSTS hosts OK"
 cage_hosts=$((NUM_HOSTS - ${#no_sudo_hosts[@]} - ${#no_ipmitool_hosts[@]}))
 if [[ "$SKIP_QSFP" == true ]]; then
     echo "  QSFP cages: not requested (--skip-qsfp)"
+elif [[ "$USE_IPMI" == false ]]; then
+    echo "  QSFP cages: over the BMC API; sudo for ipmitool is only needed for the FRU ($cage_hosts of $NUM_HOSTS hosts have it)"
 elif [[ $cage_hosts -eq $NUM_HOSTS ]]; then
     echo "  QSFP cages: all $NUM_HOSTS hosts can read them (passwordless sudo for ipmitool)"
 else
@@ -540,7 +550,13 @@ echo ""
 collect_args=(collect)
 [[ -n "$FACTORY_DESCRIPTOR_PATH" ]] && collect_args+=(--factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH")
 [[ "$SKIP_QSFP" == true ]]          && collect_args+=(--skip-qsfp)
+[[ "$USE_IPMI" == true ]]           && collect_args+=(--use-ipmi)
 [[ "$PARALLELIZE" == true ]]        && collect_args+=(--parallelize)
+# The BMC API's address and token reach the ranks through the environment, never argv:
+# the collector records its argv in every dump.
+MPI_ENV_ARGS=()
+[[ -n "${TT_BMC_API_URL:-}" ]]   && MPI_ENV_ARGS+=(-x TT_BMC_API_URL)
+[[ -n "${TT_BMC_API_TOKEN:-}" ]] && MPI_ENV_ARGS+=(-x TT_BMC_API_TOKEN)
 [[ -n "$QSFP_BUDGET" ]]             && collect_args+=(--qsfp-budget "$QSFP_BUDGET")
 [[ -n "$REASON" ]]                  && collect_args+=(--reason "$REASON")
 
@@ -566,6 +582,7 @@ COLLECT_CMD="set -o pipefail; h=\$(hostname); { $RANK_TARGET; } 2>&1 | while IFS
     echo "collected_utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "tool: $TOOL"
     echo "skip_qsfp: $SKIP_QSFP"
+    echo "cage_source: $([[ "$USE_IPMI" == true ]] && echo ipmi || echo "bmc-api ${TT_BMC_API_URL:-unset}")"
     echo "parallelize: $PARALLELIZE"
     echo "shared_mount: $SHARED_MOUNT"
     [[ ${#unreachable[@]} -gt 0 ]] && echo "unreachable_hosts: ${unreachable[*]}"
@@ -596,6 +613,7 @@ COLLECT_RESULT_FILE="$OUTPUT_DIR/.collect_results_$$"
 run_stage timeout --signal=TERM --kill-after=30s "$COLLECT_TIMEOUT" \
     mpirun --host "$HOSTS" \
         --mca btl_tcp_if_include "$MPI_IF" \
+        "${MPI_ENV_ARGS[@]}" \
         "${MPI_EXTRA_ARGS[@]}" \
         bash -c "$COLLECT_CMD" > "$COLLECT_RESULT_FILE"
 COLLECT_MPI_EXIT=$?

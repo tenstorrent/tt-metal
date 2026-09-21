@@ -97,6 +97,8 @@ Optional:
                                             installed is named and the snapshot skipped.
     --cluster-debug-always                  Collect the snapshot after every attempt, passing or failing,
                                             e.g. for a known-good baseline. Ignored with --skip-cluster-debug.
+    --cluster-debug-use-ipmi                Read the QSFP cages with ipmitool on each host instead of the
+                                            BMC API (\$TT_BMC_API_URL / \$TT_BMC_API_TOKEN, passed through).
     --cluster-debug-tool <path>             The tt-bh-glx-cluster-debug executable for that snapshot; must be
                                             visible at the same path on every host (default: \$TT_CLUSTER_DEBUG_TOOL,
                                             else the one on PATH)
@@ -151,6 +153,7 @@ DOCKER_EXTRA_ARGS=()
 REGENERATE_ON_FAILURE=true
 SKIP_CLUSTER_DEBUG=false
 CLUSTER_DEBUG_ALWAYS=false
+CLUSTER_DEBUG_USE_IPMI=false
 CLUSTER_DEBUG_TOOL=""
 CLUSTER_DEBUG_TOOL_NAME="tt-bh-glx-cluster-debug"
 CLUSTER_DEBUG_LOG_ROOT_DEFAULT="/data/dcamp/cluster-debug/logs"
@@ -379,6 +382,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --cluster-debug-always)
             CLUSTER_DEBUG_ALWAYS=true
+            shift
+            ;;
+        --cluster-debug-use-ipmi)
+            CLUSTER_DEBUG_USE_IPMI=true
             shift
             ;;
         --cluster-debug-tool)
@@ -645,6 +652,7 @@ collect_cluster_debug() {
     )
     [[ -n "$FACTORY_DESCRIPTOR_PATH" ]] && args+=(--factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH")
     [[ -n "$CLUSTER_DEBUG_TOOL" ]] && args+=(--tool "$CLUSTER_DEBUG_TOOL")
+    [[ "$CLUSTER_DEBUG_USE_IPMI" == true ]] && args+=(--use-ipmi)
     [[ ${#MPI_EXTRA_ARGS[@]} -gt 0 ]] && args+=(--mpi-args "${MPI_EXTRA_ARGS[*]}")
 
     echo ""
