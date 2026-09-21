@@ -1741,13 +1741,30 @@ class ModelArgs:
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
             )
-        else:
+        grid = self.mesh_device.compute_with_storage_grid_size() if self.mesh_device is not None else None
+        wide_blackhole_grid = is_blackhole() and grid is not None and grid.x > 8 and grid.y > 4
+        if wide_blackhole_grid:
+            # Decode Q is height sharded on the 8x4 block and the op reads batch b's Q from the b-th core of
+            # sub_core_grids, so that block has to come first; the rest of the grid supplies the workers.
             return ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=(grid.x, grid.y),
+                sub_core_grids=ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3)),
+                        ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(grid.x - 1, 3)),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(grid.x - 1, grid.y - 1)),
+                    ]
+                ),
                 exp_approx_mode=False,
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
             )
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+        )
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_program_config(
