@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/chain_pipe.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_pipe.hpp"
 
@@ -52,7 +53,7 @@ namespace dataflow_kernel_lib {
 //   configurable_receiver.receive_and_forward(dst_l1, size_bytes, round);
 namespace detail {
 
-template <mcast_wire::FamilyMetadata>
+template <mcast_wire::ArgumentMetadata>
 static constexpr bool dependent_false = false;
 
 // These sentinels only make the optional pipe surface well-formed for an absent
@@ -72,9 +73,27 @@ struct InactiveReceiverPipe {
     FORCE_INLINE uint32_t receive_signal(uint32_t = 0) { return 0; }
 };
 
+// The pipe constructs this table directly in its own storage from a lightweight
+// RT view. No pointer into a temporary decoder and no expanded-table argument.
+template <mcast_wire::SenderCoordinateMetadata METADATA, uint32_t NUM_SENDERS>
+struct ExpandedSenderCoordinates {
+    std::array<uint32_t, mcast_wire::SENDER_COORD_WORDS * NUM_SENDERS> values;
+
+    template <typename Coordinates>
+    FORCE_INLINE explicit ExpandedSenderCoordinates(const Coordinates& payload) {
+        for (uint32_t phase = 0; phase < NUM_SENDERS; ++phase) {
+            values[mcast_wire::SENDER_COORD_WORDS * phase + mcast_wire::SENDER_X] =
+                mcast_wire::sender_coordinate(payload, METADATA, phase, mcast_wire::SENDER_X);
+            values[mcast_wire::SENDER_COORD_WORDS * phase + mcast_wire::SENDER_Y] =
+                mcast_wire::sender_coordinate(payload, METADATA, phase, mcast_wire::SENDER_Y);
+        }
+    }
+    FORCE_INLINE uint32_t operator[](uint32_t word) const { return values[word]; }
+};
+
 template <
     bool PRESENT,
-    mcast_wire::FamilyMetadata METADATA,
+    mcast_wire::ArgumentMetadata METADATA,
     typename Runtime,
     typename DataReadyBinding,
     typename ConsumerReadyBinding,
@@ -82,7 +101,7 @@ template <
 struct McastArgsImpl;
 
 template <
-    mcast_wire::FamilyMetadata METADATA,
+    mcast_wire::ArgumentMetadata METADATA,
     typename Runtime,
     typename DataReadyBinding,
     typename ConsumerReadyBinding,
@@ -94,10 +113,10 @@ struct McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBin
     // `has_receivers` indicates remote fan-out. Do not use it to suppress sender
     // work: a present zero-fan-out sender still calls send() to perform a degenerate local copy. The
     // per-core role metadata reports which pipe faces this kernel instance may construct and its phase.
-    static constexpr uint32_t has_receivers = METADATA.has_remote_receivers;
-    static constexpr uint32_t ack_count = METADATA.ack_count;
-    static constexpr uint32_t flags = METADATA.flags;
-    static constexpr uint32_t rotating_span = METADATA.rotating_span;
+    static constexpr uint32_t has_receivers = METADATA.family.has_remote_receivers;
+    static constexpr uint32_t ack_count = METADATA.family.ack_count;
+    static constexpr uint32_t flags = METADATA.family.flags;
+    static constexpr uint32_t rotating_span = METADATA.family.rotating_span;
 
     // Pipe behaviour lifted off the flags word (host-computed): the caller never spells these.
     static constexpr TransferMode transfer_mode = mcast_wire::transfer_mode(flags);
@@ -111,16 +130,21 @@ struct McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBin
 
     // Sender coord pairs this family carries: 1 for a fixed sender, rotating_span otherwise.
     static constexpr uint32_t num_senders = rotating ? rotating_span : 1u;
+    static_assert(
+        METADATA.coordinates.encoding == mcast_wire::SenderCoordinateEncoding::ExplicitPairs ||
+            (METADATA.coordinates.columns > 0 && METADATA.coordinates.rows > 0 && METADATA.coordinates.x_ranges > 0 &&
+             METADATA.coordinates.y_ranges > 0),
+        "Compressed sender coordinates require nonempty axes and ranges");
 
-    static constexpr SenderMcastMode sender_mcast_mode = METADATA.sender_mcast_mode;
+    static constexpr SenderMcastMode sender_mcast_mode = METADATA.family.sender_mcast_mode;
     static_assert(
         mcast_wire::concrete(sender_mcast_mode) || sender_mcast_mode == SenderMcastMode::Unknown,
         "Invalid sender multicast mode");
-    static constexpr uint32_t remote_count = METADATA.uniform_remote_count;
-    static constexpr uint32_t loopback_count = METADATA.uniform_loopback_count;
+    static constexpr uint32_t remote_count = METADATA.family.uniform_remote_count;
+    static constexpr uint32_t loopback_count = remote_count + 1;
     static constexpr uint8_t sender_noc = (flags & mcast_wire::NOC1) ? 1 : 0;
 
-    static constexpr uint32_t rectangle_capacity = METADATA.rectangle_capacity;
+    static constexpr uint32_t rectangle_capacity = METADATA.family.rectangle_capacity;
     static_assert(
         transfer_mode == TransferMode::ChainUnicast
             ? rectangle_capacity == 0
@@ -133,42 +157,47 @@ struct McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBin
     // (sender-only, receiver-only, both, or neither) and must decide which pipe faces to construct.
     // When every dispatched core has a known role, construct that pipe face directly; sender() and
     // receiver() assert that the runtime role metadata permits it.
-    bool can_send() const {
-        return (Runtime::read(
-                    mcast_wire::roles_offset(rotating_span, rectangle_capacity, transfer_mode) + mcast_wire::ROLES) &
-                mcast_wire::CAN_SEND) != 0u;
-    }
-    bool can_receive() const {
-        return (Runtime::read(
-                    mcast_wire::roles_offset(rotating_span, rectangle_capacity, transfer_mode) + mcast_wire::ROLES) &
-                mcast_wire::CAN_RECEIVE) != 0u;
-    }
+    static constexpr mcast_wire::RuntimeLayout runtime_layout{METADATA};
+    static constexpr bool sender_available = (METADATA.kernel.capabilities & mcast_wire::CAN_SEND) != 0;
+    static constexpr bool receiver_available = (METADATA.kernel.capabilities & mcast_wire::CAN_RECEIVE) != 0;
+    bool can_send() const { return (roles_() & mcast_wire::CAN_SEND) != 0; }
+    bool can_receive() const { return (roles_() & mcast_wire::CAN_RECEIVE) != 0; }
     static constexpr uint32_t sender_index(uint32_t round) { return round % num_senders; }
     bool should_send(uint32_t round) const;
 
     // Bind resources directly into the pipes; semaphore IDs/tokens are not part of the decoder API.
     using SenderPipeType = std::conditional_t<
-        transfer_mode == TransferMode::ChainUnicast,
-        ChainSenderPipeImpl<noc_index, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, signal>,
-        SenderPipeImpl<
-            noc_index,
-            DataReadyBinding,
-            pre_handshake,
-            ConsumerReadyBinding,
-            signal,
-            rotating,
-            sender_mcast_mode,
-            rectangle_capacity ? rectangle_capacity : 1>>;
+        !sender_available,
+        InactiveSenderPipe,
+        std::conditional_t<
+            transfer_mode == TransferMode::ChainUnicast,
+            ChainSenderPipeImpl<noc_index, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, signal>,
+            SenderPipeImpl<
+                noc_index,
+                DataReadyBinding,
+                pre_handshake,
+                ConsumerReadyBinding,
+                signal,
+                rotating,
+                sender_mcast_mode,
+                rectangle_capacity ? rectangle_capacity : 1>>>;
+    using SenderCoordinates = std::conditional_t<
+        METADATA.coordinates.encoding == mcast_wire::SenderCoordinateEncoding::ExplicitPairs,
+        decltype(Runtime::coordinates(0)),
+        ExpandedSenderCoordinates<METADATA.coordinates, num_senders>>;
     using ReceiverPipeType = std::conditional_t<
-        transfer_mode == TransferMode::ChainUnicast,
-        ChainReceiverPipeImpl<noc_index, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, signal>,
-        ReceiverPipeImpl<
-            DataReadyBinding,
-            pre_handshake,
-            ConsumerReadyBinding,
-            signal,
-            num_senders,
-            decltype(Runtime::coordinates(0))>>;
+        !receiver_available,
+        InactiveReceiverPipe,
+        std::conditional_t<
+            transfer_mode == TransferMode::ChainUnicast,
+            ChainReceiverPipeImpl<noc_index, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding, signal>,
+            ReceiverPipeImpl<
+                DataReadyBinding,
+                pre_handshake,
+                ConsumerReadyBinding,
+                signal,
+                num_senders,
+                SenderCoordinates>>>;
 
     SenderPipeType sender(const Noc& noc) const;
     std::optional<SenderPipeType> optional_sender(const Noc& noc) const;
@@ -176,20 +205,35 @@ struct McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBin
     std::optional<ReceiverPipeType> optional_receiver(const Noc& noc) const;
 
     uint32_t sender_x() const {
-        return Runtime::read(mcast_wire::sender_coords_offset(rotating_span) + mcast_wire::SENDER_X);
+        static_assert(
+            runtime_layout.sender_coordinates != mcast_wire::OMITTED,
+            "Sender coordinates are unavailable on this placement");
+        return mcast_wire::sender_coordinate(
+            Runtime::coordinates(runtime_layout.sender_coordinates), METADATA.coordinates, 0, mcast_wire::SENDER_X);
     }
     uint32_t sender_y() const {
-        return Runtime::read(mcast_wire::sender_coords_offset(rotating_span) + mcast_wire::SENDER_Y);
+        static_assert(
+            runtime_layout.sender_coordinates != mcast_wire::OMITTED,
+            "Sender coordinates are unavailable on this placement");
+        return mcast_wire::sender_coordinate(
+            Runtime::coordinates(runtime_layout.sender_coordinates), METADATA.coordinates, 0, mcast_wire::SENDER_Y);
     }
 
 private:
+    uint32_t roles_() const {
+        if constexpr (runtime_layout.roles == mcast_wire::OMITTED) {
+            return METADATA.kernel.roles;
+        } else {
+            return Runtime::read(runtime_layout.roles);
+        }
+    }
     // A declaration-only fallback capacity keeps this unused decoder well-formed for chain-only layouts.
     SenderRuntimeArgumentsFor<rectangle_capacity ? rectangle_capacity : 1> sender_runtime_arguments() const;
     ChainRuntimeArguments chain_runtime_arguments() const;
 };
 
 template <
-    mcast_wire::FamilyMetadata METADATA,
+    mcast_wire::ArgumentMetadata METADATA,
     typename Runtime,
     typename DataReadyBinding,
     typename ConsumerReadyBinding,
@@ -225,32 +269,23 @@ struct PositionalMcastRuntime {
 };
 
 template <uint32_t CT_BASE>
-constexpr mcast_wire::FamilyMetadata positional_mcast_metadata() {
-    if constexpr (get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::ABSENT) {
-        return {};
-    } else {
-        return {
-            get_compile_time_arg_val(CT_BASE + mcast_wire::ROTATING_SPAN),
-            get_compile_time_arg_val(CT_BASE + mcast_wire::RECTANGLE_CAPACITY),
-            get_compile_time_arg_val(CT_BASE + mcast_wire::ACK_COUNT),
-            get_compile_time_arg_val(CT_BASE + mcast_wire::REMOTE_COUNT),
-            get_compile_time_arg_val(CT_BASE + mcast_wire::LOOPBACK_COUNT),
-            static_cast<SenderMcastMode>(get_compile_time_arg_val(CT_BASE + mcast_wire::SENDER_MCAST_MODE)),
-            get_compile_time_arg_val(CT_BASE + mcast_wire::HAS_RECEIVERS) != 0u,
-            get_compile_time_arg_val(CT_BASE + mcast_wire::FLAGS)};
-    }
+struct PositionalMcastCompileTime {
+    constexpr uint32_t operator[](uint32_t index) const { return kernel_compile_time_args[CT_BASE + index]; }
+};
+
+template <typename Words, bool SEMAPHORE_IDS = true>
+constexpr mcast_wire::ArgumentMetadata mcast_metadata() {
+    static_assert(mcast_wire::valid_compile_time_control(Words{}[0]), "Unsupported multicast wire tag");
+    return mcast_wire::decode_compile_time_metadata(Words{}, SEMAPHORE_IDS);
 }
 
-template <uint32_t CT_BASE, uint32_t ROLE>
+template <uint32_t CT_BASE, mcast_wire::SemaphoreRole ROLE>
 constexpr uint32_t positional_mcast_semaphore() {
-    if constexpr (get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::ABSENT) {
-        return UNUSED_SEM_ID;
-    } else if constexpr (
-        ROLE == mcast_wire::SIGNAL_SOURCE && mcast_wire::transfer_mode(get_compile_time_arg_val(
-                                                 CT_BASE + mcast_wire::FLAGS)) != TransferMode::ChainUnicast) {
+    constexpr mcast_wire::CompileTimeLayout layout(get_compile_time_arg_val(CT_BASE));
+    if constexpr (layout.semaphore(ROLE) == mcast_wire::OMITTED) {
         return UNUSED_SEM_ID;
     } else {
-        return get_compile_time_arg_val(CT_BASE + ROLE);
+        return get_compile_time_arg_val(CT_BASE + layout.semaphore(ROLE));
     }
 }
 
@@ -258,8 +293,8 @@ constexpr uint32_t positional_mcast_semaphore() {
 
 template <uint32_t CT_BASE, uint32_t RT_BASE>
 struct McastArgs : detail::McastArgsImpl<
-                       (get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::FAMILY),
-                       detail::positional_mcast_metadata<CT_BASE>(),
+                       (get_compile_time_arg_val(CT_BASE) != mcast_wire::ABSENT),
+                       detail::mcast_metadata<detail::PositionalMcastCompileTime<CT_BASE>>(),
                        detail::PositionalMcastRuntime<RT_BASE>,
                        SemaphoreBindingToken<
                            detail::positional_mcast_semaphore<CT_BASE, mcast_wire::DATA_READY>(),
@@ -271,23 +306,16 @@ struct McastArgs : detail::McastArgsImpl<
                            detail::positional_mcast_semaphore<CT_BASE, mcast_wire::SIGNAL_SOURCE>(),
                            SemScope::LOCAL_NONATOMIC>> {
     static_assert(
-        get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::ABSENT ||
-            get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::FAMILY,
+        mcast_wire::valid_compile_time_control(get_compile_time_arg_val(CT_BASE)),
         "Unsupported multicast wire tag; rebuild host and kernels for the unified family format");
     static constexpr uint32_t next_compile_time_args_offset() {
-        constexpr auto metadata = detail::positional_mcast_metadata<CT_BASE>();
-        return CT_BASE + (get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::ABSENT
-                              ? mcast_wire::ABSENT_CT_WORDS
-                              : mcast_wire::compile_time_words(mcast_wire::transfer_mode(metadata.flags)));
+        return CT_BASE + mcast_wire::CompileTimeLayout(get_compile_time_arg_val(CT_BASE)).words;
     }
     static constexpr uint32_t next_runtime_args_offset() {
-        constexpr auto metadata = detail::positional_mcast_metadata<CT_BASE>();
-        return RT_BASE + (get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::ABSENT
+        constexpr auto metadata = detail::mcast_metadata<detail::PositionalMcastCompileTime<CT_BASE>>();
+        return RT_BASE + (get_compile_time_arg_val(CT_BASE) == mcast_wire::ABSENT
                               ? 0
-                              : mcast_wire::runtime_words(
-                                    metadata.rotating_span,
-                                    metadata.rectangle_capacity,
-                                    mcast_wire::transfer_mode(metadata.flags)));
+                              : mcast_wire::RuntimeLayout(metadata).words);
     }
 };
 

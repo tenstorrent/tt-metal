@@ -52,6 +52,92 @@ def attach_for_inspection(family, cores, noc=ttnn.NOC.NOC_0, semaphores=()):
     return descriptor, kernel
 
 
+def inspect_mcast_ct(kernel, prefix="mcast"):
+    """Independent v3 decoder; literal bits and field order, not the C++ codec."""
+    named = dict(kernel.named_compile_time_args)
+    ct = kernel.compile_time_args[named[prefix + "_ct_offset"] :]
+    control = ct[0]
+    assert control & 15 == 3
+    fields = dict(
+        flags=(control >> 4) & 31,
+        capacity=(control >> 13) & 3,
+        roles=0xFFFFFFFF if control & (1 << 17) else (control >> 15) & 3,
+        capabilities=(control >> 18) & 3,
+        encoding=(control >> 20) & 3,
+        remote=0,
+        span=0,
+        consumer_ready=0xFFFFFFFF,
+        signal_source=0xFFFFFFFF,
+    )
+    offset = 1
+
+    def take():
+        nonlocal offset
+        value = ct[offset]
+        offset += 1
+        return value
+
+    fields["data_ready"] = take()
+    if fields["flags"] & 1:
+        fields["consumer_ready"] = take()
+    if (fields["flags"] >> 3) & 3:
+        fields["signal_source"] = take()
+    if control & (1 << 22):
+        fields["remote"] = take()
+    ack_mode = (control >> 24) & 3
+    fields["ack"] = (
+        take() if ack_mode == 1 else fields["remote"] if ack_mode == 2 else 0xFFFFFFFF if ack_mode == 3 else 0
+    )
+    if control & (1 << 23):
+        fields["span"] = take()
+    if fields["encoding"]:
+        for name in ("columns", "rows", "x_ranges", "y_ranges"):
+            fields[name] = take()
+    fields["words"] = offset
+    return fields
+
+
+def inspect_mcast(kernel, core, prefix="mcast"):
+    """Test-owned decoder of role/count/coordinate fields."""
+    named = dict(kernel.named_compile_time_args)
+    ct = inspect_mcast_ct(kernel, prefix)
+    rt = kernel.runtime_args[core.x][core.y][named[prefix + "_rt_offset"] :]
+    if (ct["flags"] >> 3) & 3:
+        return dict(roles=rt[9], phase=rt[10], rectangles=0, ack=rt[1], coordinates=list(rt[2:4]))
+    offset = 0
+    roles = ct["roles"]
+    if roles == 0xFFFFFFFF:
+        roles = rt[offset]
+        offset += 1
+    phase = 0
+    if ct["span"] and ct["capabilities"] & 1:
+        phase = rt[offset]
+        offset += 1
+    rectangles = 1
+    if ct["capacity"] > 1 and ct["capabilities"] & 1:
+        rectangles = rt[offset]
+        offset += 1
+    ack = ct["ack"]
+    if ct["flags"] & 1 and ct["capabilities"] & 1 and ack == 0xFFFFFFFF:
+        ack = rt[offset]
+        offset += 1
+    coordinates = []
+    if ct["capabilities"] & 2:
+        count = ct["span"] or 1
+        if ct["encoding"] == 0:
+            coordinates = list(rt[offset : offset + 2 * count])
+        else:
+            xs, ys = [], []
+            for index in range(ct["x_ranges"] + ct["y_ranges"]):
+                start, end = rt[offset + 2 * index : offset + 2 * index + 2]
+                (xs if index < ct["x_ranges"] else ys).extend(range(start, end + 1))
+            for index in range(count):
+                x = index % ct["columns"] if ct["encoding"] == 1 else index // ct["rows"]
+                y = index // ct["columns"] if ct["encoding"] == 1 else index % ct["rows"]
+                coordinates.extend([xs[x], ys[y]])
+    return dict(roles=roles, phase=phase, rectangles=rectangles, ack=ack, coordinates=coordinates)
+
+
 def run_family_case(
     device,
     specs,
@@ -278,27 +364,25 @@ def _run_channel(
     )
     descriptor = ttnn.ProgramDescriptor(semaphores=semaphores)
     family.attach(descriptor, "mcast", kernels[:1] if zero_ack else kernels)
-    mcast_ct = dict(kernels[0].named_compile_time_args)["mcast_ct_offset"]
-    mcast_rt = dict(kernels[0].named_compile_time_args)["mcast_rt_offset"]
-    attached_ct = kernels[0].compile_time_args[mcast_ct:]
+    attached_ct = inspect_mcast_ct(kernels[0])
     if zero_ack:
         passive = ttnn.McastFamily(
             device,
-            ttnn.McastConfig(noc=config.noc, handshake=False, data_ready=config.data_ready, sem_ids=[attached_ct[2]]),
+            ttnn.McastConfig(
+                noc=config.noc, handshake=False, data_ready=config.data_ready, sem_ids=[attached_ct["data_ready"]]
+            ),
         )
         for receivers, senders in specs:
             passive.add_group(core_set(receivers), [ttnn.CoreCoord(*c) for c in senders])
         passive.attach(descriptor, "mcast", kernels[1:])
     if expected_chain is not None:
-        assert (attached_ct[5] >> 3) & 3 == int(expected_chain)
+        assert (attached_ct["flags"] >> 3) & 3 == int(expected_chain)
         if expected_chain:
-            assert attached_ct[10:] == [0, 2]
+            assert attached_ct["capacity"] == 0 and attached_ct["signal_source"] == 2
         for receivers, senders in specs:
             sender = ttnn.CoreCoord(*senders[0])
             fanout = len(receivers) - int(senders[0] in receivers)
-            assert kernels[0].runtime_args[sender.x][sender.y][mcast_rt:][1] == (
-                int(fanout > 0) if expected_chain else fanout
-            )
+            assert inspect_mcast(kernels[0], sender)["ack"] == (int(fanout > 0) if expected_chain else fanout)
     if min_rectangles is not None:
         # Guard cases whose point is an irregular mapping: they must not degrade into dense sets on this grid.
         # Chain arguments omit rectangles; inspect the same geometry in multicast mode.
@@ -308,7 +392,7 @@ def _run_channel(
         _, geometry_kernel = attach_for_inspection(geometry_family, participants, config.noc)
         for _, senders in specs:
             x, y = senders[0]
-            assert geometry_kernel.runtime_args[x][y][0] >= min_rectangles
+            assert inspect_mcast(geometry_kernel, ttnn.CoreCoord(x, y))["rectangles"] >= min_rectangles
     for kernel in kernels:
         ttnn.attach_absent(kernel, "absent_mcast")
     if with_barrier:

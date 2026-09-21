@@ -132,6 +132,126 @@ std::vector<uint32_t> runtime_args(Family family, CoreCoord core, const std::vec
     return args;
 }
 
+struct DecodedCompileTime {
+    wire::ArgumentMetadata metadata;
+    std::array<uint32_t, 3> semaphores{UNUSED_SEM_ID, UNUSED_SEM_ID, UNUSED_SEM_ID};
+    uint32_t words = 1;
+};
+
+DecodedCompileTime decode_emitted_ct(const std::vector<uint32_t>& ct, uint32_t base = 0, bool ids = true) {
+    // Independent literal v3 decoder; complete-block goldens below pin the bits
+    // and optional-field order without using the production codec or its layout.
+    DecodedCompileTime result;
+    const uint32_t control = ct.at(base);
+    if (control == 0) {
+        return result;
+    }
+    EXPECT_EQ(control & 15u, 3u);
+    auto& m = result.metadata;
+    m.family.flags = (control >> 4) & 31u;
+    m.family.has_remote_receivers = (control >> 9) & 1u;
+    m.family.sender_mcast_mode = SenderMcastMode((control >> 10) & 7u);
+    m.family.rectangle_capacity = (control >> 13) & 3u;
+    m.kernel.roles = control & (1u << 17) ? 0xFFFFFFFFu : (control >> 15) & 3u;
+    m.kernel.capabilities = (control >> 18) & 3u;
+    m.coordinates.encoding = wire::SenderCoordinateEncoding((control >> 20) & 3u);
+    auto next = [&]() { return ct.at(base + result.words++); };
+    if (ids) {
+        result.semaphores[0] = next();
+        if (m.family.flags & 1u) {
+            result.semaphores[1] = next();
+        }
+        if ((m.family.flags >> 3) & 3u) {
+            result.semaphores[2] = next();
+        }
+    }
+    m.family.remote_count_known = (control >> 22) & 1u;
+    if (m.family.remote_count_known) {
+        m.family.uniform_remote_count = next();
+    }
+    const uint32_t ack = (control >> 24) & 3u;
+    m.family.ack_count = ack == 1 ? next() : ack == 2 ? m.family.uniform_remote_count : ack == 3 ? 0xFFFFFFFFu : 0u;
+    if (control & (1u << 23)) {
+        m.family.rotating_span = next();
+    }
+    if (uint32_t(m.coordinates.encoding) != 0) {
+        m.coordinates.columns = next();
+        m.coordinates.rows = next();
+        m.coordinates.x_ranges = next();
+        m.coordinates.y_ranges = next();
+    }
+    return result;
+}
+
+wire::ArgumentMetadata emitted_metadata(const std::vector<uint32_t>& ct, uint32_t base = 0) {
+    return decode_emitted_ct(ct, base).metadata;
+}
+
+uint32_t emitted_semaphore(const std::vector<uint32_t>& ct, wire::SemaphoreRole role, uint32_t base = 0) {
+    return decode_emitted_ct(ct, base).semaphores[role];
+}
+
+struct DecodedMcast {
+    uint32_t roles = 0;
+    uint32_t phase = wire::NO_SENDER_ROUND;
+    uint32_t ack = 0;
+    std::vector<dataflow_kernel_lib::RectangleRuntimeArguments> rectangles;
+    std::vector<uint32_t> coordinates;
+};
+
+DecodedMcast decode_multicast(const wire::ArgumentMetadata& metadata, std::span<const uint32_t> words) {
+    const wire::RuntimeLayout layout(metadata);
+    EXPECT_EQ(words.size(), layout.words);
+    DecodedMcast decoded;
+    decoded.roles = layout.roles == wire::OMITTED ? metadata.kernel.roles : words[layout.roles];
+    if (decoded.roles & wire::CAN_SEND) {
+        decoded.phase = layout.sender_phase == wire::OMITTED ? 0 : words[layout.sender_phase];
+        decoded.ack = layout.ack == wire::OMITTED ? metadata.family.ack_count : words[layout.ack];
+        const uint32_t count = layout.rectangle_count == wire::OMITTED ? 1 : words[layout.rectangle_count];
+        for (uint32_t i = 0; i < count; ++i) {
+            const uint32_t base = layout.rectangles + i * layout.rectangle_stride;
+            dataflow_kernel_lib::RectangleRuntimeArguments rectangle{};
+            if (layout.rectangle_bounds != wire::OMITTED) {
+                const uint32_t bounds = base + layout.rectangle_bounds;
+                rectangle.bounds = {words[bounds], words[bounds + 1], words[bounds + 2], words[bounds + 3]};
+            }
+            rectangle.remote_count = layout.rectangle_remote == wire::OMITTED ? metadata.family.uniform_remote_count
+                                                                              : words[base + layout.rectangle_remote];
+            rectangle.loopback_count = rectangle.remote_count + 1;
+            rectangle.sender_mcast_mode = layout.rectangle_mode == wire::OMITTED
+                                              ? metadata.family.sender_mcast_mode
+                                              : static_cast<SenderMcastMode>(words[base + layout.rectangle_mode]);
+            decoded.rectangles.push_back(rectangle);
+        }
+    }
+    if ((decoded.roles & wire::CAN_RECEIVE) && layout.sender_coordinates != wire::OMITTED) {
+        const uint32_t count = std::max(1u, metadata.family.rotating_span);
+        const auto payload = words.subspan(layout.sender_coordinates, layout.coordinate_words);
+        // Independent expansion: build axis vectors, then walk the CT traversal.
+        if (metadata.coordinates.encoding == wire::SenderCoordinateEncoding::ExplicitPairs) {
+            decoded.coordinates.assign(payload.begin(), payload.end());
+        } else {
+            std::vector<uint32_t> xs, ys;
+            for (uint32_t range = 0; range < metadata.coordinates.x_ranges + metadata.coordinates.y_ranges; ++range) {
+                auto& axis = range < metadata.coordinates.x_ranges ? xs : ys;
+                for (uint32_t value = payload[2 * range]; value <= payload[2 * range + 1]; ++value) {
+                    axis.push_back(value);
+                }
+            }
+            for (uint32_t phase = 0; phase < count; ++phase) {
+                const bool rows = metadata.coordinates.encoding == wire::SenderCoordinateEncoding::RowMajorRanges;
+                decoded.coordinates.push_back(xs.at(rows ? phase % xs.size() : phase / ys.size()));
+                decoded.coordinates.push_back(ys.at(rows ? phase / xs.size() : phase % ys.size()));
+            }
+        }
+    }
+    return decoded;
+}
+
+DecodedMcast decoded_args(const McastFamily& family, CoreCoord core, const std::vector<uint32_t>& existing = {}) {
+    return decode_multicast(emitted_metadata(compile_args(family, existing)), runtime_args(family, core, existing));
+}
+
 template <typename Family>
 std::vector<tt::tt_metal::SemaphoreDescriptor> allocated_semaphores(
     Family family, const std::vector<uint32_t>& existing = {}) {
@@ -171,10 +291,10 @@ void check_group(
     const std::vector<uint32_t>& existing = {}) {
     const auto workers = worker_coordinates(device);
     const auto ct = compile_args(family, existing);
-    ASSERT_EQ(ct.size(), 11u);
-    ASSERT_EQ(ct[0], 1u);
+    ASSERT_EQ(ct.size(), decode_emitted_ct(ct).words);
+    ASSERT_EQ(ct[0] & 15u, 3u);
     const uint32_t count = group.senders.size();
-    EXPECT_EQ(ct[6], (count > 1) ? count : 0u);
+    EXPECT_EQ(emitted_metadata(ct).family.rotating_span, (count > 1) ? count : 0u);
     Coordinates expected;
     for (auto c : tt::tt_metal::corerange_to_cores(group.receivers, std::nullopt, true)) {
         auto w = device->worker_core_from_logical_core(c);
@@ -184,17 +304,23 @@ void check_group(
         const auto sender = group.senders[phase];
         const auto worker = device->worker_core_from_logical_core(sender);
         const auto rt = runtime_args(family, sender, existing);
-        ASSERT_EQ(rt.size(), 2u + 2u * count + 7u * ct[10] + 2u);
-        EXPECT_EQ(rt[rt.size() - 1], phase);
-        EXPECT_EQ(rt[rt.size() - 2], 1u | (count > 1 && group.receivers.contains(sender) ? 2u : 0u));
+        const auto decoded = decode_multicast(emitted_metadata(ct), rt);
+        EXPECT_EQ(decoded.phase, phase);
+        EXPECT_EQ(decoded.roles, 1u | (count > 1 && group.receivers.contains(sender) ? 2u : 0u));
         Coordinates actual;
         uint32_t remote_total = 0;
-        for (uint32_t i = 0; i < rt[0]; ++i) {
-            const auto* r = rt.data() + 2 + 2 * count + 7 * i;
-            const auto xlo = std::min(r[0], r[2]), xhi = std::max(r[0], r[2]);
-            const auto ylo = std::min(r[1], r[3]), yhi = std::max(r[1], r[3]);
-            EXPECT_EQ(r[0], (ct[5] & 4) ? xhi : xlo);
-            EXPECT_EQ(r[1], (ct[5] & 4) ? yhi : ylo);
+        for (const auto& rectangle : decoded.rectangles) {
+            if (uint32_t(emitted_metadata(ct).family.sender_mcast_mode) == 1) {
+                EXPECT_EQ(rectangle.remote_count, 0u);
+                EXPECT_EQ(rectangle.loopback_count, 1u);
+                actual.emplace(worker.x, worker.y);
+                continue;
+            }
+            const auto& r = rectangle.bounds;
+            const auto xlo = std::min(r.sx, r.ex), xhi = std::max(r.sx, r.ex);
+            const auto ylo = std::min(r.sy, r.ey), yhi = std::max(r.sy, r.ey);
+            EXPECT_EQ(r.sx, (emitted_metadata(ct).family.flags & 4) ? xhi : xlo);
+            EXPECT_EQ(r.sy, (emitted_metadata(ct).family.flags & 4) ? yhi : ylo);
             uint32_t area = 0;
             bool inside = false;
             for (uint32_t y = ylo; y <= yhi; ++y) {
@@ -208,20 +334,21 @@ void check_group(
                 }
             }
             const uint32_t remote = area - inside;
-            EXPECT_EQ(r[4], remote);
-            EXPECT_EQ(r[5], remote + 1u);
-            EXPECT_EQ(r[6], remote == 0 ? 1u : inside ? 3u : 2u);
-            if (ct[7] != 4) {
-                EXPECT_EQ(r[6], ct[7]);
+            EXPECT_EQ(rectangle.remote_count, remote);
+            EXPECT_EQ(rectangle.loopback_count, remote + 1u);
+            EXPECT_EQ(uint32_t(rectangle.sender_mcast_mode), remote == 0 ? 1u : inside ? 3u : 2u);
+            if (uint32_t(emitted_metadata(ct).family.sender_mcast_mode) != 4) {
+                EXPECT_EQ(
+                    uint32_t(rectangle.sender_mcast_mode), uint32_t(emitted_metadata(ct).family.sender_mcast_mode));
             }
             remote_total += remote;
         }
         EXPECT_EQ(actual, expected);
         EXPECT_EQ(remote_total, expected.size() - expected.count({worker.x, worker.y}));
-        for (uint32_t i = 0; i < count; ++i) {
+        for (uint32_t i = 0; i < decoded.coordinates.size() / 2; ++i) {
             const auto w = device->worker_core_from_logical_core(group.senders[i]);
-            EXPECT_EQ(rt[2 + 2 * i], w.x);
-            EXPECT_EQ(rt[3 + 2 * i], w.y);
+            EXPECT_EQ(decoded.coordinates[2 * i], w.x);
+            EXPECT_EQ(decoded.coordinates[2 * i + 1], w.y);
         }
         EXPECT_EQ(rt, runtime_args(family, sender, existing));
     }
@@ -229,10 +356,15 @@ void check_group(
         if (std::find(group.senders.begin(), group.senders.end(), core) != group.senders.end()) {
             continue;
         }
-        const auto rt = runtime_args(family, core, existing);
-        EXPECT_EQ(rt[rt.size() - 2], 2u);
-        EXPECT_EQ(rt.back(), wire::NO_SENDER_ROUND);
-        EXPECT_EQ(runtime_args(family, core, existing)[wire::ACK], 0u);
+        const auto decoded = decoded_args(family, core, existing);
+        EXPECT_EQ(decoded.roles, 2u);
+        EXPECT_EQ(decoded.phase, wire::NO_SENDER_ROUND);
+        EXPECT_EQ(decoded.ack, 0u);
+        for (uint32_t i = 0; i < count; ++i) {
+            const auto mapped = device->worker_core_from_logical_core(group.senders[i]);
+            EXPECT_EQ(decoded.coordinates[2 * i], mapped.x);
+            EXPECT_EQ(decoded.coordinates[2 * i + 1], mapped.y);
+        }
     }
 }
 
@@ -278,6 +410,277 @@ TEST(McastHostWire, AbsentFamilyIsOneWord) {
     EXPECT_EQ(args, (std::vector<uint32_t>{17, 0}));
 }
 
+constexpr wire::ArgumentMetadata fixed_metadata(uint32_t roles) {
+    return {
+        .family =
+            {.rectangle_capacity = 1,
+             .ack_count = 7,
+             .uniform_remote_count = 7,
+             .remote_count_known = true,
+             .sender_mcast_mode = SenderMcastMode::MulticastIncludeSource,
+             .has_remote_receivers = true,
+             .flags = 1},
+        .kernel = {.roles = roles, .capabilities = roles}};
+}
+
+TEST(McastHostWire, CompactCompileTimeCountsAndFullWidthValues) {
+    constexpr auto sender = fixed_metadata(1);
+    constexpr uint32_t control = wire::compile_time_control(sender);
+    static_assert(control == 0x0244AE13u);
+    static_assert(wire::CompileTimeLayout(control).words == 4);         // + two named offsets = 6.
+    static_assert(wire::CompileTimeLayout(control, false).words == 2);  // Native bindings, no numeric IDs.
+    constexpr std::array<uint32_t, 4> literal{0x0244AE13u, 11, 13, 7};
+    constexpr auto decoded = wire::decode_compile_time_metadata(literal);
+    static_assert(decoded.family.ack_count == 7 && decoded.family.uniform_remote_count == 7);
+    static_assert(decoded.kernel.roles == 1 && decoded.kernel.capabilities == 1);
+    EXPECT_EQ(decode_emitted_ct(std::vector<uint32_t>(literal.begin(), literal.end())).words, 4u);
+    EXPECT_FALSE(wire::valid_compile_time_control(1));
+    EXPECT_FALSE(wire::valid_compile_time_control(2));
+    constexpr std::array<uint32_t, 1> absent{0};
+    static_assert(wire::CompileTimeLayout(0).words == 1);
+    static_assert(wire::decode_compile_time_metadata(absent).family.rotating_span == 0);
+
+    auto receiver = fixed_metadata(2);
+    EXPECT_EQ(wire::CompileTimeLayout(wire::compile_time_control(receiver)).words + 2, 5u);
+    receiver.family.flags = 0;
+    EXPECT_EQ(wire::CompileTimeLayout(wire::compile_time_control(receiver)).words + 2, 4u);
+    auto custom_ack = sender;
+    custom_ack.family.ack_count = 0;  // Known zero must remain a separate constant, not mean "use fanout".
+    EXPECT_EQ(wire::CompileTimeLayout(wire::compile_time_control(custom_ack)).words + 2, 7u);
+
+    auto large = sender;
+    large.kernel = {.roles = wire::DYNAMIC_ROLES, .capabilities = 3};
+    large.family.uniform_remote_count = 0x12345678;
+    large.family.ack_count = 0x01234567;
+    large.family.rotating_span = 0x10001;
+    large.coordinates = {wire::SenderCoordinateEncoding::ColumnMajorRanges, 0x10002, 0x10003, 0x10004, 0x10005};
+    for (const bool ids : {false, true}) {
+        const wire::CompileTimeLayout layout(wire::compile_time_control(large), ids);
+        std::vector<uint32_t> words(layout.words);
+        wire::encode_compile_time_metadata(words, large, ids);
+        const auto result = wire::decode_compile_time_metadata(words, ids);
+        const auto independent = decode_emitted_ct(words, 0, ids);
+        EXPECT_EQ(independent.words, words.size());
+        EXPECT_EQ(result.family.uniform_remote_count, large.family.uniform_remote_count);
+        EXPECT_EQ(result.family.ack_count, large.family.ack_count);
+        EXPECT_EQ(result.family.rotating_span, large.family.rotating_span);
+        EXPECT_EQ(result.coordinates.columns, large.coordinates.columns);
+        EXPECT_EQ(result.coordinates.rows, large.coordinates.rows);
+        EXPECT_EQ(result.coordinates.x_ranges, large.coordinates.x_ranges);
+        EXPECT_EQ(result.coordinates.y_ranges, large.coordinates.y_ranges);
+        EXPECT_EQ(independent.metadata.family.rotating_span, large.family.rotating_span);
+        EXPECT_EQ(independent.metadata.coordinates.y_ranges, large.coordinates.y_ranges);
+    }
+}
+
+TEST(McastHostWire, CompactCompileTimePreservesEveryRuntimeOffset) {
+    const auto offsets = [](const wire::ArgumentMetadata& metadata) {
+        const wire::RuntimeLayout r(metadata);
+        return std::array{
+            r.roles,
+            r.sender_phase,
+            r.rectangle_count,
+            r.ack,
+            r.sender_coordinates,
+            r.coordinate_words,
+            r.rectangles,
+            r.rectangle_bounds,
+            r.rectangle_remote,
+            r.rectangle_mode,
+            r.rectangle_stride,
+            r.chain_neighbors,
+            r.words};
+    };
+    const auto verify = [&](const wire::ArgumentMetadata& metadata) {
+        for (const bool ids : {false, true}) {
+            const wire::CompileTimeLayout layout(wire::compile_time_control(metadata), ids);
+            std::vector<uint32_t> words(layout.words);
+            wire::encode_compile_time_metadata(words, metadata, ids);
+            const auto decoded = wire::decode_compile_time_metadata(words, ids);
+            EXPECT_EQ(offsets(decoded), offsets(metadata));
+            EXPECT_EQ(offsets(decode_emitted_ct(words, 0, ids).metadata), offsets(metadata));
+            std::vector<uint32_t> again(layout.words);
+            wire::encode_compile_time_metadata(again, decoded, ids);
+            EXPECT_EQ(again, words);
+        }
+    };
+    for (const uint32_t flags : {0u, 1u, 3u, 5u, 7u}) {
+        for (const auto kernel :
+             {wire::KernelMetadata{0, 0},
+              wire::KernelMetadata{1, 1},
+              wire::KernelMetadata{2, 2},
+              wire::KernelMetadata{3, 3},
+              wire::KernelMetadata{wire::DYNAMIC_ROLES, 1},
+              wire::KernelMetadata{wire::DYNAMIC_ROLES, 2},
+              wire::KernelMetadata{}}) {
+            for (const uint32_t rectangles : {1u, 2u, 3u}) {
+                for (const uint32_t ack : {0u, 7u, ACK_EQUALS_FANOUT}) {
+                    for (const bool known : {false, true}) {
+                        for (const auto mode :
+                             {SenderMcastMode::LocalCopy,
+                              SenderMcastMode::MulticastExcludeSource,
+                              SenderMcastMode::MulticastIncludeSource,
+                              SenderMcastMode::Unknown}) {
+                            auto metadata = fixed_metadata(1);
+                            metadata.kernel = kernel;
+                            metadata.family.flags = flags;
+                            metadata.family.rectangle_capacity = rectangles;
+                            metadata.family.ack_count = ack;
+                            metadata.family.remote_count_known = known;
+                            metadata.family.sender_mcast_mode = mode;
+                            verify(metadata);
+                            metadata.family.rotating_span = 61;
+                            verify(metadata);  // Explicit coordinate fallback.
+                            metadata.coordinates = {wire::SenderCoordinateEncoding::RowMajorRanges, 8, 8, 2, 1};
+                            verify(metadata);  // Partial traversal, including a gap in mapped X coordinates.
+                            metadata.coordinates.encoding = wire::SenderCoordinateEncoding::ColumnMajorRanges;
+                            verify(metadata);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    auto chain = fixed_metadata(3);
+    chain.family.flags = 9;
+    chain.family.rectangle_capacity = 0;
+    chain.family.sender_mcast_mode = SenderMcastMode::Unknown;
+    verify(chain);
+    EXPECT_EQ(wire::CompileTimeLayout(wire::compile_time_control(chain)).words + 2, 6u);
+}
+
+TEST(McastHostWire, CompactOffsetsAreConstexprAndKnownZeroIsDistinct) {
+    constexpr wire::RuntimeLayout sender(fixed_metadata(1)), receiver(fixed_metadata(2)), idle(fixed_metadata(0));
+    static_assert(sender.words == 4 && sender.rectangles == 0 && sender.rectangle_stride == 4);
+    static_assert(sender.roles == wire::OMITTED && sender.sender_phase == wire::OMITTED);
+    static_assert(sender.sender_coordinates == wire::OMITTED && sender.rectangle_remote == wire::OMITTED);
+    static_assert(receiver.words == 2 && receiver.sender_coordinates == 0 && receiver.rectangles == wire::OMITTED);
+    static_assert(idle.words == 0);
+    static_assert(wire::CompileTimeLayout(wire::compile_time_control(fixed_metadata(1))).words == 4);
+    static_assert(wire::CompileTimeLayout(wire::compile_time_control(fixed_metadata(2))).words == 3);
+
+    auto local = fixed_metadata(1);
+    local.family.sender_mcast_mode = SenderMcastMode::LocalCopy;
+    local.family.uniform_remote_count = 0;
+    local.family.ack_count = 0;
+    EXPECT_EQ(wire::RuntimeLayout(local).words, 0u);
+    local.family.remote_count_known = false;
+    EXPECT_EQ(wire::RuntimeLayout(local).words, 1u);
+    auto multiple = fixed_metadata(1);
+    multiple.family.rectangle_capacity = 2;
+    EXPECT_EQ(wire::RuntimeLayout(multiple).words, 11u);
+    EXPECT_EQ(wire::RuntimeLayout(multiple).rectangle_remote, 4u);  // Equal total fanout is not per-rectangle fanout.
+    multiple.family.ack_count = 0xFFFFFFFFu;
+    multiple.family.sender_mcast_mode = SenderMcastMode::Unknown;
+    EXPECT_EQ(wire::RuntimeLayout(multiple).words, 14u);
+    multiple.family.flags = 0;  // No ACK field without handshakes.
+    EXPECT_EQ(wire::RuntimeLayout(multiple).words, 13u);
+    multiple.family.flags = 9;
+    multiple.family.rectangle_capacity = 0;
+    const wire::RuntimeLayout chain(multiple);
+    EXPECT_EQ(chain.words, 11u);
+    EXPECT_EQ(chain.chain_neighbors, 4u);
+    EXPECT_EQ(chain.roles, 9u);
+}
+
+TEST(McastHostWire, CoordinateRangesPreserveGapsOrdersAndPartialTraversal) {
+    // Independent literal payload: X=3..6,8..11; Y=13..20. 8x8 with one gap.
+    constexpr std::array<uint32_t, 6> ranges{3, 6, 8, 11, 13, 20};
+    constexpr wire::SenderCoordinateMetadata rows{wire::SenderCoordinateEncoding::RowMajorRanges, 8, 8, 2, 1};
+    constexpr wire::SenderCoordinateMetadata columns{wire::SenderCoordinateEncoding::ColumnMajorRanges, 8, 8, 2, 1};
+    static_assert(wire::sender_coordinate(ranges, rows, 4, 0) == 8);
+    static_assert(wire::sender_coordinate(ranges, columns, 4, 1) == 17);
+    for (const auto metadata : {rows, columns}) {
+        for (uint32_t count : {1u, 8u, 61u, 64u}) {
+            for (uint32_t phase = 0; phase < count; ++phase) {
+                const uint32_t x = metadata.encoding == rows.encoding ? phase % 8 : phase / 8;
+                const uint32_t y = metadata.encoding == rows.encoding ? phase / 8 : phase % 8;
+                EXPECT_EQ(wire::sender_coordinate(ranges, metadata, phase, 0), 3u + x + (x >= 4));
+                EXPECT_EQ(wire::sender_coordinate(ranges, metadata, phase, 1), 13u + y);
+            }
+        }
+    }
+    auto metadata = fixed_metadata(2);
+    metadata.family.rotating_span = 64;
+    metadata.coordinates = rows;
+    EXPECT_EQ(wire::RuntimeLayout(metadata).coordinate_words, 6u);
+    metadata.coordinates.x_ranges = 1;
+    EXPECT_EQ(wire::RuntimeLayout(metadata).coordinate_words, 4u);
+    metadata.family.rotating_span = 8;
+    metadata.coordinates.rows = 1;
+    EXPECT_EQ(wire::RuntimeLayout(metadata).coordinate_words, 4u);
+}
+
+TEST_F(McastHostFixture, CompactPlacementGoldensAndDirectDescriptorParity) {
+    using namespace tt::tt_metal;
+    for (const auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+        for (bool handshake : {false, true}) {
+            auto family =
+                make_family(device_, {{grid({1, 2}, {4, 2}), {{1, 2}}}}, {.noc = noc, .handshake = handshake});
+            ProgramDescriptor descriptor;
+            KernelDescriptor sender, receiver, inactive;
+            sender.core_ranges = cores({{1, 2}});
+            receiver.core_ranges = grid({2, 2}, {4, 2});
+            inactive.core_ranges = cores({{0, 0}});
+            for (auto* kernel : {&sender, &receiver, &inactive}) {
+                kernel->config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = noc};
+            }
+            family.attach(descriptor, "channel", std::array{std::ref(sender), std::ref(receiver), std::ref(inactive)});
+            const auto lo = device_->worker_core_from_logical_core({1, 2});
+            const auto hi = device_->worker_core_from_logical_core({4, 2});
+            const std::vector<uint32_t> bounds = noc == NOC::NOC_0 ? std::vector<uint32_t>{lo.x, lo.y, hi.x, hi.y}
+                                                                   : std::vector<uint32_t>{hi.x, hi.y, lo.x, lo.y};
+            EXPECT_EQ(sender.runtime_args.front().second, bounds);
+            for (const auto& [core, args] : receiver.runtime_args) {
+                EXPECT_EQ(args, (std::vector<uint32_t>{lo.x, lo.y}));
+            }
+            EXPECT_TRUE(inactive.runtime_args.front().second.empty());
+            EXPECT_EQ(sender.compile_time_args.size() + sender.named_compile_time_args.size(), handshake ? 6u : 5u);
+            EXPECT_EQ(receiver.compile_time_args.size() + receiver.named_compile_time_args.size(), handshake ? 5u : 4u);
+            EXPECT_EQ(emitted_metadata(sender.compile_time_args).kernel.roles, 1u);
+            EXPECT_EQ(emitted_metadata(receiver.compile_time_args).kernel.roles, 2u);
+            EXPECT_EQ(emitted_metadata(inactive.compile_time_args).kernel.roles, 0u);
+            auto bound = family;
+            Program program;
+            bound.append_semaphores(program);
+            for (const auto* expected : {&sender, &receiver, &inactive}) {
+                std::vector<uint32_t> ct;
+                KernelDescriptor::RuntimeArgs rt;
+                const auto offsets = bound.append_kernel_args_to(ct, rt, expected->core_ranges);
+                EXPECT_EQ(offsets.compile_time, 0u);
+                EXPECT_EQ(offsets.runtime, 0u);
+                EXPECT_EQ(ct, expected->compile_time_args);
+                EXPECT_EQ(rt, expected->runtime_args);
+            }
+            std::vector<uint32_t> ct{17};
+            KernelDescriptor::RuntimeArgs rt{{{7, 7}, {19}}};
+            const auto before = rt;
+            EXPECT_ANY_THROW(bound.append_kernel_args_to(ct, rt, sender.core_ranges));
+            EXPECT_EQ(ct, (std::vector<uint32_t>{17}));
+            EXPECT_EQ(rt, before);
+            // Placement specialization must not mutate the conservative paired API.
+            EXPECT_EQ(emitted_metadata(compile_args(family)).kernel.roles, 0xFFFFFFFFu);
+        }
+    }
+    auto local = make_family(device_, {{cores({{2, 3}}), {{2, 3}}}});
+    tt::tt_metal::ProgramDescriptor descriptor;
+    tt::tt_metal::KernelDescriptor kernel;
+    kernel.core_ranges = cores({{2, 3}});
+    kernel.config =
+        tt::tt_metal::DataMovementConfigDescriptor{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0};
+    local.attach(descriptor, "local", std::array{std::ref(kernel)});
+    EXPECT_TRUE(kernel.runtime_args.front().second.empty());
+    EXPECT_EQ(kernel.compile_time_args[0] & 15u, 3u);
+    EXPECT_EQ(emitted_metadata(kernel.compile_time_args).family.remote_count_known, 1u);
+    tt::tt_metal::KernelDescriptor empty;
+    empty.config = kernel.config;
+    local.attach(descriptor, "empty", std::array{std::ref(empty)});
+    EXPECT_EQ(empty.compile_time_args[0] & 15u, 3u);
+    EXPECT_EQ(emitted_metadata(empty.compile_time_args).kernel.roles, 0xFFFFFFFFu);
+    EXPECT_EQ(emitted_metadata(empty.compile_time_args).kernel.capabilities, 3u);
+    EXPECT_TRUE(empty.runtime_args.empty());
+}
+
 TEST_F(McastHostFixture, NamedOffsetsPreserveSerializedWireValues) {
     // Literal positions are intentional: this oracle must catch coordinated encoder/decoder
     // changes that accidentally alter the established wire format.
@@ -296,14 +699,12 @@ TEST_F(McastHostFixture, NamedOffsetsPreserveSerializedWireValues) {
     McastFamily family(device_, cfg);
     const std::vector<CoreCoord> senders{{6, 1}, {1, 6}};
     family.add_group(grid({2, 3}, {4, 5}), senders);
-    const std::vector<uint32_t> expected_ct{1, 1, 11, 13, 5, 7, 2, 2, 9, 10, 1};
+    const std::vector<uint32_t> expected_ct{0x01CE2A73u, 11, 13, 9, 5, 2};
     EXPECT_EQ(compile_args(family, {11, 13}), expected_ct);
-    auto face_ct = expected_ct;
-    face_ct[5] = 6;
     cfg.handshake = false;
     cfg.sem_ids = std::vector<uint32_t>{11};
     auto passive = make_family(device_, {GroupInput(grid({2, 3}, {4, 5}), senders)}, cfg);
-    face_ct[3] = UNUSED_SEM_ID;
+    const std::vector<uint32_t> face_ct{0x00CE2A63u, 11, 9, 2};
     EXPECT_EQ(compile_args(passive, {11}), face_ct);
     auto mapped = [&](CoreCoord core) { return device_->worker_core_from_logical_core(core); };
     const auto a = mapped(senders[0]), b = mapped(senders[1]);
@@ -311,7 +712,7 @@ TEST_F(McastHostFixture, NamedOffsetsPreserveSerializedWireValues) {
     for (uint32_t phase = 0; phase < senders.size(); ++phase) {
         const std::vector<uint32_t> expected_rt{
             1,
-            5,
+            phase,
             uint32_t(a.x),
             uint32_t(a.y),
             uint32_t(b.x),
@@ -319,24 +720,129 @@ TEST_F(McastHostFixture, NamedOffsetsPreserveSerializedWireValues) {
             uint32_t(hi.x),
             uint32_t(hi.y),
             uint32_t(lo.x),
-            uint32_t(lo.y),
-            9,
-            10,
-            2,
-            1,
-            phase};
+            uint32_t(lo.y)};
         EXPECT_EQ(runtime_args(family, senders[phase], {11, 13}), expected_rt);
     }
     const std::vector<uint32_t> receiver_rt{
-        0, 0, uint32_t(a.x), uint32_t(a.y), uint32_t(b.x), uint32_t(b.y), 0, 0, 0, 0, 0, 0, 0, 2, 0xFFFFFFFFu};
+        2, 0xFFFFFFFFu, uint32_t(a.x), uint32_t(a.y), uint32_t(b.x), uint32_t(b.y), 0, 0, 0, 0};
     EXPECT_EQ(runtime_args(family, {3, 4}, {11, 13}), receiver_rt);
-    std::vector<uint32_t> inactive(15, 0);
-    inactive[14] = 0xFFFFFFFFu;
+    std::vector<uint32_t> inactive(10, 0);
+    inactive[1] = 0xFFFFFFFFu;
     EXPECT_EQ(runtime_args(family, {0, 0}, {11, 13}), inactive);
     const auto sender_only = family.sender_only_cores();
     EXPECT_EQ(sender_only.num_cores(), senders.size());
     for (const auto& sender : senders) {
         EXPECT_TRUE(sender_only.contains(sender));
+    }
+}
+
+TEST_F(McastHostFixture, CompactCoordinatesMatchEveryMappedSenderAndFallbackPerPlacement) {
+    if (device_->compute_with_storage_grid_size().x < 9 || device_->compute_with_storage_grid_size().y < 9) {
+        GTEST_SKIP() << "Coordinate matrix requires a 9x9 worker grid";
+    }
+    for (const auto noc : {NOC::NOC_0, NOC::NOC_1}) {
+        for (const bool column_major : {false, true}) {
+            for (const uint32_t count : {8u, 61u, 64u}) {
+                std::vector<CoreCoord> senders;
+                for (uint32_t index = 0; index < count; ++index) {
+                    senders.emplace_back(
+                        1 + (column_major ? index / 8 : index % 8), 1 + (column_major ? index % 8 : index / 8));
+                }
+                const GroupInput input(grid({1, 1}, {8, 8}), senders);
+                auto family = make_family(device_, {input}, {.noc = noc});
+                const auto ct = compile_args(family);
+                ASSERT_NE(
+                    uint32_t(emitted_metadata(ct).coordinates.encoding),
+                    0u);  // Regular mapped grids/lines save words even across worker-coordinate gaps.
+                const auto metadata = emitted_metadata(ct);
+                for (uint32_t phase = 0; phase < count; ++phase) {
+                    const auto decoded = decoded_args(family, senders[phase]);
+                    EXPECT_EQ(decoded.phase, phase);
+                    ASSERT_EQ(decoded.coordinates.size(), 2 * count);
+                    for (uint32_t expected_phase = 0; expected_phase < count; ++expected_phase) {
+                        const auto mapped = device_->worker_core_from_logical_core(senders[expected_phase]);
+                        EXPECT_EQ(decoded.coordinates[2 * expected_phase], mapped.x);
+                        EXPECT_EQ(decoded.coordinates[2 * expected_phase + 1], mapped.y);
+                    }
+                }
+                EXPECT_LT(wire::RuntimeLayout(metadata).coordinate_words, 2u * count);
+                EXPECT_EQ(metadata.coordinates.columns * metadata.coordinates.rows, count == 61 ? 64u : count);
+            }
+        }
+        // Distinct compatible widths and traversal dimensions may not share one
+        // CT description. Each separately placed kernel can still compress.
+        const GroupInput line(grid({0, 0}, {3, 0}), {{0, 0}, {1, 0}, {2, 0}, {3, 0}});
+        const GroupInput square(grid({0, 2}, {1, 3}), {{0, 2}, {1, 2}, {0, 3}, {1, 3}});
+        auto mixed = make_family(device_, {line, square}, {.noc = noc});
+        EXPECT_EQ(uint32_t(emitted_metadata(compile_args(mixed)).coordinates.encoding), 0u);
+        for (const auto& input : {line, square}) {
+            tt::tt_metal::ProgramDescriptor descriptor;
+            tt::tt_metal::KernelDescriptor kernel;
+            kernel.core_ranges = input.receivers;
+            kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = noc};
+            mixed.attach(descriptor, "channel", std::array{std::ref(kernel)});
+            EXPECT_NE(uint32_t(emitted_metadata(kernel.compile_time_args).coordinates.encoding), 0u);
+            EXPECT_EQ(wire::RuntimeLayout(emitted_metadata(kernel.compile_time_args)).coordinate_words, 4u);
+        }
+        const GroupInput custom(grid({0, 0}, {2, 1}), {{0, 0}, {1, 1}, {2, 0}, {0, 1}});
+        auto sparse = make_family(device_, {custom}, {.noc = noc});
+        EXPECT_EQ(uint32_t(emitted_metadata(compile_args(sparse)).coordinates.encoding), 0u);
+        check_group(device_, sparse, custom);
+        const GroupInput external(grid({0, 4}, {3, 4}), line.senders);
+        auto outside = make_family(device_, {external}, {.noc = noc});
+        EXPECT_NE(uint32_t(emitted_metadata(compile_args(outside)).coordinates.encoding), 0u);
+        check_group(device_, outside, external);
+        const GroupInput external_custom(external.receivers, custom.senders);
+        auto outside_custom = make_family(device_, {external_custom}, {.noc = noc});
+        EXPECT_EQ(uint32_t(emitted_metadata(compile_args(outside_custom)).coordinates.encoding), 0u);
+        check_group(device_, outside_custom, external_custom);
+
+        std::vector<CoreCoord> eight_senders;
+        for (uint32_t x = 0; x < 8; ++x) {
+            eight_senders.emplace_back(x, 0);
+        }
+        const GroupInput split_receivers(
+            CoreRangeSet(std::set{CoreRange({0, 0}, {7, 0}), CoreRange({0, 2}, {3, 2})}), eight_senders);
+        auto split = make_family(device_, {split_receivers}, {.noc = noc});
+        const auto split_metadata = emitted_metadata(compile_args(split));
+        EXPECT_NE(split_metadata.coordinates.encoding, wire::SenderCoordinateEncoding::ExplicitPairs);
+        EXPECT_EQ(split_metadata.family.rectangle_capacity, 2u);
+        EXPECT_EQ(split_metadata.family.sender_mcast_mode, SenderMcastMode::Unknown);
+        const wire::RuntimeLayout split_layout(split_metadata);
+        EXPECT_EQ(split_layout.rectangle_stride, 6u);    // Bounds, per-rectangle remote, mode.
+        EXPECT_EQ(split_layout.sender_coordinates, 3u);  // Roles, rotating phase, rectangle count.
+        check_group(device_, split, split_receivers);
+
+        for (const bool compatible : {false, true}) {
+            const GroupInput external_group(
+                grid({0, 4}, {3, 4}),
+                compatible ? std::vector<CoreCoord>{{0, 6}, {1, 6}, {2, 6}, {3, 6}}
+                           : std::vector<CoreCoord>{{0, 6}, {1, 6}, {0, 7}, {1, 7}});
+            auto receiver_and_sender_groups = make_family(device_, {line, external_group}, {.noc = noc});
+            tt::tt_metal::ProgramDescriptor descriptor;
+            tt::tt_metal::KernelDescriptor kernel;
+            kernel.core_ranges = line.receivers.merge(cores(external_group.senders));
+            kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = noc};
+            receiver_and_sender_groups.attach(descriptor, "channel", std::array{std::ref(kernel)});
+            const auto metadata = emitted_metadata(kernel.compile_time_args);
+            EXPECT_EQ(metadata.coordinates.encoding != wire::SenderCoordinateEncoding::ExplicitPairs, compatible);
+            const wire::RuntimeLayout layout(metadata);
+            // A mixed placement must carry the correct schedule even on its
+            // sender-only cores, for both compatible and fallback encodings.
+            for (const auto& [core, args] : kernel.runtime_args) {
+                const auto& schedule = core.y >= 6 ? external_group.senders : line.senders;
+                for (uint32_t phase = 0; phase < schedule.size(); ++phase) {
+                    const auto mapped = device_->worker_core_from_logical_core(schedule[phase]);
+                    const auto* coordinates = args.data() + layout.sender_coordinates;
+                    EXPECT_EQ(
+                        wire::sender_coordinate(coordinates, metadata.coordinates, phase, wire::SENDER_X), mapped.x);
+                    EXPECT_EQ(
+                        wire::sender_coordinate(coordinates, metadata.coordinates, phase, wire::SENDER_Y), mapped.y);
+                }
+            }
+        }
     }
 }
 
@@ -482,11 +988,11 @@ TEST_F(McastHostFixture, ExactStaircaseAndDifferentGroupSizes) {
         GroupInput staircase(cores({{7, 0}, {0, 1}, {1, 1}, {2, 1}, {0, 2}}), std::vector<CoreCoord>{{7, 0}});
         GroupInput rectangle(grid({3, 3}, {5, 3}), std::vector<CoreCoord>{{3, 3}});
         auto family = make_family(device_, {staircase, rectangle}, cfg);
-        EXPECT_EQ(compile_args(family)[wire::RECTANGLE_CAPACITY], 3u);
-        EXPECT_EQ(runtime_args(family, {3, 3})[wire::NUM_RECTANGLES], 1u);
-        EXPECT_EQ(runtime_args(family, {7, 0})[wire::ACK], 4u);
-        EXPECT_EQ(runtime_args(family, {3, 3})[wire::ACK], 2u);
-        EXPECT_EQ(compile_args(family)[4], ACK_EQUALS_FANOUT);
+        EXPECT_EQ(emitted_metadata(compile_args(family)).family.rectangle_capacity, 3u);
+        EXPECT_EQ(decoded_args(family, {3, 3}).rectangles.size(), 1u);
+        EXPECT_EQ(decoded_args(family, {7, 0}).ack, 4u);
+        EXPECT_EQ(decoded_args(family, {3, 3}).ack, 2u);
+        EXPECT_EQ(emitted_metadata(compile_args(family)).family.ack_count, ACK_EQUALS_FANOUT);
         check_group(device_, family, staircase);
         check_group(device_, family, rectangle);
     }
@@ -501,7 +1007,7 @@ TEST_F(McastHostFixture, FullWidthMappedCoverage) {
         GroupInput group(receivers, std::vector<CoreCoord>{{0, 0}, {size.x - 1, 1}});
         auto family = make_family(device_, {group}, cfg);
         check_group(device_, family, group);
-        EXPECT_EQ(compile_args(family)[wire::RECTANGLE_CAPACITY], 1u);
+        EXPECT_EQ(emitted_metadata(compile_args(family)).family.rectangle_capacity, 1u);
     }
 }
 
@@ -523,8 +1029,8 @@ TEST_F(McastHostFixture, CompactConv3dGroupsUseLogicalRectangles) {
         }
         auto multicast = make_family(device_, groups, cfg);
         auto chain = make_family(device_, groups, chain_config(cfg));
-        EXPECT_EQ(compile_args(multicast)[wire::RECTANGLE_CAPACITY], 3u);
-        EXPECT_EQ(compile_args(chain)[wire::RECTANGLE_CAPACITY], 0u);
+        EXPECT_EQ(emitted_metadata(compile_args(multicast)).family.rectangle_capacity, 3u);
+        EXPECT_EQ(emitted_metadata(compile_args(chain)).family.rectangle_capacity, 0u);
         for (const auto& group : groups) {
             check_group(device_, multicast, group);
             EXPECT_EQ(runtime_args(chain, group.senders.front())[wire::ACK], 1u);
@@ -537,10 +1043,9 @@ TEST_F(McastHostFixture, LocalAndNonparticipantRoles) {
     auto family = make_family(device_, {local});
     check_group(device_, family, local);
     EXPECT_EQ(runtime_args(family, {3, 3})[0], 1u);
-    EXPECT_EQ(compile_args(family)[wire::HAS_RECEIVERS], 0u);
+    EXPECT_EQ(emitted_metadata(compile_args(family)).family.has_remote_receivers, 0u);
     auto outside = runtime_args(family, {0, 0});
-    EXPECT_EQ(outside.back(), wire::NO_SENDER_ROUND);
-    outside.pop_back();
+    EXPECT_EQ(outside.size(), 3u);  // Dynamic role + fixed coordinate pair; no local-copy rectangle fields.
     EXPECT_TRUE(std::all_of(outside.begin(), outside.end(), [](auto v) { return v == 0; }));
     Mcast2D wrapper(device_, grid({3, 3}, {3, 3}), Mcast2DFixedSenderConfig{{3, 3}});
     check_wrapper(wrapper, make_family(device_, {local}));
@@ -554,27 +1059,32 @@ TEST_F(McastHostFixture, IrregularReceiverSetPolicySelectsFamilyTransport) {
         McastConfig config;
         config.noc = noc;
         auto hardware = make_family(device_, {dense}, chain_config(config));
-        EXPECT_EQ(wire::transfer_mode(compile_args(hardware)[wire::FLAGS]), TransferMode::Multicast);
+        EXPECT_EQ(wire::transfer_mode(emitted_metadata(compile_args(hardware)).family.flags), TransferMode::Multicast);
         check_group(device_, hardware, dense);
         auto chain = make_family(device_, {irregular}, chain_config(config));
-        EXPECT_EQ(wire::transfer_mode(compile_args(chain)[wire::FLAGS]), TransferMode::ChainUnicast);
+        EXPECT_EQ(wire::transfer_mode(emitted_metadata(compile_args(chain)).family.flags), TransferMode::ChainUnicast);
         auto rectangles = make_family(device_, {dense, local}, chain_config(config));
-        EXPECT_EQ(wire::transfer_mode(compile_args(rectangles)[wire::FLAGS]), TransferMode::Multicast);
+        EXPECT_EQ(
+            wire::transfer_mode(emitted_metadata(compile_args(rectangles)).family.flags), TransferMode::Multicast);
         for (const auto& groups :
              {std::vector<GroupInput>{dense, irregular, local}, std::vector<GroupInput>{irregular, local, dense}}) {
             auto family = make_family(device_, groups, chain_config(config));
             auto multiple_mcast = make_family(device_, groups, config);
-            EXPECT_EQ(wire::transfer_mode(compile_args(family)[wire::FLAGS]), TransferMode::ChainUnicast);
-            EXPECT_EQ(wire::transfer_mode(compile_args(multiple_mcast)[wire::FLAGS]), TransferMode::Multicast);
-            EXPECT_EQ(compile_args(family)[wire::RECTANGLE_CAPACITY], 0u);
-            EXPECT_EQ(compile_args(multiple_mcast)[wire::RECTANGLE_CAPACITY], 3u);
+            EXPECT_EQ(
+                wire::transfer_mode(emitted_metadata(compile_args(family)).family.flags), TransferMode::ChainUnicast);
+            EXPECT_EQ(
+                wire::transfer_mode(emitted_metadata(compile_args(multiple_mcast)).family.flags),
+                TransferMode::Multicast);
+            EXPECT_EQ(emitted_metadata(compile_args(family)).family.rectangle_capacity, 0u);
+            EXPECT_EQ(emitted_metadata(compile_args(multiple_mcast)).family.rectangle_capacity, 3u);
             EXPECT_EQ(runtime_args(family, {1, 0})[wire::ACK], 1u);  // Dense group also uses per-hop readiness.
             EXPECT_EQ(runtime_args(family, {2, 2})[wire::ACK], 1u);
             EXPECT_EQ(runtime_args(family, {6, 0})[wire::ACK], 0u);
             for (auto core : tt::tt_metal::corerange_to_cores(family.participating_cores())) {
-                EXPECT_EQ(runtime_args(family, core).size(), wire::runtime_words(0, 0, TransferMode::ChainUnicast));
+                EXPECT_EQ(runtime_args(family, core).size(), wire::CHAIN_RUNTIME_WORDS);
             }
-            EXPECT_EQ(runtime_args(multiple_mcast, {7, 7}).size(), wire::runtime_words(0, 3, TransferMode::Multicast));
+            EXPECT_EQ(
+                runtime_args(multiple_mcast, {7, 7}).size(), 23u);  // Roles, count, ACK, coords, 3 * 6 rectangle words.
         }
     }
 }
@@ -594,14 +1104,15 @@ TEST_F(McastHostFixture, FlagsSemaphoresAndAckPrecedence) {
                     cfg.base_sem_id = 4;
                     GroupInput group(receivers, std::vector<CoreCoord>{{2, 2}}, group_ack);
                     auto family = make_family(device_, {group}, cfg);
-                    EXPECT_EQ(runtime_args(family, {2, 2})[wire::ACK], group_ack.value_or(config_ack.value_or(2)));
                     EXPECT_EQ(
-                        compile_args(family)[5],
+                        decoded_args(family, {2, 2}).ack, handshake ? group_ack.value_or(config_ack.value_or(2)) : 0u);
+                    EXPECT_EQ(
+                        emitted_metadata(compile_args(family)).family.flags,
                         uint32_t(handshake) + (signal == dataflow_kernel_lib::DataReadySignal::Counter ? 2u : 0u));
                     auto passive_cfg = cfg;
                     passive_cfg.handshake = false;
                     EXPECT_EQ(
-                        compile_args(make_family(device_, {group}, passive_cfg))[5],
+                        emitted_metadata(compile_args(make_family(device_, {group}, passive_cfg))).family.flags,
                         signal == dataflow_kernel_lib::DataReadySignal::Counter ? 2u : 0u);
                     EXPECT_EQ(allocated_semaphores(family).size(), handshake ? 2u : 1u);
                     const auto owned = allocated_semaphores(family);
@@ -610,8 +1121,10 @@ TEST_F(McastHostFixture, FlagsSemaphoresAndAckPrecedence) {
                     cfg.sem_ids = handshake ? std::vector<uint32_t>{6, 7} : std::vector<uint32_t>{6};
                     auto adopted = make_family(device_, {group}, cfg);
                     EXPECT_TRUE(allocated_semaphores(adopted, *cfg.sem_ids).empty());
-                    EXPECT_EQ(compile_args(adopted, *cfg.sem_ids)[2], 6u);
-                    EXPECT_EQ(compile_args(adopted, *cfg.sem_ids)[3], handshake ? 7u : UNUSED_SEM_ID);
+                    EXPECT_EQ(emitted_semaphore(compile_args(adopted, *cfg.sem_ids), wire::DATA_READY), 6u);
+                    EXPECT_EQ(
+                        emitted_semaphore(compile_args(adopted, *cfg.sem_ids), wire::CONSUMER_READY),
+                        handshake ? 7u : UNUSED_SEM_ID);
                 }
             }
         }
@@ -635,7 +1148,7 @@ TEST_F(McastHostFixture, SenderListsAndSingletonWrapperSchedules) {
                 for (auto sender : {CoreCoord{2, 2}, row ? CoreCoord{4, 2} : CoreCoord{2, 4}}) {
                     GroupInput group(receivers, {sender});
                     auto family = make_family(device_, {group}, cfg);
-                    EXPECT_EQ(compile_args(family)[6], 0u);
+                    EXPECT_EQ(emitted_metadata(compile_args(family)).family.rotating_span, 0u);
                     check_group(device_, family, group);
                     const auto sender_grid = grid(sender, sender);
                     check_wrapper(
@@ -704,12 +1217,12 @@ TEST_F(McastHostFixture, FamilySerializationAndRouting) {
                 groups.emplace_back(receivers[i], senders, i == 2 ? std::optional<uint32_t>{1} : std::nullopt);
             }
             auto family = make_family(device_, groups, cfg);
-            ASSERT_EQ(compile_args(family, {6, 7})[wire::RECTANGLE_CAPACITY], 3u);
+            ASSERT_EQ(emitted_metadata(compile_args(family, {6, 7})).family.rectangle_capacity, 3u);
             EXPECT_TRUE(allocated_semaphores(family, {6, 7}).empty());
             for (size_t i = 0; i < groups.size(); ++i) {
                 check_group(device_, family, groups[i], {6, 7});
-                EXPECT_EQ(runtime_args(family, first[i], {6, 7})[wire::NUM_RECTANGLES], i + 1u);
-                EXPECT_EQ(runtime_args(family, first[i], {6, 7})[wire::ACK], i == 2 ? 1u : 0u);
+                EXPECT_EQ(decoded_args(family, first[i], {6, 7}).rectangles.size(), i + 1u);
+                EXPECT_EQ(decoded_args(family, first[i], {6, 7}).ack, i == 2 ? 1u : 0u);
                 std::vector<uint32_t> appended{99};
                 detail::append_args_to(appended, runtime_args(family, first[i], {6, 7}));
                 auto expected = runtime_args(family, first[i], {6, 7});
@@ -724,8 +1237,10 @@ TEST_F(McastHostFixture, FamilySerializationAndRouting) {
             EXPECT_EQ(appended, expected);
             auto inactive = runtime_args(family, {7, 7}, {6, 7});
             EXPECT_EQ(inactive.size(), runtime_args(family, first[0], {6, 7}).size());
-            EXPECT_EQ(inactive.back(), wire::NO_SENDER_ROUND);
-            inactive.pop_back();
+            if (rotating) {
+                EXPECT_EQ(inactive[1], wire::NO_SENDER_ROUND);
+                inactive[1] = 0;
+            }
             EXPECT_TRUE(std::all_of(inactive.begin(), inactive.end(), [](auto word) { return word == 0; }));
         }
     }
@@ -791,8 +1306,8 @@ TEST_F(McastHostFixture, FailedArgumentPreparationAndLateTransportSelection) {
     check_building_queries(late);
     late.add_group(cores({{0, 2}, {2, 2}}), {{0, 2}});
     attach_for_inspection(late);
-    EXPECT_EQ(wire::transfer_mode(compile_args(late)[wire::FLAGS]), TransferMode::ChainUnicast);
-    EXPECT_EQ(compile_args(late)[wire::RECTANGLE_CAPACITY], 0u);
+    EXPECT_EQ(wire::transfer_mode(emitted_metadata(compile_args(late)).family.flags), TransferMode::ChainUnicast);
+    EXPECT_EQ(emitted_metadata(compile_args(late)).family.rectangle_capacity, 0u);
     EXPECT_EQ(runtime_args(late, {1, 0})[wire::ACK], 1u);
     EXPECT_EQ(runtime_args(late, {1, 0}).size(), 11u);
     EXPECT_EQ(runtime_args(late, {2, 2}).size(), 11u);
@@ -813,10 +1328,10 @@ TEST_F(McastHostFixture, FamilyValueSemanticsAndConfigSnapshot) {
     attach_for_inspection(building, original_cfg);
     EXPECT_EQ(building.participating_cores().num_cores(), 1u);
     EXPECT_EQ(copy.participating_cores().num_cores(), 3u);
-    EXPECT_EQ(compile_args(copy, {6, 7})[wire::DATA_READY], 6u);
-    EXPECT_NE(compile_args(copy, {6, 7})[wire::FLAGS] & wire::NOC1, 0u);
-    EXPECT_EQ(compile_args(building, {6, 7})[wire::HAS_RECEIVERS], 0u);
-    EXPECT_EQ(compile_args(copy, {6, 7})[wire::HAS_RECEIVERS], 1u);
+    EXPECT_EQ(emitted_semaphore(compile_args(copy, {6, 7}), wire::DATA_READY), 6u);
+    EXPECT_NE(emitted_metadata(compile_args(copy, {6, 7})).family.flags & wire::NOC1, 0u);
+    EXPECT_EQ(emitted_metadata(compile_args(building, {6, 7})).family.has_remote_receivers, 0u);
+    EXPECT_EQ(emitted_metadata(compile_args(copy, {6, 7})).family.has_remote_receivers, 1u);
     const auto ct = compile_args(copy, {6, 7});
     const auto rt = runtime_args(copy, {4, 2}, {6, 7});
     auto moved = [&] {
@@ -896,9 +1411,14 @@ TEST_F(McastHostFixture, GroupNormFactoryEmitsExactDestinations) {
                                std::string::npos;
                     });
                 ASSERT_NE(it, descriptor.kernels.end());
-                ASSERT_GE(it->compile_time_args.size(), 11u);
-                EXPECT_EQ(it->compile_time_args[it->compile_time_args.size() - 11], wire::FAMILY);
-                EXPECT_EQ(it->compile_time_args.back(), capacity);
+                const auto offset = std::find_if(
+                    it->named_compile_time_args.begin(), it->named_compile_time_args.end(), [](const auto& arg) {
+                        return arg.first == "reduction_mcast_ct_offset";
+                    });
+                ASSERT_NE(offset, it->named_compile_time_args.end());
+                const auto metadata = emitted_metadata(it->compile_time_args, offset->second);
+                EXPECT_EQ(it->compile_time_args[offset->second] & 15u, 3u);
+                EXPECT_EQ(metadata.family.rectangle_capacity, capacity);
                 ASSERT_EQ(it->runtime_args.size(), batches);
                 std::set<uint32_t> counts;
                 for (const auto& [sender, args] : it->runtime_args) {
@@ -909,13 +1429,15 @@ TEST_F(McastHostFixture, GroupNormFactoryEmitsExactDestinations) {
                     ASSERT_LT(batch, batches);
                     // Contributors' X/Y coordinates precede the family's sender block.
                     const uint32_t rt_base = 2 * contributors;
-                    ASSERT_GE(args.size(), rt_base + wire::roles_offset(0, capacity, TransferMode::Multicast) + 2u);
-                    const uint32_t rectangles = args[rt_base + wire::NUM_RECTANGLES];
+                    ASSERT_GE(args.size(), rt_base);
+                    const auto decoded = decode_multicast(metadata, std::span(args).subspan(rt_base));
+                    const uint32_t rectangles = decoded.rectangles.size();
                     ASSERT_GE(rectangles, 1u);
                     ASSERT_LE(rectangles, 3u);
                     counts.insert(rectangles);
-                    EXPECT_EQ(args[rt_base + wire::ACK], contributors - 1);
-                    EXPECT_EQ(args[args.size() - 2], wire::CAN_SEND);
+                    EXPECT_EQ(metadata.family.flags & wire::PRE_HANDSHAKE, 0u);
+                    EXPECT_EQ(decoded.ack, 0u);  // Gather readiness is independent; no multicast ACK field.
+                    EXPECT_EQ(decoded.roles, wire::CAN_SEND);
                     Coordinates expected, actual;
                     for (uint32_t i = 0; i < contributors; ++i) {
                         const auto worker =
@@ -925,9 +1447,9 @@ TEST_F(McastHostFixture, GroupNormFactoryEmitsExactDestinations) {
                         EXPECT_EQ(args[contributors + i], worker.y);
                     }
                     for (uint32_t i = 0; i < rectangles; ++i) {
-                        const auto base = rt_base + wire::rectangles_offset(0) + i * wire::RECT_WORDS;
-                        const auto sx = args[base + wire::SX], sy = args[base + wire::SY];
-                        const auto ex = args[base + wire::EX], ey = args[base + wire::EY];
+                        const auto& bounds = decoded.rectangles[i].bounds;
+                        const auto sx = bounds.sx, sy = bounds.sy;
+                        const auto ex = bounds.ex, ey = bounds.ey;
                         for (uint32_t y = std::min(sy, ey); y <= std::max(sy, ey); ++y) {
                             for (uint32_t x = std::min(sx, ex); x <= std::max(sx, ex); ++x) {
                                 if (!worker_coordinates(device_).contains({x, y})) {
@@ -966,11 +1488,11 @@ TEST_F(McastHostFixture, GroupNormUsesExactFamilies) {
             check_group(device_, family, GroupInput(cores(shape), std::vector<CoreCoord>{shape.front()}), {0, 1});
             check_group(device_, family, GroupInput(cores(second), std::vector<CoreCoord>{second.front()}), {0, 1});
             EXPECT_TRUE(allocated_semaphores(family, {0, 1}).empty());
-            EXPECT_EQ(compile_args(family, {0, 1})[5] & 1, 1u);
+            EXPECT_EQ(emitted_metadata(compile_args(family, {0, 1})).family.flags & 1, 1u);
             config.handshake = false;
             config.sem_ids = std::vector<uint32_t>{0};
             auto passive = ttnn::prim::make_group_norm_mcast_family(device_, {shape, second}, config);
-            EXPECT_EQ(compile_args(passive, {0})[5] & 1u, 0u);
+            EXPECT_EQ(emitted_metadata(compile_args(passive, {0})).family.flags & 1u, 0u);
             config.handshake = true;
             config.sem_ids = std::vector<uint32_t>{0, 1};
         }
@@ -985,22 +1507,30 @@ TEST_F(McastHostFixture, IrregularReceiverSetPolicyDoesNotAffectRegularFamilies)
     config.ack_count_override = 0;
     auto ordinary = make_family(device_, {dense}, config);
     auto chain_link_policy = make_family(device_, {dense}, chain_config(config));
-    EXPECT_EQ(wire::transfer_mode(compile_args(ordinary)[wire::FLAGS]), dataflow_kernel_lib::TransferMode::Multicast);
+    EXPECT_EQ(
+        wire::transfer_mode(emitted_metadata(compile_args(ordinary)).family.flags),
+        dataflow_kernel_lib::TransferMode::Multicast);
     EXPECT_EQ(compile_args(chain_link_policy), compile_args(ordinary));
     EXPECT_EQ(runtime_args(chain_link_policy, {1, 1}), runtime_args(ordinary, {1, 1}));
     config.handshake = true;
     config.ack_count_override.reset();
     auto requested = make_family(device_, {dense}, chain_config(config));
-    EXPECT_EQ(wire::transfer_mode(compile_args(requested)[wire::FLAGS]), dataflow_kernel_lib::TransferMode::Multicast);
-    EXPECT_EQ(compile_args(requested)[wire::RECTANGLE_CAPACITY], 1u);
-    EXPECT_EQ(runtime_args(requested, {1, 1})[wire::NUM_RECTANGLES], 1u);
-    EXPECT_EQ(runtime_args(requested, {1, 1})[wire::ACK], 2u);
+    EXPECT_EQ(
+        wire::transfer_mode(emitted_metadata(compile_args(requested)).family.flags),
+        dataflow_kernel_lib::TransferMode::Multicast);
+    EXPECT_EQ(emitted_metadata(compile_args(requested)).family.rectangle_capacity, 1u);
+    EXPECT_EQ(decoded_args(requested, {1, 1}).rectangles.size(), 1u);
+    EXPECT_EQ(decoded_args(requested, {1, 1}).ack, 2u);
     auto rotating = make_family(device_, {GroupInput(dense.receivers, {{1, 1}, {2, 1}})}, chain_config());
-    EXPECT_EQ(wire::transfer_mode(compile_args(rotating)[wire::FLAGS]), dataflow_kernel_lib::TransferMode::Multicast);
+    EXPECT_EQ(
+        wire::transfer_mode(emitted_metadata(compile_args(rotating)).family.flags),
+        dataflow_kernel_lib::TransferMode::Multicast);
     const GroupInput irregular(cores({{0, 0}, {2, 0}, {4, 0}}), {{0, 0}});
     auto multicast = make_family(device_, {irregular}, {});
-    EXPECT_EQ(compile_args(multicast)[wire::RECTANGLE_CAPACITY], 3u);
-    EXPECT_EQ(wire::transfer_mode(compile_args(multicast)[wire::FLAGS]), dataflow_kernel_lib::TransferMode::Multicast);
+    EXPECT_EQ(emitted_metadata(compile_args(multicast)).family.rectangle_capacity, 3u);
+    EXPECT_EQ(
+        wire::transfer_mode(emitted_metadata(compile_args(multicast)).family.flags),
+        dataflow_kernel_lib::TransferMode::Multicast);
     check_group(device_, multicast, irregular);
 }
 
@@ -1013,12 +1543,14 @@ TEST_F(McastHostFixture, ChainTopologyIsExactSenderFirstAndMapped) {
         const auto receivers = cores({{0, 1}, {2, 1}, {0, 2}});
         for (auto sender : {CoreCoord{2, 1}, CoreCoord{4, 2}}) {
             auto family = make_family(device_, {GroupInput(receivers, {sender})}, chain_config(config));
-            EXPECT_EQ(compile_args(family)[wire::RECTANGLE_CAPACITY], 0u);
+            EXPECT_EQ(emitted_metadata(compile_args(family)).family.rectangle_capacity, 0u);
             EXPECT_EQ(runtime_args(family, sender)[wire::ACK], 1u);
             const auto ct = compile_args(family);
-            EXPECT_EQ(ct.size(), 12u);
-            EXPECT_EQ(ct[11], 2u);
-            EXPECT_EQ(wire::transfer_mode(ct[wire::FLAGS]), dataflow_kernel_lib::TransferMode::ChainUnicast);
+            EXPECT_EQ(ct.size(), 4u);
+            EXPECT_EQ(emitted_semaphore(ct, wire::SIGNAL_SOURCE), 2u);
+            EXPECT_EQ(
+                wire::transfer_mode(emitted_metadata(ct).family.flags),
+                dataflow_kernel_lib::TransferMode::ChainUnicast);
             const std::vector<CoreCoord> expected = receivers.contains(sender)
                                                         ? std::vector<CoreCoord>{sender, {0, 1}, {0, 2}}
                                                         : std::vector<CoreCoord>{sender, {0, 1}, {2, 1}, {0, 2}};
@@ -1050,10 +1582,10 @@ TEST_F(McastHostFixture, ChainFamilyUsesOneCompileTimeTransportForEveryGeometry)
     const GroupInput irregular(cores({{0, 2}, {2, 2}, {4, 2}}), {{0, 2}});
     const GroupInput local(cores({{6, 0}}), {{6, 0}});
     auto family = make_family(device_, {dense, irregular, local}, chain_config());
-    EXPECT_EQ(compile_args(family)[wire::RECTANGLE_CAPACITY], 0u);
+    EXPECT_EQ(emitted_metadata(compile_args(family)).family.rectangle_capacity, 0u);
     const auto ct = compile_args(family);
-    EXPECT_EQ(wire::transfer_mode(ct[wire::FLAGS]), dataflow_kernel_lib::TransferMode::ChainUnicast);
-    EXPECT_EQ(ct[wire::ACK_COUNT], ACK_EQUALS_FANOUT);  // One successor, except for the local-only group.
+    EXPECT_EQ(wire::transfer_mode(emitted_metadata(ct).family.flags), dataflow_kernel_lib::TransferMode::ChainUnicast);
+    EXPECT_EQ(emitted_metadata(ct).family.ack_count, 0u);  // Chain ACKs remain in the unchanged per-core RT block.
     EXPECT_EQ(runtime_args(family, {6, 0})[wire::ACK], 0u);
     const auto local_rt = runtime_args(family, {6, 0});
     EXPECT_EQ(local_rt[4], dataflow_kernel_lib::NO_CHAIN_NEIGHBOR);
@@ -1096,9 +1628,9 @@ TEST_F(McastHostFixture, ChainRejectsUnsupportedProtocolsAndGeometry) {
     config.sem_ids = std::vector<uint32_t>{3, 4, 5};
     auto adopted = make_family(device_, {group}, chain_config(config));
     EXPECT_TRUE(allocated_semaphores(adopted, *config.sem_ids).empty());
-    EXPECT_EQ(compile_args(adopted, *config.sem_ids)[wire::DATA_READY], 3u);
-    EXPECT_EQ(compile_args(adopted, *config.sem_ids)[wire::CONSUMER_READY], 4u);
-    EXPECT_EQ(compile_args(adopted, *config.sem_ids)[11], 5u);
+    EXPECT_EQ(emitted_semaphore(compile_args(adopted, *config.sem_ids), wire::DATA_READY), 3u);
+    EXPECT_EQ(emitted_semaphore(compile_args(adopted, *config.sem_ids), wire::CONSUMER_READY), 4u);
+    EXPECT_EQ(emitted_semaphore(compile_args(adopted, *config.sem_ids), wire::SIGNAL_SOURCE), 5u);
 }
 
 TEST_F(McastHostFixture, SameInputsCanPrepareDifferentFamilyTransports) {
@@ -1117,7 +1649,7 @@ TEST_F(McastHostFixture, ChainSignalSourceAllocationAndWire) {
     auto cfg = chain_config();
     cfg.base_sem_id = 3;
     auto family = make_family(device_, {group}, cfg);
-    const std::vector<uint32_t> expected{1, 1, 3, 4, 1, 9, 0, 4, 1, 2, 0, 5};
+    const std::vector<uint32_t> expected{0x000E1293u, 3, 4, 5};
     EXPECT_EQ(compile_args(family), expected);
     EXPECT_EQ(allocated_semaphores(family).size(), 3u);
     const auto owned = allocated_semaphores(family);
@@ -1143,7 +1675,7 @@ TEST_F(McastHostFixture, ChainSignalSourceAllocationAndWire) {
     // A rectangular family resolves to multicast and needs only two semaphore IDs.
     cfg.sem_ids = std::vector<uint32_t>{3, 4};
     const auto dense = make_family(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})}, cfg);
-    EXPECT_EQ(compile_args(dense, {3, 4}).size(), 11u);
+    EXPECT_EQ(compile_args(dense, {3, 4}).size(), 4u);
 }
 
 TEST_F(McastHostFixture, DescriptorAppendPadsPerKernelAndPreservesBindings) {
@@ -1241,13 +1773,13 @@ TEST_F(McastHostFixture, DescriptorAttachAppendsAfterPrefixesAndPreservesBufferB
     EXPECT_EQ(desc.semaphores[2].id, 1u);
     EXPECT_EQ(desc.semaphores[3].id, 3u);
     const auto& attached = desc.kernels[0];
-    const std::vector<uint32_t> expected_ct{17, 19, 1, 1, 1, 3, 1, 1, 0, 3, 1, 2, 1};
+    const std::vector<uint32_t> expected_ct{17, 19, 0x024E2E13u, 1, 3, 1};
     EXPECT_EQ(attached.compile_time_args, expected_ct);
     const auto a = device_->worker_core_from_logical_core({0, 0});
     const auto b = device_->worker_core_from_logical_core({1, 0});
-    const std::vector<uint32_t> expected_sender{21, 23, 0, 1, 1, a.x, a.y, a.x, a.y, b.x, b.y, 1, 2, 3, 1, 0};
-    const std::vector<uint32_t> expected_receiver{31, 33, 35, 0, 0, a.x, a.y, 0, 0, 0, 0, 0, 0, 0, 2, 0xFFFFFFFFu};
-    const std::vector<uint32_t> expected_inactive{41, 43, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFFFFFFFFu};
+    const std::vector<uint32_t> expected_sender{21, 23, 0, 1, a.x, a.y, a.x, a.y, b.x, b.y};
+    const std::vector<uint32_t> expected_receiver{31, 33, 35, 2, a.x, a.y, 0, 0, 0, 0};
+    const std::vector<uint32_t> expected_inactive{41, 43, 0, 0, 0, 0, 0, 0, 0, 0};
     EXPECT_EQ(attached.runtime_args[0].second, expected_sender);
     EXPECT_EQ(attached.runtime_args[1].second, expected_receiver);
     EXPECT_EQ(attached.runtime_args[2].second, expected_inactive);
@@ -1256,8 +1788,8 @@ TEST_F(McastHostFixture, DescriptorAttachAppendsAfterPrefixesAndPreservesBufferB
     EXPECT_EQ(attached.common_buffer_bindings[0].arg_idx, 0u);
     EXPECT_EQ(attached.common_runtime_args, std::vector<uint32_t>{71});
     // Automatic resource assignment belongs to the descriptor, not the prepared family.
-    EXPECT_EQ(compile_args(family)[2], 0u);
-    EXPECT_EQ(compile_args(family)[3], 1u);
+    EXPECT_EQ(emitted_semaphore(compile_args(family), wire::DATA_READY), 0u);
+    EXPECT_EQ(emitted_semaphore(compile_args(family), wire::CONSUMER_READY), 1u);
 }
 
 TEST_F(McastHostFixture, DescriptorAttachValidatesAllKernelsBeforeMutation) {
@@ -1309,12 +1841,12 @@ TEST_F(McastHostFixture, DescriptorAttachAdoptionAndAbsence) {
     desc.semaphores[0].initial_value = 0;
     family.attach(desc, "mcast", points);
     EXPECT_EQ(desc.semaphores.size(), 1u);
-    EXPECT_EQ(desc.kernels[0].compile_time_args[3], 5u);
-    EXPECT_EQ(desc.kernels[0].compile_time_args[4], 0xFFFFFFFFu);
-    EXPECT_EQ(desc.kernels[0].compile_time_args[6], 0u);
+    EXPECT_EQ(emitted_semaphore(desc.kernels[0].compile_time_args, wire::DATA_READY, 1), 5u);
+    EXPECT_EQ(emitted_semaphore(desc.kernels[0].compile_time_args, wire::CONSUMER_READY, 1), UNUSED_SEM_ID);
+    EXPECT_EQ(emitted_metadata(desc.kernels[0].compile_time_args, 1).family.flags, 0u);
     const auto runtime = desc.kernels[0].runtime_args;
     attach_absent(desc.kernels[0], "absent_mcast");
-    EXPECT_EQ(desc.kernels[0].compile_time_args[12], 0u);
+    EXPECT_EQ(desc.kernels[0].compile_time_args.back(), 0u);
     EXPECT_EQ(desc.kernels[0].compile_time_args[0], 31u);
     EXPECT_EQ(desc.kernels[0].runtime_args, runtime);
     EXPECT_EQ(desc.semaphores.size(), 1u);
@@ -1349,11 +1881,11 @@ TEST_F(McastHostFixture, DescriptorAttachExactAllocationAndIndependentFamilies) 
     ASSERT_EQ(desc.semaphores.size(), 4u);
     EXPECT_EQ(desc.semaphores[2].id, 0u);
     EXPECT_EQ(desc.semaphores[3].id, 1u);
-    const std::vector<uint32_t> expected{97, 1, 1, 4, 5, 1, 1, 0, 3, 1, 2, 1, 1, 1, 0, 1, 1, 1, 0, 3, 1, 2, 1};
+    const std::vector<uint32_t> expected{97, 0x024E2E13u, 4, 5, 1, 0x024E2E13u, 0, 1, 1};
     EXPECT_EQ(desc.kernels[0].compile_time_args, expected);
     for (const auto& [core, args] : desc.kernels[0].runtime_args) {
-        ASSERT_EQ(args.size(), 26u);
-        EXPECT_TRUE(std::equal(args.begin(), args.begin() + 13, args.begin() + 13));
+        ASSERT_EQ(args.size(), 14u);
+        EXPECT_TRUE(std::equal(args.begin(), args.begin() + 7, args.begin() + 7));
     }
     auto exhausted_base = make_family(device_, {group}, McastConfig{.base_sem_id = 15});
     const auto before = desc.kernels[0];
@@ -1383,7 +1915,7 @@ TEST_F(McastHostFixture, DescriptorAttachChainRequiresForwarderNocAndThreeResour
         DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
     family.attach(desc, "mcast", points);
     ASSERT_EQ(desc.semaphores.size(), 3u);
-    const std::vector<uint32_t> expected{1, 1, 0, 1, 1, 9, 0, 4, 1, 2, 0, 2};
+    const std::vector<uint32_t> expected{0x000E1293u, 0, 1, 2};
     for (const auto& attached : desc.kernels) {
         EXPECT_EQ(attached.compile_time_args, expected);
         ASSERT_EQ(attached.runtime_args.size(), 1u);
@@ -1436,6 +1968,7 @@ m2::ProgramSpec spec_pair(uint32_t prefix = 0) {
             .runtime_arg_schema = {.runtime_arg_names = {"kept_rt"}, .common_runtime_arg_names = {"kept_common"}},
             .hw_config = m2::DataMovementHardwareConfig{m2::CreateReaderGen1DataMovementConfig()}};
         kernel.advanced_options.num_runtime_varargs = prefix;
+        kernel.advanced_options.compile_time_varargs = {101, 103};
         spec.kernels.push_back(std::move(kernel));
     }
     spec.work_units = {
@@ -1467,7 +2000,7 @@ TEST_F(McastHostFixture, NoHandshakeLeavesExchangeCreditAcrossConstructionPaths)
         family.attach(descriptor, "payload", targets);
         ASSERT_EQ(descriptor.semaphores.size(), 15u);
         EXPECT_EQ(descriptor.semaphores.back().id, 14u);
-        EXPECT_EQ(kernel.compile_time_args[wire::CONSUMER_READY], UNUSED_SEM_ID);
+        EXPECT_EQ(emitted_semaphore(kernel.compile_time_args, wire::CONSUMER_READY), UNUSED_SEM_ID);
 
         m2::ProgramRunArgs args;
         family.attach(spec, args, "payload", spec_targets);
@@ -1503,11 +2036,17 @@ TEST_F(McastHostFixture, SpecAttachPopulatesNamedMetadataResourcesAndRuntimePref
     const auto end = device_->worker_core_from_logical_core({1, 0});
     for (size_t i = 0; i < spec.kernels.size(); ++i) {
         const auto& kernel = spec.kernels[i];
-        EXPECT_EQ(kernel.advanced_options.num_runtime_varargs, 15u);
+        EXPECT_EQ(kernel.advanced_options.num_runtime_varargs, i == 0 ? 6u : 5u);
         EXPECT_EQ(kernel.compile_time_args.get("channel_mcast_rt_base").value(), 2u);
-        EXPECT_EQ(kernel.compile_time_args.get("channel_mcast_flags").value(), 1u);
-        EXPECT_EQ(kernel.compile_time_args.get("channel_mcast_rectangle_capacity").value(), 1u);
-        EXPECT_EQ(kernel.compile_time_args.get("channel_mcast_uniform_remote_count").value(), 1u);
+        EXPECT_EQ(kernel.compile_time_args.get("channel_mcast_ct_base").value(), 2u);
+        const auto decoded = decode_emitted_ct(kernel.advanced_options.compile_time_varargs, 2, false);
+        EXPECT_EQ(decoded.metadata.family.flags, 1u);
+        EXPECT_EQ(decoded.metadata.family.rectangle_capacity, 1u);
+        EXPECT_EQ(decoded.metadata.family.uniform_remote_count, i == 0 ? 1u : 0u);
+        EXPECT_EQ(kernel.advanced_options.compile_time_varargs.size(), i == 0 ? 4u : 3u);
+        EXPECT_EQ(kernel.advanced_options.compile_time_varargs[0], 101u);
+        EXPECT_EQ(kernel.advanced_options.compile_time_varargs[1], 103u);
+        EXPECT_EQ(kernel.compile_time_args.size(), 3u);  // Existing arg plus CT/RT offsets.
         EXPECT_EQ(kernel.compile_time_args.get("kept_ct").value(), 73u);
         EXPECT_EQ(
             kernel.compiler_options.defines.get("channel_mcast_data_ready_type").value(),
@@ -1515,13 +2054,11 @@ TEST_F(McastHostFixture, SpecAttachPopulatesNamedMetadataResourcesAndRuntimePref
         EXPECT_EQ(kernel.compiler_options.defines.get("channel_mcast_signal_source_type").value(), "std::nullptr_t");
         EXPECT_EQ(args.kernel_run_args[i].common_runtime_arg_values.get("kept_common").value(), 97u);
     }
-    const std::vector<uint32_t> sender_expected{
-        41, 51, 1, 1, sender.x, sender.y, sender.x, sender.y, end.x, end.y, 1, 2, 3, 1, 0};
+    const std::vector<uint32_t> sender_expected{41, 51, sender.x, sender.y, end.x, end.y};
     EXPECT_EQ(args.kernel_run_args[0].advanced_options.runtime_varargs.get({0, 0}).value(), sender_expected);
     EXPECT_EQ(args.kernel_run_args[1].runtime_arg_values.get("kept_rt").value().get({1, 0}).value(), 84u);
     const auto& inactive = args.kernel_run_args[1].advanced_options.runtime_varargs.get({2, 0}).value();
-    EXPECT_EQ(inactive[13], 0u);
-    EXPECT_EQ(inactive[14], 0xffffffffu);
+    EXPECT_EQ(inactive, (std::vector<uint32_t>{43, 53, 0, 0, 0}));
 }
 
 TEST_F(McastHostFixture, SpecAttachComposesAndNativeRunArgsCopiesKeepPayloads) {
@@ -1532,8 +2069,11 @@ TEST_F(McastHostFixture, SpecAttachComposesAndNativeRunArgsCopiesKeepPayloads) {
     const auto payload = args.kernel_run_args[0].advanced_options.runtime_varargs.get({0, 0}).value();
     family.attach(spec, args, "second", spec_targets);
     EXPECT_EQ(spec.semaphores.size(), 4u);
-    EXPECT_EQ(spec.kernels[0].compile_time_args.get("second_mcast_rt_base").value(), 13u);
-    EXPECT_EQ(spec.kernels[0].advanced_options.num_runtime_varargs, 26u);
+    EXPECT_EQ(spec.kernels[0].compile_time_args.get("second_mcast_rt_base").value(), 4u);
+    EXPECT_EQ(spec.kernels[0].compile_time_args.get("first_mcast_ct_base").value(), 2u);
+    EXPECT_EQ(spec.kernels[0].compile_time_args.get("second_mcast_ct_base").value(), 4u);
+    EXPECT_EQ(spec.kernels[1].compile_time_args.get("second_mcast_ct_base").value(), 3u);
+    EXPECT_EQ(spec.kernels[0].advanced_options.num_runtime_varargs, 8u);
     auto copied = args;
     copied.kernel_run_args[0].runtime_arg_values["kept_rt"][{0, 0}] = 123;
     auto expected = payload;
@@ -1579,7 +2119,7 @@ TEST_F(McastHostFixture, SpecAttachFailuresLeaveBothObjectsUnchanged) {
                 .noc = NOC::NOC_1;
         }
         if (std::string_view(violation) == "duplicate-prefix") {
-            spec.kernels[1].compile_time_args["channel_mcast_flags"] = 55;
+            spec.kernels[1].compile_time_args["channel_mcast_ct_base"] = 55;
         }
         auto targets = spec_targets;
         if (std::string_view(violation) == "duplicate-target") {
@@ -1592,6 +2132,10 @@ TEST_F(McastHostFixture, SpecAttachFailuresLeaveBothObjectsUnchanged) {
         ASSERT_EQ(args.kernel_run_args.size(), before.kernel_run_args.size());
         for (size_t i = 0; i < spec.kernels.size(); ++i) {
             EXPECT_EQ(spec.kernels[i].compile_time_args, before_spec.kernels[i].compile_time_args) << violation;
+            EXPECT_EQ(
+                spec.kernels[i].advanced_options.compile_time_varargs,
+                before_spec.kernels[i].advanced_options.compile_time_varargs)
+                << violation;
             EXPECT_EQ(spec.kernels[i].advanced_options.num_runtime_varargs, 1u) << violation;
             EXPECT_TRUE(spec.kernels[i].semaphore_bindings.empty()) << violation;
             EXPECT_TRUE(spec.kernels[i].compiler_options.defines.empty()) << violation;
@@ -1642,7 +2186,7 @@ TEST_F(McastHostFixture, SpecAttachValidatesUniformVarargSchemaAndNormalizesOver
     args.kernel_run_args[0].advanced_options.runtime_varargs[{1, 0}] = {31, 37};
     args.kernel_run_args[0].advanced_options.runtime_varargs[{2, 0}] = {41, 43};
     family.attach(spec, args, "channel", spec_targets);
-    EXPECT_EQ(spec.kernels[1].advanced_options.num_runtime_varargs, 15u);
+    EXPECT_EQ(spec.kernels[1].advanced_options.num_runtime_varargs, 5u);
     EXPECT_TRUE(spec.kernels[1].advanced_options.num_runtime_varargs_per_node.empty());
     EXPECT_EQ(spec.kernels[1].compile_time_args.get("channel_mcast_rt_base").value(), 2u);
 }
@@ -1652,7 +2196,8 @@ TEST_F(McastHostFixture, SpecAbsentNeedsNoResourcesOrRunArgumentObject) {
     attach_absent(spec, "none", spec_targets);
     EXPECT_TRUE(spec.semaphores.empty());
     for (const auto& kernel : spec.kernels) {
-        EXPECT_EQ(kernel.compile_time_args.get("none_mcast_tag").value(), 0u);
+        EXPECT_EQ(kernel.compile_time_args.get("none_mcast_ct_base").value(), 2u);
+        EXPECT_EQ(kernel.advanced_options.compile_time_varargs, (std::vector<uint32_t>{101, 103, 0}));
         EXPECT_EQ(kernel.advanced_options.num_runtime_varargs, 3u);
         EXPECT_TRUE(kernel.semaphore_bindings.empty());
         EXPECT_EQ(kernel.compiler_options.defines.size(), 3u);
@@ -1782,6 +2327,35 @@ TEST_F(McastHostFixture, SpecDeviceSmoke) {
     run_spec_device_contract(*device_, NOC::NOC_0, false, false, false, false, true, false);
 }
 
+TEST_F(McastHostFixture, SpecDeviceOldTag) {
+    using namespace tt::tt_metal;
+    const std::array targets{m2::KernelSpecName{"old_tag"}};
+    m2::ProgramSpec spec{
+        .kernels =
+            {{.unique_id = targets.front(),
+              .source = m2::KernelSpec::SourceCode{R"(
+                #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
+                void kernel_main() { constexpr auto channel = MCAST_SPEC_ARGS(channel); }
+            )"},
+              .hw_config = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0}}},
+        .work_units = {{.name = "old_tag", .kernels = {targets.front()}, .target_nodes = CoreCoord{0, 0}}}};
+    auto family = make_family(device_, {{grid({0, 0}, {1, 0}), {{0, 0}}}});
+    m2::ProgramRunArgs args;
+    family.attach(spec, args, "channel", targets);
+    const auto ct_base = spec.kernels.front().compile_time_args.get("channel_mcast_ct_base").value();
+    spec.kernels.front().advanced_options.compile_time_varargs[ct_base] = 2;
+    try {
+        auto workload = m2::MakeMeshWorkloadFromSpec(*device_, spec);
+        for (auto& [region, program] : workload.get_programs()) {
+            m2::SetProgramRunArgs(program, args);
+        }
+        tt::tt_metal::distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, true);
+        FAIL() << "The native decoder accepted an obsolete multicast tag";
+    } catch (const std::exception& error) {
+        EXPECT_NE(std::string(error.what()).find("Unsupported multicast wire tag"), std::string::npos);
+    }
+}
+
 TEST_F(McastHostFixture, SpecDeviceMatrix) {
     for (auto noc : {NOC::NOC_0, NOC::NOC_1}) {
         for (bool counter : {false, true}) {
@@ -1811,8 +2385,8 @@ TEST_F(McastHostFixture, ProgramBindingAllocatesOnceAndAppendsResolvedIds) {
     family.append_semaphores(program);
     family.append_compile_time_args_to(ct);
     family.append_runtime_args_to(rt, {0, 0});
-    EXPECT_EQ(ct[1 + wire::DATA_READY], 1u);
-    EXPECT_EQ(ct[1 + wire::CONSUMER_READY], 3u);
+    EXPECT_EQ(emitted_semaphore(ct, wire::DATA_READY, 1), 1u);
+    EXPECT_EQ(emitted_semaphore(ct, wire::CONSUMER_READY, 1), 3u);
     EXPECT_EQ(rt.front(), 73u);
     EXPECT_GT(rt.size(), 1u);
     ASSERT_EQ(program.impl().semaphores().size(), 4u);
@@ -1849,8 +2423,8 @@ TEST_F(McastHostFixture, ProgramBindingValidatesAllRolesBeforeMutationAndSupport
     Program program;
     exact.append_semaphores(program);
     exact.append_compile_time_args_to(ct);
-    EXPECT_EQ(ct[wire::DATA_READY], 2u);
-    EXPECT_EQ(ct[wire::CONSUMER_READY], 3u);
+    EXPECT_EQ(emitted_semaphore(ct, wire::DATA_READY), 2u);
+    EXPECT_EQ(emitted_semaphore(ct, wire::CONSUMER_READY), 3u);
 
     Mcast2D passive(
         device_,
@@ -1860,16 +2434,16 @@ TEST_F(McastHostFixture, ProgramBindingValidatesAllRolesBeforeMutationAndSupport
     passive.append_semaphores(program);
     ct.clear();
     passive.append_compile_time_args_to(ct);
-    EXPECT_EQ(ct[wire::DATA_READY], 2u);
-    EXPECT_EQ(ct[wire::CONSUMER_READY], UNUSED_SEM_ID);
+    EXPECT_EQ(emitted_semaphore(ct, wire::DATA_READY), 2u);
+    EXPECT_EQ(emitted_semaphore(ct, wire::CONSUMER_READY), UNUSED_SEM_ID);
     EXPECT_EQ(program.impl().semaphores().size(), 2u);
 
     Mcast1D another(device_, participants, Mcast1DShape::PerRow, Mcast1DFixedSenderConfig{});
     another.append_semaphores(program);
     ct.clear();
     another.append_compile_time_args_to(ct);
-    EXPECT_EQ(ct[wire::DATA_READY], 0u);
-    EXPECT_EQ(ct[wire::CONSUMER_READY], 1u);
+    EXPECT_EQ(emitted_semaphore(ct, wire::DATA_READY), 0u);
+    EXPECT_EQ(emitted_semaphore(ct, wire::CONSUMER_READY), 1u);
     EXPECT_EQ(program.impl().semaphores().size(), 4u);
 
     auto missing = make_family(device_, {{participants, {{0, 0}}}}, {.sem_ids = std::vector<uint32_t>{4, 5}});
@@ -1890,7 +2464,7 @@ TEST_F(McastHostFixture, ProgramBindingCoversChainExhaustionAndUnsupportedProgra
     std::vector<uint32_t> ct;
     chain.append_compile_time_args_to(ct);
     ASSERT_EQ(chain_program.impl().semaphores().size(), 3u);
-    EXPECT_EQ(ct[wire::SIGNAL_SOURCE], 2u);
+    EXPECT_EQ(emitted_semaphore(ct, wire::SIGNAL_SOURCE), 2u);
 
     const auto participants = grid({0, 0}, {1, 0});
     auto family = make_family(device_, {{participants, {{0, 0}}}});

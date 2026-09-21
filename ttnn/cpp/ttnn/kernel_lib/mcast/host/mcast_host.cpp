@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <set>
 
 #include <tt_stl/assert.hpp>
 
@@ -45,13 +46,6 @@ uint32_t mcast_flags(const McastConfig& cfg) {
     return flags;
 }
 
-void write_role_args(
-    std::vector<uint32_t>& args, uint32_t base, bool can_send, bool can_receive, uint32_t sender_round) {
-    namespace wire = dataflow_kernel_lib::mcast_wire;
-    args[base + wire::ROLES] = (can_send ? wire::CAN_SEND : 0u) | (can_receive ? wire::CAN_RECEIVE : 0u);
-    args[base + wire::SENDER_ROUND] = sender_round;
-}
-
 void append_sender_coords(
     std::vector<uint32_t>& args, tt::tt_metal::IDevice* device, const std::vector<tt::tt_metal::CoreCoord>& senders) {
     namespace wire = dataflow_kernel_lib::mcast_wire;
@@ -84,9 +78,77 @@ using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
 namespace wire = dataflow_kernel_lib::mcast_wire;
 
+namespace {
+// Preserve first-appearance axis order, including gaps. The reconstruction check
+// below, not a bounding box, determines whether this is a Cartesian prefix.
+std::vector<uint32_t> coordinate_axis(const std::vector<uint32_t>& coordinates, uint32_t axis) {
+    std::vector<uint32_t> values;
+    std::set<uint32_t> seen;
+    for (size_t i = axis; i < coordinates.size(); i += wire::SENDER_COORD_WORDS) {
+        if (seen.insert(coordinates[i]).second) {
+            values.push_back(coordinates[i]);
+        }
+    }
+    return values;
+}
+
+void append_coordinate_ranges(std::vector<uint32_t>& ranges, const std::vector<uint32_t>& axis) {
+    for (const uint32_t coordinate : axis) {
+        if (!ranges.empty() && ranges.back() != UINT32_MAX && coordinate == ranges.back() + 1) {
+            ranges.back() = coordinate;
+        } else {
+            const size_t offset = ranges.size();
+            ranges.resize(offset + wire::RANGE_WORDS);
+            ranges[offset + wire::RANGE_START] = coordinate;
+            ranges[offset + wire::RANGE_END] = coordinate;
+        }
+    }
+}
+
+std::pair<wire::SenderCoordinateMetadata, std::vector<uint32_t>> compress_coordinates(
+    const std::vector<uint32_t>& coordinates) {
+    const auto xs = coordinate_axis(coordinates, wire::SENDER_X);
+    const auto ys = coordinate_axis(coordinates, wire::SENDER_Y);
+    std::vector<uint32_t> x_ranges, y_ranges;
+    append_coordinate_ranges(x_ranges, xs);
+    append_coordinate_ranges(y_ranges, ys);
+    if (x_ranges.size() + y_ranges.size() >= coordinates.size()) {
+        return {};
+    }
+    wire::SenderCoordinateMetadata metadata;
+    metadata.columns = xs.size();
+    metadata.rows = ys.size();
+    metadata.x_ranges = x_ranges.size() / wire::RANGE_WORDS;
+    metadata.y_ranges = y_ranges.size() / wire::RANGE_WORDS;
+    x_ranges.insert(x_ranges.end(), y_ranges.begin(), y_ranges.end());
+    for (const auto encoding :
+         {wire::SenderCoordinateEncoding::RowMajorRanges, wire::SenderCoordinateEncoding::ColumnMajorRanges}) {
+        metadata.encoding = encoding;
+        bool matches = true;
+        for (uint32_t word = 0; word < coordinates.size(); ++word) {
+            if (wire::sender_coordinate(
+                    x_ranges, metadata, word / wire::SENDER_COORD_WORDS, word % wire::SENDER_COORD_WORDS) !=
+                coordinates[word]) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) {
+            return {metadata, std::move(x_ranges)};
+        }
+    }
+    return {};
+}
+
+bool same_encoding(wire::SenderCoordinateMetadata left, wire::SenderCoordinateMetadata right) {
+    return left.encoding == right.encoding && left.columns == right.columns && left.rows == right.rows &&
+           left.x_ranges == right.x_ranges && left.y_ranges == right.y_ranges;
+}
+}  // namespace
+
 std::vector<uint32_t> detail::absent_mcast_compile_time_args() {
     std::vector<uint32_t> args(wire::ABSENT_CT_WORDS);
-    args[wire::TAG] = wire::ABSENT;
+    args[0] = wire::ABSENT;
     return args;
 }
 
@@ -119,7 +181,10 @@ McastFamily::Group::Group(
 }
 
 void McastFamily::Group::prepare_(
-    tt::tt_metal::IDevice* device, const McastConfig& cfg, dataflow_kernel_lib::TransferMode transfer_mode) const {
+    tt::tt_metal::IDevice* device,
+    const McastConfig& cfg,
+    dataflow_kernel_lib::TransferMode transfer_mode,
+    const CoreRangeSet* handshake_cores) const {
     auto& state = prepared_.emplace(PreparedState{});
     // Map the normalized logical rectangles: non-worker NoC rows/columns are transparent to multicast.
     // Preserve holes in the logical receiver set, and count actual workers rather than NoC area.
@@ -144,19 +209,28 @@ void McastFamily::Group::prepare_(
             "supported");
         state.transport = prepare_chain_(device, state);
     } else {
-        state.transport = prepare_multicast_(cfg, state);
+        state.transport = prepare_multicast_(cfg, state, handshake_cores);
+        // Sender-coordinate encoding is independent of receiver membership.
+        // Exact reconstruction and size checks select ranges or explicit pairs.
+        if (rotating()) {
+            auto compressed = compress_coordinates(state.sender_coords);
+            state.coordinate_metadata = compressed.first;
+            state.sender_ranges = std::move(compressed.second);
+        }
     }
 }
 
 McastFamily::Group::PreparedMulticast McastFamily::Group::prepare_multicast_(
-    const McastConfig& cfg, PreparedState& state) const {
+    const McastConfig& cfg, PreparedState& state, const CoreRangeSet* handshake_cores) const {
     PreparedMulticast multicast;
     const auto override = ack_count_override_.has_value() ? ack_count_override_ : cfg.ack_count_override;
+    const uint32_t handshake_count = handshake_cores ? receivers_.intersection(*handshake_cores).num_cores() : 0;
     std::optional<SenderMcastMode> first_sender_mcast_mode;
     bool uniform_sender_mcast_mode = true;
     for (size_t phase = 0; phase < senders_.size(); ++phase) {
         const uint32_t fanout = fanouts_[phase];
-        const uint32_t ack = override.value_or(fanout);
+        const uint32_t ack =
+            handshake_cores ? handshake_count - handshake_cores->contains(senders_[phase]) : override.value_or(fanout);
         TT_FATAL(
             ack <= fanout,
             "McastFamily::prepare_arguments: acknowledgment count ({}) exceeds sender fan-out ({})",
@@ -240,25 +314,43 @@ bool McastFamily::Group::has_remote_receivers() const {
 uint32_t McastFamily::Group::num_rectangles() const { return prepared_state_().rectangles.size(); }
 
 std::vector<uint32_t> McastFamily::Group::runtime_args(
-    const CoreCoord& core, const dataflow_kernel_lib::mcast_wire::FamilyMetadata& layout) const {
+    const CoreCoord& core, const wire::ArgumentMetadata& metadata) const {
     const auto& state = prepared_state_();
-    std::vector<uint32_t> args(
-        wire::runtime_words(layout.rotating_span, layout.rectangle_capacity, wire::transfer_mode(layout.flags)), 0u);
+    const wire::RuntimeLayout runtime(metadata);
+    std::vector<uint32_t> args(runtime.words, 0u);
     const auto phase = sender_phase_(core);
     const bool sender = phase != wire::NO_SENDER_ROUND;
-    std::copy(
-        state.sender_coords.begin(),
-        state.sender_coords.end(),
-        args.begin() + wire::sender_coords_offset(layout.rotating_span));
+    const bool receiver = receivers_.contains(core) && (!sender || rotating());
+    if (runtime.sender_coordinates != wire::OMITTED) {
+        const auto& coordinates = metadata.coordinates.encoding == wire::SenderCoordinateEncoding::ExplicitPairs
+                                      ? state.sender_coords
+                                      : state.sender_ranges;
+        std::copy(coordinates.begin(), coordinates.end(), args.begin() + runtime.sender_coordinates);
+    }
     if (sender) {
-        args[wire::ACK] = state.acks[phase];
+        if (runtime.ack != wire::OMITTED) {
+            args[runtime.ack] = state.acks[phase];
+        }
         if (const auto* multicast = std::get_if<PreparedMulticast>(&state.transport)) {
-            args[wire::NUM_RECTANGLES] = state.rectangles.size();
+            if (runtime.rectangle_count != wire::OMITTED) {
+                args[runtime.rectangle_count] = state.rectangles.size();
+            }
             const auto& rectangle_args = multicast->receiver_rectangle_args_per_sender[phase];
-            std::copy(
-                rectangle_args.begin(),
-                rectangle_args.end(),
-                args.begin() + wire::rectangles_offset(layout.rotating_span));
+            for (uint32_t rectangle = 0; rectangle < state.rectangles.size(); ++rectangle) {
+                const uint32_t source = rectangle * wire::RECT_WORDS;
+                const uint32_t target = runtime.rectangles + rectangle * runtime.rectangle_stride;
+                if (runtime.rectangle_bounds != wire::OMITTED) {
+                    for (const uint32_t bound : {wire::SX, wire::SY, wire::EX, wire::EY}) {
+                        args[target + runtime.rectangle_bounds + bound] = rectangle_args[source + bound];
+                    }
+                }
+                if (runtime.rectangle_remote != wire::OMITTED) {
+                    args[target + runtime.rectangle_remote] = rectangle_args[source + wire::REMOTE];
+                }
+                if (runtime.rectangle_mode != wire::OMITTED) {
+                    args[target + runtime.rectangle_mode] = rectangle_args[source + wire::RECT_SENDER_MCAST_MODE];
+                }
+            }
         }
     }
     const auto* chain = std::get_if<PreparedChain>(&state.transport);
@@ -267,25 +359,31 @@ std::vector<uint32_t> McastFamily::Group::runtime_args(
         TT_FATAL(
             it != chain->order.end(), "McastFamily::runtime_args: participating core is missing from chain topology");
         const auto& node = chain->nodes[it - chain->order.begin()];
-        const auto base = wire::chain_offset(layout.rotating_span, layout.rectangle_capacity);
+        const auto base = runtime.chain_neighbors;
         args[base + wire::PREDECESSOR_X] = node.predecessor_x;
         args[base + wire::PREDECESSOR_Y] = node.predecessor_y;
         args[base + wire::SUCCESSOR_X] = node.successor_x;
         args[base + wire::SUCCESSOR_Y] = node.successor_y;
         args[base + wire::INCLUDES_SENDER] = node.includes_sender;
     }
-    const bool receiver = receivers_.contains(core) && (!sender || rotating());
-    detail::write_role_args(
-        args,
-        wire::roles_offset(layout.rotating_span, layout.rectangle_capacity, wire::transfer_mode(layout.flags)),
-        sender,
-        receiver,
-        phase);
+    if (runtime.roles != wire::OMITTED) {
+        args[runtime.roles] = (sender ? wire::CAN_SEND : 0u) | (receiver ? wire::CAN_RECEIVE : 0u);
+    }
+    if (runtime.sender_phase != wire::OMITTED) {
+        args[runtime.sender_phase] = phase;
+    }
     return args;
 }
 
 McastFamily::McastFamily(tt::tt_metal::IDevice* device, const McastConfig& cfg) : device_(device), cfg_(cfg) {
     TT_FATAL(device_ != nullptr, "McastFamily: device must not be null");
+}
+
+McastFamily::McastFamily(
+    tt::tt_metal::IDevice* device, const McastConfig& cfg, std::optional<CoreRangeSet> handshake_cores) :
+    McastFamily(device, cfg) {
+    TT_FATAL(cfg.handshake || !handshake_cores, "Mcast: handshake_cores must be null when handshaking is disabled");
+    handshake_cores_ = std::move(handshake_cores);
 }
 
 void McastFamily::add_group(
@@ -347,6 +445,13 @@ void McastFamily::prepare_arguments_() const {
         has_irregular_receiver_set && cfg_.irregular_receiver_set_mode == TransferMode::ChainUnicast
             ? TransferMode::ChainUnicast
             : TransferMode::Multicast;
+    if (handshake_cores_) {
+        TT_FATAL(
+            handshake_cores_->subtract(receivers_).empty(), "Mcast: handshake_cores must be a subset of receivers");
+        TT_FATAL(
+            transfer_mode != TransferMode::ChainUnicast || receivers_.subtract(*handshake_cores_).empty(),
+            "Mcast: chain forwarding requires all receivers in handshake_cores");
+    }
     const bool rotating = groups_.front().rotating();
     layout_.rotating_span = rotating ? groups_.front().num_senders() : 0;
     layout_.flags = detail::mcast_flags(cfg_);
@@ -354,7 +459,7 @@ void McastFamily::prepare_arguments_() const {
     std::optional<SenderMcastMode> first_sender_mcast_mode;
     bool uniform_ack = true, uniform_remote = true, uniform_sender_mcast_mode = true;
     for (auto& group : groups_) {
-        group.prepare_(device_, cfg_, transfer_mode);
+        group.prepare_(device_, cfg_, transfer_mode, handshake_cores_ ? &*handshake_cores_ : nullptr);
         layout_.has_remote_receivers |= group.has_remote_receivers();
         const auto& state = group.prepared_state_();
         // Compare every sender turn across all groups; first_ack/first_remote persist between groups.
@@ -387,7 +492,7 @@ void McastFamily::prepare_arguments_() const {
     layout_.flags |= uint32_t(transfer_mode) << wire::TRANSFER_MODE_SHIFT;
     layout_.ack_count = uniform_ack ? *first_ack : ACK_EQUALS_FANOUT;
     layout_.uniform_remote_count = uniform_remote ? *first_remote : 0u;
-    layout_.uniform_loopback_count = uniform_remote ? *first_remote + 1u : 0u;
+    layout_.remote_count_known = uniform_remote;
     // A concrete CT mode is a per-rectangle specialization, never a whole-group inference.
     layout_.sender_mcast_mode =
         uniform_sender_mcast_mode && first_sender_mcast_mode ? *first_sender_mcast_mode : SenderMcastMode::Unknown;
@@ -408,6 +513,15 @@ void McastFamily::prepare_arguments_() const {
     }
     prepared_arch_ = device_->arch();
     prepared_device_grid_ = device_->compute_with_storage_grid_size();
+    generic_metadata_ = {.family = layout_};
+    if (transfer_mode == TransferMode::Multicast) {
+        const auto candidate = groups_.front().prepared_state_().coordinate_metadata;
+        if (std::all_of(groups_.begin(), groups_.end(), [&](const Group& group) {
+                return same_encoding(candidate, group.prepared_state_().coordinate_metadata);
+            })) {
+            generic_metadata_.coordinates = candidate;
+        }
+    }
     arguments_prepared_ = true;
 }
 
@@ -422,40 +536,71 @@ const McastFamily::Group* McastFamily::group_for_core_(const CoreCoord& core) co
     }
     return nullptr;
 }
-std::vector<uint32_t> McastFamily::compile_time_args_(const std::array<uint32_t, 3>& ids) const {
-    const auto& layout = layout_;
-    const auto flags = layout.flags;
-    std::vector<uint32_t> args(wire::compile_time_words(wire::transfer_mode(flags)));
-    args[wire::TAG] = wire::FAMILY;
-    args[wire::HAS_RECEIVERS] = layout.has_remote_receivers;
-    args[wire::DATA_READY] = ids[0];
-    args[wire::CONSUMER_READY] = ids[1];
-    args[wire::ACK_COUNT] = layout.ack_count;
-    args[wire::FLAGS] = flags;
-    args[wire::ROTATING_SPAN] = layout.rotating_span;
-    args[wire::SENDER_MCAST_MODE] = uint32_t(layout.sender_mcast_mode);
-    args[wire::REMOTE_COUNT] = layout.uniform_remote_count;
-    args[wire::LOOPBACK_COUNT] = layout.uniform_loopback_count;
-    args[wire::RECTANGLE_CAPACITY] = layout.rectangle_capacity;
-    if (wire::transfer_mode(flags) == TransferMode::ChainUnicast) {
-        args[wire::SIGNAL_SOURCE] = ids[2];
+wire::ArgumentMetadata McastFamily::argument_metadata_(const CoreRangeSet* placement) const {
+    require_arguments_prepared_();
+    // Empty descriptor placements still compile their source, including direct
+    // pipe construction. No roles can be inferred; retain the generic metadata.
+    if (!placement || placement->empty() || wire::transfer_mode(layout_.flags) == TransferMode::ChainUnicast) {
+        return generic_metadata_;
+    }
+    wire::ArgumentMetadata metadata{.family = layout_};
+    metadata.kernel.capabilities = 0;
+    std::optional<uint32_t> first_roles;
+    bool uniform_roles = true;
+    std::optional<wire::SenderCoordinateMetadata> encoding;
+    bool compatible_coordinates = true;
+    for (const auto& core : tt::tt_metal::corerange_to_cores(*placement)) {
+        uint32_t roles = 0;
+        if (const auto* group = group_for_core_(core)) {
+            const bool sends = group->sender_phase_(core) != wire::NO_SENDER_ROUND;
+            const bool receives = group->receivers_.contains(core) && (!sends || group->rotating());
+            roles = (sends ? wire::CAN_SEND : 0u) | (receives ? wire::CAN_RECEIVE : 0u);
+            // Coordinate accessors are valid on every participating core when
+            // this kernel carries coordinates, including its sender-only cores.
+            if (compatible_coordinates) {
+                const auto candidate = group->prepared_state_().coordinate_metadata;
+                compatible_coordinates = candidate.encoding != wire::SenderCoordinateEncoding::ExplicitPairs &&
+                                         (!encoding || same_encoding(*encoding, candidate));
+                encoding = candidate;
+            }
+        }
+        if (!first_roles) {
+            first_roles = roles;
+        } else {
+            uniform_roles &= *first_roles == roles;
+        }
+        metadata.kernel.capabilities |= roles;
+    }
+    metadata.kernel.roles = uniform_roles ? *first_roles : wire::DYNAMIC_ROLES;
+    if (compatible_coordinates && encoding) {
+        metadata.coordinates = *encoding;
+    }
+    return metadata;
+}
+
+std::vector<uint32_t> McastFamily::compile_time_args_(
+    const std::array<uint32_t, 3>& ids, const wire::ArgumentMetadata& metadata) const {
+    const wire::CompileTimeLayout layout(wire::compile_time_control(metadata));
+    std::vector<uint32_t> args(layout.words);
+    wire::encode_compile_time_metadata(args, metadata);
+    for (const auto role : {wire::DATA_READY, wire::CONSUMER_READY, wire::SIGNAL_SOURCE}) {
+        if (const auto offset = layout.semaphore(role); offset != wire::OMITTED) {
+            args[offset] = ids[role];
+        }
     }
     return args;
 }
 
-std::vector<uint32_t> McastFamily::runtime_args_(const CoreCoord& core) const {
+std::vector<uint32_t> McastFamily::runtime_args_(const CoreCoord& core, const wire::ArgumentMetadata& metadata) const {
     require_arguments_prepared_();
     if (const auto* group = group_for_core_(core)) {
-        return group->runtime_args(core, layout_);
+        return group->runtime_args(core, metadata);
     }
-    std::vector<uint32_t> args(
-        wire::runtime_words(layout_.rotating_span, layout_.rectangle_capacity, wire::transfer_mode(layout_.flags)), 0u);
-    detail::write_role_args(
-        args,
-        wire::roles_offset(layout_.rotating_span, layout_.rectangle_capacity, wire::transfer_mode(layout_.flags)),
-        false,
-        false,
-        wire::NO_SENDER_ROUND);
+    const wire::RuntimeLayout runtime(metadata);
+    std::vector<uint32_t> args(runtime.words, 0u);
+    if (runtime.sender_phase != wire::OMITTED) {
+        args[runtime.sender_phase] = wire::NO_SENDER_ROUND;
+    }
     return args;
 }
 const CoreRangeSet& McastFamily::participating_cores() const {

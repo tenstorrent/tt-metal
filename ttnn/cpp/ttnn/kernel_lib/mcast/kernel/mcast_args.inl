@@ -14,21 +14,22 @@
 namespace dataflow_kernel_lib::detail {
 
 template <
-    mcast_wire::FamilyMetadata METADATA,
+    mcast_wire::ArgumentMetadata METADATA,
     typename Runtime,
     typename DataReadyBinding,
     typename ConsumerReadyBinding,
     typename SignalSourceBinding>
 bool McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding>::should_send(
     uint32_t round) const {
-    return can_send() &&
-           sender_index(round) == Runtime::read(
-                                      mcast_wire::roles_offset(rotating_span, rectangle_capacity, transfer_mode) +
-                                      mcast_wire::SENDER_ROUND);
+    if constexpr (!sender_available || !rotating) {
+        return can_send();
+    } else {
+        return can_send() && sender_index(round) == Runtime::read(runtime_layout.sender_phase);
+    }
 }
 
 template <
-    mcast_wire::FamilyMetadata METADATA,
+    mcast_wire::ArgumentMetadata METADATA,
     typename Runtime,
     typename DataReadyBinding,
     typename ConsumerReadyBinding,
@@ -37,17 +38,22 @@ typename McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyB
     SenderPipeType
     McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding>::sender(
         const Noc& noc) const {
-    ASSERT(can_send());
-    static_assert(sender_noc == noc_index, "Host multicast NoC does not match sending kernel NoC");
-    if constexpr (transfer_mode == TransferMode::Multicast) {
-        return SenderPipeType(noc, sender_runtime_arguments());
+    static_assert(sender_available, "A sender pipe is unavailable on this placement");
+    if constexpr (!sender_available) {
+        return {};
     } else {
-        return SenderPipeType(noc, chain_runtime_arguments());
+        ASSERT(can_send());
+        static_assert(sender_noc == noc_index, "Host multicast NoC does not match sending kernel NoC");
+        if constexpr (transfer_mode == TransferMode::Multicast) {
+            return SenderPipeType(noc, sender_runtime_arguments());
+        } else {
+            return SenderPipeType(noc, chain_runtime_arguments());
+        }
     }
 }
 
 template <
-    mcast_wire::FamilyMetadata METADATA,
+    mcast_wire::ArgumentMetadata METADATA,
     typename Runtime,
     typename DataReadyBinding,
     typename ConsumerReadyBinding,
@@ -57,14 +63,18 @@ std::optional<
         SenderPipeType>
 McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding>::optional_sender(
     const Noc& noc) const {
-    if (!can_send()) {
+    if constexpr (!sender_available) {
         return std::nullopt;
+    } else {
+        if (!can_send()) {
+            return std::nullopt;
+        }
+        return sender(noc);
     }
-    return sender(noc);
 }
 
 template <
-    mcast_wire::FamilyMetadata METADATA,
+    mcast_wire::ArgumentMetadata METADATA,
     typename Runtime,
     typename DataReadyBinding,
     typename ConsumerReadyBinding,
@@ -73,20 +83,22 @@ typename McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyB
     ReceiverPipeType
     McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding>::receiver(
         const Noc& noc) const {
-    ASSERT(can_receive());
-    if constexpr (transfer_mode != TransferMode::Multicast) {
-        // Relays issue payload writes, so they need the family NoC like a sender does.
-        static_assert(sender_noc == noc_index, "Host family NoC does not match forwarding receiver kernel NoC");
-    }
-    if constexpr (transfer_mode == TransferMode::ChainUnicast) {
-        return ReceiverPipeType(noc, chain_runtime_arguments());
+    static_assert(receiver_available, "A receiver pipe is unavailable on this placement");
+    if constexpr (!receiver_available) {
+        return {};
     } else {
-        return ReceiverPipeType(noc, Runtime::coordinates(mcast_wire::sender_coords_offset(rotating_span)));
+        ASSERT(can_receive());
+        if constexpr (transfer_mode == TransferMode::ChainUnicast) {
+            static_assert(sender_noc == noc_index, "Host family NoC does not match forwarding receiver kernel NoC");
+            return ReceiverPipeType(noc, chain_runtime_arguments());
+        } else {
+            return ReceiverPipeType(noc, Runtime::coordinates(runtime_layout.sender_coordinates));
+        }
     }
 }
 
 template <
-    mcast_wire::FamilyMetadata METADATA,
+    mcast_wire::ArgumentMetadata METADATA,
     typename Runtime,
     typename DataReadyBinding,
     typename ConsumerReadyBinding,
@@ -96,14 +108,25 @@ std::optional<
         ReceiverPipeType>
 McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding>::optional_receiver(
     const Noc& noc) const {
-    if (!can_receive()) {
+    if constexpr (!receiver_available) {
         return std::nullopt;
+    } else {
+        if (!can_receive()) {
+            return std::nullopt;
+        }
+        if constexpr (transfer_mode == TransferMode::ChainUnicast) {
+            static_assert(sender_noc == noc_index, "Host family NoC does not match forwarding receiver kernel NoC");
+            return std::optional<ReceiverPipeType>(std::in_place, noc, chain_runtime_arguments());
+        } else {
+            // Construct the owned coordinate table in the optional's final storage.
+            return std::optional<ReceiverPipeType>(
+                std::in_place, noc, Runtime::coordinates(runtime_layout.sender_coordinates));
+        }
     }
-    return receiver(noc);
 }
 
 template <
-    mcast_wire::FamilyMetadata METADATA,
+    mcast_wire::ArgumentMetadata METADATA,
     typename Runtime,
     typename DataReadyBinding,
     typename ConsumerReadyBinding,
@@ -119,28 +142,35 @@ McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBinding, S
     // Every group has destinations, so capacity one guarantees exactly one record.
     constexpr bool single_rectangle = rectangle_capacity == 1;
     SenderRuntimeArgumentsFor<rectangle_capacity ? rectangle_capacity : 1> prepared;
-    prepared.num_rectangles = single_rectangle ? 1u : Runtime::read(mcast_wire::NUM_RECTANGLES);
-    prepared.ack_count = ack_count != ACK_EQUALS_FANOUT ? ack_count : Runtime::read(mcast_wire::ACK);
+    prepared.num_rectangles = single_rectangle ? 1u : Runtime::read(runtime_layout.rectangle_count);
+    if constexpr (pre_handshake) {
+        prepared.ack_count = ack_count != ACK_EQUALS_FANOUT ? ack_count : Runtime::read(runtime_layout.ack);
+    }
     ASSERT(prepared.num_rectangles >= 1 && prepared.num_rectangles <= rectangle_capacity);
     for (uint32_t i = 0; i < prepared.num_rectangles; ++i) {
-        const uint32_t base = mcast_wire::rectangles_offset(rotating_span) + i * mcast_wire::RECT_WORDS;
-        prepared.rectangles[i] = {
-            {Runtime::read(base + mcast_wire::SX),
-             Runtime::read(base + mcast_wire::SY),
-             Runtime::read(base + mcast_wire::EX),
-             Runtime::read(base + mcast_wire::EY)},
-            // At capacity one, positive uniform group counts are also this rectangle's counts.
-            single_rectangle && remote_count > 0 ? remote_count : Runtime::read(base + mcast_wire::REMOTE),
-            single_rectangle && loopback_count > 0 ? loopback_count : Runtime::read(base + mcast_wire::LOOPBACK),
+        const uint32_t base = runtime_layout.rectangles + i * runtime_layout.rectangle_stride;
+        auto& rectangle = prepared.rectangles[i];
+        if constexpr (runtime_layout.rectangle_bounds != mcast_wire::OMITTED) {
+            rectangle.bounds = {
+                Runtime::read(base + runtime_layout.rectangle_bounds + mcast_wire::SX),
+                Runtime::read(base + runtime_layout.rectangle_bounds + mcast_wire::SY),
+                Runtime::read(base + runtime_layout.rectangle_bounds + mcast_wire::EX),
+                Runtime::read(base + runtime_layout.rectangle_bounds + mcast_wire::EY)};
+        }
+        rectangle.remote_count = single_rectangle && METADATA.family.remote_count_known
+                                     ? remote_count
+                                     : Runtime::read(base + runtime_layout.rectangle_remote);
+        rectangle.loopback_count = rectangle.remote_count + 1;
+        rectangle.sender_mcast_mode =
             mcast_wire::concrete(sender_mcast_mode)
                 ? sender_mcast_mode
-                : static_cast<SenderMcastMode>(Runtime::read(base + mcast_wire::RECT_SENDER_MCAST_MODE))};
+                : static_cast<SenderMcastMode>(Runtime::read(base + runtime_layout.rectangle_mode));
     }
     return prepared;
 }
 
 template <
-    mcast_wire::FamilyMetadata METADATA,
+    mcast_wire::ArgumentMetadata METADATA,
     typename Runtime,
     typename DataReadyBinding,
     typename ConsumerReadyBinding,
@@ -148,7 +178,7 @@ template <
 ChainRuntimeArguments
 McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBinding, SignalSourceBinding>::
     chain_runtime_arguments() const {
-    constexpr uint32_t base = mcast_wire::chain_offset(rotating_span, rectangle_capacity);
+    constexpr uint32_t base = runtime_layout.chain_neighbors;
     return {
         Runtime::read(base + mcast_wire::PREDECESSOR_X),
         Runtime::read(base + mcast_wire::PREDECESSOR_Y),

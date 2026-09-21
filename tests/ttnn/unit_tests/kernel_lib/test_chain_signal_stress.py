@@ -50,7 +50,7 @@ def _stress(device, noc, counter, events, guards, includes_sender, reverse_chann
     program = ttnn.ProgramDescriptor(cbs=cbs)
     family.attach(program, "chain_mcast", [kernel])
     offset = dict(kernel.named_compile_time_args)["chain_mcast_ct_offset"]
-    assert len(kernel.compile_time_args[offset:]) == 12 and kernel.compile_time_args[offset + 11] == 2
+    assert len(kernel.compile_time_args[offset:]) == 4 and kernel.compile_time_args[offset + 3] == 2
     if reverse:
         reverse.attach(program, "reverse_mcast", [kernel])
     else:

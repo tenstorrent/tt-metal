@@ -13,7 +13,7 @@
 #include <variant>
 #include <vector>
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_compile_time_args.hpp"
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
@@ -100,6 +100,11 @@ struct McastConfig {
     dataflow_kernel_lib::TransferMode irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::Multicast;
 };
 
+struct McastArgumentOffsets {
+    uint32_t compile_time;
+    uint32_t runtime;
+};
+
 void attach_absent(tt::tt_metal::KernelDescriptor& kernel, std::string_view prefix);
 void attach_absent(
     tt::tt_metal::experimental::ProgramSpec&,
@@ -173,26 +178,41 @@ public:
     template <typename Args>
     void append_compile_time_args_to(Args& destination) const {
         require_program_bound_();
-        detail::append_args_to(destination, compile_time_args_(program_semaphore_ids_));
+        detail::append_args_to(destination, compile_time_args_(program_semaphore_ids_, argument_metadata_()));
     }
 
     // Direct Program construction, step 3: append this core's multicast runtime arguments to existing arguments.
     template <typename Args>
     void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
         require_program_bound_();
-        detail::append_args_to(destination, runtime_args_(core));
+        detail::append_args_to(destination, runtime_args_(core, argument_metadata_()));
     }
+
+    // Placement-specific CT/RT must be emitted together. Prefixes are padded per
+    // kernel; all validation and emission is staged before either destination changes.
+    McastArgumentOffsets append_kernel_args_to(
+        std::vector<uint32_t>& compile_time_args,
+        tt::tt_metal::KernelDescriptor::RuntimeArgs& runtime_args,
+        const tt::tt_metal::CoreRangeSet& placement) const;
 
     const tt::tt_metal::CoreRangeSet& participating_cores() const;
     tt::tt_metal::CoreRangeSet sender_only_cores() const;
 
 private:
+    friend class Mcast;
     friend class Mcast1D;
     friend class Mcast2D;
+    McastFamily(
+        tt::tt_metal::IDevice* device,
+        const McastConfig& cfg,
+        std::optional<tt::tt_metal::CoreRangeSet> handshake_cores);
     void prepare_topology_() const;
     // Idempotent after success. Failure preserves collected groups and their topology.
     void prepare_arguments_() const;
-    std::vector<uint32_t> runtime_args_(const tt::tt_metal::CoreCoord& core) const;
+    dataflow_kernel_lib::mcast_wire::ArgumentMetadata argument_metadata_(
+        const tt::tt_metal::CoreRangeSet* placement = nullptr) const;
+    std::vector<uint32_t> runtime_args_(
+        const tt::tt_metal::CoreCoord& core, const dataflow_kernel_lib::mcast_wire::ArgumentMetadata& metadata) const;
 
     struct Group {
         Group(
@@ -205,7 +225,8 @@ private:
         const tt::tt_metal::CoreRangeSet& participating_cores() const { return participating_; }
 
         std::vector<uint32_t> runtime_args(
-            const tt::tt_metal::CoreCoord& core, const dataflow_kernel_lib::mcast_wire::FamilyMetadata& layout) const;
+            const tt::tt_metal::CoreCoord& core,
+            const dataflow_kernel_lib::mcast_wire::ArgumentMetadata& metadata) const;
 
         bool rotating() const { return senders_.size() > 1; }
         uint32_t num_senders() const;
@@ -227,14 +248,18 @@ private:
         struct PreparedState {
             std::vector<PreparedRectangle> rectangles;
             std::vector<uint32_t> sender_coords;
+            dataflow_kernel_lib::mcast_wire::SenderCoordinateMetadata coordinate_metadata;
+            std::vector<uint32_t> sender_ranges;
             std::vector<uint32_t> acks;
             std::variant<PreparedMulticast, PreparedChain> transport = PreparedMulticast{};
         };
         void prepare_(
             tt::tt_metal::IDevice* device,
             const McastConfig& cfg,
-            dataflow_kernel_lib::TransferMode transfer_mode) const;
-        PreparedMulticast prepare_multicast_(const McastConfig& cfg, PreparedState& state) const;
+            dataflow_kernel_lib::TransferMode transfer_mode,
+            const tt::tt_metal::CoreRangeSet* handshake_cores) const;
+        PreparedMulticast prepare_multicast_(
+            const McastConfig& cfg, PreparedState& state, const tt::tt_metal::CoreRangeSet* handshake_cores) const;
         PreparedChain prepare_chain_(tt::tt_metal::IDevice* device, PreparedState& state) const;
         const PreparedState& prepared_state_() const;
         uint32_t sender_phase_(const tt::tt_metal::CoreCoord& core) const;
@@ -253,7 +278,8 @@ private:
     void validate_semaphores_present_and_zeroed_(
         std::span<const tt::tt_metal::SemaphoreDescriptor> existing, const std::array<uint32_t, 3>& ids) const;
     uint32_t required_semaphores_() const;
-    std::vector<uint32_t> compile_time_args_(const std::array<uint32_t, 3>& ids) const;
+    std::vector<uint32_t> compile_time_args_(
+        const std::array<uint32_t, 3>& ids, const dataflow_kernel_lib::mcast_wire::ArgumentMetadata& metadata) const;
     tt::tt_metal::IDevice* device_;
     mutable bool arguments_prepared_ = false;
     mutable bool topology_current_ = false;
@@ -265,9 +291,13 @@ private:
     const Group* group_for_core_(const tt::tt_metal::CoreCoord& core) const;
     std::vector<Group> groups_;
     McastConfig cfg_;
+    // Only the unified wrapper supplies this owned, family-wide subset. Legacy
+    // family/group scalar overrides retain their existing semantics.
+    std::optional<tt::tt_metal::CoreRangeSet> handshake_cores_;
     mutable tt::tt_metal::CoreRangeSet receivers_;
     mutable tt::tt_metal::CoreRangeSet participating_;
     mutable dataflow_kernel_lib::mcast_wire::FamilyMetadata layout_;
+    mutable dataflow_kernel_lib::mcast_wire::ArgumentMetadata generic_metadata_;
 };
 
 // Mcast1D-specific types.
@@ -349,6 +379,13 @@ public:
         family_->append_runtime_args_to(destination, core);
     }
 
+    McastArgumentOffsets append_kernel_args_to(
+        std::vector<uint32_t>& compile_time_args,
+        tt::tt_metal::KernelDescriptor::RuntimeArgs& runtime_args,
+        const tt::tt_metal::CoreRangeSet& placement) const {
+        return family_->append_kernel_args_to(compile_time_args, runtime_args, placement);
+    }
+
     const tt::tt_metal::CoreRangeSet& participating_cores() const;
     tt::tt_metal::CoreRangeSet sender_only_cores() const;
 
@@ -426,6 +463,13 @@ public:
     template <typename Args>
     void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
         family_->append_runtime_args_to(destination, core);
+    }
+
+    McastArgumentOffsets append_kernel_args_to(
+        std::vector<uint32_t>& compile_time_args,
+        tt::tt_metal::KernelDescriptor::RuntimeArgs& runtime_args,
+        const tt::tt_metal::CoreRangeSet& placement) const {
+        return family_->append_kernel_args_to(compile_time_args, runtime_args, placement);
     }
 
 private:

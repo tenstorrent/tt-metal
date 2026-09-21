@@ -64,11 +64,8 @@ std::vector<size_t> validate_targets(
         TT_FATAL(std::isalnum(ch) || ch == '_', "Multicast prefix must be a C++ identifier");
     }
     std::vector<std::string> reserved;
-#define ADD_RESERVED(P, field) reserved.push_back(spec_name(P, #field));
-    TT_MCAST_SPEC_METADATA(ADD_RESERVED, prefix)
-#undef ADD_RESERVED
     for (auto field :
-         {"tag",
+         {"ct_base",
           "rt_base",
           "data_ready",
           "consumer_ready",
@@ -155,15 +152,20 @@ uint32_t uniform_varargs(const m2::KernelSpec& kernel, const CoreRangeSet& nodes
 void add_metadata(
     m2::KernelSpec& kernel,
     std::string_view prefix,
-    const wire::FamilyMetadata& metadata,
+    const wire::ArgumentMetadata& metadata,
     bool present,
     uint32_t base) {
-    kernel.compile_time_args.emplace(spec_name(prefix, "tag"), present ? wire::FAMILY : wire::ABSENT);
+    const uint32_t control = present ? wire::compile_time_control(metadata) : wire::ABSENT;
+    const wire::CompileTimeLayout layout(control, false);
+    auto& ct = kernel.advanced_options.compile_time_varargs;
+    TT_FATAL(ct.size() <= std::numeric_limits<uint32_t>::max() - layout.words, "Multicast CT varargs overflow");
+    kernel.compile_time_args.emplace(spec_name(prefix, "ct_base"), static_cast<uint32_t>(ct.size()));
     kernel.compile_time_args.emplace(spec_name(prefix, "rt_base"), base);
-#define ADD_METADATA(P, field) \
-    kernel.compile_time_args.emplace(spec_name(P, #field), static_cast<uint32_t>(metadata.field));
-    TT_MCAST_SPEC_METADATA(ADD_METADATA, prefix)
-#undef ADD_METADATA
+    std::vector<uint32_t> words(layout.words, wire::ABSENT);
+    if (present) {
+        wire::encode_compile_time_metadata(words, metadata, false);
+    }
+    ct.insert(ct.end(), words.begin(), words.end());
 }
 
 constexpr std::array<std::string_view, 3> resource_roles{"data_ready", "consumer_ready", "signal_source"};
@@ -215,11 +217,11 @@ void McastFamily::attach(
     }
     const bool chain = wire::transfer_mode(layout_.flags) == dataflow_kernel_lib::TransferMode::ChainUnicast;
     const auto grid = prepared_device_grid_;
-    const uint32_t words =
-        wire::runtime_words(layout_.rotating_span, layout_.rectangle_capacity, wire::transfer_mode(layout_.flags));
     for (const auto index : indices) {
         auto& kernel = staged.kernels[index];
         const auto nodes = placement(staged, kernel.unique_id);
+        const auto metadata = argument_metadata_(&nodes);
+        const uint32_t words = wire::RuntimeLayout(metadata).words;
         const auto base = uniform_varargs(kernel, nodes);
         TT_FATAL(base <= std::numeric_limits<uint32_t>::max() - words, "Multicast runtime vararg count overflows");
         auto args = std::find_if(
@@ -248,12 +250,12 @@ void McastFamily::attach(
             TT_FATAL(entry != values.end() || base == 0, "Missing caller runtime prefix for multicast attachment");
             auto& args_for_node = values[node];
             TT_FATAL(args_for_node.size() == base, "Multicast runtime varargs must match the declared prefix count");
-            const auto payload = runtime_args_(node);
+            const auto payload = runtime_args_(node, metadata);
             args_for_node.insert(args_for_node.end(), payload.begin(), payload.end());
         }
         kernel.advanced_options.num_runtime_varargs = base + words;
         kernel.advanced_options.num_runtime_varargs_per_node.clear();
-        add_metadata(kernel, prefix, layout_, true, base);
+        add_metadata(kernel, prefix, metadata, true, base);
         for (uint32_t role = 0; role < resource_roles.size(); ++role) {
             const auto accessor = spec_name(prefix, resource_roles[role]);
             if (role < count) {

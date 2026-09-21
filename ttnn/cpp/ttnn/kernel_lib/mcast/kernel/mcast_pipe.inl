@@ -368,13 +368,14 @@ template <
     DataReadySignal DATA_READY_SIGNAL,
     uint32_t NUM_SENDERS,
     typename SenderCoordinates>
+template <typename CoordinateSource>
 FORCE_INLINE ReceiverPipeImpl<
     DataReadyBinding,
     PRE_HANDSHAKE,
     ConsumerReadyBinding,
     DATA_READY_SIGNAL,
     NUM_SENDERS,
-    SenderCoordinates>::ReceiverPipeImpl(const Noc& noc, SenderCoordinates sender_coords) :
+    SenderCoordinates>::ReceiverPipeImpl(const Noc& noc, CoordinateSource sender_coords) :
     noc_(noc),
     data_ready_(detail::make_mcast_semaphore<DataReadyBinding{}>()),
     consumer_ready_(detail::make_mcast_semaphore<ConsumerReadyBinding{}>()),

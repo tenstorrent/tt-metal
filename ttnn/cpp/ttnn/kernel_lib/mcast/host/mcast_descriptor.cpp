@@ -59,7 +59,6 @@ void McastFamily::attach(
             semaphores.push_back({.id = ids[role], .core_ranges = participating_, .initial_value = 0});
         }
     }
-    const auto ct = compile_time_args_(ids);
     const bool chain = wire::transfer_mode(layout_.flags) == TransferMode::ChainUnicast;
     std::set<const KernelDescriptor*> selected;
     std::vector<KernelDescriptor> kernels;
@@ -68,6 +67,8 @@ void McastFamily::attach(
         TT_FATAL(selected.insert(&target.get()).second, "Duplicate multicast attachment kernel");
         auto kernel = target.get();
         const auto noc = kernel_noc(kernel, prepared_arch_);
+        const auto metadata = argument_metadata_(&kernel.core_ranges);
+        const auto ct = compile_time_args_(ids, metadata);
         size_t rt_offset = 0;
         std::set<CoreCoord> runtime_cores;
         for (const auto& [core, args] : kernel.runtime_args) {
@@ -106,7 +107,7 @@ void McastFamily::attach(
                 kernel.runtime_args.emplace_back(core, std::vector<uint32_t>{});
                 entry = std::prev(kernel.runtime_args.end());
             }
-            const auto payload = runtime_args_(core);
+            const auto payload = runtime_args_(core, metadata);
             TT_FATAL(
                 rt_offset <= std::numeric_limits<uint32_t>::max() - payload.size(),
                 "Multicast runtime argument positions overflow");
@@ -121,6 +122,48 @@ void McastFamily::attach(
     for (size_t i = 0; i < targets.size(); ++i) {
         targets[i].get() = std::move(kernels[i]);
     }
+}
+
+McastArgumentOffsets McastFamily::append_kernel_args_to(
+    std::vector<uint32_t>& compile_time_args,
+    KernelDescriptor::RuntimeArgs& runtime_args,
+    const CoreRangeSet& placement) const {
+    require_program_bound_();
+    TT_FATAL(!placement.empty(), "Direct multicast kernel placement must not be empty");
+    const auto metadata = argument_metadata_(&placement);
+    const auto ct = compile_time_args_(program_semaphore_ids_, metadata);
+    TT_FATAL(
+        compile_time_args.size() <= std::numeric_limits<uint32_t>::max() - ct.size(), "Multicast CT offset overflow");
+    size_t rt_offset = 0;
+    std::set<CoreCoord> existing;
+    for (const auto& [core, args] : runtime_args) {
+        TT_FATAL(placement.contains(core), "Multicast runtime arguments target an unplaced core");
+        TT_FATAL(existing.insert(core).second, "Duplicate per-core multicast runtime arguments");
+        rt_offset = std::max(rt_offset, args.size());
+    }
+    TT_FATAL(
+        rt_offset <= std::numeric_limits<uint32_t>::max() - wire::RuntimeLayout(metadata).words,
+        "Multicast RT offset overflow");
+    const McastArgumentOffsets offsets{uint32_t(compile_time_args.size()), uint32_t(rt_offset)};
+    auto staged_ct = compile_time_args;
+    auto staged_rt = runtime_args;
+    for (const auto& core : corerange_to_cores(placement)) {
+        auto entry = std::find_if(
+            staged_rt.begin(), staged_rt.end(), [&](const KernelDescriptor::RuntimeArgs::value_type& item) {
+                return item.first == core;
+            });
+        if (entry == staged_rt.end()) {
+            staged_rt.emplace_back(core, std::vector<uint32_t>{});
+            entry = std::prev(staged_rt.end());
+        }
+        entry->second.resize(rt_offset, 0u);
+        const auto payload = runtime_args_(core, metadata);
+        entry->second.insert(entry->second.end(), payload.begin(), payload.end());
+    }
+    staged_ct.insert(staged_ct.end(), ct.begin(), ct.end());
+    compile_time_args = std::move(staged_ct);
+    runtime_args = std::move(staged_rt);
+    return offsets;
 }
 
 void attach_absent(KernelDescriptor& kernel, std::string_view prefix) {

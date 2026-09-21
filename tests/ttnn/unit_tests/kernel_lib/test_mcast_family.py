@@ -3,7 +3,13 @@
 """Exact family membership, transport selection and protocol ordering."""
 
 import pytest
-from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import run_family_case
+import ttnn
+from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import (
+    attach_for_inspection,
+    core_set,
+    inspect_mcast_ct,
+    run_family_case,
+)
 
 
 @pytest.mark.parametrize("noc", [0, 1])
@@ -203,3 +209,87 @@ def test_policy_backpressure(device, noc, counter):
         adopted=True,
         rounds=12,
     )
+
+
+@pytest.mark.parametrize("noc", [0, 1])
+@pytest.mark.parametrize("column_major", [False, True])
+@pytest.mark.parametrize("count", [61, 64])
+def test_compressed_coordinate_lifetime(device, noc, column_major, count):
+    size = device.compute_with_storage_grid_size()
+    if size.x < 8 or size.y < 8:
+        pytest.skip("requires an 8x8 worker grid")
+    receivers = [(x, y) for y in range(8) for x in range(8)]
+    senders = [(i // 8, i % 8) if column_major else (i % 8, i // 8) for i in range(count)]
+    # Pass through all phases and wrap: the returned optional receiver must own
+    # its expanded table after the temporary decoder/constructor has gone away.
+    run_family_case(device, [(receivers, senders)], noc=noc, counter=True, rounds=count + 3)
+
+
+@pytest.mark.parametrize("noc", [0, 1])
+@pytest.mark.parametrize("counter", [False, True], ids=["flag", "counter"])
+@pytest.mark.parametrize("column_major", [False, True], ids=["rows", "columns"])
+@pytest.mark.parametrize("external_only", [False, True], ids=["mixed-senders", "external-senders"])
+def test_compressed_external_sender_lifetime(device, noc, counter, column_major, external_only):
+    size = device.compute_with_storage_grid_size()
+    if size.x < 9 or size.y < 8:
+        pytest.skip("requires a 9x8 worker grid including a spectator")
+
+    def coord(along, across):
+        return (across, along) if column_major else (along, across)
+
+    # An incomplete final row/column must preserve its exact sender order. In
+    # the mixed case, ACK counts and include/exclude-source mode vary by phase.
+    senders = [coord(i % 8, i // 8) for i in range(31)]
+    receivers = [coord(i, 6 if external_only else 0) for i in range(8)]
+    config = ttnn.McastConfig(noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0)
+    family = ttnn.McastFamily(device, config)
+    family.add_group(core_set(receivers), [ttnn.CoreCoord(*core) for core in senders])
+    _, kernel = attach_for_inspection(family, core_set(receivers + senders), config.noc)
+    metadata = inspect_mcast_ct(kernel)
+    assert metadata["encoding"] != 0
+    assert metadata["span"] == len(senders)
+    assert 2 * (metadata["x_ranges"] + metadata["y_ranges"]) < 2 * len(senders)
+    # Exercise every sender and wrap, with the decoded table owned by the pipe.
+    run_family_case(device, [(receivers, senders)], noc=noc, counter=counter, rounds=len(senders) + 3)
+
+
+def test_group_attention_external_sender_argument_counts(device):
+    size = device.compute_with_storage_grid_size()
+    if size.x * size.y < 32 or size.y >= 32:
+        pytest.skip("requires a multi-column 32-sender grid")
+    # Match group attention's column-major 10-Q-head receiver box, 32 rotating
+    # senders, and full kernel placement (including inactive cores).
+    senders = [(i // size.y, i % size.y) for i in range(32)]
+    receivers = [(i // size.y, i % size.y) for i in range(10)]
+    receiver_box = ttnn.CoreRangeSet([core_set(receivers).bounding_box()])
+    family = ttnn.Mcast2D(
+        device,
+        receiver_box,
+        ttnn.Mcast2DRotatingSenderConfig(
+            sender_grid=core_set(senders), sender_order=ttnn.Mcast2DSenderOrder.ColumnMajor
+        ),
+        ttnn.McastConfig(),
+    )
+    _, kernel = attach_for_inspection(family, core_set([(x, y) for x in range(size.x) for y in range(size.y)]))
+    metadata = inspect_mcast_ct(kernel)
+    assert metadata["encoding"] != 0
+    assert metadata["span"] == 32
+    coordinate_words = 2 * (metadata["x_ranges"] + metadata["y_ranges"])
+    expected_rt = 9 + coordinate_words  # Roles, phase, ACK, bounds, remote count, mode.
+    for x in range(size.x):
+        for y in range(size.y):
+            assert len(kernel.runtime_args[x][y]) == expected_rt
+    assert expected_rt < 73
+    print(f"Group attention Q10 multicast RT: 73 -> {expected_rt} words/core")
+
+
+def test_large_explicit_coordinate_lifetime(device):
+    size = device.compute_with_storage_grid_size()
+    if size.x < 8 or size.y < 8:
+        pytest.skip("requires an 8x8 worker grid")
+    receivers = [(x, y) for y in range(8) for x in range(8)]
+    senders = receivers.copy()
+    # The same 64-core geometry with a non-Cartesian traversal must retain pairs.
+    # This also provides a matched explicit-storage artifact for the range audit.
+    senders[0], senders[1] = senders[1], senders[0]
+    run_family_case(device, [(receivers, senders)], noc=0, counter=True, rounds=67)

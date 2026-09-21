@@ -4,7 +4,12 @@
 
 import pytest
 import ttnn
-from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import attach_for_inspection, core_set
+from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import (
+    attach_for_inspection,
+    core_set,
+    inspect_mcast,
+    inspect_mcast_ct,
+)
 
 
 def inspect(family, device, noc=ttnn.NOC.NOC_0):
@@ -35,8 +40,8 @@ def test_wrapper_keywords(device, kind):
         )
     )
     _, kernel = inspect(helper, device, ttnn.NOC.NOC_1)
-    assert kernel.runtime_args[1][1][1] == 1
-    assert kernel.runtime_args[3][1][1] == 1
+    assert inspect_mcast(kernel, ttnn.CoreCoord(1, 1))["ack"] == 1
+    assert inspect_mcast(kernel, ttnn.CoreCoord(3, 1))["ack"] == 1
 
 
 def test_group_sender_lists(device, expect_error):
@@ -49,12 +54,12 @@ def test_group_sender_lists(device, expect_error):
     ordered = [ttnn.CoreCoord(2, 0), ttnn.CoreCoord(0, 0)]
     family.add_group(receivers, ordered)
     _, kernel = inspect(family, device)
-    assert kernel.compile_time_args[6] == 2
+    assert inspect_mcast_ct(kernel)["span"] == 2
     mapped = [device.worker_core_from_logical_core(c) for c in ordered]
     for phase, core in enumerate(ordered):
-        rt = kernel.runtime_args[core.x][core.y]
-        assert rt[2:6] == [mapped[0].x, mapped[0].y, mapped[1].x, mapped[1].y]
-        assert rt[-1] == phase
+        decoded = inspect_mcast(kernel, core)
+        assert decoded["coordinates"] == [mapped[0].x, mapped[0].y, mapped[1].x, mapped[1].y]
+        assert decoded["phase"] == phase
 
 
 @pytest.mark.parametrize("noc", [ttnn.NOC.NOC_0, ttnn.NOC.NOC_1])

@@ -33,24 +33,13 @@ tt::tt_metal::KernelHandle create_mcast_dataflow_kernel(
     const std::string& source,
     const Placement& placement,
     tt::tt_metal::DataMovementConfig config) {
-    const auto ct_offset = config.compile_args.size();
+    auto ct_offset = config.compile_args.size();
     size_t rt_offset = 0;
     if (family) {
-        for (const auto& [core, args] : runtime_args) {
-            rt_offset = std::max(rt_offset, args.size());
-        }
-        family->append_compile_time_args_to(config.compile_args);
-        for (const auto& core : tt::tt_metal::corerange_to_cores(tt::tt_metal::CoreRangeSet(placement))) {
-            auto entry = std::find_if(
-                runtime_args.begin(), runtime_args.end(), [&](const auto& item) { return item.first == core; });
-            if (entry == runtime_args.end()) {
-                runtime_args.emplace_back(core, std::vector<uint32_t>(rt_offset, 0));
-                entry = std::prev(runtime_args.end());
-            } else {
-                entry->second.resize(rt_offset, 0);
-            }
-            family->append_runtime_args_to(entry->second, core);
-        }
+        const auto offsets =
+            family->append_kernel_args_to(config.compile_args, runtime_args, tt::tt_metal::CoreRangeSet(placement));
+        ct_offset = offsets.compile_time;
+        rt_offset = offsets.runtime;
     } else {
         ttnn::kernel_lib::host::append_absent_mcast_compile_time_args_to(config.compile_args);
     }

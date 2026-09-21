@@ -20,7 +20,7 @@
 #pragma once
 
 // Increment when public API changes require callers to update their code.
-#define MCAST_PIPE_API_VERSION 26
+#define MCAST_PIPE_API_VERSION 27
 
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_semaphore.hpp"
@@ -139,7 +139,8 @@ class ReceiverPipeImpl {
 
 public:
     // The view supplies NUM_SENDERS virtual NoC coordinate pairs. Pointer-backed storage must outlive the pipe.
-    FORCE_INLINE explicit ReceiverPipeImpl(const Noc& noc, SenderCoordinates sender_coords);
+    template <typename CoordinateSource = SenderCoordinates>
+    FORCE_INLINE explicit ReceiverPipeImpl(const Noc& noc, CoordinateSource sender_coords);
 
     // Handle receiver readiness, then wait for data from the sender selected by the absolute work round.
     FORCE_INLINE void receive(uint32_t round = 0);

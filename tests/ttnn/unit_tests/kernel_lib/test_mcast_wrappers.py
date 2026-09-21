@@ -10,6 +10,8 @@ from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import (
     KERNEL_DIR,
     TILE_BYTES,
     core_set,
+    inspect_mcast,
+    inspect_mcast_ct,
     make_cb,
     tile_pattern,
     run_wrapper_case,
@@ -101,7 +103,6 @@ def _run_transfer(
         )
     helper.attach(descriptor, "mcast", kernels[:2])
     if ack_subset is not None:
-        offset = dict(sender.named_compile_time_args)["mcast_ct_offset"]
         passive = ttnn.Mcast2D(
             device,
             core_set(receivers),
@@ -110,7 +111,7 @@ def _run_transfer(
                 noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0,
                 handshake=False,
                 data_ready=signal,
-                sem_ids=[sender.compile_time_args[offset + 2]],
+                sem_ids=[inspect_mcast_ct(sender)["data_ready"]],
             ),
         )
         passive.attach(descriptor, "mcast", kernels[2:])
@@ -272,7 +273,7 @@ def _run_rotating_line(
     )
     pd = ttnn.ProgramDescriptor(cbs=cbs)
     mc.attach(pd, "mcast", [k])
-    assert k.compile_time_args[dict(k.named_compile_time_args)["mcast_ct_offset"] + 6] == span
+    assert inspect_mcast_ct(k)["span"] == span
     pd.kernels = [k]
     output = ttnn.generic_op(io_tensors, pd)
     torch_out = ttnn.to_torch(output).reshape(N * span, 1, 32, 32 * payload_tiles)
@@ -343,17 +344,12 @@ def _run_fixed_line(
     )
     pd = ttnn.ProgramDescriptor(cbs=cbs)
     mc.attach(pd, "mcast", [k])
-    assert (
-        k.compile_time_args[dict(k.named_compile_time_args)["mcast_ct_offset"] :][6] == 0
-    ), "fixed mode has no rotating span"
+    assert inspect_mcast_ct(k)["span"] == 0, "fixed mode has no rotating span"
     if sender_placement == ttnn.Mcast1DSenderPlacement.Diagonal:
         for Y in range(GR):
             expected_sender = ttnn.CoreCoord((starting_sender_index + Y) % GC, Y)
             assert (
-                k.runtime_args[expected_sender.x][expected_sender.y][
-                    dict(k.named_compile_time_args)["mcast_rt_offset"] :
-                ][-2]
-                & 1
+                inspect_mcast(k, expected_sender)["roles"] & 1
             ), f"row {Y}: expected diagonal sender {expected_sender}"
     pd.kernels = [k]
     output = ttnn.generic_op(io_tensors, pd)
