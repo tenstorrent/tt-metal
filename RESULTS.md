@@ -25,13 +25,14 @@ Independently corroborated on g03blx04, which measured 15.2 s for the same 8-for
 
 ## Results
 
-
 | Mode | Clip | Frames | Canvas | Fwd | Padded | Encoder | Keyframe encode | Denoise | VAE decode | Audio decode | Total | s / video s | CLIP | Node |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | t2va | 5 s | 124 | 1344x768 | 8 | 37888 | 0.4 | -- | 9.4 | 3.6 | 1.2 | 14.5 | 2.8 | 37.53 | bh-glx-120-b09u02 |
+| t2va | 10 s | 243 | 1344x768 | 8 | 73472 | 0.4 | -- | 23.1 | 7.3 | 1.3 | 32.1 | 3.2 | 36.94 | bh-glx-120-b09u02 |
 | fl2va | 10 s | 243 | 1344x768 | 8 | 77568 | 2.2 | 1.3 | 30.2 | 7.3 | 1.2 | 42.1 | 4.2 | 37.19 | bh-glx-120-c06u08 |
 | fl2va | 15 s | 362 | 1344x768 | 8 | 113152 | 2.2 | 1.3 | 58.5 | 10.8 | 1.5 | 74.2 | 4.9 | 37.44 | bh-glx-120-c06u08 |
 
+**Not measured:** t2va 15 s, fl2va 5 s, ref2va 5 s, ref2va 10 s, ref2va 15 s.
 
 Timings are seconds of compute in the warm window: each point runs one full warmup generation at
 its shape first, and prepares plus artifact export are excluded. CLIP is prompt alignment,
