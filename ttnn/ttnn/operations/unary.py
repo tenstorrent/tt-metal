@@ -627,10 +627,17 @@ def _golden_function_round(input_tensor_a, decimals=None, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.round, golden_function=_golden_function_round)
 
 
-def _golden_function_selu(input_tensor_a, *args, **kwargs):
+def _golden_function_selu(input_tensor_a, *args, scale=None, alpha=None, **kwargs):
     import torch
 
-    return torch.nn.functional.selu(input_tensor_a)
+    # The generic unary wrapper drops parameters, so forward both operation controls.
+    # ttnn.selu binds scale/alpha as keyword-only arguments; without naming them here they
+    # land in **kwargs and the golden silently returns standard SELU instead.
+    if scale is None and alpha is None:
+        return torch.nn.functional.selu(input_tensor_a)
+    scale = 1.0507009873554804934193349852946 if scale is None else scale
+    alpha = 1.6732632423543772848170429916717 if alpha is None else alpha
+    return scale * torch.nn.functional.elu(input_tensor_a, alpha=alpha)
 
 
 ttnn.attach_golden_function(ttnn.selu, golden_function=_golden_function_selu)
