@@ -197,6 +197,9 @@ SHAPES = [
     (13664, 5376, 5376, 8, 8, True, "qkv"),
     (9184, 7168, 1344, 8, 8, True, "plain"),
     (13664, 7168, 1344, 8, 8, True, "plain"),
+    # to_out with the real fused addcmul epilogue and math_approx_mode=True (the model's config). The "plain" row
+    # above is what the perf doc's 4332.8 us was swept with: no epilogue, approx off.
+    (13664, 7168, 1344, 8, 8, True, "to_out"),
     (9184, 5376, 7168, 8, 8, True, "ff1_swiglu"),
     (13664, 5376, 7168, 8, 8, True, "ff1_swiglu"),
     # ff2 unfused on the FULL 8x9 grid. This is the path Wormhole takes today: `has_mmrs_config`

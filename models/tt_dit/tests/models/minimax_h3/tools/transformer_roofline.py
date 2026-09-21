@@ -2,21 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Roofline for the MiniMax-H3 AGMMs on the Wormhole 4x8 Galaxy, 15 s / 768P / 16:9.
+"""Roofline of the MiniMax-H3 transformer block on the Wormhole 4x8 Galaxy, 15 s / 768P / 16:9.
+
+Two views of one block, per device. (1) The matmul-class ops from the shared registry `minimax_h3_ops.py`
+(to_qkv, to_out, ff1 are AGMMs, ff2 is a plain matmul + reduce-scatter), each given compute / DRAM / fabric
+bounds from its shape; `--ops agmm` (default) selects the three AGMMs, `--ops all` or a comma list selects any
+subset. (2) Whole-block mode: every op in the Tracy per-op breakdown, rooflined by class from the profile CSV.
+50 blocks (+2 token-refiner blocks at M=64) per forward. Not a test; pytest leaves it alone. Host-only: numpy +
+matplotlib, no ttnn/torch.
+
+    python models/tt_dit/tests/models/minimax_h3/tools/transformer_roofline.py --dump
+    python models/tt_dit/tests/models/minimax_h3/tools/transformer_roofline.py --figs all --measured-csv sweep_results_mm.csv
+    python models/tt_dit/tests/models/minimax_h3/tools/transformer_roofline.py --ops all --dump
+    python models/tt_dit/tests/models/minimax_h3/tools/transformer_roofline.py --selftest
 
 AGMM = `ttnn.experimental.all_gather_minimal_matmul_async`, the fused TP all-gather + matmul every
-column-parallel linear in the H3 DiT runs on (`models/tt_dit/layers/linear.py`). One transformer block
-has exactly three: to_qkv, to_out and ff1 (fused SwiGLU); ff2 is a plain matmul + reduce-scatter and is
-only included with `--include-ff2`. 50 blocks (+2 token-refiner blocks at M=64) per forward, 49
-forwards per video. Not a test; pytest leaves it alone. Host-only: numpy + matplotlib, no ttnn/torch.
-
-    python models/tt_dit/tests/models/minimax_h3/tools/agmm_roofline.py --dump
-    python models/tt_dit/tests/models/minimax_h3/tools/agmm_roofline.py --figs all --measured-csv sweep_results_mm.csv
-    python models/tt_dit/tests/models/minimax_h3/tools/agmm_roofline.py --selftest
-
-Model (ported unchanged from `origin/cglagovich/agmm_analysis:agmm/roofline_lib.py`, the source of the
-"AGMM Regime & Block Tuning" and "AGMM shape database" artifacts), per device, bf16, ring R = TP,
-L links per direction, K_gathered = K_local * R:
+column-parallel linear in the H3 DiT runs on (`models/tt_dit/layers/linear.py`). Ring-matmul model (ported
+unchanged from `origin/cglagovich/agmm_analysis:agmm/roofline_lib.py`, the source of the "AGMM Regime & Block
+Tuning" and "AGMM shape database" artifacts), per device, bf16, ring R = TP, L links per direction,
+K_gathered = K_local * R:
 
     FLOPs          = 2 * M * K_gathered * N
     bytes_dram     = 2 * (M * K_gathered + K_gathered * N)     gathered in0 + resident in1
@@ -25,17 +29,19 @@ L links per direction, K_gathered = K_local * R:
     ideal          = max(FLOPs/peak, bytes_dram/DRAM_BW, bytes_per_link/LINK_BW), limiter = argmax
     N*             = peak / (2 * LINK_BW) * (R - 1) / (R * L)  compute<->fabric crossover, M-independent
 
-Every constant in those artifacts is Blackhole Galaxy (12x9 = 108-core AGMM grid at 1.35 GHz =
+A plain matmul + reduce-scatter (ff2) runs on the full grid and moves (R - 1) * (2 * M * N / R) / (2 * L) per link.
+
+Every constant in those artifacts is Blackhole Galaxy (12x9 = 108-core ring-matmul grid at 1.35 GHz =
 298.6 TFLOP/s HiFi2, 512 GB/s DRAM, 2 links x 25 GB/s). The Wormhole Galaxy the model ships on
 (`MESH_4X8_RING_WH` = `4x8nl4`, TP=4 / SP=8, Ring, 4 links) is a different part on every axis; the
 `WH` constants below are each traced to the repo file that defines them, and the `BH` constants are
 kept verbatim, labelled as inherited, for the side-by-side. Note the two fabrics coincide on aggregate
 ingress (4 x 12.5 = 2 x 25 = 50 GB/s per direction), so the fabric bars are identical across arches.
 
-Whole-block mode (default when the Tracy profile exists; `--agmm-only` restores the AGMM-only output): reads
+Whole-block mode (default when the Tracy profile exists; `--no-block` restores the selected-ops-only output): reads
 the fsdp1 15 s block profile the perf doc's per-op table came from (`--profile-csv`), merges the warm iteration
 across the 32 devices like `project_block_perf.py`, and gives every op a roofline by class -- these are
-judgement calls built on the models already in the repo (AGMM analysis, `OpPerformanceModelGeneral`,
+judgement calls built on the models already in the repo (the ring-matmul analysis, `OpPerformanceModelGeneral`,
 `roofline_utils.py`, `estimate_fabric_transfer_cycles`) and are printed on every block figure:
   compute-bound (SDPA, matmuls): 2*FLOPs / (cores_of_the_op * 2048 FLOP/cycle * 1.0 GHz at HiFi2)
   DRAM-bound (embeddings, RMSNorm, tilize/untilize, concat): bytes in + out of DRAM tensors / 288 GB/s
@@ -55,12 +61,25 @@ import csv
 import math
 import os
 import re
+import sys
 from dataclasses import dataclass, replace
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from minimax_h3_ops import (  # noqa: E402
+    AGMM_OPS,
+    M_15S_768P_16_9,
+    MEASURED_US_WH_15S,
+    OPS_BY_NAME,
+    SWEEP_USE_CASE_TO_OP,
+    OpSpec,
+    select_ops,
+)
+
+Op = OpSpec  # the roofline's op record is the registry's
 
 FIDELITY_CYCLES = {"LoFi": 1, "HiFi2": 2, "HiFi3": 3, "HiFi4": 4}
 LOFI_FLOP_PER_CYCLE_PER_CORE = 4096  # 8x16 x 16x16 per cycle, 2*8*16*16 -- matmul_device_operation.cpp:2791
 BF16_BYTES = 2
-TILE = 32
 
 
 @dataclass(frozen=True)
@@ -68,8 +87,8 @@ class Arch:
     name: str
     short: str
     clock_hz: float
-    agmm_cores: int  # matmul worker grid of the AGMM (one row/column reserved for the CCL muxes)
-    agmm_grid: tuple[int, int]
+    ring_matmul_cores: int  # worker grid of the ring all-gather matmul (one row/column reserved for the CCL muxes)
+    ring_matmul_grid: tuple[int, int]
     full_cores: int  # full compute grid, what a plain matmul (ff2) runs on
     dram_bw: float  # bytes/s
     link_bw: float  # bytes/s per unidirectional ethernet link
@@ -79,11 +98,11 @@ class Arch:
     source: str
 
     def peak_flops(self, fidelity: str = "HiFi2", cores: int | None = None) -> float:
-        cores = self.agmm_cores if cores is None else cores
+        cores = self.ring_matmul_cores if cores is None else cores
         return cores * (LOFI_FLOP_PER_CYCLE_PER_CORE / FIDELITY_CYCLES[fidelity]) * self.clock_hz
 
     def n_star(self, fidelity: str = "HiFi2", num_links: int | None = None) -> float:
-        """Output width above which the AGMM is compute-bound rather than fabric-bound (any M)."""
+        """Output width above which a ring all-gather matmul (AGMM) is compute-bound rather than fabric-bound (any M)."""
         L = self.num_links if num_links is None else num_links
         R = self.ring_size
         return self.peak_flops(fidelity) / (2 * self.link_bw) * (R - 1) / (R * L)
@@ -98,8 +117,8 @@ WH = Arch(
     name="Wormhole Galaxy 4x8 (4x8nl4: TP=4 / SP=8, Ring, 4 links)",
     short="WH",
     clock_hz=1.0e9,  # tests/nightly/sdpa_perf_utils.py:31
-    agmm_cores=64,  # 8x8: agmm_worker_grid reserves the bottom row of the 8x9 grid (utils/matmul.py:407)
-    agmm_grid=(8, 8),
+    ring_matmul_cores=64,  # 8x8: agmm_worker_grid reserves the bottom row of the 8x9 grid (utils/matmul.py:407)
+    ring_matmul_grid=(8, 8),
     full_cores=72,  # 8x9 -- sdpa_perf_utils.py:70 WH_GALAXY_GRID
     dram_bw=WH_DRAM_BW["spec"],
     link_bw=12.5e9,  # 100 Gbps per link -- ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp:2130
@@ -113,8 +132,8 @@ BH = Arch(
     name="Blackhole Galaxy 4x8 (constants inherited from cglagovich/agmm_analysis: 2 links)",
     short="BH",
     clock_hz=1.35e9,
-    agmm_cores=108,  # 12x9
-    agmm_grid=(12, 9),
+    ring_matmul_cores=108,  # 12x9
+    ring_matmul_grid=(12, 9),
     full_cores=120,  # 12x10 -- sdpa_perf_utils.py:69 GALAXY_GRID
     dram_bw=512e9,
     link_bw=25e9,  # 400 Gbps nominal, "currently limited to half BW" -- ccl_common.cpp:2132
@@ -125,43 +144,16 @@ BH = Arch(
 )
 
 
-@dataclass(frozen=True)
-class Op:
-    name: str
-    K: int  # K after the gather (= per-device K for the plain ff2 matmul)
-    N: int  # per-device output width
-    fusion: str
-    kind: str = "agmm"  # "agmm" | "mm+rs"
-    marker: str = "o"
-
-
-# The three AGMMs of one transformer block, per device at TP=4 (agmm_config.py, attention_minimax_h3.py).
-# hidden 5376, inner 7168 (56 heads x 128), ffn 14336: qkv N = 3*inner/4, out N = hidden/4, ff1 N = 2*ffn/4.
-OPS = [
-    Op("to_qkv", 5376, 5376, "chunks=3", marker="o"),
-    Op("to_out", 7168, 1344, "addcmul", marker="s"),
-    Op("ff1", 5376, 7168, "SwiGLU", marker="^"),
-]
-FF2 = Op("ff2", 3584, 5376, "MM + reduce-scatter", kind="mm+rs", marker="D")
-
+# The ops themselves (shapes, fusion, blocking, perf-doc baselines, colours) live in `minimax_h3_ops.py`.
 # 15 s / 768P / 16:9: 1344x768, 362 frames -> 107 latent frames x 24x42 patches = 107856 video rows
 # + 603 audio latents x 2 channels + 39 text tokens = 109101, padded to SP*TILE*... = 109312
 # (`packing.padded_sequence_length`), 13664 rows per device at SP=8 (MiniMaxH3_wormhole_perf.md:129).
-M_15S_768P_16_9 = 13664
-M_REFINER = 64  # the 2 token-refiner blocks run the same three (K, N) over the 39-token text stream
+M_REFINER = 64  # the 2 token-refiner blocks run the same (K, N) shapes over the 39-token text stream
 BLOCKS_PER_FORWARD = 50
-REFINER_BLOCKS_PER_FORWARD = 2
-FORWARDS_PER_VIDEO = 49
-
-# Shipped blockings on the WH 8x8 grid at M=13664, HiFi2 (MiniMaxH3_wormhole_perf.md:365-371).
-MEASURED_US_WH_15S = {"to_qkv": 10401.8, "to_out": 4332.8, "ff1": 15709.9, "ff2": 6770.7}
-SWEEP_USE_CASE_TO_OP = {"qkv": "to_qkv", "plain": "to_out", "ff1_swiglu": "ff1", "ff2": "ff2"}
 
 RESOURCES = ("compute", "dram", "fabric")
 RESOURCE_LABEL = {"compute": "compute", "dram": "DRAM", "fabric": "fabric"}
 RESOURCE_COLOR = {"compute": "#2a78d6", "dram": "#eb6834", "fabric": "#1baf7a"}
-# ops get the next three categorical slots so an op colour is never mistaken for a resource colour
-OP_COLOR = {"to_qkv": "#eda100", "to_out": "#e87ba4", "ff1": "#008300", "ff2": "#8a8983"}
 INK, INK_2, INK_MUTED, GRID = "#1a1a19", "#52514e", "#8a8983", "#e6e5e0"
 
 
@@ -229,7 +221,7 @@ def roofline(
     flops = 2.0 * M * op.K * op.N
     bytes_dram = BF16_BYTES * (M * op.K + op.K * op.N)
     if op.kind == "agmm":
-        cores = arch.agmm_cores
+        cores = arch.ring_matmul_cores
         shard = BF16_BYTES * M * (op.K / R)  # this device's in0 shard, gathered to the other R-1
     else:  # plain matmul on the full grid, then reduce-scatter of the [M, N] partial into N/R per device
         cores = arch.full_cores
@@ -296,12 +288,13 @@ def dump_table(rows: list[Roofline], title: str) -> str:
             f"**{_fmt_us(r.ideal)}** | {r.limiter} | {'—' if r.measured is None else _fmt_us(r.measured)} | "
             f"{'—' if r.headroom is None else f'{r.headroom:.2f}x'} | {_pct(r.util('compute'))} | {_pct(r.util('dram'))} | {_pct(r.util('fabric'))} |"
         )
-    agmm = [r for r in rows if r.op.kind == "agmm" and r.M != M_REFINER]
-    if agmm:
-        ideal_block = sum(r.ideal for r in agmm)
-        line = f"AGMM ideal per block {ideal_block * 1e3:.2f} ms -> {ideal_block * BLOCKS_PER_FORWARD * 1e3:.0f} ms per forward ({BLOCKS_PER_FORWARD} blocks)"
-        if all(r.measured is not None for r in agmm):
-            meas_block = sum(r.measured for r in agmm)
+    block = [r for r in rows if r.M != M_REFINER]
+    if block:
+        ideal_block = sum(r.ideal for r in block)
+        names = ", ".join(r.op.name for r in block)
+        line = f"Ideal per block for {names}: {ideal_block * 1e3:.2f} ms -> {ideal_block * BLOCKS_PER_FORWARD * 1e3:.0f} ms per forward ({BLOCKS_PER_FORWARD} blocks)"
+        if all(r.measured is not None for r in block):
+            meas_block = sum(r.measured for r in block)
             line += f"; measured {meas_block * 1e3:.2f} ms per block, {meas_block / ideal_block:.2f}x headroom"
         out += ["", line]
     return "\n".join(out)
@@ -315,11 +308,11 @@ def constants_table(arches: list[Arch], fidelity: str) -> str:
         ("AI clock", lambda a: f"{a.clock_hz / 1e9:.2f} GHz"),
         (f"FLOP/cycle/core @ {fidelity}", lambda a: f"{LOFI_FLOP_PER_CYCLE_PER_CORE // FIDELITY_CYCLES[fidelity]}"),
         (
-            "AGMM matmul grid",
-            lambda a: f"{a.agmm_grid[0]}x{a.agmm_grid[1]} = {a.agmm_cores} cores (full {a.full_cores})",
+            "ring-matmul (AGMM) grid",
+            lambda a: f"{a.ring_matmul_grid[0]}x{a.ring_matmul_grid[1]} = {a.ring_matmul_cores} cores (full {a.full_cores})",
         ),
-        (f"peak @ {fidelity}, AGMM grid", lambda a: f"{a.peak_flops(fidelity) / 1e12:.1f} TFLOP/s"),
-        ("peak @ LoFi, AGMM grid", lambda a: f"{a.peak_flops('LoFi') / 1e12:.1f} TFLOP/s"),
+        (f"peak @ {fidelity}, ring-matmul grid", lambda a: f"{a.peak_flops(fidelity) / 1e12:.1f} TFLOP/s"),
+        ("peak @ LoFi, ring-matmul grid", lambda a: f"{a.peak_flops('LoFi') / 1e12:.1f} TFLOP/s"),
         ("DRAM bandwidth", lambda a: f"{a.dram_bw / 1e9:.0f} GB/s"),
         ("eth link, unidirectional", lambda a: f"{a.link_bw / 1e9:.1f} GB/s"),
         ("links per direction", lambda a: f"{a.num_links}"),
@@ -417,7 +410,7 @@ def _style(ax, grid_axis: str = "both") -> None:
 
 def _constants_line(arch: Arch, fidelity: str) -> str:
     return (
-        f"{arch.short}: {arch.agmm_cores} cores x {LOFI_FLOP_PER_CYCLE_PER_CORE // FIDELITY_CYCLES[fidelity]} FLOP/cycle x "
+        f"{arch.short}: {arch.ring_matmul_cores} cores x {LOFI_FLOP_PER_CYCLE_PER_CORE // FIDELITY_CYCLES[fidelity]} FLOP/cycle x "
         f"{arch.clock_hz / 1e9:.2f} GHz = {arch.peak_flops(fidelity) / 1e12:.1f} TFLOP/s {fidelity}  ·  "
         f"DRAM {arch.dram_bw / 1e9:.0f} GB/s  ·  {arch.num_links} x {arch.link_bw / 1e9:.1f} GB/s links  ·  ring {arch.ring_size}"
     )
@@ -550,6 +543,7 @@ def fig_time_bars(rows_by_arch: dict[str, list[Roofline]], fidelity: str, title:
     from matplotlib.patches import Patch
 
     arches = list(rows_by_arch)
+    ingress = [rows[0].arch.num_links * rows[0].arch.link_bw for rows in rows_by_arch.values()]
     fig, axes = plt.subplots(len(arches), 1, figsize=(11, 3.9 * len(arches)), sharey=True, squeeze=False)
     ymax = 0.0
     width, gap = 0.24, 0.03
@@ -643,7 +637,12 @@ def fig_time_bars(rows_by_arch: dict[str, list[Roofline]], fidelity: str, title:
         0.005,
         "Each group is one op; its three bars are the time that op would take if it were limited only by compute, only by DRAM\n"
         "bandwidth, or only by fabric (all-gather) bandwidth. The tallest bar is the roofline ideal (black tick).\n"
-        f"Hollow diamond = {measured_note}. Fabric bars coincide across arches: both rings ingest 50 GB/s per direction.",
+        f"Hollow diamond = {measured_note}."
+        + (
+            f" Fabric bars coincide across arches: every ring ingests {ingress[0] / 1e9:.0f} GB/s per direction."
+            if len(set(ingress)) == 1 and len(ingress) > 1
+            else ""
+        ),
         fontsize=8,
         color=INK_MUTED,
         va="bottom",
@@ -653,7 +652,7 @@ def fig_time_bars(rows_by_arch: dict[str, list[Roofline]], fidelity: str, title:
 
 
 def fig_stacked(rows_by_arch: dict[str, list[Roofline]], fidelity: str, title: str, measured_note: str):
-    """One stacked bar per arch: the three ops' ideal times summed, colour-coded by op, with the summed
+    """One stacked bar per arch: the selected ops' ideal times summed, colour-coded by op, with the summed
     measured wall time marked on top (and, where measured, a second stack of the measured times)."""
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
@@ -663,16 +662,18 @@ def fig_stacked(rows_by_arch: dict[str, list[Roofline]], fidelity: str, title: s
     _style(ax, grid_axis="y")
     width = 0.55
     columns = []  # (x, label, [(op, seconds)], hatch, sublabel)
+    op_color: dict[str, str] = {}
     x = 0.0
     for key, rows in rows_by_arch.items():
-        agmm = [r for r in rows if r.op.kind == "agmm" and r.M != M_REFINER]
-        arch = agmm[0].arch
+        block = [r for r in rows if r.M != M_REFINER]
+        arch = block[0].arch
+        op_color.update({r.op.name: r.op.color for r in block})
         columns.append(
-            (x, f"{arch.short} ideal", [(r.op.name, r.ideal) for r in agmm], None, _constants_line(arch, fidelity))
+            (x, f"{arch.short} ideal", [(r.op.name, r.ideal) for r in block], None, _constants_line(arch, fidelity))
         )
         x += 1.0
-        if all(r.measured is not None for r in agmm):
-            columns.append((x, f"{arch.short} measured", [(r.op.name, r.measured) for r in agmm], "//", None))
+        if all(r.measured is not None for r in block):
+            columns.append((x, f"{arch.short} measured", [(r.op.name, r.measured) for r in block], "//", None))
             x += 1.0
         x += 0.35
     ymax = 0.0
@@ -686,7 +687,7 @@ def fig_stacked(rows_by_arch: dict[str, list[Roofline]], fidelity: str, title: s
                 ms,
                 width,
                 bottom=bottom,
-                color=OP_COLOR[op_name],
+                color=op_color[op_name],
                 hatch=hatch,
                 edgecolor="white",
                 linewidth=1.5,
@@ -739,8 +740,10 @@ def fig_stacked(rows_by_arch: dict[str, list[Roofline]], fidelity: str, title: s
     ax.tick_params(axis="x", length=0)
     ax.set_xlim(-0.7, columns[-1][0] + 0.7)
     ax.set_ylim(0, ymax * 1.28)
-    ax.set_ylabel("time per transformer block, ms (three AGMM calls)", fontsize=9, color=INK_2)
-    handles = [Patch(color=OP_COLOR[name], label=name) for name in ("to_qkv", "to_out", "ff1")]
+    ax.set_ylabel(
+        f"time per transformer block, ms ({len(op_color)} calls: {', '.join(op_color)})", fontsize=9, color=INK_2
+    )
+    handles = [Patch(color=color, label=name) for name, color in op_color.items()]
     handles.append(Patch(facecolor="white", edgecolor=INK_2, hatch="//", label="measured stack"))
     handles.append(
         Line2D([], [], marker="D", ls=(0, (3, 2)), color=INK, ms=7, mfc="white", mec=INK, label="measured sum")
@@ -753,7 +756,7 @@ def fig_stacked(rows_by_arch: dict[str, list[Roofline]], fidelity: str, title: s
     fig.text(
         0.01,
         0.005,
-        "Ideal = each op's roofline lower bound (its binding resource at 100% of peak), summed over the three AGMMs of one "
+        "Ideal = each op's roofline lower bound (its binding resource at 100% of peak), summed over the selected ops of one "
         f"block.\nMeasured = {measured_note}.",
         fontsize=8,
         color=INK_MUTED,
@@ -764,22 +767,33 @@ def fig_stacked(rows_by_arch: dict[str, list[Roofline]], fidelity: str, title: s
 
 
 def fig_nstar(arches: list[Arch], ops: list[Op], fidelity: str, title: str):
+    """N* (compute/fabric crossover width) vs link count. Only the ring all-gather matmuls have an N*, so only
+    ops of the agmm family are drawn as reference lines."""
     import matplotlib.pyplot as plt
     from matplotlib.ticker import FixedLocator, FuncFormatter, NullLocator
 
+    ops = [op for op in ops if op.kind == "agmm"]
+    links = [1, 2, 3, 4]
     fig, ax = plt.subplots(figsize=(8.5, 5.2))
     _style(ax)
     ax.set_yscale("log")
-    ticks = [800, 1000, 1500, 2000, 3000, 4000, 6000, 8000]
+    values = [op.N for op in ops] + [a.n_star(fidelity, L) for a in arches for L in links]
+    lo, hi = min(values) / 1.25, max(values) * 1.15
+    ticks = [
+        t for t in (200, 300, 400, 600, 800, 1000, 1500, 2000, 3000, 4000, 6000, 8000, 12000, 16000) if lo <= t <= hi
+    ]
     ax.yaxis.set_major_locator(FixedLocator(ticks))
     ax.yaxis.set_minor_locator(NullLocator())
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:,.0f}"))
-    ax.set_ylim(800, 9000)
-    links = [1, 2, 3, 4]
-    styles = {"WH": dict(color=INK, ls="-", marker="o"), "BH": dict(color=INK_MUTED, ls=(0, (4, 2)), marker="s")}
-    for arch in arches:
+    ax.set_ylim(lo, hi)
+    styles = [
+        dict(color=INK, ls="-", marker="o"),
+        dict(color=INK_MUTED, ls=(0, (4, 2)), marker="s"),
+        dict(color=INK_2, ls=":", marker="^"),
+    ]
+    for i, arch in enumerate(arches):
         ns = [arch.n_star(fidelity, L) for L in links]
-        st = styles.get(arch.short, dict(color=INK_2, ls=":", marker="^"))
+        st = styles[i % len(styles)]
         ax.plot(
             links,
             ns,
@@ -851,12 +865,12 @@ def selftest() -> None:
         assert abs(a - b) <= tol, f"{a} != {b} (tol {tol})"
 
     # The BH shape database row ltx_m1216_k4096_n8 (ring 4, 2 links): t_compute 0.3, t_dram 19.6, t_fabric 74.7 us.
-    r = roofline(1216, Op("ltx", 4096, 8, "—"), BH, "HiFi2")
+    r = roofline(1216, Op.adhoc("ltx", 4096, 8, "—"), BH, "HiFi2")
     close(r.t_fabric * 1e6, 74.7, 0.05)
     close(r.t_dram * 1e6, 19.6, 0.05)
     close(r.t_compute * 1e6, 0.27, 0.01)
     # ltx_m4864_k4096_n3072_c3: t_compute 409.9, t_dram 127.0, t_fabric 298.8 -> compute.
-    r = roofline(4864, Op("ltx", 4096, 3072, "chunks3"), BH, "HiFi2")
+    r = roofline(4864, Op.adhoc("ltx", 4096, 3072, "chunks3"), BH, "HiFi2")
     close(r.t_compute * 1e6, 409.9, 0.1)
     close(r.t_dram * 1e6, 127.0, 0.1)
     close(r.t_fabric * 1e6, 298.8, 0.1)
@@ -865,7 +879,7 @@ def selftest() -> None:
     close(BH.n_star("HiFi2", 1), 4479, 1)  # artifact N* table, ring 4 / 1 link
     # Wormhole anchors (MiniMaxH3_wormhole_perf.md roofline section: ff1 1.05 T, 8.0 ms at 64 cores).
     close(WH.peak_flops("HiFi2") / 1e12, 131.07, 0.01)
-    r = roofline(M_15S_768P_16_9, OPS[2], WH, "HiFi2", measured_us=MEASURED_US_WH_15S["ff1"])
+    r = roofline(M_15S_768P_16_9, OPS_BY_NAME["ff1"], WH, "HiFi2", measured_us=MEASURED_US_WH_15S["ff1"])
     close(r.flops / 1e12, 1.053, 0.001)
     close(r.t_compute * 1e6, 8034.4, 0.5)
     close(r.t_dram * 1e6, 777.7, 0.5)
@@ -874,8 +888,8 @@ def selftest() -> None:
     close(r.util("compute"), 0.511, 0.002)
     close(WH.n_star("HiFi2"), 983, 1)
     # to_out: compute-bound on WH at 4 links, fabric-bound on BH at 2 links.
-    assert roofline(M_15S_768P_16_9, OPS[1], WH).limiter == "compute"
-    assert roofline(M_15S_768P_16_9, OPS[1], BH).limiter == "fabric"
+    assert roofline(M_15S_768P_16_9, OPS_BY_NAME["to_out"], WH).limiter == "compute"
+    assert roofline(M_15S_768P_16_9, OPS_BY_NAME["to_out"], BH).limiter == "fabric"
     print("selftest OK")
 
 
@@ -1015,10 +1029,10 @@ def load_block_profile(path: str, arch: Arch, fidelity: str = "HiFi2") -> list[B
         )
         if code == "AllGatherMinimalMatmulAsyncOp":
             m_rows, k_g, n = ins[0][0][2], ins[1][0][2], ins[1][0][3]
-            op = {5376: OPS[0], 1344: OPS[1], 7168: OPS[2]}.get(n, Op(f"agmm N{n}", k_g, n, "?"))
+            op = {s.N: s for s in AGMM_OPS}.get(n, Op.adhoc(f"agmm N{n}", k_g, n, "?"))
             rl = roofline(m_rows, op, arch, fidelity, num_links=L)
             name, klass, tc, td, tf = f"AGMM {op.name}", rl.limiter, rl.t_compute, rl.t_dram, rl.t_fabric
-            formula = f"AGMM roofline: 2·{m_rows}·{k_g}·{n} FLOP on {arch.agmm_cores} cores; gather (R−1)·M·K_local·2B/(2·{L})"
+            formula = f"AGMM roofline: 2·{m_rows}·{k_g}·{n} FLOP on {arch.ring_matmul_cores} cores; gather (R−1)·M·K_local·2B/(2·{L})"
         elif code == "RingJointSDPADeviceOperation":
             heads, s_local, d = ins[0][0][1], ins[0][0][2], ins[0][0][3]
             s_total = ins[3][0][2] if len(ins) > 3 else s_local
@@ -1031,7 +1045,7 @@ def load_block_profile(path: str, arch: Arch, fidelity: str = "HiFi2") -> list[B
             m_rows, k, n = ins[0][0][2], ins[1][0][2], ins[1][0][3]
             tc = 2.0 * m_rows * k * n / (cores * per_cycle * arch.clock_hz)
             td = _bytes(ins + outs) / dram_bw
-            name = "MinimalMatmul ff2" if m_rows > 32 else f"MinimalMatmul M={m_rows} (adaLN)"
+            name = f"MinimalMatmul {OPS_BY_NAME['ff2'].name}" if m_rows > 32 else f"MinimalMatmul M={m_rows} (adaLN)"
             klass = "compute" if tc >= td else "dram"
             formula = f"2·{m_rows}·{k}·{n} FLOP on {cores} cores; {_bytes(ins + outs) / 1e6:.0f} MB DRAM"
         elif code == "ReduceScatterMinimalAsyncDeviceOperation":
@@ -1261,8 +1275,17 @@ def main() -> None:
     p.add_argument(
         "--M", type=int, default=M_15S_768P_16_9, help="rows per device (default 13664 = 15 s / 768P / 16:9 at SP=8)"
     )
-    p.add_argument("--include-ff2", action="store_true", help="add ff2 (plain matmul + reduce-scatter, not an AGMM)")
-    p.add_argument("--include-refiner", action="store_true", help="add the token-refiner AGMMs at M=64")
+    p.add_argument(
+        "--ops",
+        default="agmm",
+        help=f"ops to roofline: agmm (default: {', '.join(s.name for s in AGMM_OPS)}), all, or a comma list of op names / families",
+    )
+    p.add_argument(
+        "--include-ff2", action="store_true", help="alias for adding ff2 to --ops (plain matmul + reduce-scatter)"
+    )
+    p.add_argument(
+        "--include-refiner", action="store_true", help="add the token-refiner instances of the selected ops at M=64"
+    )
     p.add_argument("--no-bh", action="store_true", help="drop the Blackhole side of the comparison")
     p.add_argument(
         "--measured-csv",
@@ -1276,11 +1299,13 @@ def main() -> None:
         help="Tracy ops_perf_results CSV of one block (fsdp1 15 s profile by default)",
     )
     p.add_argument(
+        "--no-block",
         "--agmm-only",
+        dest="no_block",
         action="store_true",
-        help="AGMM figures/tables only (the pre-block behaviour); block figures need --profile-csv",
+        help="selected-op figures/tables only, no whole-block mode (block figures need --profile-csv)",
     )
-    p.add_argument("--out-dir", default="agmm_roofline_out")
+    p.add_argument("--out-dir", default="transformer_roofline_out")
     p.add_argument("--dpi", type=int, default=160)
     args = p.parse_args()
 
@@ -1295,7 +1320,7 @@ def main() -> None:
     wh = replace(WH, dram_bw=dram_bw, num_links=args.links or WH.num_links)
     arches = [wh] if args.no_bh else [wh, BH]
 
-    ops = list(OPS) + ([FF2] if args.include_ff2 else [])
+    ops = select_ops(args.ops + (",ff2" if args.include_ff2 else ""))
     measured: dict[str, float] = {}
     if not args.no_measured:
         measured = dict(MEASURED_US_WH_15S) if args.M == M_15S_768P_16_9 else {}
@@ -1309,17 +1334,17 @@ def main() -> None:
             for op in ops
         ]
         if args.include_refiner:
-            rows += [roofline(M_REFINER, op, arch, args.fidelity) for op in OPS]
+            rows += [roofline(M_REFINER, op, arch, args.fidelity) for op in ops]
         rows_by_arch[arch.short] = rows
 
     all_rows = [r for rows in rows_by_arch.values() for r in rows]
     block_ops = None
-    if not args.agmm_only:
+    if not args.no_block:
         if os.path.exists(args.profile_csv):
             block_ops = load_block_profile(args.profile_csv, wh, args.fidelity)
         else:
             print(
-                f"note: no block profile at {args.profile_csv}; block figures skipped (pass --profile-csv or --agmm-only)"
+                f"note: no block profile at {args.profile_csv}; block figures skipped (pass --profile-csv or --no-block)"
             )
     if args.dump and block_ops:
         print(
@@ -1338,20 +1363,23 @@ def main() -> None:
 
     figs = set() if args.figs == "none" else set(args.figs.split(","))
     if "all" in figs:
-        figs = {"roofline", "bars", "stacked", "nstar"} | (set() if args.agmm_only else {"block_stacked", "block_ops"})
+        figs = {"roofline", "bars", "stacked", "nstar"} | (set() if args.no_block else {"block_stacked", "block_ops"})
     if not figs and not args.dump and not args.selftest:
         p.error("nothing to do: pass --dump, --selftest or --figs")
+    os.makedirs(args.out_dir, exist_ok=True)
+    csv_path = os.path.join(args.out_dir, "roofline.csv")
+    write_csv(all_rows, csv_path)
+    written = []
     if figs:
         import matplotlib
 
         matplotlib.use("Agg")
-        os.makedirs(args.out_dir, exist_ok=True)
-        write_csv(all_rows, os.path.join(args.out_dir, "agmm_roofline.csv"))
         tag = f"M{args.M}"
+        op_names = ", ".join(op.name for op in ops)
         shape_title = (
-            f"MiniMax-H3 AGMMs, 15 s / 768P / 16:9 (M = {args.M} rows per device, TP = 4, SP = 8)"
+            f"MiniMax-H3 transformer block, 15 s / 768P / 16:9 (M = {args.M} rows per device, TP = 4, SP = 8)"
             if args.M == M_15S_768P_16_9
-            else f"MiniMax-H3 AGMMs, M = {args.M} rows per device (TP = 4)"
+            else f"MiniMax-H3 transformer block, M = {args.M} rows per device (TP = 4)"
         )
         if args.no_measured or not measured:
             measured_note = "no measurement"
@@ -1359,33 +1387,32 @@ def main() -> None:
             measured_note = f"measured, best swept blocking ({os.path.basename(args.measured_csv)})"
         else:
             measured_note = "measured, shipped blocking (MiniMaxH3_wormhole_perf.md)"
-        written = []
         if "roofline" in figs:
             fig = fig_roofline(
                 rows_by_arch[wh.short],
                 wh,
                 args.fidelity,
-                f"Roofline on the Wormhole Galaxy — {shape_title}",
+                f"Roofline on the Wormhole Galaxy, {op_names} — {shape_title}",
                 measured_note,
             )
-            path = os.path.join(args.out_dir, f"agmm_roofline_wh_{tag}.png")
+            path = os.path.join(args.out_dir, f"roofline_wh_{tag}.png")
             fig.savefig(path, dpi=args.dpi)
             written.append(path)
         if "bars" in figs:
             fig = fig_time_bars(
-                rows_by_arch, args.fidelity, f"Best-case time per resource — {shape_title}", measured_note
+                rows_by_arch, args.fidelity, f"Best-case time per resource, {op_names} — {shape_title}", measured_note
             )
-            path = os.path.join(args.out_dir, f"agmm_time_bars_{tag}.png")
+            path = os.path.join(args.out_dir, f"time_bars_{tag}.png")
             fig.savefig(path, dpi=args.dpi)
             written.append(path)
         if "stacked" in figs:
             fig = fig_stacked(
                 rows_by_arch,
                 args.fidelity,
-                f"Three AGMMs per block, stacked — {shape_title.replace('MiniMax-H3 AGMMs, ', '')}",
+                f"{op_names} per block, stacked — {shape_title.replace('MiniMax-H3 transformer block, ', '')}",
                 measured_note,
             )
-            path = os.path.join(args.out_dir, f"agmm_stacked_{tag}.png")
+            path = os.path.join(args.out_dir, f"stacked_{tag}.png")
             fig.savefig(path, dpi=args.dpi)
             written.append(path)
         if block_ops and "block_stacked" in figs:
@@ -1393,7 +1420,7 @@ def main() -> None:
                 block_ops,
                 wh,
                 args.fidelity,
-                f"Roofline vs measured, every op — {shape_title.replace('MiniMax-H3 AGMMs', 'MiniMax-H3 transformer block')}",
+                f"Roofline vs measured, every op — {shape_title}",
                 os.path.basename(args.profile_csv),
             )
             path = os.path.join(args.out_dir, f"block_stacked_{tag}.png")
@@ -1404,7 +1431,7 @@ def main() -> None:
                 block_ops,
                 wh,
                 args.fidelity,
-                f"Per-op roofline vs measured — {shape_title.replace('MiniMax-H3 AGMMs', 'MiniMax-H3 transformer block')}",
+                f"Per-op roofline vs measured — {shape_title}",
                 os.path.basename(args.profile_csv),
             )
             path = os.path.join(args.out_dir, f"block_ops_{tag}.png")
@@ -1414,11 +1441,11 @@ def main() -> None:
             fig = fig_nstar(
                 arches, ops, args.fidelity, "Regime crossover N* vs link count — Wormhole vs Blackhole Galaxy"
             )
-            path = os.path.join(args.out_dir, "agmm_nstar_links.png")
+            path = os.path.join(args.out_dir, "nstar_links.png")
             fig.savefig(path, dpi=args.dpi)
             written.append(path)
-        for path in written + [os.path.join(args.out_dir, "agmm_roofline.csv")]:
-            print(f"wrote {path}")
+    for path in written + [csv_path]:
+        print(f"wrote {path}")
 
 
 if __name__ == "__main__":

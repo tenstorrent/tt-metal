@@ -4,8 +4,9 @@
 
 """Temporary Tracy device zones for the AGMM compute kernel, and a parser for the resulting profile_log_device.csv.
 
-    python models/tt_dit/tests/models/minimax_h3/tools/agmm_compute_zones.py apply block     # KLOOP + SWIGLU per output block
+    python models/tt_dit/tests/models/minimax_h3/tools/agmm_compute_zones.py apply block     # KLOOP + the epilogue per output block
     python models/tt_dit/tests/models/minimax_h3/tools/agmm_compute_zones.py apply sampled   # ACQ/MAC/PWAIT/PACK on one subblock of every 30th K iteration
+    python models/tt_dit/tests/models/minimax_h3/tools/agmm_compute_zones.py apply opwait    # block zones + OPWAIT (in0/in1 wait_front) per K iteration, first ~100 iterations
     MM_SWEEP_EXPLICIT_COMBOS='[[8,7,10,2,2]]' MM_SWEEP_PROFILER_DUMP_EVERY=100000 \\
       python -m pytest models/tt_dit/utils/sweep_mm_block_sizes.py::test_mm_sweep \\
       -k "13664_5376_7168_8x8_agmm_ff1_swiglu and wh_4x8_ring" -s --timeout 7200
@@ -13,8 +14,15 @@
       generated/profiler/mm_sweep_wh_4x8_ring_13664_5376_7168_8x8_agmm_ff1_swiglu/reports/<ts>/profile_log_device.csv
     python models/tt_dit/tests/models/minimax_h3/tools/agmm_compute_zones.py revert          # git checkout of the kernel
 
+The compute kernel is shared by every AGMM of the block (to_qkv, to_out, ff1); `help` prints the sweep-harness `-k`
+id and shipped blocking of each (from `minimax_h3_ops.py`). `apply block` zones the K loop (`KLOOP`) and whichever
+epilogue the op compiles: `SWIGLU` (ff1), `EPILOGUE_ADDCMUL` (to_out), `EPILOGUE_COPY` (to_qkv as the model runs it,
+bias=None) or `EPILOGUE_BIAS` (to_qkv through the sweep harness, which always passes a bias). `apply sampled` is
+inside the K loop and epilogue-independent.
+
 `apply` edits `all_gather_minimal_matmul_async/device/kernels/compute.cpp` in place with exact-match replacements
-(it asserts if the kernel text has moved on); `revert` restores it from git. The zones are on purpose not in the tree.
+(it asserts if the kernel text has moved on); `revert` restores it from git (discarding ANY uncommitted edit to that
+file). The zones are on purpose not in the tree.
 
 Reading the sampled mode: the compute kernel is compiled once per TRISC, so the same zone is timed on all three
 threads. ACQ on MATH = waiting for a free DST half; MAC on MATH = MAC issue, on UNPACK = unpack busy; PWAIT on PACK =
@@ -26,6 +34,7 @@ from __future__ import annotations
 
 import collections
 import csv
+import os
 import subprocess
 import sys
 
@@ -68,6 +77,71 @@ BLOCK_EDITS = [
                 swiglu_block(
                     intermediate_cb.get_cb_id(), in2_cb.get_cb_id(), out_cb.get_cb_id(), M_block_tiles, N_block_tiles);
             }""",
+    ),
+    # The other epilogues (one is compiled per op: FUSE_SWIGLU -> ff1, FUSE_TERNARY -> to_out, neither -> to_qkv,
+    # which is a plain copy when the op has no bias and add_bias_block when it has one -- the sweep harness always
+    # passes a bias, the model and the mesh bench never do).
+    (
+        """            copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+""",
+        """            {
+                DeviceZoneScopedN("EPILOGUE_COPY");
+                copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
+            }
+""",
+    ),
+    (
+        """            add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);
+""",
+        """            {
+                DeviceZoneScopedN("EPILOGUE_BIAS");
+                add_bias_block(intermediate_cb, in2_cb, out_cb, M_block_tiles, N_block_tiles);
+            }
+""",
+    ),
+    (
+        """            add_bias_and_addcmul_block(
+                intermediate_cb,
+                in2_cb,
+                ternary_a_cb,
+                ternary_b_cb,
+                fused_ternary_scalar_uint,
+                out_cb,
+                M_block_tiles,
+                N_block_tiles,
+                broadcast_ternary_b);
+""",
+        """            {
+                DeviceZoneScopedN("EPILOGUE_ADDCMUL");
+                add_bias_and_addcmul_block(
+                    intermediate_cb,
+                    in2_cb,
+                    ternary_a_cb,
+                    ternary_b_cb,
+                    fused_ternary_scalar_uint,
+                    out_cb,
+                    M_block_tiles,
+                    N_block_tiles,
+                    broadcast_ternary_b);
+            }
+""",
+    ),
+]
+
+# `apply opwait`: the block zones plus the operand wait at the top of every K iteration (`in0/in1 wait_front`). One
+# zone per iteration overflows the ~120-event per-RISC profiler buffer, so only the first ~100 iterations of each
+# core are recorded -- enough to see whether the loop ever waits on the relay.
+OPWAIT_EDITS = BLOCK_EDITS + [
+    (
+        """                in0_cb.wait_front(in0_block_num_tiles);
+                in1_cb.wait_front(in1_block_num_tiles);
+""",
+        """                {
+                    DeviceZoneScopedN("OPWAIT");
+                    in0_cb.wait_front(in0_block_num_tiles);
+                    in1_cb.wait_front(in1_block_num_tiles);
+                }
+""",
     ),
 ]
 
@@ -238,7 +312,7 @@ def parse(path: str) -> None:
 def main() -> None:
     cmd = sys.argv[1] if len(sys.argv) > 1 else "help"
     if cmd == "apply":
-        apply({"block": BLOCK_EDITS, "sampled": SAMPLED_EDITS}[sys.argv[2]])
+        apply({"block": BLOCK_EDITS, "sampled": SAMPLED_EDITS, "opwait": OPWAIT_EDITS}[sys.argv[2]])
     elif cmd == "revert":
         subprocess.check_call(["git", "checkout", "--", KERNEL])
         print(f"reverted {KERNEL}")
@@ -246,6 +320,14 @@ def main() -> None:
         parse(sys.argv[2])
     else:
         print(__doc__)
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from minimax_h3_ops import AGMM_OPS
+
+        print('sweep-harness ids of the block\'s AGMMs at 15 s / 768P / 16:9 (use with -k "<id> and wh_4x8_ring"):')
+        for spec in AGMM_OPS:
+            print(
+                f"  {spec.name:7s} {spec.sweep_id():45s} shipped blocking {spec.blocks_str()}   epilogue {spec.fusion}"
+            )
 
 
 if __name__ == "__main__":

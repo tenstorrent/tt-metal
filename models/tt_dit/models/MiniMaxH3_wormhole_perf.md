@@ -168,6 +168,71 @@ bracket's width; the refiner, input projections, `norm_out` and output heads fit
 4. **ff2 runs the intended Wormhole path**: `ReduceScatterMinimalAsyncDeviceOperation` is present
    and there is no fused `Matmul_RS` row.
 
+### Re-run and run-to-run variance (2026-09-21)
+
+The same two profiles re-taken on this host at `d4fca5e3f23` + the working tree (the ff1 silu landing and the exp
+ring SDPA commits are in; nothing else of the block changed), six runs each, ~2 min per run. New report
+directories only; the 09-17 CSVs the table above came from are untouched. Tool:
+`tools/block_profile_stats.py compare|runs|devices` (same signpost isolation and device merge as
+`project_block_perf.py`).
+
+**Against the 09-17 table** (one run each side; today = the first of the six):
+
+| op | 09-17 fsdp1 | 09-21 fsdp1 | delta | 09-17 fsdp0 | 09-21 fsdp0 | delta |
+|---|---|---|---|---|---|---|
+| RingJointSDPA | 174.56 | 172.15 | **-2.40** | 174.57 | 172.21 | **-2.36** |
+| AllGatherMinimalMatmulAsync (3) | 32.25 | 31.76 | **-0.49** | 31.61 | 31.24 | -0.37 |
+| AllGatherAsync (FSDP, 4) | 3.96 | 4.27 | +0.31 | — | — | |
+| every other op | | | within ±0.08 | | | within ±0.05 |
+| **device only** | **246.92** | **244.25** | **-2.67 (-1.1%)** | **233.41** | **230.82** | **-2.59 (-1.1%)** |
+| device + op gap | 250.80 | 249.24 | -1.56 | 238.46 | 238.16 | -0.31 |
+
+The two drops are the two landings since 09-17 (exp ring SDPA work; the bf16-grade silu measured -0.56 ms per ff1
+call on the mesh bench). Projected over 50 layers the block is 12.21 s/step device-only (was 12.35).
+
+**Run-to-run, same host and commit** (6 runs per setting; sample std):
+
+| | fsdp1 mean ms | std | max-min | CoV | fsdp0 mean | std | max-min | CoV |
+|---|---|---|---|---|---|---|---|---|
+| RingJointSDPA | 172.16 | 0.031 | 0.09 | 0.02% | 172.20 | 0.039 | 0.11 | 0.02% |
+| AllGatherMinimalMatmulAsync (3) | 31.85 | 0.086 | 0.22 | 0.27% | 31.22 | 0.031 | 0.09 | 0.10% |
+| Embeddings (6) | 10.40 | 0.010 | 0.03 | 0.10% | 10.35 | 0.001 | 0.00 | 0.01% |
+| MinimalMatmul (2) | 8.56 | 0.027 | 0.06 | 0.32% | 8.59 | 0.029 | 0.08 | 0.34% |
+| AllGatherAsync (FSDP, 4) | 4.30 | 0.100 | 0.27 | 2.33% | — | | | |
+| AllBroadcast (FSDP) | 3.95 | 0.065 | 0.17 | 1.65% | — | | | |
+| DitFusedDistributedRmsnorm (4) | 2.91 | 0.058 | 0.17 | 2.00% | 2.66 | 0.036 | 0.10 | 1.37% |
+| ReduceScatterMinimalAsync | 2.77 | 0.013 | 0.03 | 0.46% | 2.82 | 0.028 | 0.07 | 0.99% |
+| NlpCreateHeads / NLPConcatHeads | 0.5-0.6 | 0.01-0.03 | 0.04-0.07 | 3-5% | 0.5-0.6 | 0.01 | 0.02-0.03 | 1-2% |
+| **device only** | **244.35** | **0.20** | **0.60** | **0.08%** | **230.76** | **0.065** | **0.15** | **0.03%** |
+| device + op gap | 247.97 | 0.82 | 2.09 | 0.33% | 236.80 | 1.16 | 2.55 | 0.49% |
+
+Device time is repeatable to 0.2 ms in 244 (SDPA to 0.03 ms, the three AGMMs together to <0.1 ms); the FSDP
+collectives and the small per-head ops are the noisy rows at 2-5% of their own value, still <0.1 ms absolute. The
+host dispatch gaps are 5-15x noisier than the device time, which is why the forward is bracketed by `device only`
+and `device + op gap` rather than quoted as one number.
+
+**Across the 32 devices within one run** (fsdp1, 09-21 r0; the 09-17 run shows the same pattern, so this is
+structural, not noise). The merge decides which number the table shows: mean over devices for collectives
+(the AGMM row), max otherwise.
+
+| op | mean over devices | slowest device | fastest device | spread |
+|---|---|---|---|---|
+| RingJointSDPA | 172.10 | 172.15 | 172.06 | 0.1 ms: every device in lockstep |
+| AllGatherMinimalMatmulAsync (3, reported as mean) | 31.76 | 33.69 | 30.20 | 3.5 ms, 11% |
+| Embeddings (6, reported as max) | 10.14 | 10.41 | 8.83 | 1.6 ms, 18% |
+| AllGatherAsync (4, mean) | 4.27 | 7.37 | 2.67 | 2.75x |
+| DitFusedDistributedRmsnorm (4, max) | 2.60 | 2.91 | 2.41 | 21% |
+
+Rule of thumb for this table: a per-op change under ~0.1 ms (under ~0.3 ms for the FSDP collectives) is not
+resolvable from one pair of runs; anything over 0.5 ms is. The -2.67 ms above is 13 run-to-run standard deviations
+and the 09-17 total sits 2.2 ms above today's slowest run: real. The +0.31 ms on AllGatherAsync is 3 of its own
+standard deviations with the 09-17 value just below today's range: probably real, small, worth a second host.
+
+Reproduce: the `run_safe_pytest.sh --profile` command above, once per setting and run (each writes a new
+`generated/profiler/reports/<ts>/`), then
+`python models/tt_dit/tests/models/minimax_h3/tools/block_profile_stats.py runs r0=<csv> r1=<csv> ...`,
+`... compare doc=<09-17 csv> today=<csv>`, `... devices <csv>`.
+
 ### SDPA chunk sizes: already optimal at 15 s
 
 `test_ring_joint_attention_create_perf_table[minimax_h3_15s_768p]` at 13664 rows/device, sweeping
@@ -376,6 +441,12 @@ that blocking has not been PCC-validated, so it is **not landed** -- `(8, 7, 10)
 pcc 1.0000000 and stays. qkv and to_out keep their `AGMM_BLOCK_SIZES` defaults: both are within
 0.5% of the best combo, comparable to the ~0.3% run-to-run spread, so neither is worth an entry.
 
+Caveat found 2026-09-21: the to_out rows were swept with the harness's `"plain"` use case, i.e. **without the fused
+addcmul epilogue the model runs** and with `math_approx_mode=False`; the qkv rows did use `chunks=3`. The harness now
+also has a `(13664, 7168, 1344, 8, 8, True, "to_out")` row that runs the real epilogue (shape id
+`13664_7168_1344_8x8_agmm_to_out`), and `transformer_op_mesh_bench.py --op to_out` measures it directly: the epilogue
+adds 0.87 ms to the 4.56 ms plain op (host-timed, 10 calls). See *to_qkv / to_out AGMM: attribution*.
+
 Why the two landed entries are keyed on `(M, K, N)` rather than added to the `(K, N)`-keyed model
 table, and how `get_matmul_config` falls back on equal `M_per_core` after an exact miss, is
 documented in `models/tt_dit/utils/matmul.py` -- the module docstring and the `grid_88_configs` /
@@ -477,6 +548,8 @@ consistent with `is_causal=False`. Observed: `(6,24)` 1,602,880 B; `(8,20)` 1,63
 | 14 | ff1 AGMM utilization (51% of HiFi2 peak) | **measured** | Roofline + six on-device experiments. The 15.7 ms splits into 8.0 ms of FPU work, **2.8 ms of serialized SwiGLU epilogue** and 4.9 ms of K-loop overhead where the compute-thread structure (4-tile DST, fp32 L1-acc pack every 7 MACs) and the operand delivery (~10 GB/s per core through the store-and-forward relay) are balanced co-limiters. fp32 dest off measures -4% alone, -8% with 8-tile subblocks, at 2x the numerical error; K_block >= 14 gives nothing. See *ff1 AGMM: where the other 49% goes* |
 | 15 | ff1 AGMM SwiGLU epilogue: bf16-grade `silu_tile<false>` (2026-09-19) | **landed** | Device kernel 15,852 → **15,289 us (-3.6%)** on the mesh, PCC 0.99998 unchanged to the 4th decimal; the mesh "hang" it was first blamed for was a semaphore-reuse race in `sweep_mm_block_sizes.py` (one semaphore pair for back-to-back calls; the model ping-pongs two), fixed. Details and next levers in `MiniMaxH3_wormhole_agmm_ff1_handoff.md` |
 | 16 | ff1 AGMM K-loop attribution with per-thread device zones (2026-09-19) | **measured** | The 5 ms above the FPU time is **pipeline issue efficiency**, not delivery: on a 2x2 fp32 subblock the MATH thread issues at 47 cycles per tile-MAC (nominal 32), UNPACK is busy 42 per tile and PACK 309 per fp32 L1-acc tile, with 21-26 cycles of DST waits — all three ~95% busy. A relay-protocol prefetch changed nothing (16.08 → 16.06 ms); 4x1 subblocks cost +2.2 ms; doubling K_block -1.3%. Remaining levers are precision decisions (fp32 dest off + 2x4: -8% measured; LUT sigmoid) or tt-llk work on `matmul_block`. Handoff §2-§5 rewritten accordingly |
+| 17 | to_qkv AGMM attribution (2026-09-21) | **measured** | Behaves like ff1: K loop 10,053 of 10,228 us per core (98%), operand waits 0.9 us of a 30 us iteration, sampled pipeline at the same 47 cycles per tile-MAC; the `chunks=3` writer split costs 0.08 ms and the copy epilogue 0.17. fp32 dest off with a 4x2 subblock: **11.30 → 10.32 ms on the mesh (-8.7%)**, rel-RMSE 0.0044 → 0.0107 (bar 0.02). LoFi saves only 1.0 of 3.0 ms of math (unpacker-paced). See *to_qkv / to_out AGMM: attribution* |
+| 18 | to_out AGMM attribution (2026-09-21) | **measured** | The op the model runs (fused addcmul, approx on) is **5.29-5.31 ms** on the device, not the 4.33 ms the blocking sweep recorded with the `plain` use case: the addcmul epilogue is 0.7 ms (two passes over the fp32 intermediate) and the K loop **waits on the in0/in1 relay 5.7 us of every 23 us iteration (~1.1 ms)** -- to_out needs ~12.8 GB/s per core of operands at its MAC pace and the store-and-forward relay delivers ~10. Relay prefetch: no gain (5.52 vs 5.43); fp32 dest off: -3.5% only, larger subblocks / M_block 16 / K_block 14 nothing on the mesh (they help single-device, where the loop does not wait). Levers left: a one-pass epilogue (~-0.35 ms) and a higher-bandwidth in0 path (multicast); see the section |
 
 ## Exp ring joint SDPA on Wormhole — brought up and measured (2026-09-18)
 
@@ -675,7 +748,8 @@ over the TP=4 ring, N=7168 packed gate|up, fused SwiGLU, bf16, HiFi2, fp32 dest,
 (64 x 2048 FLOP/cycle x 1.0 GHz = 131.1 TFLOP/s), i.e. 51%. Its DRAM bound is 0.78 ms and its fabric bound
 1.10 ms (4 links x 12.5 GB/s, bidirectional ring), so on paper the op is compute-bound by 7x. The roofline
 script that produces these numbers and the Blackhole cross-reference is
-`models/tt_dit/tests/models/minimax_h3/tools/agmm_roofline.py`.
+`models/tt_dit/tests/models/minimax_h3/tools/transformer_roofline.py` (renamed from `agmm_roofline.py` on 2026-09-21;
+it models every op of the block, with the AGMMs as the default `--ops agmm` selection).
 
 Method: mine the 320-combo ff1 block sweep already on disk, read the op's kernels, then six on-device
 experiments (all on this Galaxy, baseline re-measured in every run: 15,632-15,743 us). The block sweep and
@@ -930,3 +1004,81 @@ python -c "import ttnn; d=ttnn.open_mesh_device(ttnn.MeshShape(1,1)); print('OK'
 
 CLIP 37.36 vs 33.0 bar (docs record 37.37 for Blackhole; imaging_quality 0.6896).
 Only 16:9/5s has been VBench-verified; the sweep ran with `RUN_VBENCH=0`.
+
+## to_qkv / to_out AGMM: attribution (2026-09-21, branch `jameslee/exp_ring_sdpa_wh`)
+
+The ff1 method (*ff1 AGMM: where the other 49% goes*, handoff §6) applied to the block's other two AGMMs, with the
+tooling made generic first: `transformer_roofline.py` (was `agmm_roofline.py`; every op of the block, `--ops`
+selects), `transformer_op_mesh_bench.py --op to_qkv|to_out|ff1|ff2` (the model's exact call on one TP ring, ping-pong
+semaphores, PCC), `transformer_op_single_device_bench.py --op ...` (the single-device stand-in with the same fusion),
+one op registry `minimax_h3_ops.py`, `agmm_compute_zones.py apply block|opwait|sampled` zoning whichever epilogue the
+op compiles, and a `to_out` row in the sweep harness that runs the real addcmul epilogue (the swept 4332.8 us was the
+`plain` use case). Host-timed numbers below are the mesh bench over 10 back-to-back calls and run ~0.2-0.8 ms above the
+device time; zone numbers are per core from the Tracy harness (which always passes a bias; the model does not).
+
+| | to_qkv | to_out |
+|---|---|---|
+| per-device shape, fusion, blocking | M 13664, K 5376 (1344 local), N 5376 = 3 x 1792; `chunks=3`; (8,7,12) 2x2 fp32 | M 13664, K 7168 (1792 local), N 1344; addcmul `a + 1.0 * (x@w) * b`; (8,8,6) 2x2 fp32 |
+| roofline compute / DRAM / fabric | 6.03 / 0.71 / 1.10 ms | 2.01 / 0.75 / 1.47 ms |
+| device kernel (harness) | 10,304 us (doc: 10,401.8) | **5,294 / 5,311 us** with the epilogue (doc's `plain`: 4,332.8) |
+| mesh bench, fused / plain | 11.30 / 11.22 ms (chunk writer 0.08) | 5.43 / 4.56 ms (**epilogue 0.87**) |
+| single device, fused / plain | 11.34 / 11.26 | 4.34 / 4.06 (`dit_minimal_matmul_addcmul_fused`, a one-pass kernel) |
+| zones: K loop / epilogue / kernel | 10,053 / 168 (`EPILOGUE_BIAS`) / 10,228 us | 4,558 / **705** (`EPILOGUE_ADDCMUL`) / 5,266 us |
+| K iterations, per-iteration time | 336 (7 M x 2 N x 24 K), 29.9 us | 196 (7 x 1 x 28), 23.3 us |
+| operand wait (`OPWAIT`, first ~100 iterations) | 0.9 us per iteration (3%) | **5.75 us per iteration (25%, ~1.1 ms)** |
+| sampled 2x2 subblock: MAC / unpack / pack cycles | (not sampled; ff1's 1321 / 1357 / 1236 per 28 tile-MACs) | 1508 / 1570 / 1432 per 32 tile-MACs = **47** cyc per tile-MAC, 358 per fp32 pack |
+| FPU utilisation | 58% | 38% (against the real op) |
+
+### Decomposition
+
+| component | to_qkv, ms | to_out, ms | how |
+|---|---|---|---|
+| FPU work at HiFi2 peak | 6.0 | 2.0 | roofline |
+| grid padding (N per core 21 -> 24 tiles, 5.25 -> 6; M 54 -> 56) | 1.1 | 0.4 | issued tile-MACs / useful |
+| 2x2 fp32 pipeline issue efficiency (47 vs 32 cycles per tile-MAC) | 2.6 | 1.1 | sampled zones, same pace as ff1 |
+| operand waits on the store-and-forward relay | 0.4 | **1.1** | `OPWAIT` zone |
+| epilogue | 0.2 (copy; 0.08 more for the chunked writer) | **0.7** (addcmul, 2 passes) | block zones / mesh A/B |
+| total | ~10.3 | ~5.3 | device 10.30 / 5.29 |
+
+to_qkv is ff1 without the SwiGLU: the loop runs at the 2x2 fp32 pipeline pace and hardly waits. to_out is different.
+Its N per core is 6 tiles, one N block, so every delivered in0 byte feeds fewer tile-MACs; at the pipeline's pace it
+would consume operands at ~12.8 GB/s per core and the relay chains deliver ~10, so the unpack thread waits a quarter
+of the loop. The relay-protocol prefetch (`tools/agmm_relay_prefetch.patch`, retired for ff1) removes request latency,
+not bandwidth, and does nothing here either: 5.52 / 4.60 / 5.32 ms vs 5.43 / 4.56 / 5.23 (fused, plain, fp32-off 4x2).
+
+### Levers measured (mesh bench, host ms, 10 calls; PCC/rel-RMSE vs fp32 torch, bar 0.9995 / 0.02)
+
+| lever | to_qkv | to_out |
+|---|---|---|
+| fp32 dest off, same 2x2 | single device 11.22 -> 10.67 (-4.9%) | mesh fused **5.43 -> 5.24 (-3.5%)**, plain 4.56 -> 4.37; rel-RMSE 0.0056 -> 0.0086 |
+| fp32 dest off + 4x2 subblock | mesh fused **11.30 -> 10.32 (-8.7%)**, PCC 1.0000, rel-RMSE 0.0044 -> 0.0107; single device 10.37 (2x4: 10.80) | mesh 5.23 (single device 3.66 vs 3.88: the gain does not survive the relay) |
+| fp32 dest off + M_block 16, 4x2 | -- | mesh 5.22; (16,8,6) with fp32 on overflows L1 |
+| K_block 14 | (8,14,12) 2x4 fp32 off overflows L1 | fp32 on (8,14,6): 5.43 (0); single device 4.00 vs 4.10; the old sweep had (8,14,6) at 4,568 us, slower |
+| LoFi (diagnostic; math halves) | single device 11.22 -> 10.21: -1.0 of 3.0 ms | single device 4.10 -> 3.61: -0.5 of 1.0 ms |
+| relay prefetch patch | not run (waits are 3%) | **no gain** (see above) |
+
+### What is left
+
+- **to_qkv**: fp32 dest off with (8,7,12) 4x2 is worth 1.0 ms per call (50 ms per forward, 0.4%) at 2.4x the
+  accumulator error -- the same precision decision as ff1's, and it should be taken for the two ops together
+  (`ParallelFeedForward` / `Attention` hand one compute config to their linears; give the AGMMs their own). Beyond that
+  the loop is the 2x2 pipeline issue cost, i.e. tt-llk `matmul_block` work (handoff §4.3). The N padding (21 -> 24
+  tiles per core) is 1.1 ms of issued MACs; an N_block of 7 (3 blocks, 21 tiles, no padding) needs an odd subblock
+  width, which the 2x2 / 4x2 shapes rule out, and (8,7,7) 1x... was not measured.
+- **to_out epilogue (0.7 ms)**: `add_bias_and_addcmul_block` makes two full passes over the fp32 intermediate through
+  L1 -- multiply by `b` and the scalar back into `intermediate_cb`, then add `a` into `out_cb` -- because
+  `unary_bcast_tile` did not work under fp32 dest. One DST pass (`mul_tiles(interm, b)`, `mul_unary` only when the
+  scalar is not 1.0 -- the model passes 1.0 --, `copy_tile(a)` to a second DST tile, `add_binary_tile`, one pack) halves
+  the unpack/pack traffic: ~-0.35 ms expected. The single-device `dit_minimal_matmul_addcmul_fused` epilogue costs
+  0.28 ms on the same shape and is the reference.
+- **to_out delivery (1.1 ms)**: the only lever of size and it is dataflow work: in0 multicast to the chain instead of
+  store-and-forward (each hop today re-writes 128 KB per iteration), or the fabric-bound strided AGMM path
+  (`strided_all_gather_minimal_matmul_async`, no Wormhole config exists). Compute-side changes (fp32 off, bigger
+  subblocks, M_block 16) are absorbed by the waits: single-device to_out drops to 3.65 ms, the mesh stays at 5.22.
+- Per forward: to_qkv 10.3 -> 9.3 ms and to_out 5.3 -> ~4.2 (epilogue + fp32 off) would be ~0.1 s of the 12.4 s.
+
+Reproduce: `transformer_op_mesh_bench.py --op to_qkv|to_out [--no-fusion] [--fp32-dest 0 --blocks 8,7,12,4,2]`;
+zones through the harness with `agmm_compute_zones.py apply block|opwait|sampled` on `13664_5376_5376_8x8_agmm_qkv`
+and `13664_7168_1344_8x8_agmm_to_out` (`MM_SWEEP_EXPLICIT_COMBOS='[[8,7,12,2,2]]'` / `'[[8,8,6,2,2]]'`,
+`MM_SWEEP_PROFILER_DUMP_EVERY=100000`), then `parse` and `revert`; single-device A/Bs with
+`transformer_op_single_device_bench.py --op to_out --no-fusion --cases "8,8,6,2,2,1;8,8,6,4,2,0" [--fidelity LoFi]`.
