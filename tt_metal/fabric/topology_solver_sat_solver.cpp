@@ -9,7 +9,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include <cadical.hpp>
 
@@ -204,6 +206,47 @@ long long g_sat_instances = 0;  // total TopologySatSolver instances created thi
 struct TopologySatSolver::Impl {
     std::unique_ptr<SatEngine> engine = make_engine();
     SatProfile prof;
+    // TT_TOPO_SAT_DUMP_CNF=<path>: capture every added literal + the pending assumptions and write the exact
+    // CNF of the FIRST solve() of each solver instance to <path>.<instance#> (DIMACS; assumptions become unit
+    // clauses). Lets kissat/cadical be run STANDALONE with --statistics to measure how many conflicts a
+    // solution actually needs — i.e. why the 300k host-cap budget gave up on a satisfiable instance.
+    bool dump_cnf = std::getenv("TT_TOPO_SAT_DUMP_CNF") != nullptr;
+    std::vector<int> cnf_lits;
+    std::vector<int> asm_lits;
+    bool cnf_dumped = false;
+    void maybe_dump_cnf(int nvars) {
+        if (!dump_cnf || cnf_dumped) {
+            return;
+        }
+        cnf_dumped = true;
+        const char* base = std::getenv("TT_TOPO_SAT_DUMP_CNF");
+        const std::string path = std::string(base) + "." + std::to_string(g_sat_instances);
+        std::FILE* fp = std::fopen(path.c_str(), "w");
+        if (fp == nullptr) {
+            return;
+        }
+        long long nclauses = static_cast<long long>(asm_lits.size());
+        for (int l : cnf_lits) {
+            if (l == 0) {
+                ++nclauses;
+            }
+        }
+        std::fprintf(fp, "p cnf %d %lld\n", nvars, nclauses);
+        for (int l : cnf_lits) {
+            if (l == 0) {
+                std::fputs("0\n", fp);
+            } else {
+                std::fprintf(fp, "%d ", l);
+            }
+        }
+        for (int a : asm_lits) {
+            std::fprintf(fp, "%d 0\n", a);  // assumption -> unit clause
+        }
+        std::fclose(fp);
+        std::fprintf(
+            stderr, "[sat-cnf-dump] instance#%lld -> %s (vars=%d clauses=%lld)\n", g_sat_instances, path.c_str(),
+            nvars, nclauses);
+    }
     Impl() { ++g_sat_instances; }
     ~Impl() {
         if (prof.on) {
@@ -241,14 +284,21 @@ void TopologySatSolver::protect_variable(int var) { impl_->engine->protect_varia
 void TopologySatSolver::add(int lit) {
     impl_->engine->add(lit);
     ++impl_->prof.adds;
+    if (impl_->dump_cnf && !impl_->cnf_dumped) {
+        impl_->cnf_lits.push_back(lit);
+    }
 }
 
 void TopologySatSolver::assume(int lit) {
     impl_->engine->assume(lit);
     ++impl_->prof.assumes;
+    if (impl_->dump_cnf && !impl_->cnf_dumped) {
+        impl_->asm_lits.push_back(lit);
+    }
 }
 
 int TopologySatSolver::solve() {
+    impl_->maybe_dump_cnf(next_var_);
     ++impl_->prof.solves;
     if (!impl_->prof.on) {
         return impl_->engine->solve();
@@ -260,6 +310,7 @@ int TopologySatSolver::solve() {
 }
 
 int TopologySatSolver::solve_limited(int max_conflicts) {
+    impl_->maybe_dump_cnf(next_var_);
     ++impl_->prof.solves;
     if (!impl_->prof.on) {
         return impl_->engine->solve_limited(max_conflicts);

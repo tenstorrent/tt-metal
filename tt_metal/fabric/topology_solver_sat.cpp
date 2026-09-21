@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <map>
@@ -24,7 +25,34 @@
 
 namespace tt::tt_fabric::detail {
 
-static constexpr int kHostCapConflictBudget = 300'000;
+// Per-solve conflict budget for the host-cap solve. Raised from the original 300k: on satisfiable-but-hard
+// exact-fit rings the solution can sit well past 300k conflicts (measured: the 144-stage SC36 ring needs
+// ~1.48M), so the old budget cut the search off at ~1/5 of the way and the give-up (solve_limited -> 0/UNKNOWN)
+// was indistinguishable from a real UNSAT -> the mapper falsely reported "no solution". 20M gives >10x margin
+// for these instances while still bounding a genuinely infeasible hard cap before the fall-back to soft
+// minimize. Set TT_TOPO_SAT_CAP_CONFLICTS=0 to remove the cap entirely (unbounded; bounded only by the outer
+// operation timeout) for very large rings.
+static constexpr int kHostCapConflictBudgetDefault = 20'000'000;
+
+// Per-solve conflict budget for the host-cap / soft-minimize solves (solve_limited). Overridable via
+// TT_TOPO_SAT_CAP_CONFLICTS for diagnosing hard instances: on a large exact-fit ring (e.g. the 144-stage
+// SC36 case) 300k conflicts can be exhausted before a satisfying full-packing is found, and a budget
+// give-up (solve_limited -> 0/UNKNOWN) is indistinguishable from a genuine UNSAT to the caller. Raising the
+// budget lets us establish whether such an instance is actually SAT. <= 0 disables the limit (unbounded).
+static int host_cap_conflict_budget() {
+    static const int budget = [] {
+        const char* env = std::getenv("TT_TOPO_SAT_CAP_CONFLICTS");
+        if (env != nullptr && env[0] != '\0') {
+            const long v = std::strtol(env, nullptr, 10);
+            if (v > 0) {
+                return static_cast<int>(std::min<long>(v, std::numeric_limits<int>::max()));
+            }
+            return 0;  // <=0 -> unbounded
+        }
+        return kHostCapConflictBudgetDefault;
+    }();
+    return budget;
+}
 
 struct SatSearchBackend::Impl {
     TopologySatSolver solver;
@@ -1216,6 +1244,48 @@ bool topology_sat_encode_hard_constraints(
     // 3. Create assignment variables (preferred globals listed first in each row).
     topology_sat_create_assignment_variables(solver, constraint_data, enc, domain);
 
+    // DEBUG (TT_TOPO_SAT_DUMP_GRAPH=<path>): dump the *pure* embedding problem — logical ring adjacency,
+    // physical inter-mesh adjacency, and the AC-3-pruned per-target domains — so it can be solved by a fully
+    // independent solver, isolating whether an UNSAT comes from adjacency/injectivity alone or from the extra
+    // constraints (full-packing, bijection-completeness, cardinality, preferred). Zero cost when unset.
+    if (const char* dump_path = std::getenv("TT_TOPO_SAT_DUMP_GRAPH"); dump_path != nullptr && dump_path[0] != '\0') {
+        if (std::FILE* fp = std::fopen(dump_path, "w"); fp != nullptr) {
+            std::fprintf(fp, "NT %zu\nNG %zu\n", graph_data.n_target, graph_data.n_global);
+            for (size_t t = 0; t < graph_data.n_target && t < graph_data.target_adj_idx.size(); ++t) {
+                std::fprintf(fp, "TADJ %zu:", t);
+                for (size_t nb : graph_data.target_adj_idx[t]) {
+                    std::fprintf(fp, " %zu", nb);
+                }
+                std::fprintf(fp, "\n");
+            }
+            for (size_t g = 0; g < graph_data.n_global && g < graph_data.global_adj_idx.size(); ++g) {
+                std::fprintf(fp, "GADJ %zu:", g);
+                for (size_t nb : graph_data.global_adj_idx[g]) {
+                    std::fprintf(fp, " %zu", nb);
+                }
+                std::fprintf(fp, "\n");
+            }
+            for (size_t t = 0; t < enc.allowed_global_idx.size(); ++t) {
+                std::fprintf(fp, "DOM %zu:", t);
+                for (size_t g : enc.allowed_global_idx[t]) {
+                    std::fprintf(fp, " %zu", g);
+                }
+                std::fprintf(fp, "\n");
+            }
+            // AL <t>: <global>:<cnf_var> ...  — maps each (target, global) candidate to its assignment
+            // literal, so external tooling can append symmetry-breaking / helper clauses to the dumped CNF.
+            for (size_t t = 0; t < enc.assign_lit.size(); ++t) {
+                std::fprintf(fp, "AL %zu:", t);
+                for (size_t k = 0; k < enc.assign_lit[t].size() && k < enc.allowed_global_idx[t].size(); ++k) {
+                    std::fprintf(fp, " %zu:%d", enc.allowed_global_idx[t][k], enc.assign_lit[t][k]);
+                }
+                std::fprintf(fp, "\n");
+            }
+            std::fclose(fp);
+            log_warning(tt::LogFabric, "TT_TOPO_SAT_DUMP_GRAPH: wrote pure embedding graph to {}", dump_path);
+        }
+    }
+
     // 4. Exactly one global choice per target.
     topology_sat_encode_exactly_one_per_target(solver, enc);
 
@@ -1724,7 +1794,10 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
                     s.solver.assume(lit);
                 }
                 ++s.solve_calls;
-                bool limited = s.cap_active;
+                // The HARD host-group cap solve is the one whose verdict decides feasibility; the optional
+                // minimize/preferred stages are objectives we are happy to abandon.
+                const bool hard_cap_solve = s.cap_active;
+                bool limited = hard_cap_solve;
                 if (!limited && s.minimize_lit != 0) {
                     for (int lit : optional_lits) {
                         if (lit == s.minimize_lit) {
@@ -1733,7 +1806,24 @@ bool SatSearchBackend::next(std::vector<int>& mapping_out) {
                         }
                     }
                 }
-                const int status = limited ? s.solver.solve_limited(kHostCapConflictBudget) : s.solver.solve();
+                const int budget = host_cap_conflict_budget();
+                int status = (limited && budget > 0) ? s.solver.solve_limited(budget) : s.solver.solve();
+                // A conflict-budget give-up returns 0 (UNKNOWN), which is NOT UNSAT. For the HARD cap that
+                // distinction is load-bearing: treating a give-up as UNSAT silently drops a valid mapping (the
+                // 144-stage ring bug). So on an unknown hard-cap result, re-solve UNBOUNDED to get a real
+                // verdict (SAT -> use it; UNSAT -> honest fall-back to soft minimize), bounded only by the
+                // outer operation timeout. Soft/preferred stages keep the give-up: abandoning the objective and
+                // advancing to the next (relaxed) stage is the intended behaviour there.
+                if (hard_cap_solve && status != TopologySatSolver::kSat && status != TopologySatSolver::kUnsat) {
+                    if (with_symmetry_hint) {
+                        s.solver.assume(s.symmetry_lit);
+                    }
+                    for (int lit : optional_lits) {
+                        s.solver.assume(lit);
+                    }
+                    ++s.solve_calls;
+                    status = s.solver.solve();
+                }
                 return status == TopologySatSolver::kSat;
             };
             if ((s.symmetry_lit != 0 && solve_once(/*with_symmetry_hint=*/true)) ||
