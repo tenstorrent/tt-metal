@@ -244,11 +244,14 @@ def run_device_perf_detailed(
     return post_processed_results
 
 
-def check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=False):
+def check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=False, lower_margin=None):
+    """Check timing bounds, optionally overriding only the faster-than-expected margin."""
+    if lower_margin is None:
+        lower_margin = margin
     expected_results = {}
     failed = False
     for col, expected_perf in expected_perf_cols.items():
-        lower_threshold = (1 - margin) * expected_perf
+        lower_threshold = (1 - lower_margin) * expected_perf
         upper_threshold = (1 + margin) * expected_perf
         expected_results.update(
             {
@@ -391,6 +394,7 @@ def run_model_device_perf_test(
     margin: float = 0.015,
     comments: str = "",
     op_support_count: int = None,
+    lower_margin: float | None = None,
 ):
     """
     Run device performance test for a model and validate results against expected performance.
@@ -409,6 +413,7 @@ def run_model_device_perf_test(
         margin (float, optional): Acceptable performance margin as a percentage (e.g., 0.015 = 1.5%). Defaults to 0.015.
         comments (str, optional): Additional comments or settings description for the report. Defaults to "".
         op_support_count (int, optional): Number of operations to support. Defaults to None.
+        lower_margin (float, optional): Override only the lower timing margin; defaults to margin.
 
     Raises:
         AssertionError: If the measured performance is outside the acceptable margin from expected performance.
@@ -426,7 +431,11 @@ def run_model_device_perf_test(
     )
     expected_perf_cols = {inference_time_key: expected_device_perf_ns_per_iteration}
     expected_results = check_device_perf(
-        post_processed_results, margin=margin, expected_perf_cols=expected_perf_cols, assert_on_fail=True
+        post_processed_results,
+        margin=margin,
+        expected_perf_cols=expected_perf_cols,
+        assert_on_fail=True,
+        lower_margin=lower_margin,
     )
     prep_device_perf_report(
         model_name=model_name,

@@ -298,6 +298,10 @@ def test_sdxl_perf_device(
     if is_wormhole_b0():
         os.environ["TT_MM_THROTTLE_PERF"] = "0" if "clip_encoder" in command else "5"
 
+    # Wormhole base512 now measures ~77.7 ms. Allow this speedup while retaining
+    # the existing 82.418 ms upper bound and every other model's timing bounds.
+    lower_margin = 0.05 if is_wormhole_b0() and test_id == "unet_512x512" else None
+
     run_model_device_perf_test(
         command=command,
         expected_device_perf_ns_per_iteration=expected_perf,
@@ -308,4 +312,5 @@ def test_sdxl_perf_device(
         margin=margin,
         comments=comments,
         op_support_count=op_support_count,
+        lower_margin=lower_margin,
     )
