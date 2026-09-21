@@ -44,19 +44,26 @@ TEMPERATURE = 0.2
 # axis 1, Nx1 along axis 0. Those two differ in how the logical line lands on the physical 4x8,
 # which is the thing being compared.
 #
-# `mesh_device` gets the smallest physical submesh holding the count; `logical_shape` is what that
+# The whole Galaxy is opened and the configuration is carved out of it with `create_submeshes`,
+# rather than asking the fixture for a small mesh: on a Galaxy, opening a subset of the chips
+# directly leaves fabric's router handshake waiting on chips that are not running
+# ("Fabric Router Sync: Timeout ... did not complete the remote (ethernet) handshake"), while a
+# submesh of an initialised mesh is what the tt_dit pipelines use and works.
+#
+# `_PHYSICAL` is the submesh shape that holds each device count; `logical_shape` is what that
 # submesh is reshaped to for the run.
+_PARENT = (4, 8)
 _PHYSICAL = {1: (1, 1), 2: (1, 2), 4: (1, 4), 8: (1, 8), 16: (2, 8), 32: (4, 8)}
 
 
+@pytest.mark.parametrize("mesh_device", [_PARENT], indirect=True)
 @pytest.mark.parametrize(
-    ("mesh_device", "logical_shape"),
+    "logical_shape",
     [
-        pytest.param(_PHYSICAL[count], shape, id=f"{count}dev_{shape[0]}x{shape[1]}")
+        pytest.param(shape, id=f"{count}dev_{shape[0]}x{shape[1]}")
         for count in _PHYSICAL
         for shape in dict.fromkeys(((1, count), (count, 1)))  # dedupes 1x1
     ],
-    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -74,10 +81,12 @@ def test_mesh_sweep(*, mesh_device: ttnn.MeshDevice, logical_shape: tuple[int, i
     hf_config = transformers.AutoConfig.from_pretrained(CHECKPOINT)
     torch_prompt = torch.randint(0, hf_config.text_config.vocab_size, (1, PROMPT_LENGTH))
 
-    with reshape_device(mesh_device, logical_shape):
+    submesh = mesh_device.create_submeshes(ttnn.MeshShape(*_PHYSICAL[devices]))[0]
+
+    with reshape_device(submesh, logical_shape):
         tp_axis = 0 if logical_shape[0] > 1 else 1
-        encoder = _encoder(hf_config, mesh_device, tp_axis=tp_axis)
-        prompt = tensor.from_torch(torch_prompt, device=mesh_device, dtype=ttnn.uint32)
+        encoder = _encoder(hf_config, submesh, tp_axis=tp_axis)
+        prompt = tensor.from_torch(torch_prompt, device=submesh, dtype=ttnn.uint32)
 
         # Prefill on its own, twice: the first pass compiles, the second is the reported one.
         padded_length = -(-cache_length // MAX_CHUNK_SIZE) * MAX_CHUNK_SIZE
@@ -86,10 +95,10 @@ def test_mesh_sweep(*, mesh_device: ttnn.MeshDevice, logical_shape: tuple[int, i
             start = time.perf_counter()
             encoder.forward(
                 prompt,
-                cache=Cache(device=mesh_device, size=padded_length, batch_size=1),
+                cache=Cache(device=submesh, size=padded_length, batch_size=1),
                 skip_final_linear=True,
             )
-            ttnn.synchronize_device(mesh_device)
+            ttnn.synchronize_device(submesh)
             prefill_times.append(time.perf_counter() - start)
         prefill = prefill_times[-1]
 
