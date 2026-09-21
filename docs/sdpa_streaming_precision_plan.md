@@ -1,10 +1,11 @@
 # Streaming SDPA precision integration — PR 1
 
 Status: recipe/evidence freeze, clean branch setup, and internal numerical-policy
-and compatibility-resolver foundation implemented. Device implementations are
-not yet ported or qualified. No new public recipe interface or dispatch is
-enabled. Public enum/helper names below are intentionally not prescribed until
-the interface implementation is reviewed.
+and compatibility-resolver foundation implemented and built on the new base.
+The first shared streaming-buffer helpers are extracted and device-checked.
+New numerical recipes are not yet ported or qualified. No new public recipe
+interface or dispatch is enabled. Public enum/helper names below are intentionally
+not prescribed until the interface implementation is reviewed.
 
 ## Immutable inputs to the port
 
@@ -125,12 +126,17 @@ geometry support and is not reachable from the public operation yet.
 The compatibility branch preserves the difference between omitted config
 (HiFi2) and an explicitly empty `ComputeKernelConfig` (LoFi), every existing
 compute-config field, and the independent exponential-approximation setting.
+The Python binding is a separate compatibility case: an empty
+`WormholeComputeKernelConfig()` currently sets `MathFidelity.Invalid`, not LoFi.
+Do not silently reinterpret it as the C++ default. Its constructor contract is
+tested without launching an invalid-fidelity kernel; device default-equivalence
+tests explicitly request LoFi or omit the entire config.
 Explicit recipes reject a simultaneous compute config or `exp_approx_mode=false`
 instead of silently overriding it. C retains separate QK/PV fidelity intent;
 D's accurate softmax cannot be represented by simply flipping the generic
 approximation booleans. Device policy integration remains required for both.
 
-Validation completed:
+Initial partial validation (superseded by the full build below):
 
 - All six policy GoogleTests passed on macOS with pinned GoogleTest v1.13.0.
 - New resolver and resolver tests passed a C++20 syntax check with warnings
@@ -142,14 +148,35 @@ Validation completed:
   complete build or device validation of this branch.
 - `git diff --check` passed.
 
-Fresh full configuration used this branch's exact base and pinned submodules
+The first full configuration attempt used this branch's exact base and pinned submodules
 in an independent remote worktree. It failed downloading Boost because of
 container DNS/connectivity. Transferring the SHA256-verified pinned Boost archive
-locally advanced configuration, which then failed fetching protobuf. No new-base
-full build or device smoke result is claimed. The changed dense entry point
-still needs compilation and device regression testing once dependency access
-is restored. These tests are registered in the normal TTNN smoke target for
-that build; the standalone test is not a replacement for it.
+locally advanced configuration, which then failed fetching protobuf. Those
+initial attempts did not establish a full build or device result.
+
+### Infrastructure recovery and first shared helpers (2026-09-21)
+
+A fresh reservation on `yyzo-bh-04` restored dependency access. The full network
+home filesystem required both ccache and the firmware/device JIT cache to move
+to task-specific `/localdev` directories. No existing user data was deleted.
+
+The production branch then built successfully with its exact main base and
+pinned submodules, including TTNN bindings and tests. All 13 registered
+policy/resolver tests passed against the newly built libraries, replacing the
+earlier standalone/old-library validation limitation.
+
+`compute/streaming/circular_buffer.hpp` now owns the shared out-of-order pack,
+outlined CB publication/consumption, and retained-write-origin publication
+helpers. Their bodies, linkage, and inlining attributes are unchanged. The
+shared include replaces the definitions in `compute_streaming.hpp`; dataflow,
+formats, arithmetic, scheduling, and dispatch are unchanged.
+
+The compatibility suite passed before and after extraction (11 cases each),
+with all 10 device output hashes identical across independent JIT caches. It
+also passed with Watcher/device assertions enabled. Existing prefill tests
+passed 8 cases with 2 pre-existing skips. These are Blackhole P100 checks of the
+legacy paths, not qualification or performance measurements of the new recipes.
+See [validation details and commands](sdpa_streaming_precision_validation.md).
 
 ## Merge gates
 

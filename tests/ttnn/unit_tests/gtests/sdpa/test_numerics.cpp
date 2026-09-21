@@ -75,6 +75,33 @@ TEST(SDPANumerics, AccurateRecipeIsNotDefinedByApproximationBoolean) {
     EXPECT_TRUE(result.exp_approx_mode);
 }
 
+TEST(SDPANumerics, EveryRecipeResolvesToItsFrozenComputeFields) {
+    const std::array selections{
+        RecipeSelection{Recipe::A},
+        RecipeSelection{Recipe::B},
+        RecipeSelection{Recipe::C},
+        RecipeSelection{Recipe::D},
+        RecipeSelection{Recipe::E, KVStorage::BF16},
+        RecipeSelection{Recipe::E, KVStorage::BFP8},
+        RecipeSelection{Recipe::E, KVStorage::BFP4}};
+    for (const auto selection : selections) {
+        const auto policy = resolve_precision_policy(selection);
+        for (const auto exp : {std::optional<bool>{}, std::optional<bool>{true}}) {
+            const auto result = resolve_numerics(tt::ARCH::BLACKHOLE, selection, std::nullopt, exp);
+            ASSERT_TRUE(result.policy.has_value());
+            EXPECT_EQ(result.policy.value(), policy);
+            EXPECT_EQ(result.compute.math_fidelity, policy.pv_fidelity);
+            EXPECT_EQ(result.compute.fp32_dest_acc_en, policy.fp32_destination);
+            EXPECT_TRUE(result.compute.math_approx_mode);
+            EXPECT_TRUE(result.exp_approx_mode);
+            EXPECT_FALSE(result.compute.packer_l1_acc);
+            EXPECT_FALSE(result.compute.dst_full_sync_en);
+            EXPECT_EQ(
+                result.compute.throttle_level, ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
+        }
+    }
+}
+
 TEST(SDPANumerics, RejectAmbiguousOrConflictingExplicitControls) {
     EXPECT_THROW(
         resolve_numerics(tt::ARCH::BLACKHOLE, RecipeSelection{Recipe::A}, ttnn::ComputeKernelConfig{}, std::nullopt),
