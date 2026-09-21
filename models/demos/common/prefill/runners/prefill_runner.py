@@ -718,7 +718,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     if _migration_enabled:
         from models.demos.common.prefill.runners.migration import (
-            KvCacheStage,
             allgather_kv_stage_layouts,
             deliver_device_map_and_gather_stage_layouts,
             export_device_map_file_and_gather_stage_layouts,
@@ -752,17 +751,13 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
             )
 
-        _multi_cache_runtime = hasattr(runtime, "kv_migration_stages")
-        if _multi_cache_runtime:
-            kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
-        elif hasattr(runtime, "kv_migration_base_address"):
-            kv_stages = [KvCacheStage(runtime.kv_migration_base_address(kv_caches), first_layer_idx, num_my_layers)]
-        else:
+        if not hasattr(runtime, "kv_migration_stages"):
             raise RuntimeError(
-                f"migration enabled but runtime {type(runtime).__name__} implements neither "
-                "kv_migration_stages nor kv_migration_base_address "
+                f"migration enabled but runtime {type(runtime).__name__} does not implement "
+                "kv_migration_stages, so its KV cache layout cannot be described "
                 "(see docs/ADDING_A_PREFILL_MODEL.md §2)."
             )
+        kv_stages = runtime.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
         _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
         if _mock_migration:
             stage_layouts = allgather_kv_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE)
@@ -772,8 +767,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             )
         else:
             stage_layouts = deliver_device_map_and_gather_stage_layouts(mesh_device, kv_stages, GLOBAL_MESH_SHAPE, rank)
-
-        _layout_kwarg = {"stage_layouts": stage_layouts} if _multi_cache_runtime else {"stage_layout": stage_layouts[0]}
 
         if _mock_migration:
             device_map_path = rank_scoped_device_map_path(
@@ -788,7 +781,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    **_layout_kwarg,
+                    stage_layouts=stage_layouts,
                 )
                 logger.info(f"[mock-migration] merged KV chunk table -> {table_path} (no migration worker)")
             logger.info(f"[mock-migration] rank {rank}: local device map -> {device_map_path}")
@@ -799,7 +792,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    **_layout_kwarg,
+                    stage_layouts=stage_layouts,
                 )
                 logger.info(f"[migration] merged KV chunk table -> {table_path} (file export; no worker handshake)")
             logger.info(f"[migration] rank {rank}: exported local device map -> {migration_device_map_file_path()}")
@@ -818,7 +811,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                     table_path,
                     first_layer_idx=first_layer_idx,
                     num_my_layers=num_my_layers,
-                    **_layout_kwarg,
+                    stage_layouts=stage_layouts,
                 )
                 migration_endpoint = publish_serialized_table_and_wait_ready(
                     table_path=table_path,

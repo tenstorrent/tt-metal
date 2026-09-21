@@ -81,7 +81,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             )
         if kv_caches.index is not None:
             raise RuntimeError("Kimi-K3 has no DSA index cache; a merged table here is unexpected")
-        return [KvCacheStage(self.kv_migration_base_address(kv_caches), first_slot, len(my_slots))]
+        return [KvCacheStage(self._kvpe_base_address(kv_caches), first_slot, len(my_slots))]
 
     def kv_table_layer_rows(self, stage_layouts):
         """Publish slab i at its model layer, so table rows stay on the layer axis.
