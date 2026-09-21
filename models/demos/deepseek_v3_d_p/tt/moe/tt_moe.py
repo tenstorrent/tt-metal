@@ -214,6 +214,9 @@ class TtMoe(LightweightModule):
         shared_expert_activation: str = ACTIVATION_SILU,
         shared_expert_situ_beta: float | None = None,
         shared_expert_situ_linear_beta: float | None = None,
+        shared_expert_clamped_silu_glu_limit: float | None = None,
+        gate_score_func: str | None = None,
+        gate_hash_table: torch.Tensor | None = None,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
@@ -262,7 +265,15 @@ class TtMoe(LightweightModule):
                 sites run different ops (Python-composed vs fused kernel) at different widths.
             shared_expert_situ_beta / shared_expert_situ_linear_beta: SiTU softcap betas, required
                 when shared_expert_activation == "situ".
+            shared_expert_clamped_silu_glu_limit: clamp limit, required when
+                shared_expert_activation == "clamped_silu_glu".
             gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
+            gate_score_func: Router affinity applied to the raw logits. None keeps
+                TtMoEGateConfig's default. Read by the grouped-topk gate and by both hash gates.
+            gate_hash_table: tid2eid table, (vocab_size, num_experts_per_tok). Required by the
+                HASH_HOST / HASH_DEVICE gate modes. Not cached -- the gate replicates it. TtMoe is
+                the lowest layer that takes it: no caller above supplies it yet, so those modes are
+                reachable only by constructing TtMoe directly.
             gate_fallback_mode: Fallback mode for gate (default: HOST_ALL)
             overlap_shared_expert_with_dispatch: If True, run the shared expert and dispatch
                 on disjoint sub-devices so they overlap on-chip. If False, skip sub-device
@@ -286,7 +297,7 @@ class TtMoe(LightweightModule):
             rms_norm_eps: eps for that latent norm. Passed explicitly because
                 TtDistributedRmsNorm defaults to 1e-6 while K3's config says 1e-5.
             routed_expert_activation: GLU activation the fused routed-expert kernel runs.
-                Defaults to SiLU (DeepSeek / K2.6 / GLM). Kimi-K3 passes SituGlu. Routed only --
+                Defaults to SiLU (DeepSeek / K2.7 / GLM). Kimi-K3 passes SituGlu. Routed only --
                 the shared expert takes shared_expert_activation, which is a separate knob.
             routed_expert_hybrid_token_threshold: split the routed experts across BOTH
                 routed-expert ops by load. None (default) keeps the single-op path. An int T
@@ -308,6 +319,7 @@ class TtMoe(LightweightModule):
         self.num_routed_experts = num_routed_experts
         self.num_experts_per_tok = num_experts_per_tok
         self.seq_len_per_chip = seq_len_per_chip
+        self.layer_idx = layer_idx  # GLOBAL index; only consumed by the env-gated routing dump
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
         self.routed_emb_dim = emb_dim if routed_emb_dim is None else routed_emb_dim
@@ -371,6 +383,8 @@ class TtMoe(LightweightModule):
         gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
         # The gate all-reduce runs on the TP axis (cluster_axis=TP_AXIS), so it follows col_topology.
         gate_config.ccl_config["TOPOLOGY"] = self.col_topology
+        if gate_score_func is not None:
+            gate_config.score_func = gate_score_func
 
         # Handle cache-only case (gate_weights=None)
         if gate_weights is not None:
@@ -390,6 +404,7 @@ class TtMoe(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.gate",
             is_balanced=is_balanced,
+            hash_table=gate_hash_table,
         )
 
         self.routing_setup = TtMoERoutingSetup(
@@ -533,6 +548,7 @@ class TtMoe(LightweightModule):
             activation=shared_expert_activation,
             situ_beta=shared_expert_situ_beta,
             situ_linear_beta=shared_expert_situ_linear_beta,
+            clamped_silu_glu_limit=shared_expert_clamped_silu_glu_limit,
         )
 
         self.latent_projections = (
@@ -584,6 +600,86 @@ class TtMoe(LightweightModule):
             self.mesh_device.remove_sub_device_manager(self.sd_manager_id)
             self.sd_manager_id = None
 
+    _dump_traced_warned = False  # see the traced-path branch below; warn once per process
+
+    def _dump_routing(
+        self,
+        indices: ttnn.Tensor,
+        scores: ttnn.Tensor,
+        actual_start: int,
+        cache_user_id: int,
+        traced: bool,
+    ) -> None:
+        """Env-gated (PREFILL_DUMP_ROUTING_DIR) host dump of the gate's per-token top-k selection.
+
+        A no-op unless the var is set. The routing tensors never otherwise leave the device, so this
+        costs a full device sync plus a [tokens, topk] readback per layer per chunk: a debug tool, not
+        a production path. The file name carries the GLOBAL layer index, the KV slot and the chunk's
+        absolute KV start, because start is what lets the analysis script invert the rotated
+        block-cyclic chip->token mapping back to global token order (see rotated_chip_positions).
+
+        The ids written are GLOBAL expert ids (0..num_routed_experts-1), plus the pad sentinel
+        num_routed_experts: the gate matmul is TP-sharded on K and all-reduced, so every chip runs the
+        top-k over the FULL expert axis. Expert parallelism only enters later, in dispatch.
+        """
+        dump_dir = os.environ.get("PREFILL_DUMP_ROUTING_DIR")
+        if not dump_dir:
+            return
+        # Every dumped layer costs a device sync, so a 93-layer x 11-chunk run pays ~1000 of them and
+        # writes ~700 MB. PREFILL_DUMP_ROUTING_LAYERS narrows it to the layers actually being chased
+        # (e.g. the ones that already have a KV dump). Unset = every MoE layer.
+        wanted = os.environ.get("PREFILL_DUMP_ROUTING_LAYERS")
+        if wanted and str(self.layer_idx) not in {s.strip() for s in wanted.split(",") if s.strip()}:
+            return
+        if traced:
+            # A device->host readback is illegal inside a trace capture, and a capture recorded with
+            # one would be wrong for every replay. Stay off and say so rather than corrupt the run.
+            # Once per process, not once per MoE layer per chunk -- that would be ~69 x N identical
+            # lines on Kimi-K3 and would bury everything else in the log.
+            if not TtMoe._dump_traced_warned:
+                TtMoe._dump_traced_warned = True
+                logger.warning(
+                    "[TtMoe] PREFILL_DUMP_ROUTING_DIR is set but this is the traced path; "
+                    "routing dump skipped for all layers (run with use_trace=False to collect it)"
+                )
+            return
+        try:
+            # SP is mesh axis 0 and the gate output is TP-replicated (the logits all-reduce), so concat
+            # along axis 0 over the SP rows and collapse the TP columns -- the same composition
+            # TtMoEGatePrefill._compose_logits_to_host uses.
+            composer = ttnn.create_mesh_composer(
+                self.mesh_device,
+                config=ttnn.MeshComposerConfig(
+                    dims=(0, -1),
+                    mesh_shape_override=ttnn.MeshShape(self.mesh_device.shape[0], 1),
+                ),
+            )
+            host_indices = ttnn.to_torch(indices, mesh_composer=composer).reshape(-1, self.num_experts_per_tok)
+            host_scores = ttnn.to_torch(scores, mesh_composer=composer).reshape(-1, self.num_experts_per_tok)
+            sp_factor = int(self.mesh_device.shape[0])
+            os.makedirs(dump_dir, exist_ok=True)
+            torch.save(
+                {
+                    # int32, not int16: the sentinel is num_routed_experts and a wider expert space
+                    # would not fit int16. The file is written once and read offline; size is not the
+                    # constraint here.
+                    "expert_ids": host_indices.to(torch.int32),
+                    "expert_weights": host_scores.to(torch.float32),
+                    "layer_idx": self.layer_idx,
+                    "slot_id": int(cache_user_id),
+                    "actual_start": int(actual_start),
+                    "sp_factor": sp_factor,
+                    "tokens_per_chip": int(host_indices.shape[0]) // sp_factor,
+                    "num_routed_experts": int(self.num_routed_experts),
+                },
+                os.path.join(
+                    dump_dir,
+                    f"routing_layer{self.layer_idx}_slot{int(cache_user_id)}_start{int(actual_start)}.pt",
+                ),
+            )
+        except Exception as exc:  # diagnostics must never fail a run
+            logger.warning(f"[TtMoe] routing dump for layer {self.layer_idx} failed: {exc}")
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -592,6 +688,8 @@ class TtMoe(LightweightModule):
         padding_side: str = "right",
         actual_start: Optional[int] = None,
         metadata: Optional[tuple] = None,
+        input_ids: Optional[torch.Tensor] = None,
+        cache_user_id: int = 0,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -616,6 +714,10 @@ class TtMoe(LightweightModule):
                 illegal inside a trace capture, and a config baked in at capture time would be wrong
                 for every later chunk. Ignored unless padding awareness is active (actual_isl set and
                 a DEVICE_FP32 gate).
+            input_ids: host token ids for the whole sequence, flat, one per row of x. Required by
+                the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
+                HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
+                assumes sequential SP placement (not is_balanced).
 
         Returns:
             Tuple of (final_output, intermediates):
@@ -686,7 +788,10 @@ class TtMoe(LightweightModule):
             padding_side=padding_side,
             padding_config=padding_config,
             actual_start=actual_start or 0,
+            input_ids=input_ids,
         )
+
+        self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
 
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
             ttnn_top_k_experts_indices=indices,

@@ -22,7 +22,10 @@ inline void calculate_sqrt_custom()
 {
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::dst_reg[0] = sfpu_sqrt_custom<APPROXIMATION_MODE>(sfpi::dst_reg[0]);
+        // This wrapper is the only caller that can be handed a -inf, and the op's IEEE
+        // contract is what the edge sweep checks, so it pays for the guard that erfinv and
+        // asin/acos do not. See ckernel_sfpu_sqrt_custom.h for the measured cost.
+        sfpi::dst_reg[0] = sfpu_sqrt_custom<APPROXIMATION_MODE, 2, true /*NEGATIVE_INFINITY_SAFE*/>(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
 }

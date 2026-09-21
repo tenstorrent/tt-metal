@@ -30,6 +30,9 @@ included, is plain bf16. Only the MoE routed experts are quantized.
 """
 
 import types
+from typing import Any
+
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 
 
 class KimiK3Config:
@@ -38,6 +41,15 @@ class KimiK3Config:
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    # The one definition of K3's l1_small pool, read by the adapter (and so by the runner) and by
+    # the pytest gates, whose mesh fixture is built before any adapter is resolved. Only a CEILING
+    # is known: 24576 (this package's usual value) starves MLA chunked attention of circular
+    # buffers as soon as there is a second chunk to attend over. There is no AttnRes floor any
+    # more -- #54834's fix made the sealed set allocate one persistent semaphore set up front, and
+    # tests/attn_res/model/test_l1_small_footprint.py asserts 0 B/bank at every sealed depth with
+    # l1_small_size 1152. 4096 is therefore inherited, not measured: peers run 768 (Kimi-K2.7,
+    # Mistral-4) and 1216 (GLM-5.x). Re-bisect before trusting it.
+    L1_SMALL_SIZE = 4096
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 33792  # Dense FFN hidden dimension
 
@@ -50,16 +62,14 @@ class KimiK3Config:
     ROUTE_SCALE = 1.0  # routed_scaling_factor
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
     # Routed-expert hybrid split: experts with <= this many active tokens go to
-    # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross repeatedly on the
-    # 3584x3072 routed-expert shape: the composite's cost is flat inside an M chunk while the
-    # fused op's rises with the count, so the composite takes 352-512, loses 576-768 where the
-    # tail per_core_M rounds 18 tile-rows up to 32, and wins outright from 896. 768 is the
-    # aggregate-optimal cut over that sawtooth (+0.14% against a per-count oracle, worst cell
-    # +23% at 512). Measured under SituGlu, the activation these experts actually run.
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross ONCE on the
+    # 3584x3072 routed-expert shape, between 128 and 192: the composite's cost is flat inside an M
+    # chunk while the fused op's rises with the count. The composite takes 192 by 8.5% and never
+    # gives the band back. Measured under SituGlu, the activation these experts actually run.
     # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
-    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 768
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
 
     # Above this, moe_grouped_topk's circular buffers (sized from NUM_ROUTED_EXPERTS/32) no longer fit
     # L1 alongside the height-sharded gate input, and the program fails to validate. Enforced by
@@ -220,3 +230,30 @@ def kimi_k3_hf_config(max_seq: int = 8192):
         activation_situ_beta=KimiK3Config.ACTIVATION_SITU_BETA,
         activation_situ_linear_beta=KimiK3Config.ACTIVATION_SITU_LINEAR_BETA,
     )
+
+
+def kimi_k3_model_config() -> dict[str, Any]:
+    """The HF JSON-shaped fields `KDAConfig` consumes, built from the pinned Kimi-K3 constants.
+
+    Kimi-K3's own config.json cannot be loaded here: its `model_type` is `kimi_linear` and the
+    checkpoint's remote code raises ImportError without `fla-core`. So the KDA half of the config is
+    assembled from the constants above rather than parsed.
+    """
+    return {
+        "hidden_size": KimiK3Config.EMB_SIZE,
+        "num_hidden_layers": KimiK3Config.NUM_LAYERS,
+        "num_attention_heads": KimiK3Config.NUM_ATTENTION_HEADS,
+        "rms_norm_eps": KimiK3Config.RMS_NORM_EPS,
+        "linear_attn_config": {
+            "num_heads": KimiK3Config.KDA_NUM_HEADS,
+            "head_dim": KimiK3Config.KDA_HEAD_DIM,
+            "short_conv_kernel_size": KimiK3Config.KDA_SHORT_CONV_KERNEL_SIZE,
+            "use_full_rank_gate": KimiK3Config.KDA_USE_FULL_RANK_GATE,
+            "gate_lower_bound": KimiK3Config.KDA_GATE_LOWER_BOUND,
+        },
+    }
+
+
+def kimi_k3_kda_config() -> KDAConfig:
+    """Build the TT KDA configuration from the pinned Kimi-K3 constants."""
+    return KDAConfig.from_model_config(kimi_k3_model_config())
