@@ -1,45 +1,64 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# PREDECESSOR EXPERIMENT -- does what ran before change what we measure?
 #
-# SPDX-License-Identifier: Apache-2.0
-# Wormhole LLK perf runner, shared by the 5 wh matrix groups in
-# tests/pipeline_reorg/llk_perf_tests.yaml (the group index is passed in).
-#
-# pytest-split sharding: compile this shard's items (producer), then measure
-# them (consumer) -- one invocation each over the whole perf suite.
-#
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_wormhole.sh <group> <n_groups>
+# 64 matmul tests, measured eight times on one core with one worker, each time
+# after different predecessors. Scheduling cannot explain a difference here:
+# there is one worker, so the order within an arm is fixed.
 set -euo pipefail
-
-GROUP="${1:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-N_GROUPS="${2:?usage: run_llk_perf_wormhole.sh <group> <n_groups>}"
-SPEED_OF_LIGHT="${SPEED_OF_LIGHT:-true}"
-export TT_LLK_DISABLE_ASSERTS="${TT_LLK_DISABLE_ASSERTS:-1}"
-
-case "$SPEED_OF_LIGHT" in
-  true)
-    SPEED_OF_LIGHT_ARGS=(--speed-of-light)
-    ;;
-  false)
-    SPEED_OF_LIGHT_ARGS=()
-    ;;
-  *)
-    echo "SPEED_OF_LIGHT must be 'true' or 'false', got '$SPEED_OF_LIGHT'" >&2
-    exit 2
-    ;;
-esac
+GROUP="${1:?}"
+N_GROUPS="${2:?}"
+if [ "$GROUP" != "1" ]; then
+  echo "experiment: only group 1 runs; this group exits."
+  exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/python_tests"
-mkdir -p perf_data
+export PERF_KEEP_RUNS=0          # keep every arm; the default prunes to 10
+unset PERF_RUN_TAG               # each arm sets its own
 
-PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+M="perf and not accuracy"
+PQ="-q --override-ini=log_cli=false"
 
-pytest $PYTEST_COMPILE_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-wormhole-${GROUP}-compile.xml" .
-pytest $PYTEST_RUN_EXTRA "${SPEED_OF_LIGHT_ARGS[@]}" --compile-consumer --dist loadgroup -n 15 -x -m "perf and not accuracy" --timeout=60 \
-  --splits "$N_GROUPS" --group "$GROUP" \
-  --junitxml="pytest-report-wormhole-${GROUP}-run.xml" .
-junitparser merge pytest-report-wormhole-${GROUP}-compile.xml pytest-report-wormhole-${GROUP}-run.xml pytest-report-wormhole-${GROUP}.xml
+# --- the target: 64 matmul tests spread across the module ------------------
+pytest -q --collect-only -m "$M" perf_math_matmul.py > /tmp/mm.txt 2>&1 || true
+grep '::' /tmp/mm.txt > /tmp/mm_ids.txt
+TOTAL=$(wc -l < /tmp/mm_ids.txt)
+echo "===== matmul items collected: $TOTAL"
+if [ "$TOTAL" -lt 1000 ]; then
+  echo "FATAL: matmul collection looks wrong" >&2
+  exit 1
+fi
+STEP=$(( TOTAL / 64 ))
+awk -v s="$STEP" 'NR % s == 1' /tmp/mm_ids.txt | head -64 > /tmp/target.txt
+awk -v s="$STEP" 'NR % s == 3' /tmp/mm_ids.txt | head -64 > /tmp/other.txt
+mapfile -t TARGET < /tmp/target.txt
+mapfile -t OTHER  < /tmp/other.txt
+echo "===== target ids: ${#TARGET[@]}   other-matmul ids: ${#OTHER[@]}"
+printf '  %s\n' "${TARGET[@]:0:3}"
+
+arm() {
+  local label="$1"; shift
+  echo "===== ARM $label  ($# predecessor arg(s))  $(date -u +%H:%M:%S)"
+  export PERF_RUN_TAG="$label"
+  # Producer builds every ELF this arm needs; consumer measures on ONE worker.
+  pytest $PQ --compile-producer -n 10 -m "$M" --timeout=60 "$@" "${TARGET[@]}" \
+    > "/tmp/${label}.compile.log" 2>&1 || echo "  (producer rc=$?)"
+  pytest $PQ --compile-consumer -n 1 -m "$M" --timeout=60 "$@" "${TARGET[@]}" \
+    > "/tmp/${label}.run.log" 2>&1 || echo "  (consumer rc=$?)"
+  tail -2 "/tmp/${label}.run.log" | sed 's/^/  /'
+  unset PERF_RUN_TAG
+}
+
+arm solo
+arm after_binary        perf_eltwise_binary.py
+arm after_reduce        perf_reduce.py
+arm after_tilize        perf_fast_tilize_full.py
+arm after_transpose     perf_unpack_transpose.py
+arm after_packdestbank  perf_pack_dest_bank.py
+arm after_matmul_other  "${OTHER[@]}"
+arm solo2
+
+echo "===== arms written:"
+ls -1 ../perf_data/runs/
+echo "===== experiment done ====="
