@@ -2,6 +2,74 @@ asic_to_fabric_node_mapping:
   hostnames:
     - hostname: closet_box_cluster_desc_metal-wh-13.yaml
       mesh:
+        - mesh: 3
+        - chips:
+            - umd_chip_id: 0
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 3
+                chip_id: 1
+              asic_id: 10226819215
+            - umd_chip_id: 1
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 3
+                chip_id: 5
+              asic_id: 10226819219
+            - umd_chip_id: 2
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 3
+                chip_id: 6
+              asic_id: 10226819248
+            - umd_chip_id: 3
+              asic_position:
+                tray_id: 0
+                asic_location: 0
+              fabric_node_id:
+                mesh_id: 3
+                chip_id: 2
+              asic_id: 10226819284
+            - umd_chip_id: 4
+              asic_position:
+                tray_id: 0
+                asic_location: 1
+              fabric_node_id:
+                mesh_id: 3
+                chip_id: 0
+              asic_id: 14521786511
+            - umd_chip_id: 5
+              asic_position:
+                tray_id: 0
+                asic_location: 1
+              fabric_node_id:
+                mesh_id: 3
+                chip_id: 4
+              asic_id: 14521786515
+            - umd_chip_id: 6
+              asic_position:
+                tray_id: 0
+                asic_location: 1
+              fabric_node_id:
+                mesh_id: 3
+                chip_id: 7
+              asic_id: 14521786544
+            - umd_chip_id: 7
+              asic_position:
+                tray_id: 0
+                asic_location: 1
+              fabric_node_id:
+                mesh_id: 3
+                chip_id: 3
+              asic_id: 14521786580
+    - hostname: closet_box_cluster_desc_metal-wh-14.yaml
+      mesh:
         - mesh: 2
         - chips:
             - umd_chip_id: 0
@@ -11,81 +79,13 @@ asic_to_fabric_node_mapping:
               fabric_node_id:
                 mesh_id: 2
                 chip_id: 1
-              asic_id: 10226819215
-            - umd_chip_id: 1
-              asic_position:
-                tray_id: 0
-                asic_location: 0
-              fabric_node_id:
-                mesh_id: 2
-                chip_id: 5
-              asic_id: 10226819219
-            - umd_chip_id: 2
-              asic_position:
-                tray_id: 0
-                asic_location: 0
-              fabric_node_id:
-                mesh_id: 2
-                chip_id: 6
-              asic_id: 10226819248
-            - umd_chip_id: 3
-              asic_position:
-                tray_id: 0
-                asic_location: 0
-              fabric_node_id:
-                mesh_id: 2
-                chip_id: 2
-              asic_id: 10226819284
-            - umd_chip_id: 4
-              asic_position:
-                tray_id: 0
-                asic_location: 1
-              fabric_node_id:
-                mesh_id: 2
-                chip_id: 0
-              asic_id: 14521786511
-            - umd_chip_id: 5
-              asic_position:
-                tray_id: 0
-                asic_location: 1
-              fabric_node_id:
-                mesh_id: 2
-                chip_id: 4
-              asic_id: 14521786515
-            - umd_chip_id: 6
-              asic_position:
-                tray_id: 0
-                asic_location: 1
-              fabric_node_id:
-                mesh_id: 2
-                chip_id: 7
-              asic_id: 14521786544
-            - umd_chip_id: 7
-              asic_position:
-                tray_id: 0
-                asic_location: 1
-              fabric_node_id:
-                mesh_id: 2
-                chip_id: 3
-              asic_id: 14521786580
-    - hostname: closet_box_cluster_desc_metal-wh-14.yaml
-      mesh:
-        - mesh: 1
-        - chips:
-            - umd_chip_id: 0
-              asic_position:
-                tray_id: 0
-                asic_location: 0
-              fabric_node_id:
-                mesh_id: 1
-                chip_id: 1
               asic_id: 10226819114
             - umd_chip_id: 1
               asic_position:
                 tray_id: 0
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 2
                 chip_id: 5
               asic_id: 10226819176
             - umd_chip_id: 2
@@ -93,7 +93,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 0
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 2
                 chip_id: 6
               asic_id: 10226819182
             - umd_chip_id: 3
@@ -101,7 +101,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 0
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 2
                 chip_id: 2
               asic_id: 10226819214
             - umd_chip_id: 4
@@ -109,7 +109,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 0
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 2
                 chip_id: 0
               asic_id: 14521786410
             - umd_chip_id: 5
@@ -117,7 +117,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 0
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 2
                 chip_id: 4
               asic_id: 14521786472
             - umd_chip_id: 6
@@ -125,7 +125,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 0
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 2
                 chip_id: 7
               asic_id: 14521786478
             - umd_chip_id: 7
@@ -133,7 +133,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 0
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 1
+                mesh_id: 2
                 chip_id: 3
               asic_id: 14521786510
     - hostname: closet_box_cluster_desc_metal-wh-15.yaml
@@ -206,14 +206,14 @@ asic_to_fabric_node_mapping:
               asic_id: 14521786456
     - hostname: closet_box_cluster_desc_metal-wh-16.yaml
       mesh:
-        - mesh: 3
+        - mesh: 1
         - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 0
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 3
+                mesh_id: 1
                 chip_id: 1
               asic_id: 10226819098
             - umd_chip_id: 1
@@ -221,7 +221,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 0
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 3
+                mesh_id: 1
                 chip_id: 5
               asic_id: 10226819256
             - umd_chip_id: 2
@@ -229,7 +229,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 0
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 3
+                mesh_id: 1
                 chip_id: 2
               asic_id: 10226819289
             - umd_chip_id: 3
@@ -237,7 +237,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 0
                 asic_location: 0
               fabric_node_id:
-                mesh_id: 3
+                mesh_id: 1
                 chip_id: 6
               asic_id: 10226819300
             - umd_chip_id: 4
@@ -245,7 +245,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 0
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 3
+                mesh_id: 1
                 chip_id: 0
               asic_id: 14521786394
             - umd_chip_id: 5
@@ -253,7 +253,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 0
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 3
+                mesh_id: 1
                 chip_id: 4
               asic_id: 14521786552
             - umd_chip_id: 6
@@ -261,7 +261,7 @@ asic_to_fabric_node_mapping:
                 tray_id: 0
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 3
+                mesh_id: 1
                 chip_id: 3
               asic_id: 14521786585
             - umd_chip_id: 7
@@ -269,6 +269,6 @@ asic_to_fabric_node_mapping:
                 tray_id: 0
                 asic_location: 1
               fabric_node_id:
-                mesh_id: 3
+                mesh_id: 1
                 chip_id: 7
               asic_id: 14521786596
