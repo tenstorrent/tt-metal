@@ -37,9 +37,18 @@ void kernel_main() {
     // binding factory sets both to output_single_tile_size.
     const uint32_t zero_tile_bytes = tile_bytes;
 
+#ifdef ARCH_QUASAR
+    // Quasar: zero the staging region through the NoC, not with RISC element stores. The zeros are
+    // consumed below as the source of a noc.async_write; Scratchpad::operator[] writes the cacheable
+    // L1 view, which those NoC reads would not observe (and a fence cannot flush the D-cache, nor is
+    // invalidate_l1_cache implemented). The NoC zero-fill lands in the same domain the reads use.
+    noc.async_write_zeros(zero_stage, zero_stage.size_in_bytes());
+    noc.write_zeros_l1_barrier();
+#else
     for (uint32_t i = 0; i < zero_stage.size(); ++i) {
         zero_stage[i] = 0;
     }
+#endif
 
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
