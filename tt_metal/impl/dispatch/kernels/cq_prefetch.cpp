@@ -2469,6 +2469,9 @@ bool process_cmd(
     volatile CQPrefetchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQPrefetchCmd tt_l1_ptr*>(cmd_ptr);
     bool done = false;
 
+    // No handler may inherit PCIe routing left open by the previous command.
+    ASSERT(noc_cmd_bufs_mid_clear(noc_index), DebugAssertNocMidNotClearedTripped);
+
     switch (cmd->base.cmd_id) {
         case CQ_PREFETCH_CMD_RELAY_LINEAR:
             // DPRINT("relay_linear: {}\n", cmd_ptr);
@@ -2612,6 +2615,8 @@ bool process_cmd(
             prefetch_telemetry_base)
             ->command_count = ++command_counter;
     }
+    // Every handler that opened PCIe routing must have closed it before the next command reuses the buffer.
+    ASSERT(noc_cmd_bufs_mid_clear(noc_index), DebugAssertNocMidNotClearedTripped);
     return done;
 }
 

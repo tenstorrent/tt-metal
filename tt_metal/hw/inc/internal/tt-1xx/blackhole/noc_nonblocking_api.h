@@ -509,6 +509,14 @@ inline __attribute__((always_inline)) void noc_assert_targ_addr_mid_clear(uint32
     ASSERT(NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_MID) == 0);
 }
 
+// True when cmd_buf holds no PCIe routing, i.e. both MID registers are back to their on-chip value of zero.
+// The plain issue paths no longer rewrite MID, so anything left here is inherited by the next transaction on
+// this buffer. Callers use it to assert the buffer was handed back clean.
+inline __attribute__((always_inline)) bool noc_cmd_buf_mid_clear(uint32_t noc, uint32_t cmd_buf) {
+    return NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_TARG_ADDR_MID) == 0 &&
+           NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_RET_ADDR_MID) == 0;
+}
+
 // Debug only: returns NOC_AT_LEN_BE for cmd_buf (transaction length). Requires NOC_LOGGING_ENABLED.
 inline __attribute__((always_inline)) uint32_t noc_debug_read_at_len_be(uint32_t noc, uint32_t cmd_buf) {
     return NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_AT_LEN_BE);

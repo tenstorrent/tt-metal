@@ -217,6 +217,8 @@ FORCE_INLINE uint32_t cq_noc_sync_ret_addr_mid(uint32_t noc, uint32_t cmd_buf, u
     if (__builtin_expect(next != mid, 0)) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, next);
     }
+    // The register must now describe the address the next burst will issue against.
+    noc_assert_ret_addr_mid_matches(noc, cmd_buf, dst_addr);
     return next;
 }
 #endif
