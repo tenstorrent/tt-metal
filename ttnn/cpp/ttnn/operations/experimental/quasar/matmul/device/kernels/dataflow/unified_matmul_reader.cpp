@@ -114,6 +114,21 @@ void kernel_main() {
                                 {.offset_bytes = A_row_offset_bytes + k_tile * A_tile_bytes});
                         }
                     }
+                    if constexpr (A_last_K_tile_valid_columns > 0) {
+                        // K is not a tile multiple: zero the padding columns of the last K tile in every valid
+                        // row before the compute sees them. The zeroing has to follow the reads it patches, so
+                        // this K chunk pays one extra barrier.
+                        if (K_chunk == num_K_chunks - 1) {
+                            noc.async_read_barrier();
+                            constexpr DataFormat A_format = get_dataformat(dfb::A_slice);
+                            const uint32_t last_K_tile_of_row_0 =
+                                A_slice.get_write_ptr() + (K_chunk_tiles - 1) * A_tile_bytes;
+                            for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
+                                pad_last_ktile<A_format, A_last_K_tile_valid_columns>(
+                                    last_K_tile_of_row_0 + m_tile * K_chunk_tiles * A_tile_bytes);
+                            }
+                        }
+                    }
                 }
                 if constexpr (!B_borrowed) {
                     // B slice: rows K_chunk_first_K_tile.., columns C_slice_first_N_tile.., slot (k_tile, n_tile).
@@ -135,20 +150,6 @@ void kernel_main() {
                 }
                 noc.async_read_barrier();
 
-                if constexpr (!A_borrowed) {
-                    if constexpr (A_last_K_tile_valid_columns > 0) {
-                        // Zero the padding columns of the last K tile in every valid row (reads have landed).
-                        if (K_chunk == num_K_chunks - 1) {
-                            constexpr DataFormat A_format = get_dataformat(dfb::A_slice);
-                            const uint32_t last_K_tile_of_row_0 =
-                                A_slice.get_write_ptr() + (K_chunk_tiles - 1) * A_tile_bytes;
-                            for (uint32_t m_tile = 0; m_tile < valid_M_tiles; ++m_tile) {
-                                pad_last_ktile<A_format, A_last_K_tile_valid_columns>(
-                                    last_K_tile_of_row_0 + m_tile * K_chunk_tiles * A_tile_bytes);
-                            }
-                        }
-                    }
-                }
                 A_slice.push_back(A_slice_tiles);
                 B_slice.push_back(B_slice_tiles);
             }
