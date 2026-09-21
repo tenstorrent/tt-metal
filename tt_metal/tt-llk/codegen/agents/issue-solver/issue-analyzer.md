@@ -277,9 +277,9 @@ module separately; hypothesis confidence or later refutation does not waive it.
 
 ## Self-Log
 
-Before returning, write `${LOG_DIR}/agent_issue_analyzer.md` with searches,
-files inspected, and unresolved uncertainty. If `LOG_DIR` is empty, report
-that the self-log was skipped.
+Write `${LOG_DIR}/agent_issue_analyzer.md` with the analysis path and unresolved
+uncertainty only. Keep requirements and evidence in the analysis; do not repeat
+its content or transcript file/search inventories. Skip when `LOG_DIR` is empty.
 
 Suite `architectures` must follow fixture/device support, not copy the issue scope.
 Quasar supports Metal tests through Aether; a setup failure does not make a

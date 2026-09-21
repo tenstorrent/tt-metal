@@ -1,7 +1,7 @@
 ---
 name: issue-worker
 description: Plan, implement, and debug the right-sized LLK issue fix — minimal for targeted issues, complete for sweeps.
-tools: Bash, Read, Write, Edit, Glob, Grep
+tools: Bash, Read, Write, Edit, Glob, Grep, TaskOutput
 ---
 
 # LLK Issue Worker
@@ -202,31 +202,34 @@ runnable regression can be added inside the tt-metal worktree, return
 
    The orchestrator does not send `SIM_ISA_GAP` or `ENV_ERROR` to the worker.
    If invoked with either, return `BLOCKED` without editing.
-2. For `TIMEOUT`, `DATA_MISMATCH` or `RECONFIG_ESCAPE`, use AutoDebug as the
-   first diagnostic step after classification. Read `run.json.solver_plugins`.
-   If `tt-autodebug` is configured, explicitly read
-   `<path>/skills/autodebug/SKILL.md`, then run its launcher through the existing
-   run utility (once per worker invocation, up to 30 minutes within the current
-   retry budget; wait for completion if the shell tool yields):
+2. Inspect the exact failing variant, raw evidence, and relevant current source.
+   Use AutoDebug only when a specific hardware question or competing hypotheses
+   remain unresolved; failure classification alone does not require escalation.
+   Reuse relevant prior findings after checking their variant and patch identity.
+   Escalate again only for new evidence or a different unresolved question.
+
+   When needed and `run.json.solver_plugins` configures `tt-autodebug`, read
+   `<path>/skills/autodebug/SKILL.md` and invoke the existing inspection-only
+   launcher once within the current retry budget:
 
    ```bash
    python codegen/scripts/issue_solver_run_utils.py autodebug \
      --log-dir "$LOG_DIR" --worktree "$WORKTREE_DIR" \
-     --problem "<failure, exact evidence paths, architecture and competing hypotheses>"
+     --problem "<exact variant, patch identity, raw evidence paths, unresolved question and discriminating check>"
    ```
 
-   Read the report in the printed log directory and verify its claims against
-   current source before editing. The child is inspection-only. Launcher failure
-   is an evidence gap, not a reason to disable isolation or retry unboundedly.
-   For hangs with captured state, read `autotriage/SKILL.md` from the same package
-   and interpret the native LLK triage evidence linked in `device_recovery.triage`;
-   do not invoke Metal Inspector for bare LLK or recapture a reset card.
-   Apply `autofix/SKILL.md` to the supported diagnosis: put the discriminating
-   check in the existing Test Strategy and let testers execute it. Keep one
-   writer; do not spawn repair agents or run hardware from this role. Save
-   AutoTriage/AutoFix reports under `$LOG_DIR`, never in the source tree.
-   Without a configured package, continue the evidence-led process above and
-   record that specialist diagnosis was unavailable.
+   Wait for its blocking return; if Bash yields a task ID, use `TaskOutput` on
+   that same task. Do not add polling sleeps. Verify the report against current
+   source. A pre-existing-failure claim requires a matched baseline control;
+   a specialist conclusion alone is not proof. Launcher failure or unavailable
+   specialist evidence does not justify guessing, disabling isolation, or an
+   unbounded retry. Record unresolved evidence and return `BLOCKED` if needed.
+   For hangs with captured state, read `autotriage/SKILL.md` and use native LLK
+   evidence in `device_recovery.triage`; do not recapture a reset card or use
+   Metal Inspector for bare LLK. When applying a specialist diagnosis, read
+   `autofix/SKILL.md` and put its discriminating check in the existing Test
+   Strategy for testers to execute. Keep one writer; do not spawn repair agents
+   or run hardware here. Save specialist reports under `$LOG_DIR`.
 3. Make only changes justified by the failure evidence. For local runs, inspect
    generated assembly when needed to verify the diagnosis:
 
@@ -276,6 +279,14 @@ required: true|false
 actions:
 - ...
 
+## Performance Metric
+# One entry per planned perf selector, or "none" when no perf leaf applies.
+- arch: blackhole|wormhole
+  test: <same exact selector as the perf regression entry>
+  primary_metric: mean(L1_TO_L1)|mean(UNPACK_ISOLATE)|mean(MATH_ISOLATE)|mean(PACK_ISOLATE)
+  source: <test module's declared PerfConfig.run_types>
+  scope_reason: <why this metric measures the affected operation>
+
 ## Test Strategy
 # tt-llk suite only; Metal and TTNN verification remain in the analysis artifact
 compile_checks:
@@ -322,6 +333,16 @@ a coverage reference. Select once before sealing; the perf tester executes
 that leaf. If no performance test covers the change, record why. Do not add waivers to the plan after observing
 a failure.
 
+For each perf leaf, declare its metric in `Performance Metric` before sealing
+or measuring. Use `mean(L1_TO_L1)` whenever the selected test supplies it.
+For an isolate-only test, choose only a declared isolate that measures the
+affected operation; state that limited scope. For example, the existing
+`perf_sfpu_reduce_row_max.py` declares only `MATH_ISOLATE`. Select from test
+source, never from favorable CSV deltas. Keep the declaration on retries;
+a necessary correction requires a documented plan change, not a result waiver.
+This preselection is enforced by the instructions; the current versioned
+verification manifest does not encode the metric. Keep it outside Test Strategy.
+
 `HYPOTHESIS_REFUTED` changes the result marker, not the plan schema. Before
 returning it, keep every Plan Artifact section above, including an executable
 Test Strategy. When `perf_intent: optimize`, include an exact `perf_*.py`
@@ -345,10 +366,11 @@ BLOCKED - issue #<number>
 
 ## Self-Log
 
-Write `${LOG_DIR}/agent_issue_worker.md` before returning.
+Write a concise decision handoff to `${LOG_DIR}/agent_issue_worker.md`: result,
+changed hypothesis or scope, unresolved evidence, and artifact paths. The plan
+and analysis remain authoritative; do not repeat them, raw output, commands,
+or file/search inventories already captured in transcripts.
 
-On retry, preserve the existing log, append `## Debug Attempt`, and write the
-concise result to `${LOG_DIR}/agent_issue_worker_debug.md`.
-
-Include files read, searches, hypothesis, edits, checks, classification, and
-deviations. If `LOG_DIR` is empty, report that self-logging was skipped.
+On retry, append only the new `## Debug Attempt` delta; put its result and
+location in `${LOG_DIR}/agent_issue_worker_debug.md`. Preserve earlier attempts.
+If `LOG_DIR` is empty, skip self-logging.

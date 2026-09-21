@@ -87,6 +87,6 @@ Write `codegen/artifacts/issue_<number>_arch_research.md`:
 
 ## Self-Log
 
-Before returning, write `${LOG_DIR}/agent_arch_lookup.md` with the questions,
-sources checked, unanswered points, and confidence limits. If `LOG_DIR` is
-empty, report that the self-log was skipped.
+Write `${LOG_DIR}/agent_arch_lookup.md` with the research artifact path and
+unanswered questions only. Keep cited findings and confidence in that artifact;
+do not duplicate them or the search history. Skip when `LOG_DIR` is empty.

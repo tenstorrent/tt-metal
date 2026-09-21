@@ -1,10 +1,14 @@
 ---
 name: ttnn-tester
 description: Build the TTNN Python binding and run exact end-to-end pytest coverage for LLK changes propagated through TTNN.
-tools: Bash, Read, Write, Glob, Grep
+tools: Bash, Read, Write, Glob, Grep, TaskOutput
 ---
 
 # TTNN End-to-End Tester
+
+Submit each dispatch once and wait for its blocking return. If Bash yields a
+task ID, wait on that same task with `TaskOutput`; do not resubmit the job or
+add fixed sleeps and manual queue polling. Preserve dispatch output and errors.
 
 Use this suite only for a sealed `suite=ttnn` requirement. It verifies the
 highest affected production layer: the patched TTNN host code and Python
@@ -43,6 +47,39 @@ set `CODEGEN_RUN_ID`, `CODEGEN_ATTEMPT_ID`, and
 `CODEGEN_REQUIREMENT_ID` from that leaf before queue submission. A missing,
 ambiguous, zero-selected, or `add_required` selector is
 `MISSING_TEST_COVERAGE`, not an environment error.
+
+## Sealed silicon queue execution
+
+For `TEST_BACKEND=local` Blackhole/Wormhole leaves, use this path when
+`HW_TEST_DISPATCH_CMD` advertises `--requirement-id` in `--help` (check once per
+run). Keep the coverage, scope, and manifest checks above. Select only this
+role's `suite=ttnn` leaves, preserving reproduction-before-regression order.
+For each leaf use its existing `requirement_id`:
+
+```bash
+set -o pipefail
+$HW_TEST_DISPATCH_CMD --log-dir "$LOG_DIR" --requirement-id "$REQUIREMENT_ID" \
+  --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/ttnn_run.log"
+```
+
+The dispatcher derives and validates worktree, base, selector, architecture,
+logical attempt and result identity. Its isolated builder owns compilation and
+its blocking return owns waiting. This path replaces the local compile gate,
+warm-tree setup, selector/environment reconstruction and manual queue command
+below. Do not inspect dispatcher implementation or other agents' logs to
+reconstruct those inputs; use `--describe` only to diagnose a rejected context.
+Do not add manual routing flags or broaden a rejected selector.
+
+Require the terminal `HW_TEST_RESULT` and exact structured result for each
+executed leaf. Audit mode copies it into the current verification-results
+attempt directory; production retains the authoritative queue result. Existing
+result ingestion and strict reduction remain required.
+Because this path has no preceding local compile, an evidenced candidate
+compiler error is `COMPILE_FAILED`; setup/infrastructure failure is `ENV_ERROR`.
+Do not apply the legacy blanket build-failure-as-environment rule here.
+Continue with Result recording below.
+Local silicon, ttsim, Quasar, and dispatchers without this interface continue
+through their existing paths below.
 
 ## Step A — targeted local compile gate
 
@@ -311,9 +348,10 @@ Use `run_json_writer.py metric` with JSON-encoded values. Do not write the
 combined architecture verdict. End the architecture phase because the
 orchestrator always runs TTNN after LLK and Metal when suites are combined.
 
-Write `${LOG_DIR}/agent_ttnn_tester.md` with the target, selector, build
-strategy, local compile duration, queue producer duration when reported,
-execution route, counts, queue job IDs, and exact failure evidence.
+Append a concise handoff to `${LOG_DIR}/agent_ttnn_tester.md`: per-architecture
+verdict, first failure, deviations, and structured-result/raw-log paths.
+Preserve earlier attempts; do not duplicate commands, timings or selectors
+already captured by tools. Skip when `LOG_DIR` is empty.
 
 Return:
 

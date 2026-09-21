@@ -5,9 +5,12 @@
 """Tests for perf_eval.py — intent-aware perf regression judgement."""
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 _SPEC = importlib.util.spec_from_file_location(
     "perf_eval", Path(__file__).parent / "perf_eval.py"
@@ -34,7 +37,9 @@ def _csv(path: Path, mathop: str, tile_loop_cycles: float) -> Path:
     return path
 
 
-def _eval(current_csv, baseline_csv, *, op, goal):
+def _eval(
+    current_csv, baseline_csv, *, op, goal, primary_metric=perf_eval.PRIMARY_METRIC
+):
     cur = perf_eval._read_csv(current_csv)
     base = perf_eval._read_csv(baseline_csv) if baseline_csv else []
     return perf_eval.evaluate(
@@ -45,6 +50,7 @@ def _eval(current_csv, baseline_csv, *, op, goal):
         noise_pct=3.0,
         regress_pct=3.0,
         improve_pct=2.0,
+        primary_metric=primary_metric,
     )
 
 
@@ -183,3 +189,121 @@ def test_shipped_cli_defaults_use_half_pct_noise_floor(tmp_path):
 
     assert run(near) == 0  # within noise -> not flagged
     assert run(over) == 1  # beyond noise -> regression
+
+
+def test_isolate_only_csv_requires_explicit_selection(tmp_path):
+    # Matches the archived feature-support run's schema: there is no L1 metric.
+    header = "variant,marker,mean(MATH_ISOLATE),TEXT_SIZE(MATH_ISOLATE)\n"
+    base = tmp_path / "baseline.csv"
+    cur = tmp_path / "current.csv"
+    base.write_text(header + "a,TILE_LOOP,100,2000\nb,TILE_LOOP,200,2000\n")
+    cur.write_text(header + "a,TILE_LOOP,100,2100\nb,TILE_LOOP,200,2100\n")
+
+    missing = _eval(cur, base, op=None, goal="no_regress")
+    assert missing["verdict"] == "missing_metric"
+    assert missing["exit_code"] == 2
+    assert "mean(L1_TO_L1)" in missing["reason"]
+
+    result = _eval(
+        cur, base, op=None, goal="no_regress", primary_metric="mean(MATH_ISOLATE)"
+    )
+    assert result["verdict"] == "neutral"
+    assert result["variants_compared"] == 2
+    assert result["primary_metric"] == "mean(MATH_ISOLATE) @ TILE_LOOP"
+
+
+def test_selected_metric_is_not_replaced_by_more_favorable_metric(tmp_path):
+    base = _csv(tmp_path / "base.csv", "MathOperation.Reciprocal", 600.0)
+    cur = _csv(tmp_path / "current.csv", "MathOperation.Reciprocal", 660.0)
+    # L1 regresses by 10%, whereas MATH improves by 10%.
+    cur.write_text(cur.read_text().replace("660.0,0.0,660.0", "660.0,0.0,540.0"))
+    assert _eval(cur, base, op=None, goal="no_regress")["verdict"] == "regressed"
+    isolated = _eval(
+        cur, base, op=None, goal="improve", primary_metric="mean(MATH_ISOLATE)"
+    )
+    assert isolated["verdict"] == "improved"
+    assert isolated["delta_pct_worst"] == -10.0
+
+
+@pytest.mark.parametrize("source", ["current", "baseline"])
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "", "bad", "0", "-1"])
+def test_invalid_selected_measurement_cannot_silently_pass(tmp_path, source, value):
+    # A valid neutral variant must not hide a second malformed measurement.
+    header = "variant,marker,mean(MATH_ISOLATE)\n"
+    files = {name: tmp_path / f"{name}.csv" for name in ("current", "baseline")}
+    for name, path in files.items():
+        second = value if name == source else "100"
+        path.write_text(header + f"good,TILE_LOOP,100\nbad,TILE_LOOP,{second}\n")
+    result = _eval(
+        files["current"],
+        files["baseline"],
+        op=None,
+        goal="no_regress",
+        primary_metric="mean(MATH_ISOLATE)",
+    )
+    assert result["exit_code"] == 2
+    assert result["verdict"] == "invalid_measurement"
+    assert source in result["reason"]
+    json.dumps(result, allow_nan=False)
+
+
+def test_missing_selected_baseline_metric_is_not_comparable(tmp_path):
+    cur = _csv(tmp_path / "current.csv", "MathOperation.Reciprocal", 600.0)
+    base = tmp_path / "baseline.csv"
+    base.write_text(cur.read_text().replace("mean(MATH_ISOLATE)", "std(MATH_ISOLATE)"))
+    result = _eval(
+        cur, base, op=None, goal="no_regress", primary_metric="mean(MATH_ISOLATE)"
+    )
+    assert result["verdict"] == "missing_metric"
+    assert "baseline" in result["reason"]
+
+
+def test_unsupported_metric_rejected_by_api(tmp_path):
+    cur = _csv(tmp_path / "current.csv", "MathOperation.Reciprocal", 600.0)
+    with pytest.raises(ValueError, match="unsupported primary metric"):
+        _eval(cur, cur, op=None, goal="no_regress", primary_metric="std(L1_TO_L1)")
+
+
+@pytest.mark.parametrize("name", ["noise_pct", "regress_pct", "improve_pct"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -1.0])
+def test_nonfinite_or_negative_threshold_rejected(name, value):
+    thresholds = dict(noise_pct=0.5, regress_pct=0.5, improve_pct=0.5)
+    thresholds[name] = value
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        perf_eval.evaluate([], [], op=None, goal="no_regress", **thresholds)
+
+
+def test_cli_records_explicit_metric_and_rejects_invalid_configuration(tmp_path):
+    cur = tmp_path / "current.csv"
+    cur.write_text("variant,marker,mean(MATH_ISOLATE)\na,TILE_LOOP,100\n")
+    out = tmp_path / "result.json"
+    command = [
+        sys.executable,
+        str(Path(__file__).parent / "perf_eval.py"),
+        "--current",
+        str(cur),
+        "--baseline",
+        str(cur),
+        "--json-out",
+        str(out),
+    ]
+    result = subprocess.run(
+        command + ["--primary-metric", "mean(MATH_ISOLATE)"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0
+    assert "mean(MATH_ISOLATE) @ TILE_LOOP" in result.stdout
+    assert (
+        json.loads(out.read_text())["primary_metric"]
+        == "mean(MATH_ISOLATE) @ TILE_LOOP"
+    )
+
+    for flags in (
+        ["--primary-metric", "mean(UNKNOWN)"],
+        ["--regress-pct", "nan"],
+        ["--improve-pct", "inf"],
+    ):
+        invalid = subprocess.run(command + flags, capture_output=True, text=True)
+        assert invalid.returncode == 2
+        assert "error:" in invalid.stderr

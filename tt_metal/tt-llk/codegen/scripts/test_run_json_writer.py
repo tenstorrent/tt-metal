@@ -3362,7 +3362,9 @@ def test_review_records_pending_evidence_but_cannot_succeed(reviewed_candidate, 
 
 
 @pytest.mark.parametrize("ending", ["exit 0", "exit 1", "sleep 30"])
-def test_autodebug_launcher_is_bounded_and_archives_report(tmp_path, ending):
+def test_autodebug_launcher_is_bounded_and_archives_report(
+    tmp_path, monkeypatch, ending
+):
     wt = tmp_path / "wt"
     wt.mkdir()
     logs = tmp_path / "logs"
@@ -3370,13 +3372,25 @@ def test_autodebug_launcher_is_bounded_and_archives_report(tmp_path, ending):
     package = tmp_path / "plugin"
     launcher = package / "skills/autodebug/scripts/autodebug.sh"
     launcher.parent.mkdir(parents=True)
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_claude = fake_bin / "claude"
+    fake_claude.write_text("#!/bin/sh\nexit 97\n")
+    fake_claude.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.delenv("CODEGEN_AUTODEBUG_BUDGET_USD", raising=False)
     launcher.write_text(
         'test -z "${CLAUDECODE:-}" || exit 9\nprintf "diagnosis" > AUTODEBUG.md\n'
         + ending
         + "\n"
     )
     (logs / "run.json").write_text(
-        json.dumps({"solver_plugins": {"tt-autodebug": {"path": str(package)}}})
+        json.dumps(
+            {
+                "run_id": "bounded-launcher",
+                "solver_plugins": {"tt-autodebug": {"path": str(package)}},
+            }
+        )
     )
     result = subprocess.run(
         [
@@ -3419,3 +3433,290 @@ def test_autodebug_launcher_is_bounded_and_archives_report(tmp_path, ending):
     )
     assert refused.returncode != 0
     assert (wt / "AUTODEBUG.md").read_text() == "unrelated"
+
+
+@pytest.fixture
+def autodebug_sandbox(tmp_path, monkeypatch):
+    """Execute the real launcher/shim against a fake Claude executable only."""
+    import argparse
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("isolated_run_utils", RUN_UTILS)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    logs, worktree, fake_bin = (tmp_path / n for n in ("logs", "worktree", "fake-bin"))
+    for p in (logs, worktree, fake_bin):
+        p.mkdir()
+    package = tmp_path / "plugin"
+    launcher = package / "skills/autodebug/scripts/autodebug.sh"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text(
+        'test -z "${CLAUDECODE:-}" || exit 9\nclaude --print "diagnose"\n'
+    )
+    fake_claude = fake_bin / "claude"
+    fake_claude.write_text(
+        "#!" + sys.executable + "\nimport json,os,sys,time\n"
+        "from pathlib import Path\n"
+        'registry=json.loads(Path(os.environ["FAKE_REGISTRY"]).read_text())\n'
+        'sid=sys.argv[sys.argv.index("--session-id")+1]\n'
+        'assert any(row["session_id"]==sid for row in registry["sessions"])\n'
+        'Path("claude-argv.json").write_text(json.dumps(sys.argv[1:]))\n'
+        'Path("AUTODEBUG.md").write_text("partial diagnosis")\n'
+        'time.sleep(float(os.environ.get("FAKE_CLAUDE_SLEEP", "0")))\n'
+    )
+    fake_claude.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setenv("FAKE_REGISTRY", str(logs / "session_registry.json"))
+    monkeypatch.delenv("CODEGEN_AUTODEBUG_BUDGET_USD", raising=False)
+    run = {
+        "run_id": "isolated-run",
+        "solver_plugins": {"tt-autodebug": {"path": str(package)}},
+    }
+    (logs / "run.json").write_text(json.dumps(run))
+    state = {
+        "RUN_ID": "isolated-run",
+        "SESSION_ID": "00000000-0000-4000-8000-000000000001",
+    }
+    (logs / "state.json").write_text(json.dumps(state))
+    exports = []
+
+    def fake_export(argv, **kwargs):
+        assert Path(argv[1]).name == "extract_run_transcripts.py"
+        exports.append(argv)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(module.subprocess, "run", fake_export)
+    args = argparse.Namespace(
+        log_dir=str(logs), worktree=str(worktree), problem="exact failure", timeout=2
+    )
+    return module, args, logs, worktree, exports
+
+
+def test_autodebug_pins_child_identity_budget_and_exports(
+    autodebug_sandbox, monkeypatch
+):
+    import uuid
+
+    module, args, logs, worktree, exports = autodebug_sandbox
+    monkeypatch.setenv("CODEGEN_AUTODEBUG_BUDGET_USD", "12.50")
+    module.cmd_autodebug(args)
+    registry = json.loads((logs / "session_registry.json").read_text())
+    assert registry["run_id"] == "isolated-run"
+    assert len(registry["sessions"]) == 1
+    child = registry["sessions"][0]
+    assert str(uuid.UUID(child["session_id"])) == child["session_id"]
+    assert child["parent_session_id"] == "00000000-0000-4000-8000-000000000001"
+    assert child["project_cwd"] == str(worktree)
+    assert child["allocated_budget_usd"] == 12.5
+    argv = json.loads((worktree / "claude-argv.json").read_text())
+    assert argv[:4] == ["--session-id", child["session_id"], "--max-budget-usd", "12.5"]
+    assert len(exports) == 1 and exports[0][-4:] == [
+        "--session-id",
+        child["session_id"],
+        "--project-cwd",
+        str(worktree),
+    ]
+    assert (
+        Path(child["artifact_dir"]) / "AUTODEBUG.md"
+    ).read_text() == "partial diagnosis"
+    assert not (worktree / "AUTODEBUG.md").exists()
+
+
+def test_autodebug_timeout_retains_registry_report_and_exports(
+    autodebug_sandbox, monkeypatch
+):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    args.timeout = 0.3
+    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "30")
+    with pytest.raises(subprocess.TimeoutExpired):
+        module.cmd_autodebug(args)
+    child = json.loads((logs / "session_registry.json").read_text())["sessions"][0]
+    assert (
+        Path(child["artifact_dir"]) / "AUTODEBUG.md"
+    ).read_text() == "partial diagnosis"
+    assert len(exports) == 1
+    assert child["session_id"] in exports[0]
+    assert not (worktree / "AUTODEBUG.md").exists()
+
+
+def test_autodebug_export_failure_preserves_success(autodebug_sandbox, monkeypatch):
+    module, args, logs, worktree, _ = autodebug_sandbox
+
+    def export_failure(*a, **kw):
+        raise subprocess.TimeoutExpired("exporter", 30)
+
+    monkeypatch.setattr(module.subprocess, "run", export_failure)
+    module.cmd_autodebug(args)
+    assert any(logs.glob("autodebug-*/AUTODEBUG.md"))
+    assert (
+        "Transcript export unavailable"
+        in next(logs.glob("autodebug-*/launcher.log")).read_text()
+    )
+
+
+@pytest.mark.parametrize("cap", ["0", "0.009"])
+def test_autodebug_exhausted_budget_never_launches(autodebug_sandbox, monkeypatch, cap):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    monkeypatch.setenv("CODEGEN_AUTODEBUG_BUDGET_USD", cap)
+    with pytest.raises(SystemExit, match="exhausted"):
+        module.cmd_autodebug(args)
+    assert not (worktree / "claude-argv.json").exists()
+    assert not exports
+    assert not (logs / "session_registry.json").exists()
+
+
+def test_autodebug_allocated_budget_cannot_be_reused(autodebug_sandbox, monkeypatch):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    monkeypatch.setenv("CODEGEN_AUTODEBUG_BUDGET_USD", "2")
+    module.cmd_autodebug(args)
+    with pytest.raises(SystemExit, match="exhausted"):
+        module.cmd_autodebug(args)
+    assert (
+        len(json.loads((logs / "session_registry.json").read_text())["sessions"]) == 1
+    )
+    assert len(exports) == 1
+
+
+def test_autodebug_rejects_foreign_registry_before_launch(autodebug_sandbox):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    original = {
+        "schema": "issue-solver.session-registry",
+        "version": 1,
+        "run_id": "other",
+        "sessions": [],
+    }
+    (logs / "session_registry.json").write_text(json.dumps(original))
+    with pytest.raises(SystemExit, match="another run"):
+        module.cmd_autodebug(args)
+    assert json.loads((logs / "session_registry.json").read_text()) == original
+    assert not (worktree / "claude-argv.json").exists()
+
+
+def test_autodebug_rejects_foreign_state_before_launch(autodebug_sandbox):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    (logs / "state.json").write_text(json.dumps({"RUN_ID": "another-run"}))
+    with pytest.raises(SystemExit, match="run"):
+        module.cmd_autodebug(args)
+    assert not (worktree / "claude-argv.json").exists()
+
+
+def test_autodebug_rejects_duplicate_child_identity(autodebug_sandbox, monkeypatch):
+    import uuid
+
+    module, args, logs, worktree, exports = autodebug_sandbox
+    child_id = "00000000-0000-4000-8000-000000000002"
+    monkeypatch.setattr(module.uuid, "uuid4", lambda: uuid.UUID(child_id))
+    original = {
+        "schema": "issue-solver.session-registry",
+        "version": 1,
+        "run_id": "isolated-run",
+        "sessions": [{"session_id": child_id, "kind": "autodebug"}],
+    }
+    (logs / "session_registry.json").write_text(json.dumps(original))
+    with pytest.raises(SystemExit, match="session|duplicate"):
+        module.cmd_autodebug(args)
+    assert json.loads((logs / "session_registry.json").read_text()) == original
+    assert not (worktree / "claude-argv.json").exists()
+
+
+def test_transcript_export_explicit_missing_session_never_discovers_another(
+    tmp_path, monkeypatch
+):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "isolated_transcript_export", RUN_UTILS.with_name("extract_run_transcripts.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "_find_by_session_id", lambda sid: None)
+
+    def forbidden_discovery(pid):
+        pytest.fail(
+            "explicit session identity must never fall back to a different live session"
+        )
+
+    monkeypatch.setattr(module, "_discover_session", forbidden_discovery)
+    assert (
+        module.run(
+            str(tmp_path / "logs"), "00000000-0000-4000-8000-000000000099", None, None
+        )
+        != 0
+    )
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"schema": "another-registry"},
+        {"version": 99},
+        {"sessions": {}},
+        {"sessions": [{"session_id": "duplicate"}, {"session_id": "duplicate"}]},
+    ],
+)
+def test_autodebug_rejects_invalid_registry_without_rewriting(autodebug_sandbox, patch):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    registry = {
+        "schema": "issue-solver.session-registry",
+        "version": 1,
+        "run_id": "isolated-run",
+        "sessions": [],
+        **patch,
+    }
+    original = json.dumps(registry)
+    (logs / "session_registry.json").write_text(original)
+    with pytest.raises(SystemExit, match="schema|identity"):
+        module.cmd_autodebug(args)
+    assert (logs / "session_registry.json").read_text() == original
+    assert not (worktree / "claude-argv.json").exists()
+
+
+def test_autodebug_negative_allocation_cannot_expand_budget(
+    autodebug_sandbox, monkeypatch
+):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    monkeypatch.setenv("CODEGEN_AUTODEBUG_BUDGET_USD", "2")
+    registry = {
+        "schema": "issue-solver.session-registry",
+        "version": 1,
+        "run_id": "isolated-run",
+        "sessions": [
+            {
+                "session_id": "00000000-0000-4000-8000-000000000003",
+                "allocated_budget_usd": -10,
+            }
+        ],
+    }
+    (logs / "session_registry.json").write_text(json.dumps(registry))
+    with pytest.raises(SystemExit, match="budget|allocation"):
+        module.cmd_autodebug(args)
+    assert not (worktree / "claude-argv.json").exists()
+
+
+@pytest.mark.parametrize("cap", ["-1", "nan", "inf"])
+def test_autodebug_nonfinite_or_negative_budget_rejected(
+    autodebug_sandbox, monkeypatch, cap
+):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    monkeypatch.setenv("CODEGEN_AUTODEBUG_BUDGET_USD", cap)
+    with pytest.raises(SystemExit, match="finite and nonnegative"):
+        module.cmd_autodebug(args)
+    assert not (worktree / "claude-argv.json").exists()
+
+
+def test_autodebug_export_failure_does_not_mask_launcher_timeout(
+    autodebug_sandbox, monkeypatch
+):
+    module, args, logs, worktree, exports = autodebug_sandbox
+    args.timeout = 0.3
+    monkeypatch.setenv("FAKE_CLAUDE_SLEEP", "30")
+
+    def failed_export(*a, **kw):
+        raise OSError("synthetic export failure")
+
+    monkeypatch.setattr(module.subprocess, "run", failed_export)
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        module.cmd_autodebug(args)
+    assert caught.value.timeout == 0.3
+    assert any(logs.glob("autodebug-*/AUTODEBUG.md"))

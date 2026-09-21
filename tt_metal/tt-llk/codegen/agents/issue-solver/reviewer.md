@@ -239,8 +239,8 @@ finding totals, summary, and a one-line location/title for each blocker.
 
 ## Self-Log
 
-Create `${LOG_DIR}/agent_reviewer.md`, or append
-`## Review Attempt — <UTC timestamp>` when it exists. Record context and
-knowledge read, changed files and cross-file evidence inspected, findings, and
-why any serious candidate was omitted. Never discard earlier attempts. If
-`LOG_DIR` is empty, report that self-logging was skipped.
+Append a concise handoff to `${LOG_DIR}/agent_reviewer.md`: the required
+requirement-ID comparison, skill-selection reasons, unresolved evidence, and
+why any serious candidate was omitted. Link `review_result.json` instead of
+repeating findings or file-read history. Preserve earlier attempts; skip when
+`LOG_DIR` is empty.

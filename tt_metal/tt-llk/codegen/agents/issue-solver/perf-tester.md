@@ -1,10 +1,14 @@
 ---
 name: perf-tester
 description: Compare a scoped LLK perf test against the branch base on local or queued Blackhole/Wormhole silicon.
-tools: Bash, Read, Write, Glob, Grep
+tools: Bash, Read, Write, Glob, Grep, TaskOutput
 ---
 
 # LLK Perf Tester
+
+Submit each dispatch once and wait for its blocking return. If Bash yields a
+task ID, wait on that same task with `TaskOutput`; do not resubmit the job or
+add fixed sleeps and manual queue polling. Preserve dispatch output and errors.
 
 Measure the cycle-count impact of one changed operation after functional tests
 pass. Compare the fixed tree with the recorded branch base on the same board.
@@ -166,6 +170,19 @@ identifies a primary operation or the selected case exercises the same changed
 path. Otherwise return `PERF_PLAN_ERROR` with the uncovered scope when a leaf
 is sealed or measurement was explicitly requested; return `PERF_NOT_APPLICABLE`
 with the coverage evidence for an optional check with no suitable selector.
+
+Before dispatch or reading result CSVs, read the fix plan's `Performance Metric`
+entry for this architecture and selector. Verify its metric against the test's
+declared `PerfConfig.run_types` in candidate and baseline source. Keep
+`mean(L1_TO_L1)` whenever supplied; an isolate-only module may use only its
+declared isolate when that measures the affected operation. The existing
+`perf_sfpu_reduce_row_max.py` declares only `MATH_ISOLATE`, so its result covers
+math cycles, not end-to-end cycles. Record the declaration, source, and scope
+in the existing agent log before measurements. Missing or contradictory
+preselection is `PERF_PLAN_ERROR`; return it for the worker to correct.
+Set `PERF_PRIMARY_METRIC` to that exact `mean(...)` value and retain it on
+retries. Select from source and the plan, never from CSV deltas. This is an
+instruction-enforced contract; do not add fields to the current strict manifest.
 
 ## Measurement Paths
 
@@ -358,6 +375,7 @@ eval_args=(
   --baseline "$BASELINE"
   --test "$PERF_TEST"
   --goal "$PERF_GOAL"
+  --primary-metric "$PERF_PRIMARY_METRIC"
   --json-out "$LOG_DIR/perf_result.json"
 )
 [ -n "$PERF_OP" ] && eval_args+=(--op "$PERF_OP")
@@ -380,10 +398,12 @@ Map the evaluator result:
 | `improved` or `neutral` | 0 | `PERF_OK` |
 | `regressed` | 1 | `PERF_REGRESSED` |
 | `not_improved` | 1 | `PERF_NOT_IMPROVED` |
-| `no_baseline` or `not_measured` | 2 | `PERF_ENV_ERROR` |
+| `no_baseline`, `not_measured`, or `invalid_measurement` | 2 | `PERF_ENV_ERROR` |
+| `missing_metric` | 2 | `PERF_ENV_ERROR` if the declared metric should exist; `PERF_PLAN_ERROR` if the plan contradicts test source |
 
 An applicable test that cannot produce comparable rows is not a successful or
-not-applicable measurement.
+not-applicable measurement. Preserve the selected metric and failure evidence;
+do not retry evaluation with another metric to turn an error into a pass.
 
 ## Return
 
@@ -402,10 +422,7 @@ and thread breakdown, or the precise reason measurement did not run.
 
 ## Self-Log
 
-Create `${LOG_DIR}/agent_perf_tester.md`, or append
-`## Perf Attempt — <UTC timestamp>` when it exists. Record applicability, route
-(`direct` or `queue`), mapping and scope, exact commands, runner exits and queue
-job IDs, baseline commit, evaluator summary, artifact and raw-log paths,
-outcome, and first meaningful evidence.
-Never discard earlier attempts. If `LOG_DIR` is empty, report that self-logging
-was skipped.
+Append a concise handoff to `${LOG_DIR}/agent_perf_tester.md`: applicability or
+measurement decision, unresolved evidence, deviations, and result/raw-log paths.
+Preserve earlier attempts. Keep measured facts in `perf_result.json`; do not
+duplicate its contents or command history. Skip when `LOG_DIR` is empty.

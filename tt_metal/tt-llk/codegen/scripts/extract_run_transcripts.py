@@ -644,6 +644,12 @@ def run(
     if subs_dir is None:
         if session_id and project_cwd:
             _, subs_dir = _build_paths(session_id, project_cwd)
+        elif sid:
+            print(
+                f"extract_run_transcripts: requested session not found: {sid}",
+                file=sys.stderr,
+            )
+            return 1
         else:
             found = _discover_session(session_pid)
             if not found:

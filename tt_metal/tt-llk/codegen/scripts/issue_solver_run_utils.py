@@ -15,10 +15,13 @@ import argparse
 import fcntl
 import json
 import os
+import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -101,7 +104,91 @@ def cmd_autodebug(args: argparse.Namespace) -> None:
     if report.exists() or report.is_symlink():
         raise SystemExit("refusing to overwrite pre-existing AUTODEBUG.md")
     directory = Path(tempfile.mkdtemp(prefix="autodebug-", dir=log_dir))
+    # Pin child identity before launching so accounting survives a timeout.
+    # The installed launcher remains authoritative for the investigation prompt;
+    # this thin executable adds CLI identity/budget flags it does not expose.
+    claude = shutil.which("claude")
+    if not claude:
+        raise SystemExit("claude executable not found")
+    session_id = str(uuid.uuid4())
+    state_path = log_dir / "state.json"
+    state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    if state.get("RUN_ID") and state["RUN_ID"] != run["run_id"]:
+        raise SystemExit("state belongs to another run")
+    cap_raw = os.environ.get("CODEGEN_AUTODEBUG_BUDGET_USD")
+    cap = float(cap_raw) if cap_raw is not None else None
+    if cap is not None and (not 0 <= cap < float("inf")):
+        raise SystemExit("CODEGEN_AUTODEBUG_BUDGET_USD must be finite and nonnegative")
+    registry_path = log_dir / "session_registry.json"
+    with (log_dir / ".session_registry.lock").open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        registry = (
+            json.loads(registry_path.read_text())
+            if registry_path.exists()
+            else {
+                "schema": "issue-solver.session-registry",
+                "version": 1,
+                "run_id": run["run_id"],
+                "sessions": [],
+            }
+        )
+        if registry.get("run_id") != run["run_id"]:
+            raise SystemExit("session registry belongs to another run")
+        if (
+            registry.get("schema") != "issue-solver.session-registry"
+            or registry.get("version") != 1
+            or not isinstance(registry.get("sessions"), list)
+        ):
+            raise SystemExit("invalid session registry schema")
+        if any(not isinstance(entry, dict) for entry in registry["sessions"]):
+            raise SystemExit("invalid session registry entry")
+        ids = [entry.get("session_id") for entry in registry["sessions"]]
+        if (
+            any(not isinstance(value, str) for value in ids)
+            or len(set(ids)) != len(ids)
+            or session_id in ids
+        ):
+            raise SystemExit("duplicate or invalid session identity")
+        try:
+            allocations = [
+                float(entry.get("allocated_budget_usd") or 0)
+                for entry in registry["sessions"]
+            ]
+        except (ValueError, TypeError):
+            raise SystemExit("invalid allocated budget")
+        if any(not 0 <= value < float("inf") for value in allocations):
+            raise SystemExit("invalid allocated budget")
+        used = sum(allocations)
+        remaining = max(0, cap - used) if cap is not None else None
+        if remaining is not None and remaining < 0.01:
+            raise SystemExit("AutoDebug budget is exhausted; use existing evidence")
+        registry["sessions"].append(
+            {
+                "session_id": session_id,
+                "project_cwd": str(worktree),
+                "parent_session_id": state.get("SESSION_ID"),
+                "kind": "autodebug",
+                "allocated_budget_usd": remaining,
+                "artifact_dir": str(directory),
+            }
+        )
+        _atomic_write(registry_path, json.dumps(registry, indent=2) + "\n")
+    shim_dir = directory / "bin"
+    shim_dir.mkdir()
+    argv = [claude, "--session-id", session_id]
+    if remaining is not None:
+        argv += ["--max-budget-usd", str(remaining)]
+    shim = shim_dir / "claude"
+    shim.write_text(
+        "#!/bin/sh\nexport PATH="
+        + shlex.quote(os.environ.get("PATH", ""))
+        + "\nexec "
+        + shlex.join(argv)
+        + ' "$@"\n'
+    )
+    shim.chmod(0o755)
     env = dict(os.environ)
+    env["PATH"] = str(shim_dir) + os.pathsep + env.get("PATH", "")
     # A fresh Claude process must not inherit the parent's nesting sentinel.
     env.pop("CLAUDECODE", None)
     env.pop("AUTODEBUG_CLAUDE_MODEL", None)
@@ -128,6 +215,26 @@ def cmd_autodebug(args: argparse.Namespace) -> None:
             proc.wait()
             if report.is_file() and not report.is_symlink():
                 shutil.move(str(report), str(directory / "AUTODEBUG.md"))
+            exporter = Path(__file__).with_name("extract_run_transcripts.py")
+            try:
+                subprocess.run(
+                    [
+                        sys.executable,
+                        str(exporter),
+                        "--log-dir",
+                        str(directory),
+                        "--session-id",
+                        session_id,
+                        "--project-cwd",
+                        str(worktree),
+                    ],
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                    timeout=30,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                output.write(f"Transcript export unavailable: {type(exc).__name__}\n")
             print(directory)
     if code or not (directory / "AUTODEBUG.md").is_file():
         raise SystemExit(f"AutoDebug did not produce a successful report: {directory}")

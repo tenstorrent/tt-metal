@@ -16,9 +16,11 @@ returns an **intent-aware** verdict:
 
 It is schema-agnostic: every perf module has a different set of parameter
 columns, so the variant key is "all columns that are not a metric column"
-(`mean(...)`, `std(...)`, `TEXT_SIZE(...)`). The headline metric is
-`mean(L1_TO_L1)` (total L1->L1 cycles), measured on the `TILE_LOOP` marker
-(per-tile, the most comparable number) and falling back to `KERNEL`.
+(`mean(...)`, `std(...)`, `TEXT_SIZE(...)`). The default headline metric is
+`mean(L1_TO_L1)` (total L1->L1 cycles). Isolate-only tests require an explicit
+--primary-metric selection, agreed before inspecting results; the evaluator
+never substitutes a more favorable metric. It uses the `TILE_LOOP` marker
+(per-tile, the most comparable number), falling back to `KERNEL`.
 
 The perf tests' run-to-run noise is ~0.5% (per the perf team), so deltas within
 +/-0.5% are treated as noise (neutral) by default — see --regress-pct /
@@ -37,6 +39,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import statistics
 import sys
 from pathlib import Path
@@ -51,6 +54,7 @@ CONTEXT_METRICS = (
     "mean(MATH_ISOLATE)",
     "mean(PACK_ISOLATE)",
 )
+SUPPORTED_PRIMARY_METRICS = (PRIMARY_METRIC, *CONTEXT_METRICS)
 
 
 def _read_csv(path: Path) -> list[dict[str, str]]:
@@ -70,8 +74,9 @@ def _to_float(value: str | None) -> float | None:
     if value is None or value == "":
         return None
     try:
-        return float(value)
-    except ValueError:
+        number = float(value)
+        return number if math.isfinite(number) else None
+    except (TypeError, ValueError):
         return None
 
 
@@ -114,14 +119,26 @@ def evaluate(
     noise_pct: float,
     regress_pct: float,
     improve_pct: float,
+    primary_metric: str = PRIMARY_METRIC,
 ) -> dict[str, Any]:
     """Return a `perf` result dict. Pure function for easy unit testing."""
+
+    if primary_metric not in SUPPORTED_PRIMARY_METRICS:
+        raise ValueError(f"unsupported primary metric: {primary_metric}")
+    for name, value in (
+        ("noise_pct", noise_pct),
+        ("regress_pct", regress_pct),
+        ("improve_pct", improve_pct),
+    ):
+        if not math.isfinite(value) or value < 0:
+            raise ValueError(f"{name} must be finite and non-negative")
 
     if not current_rows:
         return {
             "measured": False,
             "goal": goal,
             "op": op,
+            "primary_metric": primary_metric,
             "verdict": "not_measured",
             "reason": "no current perf rows",
             "exit_code": 2,
@@ -136,19 +153,44 @@ def evaluate(
         current_rows = [r for r in current_rows if r.get("marker") == marker]
         baseline_rows = [r for r in baseline_rows if r.get("marker") == marker]
 
-    primary_label = f"{PRIMARY_METRIC} @ {marker or 'all-markers'}"
+    primary_label = f"{primary_metric} @ {marker or 'all-markers'}"
+
+    def not_comparable(verdict: str, reason: str) -> dict[str, Any]:
+        return {
+            "measured": False,
+            "goal": goal,
+            "op": op,
+            "primary_metric": primary_label,
+            "verdict": verdict,
+            "reason": reason,
+            "exit_code": 2,
+        }
+
+    for source, rows in (("current", current_rows), ("baseline", baseline_rows)):
+        if rows and any(primary_metric not in row for row in rows):
+            return not_comparable(
+                "missing_metric", f"{source} rows lack selected metric {primary_metric}"
+            )
 
     base_index = _index_by_key(baseline_rows, key_cols)
 
     per_variant: list[dict[str, Any]] = []
     deltas: list[float] = []
     for cur in current_rows:
-        cur_val = _to_float(cur.get(PRIMARY_METRIC))
-        if cur_val is None or cur_val == 0:
-            continue
+        cur_val = _to_float(cur.get(primary_metric))
+        if cur_val is None or cur_val <= 0:
+            return not_comparable(
+                "invalid_measurement",
+                f"current {primary_metric} must contain finite positive cycle counts",
+            )
         key = tuple(cur.get(c, "") for c in key_cols)
         base = base_index.get(key)
-        base_val = _to_float(base.get(PRIMARY_METRIC)) if base else None
+        base_val = _to_float(base.get(primary_metric)) if base else None
+        if base is not None and (base_val is None or base_val <= 0):
+            return not_comparable(
+                "invalid_measurement",
+                f"matching baseline {primary_metric} must contain finite positive cycle counts",
+            )
         entry: dict[str, Any] = {
             "key": {c: cur.get(c, "") for c in key_cols},
             "current_cycles": cur_val,
@@ -160,6 +202,11 @@ def evaluate(
         }
         if base_val is not None and base_val != 0:
             delta = (cur_val - base_val) / base_val * 100.0
+            if not math.isfinite(delta):
+                return not_comparable(
+                    "invalid_measurement",
+                    f"{primary_metric} percentage delta is not finite",
+                )
             entry["delta_pct"] = round(delta, 3)
             deltas.append(delta)
         per_variant.append(entry)
@@ -213,12 +260,15 @@ def evaluate(
     for metric in CONTEXT_METRICS:
         cur_m = _to_float(cur_row.get(metric)) if cur_row else None
         base_m = _to_float(base_row.get(metric)) if base_row else None
-        if cur_m is None or base_m is None or base_m == 0:
+        if cur_m is None or base_m is None or base_m <= 0:
+            continue
+        context_delta = (cur_m - base_m) / base_m * 100.0
+        if not math.isfinite(context_delta):
             continue
         breakdown[metric] = {
             "baseline": base_m,
             "current": cur_m,
-            "delta_pct": round((cur_m - base_m) / base_m * 100.0, 3),
+            "delta_pct": round(context_delta, 3),
         }
     # Drop the internal raw-row refs from every entry; attach the breakdown.
     for e in per_variant:
@@ -304,6 +354,12 @@ def main(argv: list[str] | None = None) -> int:
         "--test", default=None, help="Perf test module name (for the report)"
     )
     p.add_argument("--goal", choices=["improve", "no_regress"], default="no_regress")
+    p.add_argument(
+        "--primary-metric",
+        choices=SUPPORTED_PRIMARY_METRICS,
+        default=PRIMARY_METRIC,
+        help="Cycle metric selected by the test contract; no automatic fallback",
+    )
     # The perf team measured the perf tests' run-to-run noise at ~0.5%, so a
     # delta within +/-0.5% is treated as noise (neutral), not a regression or a
     # real improvement.
@@ -324,6 +380,10 @@ def main(argv: list[str] | None = None) -> int:
         "--json-out", default=None, help="Write the perf result JSON to this path"
     )
     args = p.parse_args(argv)
+    for name in ("noise_pct", "regress_pct", "improve_pct"):
+        value = getattr(args, name)
+        if not math.isfinite(value) or value < 0:
+            p.error(f"--{name.replace('_', '-')} must be finite and non-negative")
 
     current_rows = _read_csv(Path(args.current))
     baseline_rows = _read_csv(Path(args.baseline)) if args.baseline else []
@@ -336,6 +396,7 @@ def main(argv: list[str] | None = None) -> int:
         noise_pct=args.noise_pct,
         regress_pct=args.regress_pct,
         improve_pct=args.improve_pct,
+        primary_metric=args.primary_metric,
     )
     if args.test:
         result["test"] = args.test

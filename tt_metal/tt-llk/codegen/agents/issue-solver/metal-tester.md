@@ -1,10 +1,14 @@
 ---
 name: metal-tester
 description: Verify CKernels, Compute-API, and Metal-runtime LLK changes with the `unit_tests_llk` gtest suite on ttsim or silicon.
-tools: Bash, Read, Write, Glob, Grep
+tools: Bash, Read, Write, Glob, Grep, TaskOutput
 ---
 
 # Metal Test-Suite Tester
+
+Submit each dispatch once and wait for its blocking return. If Bash yields a
+task ID, wait on that same task with `TaskOutput`; do not resubmit the job or
+add fixed sleeps and manual queue polling. Preserve dispatch output and errors.
 
 Run `unit_tests_llk` for lower-layer changes that need a Metal regression:
 CKernels API, Compute API, Metal runtime, and Metal LLK tests. The gtest
@@ -66,6 +70,40 @@ Optional environment:
 - `TT_METAL_LLK_ASSERTS=1`: enable device assertions and
   `TT_METAL_WATCHER=1` for local execution. The current queue request does not
   transport these optional variables.
+
+## Sealed silicon queue execution
+
+For `TEST_BACKEND=local` Blackhole/Wormhole leaves, use this path when
+`HW_TEST_DISPATCH_CMD` advertises `--requirement-id` in `--help` (check once per
+run). Apply the coverage, scope, and manifest checks in Mandatory Pre-Flight
+below, skipping its local-build and warm-tree steps. Select only `suite=metal`
+leaves, preserving reproduction-before-regression order.
+For each leaf use its existing `requirement_id`:
+
+```bash
+set -o pipefail
+$HW_TEST_DISPATCH_CMD --log-dir "$LOG_DIR" --requirement-id "$REQUIREMENT_ID" \
+  --timeout "${TIMEOUT:-1800}" 2>&1 | tee -a "$LOG_DIR/metal_run.log"
+```
+
+The dispatcher derives and validates worktree, base, selector, architecture,
+logical attempt and result identity. Its isolated builder owns compilation and
+its blocking return owns waiting. This path replaces the local compile gate,
+warm-tree setup, selector/environment reconstruction and manual queue command
+below. Do not inspect dispatcher implementation or other agents' logs to
+reconstruct those inputs; use `--describe` only to diagnose a rejected context.
+Do not add manual routing flags or broaden a rejected selector.
+
+Require the terminal `HW_TEST_RESULT` and exact structured result for each
+executed leaf. Audit mode copies it into the current verification-results
+attempt directory; production retains the authoritative queue result. Existing
+result ingestion and strict reduction remain required.
+Because this path has no preceding local compile, an evidenced candidate
+compiler error is `COMPILE_FAILED`; setup/infrastructure failure is `ENV_ERROR`.
+Do not apply the legacy blanket build-failure-as-environment rule here.
+Continue with Outcome Reading, Output Format, and Result Recording below.
+Local silicon, ttsim, Quasar, and dispatchers without this interface continue
+through their existing paths below.
 
 ## Mandatory Pre-Flight
 
@@ -505,9 +543,7 @@ out-of-scope architectures.
 
 ## Self-Log
 
-Create `${LOG_DIR}/agent_metal_tester.md`, or append
-`## Metal Test Attempt — <UTC timestamp>` when it exists. Record the build
-strategy and duration, exact commands and relevant environment, filter,
-coverage state, assertion mode, queue job IDs, per-architecture counts and
-verdicts, and the first meaningful failure. Never discard earlier attempts. If
-`LOG_DIR` is empty, report that self-logging was skipped.
+Append a concise attempt handoff to `${LOG_DIR}/agent_metal_tester.md`:
+per-architecture verdict, first failure, deviations, and structured-result/raw-log
+paths. Preserve earlier attempts; do not duplicate commands, environment,
+selectors, or raw output already captured by tools. Skip when `LOG_DIR` is empty.
