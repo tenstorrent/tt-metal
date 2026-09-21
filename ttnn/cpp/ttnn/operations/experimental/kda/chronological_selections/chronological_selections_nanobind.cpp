@@ -36,17 +36,25 @@ void bind_chronological_selections(nb::module_& mod) {
             key_dim (int): Positive state key dimension.
             value_dim (int): Positive state value dimension.
 
-        The scalar is read on every execution without host readback. Keep its
-        address stable and update its contents before replaying a captured trace.
-        Each device's rank comes from its mesh coordinate. The interval occupies
-        the full physical capacity; this operation does not accept an end bound.
+        Keyword Args:
+            actual_end (ttnn.Tensor, optional): Replicated, interleaved UINT32
+                row-major device scalar containing the exclusive absolute end.
+                Both bounds must be 32-aligned and define a nonempty interval no
+                longer than the full physical capacity. Omission uses full capacity.
+
+        Bounds are read on every execution without host readback. Keep their
+        addresses stable and update their contents before replaying a captured trace.
+        Runtime values are caller preconditions on every replay. Each device's rank
+        comes from its mesh coordinate.
 
         Returns:
             ttnn.Tensor: Interleaved UINT32 row-major DRAM table of shape
-                ``[7 + 2 * SP_size, 8]`` per device. This private representation
+                ``[8 + 2 * SP_size, 8]`` per device. This private representation
                 contains three history-index records, paired start/exclusive-end
                 bounds for local entry and final state, and one bounds pair per
-                chronological affine-transform step. Consumers must use the shared
+                chronological affine-transform step, followed by a local final-history
+                record selecting the last three valid local rows (a placeholder on
+                empty ranks). Consumers must use the shared
                 ``_selection_layout`` definitions rather than hard-coded offsets.
         )doc",
         &ttnn::experimental::kda::chronological_selections,

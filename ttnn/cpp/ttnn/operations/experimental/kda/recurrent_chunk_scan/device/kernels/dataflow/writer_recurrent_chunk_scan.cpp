@@ -14,10 +14,11 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-template <uint32_t Rows, uint32_t Vt, uint32_t VtFull, uint32_t PacketRows, typename Accessor>
+template <uint32_t Rows, uint32_t Vt, uint32_t VtFull, uint32_t PacketRows, bool Consume = true, typename Accessor>
 FORCE_INLINE void write_value_slice(
     const Accessor& accessor, DataflowBuffer& buffer, Noc& noc, uint32_t row_base, uint32_t value_block) {
     static_assert(PacketRows > 0 && Rows % PacketRows == 0);
+    static_assert(Consume || PacketRows == Rows, "Retained writes require one complete buffer packet");
     constexpr uint32_t packet_tiles = PacketRows * Vt;
     const uint32_t entry_size = buffer.get_entry_size();
     for (uint32_t packet = 0; packet < Rows; packet += PacketRows) {
@@ -34,7 +35,9 @@ FORCE_INLINE void write_value_slice(
             }
         }
         noc.async_write_barrier();
-        buffer.pop_front(packet_tiles);
+        if constexpr (Consume) {
+            buffer.pop_front(packet_tiles);
+        }
     }
 }
 
@@ -94,8 +97,13 @@ FORCE_INLINE void write_recurrent(
         const uint32_t row_base = (head * num_chunks + chunk) * Ct * VtFull;
         write_value_slice<Ct, Vt, VtFull, Ct>(output_accessor, output, noc, row_base, value_block);
     }
-    const uint32_t state_row_base = final_head * Kt * VtFull;
-    write_value_slice<Kt, Vt, VtFull, Kt>(final_state_accessor, final_state, noc, state_row_base, value_block);
+    // Preserve every valid group's state at its own index. Also publish the last
+    // valid state in the final physical slot used by the layer's carry selection.
+    if (final_head != head) {
+        write_value_slice<Kt, Vt, VtFull, Kt, false>(
+            final_state_accessor, final_state, noc, final_head * Kt * VtFull, value_block);
+    }
+    write_value_slice<Kt, Vt, VtFull, Kt>(final_state_accessor, final_state, noc, head * Kt * VtFull, value_block);
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary, uint32_t has_actual_end>

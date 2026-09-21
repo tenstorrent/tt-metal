@@ -283,7 +283,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
             to_remote_a.wait_front(affine_a_tiles);
             to_remote_b.wait_front(affine_b_tiles);
         }
-        // Each head is an independent G-worker scan. Do not release its next NoC stage until all G workers have
+        // Each head is an independent scan. Do not release its next NoC stage until all active workers have
         // consumed their remote buffers and produced the next prefix; otherwise that head can overwrite a mailbox
         // while compute is still reading it. Arrival and release semaphore targets stay monotonic across stages.
         synchronize_head_stage<G>(worker_index, group, active, completed_stages, noc, arrival, release);

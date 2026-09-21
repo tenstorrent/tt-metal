@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Prepared terms and direct scan match physically trimmed native execution."""
 
+import pytest
 import torch
 
 import ttnn
@@ -93,4 +94,70 @@ def test_padding_preparation_and_scan(device):
     finally:
         ttnn.release_trace(device, trace)
         for tensor in (*outputs, *inputs, beta_tt, initial_tt, start, end):
+            ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize("width", [32, 128])
+def test_padding_scan_preserves_valid_group_states(device, width):
+    """Shortening one trace preserves group indices and the fixed-slot final carry."""
+    from tests.ttnn.nightly.unit_tests.operations.experimental.kda.test_prepare_chunk_recurrence import (
+        _device_inputs,
+        _host_inputs,
+        _run,
+    )
+    from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
+
+    heads, groups, chunks_per_group = 2, 4, 2
+    inputs = _device_inputs(_host_inputs(heads, groups * chunks_per_group, width, width, seed=1912), device)
+    prepared = _run(inputs, heads)
+    prepared_host = [ttnn.to_torch(t) for t in prepared]
+    grouped = [ttnn.reshape(t, (heads * groups, chunks_per_group, *tuple(t.shape)[2:])) for t in prepared]
+    initial_host = torch.randn(heads, groups, width, width, generator=torch.Generator().manual_seed(219)) * 0.1
+
+    def upload(host, dtype=ttnn.float32):
+        return ttnn.from_torch(host.contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    initial = upload(initial_host.reshape(heads * groups, width, width))
+    tail = upload(initial_host[:, 0])
+    start, end = make_actual_start(device, 0), make_actual_start(device, 256)
+
+    def run():
+        return ttnn.experimental.kda.recurrent_chunk_scan(
+            *grouped, initial, groups_per_head=groups, actual_start=start, actual_end=end, tail_entry_states=tail
+        )
+
+    for _ in range(2):
+        for tensor in run():
+            ttnn.deallocate(tensor)
+    trace = ttnn.begin_trace_capture(device, cq_id=0)
+    output, states = run()
+    ttnn.end_trace_capture(device, trace, cq_id=0)
+    try:
+        for length in (256, 32, 96, 160, 224, 128, 32, 256):
+            source = make_actual_start(device, length)
+            ttnn.copy(source, end)
+            ttnn.deallocate(source)
+            ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
+            observed = ttnn.to_torch(states).reshape(heads, groups, width, width)
+            active_groups = (length + 63) // 64
+            for group in range(active_groups):
+                begin = group * chunks_per_group
+                count = min(chunks_per_group, length // 32 - begin)
+                terms = [
+                    upload(host[:, begin : begin + count], tensor.dtype)
+                    for host, tensor in zip(prepared_host, prepared, strict=True)
+                ]
+                seed = upload(initial_host[:, group])
+                expected_output, expected_state = ttnn.experimental.kda.recurrent_chunk_scan(
+                    *terms, seed, actual_start=start, tail_entry_states=seed
+                )
+                expected = ttnn.to_torch(expected_state)
+                torch.testing.assert_close(observed[:, group], expected, rtol=0, atol=0)
+                if group == active_groups - 1:
+                    torch.testing.assert_close(observed[:, -1], expected, rtol=0, atol=0)
+                for tensor in (*terms, seed, expected_output, expected_state):
+                    ttnn.deallocate(tensor)
+    finally:
+        ttnn.release_trace(device, trace)
+        for tensor in (output, states, initial, tail, start, end, *grouped, *inputs):
             ttnn.deallocate(tensor)

@@ -69,6 +69,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: New tensors containing BFLOAT16 token
                 outputs ``Y[B*H*G,N,32,V]`` and FLOAT32 final state ``S[B*H*G,K,V]``.
+                Each valid group's state remains at its group index. For a nonempty
+                padded rank, the last valid group's state is also copied to group
+                ``G-1`` for fixed-slot carry selection. Other padded slots are unspecified.
 
         Note:
             ``v_beta``, ``kd``, ``q_decay``, ``k_dec_t``, and ``final_decay`` may be
