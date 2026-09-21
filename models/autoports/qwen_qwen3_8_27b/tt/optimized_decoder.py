@@ -83,7 +83,7 @@ class OptimizedDecoder(LightweightModule):
     CHUNK_SIZE = DEFAULT_POLICY["chunk_size"]
 
     @classmethod
-    def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, policy=None):
+    def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, policy=None, replicated_mesh=False):
         """Load an HF layer-local state dict (keys match Qwen3_5DecoderLayer)."""
         import torch
 
@@ -103,7 +103,7 @@ class OptimizedDecoder(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        if mesh_device.get_num_devices() != 1:
+        if mesh_device.get_num_devices() != 1 and not replicated_mesh:
             raise ValueError("Optimized decoder requires a single-device mesh")
         if (hf_config.hidden_size, hf_config.intermediate_size) != (5120, 17408):
             raise ValueError("Expected the real Qwen3.8-27B text config")

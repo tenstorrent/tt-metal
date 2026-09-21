@@ -16,6 +16,8 @@ from models.autoports.qwen_qwen3_8_27b.tt.precision import decoder_policy
 
 VARIANTS = {
     "baseline": {},
+    "mmrs": dict(output_scheme="mmrs", fused_n=8, fused_grid=[10, 8], flatten_prefill_batch=True),
+    "mmrswide": dict(output_scheme="mmrs", fused_n=8, fused_grid=[11, 8], flatten_prefill_batch=True),
     "m8n8": dict(minimal_m=8, minimal_n=8),
     "m8n16": dict(minimal_m=8, minimal_n=16),
     "m16n8": dict(minimal_m=16, minimal_n=8),
