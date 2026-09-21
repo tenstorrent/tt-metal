@@ -1235,7 +1235,6 @@ void py_module(nb::module_& mod) {
             &ttnn::prim::MatmulDeviceOperation::compute_descriptor_program_hash,
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"))
-        // prim::matmul with optional bias; ttnn.linear post-processes when in1 is batched
         .def_static(
             "invoke",
             [](const ttnn::Tensor& input_tensor_a,
@@ -1247,7 +1246,11 @@ void py_module(nb::module_& mod) {
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::arg("bias") = nb::none(),
-            nb::arg("attributes"));
+            nb::arg("attributes"),
+            R"doc(
+        Launch ttnn::prim::matmul with optional fused bias. ttnn.linear / ttnn.matmul post-process
+        bias when in1 is batched, so they never fuse in that case.
+    )doc");
 
     // Bind MatmulMultiCoreReuseMcast1DProgramFactory for descriptor creation
     nb::class_<ttnn::prim::MatmulMultiCoreReuseMcast1DProgramFactory>(mod, "MatmulMultiCoreReuseMcast1DProgramFactory")
