@@ -36,13 +36,8 @@ on:
         description: "Times each op runs. Run 1 is uncached, the rest hit the program cache."
         type: string
         default: "3"
-      arch:
-        type: choice
-        options:
-          - wormhole_b0
-          - blackhole
-        default: wormhole_b0
       runner-label:
+        description: "Which card to run on. The arch follows from this rather than being a separate input, so the two cannot disagree."
         type: choice
         options:
           - N150
@@ -53,16 +48,18 @@ on:
     # 05:00 UTC daily. ttnn-run-sweeps already occupies 02:00 and 03:00.
     - cron: "0 5 * * *"
 
-run-name: "eltwise determinism [${{ inputs.dtypes || 'bfloat16,float32' }} ${{ inputs.shape || '1x1x32x32' }} ${{ inputs.memory-config || 'dram' }}] (${{ inputs.arch || 'wormhole_b0' }})"
+run-name: "eltwise determinism [${{ inputs.dtypes || 'bfloat16,float32' }} ${{ inputs.shape || '1x1x32x32' }} ${{ inputs.memory-config || 'dram' }}] (${{ inputs.runner-label || 'N150' }})"
 
+# Read-only by default: the hardware job only pulls an image and runs tests, and inheriting a
+# package-write token would expose it inside that container for nothing. build-artifact re-grants
+# packages: write on its own job, which is the only one that publishes.
 permissions:
   contents: read
-  packages: write
 
-# Two dispatches of the same arch would contend for one device, so the later one wins. The run_id
+# Two dispatches at the same runner label would contend for one device, so the later one wins. The run_id
 # keeps every run on a protected branch in its own group, so the daily runs never cancel each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.arch || 'wormhole_b0' }}-${{
+  group: ${{ github.workflow }}-${{ inputs.runner-label || 'N150' }}-${{
     github.ref_protected && github.run_id || github.ref }}
   cancel-in-progress: true
 
@@ -92,7 +89,7 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ inputs.arch || 'wormhole_b0' }}
+        ARCH_NAME: ${{ inputs.runner-label == 'P150b' && 'blackhole' || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
         ELTWISE_DETERMINISM_DTYPES: ${{ inputs.dtypes || 'bfloat16,float32' }}
@@ -133,7 +130,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: eltwise-determinism-report-${{ inputs.arch || 'wormhole_b0' }}
+          name: eltwise-determinism-report-${{ inputs.runner-label || 'N150' }}
           # /docker-job/ is the host-side mount of the container's /work/. pytest writes the report
           # to /work inside the container; this host path is what upload-artifact can actually see.
           path: ${{ github.workspace }}/docker-job/eltwise-determinism-report.xml
@@ -142,3 +139,30 @@ jobs:
           # container-path mistake this line fixes.
           if-no-files-found: warn
           retention-days: 7
+
+  # A scheduled failure is otherwise visible only to whoever happens to open the Actions tab, which
+  # for a daily job means it can sit red for days. Scheduled runs only: a dispatch already has
+  # someone watching it. Skips itself when the token is unset, so the workflow stays usable in a
+  # fork and a missing secret cannot turn a passing run red.
+  report-status:
+    name: "Report status"
+    runs-on: ubuntu-slim
+    needs: eltwise-determinism
+    if: ${{ always() && github.event_name == 'schedule' && needs.eltwise-determinism.result != 'success' }}
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.ELTWISE_SLACK_REPORTING_BOT_TOKEN }}
+    steps:
+      - name: Checkout repository
+        if: ${{ env.SLACK_BOT_TOKEN != '' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+      - name: Report status
+        if: ${{ env.SLACK_BOT_TOKEN != '' }}
+        uses: ./.github/actions/report-failure
+        with:
+          test_name: "eltwise determinism and correctness"
+          slack_bot_token: ${{ secrets.ELTWISE_SLACK_REPORTING_BOT_TOKEN }}
+          slack_channel_id: ${{ secrets.ELTWISE_CI_STATUS_CHANNEL_ID }}
+          status: ${{ needs.eltwise-determinism.result }}

@@ -33,11 +33,32 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # The configuration is read from the environment so one file serves both the scheduled run and a
 # manual dispatch that wants to sweep an axis, without a second copy of the op table. The defaults
-# cover both float dtypes on a single DRAM tile, which is what runs daily and on PRs.
-#
-# How many times each op runs. 3 is the useful minimum: one uncached, two cached, so a
-# cache-path difference and a run-to-run difference are both reachable.
-RUNS = int(os.environ.get("ELTWISE_DETERMINISM_RUNS", "3"))
+# cover both float dtypes on a single DRAM tile, which is what runs daily.
+
+
+def _runs_from_env():
+    """How many times each op runs.
+
+    3 is the default: one uncached and two cached, so a cache-path difference and a difference
+    between two cached runs are both reachable. 2 is the floor -- it still crosses the uncached to
+    cached boundary, which is the transition most likely to diverge. Anything below that is
+    rejected rather than allowed to pass vacuously: at 1 there is no pair to compare and every op
+    would be reported as deterministic without a single comparison having been made.
+    """
+    raw = os.environ.get("ELTWISE_DETERMINISM_RUNS", "3")
+    try:
+        runs = int(raw)
+    except ValueError:
+        raise ValueError(f"ELTWISE_DETERMINISM_RUNS must be an integer; got {raw!r}")
+    if runs < 2:
+        raise ValueError(
+            f"ELTWISE_DETERMINISM_RUNS must be at least 2 to compare anything; got {runs}. "
+            "3 is the default and also covers a difference between two cached runs."
+        )
+    return runs
+
+
+RUNS = _runs_from_env()
 
 _DTYPES = {"bfloat16": ttnn.bfloat16, "float32": ttnn.float32}
 _MEMORY = {"dram": ttnn.DRAM_MEMORY_CONFIG, "l1": ttnn.L1_MEMORY_CONFIG}
@@ -523,11 +544,28 @@ def _job_summary(request):
         reporter.write_line(summary)
 
 
+# The function-scoped `device` fixture is deliberate here, not an oversight. The program cache
+# lives on the device and is empty on a fresh one, so a per-test device is what makes run 1 a real
+# cache miss and runs 2..N real hits -- the transition this whole check is built to watch. A
+# module-scoped device would carry the cache across cases, so an op whose program was already
+# compiled by an earlier case would never see the uncached path, weakening the check silently.
+#
+# It is also not the cost it looks like: the cluster is opened once per process, not once per test
+# (measured: one open and one close across three cases), so a case costs ~90ms end to end and the
+# full 380-case run takes about five minutes. Nothing to buy back here.
 @pytest.mark.parametrize("dtype", [d for d, _ in DTYPES], ids=[n for _, n in DTYPES])
 @pytest.mark.parametrize("spec", ALL_OPS, ids=lambda s: s.name)
 def test_eltwise_deterministic_and_correct(device, spec, dtype):
     """Every run bit-identical to the first, and the first correct against the golden."""
-    stats = _Stats(op=spec.name, dtype=_dtype_name(dtype))
+    # An op that pins its own dtype ignores the parameter, so without this it would run once per
+    # dtype doing byte-for-byte the same work and report two identical rows. The bitwise ops are
+    # the only ones, and they are int32.
+    if spec.dtype is not None and dtype is not DTYPES[0][0]:
+        pytest.skip(f"{spec.name} pins {_dtype_name(spec.dtype)}; the dtype parameter would repeat the same case")
+
+    # spec.dtype wins when the op pins one, so a failure row names the dtype that actually ran
+    # rather than the parameter it was reached through.
+    stats = _Stats(op=spec.name, dtype=_dtype_name(spec.dtype or dtype))
     _COLLECTED.append(stats)
 
     torch_operands, ttnn_operands = _build_operands(spec, dtype, device)
