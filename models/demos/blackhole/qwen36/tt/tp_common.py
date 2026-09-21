@@ -580,6 +580,23 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
     return cache[key]
 
 
+def mmrs_prefill_supported(device, nd, rs_offset=(0, 8)):
+    """Whether the fused prefill out-proj matmul_reduce_scatter can be PLACED on this device.
+
+    The op selects 36 reduce-scatter worker cores (3 full rows on a 12-wide Blackhole grid) and
+    places them at rs_offset, above the matmul's own (8,8) grid. A 10-row Blackhole leaves only
+    2 rows there, so placement fails at every TP on this SKU:
+
+        ccl_common.cpp:562 Core grid offset 0-8 pushed 12 of the 36 selected worker cores
+        (first: 0-10) off the worker grid; kernels cannot be placed there.
+
+    Ring size is NOT the discriminator -- the same 36 cores are selected at nd=4 and nd=8.
+    Falling back to the unfused row-parallel matmul + tt_all_reduce is correct and works.
+    """
+    rows_free = max(0, device.compute_with_storage_grid_size().y - rs_offset[1])
+    return rows_free >= 3
+
+
 def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, dtype, grid=(8, 8), rs_offset=(0, 8)):
     """Fused row-parallel out-proj matmul + reduce-scatter for PREFILL (matmul_reduce_scatter_async).
 

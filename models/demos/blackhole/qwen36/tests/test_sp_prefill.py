@@ -62,13 +62,28 @@ from models.demos.blackhole.qwen36.tt.sp_prefill import BLOCK_SIZE, SPPrefill, _
 # touching every call site.
 
 SP_DIES = int(os.environ.get("SP_DIES", "4"))
+# SP_TP>1 gives every span a tensor-parallel group; the mesh then needs SP_DIES*SP_TP dies.
+SP_TP = int(os.environ.get("SP_TP", "1"))
 
 
 def _open_sp_mesh(n_dies=None, **kwargs):
-    n_dies = SP_DIES if n_dies is None else n_dies
+    n_dies = SP_DIES * SP_TP if n_dies is None else n_dies
+    # SP=1D wavefront over a line of dies routes fine on FABRIC_1D. With tp>1 the spans become
+    # (1, tp) groups carved out of a 2-D mesh, so consecutive groups are no longer collinear --
+    # e.g. (4,8) split into (1,4) puts group 1 at row0/cols4-7 and group 2 at row1/cols0-3, and
+    # the hop dies with "Sender and receiver chips must be in the same row or column when using
+    # 1D Line Fabric". FABRIC_2D routes those diagonal hops.
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     system = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape()
     size = system.mesh_size()
+    if SP_TP > 1 and size == n_dies:
+        # tp>1 needs the NATIVE 2-D shape, not a (1, N) line. A logical (1, 32) row maps onto
+        # the physical 4x8 grid with row jumps, so consecutive (1, tp) span groups land
+        # diagonally and the 1D-fabric socket hop is rejected. Opening (4, 8) instead lets
+        # SPPrefill snake the span order so every hop stays in one row or one column.
+        shape = ttnn.MeshShape(4, 8) if size == 32 else system
+        mesh = ttnn.open_mesh_device(mesh_shape=shape, **kwargs)
+        return mesh, mesh
     if size > n_dies:
         # A 32-chip Blackhole Galaxy reports its system shape as (8, 4), which a (1, 8)
         # submesh does not divide ("Shape MeshShape([8, 4]) is not divisible by submesh
@@ -223,7 +238,7 @@ def test_sp_prefill_matches_single_device(sp_mesh, T):
     gc.collect()
 
     t0 = time.perf_counter()
-    sp = SPPrefill(sp_mesh, n_spans=SP_DIES, span_len=span_len, max_seq_len=max_seq_len, hf_model=hf_model)
+    sp = SPPrefill(sp_mesh, n_spans=SP_DIES, tp=SP_TP, span_len=span_len, max_seq_len=max_seq_len, hf_model=hf_model)
     logger.info(f"[test] SPPrefill build time: {time.perf_counter() - t0:.1f}s")
 
     try:
@@ -288,7 +303,7 @@ def test_sp_prefill_matches_tp4(T):
     # ---- phase (b): SPPrefill on the SAME tokens ----
     mesh2_owner, mesh2 = _open_sp_mesh(trace_region_size=64 * 1024 * 1024, l1_small_size=GDN_CONV1D_L1_SMALL_SIZE)
     try:
-        sp = SPPrefill(mesh2, n_spans=SP_DIES, span_len=span_len, max_seq_len=max_seq_len, hf_model=hf_model)
+        sp = SPPrefill(mesh2, n_spans=SP_DIES, tp=SP_TP, span_len=span_len, max_seq_len=max_seq_len, hf_model=hf_model)
         try:
             sp_logits = sp.prefill(tokens).float()
         finally:
@@ -328,6 +343,7 @@ def test_sp_prefill_traced_ttft(sp_mesh):
     sp = SPPrefill(
         sp_mesh,
         n_spans=SP_DIES,
+        tp=SP_TP,
         span_len=span_len,
         max_seq_len=T,
         hf_model=hf_model,
@@ -501,6 +517,7 @@ def test_sp_prefill_then_tp_decode_b_sp_export():
         sp = SPPrefill(
             mesh,
             n_spans=SP_DIES,
+            tp=SP_TP,
             span_len=span_len,
             max_seq_len=T,
             hf_model=hf_model,

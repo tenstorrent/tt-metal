@@ -621,7 +621,15 @@ class Qwen36Model:
         cos = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
         sin = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
 
-        for layer in self.layers:
+        # Per-layer tracy signposts (QWEN36_SIGNPOSTS=1) for the GDN-vs-FA breakdown. This is
+        # the EAGER TP prefill, so the markers actually fire -- prefill_traced_chunked replays a
+        # captured trace for every full chunk and never re-enters Python, which is why
+        # signposting _forward_prefill_chunk_tp produced nothing at ISL 4096 (2 full chunks, no tail).
+        _sigs = os.environ.get("QWEN36_SIGNPOSTS") == "1"
+        for _li, layer in enumerate(self.layers):
+            if _sigs:
+                _ckpt = self.layer_indices[_li] if hasattr(self, "layer_indices") else _li
+                _signpost(f"prefill L{_ckpt} {'attn' if layer.is_full_attention else 'gdn'}")
             x = layer.forward(x, cos=cos, sin=sin, mode="prefill", chunk_size=128, valid_len=valid_len)
 
         # Last real position via one-hot matmul (not slice): bare slice breaks at long T (~49k+).
@@ -1037,7 +1045,15 @@ class Qwen36Model:
         # identity when the mask is zero, i.e. every text-only chunk). The caller stages the
         # buffers before replaying chunk 0 of a multimodal prompt; later chunks are cleared.
         x = self._apply_vision_merge(x, length=chunk_size)
-        for layer in self.layers:
+        # Per-layer tracy signposts (QWEN36_SIGNPOSTS=1) so an EAGER prefill capture can be
+        # bucketed into GDN vs full-attention layers, the same way sp_prefill._run_layer_major
+        # marks the SP path. No-op when unset, and meaningless under trace replay (one command,
+        # never re-enters Python) -- profile the untraced warmup pass.
+        _sigs = os.environ.get("QWEN36_SIGNPOSTS") == "1"
+        for _li, layer in enumerate(self.layers):
+            if _sigs:
+                _ckpt = self.layer_indices[_li] if hasattr(self, "layer_indices") else _li
+                _signpost(f"prefill L{_ckpt} {'attn' if layer.is_full_attention else 'gdn'}")
             if layer.is_full_attention:
                 x_new = layer.forward(
                     x,

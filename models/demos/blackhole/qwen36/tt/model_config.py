@@ -358,6 +358,25 @@ class Qwen36ModelArgs(ModelArgs):
             return False
         return (layer_idx + 1) % self.moe_decoder_sparse_step == 0
 
+    def ccl_topology(self):
+        """Linear CCL on a 1-D Blackhole-Galaxy submesh.
+
+        The base returns Ring for BLACKHOLE_GALAXY at num_devices >= 8, right for a ring-wired
+        P150x8 but wrong for a row carved out of a Galaxy: row 0 is chips
+        [0, 1, 2, 3, 27, 26, 25, 24] with no wrap, so Ring dies in route resolution with
+        "Could not find any forwarding direction from src (M0, D0) to dst (M0, D28)".
+        """
+        import ttnn as _ttnn
+
+        md = getattr(self, "mesh_device", None)
+        if (
+            md is not None
+            and _ttnn.cluster.get_cluster_type() == _ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+            and 1 in tuple(md.shape)
+        ):
+            return _ttnn.Topology.Linear
+        return super().ccl_topology()
+
     def is_distributed_norm(self, mode):
         """Force the distributed-norm path for multi-device prefill.
 

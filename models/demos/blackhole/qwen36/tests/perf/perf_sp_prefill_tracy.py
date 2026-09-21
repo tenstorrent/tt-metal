@@ -50,6 +50,7 @@ def test_perf_sp_prefill_tracy():
         sp = SPPrefill(
             mesh,
             n_spans=SP_DIES,
+            tp=SP_TP,
             span_len=T // SP_DIES,
             max_seq_len=T,
             hf_model=model_path(),

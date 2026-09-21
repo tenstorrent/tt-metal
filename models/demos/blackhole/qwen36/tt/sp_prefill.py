@@ -161,6 +161,7 @@ class SPPrefill:
         mesh_device,
         *,
         n_spans=4,
+        tp=1,
         span_len=1024,
         max_seq_len=4096,
         hf_model=None,
@@ -184,10 +185,17 @@ class SPPrefill:
         # 128 is the SDPA q-chunk size assumed by forward_prefill_paged's chunk_start_idx; FIFO
         # sizes and the L1 budget in this module were validated at span_len=1024 only.
         assert span_len % 128 == 0, "span_len must be a multiple of 128 (the SDPA q-chunk size)"
-        assert tuple(mesh_device.shape) == (1, n_spans), (
-            f"SPPrefill assumes a (1, {n_spans}) mesh for the forward die d -> d+1 adjacency, "
-            f"got {tuple(mesh_device.shape)}"
+        # tp>1 gives each span a TENSOR-PARALLEL GROUP instead of a single die, so the two
+        # parallelisms compose: SP splits the prompt across groups, TP splits each layer across
+        # the dies within a group. The mesh must hold n_spans * tp dies; a (1, N) line works, and
+        # so does any 2-D shape whose total size matches (a Blackhole Galaxy caps at 8 columns,
+        # so SP=8 x TP=4 has to come from (4, 8) carved into 8 groups of (1, 4)).
+        n_dies = mesh_device.shape[0] * mesh_device.shape[1]
+        assert n_dies == n_spans * tp, (
+            f"SPPrefill needs n_spans*tp = {n_spans}*{tp} = {n_spans * tp} dies, "
+            f"got mesh {tuple(mesh_device.shape)} = {n_dies}"
         )
+        self.tp = tp
         self.n_spans = n_spans
         self.span_len = span_len
         self.max_seq_len = max_seq_len
@@ -195,8 +203,31 @@ class SPPrefill:
         self.blocks_per_span = span_len // BLOCK_SIZE
 
         self.mesh_device = mesh_device
-        self.subs = mesh_device.create_submeshes(ttnn.MeshShape(1, 1))
+        # One submesh per SPAN; each is a (1, tp) tensor-parallel group (tp=1 -> one die, the
+        # original behaviour). _build_socket_pair already iterates MeshCoordinateRange(sub.shape),
+        # so a group-to-group socket fans out to one connection per die pair automatically.
+        self.subs = mesh_device.create_submeshes(ttnn.MeshShape(1, tp))
         assert len(self.subs) == n_spans, f"expected {n_spans} submeshes, got {len(self.subs)}"
+        # SNAKE the group order when the spans tile a 2-D mesh. The wavefront sockets connect
+        # die j of group g to die j of group g+1, and 1D Line Fabric requires sender and
+        # receiver to share a row or a column. create_submeshes hands back row-major order, so
+        # on a (4,8) mesh with tp=4 the wrap from (row r, block 1) to (row r+1, block 0) is
+        # diagonal and the hop dies with:
+        #   mesh_socket_utils.cpp:115 Sender and receiver chips must be in the same row or
+        #   column when using 1D Line Fabric
+        # Reversing every other row makes consecutive groups differ in exactly one axis
+        # (measured: 3 illegal hops row-major -> 0 snaked, for (4,8)/tp=4).
+        # FABRIC_2D is NOT an alternative: all_gather_minimal_matmul_async's dm_in0_sender
+        # kernel is written against the linear (1D) fabric API and fails to compile under 2D.
+        _rows, _cols = mesh_device.shape[0], mesh_device.shape[1]
+        _per_row = _cols // tp
+        if _rows > 1 and _per_row > 1 and _rows * _per_row == n_spans:
+            snake = []
+            for r in range(_rows):
+                blocks = range(_per_row) if r % 2 == 0 else reversed(range(_per_row))
+                snake += [r * _per_row + b for b in blocks]
+            self.subs = [self.subs[i] for i in snake]
+            logger.info(f"[SPPrefill] snaked span order for 1D-fabric collinearity: {snake}")
 
         # Safe defaults so close() can always run cleanly, even if construction below fails
         # partway through (see the try/except immediately below).
