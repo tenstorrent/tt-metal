@@ -6,8 +6,9 @@
 
     python tech_reports/CCLs/plot_results.py
 
-Reads every data/results_*.csv, keeps the DRAM rows, and writes one figure per
-device count to images/, with a panel per resolved topology.
+Reads every data/results_*.csv and writes to images/: one bandwidth figure per
+architecture and device count, with a panel per resolved topology, plus a
+memory config figure wherever an op was measured in both L1 and DRAM.
 """
 
 import glob
@@ -40,20 +41,17 @@ def load():
     if not paths:
         raise SystemExit(f"no results_*.csv in {DATA_DIR}. Run run_bench.sh first.")
     df = pd.concat([pd.read_csv(p) for p in paths], ignore_index=True)
-    return df[(df["memory"] == "dram") & df["linkbw_gbps"].notna()].sort_values("bytes")
+    return df[df["linkbw_gbps"].notna()].sort_values("bytes")
 
 
-def panel(ax, df, title, line_rate, style):
-    # Plotting fastest first gives the legend and the gutter the same order.
-    ops = sorted(df["op"].unique(), key=lambda op: -df[df["op"] == op]["linkbw_gbps"].max())
+def panel(ax, groups, title, line_rate):
+    """groups: [(label, color, marker, linestyle, frame)], plotted fastest first
+    so the legend and the gutter share one order."""
+    groups = sorted(groups, key=lambda g: -g[4]["linkbw_gbps"].max())
 
-    peaks = []
-    for op in ops:
-        g = df[df["op"] == op]
-        color, marker = style[op]
-        ax.plot(g["bytes"], g["linkbw_gbps"], color=color, marker=marker,
-                markersize=4, linewidth=1.6, label=op.replace("_", "-").capitalize())
-        peaks.append((g["linkbw_gbps"].max(), color))
+    for label, color, marker, linestyle, g in groups:
+        ax.plot(g["bytes"], g["linkbw_gbps"], color=color, marker=marker, linestyle=linestyle,
+                markersize=4, linewidth=1.6, label=label)
 
     ax.axhline(line_rate, color="0.6", linewidth=0.9)
     ax.text(0.99, line_rate, f" max {line_rate:g} GB/s", transform=ax.get_yaxis_transform(),
@@ -62,12 +60,14 @@ def panel(ax, df, title, line_rate, style):
     # Peak labels in the right gutter, nudged apart where series land close.
     y_transform = ax.get_yaxis_transform()  # x in axes fraction, y in data units
     placed = math.inf
-    for peak, color in peaks:
+    for _, color, _, _, g in groups:
+        peak = g["linkbw_gbps"].max()
         y = min(peak, placed - line_rate * 0.05)
         ax.text(1.02, y, f"{peak:.1f} GB/s", transform=y_transform, va="center", fontsize=8, color=color)
         placed = y
 
-    lo, hi = df["bytes"].min(), df["bytes"].max()
+    lo = min(g["bytes"].min() for *_, g in groups)
+    hi = max(g["bytes"].max() for *_, g in groups)
     ax.set_xscale("log", base=2)
     ax.set_xticks([2**k for k in range(int(math.log2(lo)), int(math.log2(hi)) + 1, 4)])
     ax.xaxis.set_major_formatter(lambda v, _: human(v))
@@ -79,31 +79,68 @@ def panel(ax, df, title, line_rate, style):
     ax.legend(loc="upper left", fontsize=8, frameon=True, framealpha=0.9)
 
 
+def figure(panels, title, subtitle, dest):
+    """panels: [(panel_title, groups)], one subplot each."""
+    fig, axes = plt.subplots(1, len(panels), figsize=(6.5 * len(panels), 4.6), squeeze=False)
+    for ax, (panel_title, groups, line_rate) in zip(axes[0], panels):
+        panel(ax, groups, panel_title, line_rate)
+    axes[0][0].set_ylabel("Per-link bandwidth (GB/s)", fontsize=9)
+
+    fig.suptitle(title, fontsize=13, fontweight="bold")
+    fig.text(0.5, 0.90, subtitle, fontsize=9, color="0.35", ha="center")
+    # wspace leaves room for each panel's gutter labels.
+    fig.subplots_adjust(top=0.78, right=0.82, wspace=0.55)
+    fig.savefig(dest, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"wrote {dest}")
+
+
+def linkbw_figures(df, style):
+    # Architectures differ in line rate, so they never share a figure.
+    for (arch, n), per_n in df[df["memory"] == "dram"].groupby(["arch", "n"]):
+        line_rate = float(per_n["line_rate_gbps"].iloc[0])
+        panels = []
+        for topology in sorted(per_n["topology_resolved"].unique()):
+            per_topo = per_n[per_n["topology_resolved"] == topology]
+            groups = [(op.replace("_", "-").capitalize(), *style[op], "-", g)
+                      for op, g in per_topo.groupby("op")]
+            panels.append((f"{topology.lower()} topology", groups, line_rate))
+        figure(panels, f"CCL link bandwidth - {arch.capitalize()}",
+               f"{n} devices, {per_n['links'].iloc[0]} links/direction, "
+               f"{per_n['dtype'].iloc[0]}, DRAM",
+               IMAGE_DIR / f"linkbw_{arch}_n{n}.png")
+
+
+def memcfg_figures(df):
+    for (arch, n), per_n in df.groupby(["arch", "n"]):
+        # Only ops measured in both memory configs say anything about the memory limit.
+        ops = [op for op, g in per_n.groupby("op") if {"l1", "dram"} <= set(g["memory"])]
+        if not ops:
+            continue
+        line_rate = float(per_n["line_rate_gbps"].iloc[0])
+        # Coloured per (op, memory config) pair: the memory config is the comparison
+        # here, and with a single op the op colour would make both series identical.
+        pairs = [(op, memory) for op in ops for memory in ("dram", "l1")]
+        groups = []
+        for i, (op, memory) in enumerate(pairs):
+            g = per_n[(per_n["op"] == op) & (per_n["memory"] == memory)]
+            color, marker = PALETTE[i % len(PALETTE)]
+            label = f"{op.replace('_', '-').capitalize()}, {memory.upper()}"
+            groups.append((label, color, marker, "-" if memory == "dram" else "--", g))
+        topology = per_n["topology_resolved"].iloc[0].lower()
+        figure([(f"{topology} topology", groups, line_rate)],
+               f"CCL mem config - {arch.capitalize()}",
+               f"{n} devices, {per_n['links'].iloc[0]} links/direction, {per_n['dtype'].iloc[0]}",
+               IMAGE_DIR / f"memcfg_{arch}_n{n}.png")
+
+
 def main():
     df = load()
     IMAGE_DIR.mkdir(exist_ok=True)
-    arch = df["arch"].iloc[0]
-    line_rate = float(df["line_rate_gbps"].iloc[0])
     # Assigned once over the whole run, so an op keeps its colour across figures.
     style = {op: PALETTE[i % len(PALETTE)] for i, op in enumerate(sorted(df["op"].unique()))}
-
-    for n, per_n in df.groupby("n"):
-        topologies = sorted(per_n["topology_resolved"].unique())
-        fig, axes = plt.subplots(1, len(topologies), figsize=(6.5 * len(topologies), 4.6), squeeze=False)
-        for ax, topology in zip(axes[0], topologies):
-            panel(ax, per_n[per_n["topology_resolved"] == topology], f"{topology.lower()} topology", line_rate, style)
-        axes[0][0].set_ylabel("Per-link bandwidth (GB/s)", fontsize=9)
-
-        fig.suptitle(f"CCL performance - {arch.capitalize()}", fontsize=13, fontweight="bold")
-        fig.text(0.5, 0.90, f"{n} devices, {per_n['links'].iloc[0]} links/direction, "
-                            f"{per_n['dtype'].iloc[0]}, DRAM", fontsize=9, color="0.35", ha="center")
-        # wspace leaves room for each panel's gutter labels.
-        fig.subplots_adjust(top=0.78, right=0.82, wspace=0.55)
-
-        dest = IMAGE_DIR / f"linkbw_n{n}.png"
-        fig.savefig(dest, dpi=200, bbox_inches="tight")
-        plt.close(fig)
-        print(f"wrote {dest}")
+    linkbw_figures(df, style)
+    memcfg_figures(df)
 
 
 if __name__ == "__main__":

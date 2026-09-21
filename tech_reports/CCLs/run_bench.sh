@@ -68,9 +68,9 @@ for run in ${RUNS}; do
     CCL_TOPOLOGY="${topology}" CCL_MEMORY="${memory}" \
         python -m tracy -r -p -v -m pytest "${TEST}" -k test_perf \
         > "${log}" 2>&1
-    rc=$?
-    if [ "${rc}" -ne 0 ]; then
-        printf -- '\npytest exited %s. Last 40 lines of %s:\n\n' "${rc}" "${log}"
+    # `python -m tracy` exits 0 even when pytest fails, so read its summary line.
+    if grep -qE '^=+ .*[0-9]+ (failed|error)' "${log}"; then
+        printf -- '\npytest reported failures. Last 40 lines of %s:\n\n' "${log}"
         tail -40 "${log}"
         continue
     fi
