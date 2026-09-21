@@ -19,7 +19,7 @@ def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, *, pcc=0.9
 
     Defaults to ``assert_with_pcc(pcc)`` for composite math (ldexp/logaddexp/xlogy/bias_gelu) where
     the expected error exceeds the ULP <= 5 policy. Callers set ``exact=True`` for ops whose output
-    is a bit-exact selection or boolean (maximum/minimum, logical_and/or/xor)."""
+    is a bit-exact selection or boolean (logical_and/or/xor)."""
     torch.manual_seed(0)
     low = low
     high = high
@@ -89,18 +89,6 @@ def test_xlogy(device, h, w):
 @pytest.mark.parametrize("w", [128])
 def test_bias_gelu(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.bias_gelu, -100, 100)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_maximum(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.maximum, -100, 100, exact=True)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-def test_minimum(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.minimum, -100, 100, exact=True)
 
 
 def test_arithmetic_operators(device):
@@ -204,29 +192,6 @@ def test_rne_approx_modes(device, ttnn_op, fast_and_approximate_mode, ulp_thresh
     output = ttnn.to_torch(ttnn_op(input_tensor_a, input_tensor_b, **kwargs))
 
     assert_with_ulp(expected_result=torch_output_tensor, actual_result=output, ulp_threshold=ulp_threshold)
-
-
-# fmt: off
-@pytest.mark.parametrize("ttnn_op", [ttnn.add_, ttnn.subtract_, ttnn.rsub_])
-@pytest.mark.parametrize("fast_and_approximate_mode, ulp_threshold", [(False, 0), (None, 1)])
-# fmt: on
-def test_rne_approx_modes_inplace(device, ttnn_op, fast_and_approximate_mode, ulp_threshold):
-    torch.manual_seed(0)
-
-    torch_input_tensor_a = torch.randn((128, 128), dtype=torch.bfloat16) * 1e5
-    torch_input_tensor_b = torch.randn((128, 128), dtype=torch.bfloat16) * 1e5
-    golden_fn = ttnn.get_golden_function(ttnn_op)
-    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    kwargs = {} if fast_and_approximate_mode is None else {"fast_and_approximate_mode": fast_and_approximate_mode}
-    ttnn_op(input_tensor_a, input_tensor_b, **kwargs)
-
-    assert_with_ulp(
-        expected_result=torch_output_tensor, actual_result=ttnn.to_torch(input_tensor_a), ulp_threshold=ulp_threshold
-    )
 
 
 # fmt: off

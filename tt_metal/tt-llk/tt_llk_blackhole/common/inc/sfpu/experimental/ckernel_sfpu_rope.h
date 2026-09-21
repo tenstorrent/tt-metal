@@ -169,5 +169,87 @@ inline void sfpu_rope_all_rows(const std::uint32_t scale_fp32)
     }
 }
 
+/**
+ * Ht*Wt x-tiles starting at DEST row ``x_base``, ``x_stride`` rows apart, against
+ * Wt fused cos/sin tiles at ``cs_base`` (``cs_stride`` apart). The fused tiles
+ * are shared by every head — decode rotates all heads at one position — so the
+ * nesting is (width tile, column-face) outer and head inner, and each fused
+ * tile is loaded once rather than per tile.
+ *
+ * ``tile_h`` is the live row count of each x tile (1, 2, 4, 8, 16, or 32).
+ * When ``cos_sin_per_row`` is false (single-token decode) one fused row is
+ * reused for every row-group of that column-face; the fused tile must then
+ * have that row replicated across live rows if ``tile_h > 1``.  When true
+ * (block decode) each 4-row group loads its matching fused rows.
+ *
+ * x_stride is 64 when x came from copy_tile (Tile32x32 slots) and 32 when it is
+ * a custom_mm<dense_packing> result still sitting in DEST.
+ */
+template <
+    std::uint32_t Ht,
+    std::uint32_t Wt,
+    std::uint32_t x_base,
+    std::uint32_t x_stride,
+    std::uint32_t cs_base,
+    std::uint32_t cs_stride,
+    bool has_scale       = false,
+    std::uint32_t tile_h = 1,
+    bool cos_sin_per_row = false>
+inline void sfpu_rope_fused_all_rows(const std::uint32_t scale_fp32)
+{
+    constexpr std::uint32_t F = rope::FACE_ROWS;
+
+    static_assert(tile_h == 1 || tile_h == 2 || tile_h == 4 || tile_h == 8 || tile_h == 16 || tile_h == 32, "rope_sfpu: tile_h must be 1, 2, 4, 8, 16, or 32");
+    static_assert((F & 3) == 0, "face stride must keep rows 4-row aligned");
+    static_assert((x_base & 3) == 0 && (x_stride & 3) == 0, "x rows must be 4-row aligned");
+    static_assert((cs_base & 3) == 0 && (cs_stride & 3) == 0, "cos/sin rows must be 4-row aligned");
+
+    constexpr std::uint32_t head_stride        = Wt * x_stride;
+    constexpr std::uint32_t num_row_halves     = (tile_h > 16) ? 2 : 1;
+    constexpr std::uint32_t live_rows_per_half = (tile_h > 16) ? 16 : tile_h;
+    constexpr std::uint32_t num_row_groups     = (live_rows_per_half + 3) / 4;
+
+    for (std::uint32_t w = 0; w < Wt; w++)
+    {
+        for (std::uint32_t f = 0; f < 2; f++)
+        {
+            if constexpr (!cos_sin_per_row)
+            {
+                // One shared phase per column-face; reused for every row-group
+                // and (for tile_h==32) the matching bottom face.
+                const std::uint32_t cs_off = w * cs_stride + f * F;
+                sfpu_rope_load_cos_sin(cs_base + cs_off, cs_base + cs_off + 2);
+                if constexpr (has_scale)
+                {
+                    sfpu_rope_scale_cos_sin(scale_fp32);
+                }
+            }
+            for (std::uint32_t half = 0; half < num_row_halves; half++)
+            {
+                for (std::uint32_t rg = 0; rg < num_row_groups; rg++)
+                {
+                    const std::uint32_t face_base = half * 32 + f * F;
+                    const std::uint32_t rg_off    = rg * 4;
+                    if constexpr (cos_sin_per_row)
+                    {
+                        const std::uint32_t cs_off = w * cs_stride + face_base + rg_off;
+                        sfpu_rope_load_cos_sin(cs_base + cs_off, cs_base + cs_off + 2);
+                        if constexpr (has_scale)
+                        {
+                            sfpu_rope_scale_cos_sin(scale_fp32);
+                        }
+                    }
+                    std::uint32_t x_addr = x_base + w * x_stride + face_base + rg_off;
+                    for (std::uint32_t h = 0; h < Ht; h++)
+                    {
+                        sfpu_rope_face(x_addr);
+                        x_addr += head_stride;
+                    }
+                }
+            }
+        }
+    }
+}
+
 } // namespace sfpu
 } // namespace ckernel

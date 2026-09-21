@@ -34,7 +34,8 @@ def open_mesh_device(
     elif fabric_mode:
         raise ValueError(f"PREFILL_FABRIC_MODE must be one of {sorted(fabric_mode_map)}, got {fabric_mode!r}")
     else:
-        fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
+        # The torus modes need a descriptor declaring RING on both axes; a LINE one hangs at bring-up.
+        fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     logger.info(f"Fabric config: {fabric_config} (sp={sp}, PREFILL_FABRIC_MODE={fabric_mode or 'unset'})")
 
     fabric_router_config = _create_fabric_router_config(
@@ -98,9 +99,11 @@ def build_h2d_service(
     return service
 
 
-def activation_global_spec(chunk_size: int, hidden_size: int) -> ttnn.TensorSpec:
+def activation_global_spec(chunk_size: int, hidden_size: int, planes: int = 1) -> ttnn.TensorSpec:
+    # planes > 1 for a model that carries per-token state across the rank boundary as well as the
+    # activation: the mapper shards dims 2 and 3, so extra planes only widen the per-chip shard.
     return ttnn.TensorSpec(
-        shape=ttnn.Shape([1, 1, chunk_size, hidden_size]),
+        shape=ttnn.Shape([1, planes, chunk_size, hidden_size]),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,

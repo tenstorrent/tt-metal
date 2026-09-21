@@ -198,7 +198,9 @@ enum class InitReconfigOwner {
 /// `PerTile + Col` denotes a streamed column: the chain waits for one tile at each grid-row boundary,
 /// reuses the current front tile across that row, then pops it. `Upfront + Col` instead stages an
 /// Ht-tile window and indexes it by row. Output `PerTile` remains literal: one output tile is reserved
-/// and pushed per grid cell. `PerOuter` exists only for output DEST-row accumulation.
+/// and pushed per grid cell. `PerOuter` opens one output window per grid row: direct pack reserves
+/// and pushes Wt tiles, while PerRow DEST accumulation publishes its single reduced tile. WholeShape
+/// DEST accumulation instead uses the one-tile `OneUpfront` / `OneAtEnd` lifecycle.
 /// On a partial final block, `BlockTailSync` selects whether synchronization covers the valid
 /// remainder or the full `block_size`.
 

@@ -22,7 +22,12 @@ void py_module(nb::module_& mod) {
             input_tensor (ComplexTensor): the input tensor.
 
         Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration of the returned component. Defaults to `None`, which leaves the component where it is.
+
+        Note:
+            The result is the component of :attr:`input_tensor` itself, so a request the component already
+            satisfies returns it without a copy. A host component cannot be moved by a device operation and
+            is returned unchanged whatever is requested.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -42,7 +47,12 @@ void py_module(nb::module_& mod) {
             input_tensor (ComplexTensor): the input tensor.
 
         Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration of the returned component. Defaults to `None`, which leaves the component where it is.
+
+        Note:
+            The result is the component of :attr:`input_tensor` itself, so a request the component already
+            satisfies returns it without a copy. A host component cannot be moved by a device operation and
+            is returned unchanged whatever is requested.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -122,10 +132,18 @@ void py_module(nb::module_& mod) {
             input_tensor (ComplexTensor): the input tensor.
 
         Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory config for the operation. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration of the negated imaginary
+                component of the result. Defaults to `None`, which follows the real component of
+                :attr:`input_tensor`.
+
+        Note:
+            Only the imaginary component is computed. The real component of the result is
+            :attr:`input_tensor`'s own, returned as a view, and stays where that component already is, so the
+            two components can be in different memories when :attr:`memory_config` asks for somewhere else.
+            Use `ttnn.to_memory_config(output.real, memory_config)` if both must match.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ttnn.ComplexTensor: the output tensor.
 
         )doc",
         &ttnn::conj,
@@ -145,7 +163,7 @@ void py_module(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory config for the operation. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ttnn.ComplexTensor: the output tensor.
 
         )doc",
         &ttnn::polar,
