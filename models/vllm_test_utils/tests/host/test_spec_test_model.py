@@ -884,8 +884,6 @@ def test_the_depth_target_prefill_is_untouched(monkeypatch):
     model = _model(monkeypatch)
     prompt = torch.tensor([[11, 12, 13, 14]], dtype=torch.int32)
 
-    logits = model.prefill_forward(
-        tokens=prompt, prompt_lens=torch.tensor([4]), start_pos=torch.tensor([0])
-    )
+    logits = model.prefill_forward(tokens=prompt, prompt_lens=torch.tensor([4]), start_pos=torch.tensor([0]))
 
     assert int(logits.reshape(1, -1).argmax(dim=-1)) == 0
