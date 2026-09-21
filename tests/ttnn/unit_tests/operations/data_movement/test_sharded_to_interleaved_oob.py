@@ -41,3 +41,37 @@ def test_s2i_dram_height_sharded(device):
 
     assert_equal(torch_input_tensor, ttnn.to_torch(output_tensor))
     assert_equal(torch_weight_tensor, ttnn.to_torch(weight_tensor))
+
+
+def test_s2i_dram_block_sharded_overprovisioned_grid(device):
+    # Block-sharded input on a grid wider than the data: 16x1 tiles in 2x1-tile shards need
+    # 8x1 cores, but the grid is 8x11 (10 phantom columns). sharded_to_interleaved must not
+    # run writers on the phantom cores and overrun the DRAM output into the next buffer.
+    torch_input_tensor = torch.rand([1, 1, 512, 32], dtype=torch.bfloat16)
+    torch_weight_tensor = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+
+    core_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(10, 7)),
+        }
+    )
+    input_shard_shape = (64, 32)
+    input_shard_spec = ttnn.ShardSpec(core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT, memory_config=input_memory_config
+    )
+
+    # Reserve a DRAM slot the size of the output, then put the weight right after it
+    output_tensor = ttnn.from_torch(
+        torch_input_tensor, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    weight_tensor = ttnn.from_torch(
+        torch_weight_tensor, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    ttnn.deallocate(output_tensor)
+    output_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+
+    assert_equal(torch_input_tensor, ttnn.to_torch(output_tensor))
+    assert_equal(torch_weight_tensor, ttnn.to_torch(weight_tensor))
