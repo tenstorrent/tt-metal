@@ -19,6 +19,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tests.sdpa_perf_utils import (
     CAPACITY,
     CHUNK,
@@ -39,8 +40,9 @@ from models.demos.gemma4_d_p.tests.sdpa_perf_utils import (
     timing_summary,
 )
 from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
-from models.demos.gemma4_d_p.tt.attention.ring_prefill import migration_ring_memory_config
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import migration_ring_memory_config, ring_prefill_gather_seq
 from models.demos.gemma4_d_p.tt.ccl import CCLManager
+from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program, require_realtime_profiler
 
 
@@ -171,7 +173,9 @@ def test_sdpa_perf(mesh_device, layer, prefix, candidate):
         assert repeats >= 20
         torch.set_num_threads(8)
         mesh_device.enable_program_cache()
-        manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Linear)
+        mesh_config = MeshConfig(mesh_device)
+        manager = CCLManager(mesh_config, num_links=2, topology=ttnn.Topology.Linear)
+        metadata = PrefillMetadata(mesh_config)
         dim, kv_heads = (512, 1) if layer == "global" else (256, 4)
         window = None if layer == "global" else 1024
         grid = manager.compute_grid_size
@@ -189,8 +193,7 @@ def test_sdpa_perf(mesh_device, layer, prefix, candidate):
             packer_l1_acc=candidate.packer_l1,
         )
         k, v, host_k, host_v = _prepare_cache(mesh_device, layer, row["seed"])
-        # Service-sized two-slab halo; this checkout's production helper allocates only one.
-        gather_seq = CAPACITY if window is None else 2 * LOCAL_Q
+        gather_seq = ring_prefill_gather_seq(CAPACITY, CP, window, candidate.k)
         buffers = [
             manager.get_ring_gather_buffer(key, kv_heads, gather_seq, dim, ttnn.bfloat8_b, tensor.memory_config())
             for key, tensor in (("ring_k", k), ("ring_v", v))
@@ -201,7 +204,7 @@ def test_sdpa_perf(mesh_device, layer, prefix, candidate):
             queries = torch.randn((1, 8 * TP, length, dim), generator=generator, dtype=torch.bfloat16)
             host_q, positions = pack_queries(queries, prefix_len)
             q = _upload(mesh_device, host_q, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG)
-            manager.set_ring_metadata(0, prefix_len)
+            metadata.update(slot_idx=0, kv_actual_global=prefix_len)
             return q, host_q, positions
 
         def reset():
@@ -209,15 +212,15 @@ def test_sdpa_perf(mesh_device, layer, prefix, candidate):
                 ttnn.reset_global_semaphore_value(semaphore, 0)
             ttnn.synchronize_device(mesh_device)
 
-        def invoke(q, start, length, metadata=True):
+        def invoke(q, start, length, use_metadata=True):
             indexing = (
                 dict(
-                    slot_id=manager.get_ring_metadata()[0],
-                    kv_actual_isl_tensor=manager.get_ring_metadata()[1],
+                    slot_id=metadata.slot_idx,
+                    kv_actual_isl_tensor=metadata.kv_actual_global,
                     kv_cache_num_layers=1,
                     kv_cache_layer_idx=0,
                 )
-                if metadata
+                if use_metadata
                 else dict(kv_cache_batch_idx=0, kv_actual_isl=start)
             )
             out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -230,14 +233,14 @@ def test_sdpa_perf(mesh_device, layer, prefix, candidate):
                 persistent_output_buffer_k=buffers[0],
                 persistent_output_buffer_v=buffers[1],
                 joint_strategy="rear",
-                logical_n=CAPACITY if metadata else start + length,
+                logical_n=CAPACITY if use_metadata else start + length,
                 scale=1.0,
                 program_config=program,
                 compute_kernel_config=compute,
                 dim=2,
                 multi_device_global_semaphore=manager.ring_attention_ccl_semaphore_handles,
-                num_links=2,
-                cluster_axis=0,
+                num_links=manager.num_links,
+                cluster_axis=mesh_config.cp_axis,
                 mesh_device=mesh_device,
                 topology=ttnn.Topology.Linear,
                 ccl_core_grid_offset=ttnn.CoreCoord(*manager.ring_attention_ccl_core_grid_offset),
@@ -264,7 +267,7 @@ def test_sdpa_perf(mesh_device, layer, prefix, candidate):
                 edge_q, edge_host, edge_positions = prepare(start, length)
                 reset()
                 row["stage"] = "op"
-                edge_out = invoke(edge_q, start, length, metadata=length == CHUNK)
+                edge_out = invoke(edge_q, start, length, use_metadata=length == CHUNK)
                 row["stage"] = "accuracy"
                 _check_output(mesh_device, edge_out, edge_host, host_k, host_v, edge_positions, window, row)
                 edge_out.deallocate(True)
@@ -273,7 +276,7 @@ def test_sdpa_perf(mesh_device, layer, prefix, candidate):
         else:
             row["edge_status"] = "unsupported: checkout requires complete aligned SWA ring groups"
 
-        manager.set_ring_metadata(0, prefix)
+        metadata.update(slot_idx=0, kv_actual_global=prefix)
         row["stage"] = "timing"
         for _ in range(2):
             reset()

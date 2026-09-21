@@ -15,9 +15,15 @@ import torch
 
 from models.demos.gemma4_d_p.tests import sdpa_perf_utils as utils
 from models.demos.gemma4_d_p.tests import sweep_sdpa_perf as sweep
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_prefill_gather_seq
 
 
 class LayoutTests(unittest.TestCase):
+    def test_production_ring_gather_geometry(self):
+        self.assertEqual(ring_prefill_gather_seq(262144, 8, None, 256), 262144)
+        self.assertEqual(ring_prefill_gather_seq(262144, 8, 1024, 128), 1024)
+        self.assertEqual(ring_prefill_gather_seq(262144, 8, 1024, 256), 1024)
+
     def test_cache_ownership_and_roundtrip(self):
         # Three groups, two ranks, two rows per local slab.
         chronological = torch.arange(12).reshape(1, 1, 12, 1)

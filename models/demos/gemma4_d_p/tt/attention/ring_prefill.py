@@ -83,6 +83,19 @@ def ring_cache_seq_len(max_seq_len, cp):
     return max_seq_len // cp
 
 
+def ring_prefill_gather_seq(max_seq_len, cp, sliding_window_size, k_chunk_size):
+    """Return the persistent ring-gather buffer length used by SDPA.
+
+    Dense attention gathers the full cache capacity. Sliding attention exchanges
+    only the predecessor halo, rounded up to complete K chunks.
+    """
+    cache_seq = ring_cache_seq_len(max_seq_len, cp)
+    if sliding_window_size:
+        halo_tokens = -(-(sliding_window_size - 1) // k_chunk_size) * k_chunk_size
+        return max(halo_tokens, TILE_HEIGHT)
+    return cache_seq * cp
+
+
 def init_sliding_ring_kv_cache(
     mesh_config, num_local_kv_heads, head_dim, max_seq_len, num_layers=1, num_users=1, cache_dtype=ttnn.bfloat8_b
 ):
@@ -368,7 +381,6 @@ def _ring_prefill_attention(
         _k_chunk = 128 if sliding_window_size else 256
         program_config = ring_prefill_program_config(mesh_device, ccl_manager, head_dim, k_chunk_size=_k_chunk)
     cp = mesh_config.cp_degree
-    cache_seq = ring_cache_seq_len(max_seq_len, cp)
 
     # Buffer size depends on the mode, and the two requirements are opposites.
     #
@@ -380,12 +392,7 @@ def _ring_prefill_attention(
     # buffer (gathered rows < cache_seq * ring), rejecting a full-capacity one with
     # "requires a compact halo buffer". Size it to the halo, which is the window
     # rounded up to whole k chunks.
-    if sliding_window_size:
-        k_chunk = program_config.k_chunk_size
-        halo_tokens = -(-(sliding_window_size - 1) // k_chunk) * k_chunk
-        gather_seq = max(halo_tokens, TILE_HEIGHT)
-    else:
-        gather_seq = cache_seq * cp
+    gather_seq = ring_prefill_gather_seq(max_seq_len, cp, sliding_window_size, program_config.k_chunk_size)
     buffer_k = ccl_manager.get_ring_gather_buffer(
         "ring_k", num_local_kv_heads, gather_seq, head_dim, cache_k.dtype, cache_k.memory_config()
     )
