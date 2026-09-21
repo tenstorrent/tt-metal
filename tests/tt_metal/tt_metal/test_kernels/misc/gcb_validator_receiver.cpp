@@ -26,12 +26,6 @@
 
 #include "prefetcher_validator_common.h"
 
-namespace {
-
-constexpr uint32_t kExtraPollCycles = 1u << 18;  // ~262k spin iterations
-
-}  // namespace
-
 void kernel_main() {
     // ---- Compile-time args ----
     constexpr uint32_t remote_cb_id = get_compile_time_arg_val(0);
@@ -100,10 +94,9 @@ void kernel_main() {
                 n_col_start,
                 n_per_recv_tiles);
 
-            const uint32_t words = page_bytes / sizeof(uint32_t);
             const uint32_t mismatch_word =
                 prefetcher_validator::first_mismatching_word(page_addr, scratch_addr, page_bytes);
-            if (mismatch_word != words) {
+            if (mismatch_word != prefetcher_validator::kNoMismatch) {
                 DPRINT(
                     "VALIDATOR_MISMATCH layer={} blk={} bank={} recv_idx={} word={} got=0x{:x} exp=0x{:x}\n",
                     layer,
@@ -119,9 +112,7 @@ void kernel_main() {
                 }
             }
 
-            const bool log = (global_iter < 2) || (global_iter + 1 == num_layers * num_blocks) ||
-                             (print_stride > 0 && (global_iter % print_stride == 0));
-            if (log) {
+            if (prefetcher_validator::should_log(global_iter, num_layers * num_blocks, print_stride)) {
                 DPRINT("VALIDATOR ok layer={} blk={} bank={} recv_idx={}\n", layer, blk, bank_id, recv_idx_in_bank);
             }
 
@@ -137,7 +128,7 @@ void kernel_main() {
         get_remote_receiver_cb_interface(remote_cb_id).aligned_pages_acked_ptr);
     volatile tt_l1_ptr uint32_t* pages_sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         get_remote_receiver_cb_interface(remote_cb_id).aligned_pages_acked_ptr - L1_ALIGNMENT);
-    for (uint32_t spin = 0; spin < kExtraPollCycles; ++spin) {
+    for (uint32_t spin = 0; spin < prefetcher_validator::kExtraPollCycles; ++spin) {
         invalidate_l1_cache();
         const uint32_t sent = *pages_sent_ptr;
         const uint32_t acked = *pages_acked_ptr;

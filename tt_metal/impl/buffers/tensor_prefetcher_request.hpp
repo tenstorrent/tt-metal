@@ -168,8 +168,8 @@ struct TensorPrefetcherPrefetchCmd {
     // Number of valid TensorPrefetcherTensorLayout table entries. uint16 is ample: the table is
     // bounded by kRequestPageBytes / layout_stride, well under 300 even at the smallest stride.
     uint16_t num_layouts;
-    // Reserved. Holds target_state_addr at offset 8, which keeps the header 12 bytes (see the
-    // static_assert below) and the entry table 4-byte aligned. Zeroed by the host.
+    // Reserved, and the reason target_state_addr below lands on offset 8: that keeps the header 12
+    // bytes (see the static_assert below) and so the entry table 4-byte aligned. Zeroed by the host.
     uint16_t pad1;
     // DRISC L1 base of this sender's target state, whose meaning follows the `transport` above: a
     // DramSenderStateBlock for TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB, or a PrefetcherPipe sender

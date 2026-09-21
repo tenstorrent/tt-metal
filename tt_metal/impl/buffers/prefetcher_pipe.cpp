@@ -432,37 +432,36 @@ void PrefetcherPipeSpaceImpl::set_dram_sender_cores(std::span<const CoreCoord> d
     dram_sender_allocations_ = std::move(allocations);
 }
 
-void PrefetcherPipeSpaceImpl::validate_dram_carve(
-    CoreCoord sender, const CoreRangeSet& receivers, const std::unordered_set<CoreCoord>* pending) const {
-    TT_FATAL(
-        dram_sender_allocations_.contains(sender),
-        "create_dram_sender_pipe: sender {} was not selected for this space",
-        sender.str());
-    TT_FATAL(receivers.num_cores() > 0, "create_dram_sender_pipe: a pipe requires at least one receiver");
+// The checks a DRAM carve shares with every other DRAM carve, single-pipe or batched. The
+// reservation check is the caller's, because the batch form runs before set_dram_sender_cores has
+// reserved anything.
+void PrefetcherPipeSpaceImpl::validate_dram_pipe_geometry(CoreCoord sender, const CoreRangeSet& receivers) const {
+    TT_FATAL(receivers.num_cores() > 0, "DRAM pipe with sender {} has no receivers", sender.str());
     TT_FATAL(
         receivers.num_cores() <= config_.max_receivers_per_pipe,
-        "create_dram_sender_pipe: {} receivers exceed max_receivers_per_pipe {}",
+        "DRAM pipe with sender {} has {} receivers, exceeding max_receivers_per_pipe {}",
+        sender.str(),
         receivers.num_cores(),
         config_.max_receivers_per_pipe);
     TT_FATAL(
         config_.receiver_domain.contains(receivers),
-        "create_dram_sender_pipe: receivers {} are outside receiver_domain {}",
+        "DRAM pipe with sender {} has receivers {} outside receiver_domain {}",
+        sender.str(),
         receivers.str(),
         config_.receiver_domain.str());
-    TT_FATAL(
-        !claimed_dram_senders_.contains(sender),
-        "create_dram_sender_pipe: DRAM sender {} is already claimed by a live pipe",
-        sender.str());
-    TT_FATAL(
-        pending == nullptr || !pending->contains(sender),
-        "create_dram_sender_pipe: DRAM sender {} appears more than once in the batch",
-        sender.str());
+    TT_FATAL(!claimed_dram_senders_.contains(sender), "DRAM sender {} is already claimed by a live pipe", sender.str());
     for (const CoreCoord& receiver : corerange_to_cores(receivers)) {
         TT_FATAL(
-            !claimed_.contains(receiver),
-            "create_dram_sender_pipe: receiver {} is already claimed by a live pipe",
-            receiver.str());
+            !claimed_.contains(receiver), "DRAM pipe receiver {} is already claimed by a live pipe", receiver.str());
     }
+}
+
+void PrefetcherPipeSpaceImpl::validate_dram_carve(CoreCoord sender, const CoreRangeSet& receivers) const {
+    TT_FATAL(
+        dram_sender_allocations_.contains(sender),
+        "create_dram_sender_pipe: sender {} was not selected for this space",
+        sender.str());
+    validate_dram_pipe_geometry(sender, receivers);
 }
 
 void PrefetcherPipeSpaceImpl::validate_dram_carves(std::span<const std::pair<CoreCoord, CoreRangeSet>> pipes) const {
@@ -478,32 +477,17 @@ void PrefetcherPipeSpaceImpl::validate_dram_carves(std::span<const std::pair<Cor
             pending_senders.insert(sender).second,
             "DRAM sender {} appears in more than one pipe of the batch",
             sender.str());
-        TT_FATAL(
-            !claimed_dram_senders_.contains(sender), "DRAM sender {} is already claimed by a live pipe", sender.str());
+        // Unlike the single-pipe form, a batch may be validated before set_dram_sender_cores has
+        // reserved anything — that is the order CreatePrefetcherPipesForTensorPrefetcher uses, so
+        // that every check passes before the space is mutated.
         if (!dram_sender_allocations_.empty()) {
             TT_FATAL(
                 dram_sender_allocations_.contains(sender),
                 "DRAM sender {} is not reserved by this space",
                 sender.str());
         }
-        TT_FATAL(receivers.num_cores() > 0, "DRAM pipe batch contains a pipe with no receivers");
-        TT_FATAL(
-            receivers.num_cores() <= config_.max_receivers_per_pipe,
-            "DRAM pipe with sender {} has {} receivers, exceeding max_receivers_per_pipe {}",
-            sender.str(),
-            receivers.num_cores(),
-            config_.max_receivers_per_pipe);
-        TT_FATAL(
-            config_.receiver_domain.contains(receivers),
-            "DRAM pipe with sender {} has receivers {} outside receiver_domain {}",
-            sender.str(),
-            receivers.str(),
-            config_.receiver_domain.str());
+        validate_dram_pipe_geometry(sender, receivers);
         for (const CoreCoord& receiver : corerange_to_cores(receivers)) {
-            TT_FATAL(
-                !claimed_.contains(receiver),
-                "DRAM pipe receiver {} is already claimed by a live pipe",
-                receiver.str());
             TT_FATAL(
                 pending_receivers.insert(receiver).second,
                 "DRAM pipe receiver {} appears in more than one pipe of the batch",
@@ -514,7 +498,7 @@ void PrefetcherPipeSpaceImpl::validate_dram_carves(std::span<const std::pair<Cor
 
 PrefetcherPipe PrefetcherPipeSpaceImpl::create_dram_sender_pipe(
     CoreCoord sender, const CoreRangeSet& receivers, uint32_t recv_index_base, uint64_t tensor_prefetcher_factory_id) {
-    validate_dram_carve(sender, receivers, nullptr);
+    validate_dram_carve(sender, receivers);
     return PrefetcherPipe(std::make_unique<PrefetcherPipeImpl>(
         *this,
         sender,
@@ -567,7 +551,7 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     tensor_prefetcher_factory_id_(tensor_prefetcher_factory_id),
     drisc_config_page_(std::move(drisc_config_page)) {
     TT_FATAL(drisc_config_page_ != nullptr, "DRAM-sender PrefetcherPipe requires reserved DRISC L1");
-    space_->validate_dram_carve(sender_core_, receiver_cores_, nullptr);
+    space_->validate_dram_carve(sender_core_, receiver_cores_);
     space_->claim(receiver_cores_, *this);
     space_->claimed_dram_senders_.insert(sender_core_);
     claimed_ = true;
@@ -708,7 +692,7 @@ void PrefetcherPipeImpl::build_dram_sender_config_pages() {
                 "Failed to write DRAM-sender PrefetcherPipe receiver page on core {} device {}",
                 receivers[r].str(),
                 target_device->id());
-            if (config_pages_.empty() || !config_pages_.contains(receivers[r])) {
+            if (!config_pages_.contains(receivers[r])) {
                 config_pages_.emplace(receivers[r], std::move(receiver_page));
             }
         }

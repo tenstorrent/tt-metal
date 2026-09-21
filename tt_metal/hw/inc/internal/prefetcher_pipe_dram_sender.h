@@ -54,7 +54,7 @@ namespace experimental {
 struct PipeSenderCtx {
     uint32_t config_ptr;           // the config page itself, in DRISC L1
     uint32_t fifo_start_addr;      // ring base, in receiver (worker) L1
-    uint32_t ring_bytes;           // entry_bytes * num_entries
+    uint32_t ring_bytes;           // ring size in bytes; need not be a multiple of entry_bytes
     uint32_t entry_bytes;          // push granularity
     uint32_t num_receivers;        // receivers this sender core drives
     uint32_t receiver_noc_xy_ptr;  // -> 2 * num_receivers words of receiver NOC XY

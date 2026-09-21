@@ -66,23 +66,15 @@ ttsl::hash::hash_t DramPrefetcherConsumerDeviceOperation::compute_program_hash(
     // addresses, so a same-geometry replacement must miss this cache. A pipe reflects its own
     // identity, so the pipe list hashes as the pipes themselves; the unset target contributes an
     // empty list, which is what keeps the two transports from colliding.
-    auto hash = ttsl::hash::hash_objects_with_default_seed(
+    for (const auto& pipe : attrs.prefetcher_pipes) {
+        TT_FATAL(pipe != nullptr, "prefetcher_pipes contains a null pipe");
+    }
+    return ttsl::hash::hash_objects_with_default_seed(
         ttsl::hash::type_hash<DramPrefetcherConsumerDeviceOperation>,
         attrs.num_iters,
         attrs.page_size_bytes,
-        attrs.global_cb.has_value() ? static_cast<uint64_t>(attrs.global_cb->config_address()) : 0ull);
-    for (const auto& pipe : attrs.prefetcher_pipes) {
-        TT_FATAL(pipe != nullptr, "prefetcher_pipes contains a null pipe");
-        hash = ttsl::hash::hash_objects(
-            hash,
-            pipe->identity(),
-            pipe->sender_core(),
-            pipe->receiver_cores(),
-            pipe->ring_size(),
-            pipe->buffer_address(),
-            pipe->config_address());
-    }
-    return hash;
+        attrs.global_cb.has_value() ? static_cast<uint64_t>(attrs.global_cb->config_address()) : 0ull,
+        attrs.prefetcher_pipes);
 }
 
 ttnn::device_operation::CachedProgram<DramPrefetcherConsumerDeviceOperation::ProgramFactory::shared_variables_t>

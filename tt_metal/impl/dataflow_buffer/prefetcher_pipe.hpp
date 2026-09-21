@@ -85,8 +85,7 @@ public:
     // batch (validation runs before any claim is taken).
     void validate_carve(
         CoreCoord sender, const CoreRangeSet& receivers, const std::unordered_set<CoreCoord>* pending) const;
-    void validate_dram_carve(
-        CoreCoord sender, const CoreRangeSet& receivers, const std::unordered_set<CoreCoord>* pending) const;
+    void validate_dram_carve(CoreCoord sender, const CoreRangeSet& receivers) const;
     // `owner` is the pipe taking / releasing the claim; the space tracks it so it can detach the
     // pipe if the space is destroyed first.
     void claim(const CoreRangeSet& cores, PrefetcherPipeImpl& owner);
@@ -100,6 +99,9 @@ public:
 
 private:
     friend class PrefetcherPipeImpl;
+    // Shared by validate_dram_carve and validate_dram_carves: everything a DRAM carve must satisfy
+    // except that its sender is reserved, which the two forms check at different points.
+    void validate_dram_pipe_geometry(CoreCoord sender, const CoreRangeSet& receivers) const;
     void setup_reservation();
     void release_allocations() noexcept;
 
