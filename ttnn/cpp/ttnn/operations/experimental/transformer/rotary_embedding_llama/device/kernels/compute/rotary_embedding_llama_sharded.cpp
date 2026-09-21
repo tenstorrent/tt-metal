@@ -63,16 +63,26 @@ void kernel_main() {
     matmul_init(dfb::input, dfb::trans_mat);
     compute_kernel_hw_startup(dfb::rotated_interm, dfb::sin, dfb::sin_interm);  // General Init for all binary ops
 
-    // Get the trans_mat
+    // Get the trans_mat. The resident/borrowed shard is already in L1; this kernel advances the DFB
+    // (reserve_back/push_back) to signal it available, then consumes it. On Quasar a push with no
+    // intervening pack trips the TEN-4746 guard (llk_io_pack.h) — there is nothing to pack (the data
+    // is resident), so dummy_pack emits the required no-write PACR that orders the push after the wait
+    // and disarms the guard. WH/BH have no such guard.
     trans_mat_dfb_obj.reserve_back(onetile);
+#ifdef ARCH_QUASAR
+    dummy_pack(dfb::trans_mat);
+#endif
     trans_mat_dfb_obj.push_back(onetile);
     trans_mat_dfb_obj.wait_front(onetile);
 
-    // Get the sin/cos matrices
+    // Get the sin/cos matrices (resident shards; see the dummy_pack note above).
     // TODO: To parallelize across multiple batch, this should be in a batch loop
     sin_dfb_obj.reserve_back(Wt);
     cos_dfb_obj.reserve_back(Wt);
-
+#ifdef ARCH_QUASAR
+    dummy_pack(dfb::sin);
+    dummy_pack(dfb::cos);
+#endif
     sin_dfb_obj.push_back(Wt);
     cos_dfb_obj.push_back(Wt);
 
@@ -82,8 +92,11 @@ void kernel_main() {
         cos_interm_dfb_obj.reserve_back(Wt);
         out_dfb_obj.reserve_back(Wt);
 
-        // Get the input
+        // Get the input (resident shard; see the dummy_pack note above).
         in_dfb_obj.reserve_back(Wt);
+#ifdef ARCH_QUASAR
+        dummy_pack(dfb::input);
+#endif
         in_dfb_obj.push_back(Wt);
         in_dfb_obj.wait_front(Wt);
 
@@ -91,6 +104,12 @@ void kernel_main() {
 
         // rotated = x @ trans_mat
         matmul_init(dfb::input, dfb::trans_mat);
+#ifdef ARCH_QUASAR
+        // Quasar: the packer BFD must be programmed for the exact output DFB before pack_tile (quirk #1,
+        // re-init per DFB-id change). The last pack config was the binary-phase hw_startup (dfb::sin_interm),
+        // so retarget it to rotated_interm here or pack_tile trips the pack re-init guard (llk_pack_tile_api.h).
+        pack_init(dfb::rotated_interm);
+#endif
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);
