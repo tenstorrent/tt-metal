@@ -52,6 +52,11 @@ struct ChunkGdnFusedParams {
     // rings hide more of the per-chunk handshake round trip at +76 KB of L1 per slot on every core.
     // Read from QWEN_GDN_HANDOFF_NBUF at attrs construction (hashed).
     uint32_t nbuf = 2;
+    // Phase 1 A/B (design D5/D16): ship the six shared tensors and the v_beta slices as NV plain unicast
+    // writes per item instead of a linked multicast chain. Multicasts reserve router ports along their
+    // path; the zone captures show sporadic 20-120 us multicast-issue stalls on individual producers.
+    // Read from QWEN_GDN_UNICAST at attrs construction (hashed).
+    bool unicast = false;
     bool has_initial_state = false;
     bool output_final_state = false;
     tt::tt_metal::MemoryConfig output_mem_config;

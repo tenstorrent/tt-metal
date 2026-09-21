@@ -333,13 +333,16 @@ void kernel_main() {
     for (uint32_t c = 0; c < NC; c++) {
         // Reserve this chunk's space in ALL SEVEN hand-off CBs FIRST — the credit is the producer's
         // proof that every slot is writable (compute has popped the previous chunk).
-        CircularBuffer(cb_vbeta).reserve_back(cv);
-        CircularBuffer(cb_kd).reserve_back(ck);
-        CircularBuffer(cb_qdecay).reserve_back(ck);
-        CircularBuffer(cb_intra).reserve_back(cc);
-        CircularBuffer(cb_kdec_t).reserve_back(kc);
-        CircularBuffer(cb_dl).reserve_back(1);
-        CircularBuffer(cb_Tinv).reserve_back(cc);
+        {
+            DeviceZoneScopedN("rx_reserve");
+            CircularBuffer(cb_vbeta).reserve_back(cv);
+            CircularBuffer(cb_kd).reserve_back(ck);
+            CircularBuffer(cb_qdecay).reserve_back(ck);
+            CircularBuffer(cb_intra).reserve_back(cc);
+            CircularBuffer(cb_kdec_t).reserve_back(kc);
+            CircularBuffer(cb_dl).reserve_back(1);
+            CircularBuffer(cb_Tinv).reserve_back(cc);
+        }
 
         // Reset our valid flag BEFORE crediting: a fast producer may mcast VALID immediately after
         // the credit lands, and a late reset would overwrite it (lost wakeup -> deadlock).
@@ -352,7 +355,10 @@ void kernel_main() {
         const uint64_t dst = get_noc_addr(
             get_arg_val<uint32_t>(6 + 2 * pi), get_arg_val<uint32_t>(7 + 2 * pi), credit_word, noc.get_noc_id());
         noc_semaphore_inc(dst, 1, noc.get_noc_id());
-        valid.wait(VALID);
+        {
+            DeviceZoneScopedN("rx_wait_valid");
+            valid.wait(VALID);
+        }
 
         // The chunk's seven blocks are in our CBs; make them visible to compute.
         CircularBuffer(cb_vbeta).push_back(cv);

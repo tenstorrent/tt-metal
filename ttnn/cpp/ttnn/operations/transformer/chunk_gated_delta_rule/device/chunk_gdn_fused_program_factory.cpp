@@ -315,7 +315,17 @@ tt::tt_metal::ProgramDescriptor ChunkGdnFusedProgramFactory::create_descriptor(
 
     // Fused writer: plain scalars, no accessors (it writes no DRAM at all).
     const std::vector<uint32_t> fused_writer_ct = {
-        Ct, Kt, Vt, sem_valid_id, sem_init_id, kHandoffNbuf, NV, Vtl, fcb::u, credit_off_bytes};
+        Ct,
+        Kt,
+        Vt,
+        sem_valid_id,
+        sem_init_id,
+        kHandoffNbuf,
+        NV,
+        Vtl,
+        fcb::u,
+        credit_off_bytes,
+        attrs.unicast ? 1u : 0u};
 
     // ---- Receiver-side CT args: the phased SCAN layout at the V-slice width, with Vt_full for strides ----
     const std::vector<uint32_t> ct_scan = {Ct, Kt, Vtl, has_s0, Vt};

@@ -69,6 +69,9 @@ def _clear_gdn_env(monkeypatch):
     # F3a producer split and the NV receiver split (fused prim only; hashed via attrs.np / attrs.nv).
     monkeypatch.delenv("QWEN_GDN_NP", raising=False)
     monkeypatch.delenv("QWEN_GDN_NV", raising=False)
+    # Hand-off CB depth and the unicast/multicast transport of the hand-off (fused prim only; hashed).
+    monkeypatch.delenv("QWEN_GDN_HANDOFF_NBUF", raising=False)
+    monkeypatch.delenv("QWEN_GDN_UNICAST", raising=False)
     # Legacy selector — superseded by QWEN_GDN_PATH but still honored when PATH is unset.
     monkeypatch.delenv("QWEN_GDN_PHASED", raising=False)
     monkeypatch.delenv("QWEN_GDN_SCAN_SERIAL", raising=False)
@@ -525,6 +528,33 @@ def test_fused_nv_bit_exact_vs_phased(device, monkeypatch, nv, np_producers, nc)
     assert not bad, f"fused NV={nv} NP={np_producers}: o differs from phased in (head, vblock) slices {bad}"
     assert torch.equal(o_fu, o_ph), "fused o differs from phased outside any single v-block (layout bug)"
     assert torch.equal(fs_fu, fs_ph), f"fused NV={nv} NP={np_producers}: final_state differs from phased"
+
+
+@pytest.mark.parametrize(
+    "nv, np_producers, nc, nbuf",
+    [
+        (2, 7, 64, 2),  # BH=12 NV=2 operating point (24 receivers + 84 producers)
+        (4, 5, 64, 2),  # BH=12 NV=4 operating point (48 + 60); the Phase 1 gate geometry
+        (4, 5, 8, 3),  # short chain + deeper ring: every slot index is exercised on both sides
+        (2, 3, 9, 4),  # NC not a multiple of NP or nbuf
+    ],
+)
+def test_fused_nv_unicast_bit_exact(device, monkeypatch, nv, np_producers, nc, nbuf):
+    """Phase 1 transport A/B (design D5): the hand-off shipped as NV plain unicast writes per item
+    (QWEN_GDN_UNICAST=1) instead of the linked multicast chain is bit-identical to phased. The
+    transport is hashed, so the fused program compiles fresh (delta == 1) rather than being served
+    from the multicast entry."""
+    hk, hv = NP_BH_KV_HEADS
+    _skip_unless_geometry_fits(device, hv, nv, np_producers, nc)
+    monkeypatch.setenv("QWEN_GDN_UNICAST", "1")
+    monkeypatch.setenv("QWEN_GDN_HANDOFF_NBUF", str(nbuf))
+    (o_ph, fs_ph), (o_fu, fs_fu), delta, _ = _fused_vs_phased(
+        device, monkeypatch, hk, hv, nc, nv, np_producers, 20260921
+    )
+    assert delta == 1, f"unicast fused(NV={nv},NP={np_producers},nbuf={nbuf}) compiled {delta} programs (expected 1)"
+    bad = _vblock_mismatches(o_ph, o_fu, hv, nv)
+    assert not bad, f"unicast fused NV={nv} NP={np_producers}: o differs in (head, vblock) slices {bad}"
+    assert torch.equal(o_fu, o_ph) and torch.equal(fs_fu, fs_ph), "unicast fused differs from phased"
 
 
 @pytest.mark.parametrize(

@@ -54,6 +54,7 @@ void kernel_main() {
     constexpr uint32_t Vtl = get_compile_time_arg_val(7);         // per-receiver V-slice width (tiles)
     constexpr uint32_t CB_CREDIT = get_compile_time_arg_val(8);   // union-declared CB holding the credit words
     constexpr uint32_t CREDIT_OFF = get_compile_time_arg_val(9);  // byte offset of credit[0] in that CB
+    constexpr bool UNICAST = get_compile_time_arg_val(10) != 0;   // A/B: NV unicast writes instead of multicasts
     static_assert(Vtl * NV == Vt, "NV receivers must tile the full V width");
 
     const uint32_t NC = get_arg_val<uint32_t>(0);   // GLOBAL chunk count of this head
@@ -108,8 +109,23 @@ void kernel_main() {
 
     MulticastEndpoint mcast_dst;
     // One LINKED multicast of a shared CB's front slot into the head's rectangle.
+    UnicastEndpoint ucast_dst;
+    auto send_unicast = [&](uint32_t src_addr, uint32_t v, uint32_t n, uint32_t dst_addr) {
+        noc.async_write(
+            CoreLocalMem<uint32_t>(src_addr),
+            ucast_dst,
+            n * tb,
+            {},
+            {.noc_x = rcv_x(v), .noc_y = rcv_y(v), .addr = dst_addr});
+    };
     auto send_shared = [&](uint32_t cb_id, uint32_t n, uint32_t dst_addr) {
         const uint32_t addr = CircularBuffer(cb_id).get_read_ptr();
+        if constexpr (UNICAST) {
+            for (uint32_t v = 0; v < NV; v++) {
+                send_unicast(addr, v, n, dst_addr);
+            }
+            return;
+        }
         noc.async_write_multicast(
             CoreLocalMem<uint32_t>(addr),
             mcast_dst,
@@ -121,6 +137,10 @@ void kernel_main() {
     };
     // One UNLINKED write of `n` tiles to a single receiver (1x1 rectangle: orientation-neutral).
     auto send_slice = [&](uint32_t src_addr, uint32_t v, uint32_t n, uint32_t dst_addr) {
+        if constexpr (UNICAST) {
+            send_unicast(src_addr, v, n, dst_addr);
+            return;
+        }
         noc.async_write_multicast(
             CoreLocalMem<uint32_t>(src_addr),
             mcast_dst,
@@ -139,38 +159,53 @@ void kernel_main() {
         const uint32_t slot = c % NBUF;  // the receivers' reserved slot for GLOBAL chunk c (shared CBs)
         // Wait for the chunk's outputs in the phased prep writer's drain order (roughly
         // compute's push order), so producer-side backpressure matches that writer exactly.
-        CircularBuffer(cb_vbeta).wait_front(cv);
-        CircularBuffer(cb_Tinv).wait_front(cc);
-        CircularBuffer(cb_kd).wait_front(ck);
-        CircularBuffer(cb_intra).wait_front(cc);
-        CircularBuffer(cb_qdecay).wait_front(ck);
-        CircularBuffer(cb_kdec_t).wait_front(kc);
-        CircularBuffer(cb_dl).wait_front(1);
+        {
+            DeviceZoneScopedN("tx_wait_cb");
+            CircularBuffer(cb_vbeta).wait_front(cv);
+            CircularBuffer(cb_Tinv).wait_front(cc);
+            CircularBuffer(cb_kd).wait_front(ck);
+            CircularBuffer(cb_intra).wait_front(cc);
+            CircularBuffer(cb_qdecay).wait_front(ck);
+            CircularBuffer(cb_kdec_t).wait_front(kc);
+            CircularBuffer(cb_dl).wait_front(1);
+        }
 
         // All NV receivers of head h have reserved chunk c's slots. Exactly NV — an over-credit
         // would be a protocol bug and shows up as a hang here rather than as corrupt output.
-        noc_semaphore_wait(credit + h, NV);
+        {
+            DeviceZoneScopedN("tx_wait_credit");
+            noc_semaphore_wait(credit + h, NV);
+        }
         noc_semaphore_set(credit + h, 0);
 
-        // v_beta slices: row r of receiver v's slice <- this slot's tiles [r*Vt + v*Vtl, +Vtl).
-        const uint32_t vb_src = CircularBuffer(cb_vbeta).get_read_ptr();
-        const uint32_t vb_dst = base_vbeta + ((c * cvl) % VB_RING) * tb;
-        for (uint32_t v = 0; v < NV; v++) {
-            for (uint32_t r = 0; r < Ct; r++) {
-                send_slice(vb_src + (r * Vt + v * Vtl) * tb, v, Vtl, vb_dst + r * Vtl * tb);
+        {
+            DeviceZoneScopedN("tx_issue");
+            // v_beta slices: row r of receiver v's slice <- this slot's tiles [r*Vt + v*Vtl, +Vtl).
+            const uint32_t vb_src = CircularBuffer(cb_vbeta).get_read_ptr();
+            const uint32_t vb_dst = base_vbeta + ((c * cvl) % VB_RING) * tb;
+            for (uint32_t v = 0; v < NV; v++) {
+                for (uint32_t r = 0; r < Ct; r++) {
+                    send_slice(vb_src + (r * Vt + v * Vtl) * tb, v, Vtl, vb_dst + r * Vtl * tb);
+                }
             }
+            // The six shared tensors, linked, into the rectangle.
+            send_shared(cb_Tinv, cc, base_Tinv + slot * cc * tb);
+            send_shared(cb_kd, ck, base_kd + slot * ck * tb);
+            send_shared(cb_intra, cc, base_intra + slot * cc * tb);
+            send_shared(cb_qdecay, ck, base_qdecay + slot * ck * tb);
+            send_shared(cb_kdec_t, kc, base_kdec_t + slot * kc * tb);
+            send_shared(cb_dl, 1, base_dl + slot * 1 * tb);
         }
-        // The six shared tensors, linked, into the rectangle.
-        send_shared(cb_Tinv, cc, base_Tinv + slot * cc * tb);
-        send_shared(cb_kd, ck, base_kd + slot * ck * tb);
-        send_shared(cb_intra, cc, base_intra + slot * cc * tb);
-        send_shared(cb_qdecay, ck, base_qdecay + slot * ck * tb);
-        send_shared(cb_kdec_t, kc, base_kdec_t + slot * kc * tb);
-        send_shared(cb_dl, 1, base_dl + slot * 1 * tb);
-        // Every write above must have LANDED before the flag: the slices are unlinked unicasts and
-        // could otherwise overtake the flag. The barrier waits for acks (a flush would not).
-        noc.async_write_barrier();
-        valid.set_multicast(noc, mx0, my0, mx1, my1, NV);  // unlinked: ends the chain
+        {
+            // Every write above must have LANDED before the flag: the slices are unlinked unicasts
+            // and could otherwise overtake the flag. The barrier waits for acks (a flush would not).
+            DeviceZoneScopedN("tx_barrier");
+            noc.async_write_barrier();
+        }
+        {
+            DeviceZoneScopedN("tx_valid");
+            valid.set_multicast(noc, mx0, my0, mx1, my1, NV);  // unlinked: ends the chain
+        }
 
         // Free the slots for compute's next chunk only now (the writes have completed).
         CircularBuffer(cb_vbeta).pop_front(cv);

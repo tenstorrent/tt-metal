@@ -20,6 +20,7 @@
 #include <cstdint>
 #include "api/compute/common.h"
 #include "chunk_gdn_math.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace {
 
@@ -101,6 +102,21 @@ void kernel_main() {
     // sequential state scan lives in the separate scan kernel. Outputs (per chunk) u, w, k_dec_t,
     // q_decay, intra, dl are pushed to their CBs and streamed to DRAM by the prep writer.
     for (uint32_t c = 0; c < NC; c++) {
-        prep_chunk<Ct, Kt, Vt, QK_NORM != 0>(CBS, SCALE_BITS, EPS_BITS);
+#if defined(PROFILE_KERNEL)
+        {
+            // Diagnostic only (Tracy device runs): wait for the item's inputs up front so the zone
+            // below measures pure prep math (w_p). Idempotent waits; absent from production binaries.
+            DeviceZoneScopedN("prep_wait_in");
+            WAIT(cb_q, Ct * Kt);
+            WAIT(cb_k, Ct * Kt);
+            WAIT(cb_v, Ct * Vt);
+            WAIT(cb_g, Ct);
+            WAIT(cb_beta, Ct);
+        }
+#endif
+        {
+            DeviceZoneScopedN("prep_item");
+            prep_chunk<Ct, Kt, Vt, QK_NORM != 0>(CBS, SCALE_BITS, EPS_BITS);
+        }
     }
 }

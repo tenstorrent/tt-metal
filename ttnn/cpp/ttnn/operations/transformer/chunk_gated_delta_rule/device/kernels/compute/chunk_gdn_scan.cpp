@@ -16,6 +16,7 @@
 #include <cstdint>
 #include "api/compute/common.h"
 #include "chunk_gdn_math.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace {
 
@@ -66,6 +67,24 @@ void kernel_main() {
         const bool last = (c == NC - 1);
         const uint32_t dst = last ? cb_final : nxt_S;
 
-        scan_step<Ct, Kt, Vt>(CBS, cur_S, dst);
+#if defined(PROFILE_KERNEL)
+        {
+            // Diagnostic only (Tracy device runs): wait for all seven inputs up front so the zone below
+            // measures pure compute. The waits are idempotent — scan_step's own waits then return at
+            // once — and this block does not exist in production binaries.
+            DeviceZoneScopedN("scan_wait_in");
+            WAIT(cb_kd, Ct * Kt);
+            WAIT(cb_vbeta, Ct * Vt);
+            WAIT(cb_Tinv, Ct * Ct);
+            WAIT(cb_qdecay, Ct * Kt);
+            WAIT(cb_intra, Ct * Ct);
+            WAIT(cb_kdec_t, Kt * Ct);
+            WAIT(cb_dl, 1);
+        }
+#endif
+        {
+            DeviceZoneScopedN("scan_step");
+            scan_step<Ct, Kt, Vt>(CBS, cur_S, dst);
+        }
     }
 }
