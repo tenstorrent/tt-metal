@@ -58,11 +58,9 @@ constexpr bool is_action_thread()
 // out of reset at 0 with max 15, and the arrival drain leaves the arrival count at 0 after every rendezvous, so
 // a killed run cannot strand a count that the next one would misread as an arrival.
 //
-// Every peer has its own release semaphore. With one shared release count a peer that had already reached the
-// next rendezvous (the idle sfpu stub, with nothing between one zone boundary and the next) could take the
-// token meant for a peer whose poll was still held back by its Tensix queue, and that peer then waited for
-// good; the emulator hit it deterministically on the MxFp8R eltwise binary kernel once the zone entry grew by
-// one L1 read.
+// Every peer has its own release level. They date from the token protocol, where one shared count let a peer
+// that had already reached the next rendezvous (the idle sfpu stub) take the token meant for a slower peer; a
+// level cannot be taken, but the separate semaphores are free here and keep the peers independent.
 constexpr std::uint8_t ARRIVE_SEM       = 8;
 constexpr std::uint8_t RELEASE_SEM_BASE = 9; // unpack 9, math 10, sfpu 11
 
@@ -91,8 +89,8 @@ constexpr std::uint8_t my_release_sem()
 constexpr std::uint8_t ARRIVE_SEM  = ckernel::semaphore::PACK_DONE;
 constexpr std::uint8_t RELEASE_SEM = ckernel::semaphore::UNPACK_OPERAND_SYNC;
 
-// Blackhole has no third free semaphore, so its two peers share the release count; both are busy threads on
-// every run type, so neither reaches the next rendezvous before the other has consumed its token.
+// No third free semaphore, so the two peers share one release level. Sharing is safe because nobody consumes
+// it: the action thread flips it once per rendezvous and each peer waits for it to differ from what it saw.
 constexpr std::uint8_t release_sem_of(std::uint32_t)
 {
     return RELEASE_SEM;
@@ -107,9 +105,38 @@ constexpr std::uint8_t my_release_sem()
 
 #endif
 
-// A consumed token, not a level to observe, so a peer that samples late still finds its release. Polling
-// reads the PC buffer, never the L1 being measured, which is what keeps a waiting thread out of the
-// numbers: an L1 rendezvous cost the Quasar unpack windows up to 5% until this replaced it.
+namespace detail
+{
+// A PC buffer load has to land in a register before the next one is issued; a second load while the first is
+// still outstanding hangs the TRISC on Blackhole, and semaphore_post reads the semaphore for its assert.
+__attribute__((always_inline)) inline std::uint32_t settled(std::uint32_t value)
+{
+    asm volatile("mv %0, %0" : "+r"(value));
+    return value;
+}
+
+// Flip a release level between 0 and 1. Only the action thread ever writes a release semaphore.
+__attribute__((always_inline)) inline void flip(std::uint8_t sem)
+{
+    if (settled(ckernel::semaphore_read(sem)) == 0)
+    {
+        ckernel::semaphore_post(sem);
+    }
+    else
+    {
+        ckernel::semaphore_get(sem);
+    }
+}
+} // namespace detail
+
+// The release is a level the action thread flips, not a token a peer consumes. With tokens, two peers sharing one
+// count could both read 1 while the action thread was still posting the second token, both issue SEMGET, and the
+// second get floored at 0: that thread walked on with a token left behind, and the next rendezvous released a
+// peer early. The LLK assert in semaphore_get caught it on a Wormhole fast tilize kernel, once in 47k kernels. A
+// peer now records the level before it announces its arrival, and the action thread cannot flip until every peer
+// has arrived, so the change is never missed and nothing is consumed; a stale level left by a killed run is
+// harmless. Polling reads the PC buffer, never the L1 being measured, which is what keeps a waiting thread out
+// of the numbers: an L1 rendezvous cost the Quasar unpack windows up to 5% until semaphores replaced it.
 template <typename Action>
 __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Action action)
 {
@@ -127,18 +154,22 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
 
         action();
 
+#if defined(ARCH_QUASAR)
         for (std::uint32_t i = 0; i < NUM_THREADS - 1; ++i)
         {
-            ckernel::semaphore_post(release_sem_of(i));
+            detail::flip(release_sem_of(i));
         }
+#else
+        detail::flip(RELEASE_SEM);
+#endif
     }
     else
     {
+        const std::uint32_t seen = detail::settled(ckernel::semaphore_read(my_release_sem()));
         ckernel::semaphore_post(ARRIVE_SEM);
-        while (ckernel::semaphore_read(my_release_sem()) == 0)
+        while (ckernel::semaphore_read(my_release_sem()) == seen)
         {
         }
-        ckernel::semaphore_get(my_release_sem());
     }
 
     ckernel::fence_compiler();
