@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": "35494639210",
-    "timestamp": "2026-09-20T06:38:00Z"
+    "run_id": "35549609194",
+    "timestamp": "2026-09-20T18:57:00Z"
   },
-  "run_id": "35494639210",
+  "run_id": "35549609194",
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -227,6 +227,18 @@
     "57099": {
       "issue": 56827,
       "status": "auto-closed unmerged (unexplained, same pattern as prior #56864); external draft PR #57100 (VirdhatchaniKN) now also targets same issue with a broader 2-defect fix; flagged for maintainer consolidation in monthly summary, no new repo-assist attempt opened"
+    },
+    "57110_kda_state_dedupe": {
+      "issue": 57110,
+      "branch": "repo-assist/fix-issue-57110-kda-state-dedupe-zeros",
+      "title": "drop KdaState._zeros duplicate carry cache in kimi_k3",
+      "status": "opened this run; removed shadow _zeros cache, reset() now uses ttnn.fill(state,0,output_tensor=state) in place; Python-only, no build needed; CI n/a for docs/py-only"
+    },
+    "57111_shutdown_sentinel_device_alloc": {
+      "issue": 57111,
+      "branch": "repo-assist/fix-issue-57111-shutdown-sentinel-device-alloc",
+      "title": "allocate shutdown sentinel payload directly on device",
+      "status": "opened this run; switched torch.zeros+from_torch to ttnn.zeros(device=dev,...); Python-only, no build needed"
     }
   },
   "issues_labeled": [
@@ -578,7 +590,10 @@
     "56701": "2026-09-19: Quasar trace-capture DFB config snapshot missing (0 vs N payloads), already labeled bug, needs dispatch/serialization expertise",
     "56702": "2026-09-19: Quasar cached-program re-enqueue doesn't refresh DFB configs (WH/BH-only refresh), already labeled bug, needs dispatch/serialization expertise, sibling of 56701",
     "57055": "CMake TT::Metalium::Private refactor -- genuine, 47 occurrences/32 files, too large/architectural for a surgical repo-assist fix",
-    "57003": "T3K dispatch pipeline retirement -- gated to on-or-after 31 October 2026, not actionable yet"
+    "57003": "T3K dispatch pipeline retirement -- gated to on-or-after 31 October 2026, not actionable yet",
+    "57042": "resnet-on-quasar REDUCE_DIM macro collision: already fixed on main (param renamed to reduce_dim); verified 2026-09-20; safe to close, flagged in monthly summary",
+    "56945": "32-bit unpack-to-dest wrong-DST-tile: already has open external fix PR #56932 (awliu-TT); verified 2026-09-20, no duplicate",
+    "56986": "hf_rope decode PCC fail on BH: already has open external fix PR #57035; verified 2026-09-20, no duplicate"
   },
   "stale_pr_nudges": {
     "34933": {
@@ -1497,6 +1512,11 @@
   },
   "run_history": [
     {
+      "run_id": "35549609194",
+      "date": "2026-09-20T18:57:00Z",
+      "summary": "Task2/3: investigated fresh issue #57042 (resnet-on-quasar REDUCE_DIM macro-collision compile failure) -- verified against current tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_reduce.h that it is ALREADY FIXED on main (param renamed to lowercase reduce_dim, with explanatory comment about the -DREDUCE_DIM=... macro collision), matching the reporter's own suggested fix; flagged as closeable in monthly summary, no PR needed. Investigated #56945 (32-bit unpack-to-dest wrong-DST-tile bug) and #56986 (hf_rope decode PCC fail on BH) -- both already have open non-repo-assist fix PRs (#56932 awliu-TT, #57035) per the required existing-fix check; no duplicates opened. Fixed and opened ready-for-review PRs for two fresh, well-scoped 'found by review of #54850' bug reports: #57111 (_forward_shutdown building a plane-scaled host torch.zeros, up to ~513MB, at teardown -- switched to ttnn.zeros(device=dev) for direct on-device alloc) and #57110 (KdaState._zeros duplicate carry cache doubling KDA carry memory -- removed the shadow cache, reset() now zeroes in place via ttnn.fill(state, 0, output_tensor=state), verified ttnn.fill's output_tensor kwarg writes to a preallocated address so it preserves the class's documented trace-safety invariant). Both Python-only, no build needed. Left #57108/#57109 (Kimi-K3 weight-cache dtype gap, AttnRes plane-count triple-derivation) labeled bug but unfixed this run. Task5: spot-checked CI on newest PRs #57131/#57130 (green) and re-verified no new maintainer requests on previously-flagged PRs (#51868/#53690/#56396/#54932/#52106/#53113, all quiet). Task6: skipped -- ran last cycle (2026-09-20T06:38), too soon for the 3-day re-ping cadence. Task8: rewrote monthly summary #55015 with this run's entries and refreshed suggested-actions list."
+    },
+    {
       "run_id": "35494639210",
       "date": "2026-09-20T06:38:00Z",
       "summary": "Task1/2: reviewed newest ~50 open issues (#57103 down through #56904); confirmed #56976 (ttnn.matmul/linear ~4x slower with L1-interleaved operand/output on default program config) as a fresh, well-documented defect -- verified the reported root cause line-by-line against current ttnn/cpp/ttnn/operations/matmul/device/config/matmul_program_config.cpp (all_dram_interleaved gate at L1129-1133 requires DRAM on all three buffers; the spread-blocking branch at L1183 is keyed on that flag), labeled performance monitoring, commented with citations (did not restate reporter's own perf numbers as independently confirmed -- no HW access). Checked #56827 (concat block-sharded width ragged-tail) for existing fixes before considering a new attempt: found repo-assist's own PR #57099 (opened last run) was auto-closed unmerged despite 5/5 green checks -- same unexplained pattern as prior #56864 -- and discovered a new external draft PR #57100 (VirdhatchaniKN) claiming a broader two-defect fix (cursor arithmetic + an alignment-boundary rejection); flagged both for maintainer consolidation in the monthly summary rather than opening a third repo-assist PR. Re-verified CI on #57092/#57093 (opened previous run) -- both 5/5 green. Task6: nudged 3 never-previously-touched stale PRs from the oldest-updated, non-repo-assist list: #52375 (author checkin, dirty since 2026-09-02), #50598 (author checkin, dirty despite 2 approvals, asked to reconfirm an earlier CHANGES_REQUESTED is resolved), #51447 (author checkin, dirty, no substantive review since opened 2026-07-29). Hit the 3-action cap; noted #41596/#40339 (aarch64/Gentoo support, both behind main and untouched since spring 2026) as likely-abandoned candidates for a future closure discussion rather than another nudge. Task8: rewrote monthly summary #55015 with this run's entry, added the #56827 three-way-fix-conflict item and #56976 investigate item, added the 3 new stale-PR author-followup items."
@@ -1540,26 +1560,6 @@
       "run_id": "35190856437",
       "date": "2026-09-17T06:44:35Z",
       "summary": "Task5 (CI check follow-up on own PR): investigated CI failure on PR #56817 (test-only fix opened last run for issue #56808). The new test_eltwise_unary_typecast_int32_negative[Int32->Float32, dest_acc=Yes] caught a genuine WH/BH kernel defect: calculate_typecast_int32_to_fp32/_to_fp16b used TTI_SFPABS(mod1=0) (two's-complement int abs) on Int32 data that is sign-magnitude in hardware. Verified via DeepWiki against tt-isa-documentation (SFPABS.md/SFPCAST_IntFloat.md) and cross-checked against tt_llk_quasar's own calculate_abs (already uses the correctly-named SFPABS_MOD1_FLOAT constant with an identical warning comment). Pushed a fix (both WH/BH, both plain-loop and SFPLOADMACRO variants) switching to SFPABS_MOD1_FLOAT; posted explanatory comment on the PR. Re-verified other tracked PRs (56714/56598/56529/56428, rest of ~19 total) all green, no regressions. Task8: rewrote monthly summary #55015 (had regrown to 165KB) with current suggested actions + this run's entry."
-    },
-    {
-      "run_id": "35168710637",
-      "date": "2026-09-17T01:04:00Z",
-      "summary": "Task1/2/3: investigated fresh issue #56808 (LLK typecast test never samples negative Int32 stimuli); verified the issue's sign-magnitude claim against current ckernel_sfpu_typecast.h across WH/BH/Quasar (SFPCAST/SFPABS+SFPSETSGN comments explicitly confirm sign-magnitude Dest encoding, matching pack_int32's default); opened test-only fix PR adding test_eltwise_unary_typecast_int32_negative parametrized over Int32-input typecast pairs; commented on #56808 linking the PR. Task5: re-verified all ~19 tracked repo-assist PRs -- no CI regressions or new maintainer activity; confirmed #56375 is superseded by merged #56676 (flagged for maintainer to close). Task8: rewrote monthly summary #55015 (body had grown to ~159KB from repeated appended history; trimmed to current suggested actions + this run's entry)."
-    },
-    {
-      "run_id": "35134662726",
-      "date": "2026-09-16T18:31:00Z",
-      "summary": "Task1/2: reviewed newest issues #56644 down to #56492 (continuing below prior cursor); confirmed #56518 (pow fp32 log2 cancellation) and #56621 (tanh_bw dtype) already covered by open PRs #56593/#56064, no dups; investigated and fixed #56532 (fft/ifft bf16 writer truncation bias, confirmed >> 16 truncation still present in all 3 writer kernels), opened fix PR implementing the issue's proposal (1) - RNE rounding helper - scoped away from the larger proposal (2) per the issue's own guidance. Task5: verified PR #56714 (binary_ng width-stride fix, closes #56707) CI green; discovered PR #56375 (dispatch log fix) is superseded by merged PR #56676 which actually closed issue #56348 - flagged for maintainer to close #56375; re-verified #56428/#54792/#51868 unchanged, no new maintainer activity. Task8: rewrote monthly summary Suggested Actions list (removed merged #46265/#55847, added #56714/#56706/#56529/#56598/#56428/new #56532 PR, flagged #56375 as superseded)."
-    },
-    {
-      "date": "2026-09-15T18:33:00Z",
-      "run_id": "35007598177",
-      "summary": "Task1/2: reviewed newest issues #56680 down to #56652; labeled 4 confirmed defects (#56655 mul_reduce_scalar_chunked_tile over-count, #56673 copy_dest_value stale-slot, #56644 Fast dispatch broken on Horizon - all bug; #56650 test_unary_tanh_approx_ttnn ttsim crash after #56076 - ci-bug). Task5: replied to maintainer ncvetkovicTT's duplicate-PR question on #56529 (logical_not -0.0 fix) after searching - no duplicate found; re-verified all 18 tracked repo-assist PRs via get_check_runs/pull_request_read, no new CI regressions or unaddressed maintainer feedback beyond what's already answered. Task6: nudged 2 never-before-touched stale PRs found in oldest-updated scan: #50782 (author, unresolved CHANGES_REQUESTED) and #51086 (codeowners ping, CI green, zero reviewers). Task8: updated monthly summary #55015."
-    },
-    {
-      "run_id": "34548588178",
-      "date": "2026-09-11T01:02:00Z",
-      "summary": "Task5: re-verified all 13 tracked repo-assist PRs via get_check_runs/pull_request_read - CI unchanged (all green/behind/blocked except 55435 still stuck on RTL Sim CI failure w/ broken details_url, and 54246 now mergeable_state=dirty needing rebase, flagged for maintainer). Task1/2/3: reviewed newest ~30 issues (56194 down to 56066); confirmed 56173 (missing packaged kernel sources for sdpa/grid_sample/scatter/point_to_point) already has open fix PR #56174, no duplicate; deep-dived #56194 (Quasar STRIDED-DFB batched pack_tile L1 offset collision) - verified root cause exactly against current source across 4 cited files (llk_pack_tile_api.h, dataflow_buffer_interface.h, llk_io.h, cb_api.h), no existing fix PR found, opened surgical fix PR (repo-assist/fix-issue-56194-quasar-strided-pack-tile-index) scaling per-tile index step by stride_size_tiles in both branches of get_output_tile_index(); reviewed #56171 (SDPA decode k_chunk_size=32 boundary bug, plausible but did not conclusively pin exact fix site in reader/compute mask logic this run, left unlabeled/unfixed for next run with more budget), #56192 (perf-test flakiness near threshold, recentering-only fix, no code defect), #56122 (empty stub issue referencing #51355, no action). Task8: updated monthly summary #55015 with new run history + refreshed suggested actions."
     }
   ],
   "no_action_reviewed": [
@@ -1642,6 +1642,6 @@
       "note": "verified 0 merged PRs, 0 issues, exactly 1 PR authored (this one)"
     }
   },
-  "task8_last_update": "2026-09-20T06:38:00Z",
+  "task8_last_update": "2026-09-20T18:57:00Z",
   "ci_pattern_note": "2026-09-20: PR #56195 shows RTL Sim CI failure with details_url=github.com/tenstorrernt (typo domain) -- same broken-placeholder pattern already seen on #55434/#51868, treating as infra noise not a code defect until a real job log can be fetched."
 }
