@@ -1702,6 +1702,7 @@ def test_candidate_patch_digest_is_identical_from_llk_subdir_and_repo_root(tmp_p
     llk.mkdir(parents=True)
     (llk / "llk.txt").write_text("base llk\n")
     (worktree / "metal.txt").write_text("base metal\n")
+    (worktree / "setup-owned.txt").write_text("original infrastructure\n")
     subprocess.run(["git", "init", "-q", str(worktree)], check=True)
     subprocess.run(
         ["git", "-C", str(worktree), "config", "user.name", "test"], check=True
@@ -1720,7 +1721,49 @@ def test_candidate_patch_digest_is_identical_from_llk_subdir_and_repo_root(tmp_p
     ).stdout.strip()
     (llk / "llk.txt").write_bytes(b"changed\x00llk\n")
     (worktree / "metal.txt").write_text("changed metal\n")
+    (worktree / "metal.txt").chmod(0o755)
     (worktree / "new-untracked.txt").write_text("new candidate input\n")
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(worktree),
+            "update-index",
+            "--skip-worktree",
+            "setup-owned.txt",
+        ],
+        check=True,
+    )
+    (worktree / "setup-owned.txt").write_text("local infrastructure overlay\n")
+    index = (worktree / ".git/index").read_bytes()
+    transport_index = tmp_path / "transport-index"
+    transport_index.write_bytes(index)
+    transport_env = {**os.environ, "GIT_INDEX_FILE": str(transport_index)}
+    subprocess.run(
+        ["git", "-C", str(worktree), "add", "-A", "--", "."],
+        env=transport_env,
+        check=True,
+    )
+    # Exact hardware-transport Git serialization, independently of the helper.
+    transport_patch = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(worktree),
+            "diff",
+            "--cached",
+            "--binary",
+            "--full-index",
+            base,
+            "--",
+        ],
+        env=transport_env,
+    )
+    assert b"GIT binary patch" in transport_patch
+    assert b"new-untracked.txt" in transport_patch
+    assert b"new mode 100755" in transport_patch
+    assert b"setup-owned.txt" not in transport_patch
+    expected = hashlib.sha256(transport_patch).hexdigest()
 
     def digest(path):
         return subprocess.run(
@@ -1738,7 +1781,14 @@ def test_candidate_patch_digest_is_identical_from_llk_subdir_and_repo_root(tmp_p
             text=True,
         ).stdout.strip()
 
-    assert digest(llk) == digest(worktree)
+    for abbrev in ("7", "12"):
+        subprocess.run(
+            ["git", "-C", str(worktree), "config", "core.abbrev", abbrev], check=True
+        )
+        assert digest(llk) == digest(worktree) == expected
+        assert (worktree / ".git/index").read_bytes() == index
+        assert (worktree / "new-untracked.txt").is_file()
+        assert not list((worktree / ".git").glob(".candidate-index-*"))
     run_test_source = RUN_TEST.read_text(encoding="utf-8")
     assert "candidate-patch-digest" in run_test_source
     assert "tt-llk-local-patch-v1" not in run_test_source
@@ -2355,8 +2405,9 @@ resolve_worktree_base
 
 
 @pytest.mark.parametrize("timeout_classification", ["outer_timeout", "wall_timeout"])
+@pytest.mark.parametrize("legacy_abbreviated_patch", [False, True])
 def test_setup_worktree_records_exact_base_before_bootstrap(
-    tmp_path, timeout_classification
+    tmp_path, timeout_classification, legacy_abbreviated_patch
 ):
     repo = tmp_path / "repo"
     llk_tests = repo / "tt_metal" / "tt-llk" / "tests"
@@ -2380,8 +2431,19 @@ def test_setup_worktree_records_exact_base_before_bootstrap(
         text=True,
     ).stdout.strip()
     (repo / "source.txt").write_text("resumed candidate\n")
+    subprocess.run(["git", "-C", str(repo), "config", "core.abbrev", "7"], check=True)
     patch = subprocess.run(
-        ["git", "-C", str(repo), "diff", "--binary", base, "--", "source.txt"],
+        [
+            "git",
+            "-C",
+            str(repo),
+            "diff",
+            "--binary",
+            *([] if legacy_abbreviated_patch else ["--full-index"]),
+            base,
+            "--",
+            "source.txt",
+        ],
         check=True,
         capture_output=True,
     ).stdout
@@ -2461,9 +2523,17 @@ setup_worktree "${5:-issue-5}"
         capture_output=True,
         text=True,
     )
+    worktree = worktrees / "issue-5-v1"
+    if legacy_abbreviated_patch:
+        assert proc.returncode != 0
+        assert (
+            "imported candidate differs from the retained checkpoint patch"
+            in proc.stderr
+        )
+        assert not worktree.exists()
+        return
     assert proc.returncode == 0, proc.stderr
 
-    worktree = worktrees / "issue-5-v1"
     state = json.loads(
         (worktree / "tt_metal" / "tt-llk" / ".codegen_run_state.json").read_text()
     )
@@ -3509,6 +3579,30 @@ def test_review_preserves_index_and_accepts_packaging_commit(reviewed_candidate)
     assert len(list((logs / "reviews").glob("*.json"))) == 1
     review("prepare")
     assert not (logs / "review_result.json").exists()
+
+
+def test_review_abbreviated_legacy_identity_requires_reprepare(reviewed_candidate):
+    wt, logs, git, review, result = reviewed_candidate
+    context = result["identity"]
+    canonical_digest = context["patch_sha256"]
+    git("config", "core.abbrev", "7")
+    legacy_patch = subprocess.check_output(
+        ["git", "-C", str(wt), "diff", "--binary", context["base_commit"], "--"]
+    )
+    context["patch_sha256"] = hashlib.sha256(legacy_patch).hexdigest()
+    assert context["patch_sha256"] != canonical_digest
+    (logs / "review_context.json").write_text(json.dumps(context))
+    (logs / "review_result.json").write_text(json.dumps(result))
+    for action in ("validate", "record", "check"):
+        with pytest.raises(subprocess.CalledProcessError) as error:
+            review(action)
+        assert "review context is stale" in error.value.stderr
+    review("prepare")
+    assert not (logs / "review_result.json").exists()
+    assert (
+        json.loads((logs / "review_context.json").read_text())["patch_sha256"]
+        == canonical_digest
+    )
 
 
 @pytest.mark.parametrize(

@@ -700,7 +700,11 @@ def _canonical_digest(value: Any) -> str:
 
 
 def _candidate_patch_digest(worktree: Path, base: str) -> str:
-    """Hash all candidate content while preserving setup-owned index exclusions."""
+    """Hash full-index transport bytes, preserving setup-owned index exclusions.
+
+    Legacy abbreviated review/checkpoint digests are not identity aliases;
+    their owning contexts must be regenerated before reuse.
+    """
     if not worktree.is_dir() or not _SHA40_RE.fullmatch(base):
         raise ValueError("candidate patch requires a worktree and exact base SHA")
     worktree = Path(
@@ -757,7 +761,17 @@ def _candidate_patch_digest(worktree: Path, base: str) -> str:
             timeout=120,
         )
         patch = subprocess.run(
-            ["git", "-C", str(worktree), "diff", "--cached", "--binary", base, "--"],
+            [
+                "git",
+                "-C",
+                str(worktree),
+                "diff",
+                "--cached",
+                "--binary",
+                "--full-index",
+                base,
+                "--",
+            ],
             check=True,
             capture_output=True,
             env=env,

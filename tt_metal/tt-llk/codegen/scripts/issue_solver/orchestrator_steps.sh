@@ -1591,7 +1591,7 @@ execute_step_write_generated_patch() {
         fi
 
         tmp_patch="$_L/.generated.patch.$$"
-        if ! git -C "$wt" diff --binary "$base" "$fix" > "$tmp_patch"; then
+        if ! git -C "$wt" diff --binary --full-index "$base" "$fix" > "$tmp_patch"; then
             rm -f "$tmp_patch"
             ss PACKAGING_ERROR "packaging failed: could not create generated.patch"
             echo "PACKAGING_FAILED: git diff failed" >&2

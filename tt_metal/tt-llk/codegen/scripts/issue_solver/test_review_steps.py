@@ -1005,6 +1005,8 @@ def test_packaging_failure_and_retry_preserve_verification(
     git("add", "-A")
     git("commit", "-qm", "earlier fix")
     source.write_text("complete fix\n")
+    source.chmod(0o755)
+    (worktree / "new-binary.dat").write_bytes(b"new\x00binary\n")
     state_path = log_dir / "state.json"
     state = json.loads(state_path.read_text())
     obstacle = "Wormhole unavailable" if verification_status == "failed" else ""
@@ -1043,17 +1045,49 @@ def test_packaging_failure_and_retry_preserve_verification(
     assert state["STATUS"] == verification_status
     if retry:
         hook.write_text("#!/bin/sh\nexit 0\n")
-        for _ in range(2):
+        # Failed packaging staged the full candidate. Capture the hardware
+        # transport bytes before committing, including binary/untracked/mode changes.
+        transport_patch = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(worktree),
+                "diff",
+                "--cached",
+                "--binary",
+                "--full-index",
+                base,
+                "--",
+            ]
+        )
+        expected_digest = hashlib.sha256(transport_patch).hexdigest()
+        for abbrev in ("7", "12"):
+            git("config", "core.abbrev", abbrev)
             packaged = _bash("execute_step_write_generated_patch", llk)
             assert packaged.returncode == 0, packaged.stderr
             state = json.loads(state_path.read_text())
             assert state["PACKAGING_ERROR"] == ""
             assert state["OBSTACLE"] == obstacle
             assert state["FIX_COMMIT"] == git("rev-parse", "HEAD")
-            assert set(state["CHANGED_FILES_JSON"]) == {"fix.cpp", "earlier.cpp"}
-            assert (log_dir / "generated.patch").read_text().strip() == git(
-                "diff", "--binary", base, "HEAD"
-            )
+            assert set(state["CHANGED_FILES_JSON"]) == {
+                "fix.cpp",
+                "earlier.cpp",
+                "new-binary.dat",
+            }
+            assert (log_dir / "generated.patch").read_bytes() == transport_patch
+            digest = subprocess.check_output(
+                [
+                    sys.executable,
+                    str(CODEGEN / "scripts/run_json_writer.py"),
+                    "candidate-patch-digest",
+                    "--worktree",
+                    str(worktree),
+                    "--expected-base-sha",
+                    base,
+                ],
+                text=True,
+            ).strip()
+            assert digest == expected_digest
     finalized = _bash("refresh_cost() { :; }; execute_step_finalize_run", llk)
     assert finalized.returncode == 0, finalized.stderr
     run = json.loads((log_dir / "run.json").read_text())
