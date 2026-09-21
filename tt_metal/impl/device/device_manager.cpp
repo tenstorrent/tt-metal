@@ -20,6 +20,7 @@
 #include "impl/context/context_descriptor.hpp"
 #include "firmware/command_queue_initializer.hpp"
 #include "firmware/profiler_initializer.hpp"
+#include "impl/streaming_profiler/streaming_profiler_tile_clocks.hpp"
 #include "firmware/fabric_firmware_initializer.hpp"
 #include "firmware/dispatch_kernel_initializer.hpp"
 
@@ -476,6 +477,10 @@ void DeviceManager::initialize_fabric_and_dispatch_fw() {
     }
 
     auto active_devices = this->get_all_active_devices_impl();
+
+    for (Device* device : active_devices) {
+        streaming_profiler::measure_tile_clocks(device, ctx_.get_context_id());
+    }
 
     initializers_[FabricFirmwareInitializer::key] =
         std::make_unique<FabricFirmwareInitializer>(descriptor_, env_impl_.get_control_plane());

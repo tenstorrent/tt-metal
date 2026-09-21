@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -27,6 +28,7 @@
 #include <tt_stl/tt_pause.hpp>
 
 #include "impl/streaming_profiler/streaming_profiler_consumer.hpp"
+#include "impl/streaming_profiler/streaming_profiler_tile_clocks.hpp"
 
 namespace tt::llrt {
 class RunTimeOptions;
@@ -215,6 +217,9 @@ public:
 
     // The Tracy sink and the CSV writers rtoptions select; subsequent calls do nothing.
     void register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptions);
+    // A chip's tile clocks, measured once before its fabric and dispatch firmware; read at every bring-up after.
+    void set_tile_clocks(uint32_t chip, TileClocks clocks);
+    const TileClocks* tile_clocks(uint32_t chip) const;
     // The device<->device sync engine, owner of the clock map.
     SyncEngine& sync();
 
@@ -274,6 +279,8 @@ private:
     std::unique_ptr<TracySink> tracy_;
     ConsumerHandle next_handle_ = 1;
     std::once_flag builtins_once_;
+    mutable std::mutex tile_clocks_mu_;
+    std::map<uint32_t, TileClocks> tile_clocks_;
 };
 
 // The process's Service. Subscriptions outlive every device and context, so it is never destroyed.

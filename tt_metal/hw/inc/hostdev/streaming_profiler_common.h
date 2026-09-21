@@ -103,21 +103,27 @@ static constexpr std::uint32_t kRelayDoneMask = 0xFFFF0000u;
 // the stop word, the heartbeat behind done) travel in one host write.
 static constexpr std::uint32_t kRelayCtrlWordStride = 64;
 
-// Idle-eth tile table: the host lists tiles, an idle-eth core writes each one's wall-clock reading.
-//   [ETH_TILE_N]          tile count, host-written
-//   [ETH_TILE_READY]      kEthTileReadyWord | count once every tile is written
-//   [ETH_TILE_XY_0 ..)    y << 16 | x per tile, host-written; then per tile an int64, the core's wall tick minus the
-//                         tile's as the brackets read it
-enum EthTileTable : std::uint32_t {
-    ETH_TILE_N = 0,
-    ETH_TILE_READY = 1,
-    ETH_TILE_XY_0 = 2,
-    ETH_TILE_OUT_WORDS = 2,
+// Tile clock network scratch: the first 64 B take the landing word of the reads, the table follows at kTileNetTable,
+// two histograms of kTileNetBins uint32 counts (offsets, then round trips) at kTileNetHist.
+//   [TILE_NET_GO]        host-written: kTileNetGoMeasure when this tile's turn comes, kTileNetGoExit to release it
+//   [TILE_NET_READY]     the host's nonce once the tile is up, its inverse once every partner is written
+//   [TILE_NET_OUT_0 ..)  per partner: the median of 2 * (partner wall - bracket midpoint) in the clocks' low words,
+//                        the spread between its quartiles, the median round trip (int32 ticks), then the coarse
+//                        whole-clock difference partner - this tile (int64, low word first)
+enum TileNetTable : std::uint32_t {
+    TILE_NET_GO = 0,
+    TILE_NET_READY = 1,
+    TILE_NET_OUT_0 = 2,
+    TILE_NET_OUT_WORDS = 5,
 };
-static constexpr std::uint32_t kEthTileReadyWord = 0x71B1E000u;
-constexpr std::uint32_t eth_tile_out_word(std::uint32_t n_tiles, std::uint32_t tile) {
-    return ETH_TILE_XY_0 + n_tiles + ETH_TILE_OUT_WORDS * tile;
-}
+static constexpr std::uint32_t kTileNetGoMeasure = 1;
+static constexpr std::uint32_t kTileNetGoExit = 2;
+static constexpr std::uint32_t kTileNetTable = 64;
+static constexpr std::uint32_t kTileNetMaxPartners = 32;
+static constexpr std::uint32_t kTileNetHist =
+    kTileNetTable + 4 * (TILE_NET_OUT_0 + TILE_NET_OUT_WORDS * kTileNetMaxPartners);
+static constexpr std::uint32_t kTileNetBins = 128;
+static constexpr std::uint32_t kTileNetScratchBytes = kTileNetHist + 2 * 4 * kTileNetBins;
 
 // The device-to-device link sync's contract between the host, its resident kernels and the fabric routers: the eth
 // tile's refclk, the unit a round's stamp averages are reported in, the L1 the two ends own at the top of the active
@@ -265,7 +271,7 @@ static_assert(
 // a real producer cost over 16 -- and producer overhead outranks the knee here by policy.
 static constexpr std::uint32_t SPSC_PUBLISH_BATCH_WORDS = 16;
 
-static constexpr std::uint32_t SPSC_TYPE_ZONE_L = 4;      // >3.2 s zone: id | end_lo | end_hi | dur_lo | dur_hi
+static constexpr std::uint32_t SPSC_TYPE_ZONE_L = 4;  // >3.2 s zone: id | end_lo | end_hi | dur_lo | dur_hi
 static constexpr std::uint32_t SPSC_TYPE_STICKY_TIMER = 9;
 static constexpr std::uint32_t SPSC_TIMER_HI_MASK = 0x7FFFFFFu;  // the 27-bit low field of word0
 

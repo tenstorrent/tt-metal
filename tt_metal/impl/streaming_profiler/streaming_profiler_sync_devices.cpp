@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <set>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -24,6 +25,7 @@
 #include <umd/device/pcie/tlb_window.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -36,6 +38,7 @@
 #include "impl/kernels/kernel.hpp"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "impl/streaming_profiler/streaming_profiler_sync_engine.hpp"
+#include "impl/streaming_profiler/streaming_profiler_tile_clocks.hpp"
 #include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal::streaming_profiler {
@@ -451,50 +454,7 @@ Role role_of(const tt::Cluster& cluster, uint32_t chip, const CoreCoord& eth_log
 
 }  // namespace link_sync
 
-namespace {
-// Solves the normal equations N x = r by Gaussian elimination with partial pivoting; a pivot of zero leaves that
-// unknown at 0 (an unobserved tile).
-std::vector<double> solve_normal(std::vector<std::vector<double>> N, std::vector<double> r) {
-    const size_t n = r.size();
-    std::vector<double> x(n, 0.0);
-    std::vector<size_t> col(n);
-    for (size_t i = 0; i < n; i++) {
-        col[i] = i;
-    }
-    for (size_t c = 0; c < n; c++) {
-        size_t piv = c;
-        for (size_t k = c + 1; k < n; k++) {
-            if (std::fabs(N[k][c]) > std::fabs(N[piv][c])) {
-                piv = k;
-            }
-        }
-        std::swap(N[c], N[piv]);
-        std::swap(r[c], r[piv]);
-        if (std::fabs(N[c][c]) < 1e-9) {
-            continue;
-        }
-        for (size_t k = 0; k < n; k++) {
-            if (k == c || N[k][c] == 0.0) {
-                continue;
-            }
-            const double f = N[k][c] / N[c][c];
-            for (size_t j = c; j < n; j++) {
-                N[k][j] -= f * N[c][j];
-            }
-            r[k] -= f * r[c];
-        }
-    }
-    for (size_t c = 0; c < n; c++) {
-        if (std::fabs(N[c][c]) >= 1e-9) {
-            x[c] = r[c] / N[c][c];
-        }
-    }
-    return x;
-}
-
-}  // namespace
-
-KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreCoords& core, bool measure_only) {
+KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreCoords& core) {
     return CreateKernel(
         program,
         "tt_metal/tools/profiler/sync/eth_clock_pusher.cpp",
@@ -510,8 +470,6 @@ KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreC
                 l1.ctrl,
                 packed_xy(core.virt),
                 l1.scratch,
-                l1.table,
-                measure_only ? 1u : 0u,
                 l1.ring,
                 l1.sync_cfg,
                 l1.sync_ring,
@@ -553,197 +511,41 @@ void SyncDevices::stop(tt::Cluster& cluster) {
     stop_links(cluster);
 }
 
-// One idle-eth core's reading of one tile: the core's wall tick minus the tile's.
-struct SyncDevices::TileReading {
-    int64_t value = 0;
-};
-
-// One reading as an equation: value = x[t] - x[s] + x[path], x being pusher wall minus tile wall. -1 is the pusher
-// (the origin, x = 0) or, for the path, a two-ring read.
-struct SyncDevices::TileObs {
-    int32_t s, t;
-    uint32_t src;  // source order
-    TileReading r;
-    CoreCoord from, to;  // raw NoC 0 coordinates
-};
-
-// The unknowns: the Tensix tiles, the helper sources, then two path terms. A read within the source's column or row
-// covers one ring, the rest two; the one-ring reads sit a fixed few ticks off the two-ring ones, so each of those two
-// paths gets an unknown of its own, found from the tiles both kinds of source read, instead of pulling on the tiles'
-// offsets.
-struct SyncDevices::TileUnknowns {
-    size_t n_tiles, n_helpers;
-    size_t col() const { return n_tiles + n_helpers; }
-    size_t row() const { return n_tiles + n_helpers + 1; }
-    size_t count() const { return n_tiles + n_helpers + 2; }
-    int32_t path_of(const TileObs& o) const {
-        if (o.from.x == o.to.x) {
-            return static_cast<int32_t>(col());
-        }
-        return o.from.y == o.to.y ? static_cast<int32_t>(row()) : -1;
-    }
-    double fit_of(const TileObs& o, const std::vector<double>& x) const {
-        const auto x_of = [&](int32_t u) { return u < 0 ? 0.0 : x[static_cast<size_t>(u)]; };
-        return x_of(o.t) - x_of(o.s) + x_of(path_of(o));
-    }
-};
-
-std::vector<SyncDevices::TileObs> SyncDevices::read_tiles(uint32_t di) {
-    auto& cluster = MetalContext::instance(context_id_).get_cluster();
-    const Device& d = devices_[di].d;
-    const uint32_t nt = static_cast<uint32_t>(d.tensix.size());
-    const uint32_t ns = static_cast<uint32_t>(d.eth.size());
-    const uint32_t nh = ns - 1;
-    TT_FATAL(
-        nt + nh <= kEthTableMaxTiles,
-        "streaming profiler: device {} has {} tiles to read, the tile table holds {}",
-        d.chip_id,
-        nt + nh,
-        kEthTableMaxTiles);
-    // One core's table over `count` tiles; false until written.
-    auto read_table = [&](const CoreCoord& virt, uint32_t count, std::vector<TileReading>& out) {
-        std::vector<uint32_t> t(kernel_profiler::eth_tile_out_word(count, count), 0);
-        cluster.read_core(
-            t.data(), static_cast<uint32_t>(t.size() * sizeof(uint32_t)), tt_cxy_pair(d.chip_id, virt), eth_l1_.table);
-        if (t[kernel_profiler::ETH_TILE_READY] != (kernel_profiler::kEthTileReadyWord | count)) {
-            return false;
-        }
-        out.resize(count);
-        for (uint32_t i = 0; i < count; i++) {
-            const uint32_t w = kernel_profiler::eth_tile_out_word(count, i);
-            out[i].value = static_cast<int64_t>((static_cast<uint64_t>(t[w + 1]) << 32) | t[w]);
-        }
-        return true;
-    };
-    // Sources: the pusher, then the helpers; a source's tile list is the Tensix tiles, then the other sources in
-    // source order.
-    std::vector<std::vector<TileReading>> readings(ns);
-    for (uint32_t s = 0; s < ns; s++) {
-        const CoreCoords& src = d.eth[s];
-        std::vector<uint32_t> table(kernel_profiler::ETH_TILE_XY_0, 0);
-        for (const CoreCoords& c : d.tensix) {
-            table.push_back(packed_xy(c.virt));
-        }
-        for (uint32_t o = 0; o < ns; o++) {
-            if (o != s) {
-                table.push_back(packed_xy(d.eth[o].virt));
-            }
-        }
-        table[kernel_profiler::ETH_TILE_N] = nt + nh;
-        cluster.write_core(
-            table.data(),
-            static_cast<uint32_t>(table.size() * sizeof(uint32_t)),
-            tt_cxy_pair(d.chip_id, src.virt),
-            eth_l1_.table);
-        Program p = CreateProgram();
-        const KernelHandle kid = create_pusher_kernel(p, eth_l1_, src, /*measure_only=*/true);
-        SetRuntimeArgs(p, kid, src.logical, std::vector<uint32_t>{0});
-        detail::CompileProgram(d.device, p, /*force_slow_dispatch=*/true);
-        detail::WriteRuntimeArgsToDevice(d.device, p, /*force_slow_dispatch=*/true);
-        detail::LaunchProgram(d.device, p, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-        while (!read_table(src.virt, nt + nh, readings[s])) {
-            TT_FATAL(
-                std::chrono::steady_clock::now() < deadline,
-                "streaming profiler: device {} idle eth ({},{}) tile table not written within 2 s",
-                d.chip_id,
-                src.logical.x,
-                src.logical.y);
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        detail::WaitProgramDone(d.device, p, false);
-    }
-    // Unknown index: Tensix i -> i, helper h -> nt + h, the pusher -1.
-    const auto unknown_of_source = [&](uint32_t s) { return s == 0 ? -1 : static_cast<int32_t>(nt + s - 1); };
-    std::vector<TileObs> obs;
-    for (uint32_t s = 0; s < ns; s++) {
-        uint32_t listed = 0;
-        for (uint32_t i = 0; i < nt; i++, listed++) {
-            obs.push_back(TileObs{
-                unknown_of_source(s),
-                static_cast<int32_t>(i),
-                s,
-                readings[s][listed],
-                d.eth[s].phys,
-                d.tensix[i].phys});
-        }
-        for (uint32_t o = 0; o < ns; o++) {
-            if (o != s) {
-                obs.push_back(TileObs{
-                    unknown_of_source(s),
-                    unknown_of_source(o),
-                    s,
-                    readings[s][listed++],
-                    d.eth[s].phys,
-                    d.eth[o].phys});
-            }
-        }
-    }
-    return obs;
-}
-
-std::vector<double> SyncDevices::solve_tiles(uint32_t di) {
-    const Device& d = devices_[di].d;
-    const std::vector<TileObs> obs = read_tiles(di);
-    const TileUnknowns u{d.tensix.size(), d.eth.size() - 1};
-    std::vector<std::vector<double>> N(u.count(), std::vector<double>(u.count(), 0.0));
-    std::vector<double> rhs(u.count(), 0.0);
-    for (const TileObs& o : obs) {
-        const double v = static_cast<double>(o.r.value);
-        const int32_t cols[3] = {o.t, o.s, u.path_of(o)};
-        const double coef[3] = {1.0, -1.0, 1.0};
-        for (int i = 0; i < 3; i++) {
-            if (cols[i] < 0) {
-                continue;
-            }
-            rhs[cols[i]] += coef[i] * v;
-            for (int j = 0; j < 3; j++) {
-                if (cols[j] >= 0) {
-                    N[cols[i]][cols[j]] += coef[i] * coef[j];
-                }
-            }
-        }
-    }
-    const std::vector<double> x = solve_normal(N, rhs);
-    log_tile_fit(d, obs, x, u);
-    return x;
-}
-
-// Two numbers per chip: how far apart the tiles' clocks are, and how well the sources agree on each tile (the
-// placement's likely error).
-void SyncDevices::log_tile_fit(
-    const Device& d, const std::vector<TileObs>& obs, const std::vector<double>& x, const TileUnknowns& u) const {
-    const double ns_per_tick = 1.0 / d.frequency_ghz;
-    const auto [xlo, xhi] = std::minmax_element(x.begin(), x.begin() + static_cast<std::ptrdiff_t>(u.n_tiles));
-    double ss = 0.0, worst = 0.0;
-    for (const TileObs& o : obs) {
-        const double res = static_cast<double>(o.r.value) - u.fit_of(o, x);
-        ss += res * res;
-        worst = std::max(worst, std::fabs(res));
-    }
-    const double rms = obs.empty() ? 0.0 : std::sqrt(ss / static_cast<double>(obs.size()));
-    log_info(
-        tt::LogMetal,
-        "[streaming profiler] Device {}: {} tiles' wall clocks span {:.0f} ticks ({:.1f} ns), solved from {} idle eth "
-        "sources over {} reads; the sources disagree by {:.2f} ticks rms, {:.1f} worst ({:.2f} ns rms); one-ring "
-        "reads sit {:+.1f} (column) {:+.1f} (row) ticks off two-ring ones",
-        d.chip_id,
-        u.n_tiles,
-        *xhi - *xlo,
-        (*xhi - *xlo) * ns_per_tick,
-        d.eth.size(),
-        obs.size(),
-        rms,
-        worst,
-        rms * ns_per_tick,
-        x[u.col()],
-        x[u.row()]);
-}
-
+// The lanes' offsets into the pusher's wall domain from the chip's tile clocks (streaming_profiler_tile_clocks.hpp),
+// pusher wall minus tile wall: the workers, the pusher (0), then its linked eth cores.
 void SyncDevices::measure_tiles(uint32_t di, CaptureContext::Device& cap) {
-    const std::vector<double> x = solve_tiles(di);
-    for (size_t i = 0; i < devices_[di].d.tensix.size(); i++) {
-        cap.tile_offset[i] = std::llround(x[i]);
+    const Device& d = devices_[di].d;
+    const TileClocks* clocks = service().tile_clocks(d.chip_id);
+    if (clocks == nullptr) {
+        log_warning(
+            tt::LogMetal,
+            "[streaming profiler] Device {}: no tile clocks; every lane is placed as if its tile kept the pusher's "
+            "clock",
+            d.chip_id);
+        return;
+    }
+    const TileClock* pusher = clocks->find(CoreType::ETH, d.eth.front().logical);
+    TT_FATAL(pusher != nullptr, "streaming profiler: device {} pusher eth core is not in its tile clocks", d.chip_id);
+    size_t i = 0, missing = 0;
+    const auto place = [&](CoreType type, const CoreCoord& logical) {
+        const TileClock* t = clocks->find(type, logical);
+        cap.tile_offset[i++] = t == nullptr ? 0 : pusher->offset - t->offset;
+        missing += t == nullptr;
+    };
+    for (const CoreCoords& c : d.tensix) {
+        place(CoreType::WORKER, c.logical);
+    }
+    cap.tile_offset[i++] = 0;
+    for (const CoreCoords& c : d.linked) {
+        place(CoreType::ETH, c.logical);
+    }
+    TT_FATAL(i == cap.tile_offset.size(), "streaming profiler: device {} roster and tile offsets disagree", d.chip_id);
+    if (missing != 0) {
+        log_warning(
+            tt::LogMetal,
+            "[streaming profiler] Device {}: {} lanes have no tile clock and are placed unshifted",
+            d.chip_id,
+            missing);
     }
 }
 

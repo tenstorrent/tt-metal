@@ -43,13 +43,11 @@ constexpr uint32_t kMyXy = get_compile_time_arg_val(4);              // y << 16 
 // Scratch for a linked core: its control vector (256 B) at +0, then its two ring images (2 KiB each) -- 4608 B,
 // separate from the frame slot, which is sized for the packed payload alone.
 constexpr uint32_t kScratchAddr = get_compile_time_arg_val(5);
-constexpr uint32_t kTileTableAddr = get_compile_time_arg_val(6);  // hostdev EthTileTable
-constexpr uint32_t kMeasureOnly = get_compile_time_arg_val(7);    // write the tile table and exit
-constexpr uint32_t kRingAddr = get_compile_time_arg_val(8);       // model::kRingSamples raw samples, for transitions
-constexpr uint32_t kSyncCfgAddr = get_compile_time_arg_val(9);    // the sync socket's D2HSocket config
-constexpr uint32_t kSyncRingAddr = get_compile_time_arg_val(10);  // this core's points, kSyncRingRecords of them
+constexpr uint32_t kRingAddr = get_compile_time_arg_val(6);      // model::kRingSamples raw samples, for transitions
+constexpr uint32_t kSyncCfgAddr = get_compile_time_arg_val(7);   // the sync socket's D2HSocket config
+constexpr uint32_t kSyncRingAddr = get_compile_time_arg_val(8);  // this core's points, kSyncRingRecords of them
 constexpr uint32_t kLinkRingAddr =
-    get_compile_time_arg_val(11);  // the link ends' sync ring, one address on every active eth core; 0 = none
+    get_compile_time_arg_val(9);  // the link ends' sync ring, one address on every active eth core; 0 = none
 
 namespace kp = kernel_profiler;
 
@@ -366,119 +364,6 @@ inline __attribute__((always_inline)) void feed(Model& m, uint64_t r, uint64_t w
 }
 }  // namespace model
 
-// Each Tensix tile keeps its own wall clock. They tick on the one AICLK, but the reset that starts them reaches the
-// die in rings, 5 ticks per ring with the centre 20 ticks behind the edge (measured identical on eight p150s), so a
-// worker record needs its own tile's integer to land in the eth wall domain. One raw 4 B NoC read of the tile's
-// WALL_CLOCK_L bracketed by this core's wall clock samples (tile - midpoint) plus a path term: on the torus the two
-// NoCs swap request and response hop counts, so their average carries no hop term, and the same read of this core's
-// own register measures this end of the path. What a one-way read cannot split, the far end, stays in the reading
-// and is the host's to bound; no number is assumed for it here.
-constexpr uint32_t kTileReps = 32;
-constexpr uint32_t kTileWallLo = 0xFFB121F0u;      // RISCV_DEBUG_REG_WALL_CLOCK_L, latches the high word
-constexpr uint32_t kTileWallHiLive = 0xFFB121F4u;  // RISCV_DEBUG_REG_WALL_CLOCK_1, the live high word
-
-inline uint32_t tile_coord(uint32_t xy) {
-    return static_cast<uint32_t>(get_noc_addr(xy & 0xFFFFu, xy >> 16, 0) >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
-}
-
-// A 4 B read of `addr` on tile `coord`, landing at the scratch word congruent to it: programmed first, then sent
-// and waited for as one step, so a bracket around the send alone holds the packet's flight and the two NIUs'
-// handling and none of the programming.
-inline volatile tt_l1_ptr uint32_t* tile_arm(uint32_t noc, uint32_t coord, uint32_t addr, uint32_t bytes) {
-    const uint32_t dst = kScratchAddr + (addr & 0x3Fu);
-    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_LO, dst);
-    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_LO, addr);
-    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_MID, 0);
-    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_TARG_ADDR_COORDINATE, coord);
-    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_AT_LEN_BE, bytes);
-    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
-}
-
-inline void tile_send_wait(uint32_t noc) {
-    NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    noc_reads_num_issued[noc] += 1;
-    while (!ncrisc_noc_reads_flushed(noc)) {
-    }
-}
-
-inline uint32_t tile_read(uint32_t noc, uint32_t coord, uint32_t addr) {
-    volatile tt_l1_ptr uint32_t* land = tile_arm(noc, coord, addr, 4);
-    tile_send_wait(noc);
-    invalidate_l1_cache();
-    return *land;
-}
-
-// Median over kTileReps of 2 * (tile wall - bracket midpoint) on one NoC, in wall ticks. Upper median, as the
-// calibration used. The request is programmed once and re-sent per rep (the NIU
-// clears only NOC_CMD_CTRL on acceptance), and the bracket holds nothing but the send store and the poll: every
-// instruction inside it is time the bound has to allow the far end. The poll watches the word land in L1, which
-// is closer than the NIU's response counter; the sentinel is the previous reading with its top bit flipped, a value
-// the next reading can only take after advancing exactly 2^31 ticks, so a halted or slow clock cannot make it spin.
-// The low words differ by the eth-minus-tensix offset modulo 2^32, anywhere in [-2^31, 2^31), so the doubled and
-// summed quarter ticks need 64 bits: in 32 they wrap for 3/4 of the offsets and the table lands 2^30 ticks off.
-__attribute__((noinline, cold)) int64_t tile_bracket(uint32_t noc, uint32_t coord) {
-    uint32_t prev = tile_read(noc, coord, kTileWallLo);  // also leaves the request programmed
-    volatile tt_l1_ptr uint32_t* const land =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kScratchAddr + (kTileWallLo & 0x3Fu));
-    volatile uint32_t* const ctrl = reinterpret_cast<volatile uint32_t*>(
-        (NCRISC_RD_CMD_BUF << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CMD_CTRL);
-    volatile uint32_t* const wall = reinterpret_cast<volatile uint32_t*>(eth_ptp::kWallClockLo);
-    int64_t d[kTileReps];
-    for (uint32_t i = 0; i < kTileReps; i++) {
-        noc_reads_num_issued[noc] += 1;
-        const uint32_t sentinel = prev ^ 0x80000000u;
-        *land = sentinel;
-        const uint32_t w0 = *wall;
-        *ctrl = NOC_CTRL_SEND_REQ;
-        do {
-            invalidate_l1_cache();
-        } while (*land == sentinel);
-        const uint32_t w1 = *wall;
-        const uint32_t v = *land;
-        prev = v;
-        const int64_t di = 2 * static_cast<int64_t>(static_cast<int32_t>(v - w0)) - static_cast<int32_t>(w1 - w0);
-        uint32_t j = i;
-        for (; j > 0 && d[j - 1] > di; j--) {
-            d[j] = d[j - 1];
-        }
-        d[j] = di;
-    }
-    return d[kTileReps / 2];
-}
-
-inline int64_t round_q(int64_t q) { return (q + 2) >> 2; }
-
-// Fills the host's tile table: per tile, this core's wall tick minus the tile's as a 64-bit integer whose low word
-// is the two NoCs' bracket result, less this core's own loopback reads on both NoCs, and whose high word comes from
-// the tile's live high word read on both sides of its low word (retaken across a wrap) against this core's own.
-__attribute__((noinline, cold)) void measure_tiles() {
-    volatile tt_l1_ptr uint32_t* tab = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kTileTableAddr);
-    invalidate_l1_cache();
-    const uint32_t n = tab[kp::ETH_TILE_N];
-    const uint32_t me = tile_coord(kMyXy);
-    const int64_t loop_q = tile_bracket(0, me) + tile_bracket(1, me);
-    for (uint32_t i = 0; i < n; i++) {
-        const uint32_t coord = tile_coord(tab[kp::ETH_TILE_XY_0 + i]);
-        const int64_t fine = -round_q(tile_bracket(0, coord) + tile_bracket(1, coord) - loop_q);
-        uint32_t hi_a, lo, hi_b;
-        do {
-            hi_a = tile_read(0, coord, kTileWallHiLive);
-            lo = tile_read(0, coord, kTileWallLo);
-            hi_b = tile_read(0, coord, kTileWallHiLive);
-        } while (hi_a != hi_b);
-        const uint32_t my_lo = eth_ptp::rd(eth_ptp::kWallClockLo);
-        const uint32_t my_hi = eth_ptp::rd(eth_ptp::kWallClockHi);
-        const int64_t coarse = static_cast<int64_t>((static_cast<uint64_t>(my_hi) << 32) | my_lo) -
-                               static_cast<int64_t>((static_cast<uint64_t>(hi_a) << 32) | lo);
-        const int64_t full = coarse + static_cast<int32_t>(static_cast<uint32_t>(fine) - static_cast<uint32_t>(coarse));
-        const uint32_t w = kp::eth_tile_out_word(n, i);
-        tab[w] = static_cast<uint32_t>(static_cast<uint64_t>(full));
-        tab[w + 1] = static_cast<uint32_t>(static_cast<uint64_t>(full) >> 32);
-    }
-    tab[kp::ETH_TILE_READY] = kp::kEthTileReadyWord | n;
-}
-
-
 inline void write_to_host(const SocketSenderInterface& s, uint32_t src_l1, uint64_t dst_pcie, uint32_t size) {
     noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
         NOC_INDEX, src_l1, s.d2h.pcie_xy_enc, dst_pcie, size, 1);
@@ -683,11 +568,6 @@ void kernel_main() {
     for (uint32_t i = 0; i < n_linked; i++) {
         linked_xy[i] = get_arg_val<uint32_t>(1 + 2 * i);
         linked_l1[i] = get_arg_val<uint32_t>(2 + 2 * i);
-    }
-
-    if constexpr (kMeasureOnly != 0) {
-        measure_tiles();
-        return;
     }
 
     SocketSenderInterface sender = create_sender_socket_interface(kSocketConfigAddr);

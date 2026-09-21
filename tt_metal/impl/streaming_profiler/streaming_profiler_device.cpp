@@ -41,6 +41,7 @@
 #include "llrt/tt_cluster.hpp"
 #include "impl/streaming_profiler/streaming_profiler_service.hpp"
 #include "impl/streaming_profiler/streaming_profiler_sync_devices.hpp"
+#include "impl/streaming_profiler/streaming_profiler_tile_clocks.hpp"
 #include "hostdev/streaming_profiler_common.h"
 
 namespace tt::tt_metal::streaming_profiler {
@@ -230,8 +231,8 @@ void Devices::carve_eth_l1(const Hal& hal, uint32_t& aeth_unreserved, uint32_t& 
         eth_prof_l1_ = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::PROFILER);
         const uint32_t ebase = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
         const uint32_t esize = hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-        const uint32_t need = kCfgReserve + kCtrlBytes + slot_bytes_ + kEthScratchBytes + kEthTableBytes +
-                              kEthRingBytes + kEthSyncRingBytes + kPageSize;
+        const uint32_t need =
+            kCfgReserve + kCtrlBytes + slot_bytes_ + kEthScratchBytes + kEthRingBytes + kEthSyncRingBytes + kPageSize;
         if (esize >= need) {
             eth_l1_.cfg = ebase + esize - kCfgReserve;
             eth_l1_.sync_cfg = eth_l1_.cfg + kCfgReserve / 2;
@@ -239,8 +240,7 @@ void Devices::carve_eth_l1(const Hal& hal, uint32_t& aeth_unreserved, uint32_t& 
             eth_l1_.stage =
                 (eth_l1_.ctrl - slot_bytes_) & ~(kPageSize - 1u);  // the pack pads assume a page-aligned slot
             eth_l1_.scratch = (eth_l1_.stage - kEthScratchBytes) & ~(kPageSize - 1u);
-            eth_l1_.table = (eth_l1_.scratch - kEthTableBytes) & ~(kPageSize - 1u);
-            eth_l1_.ring = eth_l1_.table - kEthRingBytes;
+            eth_l1_.ring = eth_l1_.scratch - kEthRingBytes;
             eth_l1_.sync_ring = eth_l1_.ring - kEthSyncRingBytes;
             eth_l1_.link_ring = aeth_ok_ ? aeth_unreserved + aeth_unres_size - kernel_profiler::kLinkSyncL1Bytes +
                                                kernel_profiler::kLinkSyncRingOffset
@@ -366,7 +366,6 @@ bool Devices::boot_device(
         sd.linked.assign(ctx.producers.begin() + ctx.n_workers + 1, ctx.producers.end());
     }
     const uint32_t si = sync_->add_device(std::move(sd));
-    // The tile clocks are measured now, with nothing else of ours on the NoC: the relays and pushers launch after.
     ctx.out.ctx.tile_offset.assign(ctx.out.ctx.core_xy.size(), 0);
     if (ctx.pusher) {
         sync_->measure_tiles(si, ctx.out.ctx);
@@ -713,7 +712,7 @@ bool Devices::launch_eth_pusher(
     p.state_addr = eth_l1_.ctrl;
     p.stop_addr = eth_l1_.ctrl + kernel_profiler::kRelayCtrlWordStride;
     auto program = std::make_unique<Program>(CreateProgram());
-    const KernelHandle kid = create_pusher_kernel(*program, eth_l1_, p.core, /*measure_only=*/false);
+    const KernelHandle kid = create_pusher_kernel(*program, eth_l1_, p.core);
     std::vector<uint32_t> rt = {static_cast<uint32_t>(ctx.producers.size() - ctx.n_workers - 1)};
     for (size_t i = ctx.n_workers + 1; i < ctx.producers.size(); i++) {
         rt.push_back(packed_xy(ctx.producers[i].virt));
@@ -860,6 +859,26 @@ void Devices::quiesce(const RelayStateFn& on_state) {
     }
     for (uint32_t di = 0; di < devices_.size(); di++) {
         stop_device(di, devices_[di], on_state);
+    }
+    // The relays have left their DRAM cores: those tiles read their rows again for the drift check.
+    for (const DeviceCtx& ctx : devices_) {
+        if (ctx.device == nullptr || ctx.relays.empty()) {
+            continue;
+        }
+        try {
+            for (const Drainer& r : ctx.relays) {
+                if (r.program) {
+                    detail::WaitProgramDone(ctx.device, *r.program, false);
+                }
+            }
+            check_tile_clock_drift(ctx.device, context_id_);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "[streaming profiler] Device {}: tile clock drift check skipped ({})",
+                ctx.chip_id,
+                first_line(e.what()));
+        }
     }
 }
 

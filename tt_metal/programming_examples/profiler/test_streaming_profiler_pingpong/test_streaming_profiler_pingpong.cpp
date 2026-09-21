@@ -174,13 +174,15 @@ int main(int argc, char** argv) {
         }
     }
     auto tsc_of = [](const sp::Zone& z) { return z.start_time().time_since_epoch().count(); };
+    auto tick_of = [](const sp::Zone& z) { return static_cast<int64_t>(z.start_timestamp()); };
     auto ns_of = [](int64_t ticks) {
         return static_cast<double>(ticks) / 10.0;  // host_clock units to ns
     };
     double worst = 0;
     std::printf(
         "pair                 chip rounds   direct arcs A->B(noc0) B->A(noc1) ns   offset err ns   jitter ns   "
-        "wrap arcs A->B(noc1) B->A(noc0) ns   their half-difference ns\n");
+        "wrap arcs A->B(noc1) B->A(noc0) ns   their half-difference ns   raw ticks: offset err   host-raw ns   "
+        "displaced rounds, mean |ns|\n");
     std::vector<uint32_t> chips;
     for (const auto& [k, _] : by_core) {
         if (chips.empty() || chips.back() != k.first) {
@@ -213,7 +215,7 @@ int main(int argc, char** argv) {
             }
             // fwd[noc]: A->B one-way on that NoC; bwd[noc]: B->A. Rounds alternate NoC in pairs, so a round's two
             // messages share a NoC and each direction gets both NoCs over the run.
-            std::vector<double> fwd[2], bwd[2];
+            std::vector<double> fwd[2], bwd[2], fwd_raw[2], bwd_raw[2];
             for (size_t k = 0; k < n; k++) {
                 const int64_t ta = tsc_of(tx_a[k]), rb = tsc_of(rx_b[k]), tb = tsc_of(tx_b[k]), ra = tsc_of(rx_a[k]);
                 if (ta == 0 || rb == 0 || tb == 0 || ra == 0) {
@@ -222,6 +224,8 @@ int main(int argc, char** argv) {
                 const uint32_t noc = ((k + 1) >> 1) & 1u;
                 fwd[noc].push_back(ns_of(rb - ta));
                 bwd[noc].push_back(ns_of(ra - tb));
+                fwd_raw[noc].push_back(static_cast<double>(tick_of(rx_b[k]) - tick_of(tx_a[k])));
+                bwd_raw[noc].push_back(static_cast<double>(tick_of(rx_a[k]) - tick_of(tx_b[k])));
             }
             if (fwd[0].empty() || bwd[1].empty()) {
                 std::printf("(%zu,%zu)-(%zu,%zu) chip %u: no placeable rounds\n", a.x, a.y, b.x, b.y, chip);
@@ -230,10 +234,37 @@ int main(int argc, char** argv) {
             // The direct arcs: the same links in the two directions. Jitter is the per-message scatter of each.
             const double e = (mean(fwd[0]) - mean(bwd[1])) / 2;
             const double e_wrap = (mean(fwd[1]) - mean(bwd[0])) / 2;
+            // The same two arcs in the tiles' own ticks, uncorrected: the tile offset difference plus the NoC's
+            // asymmetry. Scaled by the ns per tick the round trip itself gives, and taken off the host-time error,
+            // what remains is what the placement onto the host timeline added between the two lanes.
+            const double e_raw = (mean(fwd_raw[0]) - mean(bwd_raw[1])) / 2;
+            const double ns_per_tick = (mean(fwd[0]) + mean(bwd[1])) / (mean(fwd_raw[0]) + mean(bwd_raw[1]));
+            // Round by round, the host one-way less the raw one-way is a constant per direction unless the two lanes
+            // were placed on different map segments; rounds more than 2 ns off their direction's median are counted,
+            // with their mean distance from it.
+            size_t displaced = 0;
+            double excursion = 0.0;
+            for (int dir = 0; dir < 2; dir++) {
+                const std::vector<double>& h = dir == 0 ? fwd[0] : bwd[1];
+                const std::vector<double>& r = dir == 0 ? fwd_raw[0] : bwd_raw[1];
+                std::vector<double> d(h.size());
+                for (size_t k = 0; k < h.size(); k++) {
+                    d[k] = h[k] - r[k] * ns_per_tick;
+                }
+                std::vector<double> sorted = d;
+                std::sort(sorted.begin(), sorted.end());
+                const double d_med = sorted[sorted.size() / 2];
+                for (double x : d) {
+                    if (std::fabs(x - d_med) > 2.0) {
+                        displaced++;
+                        excursion += std::fabs(x - d_med);
+                    }
+                }
+            }
             worst = std::max(worst, std::fabs(e));
             std::printf(
                 "(%2zu,%2zu)-(%2zu,%2zu)        %2u  %5zu        %7.1f    %7.1f            %+6.2f       %.1f / %.1f    "
-                "   %7.1f    %7.1f                %+6.2f\n",
+                "   %7.1f    %7.1f                %+6.2f              %+7.2f       %+6.2f   %4zu %+6.1f\n",
                 a.x,
                 a.y,
                 b.x,
@@ -247,10 +278,25 @@ int main(int argc, char** argv) {
                 stdev(bwd[1]),
                 mean(fwd[1]),
                 mean(bwd[0]),
-                e_wrap);
+                e_wrap,
+                e_raw,
+                e - e_raw * ns_per_tick,
+                displaced,
+                displaced == 0 ? 0.0 : excursion / static_cast<double>(displaced));
         }
     }
     std::printf("worst offset error over the direct arcs of all pairs and chips: %.2f ns\n", worst);
+    // Differences cannot see a placement that is wrong as a whole: the newest record against the host clock now.
+    int64_t newest = 0;
+    {
+        std::lock_guard<std::mutex> g(mu);
+        for (const Stamp& s : stamps) {
+            newest = std::max(newest, tsc_of(s.zone));
+        }
+    }
+    std::printf(
+        "placement: the newest record sits %.3f s behind the host clock at the end of the run\n",
+        ns_of(sp::host_clock::now().time_since_epoch().count() - newest) / 1e9);
     sp::UnregisterCallback(sub);
     return 0;
 }

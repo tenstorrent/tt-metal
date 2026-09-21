@@ -186,6 +186,17 @@ Service::Service() : sync_(std::make_unique<SyncEngine>()) { init_site_registry(
 
 SyncEngine& Service::sync() { return *sync_; }
 
+void Service::set_tile_clocks(uint32_t chip, TileClocks clocks) {
+    std::lock_guard<std::mutex> lk(tile_clocks_mu_);
+    tile_clocks_[chip] = std::move(clocks);
+}
+
+const TileClocks* Service::tile_clocks(uint32_t chip) const {
+    std::lock_guard<std::mutex> lk(tile_clocks_mu_);
+    const auto it = tile_clocks_.find(chip);
+    return it == tile_clocks_.end() ? nullptr : &it->second;
+}
+
 Service& service() {
     static ttsl::Indestructible<Service> instance;
     return instance.get();

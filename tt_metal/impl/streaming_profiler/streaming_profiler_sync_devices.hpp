@@ -157,21 +157,15 @@ struct CoreCoords {
 };
 
 // The idle-eth pusher's L1, carved from the top of IDLE_ETH UNRESERVED: the two socket configs, ctrl words
-// (done/heartbeat, go, stop), one frame slot, the linked-core scratch, the tile table, the sample ring, the sync
-// ring of its clock model's points. link_ring is the link ends' sync ring on every active eth core (0 without active
-// eth). The tile measurement runs the pusher's kernel in measure-only mode, so it shares the carve.
+// (done/heartbeat, go, stop), one frame slot, the linked-core scratch, the sample ring, the sync ring of its clock
+// model's points. link_ring is the link ends' sync ring on every active eth core (0 without active eth).
 struct EthL1 {
-    uint32_t cfg = 0, sync_cfg = 0, ctrl = 0, stage = 0, scratch = 0, table = 0, ring = 0, sync_ring = 0, link_ring = 0;
+    uint32_t cfg = 0, sync_cfg = 0, ctrl = 0, stage = 0, scratch = 0, ring = 0, sync_ring = 0, link_ring = 0;
 };
 constexpr uint32_t kEthPointUs = 1000;  // the open segment's line reaches the host at least this often
-// Tile table (hostdev EthTileTable): the header, a coordinate per Tensix tile and an int64 offset per tile.
-constexpr uint32_t kEthTableBytes = 4096;
-constexpr uint32_t kEthTableMaxTiles =
-    (kEthTableBytes / sizeof(uint32_t) - kernel_profiler::ETH_TILE_XY_0) / (1 + kernel_profiler::ETH_TILE_OUT_WORDS);
 
-// The idle-eth kernel over its L1 carve: the resident pusher, or the same kernel reading the tile table once and
-// exiting.
-KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreCoords& core, bool measure_only);
+// The idle-eth pusher kernel over its L1 carve.
+KernelHandle create_pusher_kernel(Program& program, const EthL1& l1, const CoreCoords& core);
 
 // The device-to-device sync's use of the devices. At boot it measures each chip's tile clock offsets before any
 // relay or pusher is on the NoC and plans the eth links; once the receiver drains the sockets it launches the link
@@ -197,8 +191,7 @@ public:
     // Devices are indexed in the order added, the CaptureContext's device order.
     uint32_t add_device(Device d);
     void truncate(uint32_t n);
-    // Reads every tile from every idle eth core and solves the offsets into cap.tile_offset. Nothing else of ours
-    // may be on the NoC.
+    // Every lane's offset into the pusher's wall domain, from the chip's tile clocks, into cap.tile_offset.
     void measure_tiles(uint32_t di, CaptureContext::Device& cap);
     // Every eligible eth link between the devices, all of a pair's links.
     void plan_links();
@@ -224,16 +217,6 @@ private:
         uint32_t chip_a = 0, chip_b = 0;
         uint32_t stop_a = 0, stop_b = 0;
     };
-    struct TileReading;
-    struct TileObs;
-    struct TileUnknowns;
-    // Every idle eth core reads every Tensix tile and every other idle eth tile, one core at a time so nothing else is
-    // on the NoC; each reading is one equation, tile minus source.
-    std::vector<TileObs> read_tiles(uint32_t di);
-    // The offsets solved together, the pusher the origin; logged with the sources' agreement on them.
-    std::vector<double> solve_tiles(uint32_t di);
-    void log_tile_fit(
-        const Device& d, const std::vector<TileObs>& obs, const std::vector<double>& x, const TileUnknowns& u) const;
     void stop_links(tt::Cluster& cluster);
     // The two resident kernels of a link, compiled before either launches; false with the link skipped if one does
     // not compile.
