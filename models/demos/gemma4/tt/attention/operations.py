@@ -136,7 +136,8 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None
     ``memory_config`` is forwarded to ``rms_norm``; pass L1 to keep the normed
     activation resident on L1 (packed-verify decode path). ``None`` keeps the
     op's default (follows the input's layout). ``fp32_accumulate`` selects the HiFi4 +
-    fp32-accumulation compute config used on the prefill path; decode leaves it off.
+    fp32-accumulation compute config: prefill passes it, decode does not -- see the
+    note below, which records what was measured and what is still unexplained.
     """
     orig_shape = tensor.shape
     head_dim = orig_shape[-1]
@@ -147,9 +148,40 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None
         num_heads = orig_shape[1]
         seq_or_batch = orig_shape[2]
         flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_or_batch, head_dim))
-    # Prefill matches Hugging Face's FP32 per-head Q/K/V RMSNorm (HiFi4 + fp32 accumulation).
-    # Decode keeps the op default: the fp32 config lowered paged-decode attention PCC below the
-    # 0.99 gate on both Wormhole and Blackhole (26B / E2B unit tests, 2026-09-11 onwards).
+    # Prefill matches Hugging Face's FP32 per-head Q/K/V RMSNorm (HiFi4 + fp32
+    # accumulation). Decode keeps the op default -- #56466 turned it off there after
+    # test_attention_decode_paged PCC fell 0.9921 -> 0.9890 and missed the gate.
+    #
+    # Measured 2026-09-21, recorded so the next person does not redo it:
+    #
+    #   * At the OP level fp32 is the better kernel, not the worse one. Against a
+    #     float64 golden it halves the mean error (1.2e-3 vs 2.8e-3) at all 24 shapes
+    #     tried (head_dim 256/512, rows 32-4096, DRAM and L1), and it is unbiased
+    #     (~1e-5 relative) where the default path carries a systematic +1.7e-4
+    #     relative bias. It also produces a strictly better Q in situ, at 4/4 seeds.
+    #
+    #   * Despite that, decode PCC against the HF reference is WORSE with it on --
+    #     consistently, mean -0.0023 over 8 seeds on 26B-A4B. The mechanism is not
+    #     established. It is NOT the test's fp32-vs-bf16 KV-cache mismatch: rounding
+    #     the reference cache to bf16 changes the delta by 1e-4 (-0.0022 vs -0.0023).
+    #     Until that is explained, the op-level win is not sufficient grounds to flip
+    #     decode: a more accurate Q that moves the end-to-end metric the wrong way is
+    #     an unexplained result, not an improvement.
+    #
+    #   * Whatever is decided, decode K/V should stay off regardless: it is a
+    #     bit-exact no-op there (delta 0.0000000 at two seeds), because the normed
+    #     K/V are rounded to bf16 on the paged-cache write, so the extra precision is
+    #     discarded. Only Q can move the number at all.
+    #
+    #   * Note the gates cannot referee this on their own. conftest pins one seed
+    #     (213919); across 8 seeds the fp32-vs-default delta is -0.0023 while the
+    #     default config's own spread is 0.0231 -- ten times larger -- and the sign
+    #     flips on 2 of 8. The metric is also non-monotone in its own input (at seeds
+    #     213919 and 1 fp32 has the better Q and the worse final PCC), because the
+    #     pre-norm Q already carries 4.6-4.8e-3 of bf16 QKV-matmul error that RMSNorm
+    #     amplifies by 1/rms(x) ~ 1.74, leaving this norm's own arithmetic at only
+    #     8-15% of the post-norm error variance. See
+    #     test_attention_decode_paged_seed_sweep, which gates the worst case.
     compute_kernel_config = (
         ttnn.init_device_compute_kernel_config(
             tensor.device().arch(),

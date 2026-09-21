@@ -55,6 +55,8 @@
       "test_attention_decode_paged[wormhole_b0-cache512-global-1x1]": 0.98,
       "test_attention_decode_bounded_vs_unbounded_parity[wormhole_b0-cache1500-1x1]": 0.97,
       "test_attention_decode_paged[blackhole-cache512-global-1x1]": 0.98,
+      "_comment_decode_paged_seed_sweep": "Worst case over DECODE_PAGED_SWEEP_SEEDS, measured 2026-09-21: min 0.9862254 @ seed 6 (mean 0.9936099, spread 0.0128163 across the 8 seeds).",
+      "test_attention_decode_paged_seed_sweep[blackhole-cache512-global-1x1]": 0.985,
       "_comment_batched_decode": "Same #47311 reduce-precision gap as decode_paged; batched node name previously fell through to default 0.99.",
       "test_attention_decode_paged_batched[blackhole-cache512-batch1-global-1x1]": 0.989,
       "test_attention_decode_bounded_vs_unbounded_parity[blackhole-cache1500-1x1]": 0.97,
@@ -108,6 +110,8 @@
   },
   "gemma-4-26B-A4B-it": {
     "1x1": {
+      "_comment_decode_paged_seed_sweep": "Worst case over DECODE_PAGED_SWEEP_SEEDS, measured 2026-09-21: min 0.9762341 @ seed 3 (mean 0.9919135, spread 0.0230702 across the 8 seeds). This sits ~0.004 BELOW the single-seed gate on the line above, because conftest's seed 213919 lands near the top of the distribution and the single-seed test cannot see the tail. Raise it toward 0.98 when the underlying gap closes - never to make a numerics change look good.",
+      "test_attention_decode_paged_seed_sweep[blackhole-cache512-global-1x1]": 0.975,
       "test_attention_decode_paged[blackhole-cache512-global-1x1]": 0.98,
       "test_attention_decode_paged[wormhole_b0-cache512-global-1x1]": 0.98,
       "test_attention_paged_decode_via_harness[blackhole-sliding-1x1]": 0.98,

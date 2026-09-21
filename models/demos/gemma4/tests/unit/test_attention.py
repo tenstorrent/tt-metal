@@ -14,9 +14,12 @@ Tests prefill and decode for both sliding and global layers, across all TP facto
 """
 
 import os
+import random
 
+import numpy as np
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
@@ -228,15 +231,13 @@ def _build_sliding_window_mask(cache_len, sliding_window):
     return mask
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
-@pytest.mark.parametrize("cache_len", [32, 512, 1023, 1500], ids=lambda c: f"cache{c}")
-def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, request):
-    """Test decode attention with paged KV cache against HF reference.
+def _decode_paged_pcc(layer_idx, cache_len, mesh_device, request):
+    """Run one decode-attention-vs-HF comparison and return ``(passing, pcc_msg)``.
 
-    Tests at various cache lengths including positions beyond the sliding window (1024).
-    At cache_len=1500 with sliding_window=1024, SDPA must correctly mask out old entries.
-    Global layers (no sliding window) should attend to all cache positions.
+    Shared by ``test_attention_decode_paged`` (one fixed-seed case, asserts) and
+    ``test_attention_decode_paged_seed_sweep`` (many seeds, asserts on the
+    distribution). Everything it draws -- weights, KV cache, input -- comes from
+    the ambient torch RNG, so the caller controls the seed.
     """
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
@@ -334,10 +335,89 @@ def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, 
     )
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).float()
 
-    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
-    assert passing, (
-        f"Attention paged decode (layer={layer_idx}, cache_len={cache_len}, "
-        f"sliding_window={sliding_window}) PCC too low: {pcc_msg}"
+    return compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@pytest.mark.parametrize("layer_idx", [0, 5], ids=["sliding", "global"])
+@pytest.mark.parametrize("cache_len", [32, 512, 1023, 1500], ids=lambda c: f"cache{c}")
+def test_attention_decode_paged(layer_idx, cache_len, mesh_device, reset_seeds, request):
+    """Test decode attention with paged KV cache against HF reference.
+
+    Tests at various cache lengths including positions beyond the sliding window (1024).
+    At cache_len=1500 with sliding_window=1024, SDPA must correctly mask out old entries.
+    Global layers (no sliding window) should attend to all cache positions.
+
+    This is the single-seed regression guard. It is NOT sensitive enough to rank two
+    numerics configs whose difference is small compared with its own seed spread --
+    use ``test_attention_decode_paged_seed_sweep`` for that.
+    """
+    passing, pcc_msg = _decode_paged_pcc(layer_idx, cache_len, mesh_device, request)
+    assert passing, f"Attention paged decode (layer={layer_idx}, cache_len={cache_len}) PCC too low: {pcc_msg}"
+
+
+DECODE_PAGED_SWEEP_SEEDS = (213919, 1, 2, 3, 4, 5, 6, 7)
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@pytest.mark.parametrize("layer_idx", [5], ids=["global"])
+@pytest.mark.parametrize("cache_len", [512], ids=lambda c: f"cache{c}")
+def test_attention_decode_paged_seed_sweep(layer_idx, cache_len, mesh_device, reset_seeds, request):
+    """Gate decode-attention PCC on a distribution instead of a single random draw.
+
+    ``test_attention_decode_paged`` draws its weights, KV cache and input from the
+    one seed conftest pins (213919). That makes its PCC an unbiased sample of a wide
+    distribution, not a property of the numerics: measured on 26B-A4B, the spread
+    across 8 seeds is 0.0231, while changing the per-head-norm compute config moves
+    the mean by 0.0023 and flips sign on 2 of the 8. Two PRs (#55948 and its partial
+    revert #56466) were decided on that single draw.
+
+    So this reports the whole distribution and asserts its worst case. Be clear
+    about what that does and does not buy:
+
+      * It makes the spread visible in the log, so the next person comparing two
+        numerics configs can see immediately that a 0.003 difference is inside the
+        noise of this measurement and needs a different instrument.
+      * It records the tail. On 26B-A4B seed 3 scores 0.9762 -- about 0.004 BELOW
+        the single-seed test's own 0.98 gate -- which seed 213919 hides entirely.
+      * It is a floor, not a tight guard. The threshold has to sit under that
+        measured tail, so it is loose: injecting LoFi + math_approx on the decode Q
+        norm leaves the worst case at 0.9808 and passes. That is not a gap in the
+        test so much as the same fact from the other side -- this norm is only
+        8-15% of the post-norm error variance, so its precision barely moves this
+        metric in either direction. Tighten the threshold when the tail improves.
+    """
+    # Gate on the measured worst case for this (model, mesh), never on a guess:
+    # the single-seed test's threshold describes a different statistic (one draw,
+    # not the minimum of eight) and the 0.99 default would just be aspiration. A
+    # combination that has not been measured skips rather than going red.
+    threshold = get_pcc_threshold(request, default=None)
+    if threshold is None:
+        pytest.skip(
+            f"no measured worst-case-over-seeds threshold for {request.node.name} yet; "
+            "add one to pcc_thresholds.json from a recorded sweep"
+        )
+    results = {}
+    for seed in DECODE_PAGED_SWEEP_SEEDS:
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+        _, pcc_msg = _decode_paged_pcc(layer_idx, cache_len, mesh_device, request)
+        results[seed] = float(str(pcc_msg).strip().split()[-1])
+
+    worst_seed = min(results, key=results.get)
+    worst = results[worst_seed]
+    mean = sum(results.values()) / len(results)
+    spread = max(results.values()) - min(results.values())
+    logger.info(
+        f"decode paged seed sweep (layer={layer_idx}, cache_len={cache_len}): "
+        f"worst={worst:.7f} @ seed {worst_seed}, mean={mean:.7f}, spread={spread:.7f}, "
+        f"threshold={threshold} :: " + ", ".join(f"{s}={p:.7f}" for s, p in results.items())
+    )
+    assert worst >= threshold, (
+        f"Attention paged decode worst-case PCC {worst:.7f} at seed {worst_seed} is below "
+        f"{threshold} (mean {mean:.7f} over {len(results)} seeds, spread {spread:.7f}). "
+        f"Per-seed: " + ", ".join(f"{s}={p:.7f}" for s, p in results.items())
     )
 
 
