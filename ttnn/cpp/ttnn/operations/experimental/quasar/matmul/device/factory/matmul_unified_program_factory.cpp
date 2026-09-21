@@ -132,12 +132,11 @@ RingSizes size_rings(
     r.C_slice_ring_slots = C_slice_tiles;
     r.C_partials_ring_slots = C_slice_tiles;
 
-    // Copied operands: interleaved tiles live in DRAM at the DRAM-aligned stride and the reader copies at that
-    // stride (a no-op for every 32x32 format); double-buffer whenever more than one slice passes through.
-    // Borrowed operands: the ring is the resident shard itself, natural tile stride, one slot per shard tile.
+    // One ring slot per tile for every ring (a 32x32 tile of every format is a multiple of the L1 alignment).
+    // Copied operands: double-buffer whenever more than one slice passes through. Borrowed operands: the
+    // ring is the resident shard itself, one slot per shard tile.
     // A can only be borrowed when the single K chunk covers all of K; a shard too large for a TRISC ring
     // takes the copy path.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
     const bool more_than_one_slice = (uint64_t)plan.batch_size * plan.max_C_slices_per_core * r.num_K_chunks > 1;
     const uint32_t slice_ring_depth = more_than_one_slice ? 2 : 1;
     r.borrow_A = borrowable.A && r.num_K_chunks == 1 &&
@@ -145,10 +144,8 @@ RingSizes size_rings(
     r.borrow_B = borrowable.B &&
                  (uint64_t)plan.K_tiles * plan.C_slice_N_tiles * tt::tile_size(plan.B_format) <= MAX_DFB_RING_BYTES;
     r.borrow_C = borrowable.C;
-    r.A_slot_bytes =
-        r.borrow_A ? tt::tile_size(plan.A_format) : tt::align(tt::tile_size(plan.A_format), dram_alignment);
-    r.B_slot_bytes =
-        r.borrow_B ? tt::tile_size(plan.B_format) : tt::align(tt::tile_size(plan.B_format), dram_alignment);
+    r.A_slot_bytes = tt::tile_size(plan.A_format);
+    r.B_slot_bytes = tt::tile_size(plan.B_format);
     r.A_slice_ring_slots =
         r.borrow_A ? plan.C_slice_M_tiles * plan.K_tiles : plan.C_slice_M_tiles * K_chunk_tiles * slice_ring_depth;
     r.B_slice_ring_slots =

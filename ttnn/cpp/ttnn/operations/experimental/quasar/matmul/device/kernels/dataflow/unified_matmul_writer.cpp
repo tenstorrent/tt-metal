@@ -49,7 +49,8 @@ void kernel_main() {
     }
     const auto C = TensorAccessor(tensor::C);
     Noc noc;
-    const uint32_t C_tile_bytes = C_slice.get_entry_size();
+    // One ring slot per tile; a subblock sits in the ring row-major in tiles, as the compute packs it.
+    const uint32_t C_tile_bytes = get_tile_size(dfb::C_slice);
 
     for (uint32_t batch = 0; batch < batch_size; ++batch) {
         const uint32_t C_batch_first_tile = batch * C_batch_stride_tiles;
@@ -62,23 +63,30 @@ void kernel_main() {
             // Same subblock walk as the compute kernel: (m_tile, n_tile) is the subblock's first tile within
             // the C slice.
             for (uint32_t m_tile = 0; m_tile < C_slice_M_tiles; m_tile += subblock_M_tiles) {
+                // Rows of this subblock row that lie inside C (edge subblocks are clipped).
+                const uint32_t C_m_tile = C_slice_first_M_tile + m_tile;  // subblock's first row in C, in tiles
+                const uint32_t valid_subblock_M_tiles = (C_m_tile + subblock_M_tiles <= M_tiles) ? subblock_M_tiles
+                                                        : (C_m_tile < M_tiles)                   ? M_tiles - C_m_tile
+                                                                                                 : 0;
                 for (uint32_t n_tile = 0; n_tile < C_slice_N_tiles; n_tile += subblock_N_tiles) {
+                    const uint32_t C_n_tile = C_slice_first_N_tile + n_tile;  // subblock's first column in C
+                    const uint32_t valid_subblock_N_tiles = (C_n_tile + subblock_N_tiles <= N_tiles) ? subblock_N_tiles
+                                                            : (C_n_tile < N_tiles) ? N_tiles - C_n_tile
+                                                                                   : 0;
+                    // Every subblock is waited for and popped, clipped or not, so the ring's credits balance.
                     C_slice.wait_front(subblock_tiles);
-                    uint32_t slot_offset = 0;
-                    for (uint32_t subblock_m_tile = 0; subblock_m_tile < subblock_M_tiles; ++subblock_m_tile) {
-                        const uint32_t C_m_tile =
-                            C_slice_first_M_tile + m_tile + subblock_m_tile;  // tile position in C
-                        for (uint32_t subblock_n_tile = 0; subblock_n_tile < subblock_N_tiles;
-                             ++subblock_n_tile, slot_offset += C_tile_bytes) {
-                            const uint32_t C_n_tile = C_slice_first_N_tile + n_tile + subblock_n_tile;
-                            if (C_m_tile < M_tiles && C_n_tile < N_tiles) {
-                                noc.async_write(
-                                    C_slice,
-                                    C,
-                                    C_tile_bytes,
-                                    {.offset_bytes = slot_offset},
-                                    {.page_id = C_batch_first_tile + C_m_tile * N_tiles + C_n_tile});
-                            }
+                    for (uint32_t subblock_m_tile = 0; subblock_m_tile < valid_subblock_M_tiles; ++subblock_m_tile) {
+                        const uint32_t C_row_first_tile =
+                            C_batch_first_tile + (C_m_tile + subblock_m_tile) * N_tiles + C_n_tile;
+                        const uint32_t row_offset_bytes = subblock_m_tile * subblock_N_tiles * C_tile_bytes;
+                        for (uint32_t subblock_n_tile = 0; subblock_n_tile < valid_subblock_N_tiles;
+                             ++subblock_n_tile) {
+                            noc.async_write(
+                                C_slice,
+                                C,
+                                C_tile_bytes,
+                                {.offset_bytes = row_offset_bytes + subblock_n_tile * C_tile_bytes},
+                                {.page_id = C_row_first_tile + subblock_n_tile});
                         }
                     }
                     noc.async_write_barrier();
