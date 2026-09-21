@@ -73,15 +73,6 @@ jobs:
       tracy: ${{ inputs.tracy }}
       build-wheel: true
       ref: ${{ inputs.commit || github.sha }}
-      # BRANCH-LOCAL: pinned so FIBO perf dispatches from this ref never compile. Run 34235649465
-      # is the scheduled main "(Galaxy) Sanity" build of this branch's merge-base with main
-      # (27f21ddc2c2869ea10b2085f2e74c1177f5d1dad); FIBO is Python-only under models/, taken from
-      # the checkout, so building it again would be pure latency. Pinning (rather than taking the
-      # newest green build) keeps successive perf runs comparable: the ttnn under test is fixed.
-      # Hardcoded rather than exposed as a dispatch input on purpose: main's copy of this workflow
-      # has no such input, and inputs may be validated against the default branch.
-      # Artifacts expire 2026-12-07. Revert this file once a dedicated fibo-perf.yaml lands on main.
-      use-artifacts-from-run: "34235649465"
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -99,22 +90,11 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
-        # BRANCH-LOCAL: cache on container-local disk, NOT the shared share. The other perf tests
-        # point HF_HUB_CACHE at /mnt/MLPerf/huggingface/hub and run HF_HUB_OFFLINE=1 against weights
-        # staged there out of band, but briaai/FIBO is not staged and cannot be: the host mounts
-        # that Weka filesystem read-only (`wekafs (ro,relatime,...)`), so no CI job can populate it
-        # whatever the docker bind flag says. Until infra stages FIBO, each run re-downloads 25.6 GB
-        # to ephemeral local disk. HF_HUB_OFFLINE stays unset (i.e. online) so that can happen.
-        HF_HOME: /tmp/hf
-        HF_HUB_CACHE: /tmp/hf/hub
-        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - ${{ !contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G' || '/nohugepages:/nohugepages' }}
         - ${{ !contains(inputs.runner-label, 'tt-ubuntu-2204') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
-      # --privileged -v /sys:/sys matches models-e2e-tests-impl.yaml; multi-chip meshes (Galaxy,
-      # QuietBox) need the sysfs topology that a bare --device mount does not expose.
-      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
+      options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
