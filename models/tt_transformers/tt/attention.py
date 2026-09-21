@@ -651,10 +651,9 @@ class Attention(LightweightModule):
         return q_heads_1BQD, k_heads_1BKD
 
     def _mllama_rope_fused_qk_decode(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats, current_pos):
-        q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD = self.to_qk_fused_memory_config(
-            q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD
-        )
-
+        # nlp_create_qkv_heads_decode already placed Q and K on disjoint core grids
+        # (overlap_qk_coregrid=False), which is exactly what the fused QK rotary kernel
+        # requires, so the two to_memory_config reshards are no longer needed.
         q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
         )
@@ -816,6 +815,7 @@ class Attention(LightweightModule):
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
+            overlap_qk_coregrid=not self.use_qk_fused,
             memory_config=self.args.get_attn_create_head_output_mem_config(Mode.DECODE, self.prefetcher),
         )
         norm_config = self.args.get_norm_config("attn", Mode.DECODE, None)
