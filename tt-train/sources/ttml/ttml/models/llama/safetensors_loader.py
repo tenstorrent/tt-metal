@@ -280,8 +280,8 @@ def _check_coverage(parameter_names: set[str], rules: Sequence[_Rule], checkpoin
     detail += "".join(line(f"fed by {feeders[name]} rules", name) for name in contested)
     raise RuntimeError(
         f"the loader and this Llama disagree about its parameters:{detail}\n"
-        f"Update _rules() in {Path(__file__).name} to match the model; a weight_tying or attention_bias "
-        f"mismatch between the LlamaConfig and the model also lands here."
+        f"Update _rules() in {Path(__file__).name} to match the model; a weight_tying mismatch between "
+        f"the LlamaConfig and the model also lands here."
     )
 
 
