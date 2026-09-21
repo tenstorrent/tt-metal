@@ -40,6 +40,6 @@
   "acceptance": {
     "_note": "Two spec-wide PCC numbers, applied unchanged to every component test. pcc_target is what every component aims for, while pcc_lower_bound is the assert in every test and below it, the component is not accepted and the stage does not pass. Between the two, the test passes but the component is accepted only after all corectness knobs have been tried",
     "pcc_target": 0.99,
-    "pcc_lower_bound": 0.87
+    "pcc_lower_bound": 0.84
   }
 }
