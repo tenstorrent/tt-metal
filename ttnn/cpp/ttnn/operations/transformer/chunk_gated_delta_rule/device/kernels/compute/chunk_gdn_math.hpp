@@ -594,8 +594,30 @@ inline void prep_chunk(const GdnPrepCbs& cb, uint32_t scale_bits, uint32_t eps_b
         // Diagonal inverses Mi11, Mi22, then off-diagonal Mi21 = -Mi22 @ A21 @ Mi11.
         // (A21 = -negN21, so -Mi22@A21@Mi11 = Mi22 @ negN21 @ Mi11.)
         // Mi11 -> cb.supd, Mi22 -> cb.stmp, Mi21 -> cb.ointer (all free in prep).
-        invert_block(cb.scr3, 0, cb.supd, cb.scr1, cb.scr2, cb.eye, cb.mask, cb.S, cb.final_s, cb.s2, cb.s3);  // Mi11
-        invert_block(cb.scr3, 3, cb.stmp, cb.scr1, cb.scr2, cb.eye, cb.mask, cb.S, cb.final_s, cb.s2, cb.s3);  // Mi22
+        // Mi11 -> cb.supd (negN tile 0), Mi22 -> cb.stmp (negN tile 3). ONE inlined invert_block body
+        // serves both through a 2-iteration loop the compiler must not unroll: inlining it twice
+        // put the Ct==2 prep program over the kernel-config buffer (70752 > 70656 B on QB2), and the
+        // LLK's inline asm forbids the out-of-line (noinline / -Os) alternatives. Same ops, same
+        // order, same pack boundaries -> bit-exact with the unrolled form.
+        {
+            const uint32_t neg_tile[2] = {0, 3};
+            const uint32_t inv_out[2] = {cb.supd, cb.stmp};
+#pragma GCC unroll 1
+            for (uint32_t i = 0; i < 2; i++) {
+                invert_block(
+                    cb.scr3,
+                    neg_tile[i],
+                    inv_out[i],
+                    cb.scr1,
+                    cb.scr2,
+                    cb.eye,
+                    cb.mask,
+                    cb.S,
+                    cb.final_s,
+                    cb.s2,
+                    cb.s3);
+            }
+        }
         cpy_t(cb.scr3, 2, cb.scr1);  // negN21 -> cb.scr1[0]
         WAIT(cb.scr1, 1);
         mm(cb.scr1, cb.supd, cb.scr2, 1, 1, 1, false);  // tmp = negN21 @ Mi11
