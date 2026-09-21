@@ -94,7 +94,7 @@ def build_snapshot(manifest, samples, provenance, captured_at=None, raw=None):
 
     snapshot = {
         "snapshot_version": SNAPSHOT_VERSION,
-        "kind": "fabric_debug_snapshot",
+        "kind": "fabric_snapshot",
         "captured_at": captured_at if captured_at is not None else utc_timestamp(),
         "manifest": {
             "path": str(manifest.path),

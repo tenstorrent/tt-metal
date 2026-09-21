@@ -29,13 +29,13 @@ Python 3.10+ and `jsonschema` are enough for the offline tests. Live capture add
 
 Capture never invents topology. It requires:
 
-1. **A fabric debug manifest** written by each MPI rank to disk after fabric routers reach `READY_FOR_TRAFFIC`. Each MPI rank writes:
-  `<logs_dir>/generated/fabric/fabric_debug_manifest_rank_<rank+1>_of_<world_size>.json`
+1. **A fabric manifest** written by each MPI rank to disk after fabric routers reach `READY_FOR_TRAFFIC`. Each MPI rank writes:
+  `<logs_dir>/generated/fabric/fabric_manifest_rank_<rank+1>_of_<world_size>.json`
    `logs_dir` is the process CWD unless `TT_METAL_LOGS_PATH` is set. The file lists meshes, chips, directed links, HAL/builder addresses, and the ethernet cores that are actually fabric routers (`is_local`, `physical_chip_id`, `asic_id`, `eth_chan`, logical/translated coordinates). Remote chips appear for topology but are not peek targets on this host. File present means the last fabric init in this cwd completed router sync.
 2. **The JSON schemas** in `schema/`. These are the stability boundary for the tool — consumers depend on `manifest_version` / `snapshot_version` and the documented shapes, not on ControlPlane C++ signatures.
-  - `schema/fabric_debug_manifest_schema.json` — topology artifact from fabric init
-  - `schema/fabric_debug_snapshot_schema.json` — live peek artifact from capture
-  - `schema/fabric_debug_decoded_schema.json` — typed offline state from decode
+  - `schema/fabric_manifest_schema.json` — topology artifact from fabric init
+  - `schema/fabric_snapshot_schema.json` — live peek artifact from capture
+  - `schema/fabric_snapshot_decoded_schema.json` — typed offline state from decode
 
 A snapshot copies the manifest's `run` identity (`arch`, `fabric_config`, `host_rank`, `mpi_rank`, `world_size`) and records `manifest.sha256` of the file bytes as read. That hash is how a snapshot pairs to a manifest after files have been copied and renamed. `run.written_at` stays on the manifest only. `host_rank` is the mesh-graph slice; `mpi_rank` is the MPI process. They are not always the same.
 
@@ -48,15 +48,15 @@ On a multi-host cluster, run capture once per host against that host's manifest.
 ```bash
 # from the tt-metal repo root
 python3 tt_metal/fabric/debug/visualizer/capture/cli.py \
-  --manifest generated/fabric/fabric_debug_manifest_rank_1_of_1.json \
-  -o generated/fabric/fabric_debug_snapshot_rank_1_of_1.json
+  --manifest generated/fabric/fabric_manifest_rank_1_of_1.json \
+  -o generated/fabric/fabric_snapshot_rank_1_of_1.json
 ```
 
 `--manifest` and `--output` are both required. Capture does not search `generated/fabric/` for a default file.
 
 Internally the CLI is a thin wrap around four modules:
 
-- `manifest.py` loads the JSON, checks that it is a v1 `fabric_debug_manifest`, and enumerates this host's peek targets: chips with `is_local: true`, each with a `physical_chip_id`, one target per `(mesh_id, chip_id, eth_chan)`. Duplicate endpoints are an error. Each local router must name a `layout_id` that exists in `manifest.layouts`. Remote chips stay in the file for later drawing; they are not read here. `router_layout` / `stream_regs_for_router` look up that interned region tree (allocated overlay stream ids by default; `enabled_only=True` restricts to enabled).
+- `manifest.py` loads the JSON, checks that it is a v1 `fabric_manifest`, and enumerates this host's peek targets: chips with `is_local: true`, each with a `physical_chip_id`, one target per `(mesh_id, chip_id, eth_chan)`. Duplicate endpoints are an error. Each local router must name a `layout_id` that exists in `manifest.layouts`. Remote chips stay in the file for later drawing; they are not read here. `router_layout` / `stream_regs_for_router` look up that interned region tree (allocated overlay stream ids by default; `enabled_only=True` restricts to enabled).
 - `peek.py` uses ttexalens on those targets only. It joins chips by the manifest's ASIC unique id (`physical_chip_id` is only a cross-check), checks that `eth_chan` resolves to the expected logical ethernet core, then reads reset bits, lifecycle words, overlay streams, and chunked HAL-region blobs (`unreserved`, `fabric_telemetry`, `routing_table`, `go_msg`, `launch`). Streams are the layout's allocated ids (`--streams all` reads 0–31). They are read before and after the HAL image; a moved value sets `streams.torn` and router `status` `torn` unless a higher-priority status applies. Before the main pass it samples every router's heartbeat and wall clock in fleet-wide rounds (`--liveness-samples`, `--liveness-interval`). Overlay register indices come from `run.arch`; using the wrong architecture would read a real but unrelated register.
 - `rawfile.py` concatenates those blobs into a sibling `.bin` (`tmp` + rename). The snapshot JSON names the file, its size, and its SHA-256; each router blob entry stores `offset` / `sha256` into that sidecar. JSON is written last so a snapshot on disk always has its bytes.
 - `snapshot.py` packages peek samples into the snapshot object: file `captured_at`, manifest identity plus the manifest byte `sha256`, capture-tool/host provenance, the `.bin` sidecar reference, and one `samples[]` entry. Router `status` is one of `ok`, `unreadable`, `reset`, `torn`, `unknown`, or `unsupported`; raw values remain present when only part of a router was readable.
@@ -66,12 +66,12 @@ A typical hang is assumed to leave fabric mostly stuck, so snapshots taken a bit
 
 ### Decode tool
 
-`decode/cli.py` is offline. It never talks to a device. Pair snapshots to manifests by `manifest.sha256` (not by filename), merge one owner per router, and write one `fabric_debug_decoded` JSON (`tmp` + rename).
+`decode/cli.py` is offline. It never talks to a device. Pair snapshots to manifests by `manifest.sha256` (not by filename), merge one owner per router, and write one `fabric_snapshot_decoded` JSON (`tmp` + rename).
 
 ```bash
 python3 tt_metal/fabric/debug/visualizer/decode/cli.py \
   generated/fabric \
-  -o generated/fabric/fabric_debug_decoded.json
+  -o generated/fabric/fabric_snapshot_decoded.json
 ```
 
 Pass directories or individual JSON files. `--slots none` skips packet-header decode (Galaxy size control); ring summaries still include occupancy counts from streams. `--expert-raw` embeds hex for captured regions up to 64 bytes. `--allow-manifest-mismatch` pairs by run identity when the exact hash is unavailable.
@@ -111,10 +111,10 @@ print("READY", flush=True)
 while True:
     time.sleep(30)
 PY
-# after generated/fabric/fabric_debug_manifest_rank_1_of_1.json appears:
+# after generated/fabric/fabric_manifest_rank_1_of_1.json appears:
 python3 tt_metal/fabric/debug/visualizer/capture/cli.py \
-  --manifest generated/fabric/fabric_debug_manifest_rank_1_of_1.json \
-  -o generated/fabric/fabric_debug_snapshot_rank_1_of_1.json
+  --manifest generated/fabric/fabric_manifest_rank_1_of_1.json \
+  -o generated/fabric/fabric_snapshot_rank_1_of_1.json
 kill -9 <owner-pid>
 # capture again to the same flags, different -o
 ```
@@ -140,7 +140,7 @@ Decode of those same artifacts (`slice_e_live.json` / `slice_e_killed.json`, 202
 
 ### Viewer
 
-The viewer is a static page. It never talks to a device, ttexalens, or MPI, and it does not re-derive topology, credit polarity, or occupancy. Open one `kind: fabric_debug_decoded` file (`decoded_version: 1`) via the file picker, or serve the folder and choose a committed fixture.
+The viewer is a static page. It never talks to a device, ttexalens, or MPI, and it does not re-derive topology, credit polarity, or occupancy. Open one `kind: fabric_snapshot_decoded` file (`decoded_version: 1`) via the file picker, or serve the folder and choose a committed fixture.
 
 ```bash
 # from the tt-metal repo root
@@ -173,7 +173,7 @@ idle T3K shows empty senders and open edges.
 
 ```bash
 python3 tt_metal/fabric/debug/visualizer/decode/cli.py \
-  generated/fabric/slice_e_live.json generated/fabric/fabric_debug_manifest_rank_1_of_1.json \
+  generated/fabric/slice_e_live.json generated/fabric/fabric_manifest_rank_1_of_1.json \
   -o /tmp/decoded_slice_e_live.json
 python3 tt_metal/fabric/debug/visualizer/viewer/serve.py
 # pick /tmp/decoded_slice_e_live.json

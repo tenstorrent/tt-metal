@@ -5,6 +5,7 @@
 #pragma once
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
+#include "tt_metal/fabric/builder/fabric_manifest_router_instance.hpp"
 #include "core_coord.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "impl/context/metal_context.hpp"
@@ -21,14 +22,6 @@ struct LocalTensixRelayConnectionInfo {
     size_t worker_location_info_address = 0;
     size_t free_slots_stream_id = 0;
     bool is_connected = false;
-};
-
-// Information about a downstream sender channel that a receiver channel would send data to.
-struct DownstreamSlotManifestInfo {
-    // The cardinal direction of the router that the downstream sender channel is on.
-    eth_chan_directions direction = eth_chan_directions::EAST;
-    // The absolute sender channel index of the downstream sender channel.
-    uint32_t sender_channel = 0;
 };
 
 struct SenderWorkerAdapterSpec {
@@ -138,7 +131,7 @@ public:
     uint32_t get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const override;
 
     // Returns information about the downstream sender channel that a VC's receiver buffer forwards to.
-    DownstreamSlotManifestInfo get_downstream_slot_manifest_info(uint32_t vc_idx, size_t compact_idx) const;
+    std::vector<ManifestDownstreamEdge> build_manifest_downstream_edges(uint32_t vc_idx) const;
 
     // Get buffer index semaphore address for a specific VC and compact index
     std::optional<size_t> get_buffer_index_semaphore_address(uint32_t vc_idx, size_t compact_idx) const {
