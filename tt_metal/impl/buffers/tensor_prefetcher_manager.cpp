@@ -605,10 +605,17 @@ void TensorPrefetcherManager::build_and_launch_programs(
             const bool controls_ordinary_mpfe = mpfe_policy.has_value() && s == bank_sender_base;
             uint32_t own_mpfe_port = 0;
             uint32_t ordinary_mpfe_port = 0;
+            uint32_t own_active_mpfe_weight = 0;
+            uint32_t ordinary_mpfe_weight = 0;
+            bool dynamic_mpfe_weighting = false;
             if (mpfe_policy.has_value()) {
                 const uint32_t free_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base]);
                 const uint32_t noc1_sender_port = get_mpfe_port(soc_desc, sender_logical_cores_[bank_sender_base + 1]);
                 own_mpfe_port = controls_ordinary_mpfe ? free_sender_port : noc1_sender_port;
+                own_active_mpfe_weight =
+                    controls_ordinary_mpfe ? mpfe_policy->active.free_sender : mpfe_policy->active.noc1_sender;
+                ordinary_mpfe_weight = mpfe_policy->active.ordinary;
+                dynamic_mpfe_weighting = mpfe_policy->dynamic;
                 // Logical DRAM y=0 is the harvest-stable NOC0 worker-endpoint role, not raw
                 // hardware subchannel 0. get_mpfe_port resolves that role through this device's
                 // physical subchannel and maps hardware subchannels 0..2 to MPFE P1..P3.
@@ -623,11 +630,9 @@ void TensorPrefetcherManager::build_and_launch_programs(
                 cq_signal_l1_addr_,
                 cq_signal_slot_stride_,
                 static_cast<uint32_t>(controls_ordinary_mpfe),
-                mpfe_policy.has_value()
-                    ? (controls_ordinary_mpfe ? mpfe_policy->active.free_sender : mpfe_policy->active.noc1_sender)
-                    : 0,
-                mpfe_policy.has_value() ? mpfe_policy->active.ordinary : 0,
-                mpfe_policy.has_value() ? static_cast<uint32_t>(mpfe_policy->dynamic) : 0,
+                own_active_mpfe_weight,
+                ordinary_mpfe_weight,
+                static_cast<uint32_t>(dynamic_mpfe_weighting),
                 static_cast<uint32_t>(mpfe_policy.has_value()),
             };
 
