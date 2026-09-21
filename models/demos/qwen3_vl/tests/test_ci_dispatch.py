@@ -14,11 +14,9 @@ from models.tt_transformers.tt.common import get_hf_tt_cache_path
     "model_weights",
     [
         "Qwen/Qwen3-VL-32B-Instruct",
-        "briaai/FIBO-vlm",
     ],
     ids=[
         "qwen3_vl-32B",
-        "fibo-vlm",
     ],
 )
 def test_ci_dispatch(model_weights):

@@ -20,7 +20,6 @@ class VisionAttention(LightweightModule):
         self,
         x,
         rot_mats,
-        cu_window_seqlens=None,
         user_id=0,
         page_table=None,
         chunk_page_table=None,
@@ -29,7 +28,6 @@ class VisionAttention(LightweightModule):
         return self.forward_prefill(
             x,
             rot_mats=rot_mats,
-            cu_window_seqlens=cu_window_seqlens,
             user_id=user_id,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
@@ -356,7 +354,6 @@ class VisionAttention(LightweightModule):
         self,
         x_11SH,
         rot_mats,
-        cu_window_seqlens=None,
         user_id: int = 0,
         page_table=None,
         chunk_page_table=None,
@@ -483,7 +480,6 @@ class VisionAttention(LightweightModule):
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
-                cu_window_seqlens=cu_window_seqlens,
             )
 
         # deallocate keys and values

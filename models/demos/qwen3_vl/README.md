@@ -3,8 +3,6 @@
 ## Introduction
 This codebase includes the Qwen3 family of models and currently supports the model variants:
 - Qwen3-VL-32B: [Qwen/Qwen3-VL-32B](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct)
-- FIBO-vlm: [briaai/FIBO-vlm](https://huggingface.co/briaai/FIBO-vlm), a Qwen3-VL-4B-shaped model that turns a
-  natural-language prompt into the structured JSON prompt consumed by BRIA's FIBO text-to-image model
 
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
@@ -30,7 +28,6 @@ MESH_DEVICE=<device_name> HF_MODEL=<model_name> pytest models/demos/qwen3_vl/dem
 | Model Variant      | `<model_name>` (HF_MODEL)                   | `<device_name>` (MESH_DEVICE) |
 |--------------------|---------------------------------------------|-------------------------------|
 | Qwen3-VL-32B     | Qwen/Qwen3-VL-32B-Instruct                | `T3K`                         |
-| FIBO-vlm         | briaai/FIBO-vlm                           | `N150`, `N300`, `T3K`         |
 
 ## Details
 - On the first execution of each model, TTNN will create weight cache files for that model, to speed up future runs.
