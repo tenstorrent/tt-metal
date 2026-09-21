@@ -8,6 +8,7 @@ set(UNIT_TESTS_DISPATCH_SMOKE_SOURCES
     dispatch_program/test_dispatch_stress.cpp
     dispatch_program/test_sub_device.cpp
     dispatch_program/test_kernel_config_buffer.cpp
+    dispatch_util/test_eth_dispatch_core_descriptor.cpp
     # Host-only (no-silicon) suites; their test cases carry the CPU_ prefix and run
     # on the github_hosted_cpu leg of the smoke pipeline instead of device runners.
     dispatch_buffer/test_BufferCorePageMapping_Iterator.cpp
