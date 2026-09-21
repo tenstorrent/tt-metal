@@ -15,8 +15,8 @@
 #include <vector>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <stdexcept>
-#include <queue>
 #include <unordered_map>
 #include <filesystem>
 #include <fstream>
@@ -25,7 +25,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/llrt/rtoptions.hpp"
 
 namespace tt::tt_fabric {
 
