@@ -44,4 +44,7 @@ class Packer(BasePacker):
         config: GlobalConfig,
         block: BlockData,
     ) -> str:
-        return f"_llk_pack_({block.tile_id_dest}, {block.tile_id_out}, ckernel::DEFAULT_TENSOR_SHAPE);\n"
+        tensor_shape = pack_node.output.tile_shape.cpp_value
+        return (
+            f"_llk_pack_({block.tile_id_dest}, {block.tile_id_out}, {tensor_shape});\n"
+        )

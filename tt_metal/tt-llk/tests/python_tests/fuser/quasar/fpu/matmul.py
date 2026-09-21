@@ -36,10 +36,12 @@ class MatmulFpu(Fpu):
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         rt_dim = block.block_rows
         ct_dim = block.block_cols
+        src_b_shape = compute_unit.src_a.tile_shape.cpp_value
+        src_a_shape = compute_unit.src_b.tile_shape.cpp_value
 
         return (
             f"// Operation {stage}: Matmul FPU\n"
-            f"_llk_math_matmul_init_<{math_fidelity}>({ct_dim}, {rt_dim});\n"
+            f"_llk_math_matmul_init_<{math_fidelity}>({ct_dim}, {rt_dim}, {src_b_shape}, {src_a_shape});\n"
         )
 
     def calculate(

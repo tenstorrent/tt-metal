@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from helpers.chip_architecture import ChipArchitecture
 from helpers.golden_generators import EltwiseBinaryGolden, get_golden_generator
-from helpers.llk_params import AccToDest, EltwiseBinaryReuseDestType
+from helpers.llk_params import AccToDest, EltwiseBinaryReuseDestType, MathOperation
 
 from ..state import tile_dimensions
 
@@ -18,10 +19,14 @@ def _eltwise(call, state, node, operation, config, force_accumulate):
         tensor_dst = state.dest.get(tile.dest) if accumulate or reuse_dest else None
         if node.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA:
             tensor_a = tensor_dst
-            accumulate = False
         elif node.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCB:
             tensor_b = tensor_dst
-            accumulate = False
+        if reuse_dest:
+            accumulate = (
+                config.architecture == ChipArchitecture.QUASAR
+                and node.fpu.operation != MathOperation.Elwmul
+                and node.acc_to_dest == AccToDest.Yes
+            )
         if tensor_a is None:
             tensor_a = torch.zeros(dimensions)
         if tensor_b is None:

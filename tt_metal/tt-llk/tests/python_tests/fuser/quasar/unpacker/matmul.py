@@ -64,6 +64,8 @@ class MatmulUnpacker(Unpacker):
         ) + compute_unit.src_b.bfd_alloc_and_program(BfdResource.UNP0)
         id_a = bfd_current(BfdResource.UNP1)
         id_b = bfd_current(BfdResource.UNP0)
+        src_b_shape = compute_unit.src_a.tile_shape.cpp_value
+        src_a_shape = compute_unit.src_b.tile_shape.cpp_value
         rt_dim = block.block_rows
         ct_dim = block.block_cols
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
@@ -71,7 +73,7 @@ class MatmulUnpacker(Unpacker):
 
         return (
             bfd_program + f"_llk_unpack_matmul_init_<false>"
-            f"({id_a}, {id_b}, {ct_dim}, {rt_dim}, {kt_dim});\n"
+            f"({id_a}, {id_b}, {ct_dim}, {rt_dim}, {kt_dim}, {src_b_shape}, {src_a_shape});\n"
         )
 
     def unpack(
@@ -83,6 +85,8 @@ class MatmulUnpacker(Unpacker):
     ) -> str:
         rt_dim = block.block_rows
         ct_dim = block.block_cols
+        src_b_shape = compute_unit.src_a.tile_shape.cpp_value
+        src_a_shape = compute_unit.src_b.tile_shape.cpp_value
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
         full_ct_dim = (
@@ -95,7 +99,7 @@ class MatmulUnpacker(Unpacker):
             f"    for (std::uint32_t kt = 0; kt < {kt_dim}; ++kt) {{\n"
             f"        std::uint32_t srca_tile_idx = ({block.tile_id_src_a}) + kt;\n"
             f"        std::uint32_t srcb_tile_idx = ({block.tile_id_src_b}) + kt * {full_ct_dim};\n"
-            f"        _llk_unpack_matmul_({ct_dim}, {rt_dim}, {kt_dim}, srca_tile_idx, srcb_tile_idx);\n"
+            f"        _llk_unpack_matmul_({ct_dim}, {rt_dim}, {kt_dim}, srca_tile_idx, srcb_tile_idx, {src_b_shape}, {src_a_shape});\n"
             f"    }}\n"
             f"}}\n"
         )

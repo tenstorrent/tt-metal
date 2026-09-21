@@ -35,6 +35,10 @@ class ReduceFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        integer = compute_unit.src_a.data_format.is_integer()
+        if integer and not config.dest_acc.value:
+            raise ValueError("Quasar integer Reduce requires dest_acc: true")
+        is_int_fpu_en = str(integer).lower()
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
@@ -42,7 +46,7 @@ class ReduceFpu(Fpu):
         reduce_dim_cpp = self.reduce_dim.cpp_enum_value
         return (
             f"// Operation {stage}: Reduce {reduce_dim_cpp} FPU\n"
-            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}>"
+            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}>"
             f"({compute_unit.src_a.tile_shape.cpp_value});\n"
         )
 
@@ -53,10 +57,11 @@ class ReduceFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        is_int_fpu_en = str(compute_unit.src_a.data_format.is_integer()).lower()
         pool_type_cpp = self.reduce_pool.cpp_enum_value
         reduce_dim_cpp = self.reduce_dim.cpp_enum_value
         return (
-            f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}>"
+            f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {is_int_fpu_en}>"
             f"({block.tile_id_dest}, {compute_unit.src_a.tile_shape.cpp_value});\n"
         )
 

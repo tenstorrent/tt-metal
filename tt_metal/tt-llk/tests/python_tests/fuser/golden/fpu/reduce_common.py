@@ -7,7 +7,7 @@ from helpers.golden_generators import (
     ReduceGolden,
     get_golden_generator,
 )
-from helpers.llk_params import ReduceDimension, ReducePool
+from helpers.llk_params import DataFormat, ReduceDimension, ReducePool
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 from ..state import tile_dimensions
@@ -15,6 +15,8 @@ from ..state import tile_dimensions
 
 def reduce_tile(tensor_a, tensor_b, config, operation, node, block_max=False):
     output_format = config.sentinel.golden_math_format
+    if config.dest_acc.value and output_format.is_integer():
+        output_format = DataFormat.Int32
     tile_shape = operation.tile_shape
     tile_dims = tile_dimensions(tile_shape)
     num_faces = tile_shape.total_num_faces()

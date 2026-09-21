@@ -54,4 +54,6 @@ class TransposeDestFpu(Fpu):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        return ""
+        en_32bit_dest = config.dest_acc.cpp_enum_value
+        math_format = config.sentinel._math_format.cpp_enum_value
+        return f"_configure_default_alu_data_format_state_<true, {en_32bit_dest}>({math_format}, {math_format});\n"
