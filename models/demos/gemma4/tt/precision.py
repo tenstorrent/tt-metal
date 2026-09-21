@@ -241,8 +241,13 @@ class Gemma4Precision:
         #
         # So shared_mlp is the module that cannot hold bfp8 at very long context,
         # and attention can -- keeping it quantized is both faster and closer to
-        # the <=128k configuration. 128k is coherent with BOTH in bfp8, so the
-        # ceiling sits between 131072 and 262144.
+        # the <=128k configuration. 128k is coherent with BOTH in bfp8.
+        #
+        # The ceiling is 262144 (not 131072): downgrading shared_mlp to bf16 at
+        # 256k ISL OOMs on WH T3K during KV init (~972 MB/bank already used by
+        # weights; bf16 shared_mlp + 4096-block full-attention pools do not fit).
+        # Main kept bfp8 through 256k; ISL sweep long-context-256k regressed when
+        # create_tt_model started passing max_seq_len here with a 128k ceiling.
         #
         # This was invisible for months because a path-resolution bug (fixed in
         # a73264153281) made snapshot-style model paths miss the override table

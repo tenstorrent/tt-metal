@@ -60,11 +60,11 @@ def test_ccl_topology_linear_on_wh_8_device_mesh_moe(monkeypatch):
     assert default_ccl_topology(_FakeMesh(8), is_moe=True) == ttnn.Topology.Linear
 
 
-def test_ccl_topology_ring_on_wh_8_device_mesh_dense(monkeypatch):
-    """WH T3K 1x8, dense (31B): Ring beats Linear on the decode all-reduce."""
+def test_ccl_topology_linear_on_wh_8_device_mesh_dense(monkeypatch):
+    """WH T3K 1x8, dense (31B): keep Linear — Ring regresses full-model PCC."""
     monkeypatch.delenv("GEMMA4_CCL_TOPOLOGY", raising=False)
     monkeypatch.setattr("models.demos.gemma4.tt.ccl.is_blackhole", lambda: False)
-    assert default_ccl_topology(_FakeMesh(8), is_moe=False) == ttnn.Topology.Ring
+    assert default_ccl_topology(_FakeMesh(8), is_moe=False) == ttnn.Topology.Linear
 
 
 def test_ccl_topology_env_override_beats_device_count(monkeypatch):

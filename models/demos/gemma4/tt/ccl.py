@@ -241,20 +241,13 @@ def default_ccl_topology(mesh_device=None, is_moe: bool = False):
     Override with ``GEMMA4_CCL_TOPOLOGY=ring|linear``.
 
     Policy (when env unset):
-      * **Ring** on **Blackhole** meshes with **≥8 devices** (Ring+sync beat
-        Linear+sync on the P150x8 TTFT sweep at 31B/128k).
-      * **Ring** on **Wormhole** meshes with **≥8 devices** for **dense**
-        models: on the 31B decode all-reduce Ring beats Linear, and sync beats
-        async in every arm. Opening the mesh with ``FABRIC_1D_RING`` instead of
-        ``FABRIC_1D`` buys almost nothing further, so the topology is taken
-        under plain ``FABRIC_1D`` and no harness device_params change is needed.
-        ``num_links=2`` is NOT usable here — it raises "Event Order Issue:
-        expected to read back completion signal for event 27 but got 14" (see
-        default_num_links).
-      * **Linear** for **MoE** models on WH: Ring drops 26B-A4B
-        ``test_full_model`` PCC below its TEMP 0.76 gate, Linear clears it.
-      * **Linear** everywhere else. Ring on 4-device BH drops 12B full-model
-        PCC well below the Linear result.
+      * **Ring** only on **Blackhole** meshes with **≥8 devices** (P150x8 TTFT
+        sweep: Ring+sync ~28.8s vs Linear+sync ~31.0s @ 31B/128k).
+      * **Linear** everywhere else — including Wormhole T3K 1x8. Ring on WH
+        drops ``test_full_model`` PCC (31B ~0.89 vs ~0.98; 26B-A4B below the
+        0.76 gate). Set ``GEMMA4_CCL_TOPOLOGY=ring`` explicitly to re-sweep
+        decode all-reduce perf on WH dense models.
+      * Ring on 4-device BH also drops 12B full-model PCC (~0.97 → ~0.90).
     """
     override = os.environ.get("GEMMA4_CCL_TOPOLOGY", "").strip().lower()
     if override in ("ring", "r"):
@@ -263,13 +256,11 @@ def default_ccl_topology(mesh_device=None, is_moe: bool = False):
         return ttnn.Topology.Linear
 
     n = mesh_device.get_num_devices() if mesh_device is not None else 0
+    # Ring TTFT win was swept on BH P150x8 only. WH T3K is also n=8 but must
+    # stay Linear for full-model PCC (matches main's hardcoded Linear all-reduce).
     if n:
-        if n >= 8 and not is_moe:
-            if is_blackhole():
-                return ttnn.Topology.Ring
-            model = os.environ.get("HF_MODEL", "").lower()
-            if "31b" in model:
-                return ttnn.Topology.Ring
+        if n >= 8 and is_blackhole():
+            return ttnn.Topology.Ring
         return ttnn.Topology.Linear
 
     try:

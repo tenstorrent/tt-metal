@@ -21,7 +21,7 @@
       "lm_head": "bfp8"
     },
     "bfp8_max_context": {
-      "shared_mlp": 131072
+      "shared_mlp": 262144
     }
   },
   "gemma-4-12B-it": {
