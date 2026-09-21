@@ -320,7 +320,9 @@ the only steady variant (<1% vs 15–28% noise) because its per-axis fan-in stay
 tile-index `reduce_scatter_mcast` wins instead (**~2×** over root) by parallelizing across tiles;
 at **1 tile/core** tree reduce wins again (low fan-in; reduce-scatter degenerates to one worker).
 Rule of thumb: **tree reduce when the grid is busy or the payload is tiny; tile-index reduce-scatter
-for an isolated, well-fed group.** On a 1-D group tree reduce collapses to the single root reduce.
+for an isolated, well-fed group.** On a 1-D group there is only one row, so the tree's first stage has
+nothing to do: every core sends its partial to one root, the root reduces and multicasts the result back.
+That root reduce plus one multicast back is still the recommended shape for a 1-D line with a tiny payload.
 **It is also robust to ragged splits, which is the normal case:** `num_tiles` need not divide the worker
 count, and a ragged split measures on the same curve as an even one (a ragged 20-tiles-over-8 point lands
 on the straight line through its even 16 and 24 neighbours, well inside run-to-run spread). Two properties
