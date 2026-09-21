@@ -28,6 +28,11 @@
  * @brief Synchronously copy @p n_bytes already resident in this core's L1 from @p src_l1_addr to
  *        @p dst_l1_addr with a scalar RISC copy (no NoC).
  *
+ * On return the copied bytes are globally visible. The trailing `fence` is required because these
+ * stores go through the uncached L1 alias and a DFB `push_back()` only posts the credit — without it
+ * a consumer could observe the credit before the relocated bytes have landed. `volatile` prevents
+ * compiler elision but does not provide that hardware ordering.
+ *
  * @param dst_l1_addr Destination L1 address.
  * @param src_l1_addr Source L1 address; the read that produced it must already be barriered.
  * @param n_bytes     Number of bytes to copy.
@@ -48,6 +53,8 @@ inline void local_l1_copy(uint32_t dst_l1_addr, uint32_t src_l1_addr, uint32_t n
             dst_b[i] = src_b[i];
         }
     }
+    // Order the uncached-alias stores above ahead of whatever posts the DFB credit next.
+    __asm__ __volatile__("fence" ::: "memory");
 }
 
 #endif  // ARCH_QUASAR
