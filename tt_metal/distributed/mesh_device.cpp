@@ -371,10 +371,13 @@ MeshDeviceImpl::MeshDeviceImpl(
     dispatch_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
-    Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
     const auto& mpi_context = metal_env().get_control_plane().get_distributed_context(view_->mesh_id());
     distributed_context_ =
         mpi_context->split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context->rank()));
+    // Register with the Inspector only once all the throwing work above has succeeded. Inspector stores a
+    // raw MeshDeviceImpl pointer that Data::rpc_get_mesh_devices later dereferences, so registering first
+    // would leave a dangling entry behind if the constructor threw.
+    Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
 }
 
 MetalContext& MeshDeviceImpl::metal_context() const { return *metal_context_; }
