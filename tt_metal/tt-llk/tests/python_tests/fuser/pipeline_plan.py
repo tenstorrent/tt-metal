@@ -222,6 +222,11 @@ def apply_index_spec(plan: LoopPlan, index_spec: "IndexesSchema") -> LoopPlan:
     slots = dict(plan.slots)
     origins = dict(plan.origins)
     declared = {level.var for level in plan.bank_levels + plan.call_levels}
+    declared |= {
+        f"{slot}_base"
+        for slot, value in slot_overrides.items()
+        if slot in slots and isinstance(value, list)
+    }
     template_lengths = [
         len(value)
         for slot, value in slot_overrides.items()
