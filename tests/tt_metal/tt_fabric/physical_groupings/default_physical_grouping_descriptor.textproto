@@ -1,4 +1,27 @@
 groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh {
+    dims: [1, 1]
+  }
+}
+
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh {
+    dims: [1, 2]
+  }
+}
+
+groupings {
   name: "2x2_Mesh"
   preset_type: MESH
   instances: [

@@ -826,6 +826,16 @@ bool topology_mapping_should_use_sat_engine(
 /** @see TT_TOPOLOGY_SOLVER_ENGINE in solve_topology_mapping documentation. */
 inline bool topology_mapping_use_sat_engine();
 
+// fmt cannot print non-void pointers; those nodes log as their converted dense id instead.
+template <typename T>
+auto format_graph_node(const T& node, std::size_t id) {
+    if constexpr (std::is_pointer_v<std::remove_cvref_t<T>>) {
+        return id;
+    } else {
+        return node;
+    }
+}
+
 /**
  * @brief Indexed graph representation for efficient lookups
  *
@@ -856,6 +866,9 @@ struct GraphIndexData {
 
     size_t n_target = 0;
     size_t n_global = 0;
+
+    auto printable_target(std::size_t i) const { return format_graph_node(target_nodes[i], i); }
+    auto printable_global(std::size_t i) const { return format_graph_node(global_nodes[i], i); }
 
     /**
      * @brief Construct GraphIndexData from AdjacencyGraph inputs

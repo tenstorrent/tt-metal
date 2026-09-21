@@ -24,6 +24,7 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
@@ -163,29 +164,16 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
 
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
+MeshGraphDescriptor::MeshGraphDescriptor(
+    std::shared_ptr<proto::MeshGraphDescriptor> proto, const bool backwards_compatible) :
     top_level_id_(static_cast<GlobalNodeId>(-1)) {
-    proto::MeshGraphDescriptor temp_proto;
-    google::protobuf::TextFormat::Parser parser;
-
-    // Allowing for back and forward compatibility for fields not currently in the proto file
-    parser.AllowUnknownField(true);
-    parser.AllowUnknownExtension(true);
-
-    TT_FATAL(parser.ParseFromString(text_proto, &temp_proto), "Failed to parse MeshGraphDescriptor textproto");
-
-    // Set defaults for missing fields
-    set_defaults(temp_proto);
-
-    // Validate the proto
-    const auto errors = static_validate(temp_proto, backwards_compatible);
+    TT_FATAL(proto != nullptr, "MeshGraphDescriptor proto is null");
+    set_defaults(*proto);
+    const auto errors = static_validate(*proto, backwards_compatible);
     TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
-
-    proto_ = std::make_shared<proto::MeshGraphDescriptor>(temp_proto);
-
+    proto_ = std::move(proto);
     populate();
 
-    // Prefix mgd{id}_ when DistributedContext reports a split-job sub-context id (MPI / tt-run).
     if (const auto sid = subcontext_id_for_instance_name_uniquify(); sid.has_value()) {
         const std::string prefix = "mgd" + std::to_string(*sid) + "_";
         instances_by_name_.clear();
@@ -198,11 +186,78 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
     }
 }
 
+MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
+    MeshGraphDescriptor(
+        [&] {
+            auto temp_proto = std::make_shared<proto::MeshGraphDescriptor>();
+            google::protobuf::TextFormat::Parser parser;
+            parser.AllowUnknownField(true);
+            parser.AllowUnknownExtension(true);
+            TT_FATAL(
+                parser.ParseFromString(text_proto, temp_proto.get()), "Failed to parse MeshGraphDescriptor textproto");
+            return temp_proto;
+        }(),
+        backwards_compatible) {}
+
 MeshGraphDescriptor::MeshGraphDescriptor(
     const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
     MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string()), backwards_compatible) {}
 
 MeshGraphDescriptor::~MeshGraphDescriptor() = default;
+
+namespace {
+
+proto::Architecture proto_arch_from_arch(tt::ARCH arch) {
+    switch (arch) {
+        case tt::ARCH::WORMHOLE_B0: return proto::Architecture::WORMHOLE_B0;
+        case tt::ARCH::BLACKHOLE: return proto::Architecture::BLACKHOLE;
+        default: TT_THROW("Unsupported architecture for generated MeshGraphDescriptor: {}", enchantum::to_string(arch));
+    }
+}
+
+}  // namespace
+
+MeshGraphDescriptor MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
+    tt::tt_metal::distributed::MeshShape mesh_shape,
+    FabricType fabric_type,
+    FabricReliabilityMode reliability_mode,
+    tt::ARCH arch,
+    std::uint32_t num_connections_per_direction) {
+    TT_FATAL(
+        mesh_shape[0] > 0 && mesh_shape[1] > 0,
+        "MeshGraphDescriptor: Mesh shape dimensions must be positive, got {}x{}",
+        mesh_shape[0],
+        mesh_shape[1]);
+
+    auto proto = std::make_shared<proto::MeshGraphDescriptor>();
+    auto* mesh = proto->add_mesh_descriptors();
+    mesh->set_name("M0");
+    mesh->set_arch(proto_arch_from_arch(arch));
+
+    auto* device_topology = mesh->mutable_device_topology();
+    device_topology->add_dims(static_cast<int32_t>(mesh_shape[0]));
+    device_topology->add_dims(static_cast<int32_t>(mesh_shape[1]));
+    device_topology->add_dim_types(
+        has_flag(fabric_type, torus_flag_for_axis(0)) ? proto::TorusTopology::RING : proto::TorusTopology::LINE);
+    device_topology->add_dim_types(
+        has_flag(fabric_type, torus_flag_for_axis(1)) ? proto::TorusTopology::RING : proto::TorusTopology::LINE);
+
+    auto* host_topology = mesh->mutable_host_topology();
+    host_topology->add_dims(1);
+    host_topology->add_dims(1);
+
+    auto* channels = mesh->mutable_channels();
+    channels->set_count(num_connections_per_direction);
+    channels->set_policy(
+        reliability_mode == FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE ? proto::Policy::RELAXED
+                                                                                    : proto::Policy::STRICT);
+
+    auto* top_level_mesh = proto->mutable_top_level_instance()->mutable_mesh();
+    top_level_mesh->set_mesh_descriptor("M0");
+    top_level_mesh->set_mesh_id(0);
+
+    return MeshGraphDescriptor(std::move(proto), /*backwards_compatible=*/true);
+}
 
 proto::Architecture MeshGraphDescriptor::get_arch() const {
     // All meshes must have the same arch

@@ -132,164 +132,30 @@ PhysicalSystemDescriptor run_psd_discovery() {
         *driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
 }
 
-// Bundle of mapper inputs, built once and shared by the single- and multi-solution paths.
-struct TopologyMappingInputs {
-    LogicalMultiMeshGraph logical_graph;
-    PhysicalMultiMeshGraph physical_graph;
-    TopologyMappingConfig config;
-    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
-    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
-};
-
 /**
- * @brief Build the shared inputs for topology mapping.
+ * @brief Build the shared MultiMeshSolutionEnumerator for single- and multi-solution mapping.
  *
- * This function:
- * 1. Builds physical multi-mesh graph from PSD, PGD, and MGD
- * 2. Builds logical multi-mesh graph from MGD (via MeshGraph)
- * 3. Configures topology mapping (validation modes, MGD + galaxy-corner pinnings, mesh-rank bindings)
- *
- * The result feeds both run_topology_mapping (single solution) and the streaming MultiMeshSolutionEnumerator
- * (all solutions, --all-solutions).
+ * Configures topology mapping (validation modes, MGD + galaxy-corner pinnings, mesh-rank bindings)
+ * and constructs the enumerator once. Callers pull solutions with next(): the single-solution path
+ * takes one value; --all-solutions keeps this enumerator and loops next() on the same session.
  */
-TopologyMappingInputs build_topology_mapping_inputs(
-    const PhysicalSystemDescriptor& psd,
-    const PhysicalGroupingDescriptor& pgd,
-    const MeshGraphDescriptor& mgd,
-    const std::filesystem::path& mgd_path) {
-    auto& context = tt::tt_metal::MetalContext::instance();
-    const auto& cluster = context.get_cluster();
-    MeshGraph mesh_graph(cluster, mgd_path.string());
-
-    // Configure topology mapping
-    TopologyMappingConfig config;
-    config.strict_mode = true;
-    config.disable_rank_bindings = false;  // Pass the rank bindings to make sure there isn't host rank boundary issues
-
-    // Apply the same galaxy corner pinnings as the control plane (Phase 2) so Phase 1 and Phase 2 place
-    // the galaxy pins identically. Full galaxies (per-host slice >= 32) pin all four corners; sub-galaxy
-    // slices pin only the NW corner to any tray-corner ASIC (asic_location==1 on trays 1..4).
-    if (cluster.is_ubb_galaxy()) {
-        const int world_size =
-            static_cast<int>(*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size());
-        for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
-            const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
-            const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
-            if (!is_1d && mesh_shape.mesh_size() % 32 == 0) {
-                auto mesh_pinning_groups = get_galaxy_fixed_asic_position_pinnings_for_mesh(
-                    mesh_id, mesh_shape, /*hard_pin_node_0=*/world_size == 1, /*nw_corner_only=*/false);
-                config.pinnings.insert(config.pinnings.end(), mesh_pinning_groups.begin(), mesh_pinning_groups.end());
-            }
-        }
-    }
-
-    // PSD hostname grouping and tray/ASIC-location map (logical mesh 0 anchor + pinnings support).
-    for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
-        config.hostname_to_asics[desc.host_name].insert(asic_id);
-        config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
-    }
-
-    // MGD many-to-many pinning groups, now keyed by local mesh id (PinningsByMesh). Single MGD, so local == global:
-    // flatten every mesh's groups into config.pinnings for the CSP solve, and pass the keyed map to the builder below.
-    const PinningsByMesh& mgd_pinnings = mgd.get_pinnings();
-    for (const auto& [_, groups] : mgd_pinnings) {
-        config.pinnings.insert(config.pinnings.end(), groups.begin(), groups.end());
-    }
-
-    // Set per-mesh validation modes based on mesh graph policy
-    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
-        config.mesh_validation_modes[mesh_id] = mesh_graph.is_intra_mesh_policy_relaxed(mesh_id)
-                                                    ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
-                                                    : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
-    }
-
-    // Set inter-mesh validation mode based on mesh graph policy
-    // TODO: Enable per-connection inter-mesh validation mode. Currently, all inter-mesh connections
-    // use the same validation mode based on the mesh graph's global inter-mesh policy. In the future,
-    // we should support mixed STRICT and RELAXED policies where some inter-mesh connections are
-    // device-level (strict) and others are mesh-level (relaxed).
-    // https://github.com/tenstorrent/tt-metal/issues/49960
-    config.inter_mesh_validation_mode = mesh_graph.is_inter_mesh_policy_relaxed()
-                                            ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
-                                            : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
-    if (config.inter_mesh_validation_mode.value() == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
-        log_info(tt::LogFabric, "Inter-mesh validation mode: RELAXED");
-    } else {
-        log_info(tt::LogFabric, "Inter-mesh validation mode: STRICT");
-    }
-
-    // Build physical multi-mesh graph from PSD, PGD, and MGD
-    log_info(tt::LogFabric, "Building physical multi-mesh adjacency graph...");
-    PhysicalMultiMeshGraph physical_graph =
-        build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd, std::optional<PinningsByMesh>{mgd_pinnings});
-
-    // Build logical multi-mesh graph from MGD
-    log_info(tt::LogFabric, "Building logical multi-mesh adjacency graph...");
-    LogicalMultiMeshGraph logical_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
-
-    // Print adjacency maps
-    log_logical_multi_mesh_adjacency_histograms(logical_graph);
-    log_physical_multi_mesh_adjacency_histograms(physical_graph);
-
-    // Build logical rank bindings from mesh graph: each fabric node gets its mesh_host_rank from the mesh graph
-    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
-    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
-        const auto& chip_ids = mesh_graph.get_chip_ids(mesh_id);
-        for (const auto& [coord, chip_id] : chip_ids) {
-            FabricNodeId fabric_node_id(mesh_id, chip_id);
-            auto mesh_host_rank = mesh_graph.get_host_rank_for_chip(mesh_id, chip_id);
-            if (mesh_host_rank.has_value()) {
-                fabric_node_id_to_mesh_rank[mesh_id][fabric_node_id] = mesh_host_rank.value();
-            }
-        }
-    }
-
-    // Physical rank bindings are left empty (all ASICs UNSET) so the topology mapper assigns physical
-    // ASICs to hosts itself; TopologyMappingInputs::asic_id_to_mesh_rank defaults to empty.
-    TopologyMappingInputs inputs;
-    inputs.logical_graph = std::move(logical_graph);
-    inputs.physical_graph = std::move(physical_graph);
-    inputs.config = std::move(config);
-    inputs.fabric_node_id_to_mesh_rank = std::move(fabric_node_id_to_mesh_rank);
-    return inputs;
-}
-
-/**
- * @brief Run topology mapper to map logical meshes to physical ASICs
- *
- * @param mesh_graph_descriptors  Const reference to the caller's vector of loaded MGDs (the `std::vector`
- *                                is not copied—only a reference is passed). Must match `mgd_paths_in_order`
- *                                in length and order (one path per descriptor for `MeshGraph` host ranks).
- * @param mgd_paths_in_order      Const reference to paths parallel to `mesh_graph_descriptors`.
- *
- * @return Mapping result plus per-MGD local -> global mesh id maps (same order as descriptors / `MeshGraph`s).
- */
-TopologyMappingWithLocalMaps run_topology_mapping(
+MultiMeshSolutionEnumerator make_topology_mapping_enumerator(
     const PhysicalSystemDescriptor& psd,
     const PhysicalGroupingDescriptor& pgd,
     const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
-    const std::vector<std::filesystem::path>& mgd_paths_in_order) {
+    const std::vector<std::filesystem::path>& mgd_paths_in_order,
+    bool unique_shapes) {
     if (mesh_graph_descriptors.size() != mgd_paths_in_order.size() || mesh_graph_descriptors.empty()) {
         throw std::invalid_argument(
-            "run_topology_mapping: mesh_graph_descriptors and mgd_paths_in_order size must match and be non-empty");
+            "make_topology_mapping_enumerator: mesh_graph_descriptors and mgd_paths_in_order size must match and be "
+            "non-empty");
     }
-
-    log_info(tt::LogFabric, "Building logical multi-mesh adjacency graph from MeshGraphDescriptor(s)...");
-    std::vector<LogicalMultiMeshGraph> logical_parts;
-    logical_parts.reserve(mesh_graph_descriptors.size());
-    for (const MeshGraphDescriptor& mgd : mesh_graph_descriptors) {
-        logical_parts.push_back(build_logical_multi_mesh_adjacency_graph(mgd));
-    }
-
-    std::vector<std::map<MeshId, MeshId>> per_part_local_to_global_mesh_ids;
-    const LogicalMultiMeshGraph logical_graph =
-        merge_logical_multi_mesh_adjacency_graphs(logical_parts, &per_part_local_to_global_mesh_ids);
 
     auto& metal_context = MetalContext::instance();
     const auto& cluster = metal_context.get_cluster();
 
-    // Load one MeshGraph per MGD (parallel to mesh_graph_descriptors / mgd_paths_in_order). Used below for the
-    // galaxy corner pinnings (needs mesh shapes) and the per-mesh validation policy.
+    // MeshGraphs are for galaxy-corner pin shapes, inter-mesh policy, and fabric-node host ranks.
+    // Logical adjacency and local->global MeshId remap are owned by the enumerator.
     std::vector<MeshGraph> mesh_graphs;
     mesh_graphs.reserve(mgd_paths_in_order.size());
     for (const auto& p : mgd_paths_in_order) {
@@ -304,19 +170,12 @@ TopologyMappingWithLocalMaps run_topology_mapping(
         config.hostname_to_asics[desc.host_name].insert(asic_id);
     }
 
-    // Build pinnings once, in each MGD's LOCAL mesh-id space, exactly as the single-MGD path feeds one MGD's
-    // pinnings to build_physical_multi_mesh_adjacency_graph (get_valid_groupings_for_mgd filters pins by the MGD's
-    // own local mesh ids). `per_mgd_pinnings[i]` is threaded into the physical builder for MGD i (PGD<->MGD match +
-    // PSD placement); the same pins are also remapped to GLOBAL mesh ids and concatenated into config.pinnings for
-    // the mesh->physical CSP solve, so both stages apply identical pins (the same places as the normal path).
+    // Local-space pinnings only. The enumerator remaps them to global MeshIds for intra-mesh.
     std::vector<std::optional<PinningsByMesh>> per_mgd_pinnings(mesh_graph_descriptors.size());
     const int world_size =
         static_cast<int>(*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size());
     for (std::size_t mgi = 0; mgi < mesh_graph_descriptors.size(); ++mgi) {
-        // The MGD's own many-to-many pinning groups, already keyed by this MGD's local mesh ids (PinningsByMesh).
         PinningsByMesh local_pins = mesh_graph_descriptors[mgi].get_pinnings();
-
-        // Galaxy corner pins per full-galaxy mesh (local mesh id), same as the control plane / single-MGD path.
         if (cluster.is_ubb_galaxy()) {
             for (const auto& mesh_id : mesh_graphs[mgi].get_all_mesh_ids()) {
                 const auto& mesh_shape = mesh_graphs[mgi].get_mesh_shape(mesh_id);
@@ -328,56 +187,13 @@ TopologyMappingWithLocalMaps run_topology_mapping(
                 }
             }
         }
-
-        if (local_pins.empty()) {
-            continue;
-        }
-        // Thread the local-space pins into the physical builder for this MGD.
-        per_mgd_pinnings[mgi] = local_pins;
-        // Mirror the same pins into config.pinnings (CSP) after remapping fabric_nodes local -> global mesh id.
-        const auto& local_to_global = per_part_local_to_global_mesh_ids.at(mgi);
-        for (const auto& [_, groups] : local_pins) {
-            for (const auto& group : groups) {
-                ::tt::tt_fabric::AsicPinningGroup remapped;
-                remapped.asic_positions = group.asic_positions;
-                remapped.fabric_nodes.reserve(group.fabric_nodes.size());
-                for (const auto& fabric_node : group.fabric_nodes) {
-                    const auto it = local_to_global.find(fabric_node.mesh_id);
-                    const MeshId global_mesh = (it != local_to_global.end()) ? it->second : fabric_node.mesh_id;
-                    remapped.fabric_nodes.emplace_back(global_mesh, fabric_node.chip_id);
-                }
-                config.pinnings.push_back(std::move(remapped));
-            }
+        if (!local_pins.empty()) {
+            per_mgd_pinnings[mgi] = std::move(local_pins);
         }
     }
 
-    if (!config.pinnings.empty()) {
-        const auto& asic_descriptors = psd.get_asic_descriptors();
-        for (const auto& [asic_id, _] : asic_descriptors) {
-            config.asic_positions[asic_id] = std::make_pair(psd.get_tray_id(asic_id), psd.get_asic_location(asic_id));
-        }
-    }
-
-    // Build the physical multi-mesh graph, threading each MGD's local-space pinnings into the PGD<->MGD grouping
-    // match and PSD placement (build_physical_multi_mesh_adjacency_graph -> get_valid_groupings_for_mgds ->
-    // get_valid_groupings_for_mgd), the same as the single-MGD builder overload does with its `pinnings` argument.
-    log_info(
-        tt::LogFabric, "Building physical multi-mesh adjacency graph ({} MGD(s))...", mesh_graph_descriptors.size());
-    PhysicalMultiMeshGraph physical_graph =
-        build_physical_multi_mesh_adjacency_graph(psd, pgd, mesh_graph_descriptors, per_mgd_pinnings);
-
-    // Print adjacency maps
-    log_logical_multi_mesh_adjacency_histograms(logical_graph);
-    log_physical_multi_mesh_adjacency_histograms(physical_graph);
-
-    for (std::size_t gi = 0; gi < mesh_graphs.size(); ++gi) {
-        const auto& mesh_graph = mesh_graphs[gi];
-        for (const auto& mid_local : mesh_graph.get_all_mesh_ids()) {
-            const MeshId mid_global = per_part_local_to_global_mesh_ids.at(gi).at(mid_local);
-            config.mesh_validation_modes[mid_global] = mesh_graph.is_intra_mesh_policy_relaxed(mid_local)
-                                                           ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
-                                                           : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
-        }
+    log_info(tt::LogFabric, "Preparing topology mapping ({} MGD(s))...", mesh_graph_descriptors.size());
+    for (const auto& mesh_graph : mesh_graphs) {
         if (!mesh_graph_includes_intermesh_links(mesh_graph)) {
             continue;
         }
@@ -403,14 +219,25 @@ TopologyMappingWithLocalMaps run_topology_mapping(
         log_info(tt::LogFabric, "Inter-mesh validation mode: STRICT");
     }
 
-    // Topology mapping rank validation uses merged global MeshId keys. Downstream YAML/rank bindings emit per-MGD
-    // **local** mesh ids: generate_rank_bindings hands extract_rank_bindings each partition's local-to-global map,
-    // which selects local mesh ids.
+    // Host ranks keyed in the enumerator's MeshId space: identity for one MGD, consecutive globals
+    // when merging several (same numbering merge_logical_multi_mesh_adjacency_graphs uses).
     std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
-    for (std::size_t gi = 0; gi < mesh_graphs.size(); ++gi) {
-        const auto& mesh_graph = mesh_graphs[gi];
+    std::uint32_t next_global = 0;
+    const bool merge_mesh_ids = mesh_graphs.size() > 1;
+    for (const auto& mesh_graph : mesh_graphs) {
+        std::set<MeshId> local_ids;
         for (const auto& mesh_id_local : mesh_graph.get_all_mesh_ids()) {
-            const MeshId mesh_id_global = per_part_local_to_global_mesh_ids.at(gi).at(mesh_id_local);
+            local_ids.insert(mesh_id_local);
+        }
+        std::map<MeshId, MeshId> local_to_global;
+        std::uint32_t j = 0;
+        for (MeshId local : local_ids) {
+            local_to_global[local] = merge_mesh_ids ? MeshId{next_global + j} : local;
+            ++j;
+        }
+        next_global += static_cast<std::uint32_t>(local_ids.size());
+        for (const auto& mesh_id_local : mesh_graph.get_all_mesh_ids()) {
+            const MeshId mesh_id_global = local_to_global.at(mesh_id_local);
             const auto& chip_ids = mesh_graph.get_chip_ids(mesh_id_local);
             for (const auto& [coord, chip_id] : chip_ids) {
                 FabricNodeId fabric_node_id(mesh_id_global, chip_id);
@@ -424,11 +251,49 @@ TopologyMappingWithLocalMaps run_topology_mapping(
 
     std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank = {};
 
+    log_info(tt::LogFabric, "Building topology mapping enumerator ({} MGD(s))...", mesh_graph_descriptors.size());
+    std::vector<const MeshGraphDescriptor*> descriptor_ptrs;
+    descriptor_ptrs.reserve(mesh_graph_descriptors.size());
+    for (const MeshGraphDescriptor& mgd : mesh_graph_descriptors) {
+        descriptor_ptrs.push_back(&mgd);
+    }
+    return MultiMeshSolutionEnumerator(
+        psd,
+        pgd,
+        descriptor_ptrs,
+        config,
+        unique_shapes,
+        per_mgd_pinnings,
+        asic_id_to_mesh_rank,
+        fabric_node_id_to_mesh_rank);
+}
+
+/**
+ * @brief Run topology mapper to map logical meshes to physical ASICs
+ *
+ * @param mesh_graph_descriptors  Const reference to the caller's vector of loaded MGDs (the `std::vector`
+ *                                is not copied—only a reference is passed). Must match `mgd_paths_in_order`
+ *                                in length and order (one path per descriptor for `MeshGraph` host ranks).
+ * @param mgd_paths_in_order      Const reference to paths parallel to `mesh_graph_descriptors`.
+ *
+ * @return Mapping result plus per-MGD local -> global mesh id maps (same order as descriptors / `MeshGraph`s).
+ */
+TopologyMappingWithLocalMaps run_topology_mapping(
+    const PhysicalSystemDescriptor& psd,
+    const PhysicalGroupingDescriptor& pgd,
+    const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
+    const std::vector<std::filesystem::path>& mgd_paths_in_order) {
     log_info(tt::LogFabric, "Running topology mapping with mesh graph rank bindings...");
+    MultiMeshSolutionEnumerator enumerator =
+        make_topology_mapping_enumerator(psd, pgd, mesh_graph_descriptors, mgd_paths_in_order, /*unique_shapes=*/false);
     TopologyMappingWithLocalMaps out;
-    out.mapping = map_multi_mesh_to_physical(
-        logical_graph, physical_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
-    out.per_part_local_to_global_mesh_ids = std::move(per_part_local_to_global_mesh_ids);
+    if (auto solution = enumerator.next(); solution.has_value()) {
+        out.mapping = std::move(*solution);
+    } else {
+        out.mapping.success = false;
+        out.mapping.error_message = "map_multi_mesh_to_physical: no valid placement+intra-mesh mapping found";
+    }
+    out.per_part_local_to_global_mesh_ids = enumerator.per_part_local_to_global_mesh_ids();
     return out;
 }
 
@@ -894,7 +759,6 @@ int main(int argc, char** argv) {
                         "sub-contexts) is not supported.");
                     return 1;
                 }
-                const MeshGraphDescriptor& mgd = mgds.front();
                 const std::filesystem::path& mgd_path = mgd_paths_in_order.front();
                 const std::string mgd_path_str = mgd_path.string();
                 auto& metal_context = tt::tt_metal::MetalContext::instance();
@@ -954,19 +818,12 @@ int main(int argc, char** argv) {
                 const bool unique_shapes = !args.allow_shape_permutations;
                 const std::string enumeration_mode = args.distinct_host_sets ? "distinct-host-sets" : "all";
 
-                // Pull-based streaming enumeration: ask the enumerator for ONE solution at a time and write it +
-                // rewrite solutions_index.yaml immediately, instead of collecting every solution before writing any.
-                // A consumer can pick up / test solution k while solution k+1 is still being searched for, and a
-                // crash/timeout leaves a valid index for every solution already written. Selection is IDENTICAL to
-                // the batch run_topology_mapping_n path (same session, constraints, unique_shapes, signature dedup).
-                auto inputs = build_topology_mapping_inputs(psd, pgd, mgd, mgd_path);
-                MultiMeshSolutionEnumerator enumerator(
-                    inputs.logical_graph,
-                    inputs.physical_graph,
-                    inputs.config,
-                    unique_shapes,
-                    inputs.asic_id_to_mesh_rank,
-                    inputs.fabric_node_id_to_mesh_rank);
+                // Same enumerator as the single-solution path, built once. Each next() yields one mapping
+                // from the live SAT session; this loop is the only extra work for --all-solutions.
+                MultiMeshSolutionEnumerator enumerator =
+                    make_topology_mapping_enumerator(psd, pgd, mgds, mgd_paths_in_order, unique_shapes);
+                const std::vector<std::map<MeshId, MeshId>> per_part_local_to_global_mesh_ids =
+                    enumerator.per_part_local_to_global_mesh_ids();
 
                 std::vector<SolutionIndexEntry> index_entries;
 
@@ -1000,13 +857,8 @@ int main(int argc, char** argv) {
                     }
                     ++emitted;
 
-                    // Single-MGD (enforced by the --all-solutions gate above): no logical-part merge ran, so the
-                    // solution's fabric_node_id.mesh_id already IS the MGD's mesh id (global == local). The empty
-                    // per-part map therefore selects merged/global mode -- no partition filtering, since every node
-                    // belongs to the one MGD, and resolve_mesh_graph_for_global_mesh_id looks each mesh id up
-                    // directly in the single MeshGraph.
                     std::vector<RankBindingConfig> rank_bindings = extract_rank_bindings(
-                        psd, *solution, mesh_graphs_for_extract, /*per_part_local_to_global_mesh_ids=*/{});
+                        psd, *solution, mesh_graphs_for_extract, per_part_local_to_global_mesh_ids);
 
                     const std::set<std::string> hosts = solution_host_set(rank_bindings);
                     if (args.distinct_host_sets && !seen_host_sets.insert(hosts).second) {
@@ -1060,8 +912,7 @@ int main(int argc, char** argv) {
 
                     // Rewrite the index after every solution so the on-disk index always reflects everything written
                     // so far (crash/timeout resilient). While streaming we mark truncated=true (more may still come);
-                    // the definitive flag is written after the enumeration ends below. The consumer keys off the
-                    // producer's liveness, not this flag, to decide whether more solutions are pending.
+                    // the definitive flag is written after the enumeration ends below.
                     write_solutions_index_yaml(
                         mgd_path_str,
                         enumeration_mode,
