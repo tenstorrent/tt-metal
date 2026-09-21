@@ -1,17 +1,8 @@
-name: "(T3K) T3000 unit tests"
+name: "(End of Life - 31 October 2026) T3K dispatch tests"
 
 on:
   workflow_dispatch:
     inputs:
-      model:
-        description: "Select model to test"
-        required: true
-        default: all
-        type: choice
-        options:
-          - all
-          - tttv2 modules
-          - qwen3_vl
       platform:
         required: false
         type: choice
@@ -36,16 +27,16 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-  schedule:
-    - cron: "0 */6 * * *" # This cron schedule runs the workflow every 6 hours
-
-permissions:
-  packages: write
-  contents: write
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable watcher for long-running tests"
 
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
     needs: check-harbor
     if: ${{ !cancelled() }}
@@ -55,18 +46,21 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-  t3000-unit-tests:
+
+  t3000-sanity-tests:
     needs: [check-harbor, build-artifact]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     secrets: inherit
-    uses: ./.github/workflows/t3000-unit-tests-impl.yaml
+    uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
+      enabled-skus: "wh_llmbox_civ2"
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: "wh_llmbox"
-      model: ${{ inputs.model || 'all' }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+      timeout-minutes-override: ${{ inputs.enable-watcher && 80 || 0 }}
