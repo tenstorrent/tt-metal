@@ -8,9 +8,12 @@ Runs a single forward pass inside Tracy signposts to generate device-level
 op reports. Two cases: B1/S512 and B32/S512, no trace capture (Tracy needs
 to see the individual ops, not a trace replay).
 
+test_n300_dp_tracy profiles the B12/S8192 shape on a 2-chip Wormhole card.
+test_bge_m3_tracy_perf profiles the S512 batch sweep on one device.
+
 Usage (run from tt-metal root):
-    TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r --no-runtime-analysis -v -m pytest tracy_perf.py -k "batch1" -sv
-    TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r --no-runtime-analysis -v -m pytest tracy_perf.py -k "batch32" -sv
+    TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r --no-runtime-analysis -v -m pytest models/demos/wormhole/bge_m3/tests/perf/tracy_perf.py -k "batch1" -sv
+    TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r --no-runtime-analysis -v -m pytest models/demos/wormhole/bge_m3/tests/perf/tracy_perf.py -k "batch32" -sv
 
 Reports are saved to: generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv
 """
@@ -103,5 +106,58 @@ def test_n300_dp_tracy(mesh_device):
     signpost("start")
     out = model.forward(**device_inputs)
     ttnn.synchronize_device(mesh_device)
+    signpost("stop")
+    ttnn.deallocate(out)
+
+
+SEQ_LEN_512 = 512
+
+
+@pytest.mark.parametrize(
+    "batch_size",
+    [1, 8, 16, 32],
+    ids=["batch1", "batch8", "batch16", "batch32"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 50_000_000, "num_command_queues": 1}],
+    indirect=True,
+)
+def test_bge_m3_tracy_perf(device, batch_size):
+    """Profile one S512 forward between Tracy signposts for per-op device timing.
+
+    Untraced, because Tracy reports the individual ops and a replay hides them.
+    Requires TT_METAL_DEVICE_PROFILER=1.
+    """
+    if os.environ.get("TT_METAL_DEVICE_PROFILER", "0") != "1":
+        pytest.fail("TT_METAL_DEVICE_PROFILER=1 is required for device kernel profiling.")
+
+    model_args, model, _ = create_tt_model(
+        mesh_device=device,
+        max_batch_size=batch_size,
+        max_seq_len=SEQ_LEN_512,
+        dtype=ttnn.bfloat8_b,
+    )
+
+    inputs = prepare_inputs(model_args.tokenizer, batch_size, SEQ_LEN_512, model_args.pad_token_id)
+    device_inputs = {
+        key: ttnn.from_torch(
+            inputs[key].int(),
+            device=device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for key in ("input_ids", "token_type_ids", "position_ids")
+    }
+
+    # Compile outside the signpost window.
+    out = model.forward(**device_inputs)
+    ttnn.synchronize_device(device)
+    ttnn.deallocate(out)
+
+    signpost("start")
+    out = model.forward(**device_inputs)
+    ttnn.synchronize_device(device)
     signpost("stop")
     ttnn.deallocate(out)
