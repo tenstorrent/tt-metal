@@ -888,6 +888,39 @@ def test_gpt_oss_demo(
             profiler.end(f"inference_prefill", iteration=batch_idx)
             logger.info(f"Prefill finished")
 
+        # DIAGNOSTIC: with one prompt broadcast to all users the PREFILL logits must already be
+        # identical for every user. Prefill runs one user at a time and never touches decode's
+        # 8-wide per-user core grid, so this cleanly separates "prefill built divergent state"
+        # from "decode reads the KV cache wrongly".
+        if os.getenv("GPT_OSS_CHECK_PREFILL_LOGITS") == "1":
+            import collections as _c
+
+            _pt = prefilled_token.view(-1)
+            _bad = [int(u) for u in range(global_batch_size) if _pt[u] != _pt[0]]
+            logger.warning(
+                f"PREFILL TOKEN: {global_batch_size - len(_bad)}/{global_batch_size} users match user 0; "
+                f"distinct first tokens {sorted(set(_pt.tolist()))}"
+            )
+            if _bad:
+                logger.warning(
+                    f"PREFILL TOKEN: users differing {_bad[:16]} | rows {sorted({u // 32 for u in _bad})} "
+                    f"| idx%8 {sorted({u % 8 for u in _bad})}"
+                )
+            _lg = locals().get("logits")
+            if _lg is not None and hasattr(_lg, "detach"):
+                _lg = _lg.detach().cpu().float().reshape(global_batch_size, -1)
+                _d = (_lg - _lg[0]).abs().amax(dim=1)
+                _by = _c.defaultdict(float)
+                for _u in range(global_batch_size):
+                    _by[_u % 8] = max(_by[_u % 8], float(_d[_u]))
+                logger.warning(
+                    f"PREFILL LOGITS: {int((_d == 0).sum())}/{global_batch_size} bit-identical to user 0; "
+                    f"max abs diff {_d.max():.6f}"
+                )
+                logger.warning(
+                    "PREFILL LOGITS: max abs diff by (user % 8): " + " ".join(f"{c}:{_by[c]:.6f}" for c in sorted(_by))
+                )
+
         logger.info(f"First generated token: '{tokenizer.decode(prefilled_token[0])}'")
 
         # Initialize generation state like tt_transformers

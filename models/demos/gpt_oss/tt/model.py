@@ -399,6 +399,47 @@ class Model:
                 user_id=user_id,
                 batch_size=batch_size,
             )
+            # DIAGNOSTIC: per-layer teacher forcing. With every user given the same prompt, each
+            # layer's output must be identical for every user. Measuring that on the running
+            # model conflates a layer's OWN error with divergence inherited from earlier layers,
+            # so after measuring we overwrite every user with user 0's vector -- each layer is
+            # then scored on an input that is exactly uniform, and the reported number is that
+            # layer's own contribution. GPT_OSS_TEACHER_FORCE=1 (untraced runs only: under trace
+            # this Python code is not re-entered).
+            if os.getenv("GPT_OSS_TEACHER_FORCE") == "1" and is_decode:
+                import torch as _torch
+
+                if not hasattr(self, "_tf_step"):
+                    self._tf_step = 0
+                if self._tf_step == int(os.getenv("GPT_OSS_TEACHER_FORCE_STEP", "2")):
+                    _comp = ttnn.ConcatMesh2dToTensor(
+                        self.mesh_device, dims=(-2, -1), mesh_shape=tuple(self.mesh_device.shape)
+                    )
+                    _t = ttnn.to_torch(hidden_states, mesh_composer=_comp).float()
+                    _m = _t.reshape(-1, _t.shape[-1])
+                    _d = (_m - _m[0]).abs().amax(dim=1)
+                    _by = {}
+                    for _u in range(_m.shape[0]):
+                        _by[_u % 8] = max(_by.get(_u % 8, 0.0), float(_d[_u]))
+                    logger.warning(
+                        f"TEACHER FORCE layer {i:02d}: {int((_d == 0).sum())}/{_m.shape[0]} bit-identical; "
+                        f"max {_d.max():.6f} | by idx%8 " + " ".join(f"{c}:{_by[c]:.4f}" for c in sorted(_by))
+                    )
+                    # Re-uniform the state so the next layer starts from an exactly equal batch.
+                    _forced = _m[0].unsqueeze(0).expand_as(_m).reshape(_t.shape).contiguous()
+                    hidden_states.deallocate(True)
+                    hidden_states = ttnn.from_torch(
+                        _forced,
+                        device=self.mesh_device,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=ttnn.bfloat8_b,
+                        mesh_mapper=ttnn.ShardTensor2dMesh(
+                            dims=(-2, -1), mesh_shape=self.mesh_device.shape, mesh_device=self.mesh_device
+                        ),
+                    )
+                if i == len(self.layers) - 1:
+                    self._tf_step += 1
+
             # DIAGNOSTIC: dump each layer's decode output so the dense and moe_compute runs can
             # be diffed layer by layer. GPT_OSS_DUMP_LAYERS=<dir>, only the first decode step.
             _dump_dir = os.getenv("GPT_OSS_DUMP_LAYERS")
