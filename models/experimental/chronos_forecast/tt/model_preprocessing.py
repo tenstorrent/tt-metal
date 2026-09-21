@@ -3,11 +3,8 @@
 
 """Host-side Chronos-2 input packing and (stub) weight conversion.
 
-Step 0: build history V and future W, flatten variates onto the model batch axis.
-Categorical covariates are encoded next (ordinal, or per-item target encoding when
-there is a single target). InstanceNorm then standardizes each row along time
-(optional arcsinh). Patch windows time, then concatenates time encoding and mask.
-This file does not import Amazon Chronos, and it does not run ResidualBlock.
+NOTE: Residual Block runs on host in Amazon impl, will benchmark them however assume residual add will be faster on TT
+if not will add back here
 """
 
 from __future__ import annotations
