@@ -8,7 +8,7 @@ import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
-from ttexalens.tt_exalens_lib import read_arc_telemetry_entry
+from ttexalens.tt_exalens_lib import read_firmware_telemetry_entry
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
@@ -82,7 +82,7 @@ TELEMETRY_DECODERS = {
 def read_tag(device_id, tag: str) -> str:
     raw = None
     try:
-        raw = read_arc_telemetry_entry(device_id, tag)
+        raw = read_firmware_telemetry_entry(device_id, tag)
         decoder = TELEMETRY_DECODERS.get(tag)
         return decoder(raw) if decoder else str(raw)
     except TimeoutDeviceRegisterError:

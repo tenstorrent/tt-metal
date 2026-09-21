@@ -22,7 +22,7 @@ from triage import ScriptPriority, triage_singleton, ScriptConfig, run_script
 from run_checks import run as get_run_checks, RunChecks
 from ttexalens.context import Context
 from ttexalens.device import Device
-from ttexalens.tt_exalens_lib import read_arc_telemetry_entry
+from ttexalens.tt_exalens_lib import read_firmware_telemetry_entry
 
 script_config = ScriptConfig(
     data_provider=True,
@@ -48,7 +48,7 @@ class ArcHeartbeatSampling:
 
     def get_heartbeat_sample(self, device: Device) -> HeartbeatSample:
         return HeartbeatSample(
-            heartbeat=read_arc_telemetry_entry(device.arc_block.location.device_id, "TIMER_HEARTBEAT"),
+            heartbeat=read_firmware_telemetry_entry(device.arc_block.location.device_id, "TIMER_HEARTBEAT"),
             timestamp=time.monotonic(),
         )
 

@@ -24,7 +24,7 @@ from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.hardware.noc_block import NocBlock
-from ttexalens.tt_exalens_lib import read_arc_telemetry_entry
+from ttexalens.tt_exalens_lib import read_firmware_telemetry_entry
 import utils
 
 script_config = ScriptConfig(
@@ -52,7 +52,7 @@ def check_arc_block(arc: NocBlock, postcode: int | None, arc_heartbeat_sampling:
     # Heartbeat must be increasing
     current_heartbeat_sample = arc_heartbeat_sampling.get_heartbeat_sample(device)
     initial_heartbeat_sample = arc_heartbeat_sampling.get_initial_heartbeat_sample(device)
-    arcclk_mhz = read_arc_telemetry_entry(device_id, "ARCCLK")
+    arcclk_mhz = read_firmware_telemetry_entry(device_id, "ARCCLK")
     heartbeats_per_second = (current_heartbeat_sample.heartbeat - initial_heartbeat_sample.heartbeat) / (
         current_heartbeat_sample.timestamp - initial_heartbeat_sample.timestamp
     )
