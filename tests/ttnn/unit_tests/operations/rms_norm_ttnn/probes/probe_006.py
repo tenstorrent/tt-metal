@@ -1,0 +1,11 @@
+import torch, ttnn
+dev = ttnn.open_device(device_id=0)
+x = torch.randn(1,1,256,1024, dtype=torch.float32).to(torch.bfloat16)
+L1I = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=L1I)
+out = ttnn.rms_norm(tx, epsilon=1e-5, memory_config=L1I)
+t = ttnn.to_torch(out).to(torch.float32)
+ref = x.to(torch.float32); ref = ref*torch.rsqrt(ref.pow(2).mean(-1,keepdim=True)+1e-5)
+print("PCC", float(torch.corrcoef(torch.stack([t.flatten(), ref.flatten()]))[0,1]), flush=True)
+print("HEALTH device recovered, reverted kernel runs", flush=True)
+ttnn.close_device(dev); print("PROBE_OK", flush=True)
