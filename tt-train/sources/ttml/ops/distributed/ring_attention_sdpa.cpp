@@ -286,8 +286,10 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
             partial(q_hi, k_hi, v_hi, ZigzagVisitor::Later, AttentionMaskType::None, out_hi, lse_hi, step);
         }
         if (step + 1U < ring_size) {
-            k_current = ttnn_fixed::distributed::ring_shift(k_current, cp_axis, Direction::Backward, shift_transport);
-            v_current = ttnn_fixed::distributed::ring_shift(v_current, cp_axis, Direction::Backward, shift_transport);
+            auto shifted = ttnn_fixed::distributed::ring_shift_many(
+                {k_current, v_current}, cp_axis, Direction::Backward, shift_transport);
+            k_current = std::move(shifted[0]);
+            v_current = std::move(shifted[1]);
             fw_profile.mark("forward: shift K, V");
         }
     }
@@ -470,17 +472,24 @@ autograd::TensorPtr ring_attention_sdpa_zigzag(
             }
 
             if (step > 0) {
-                k_current = ttnn_fixed::distributed::ring_shift(k_current, cp_axis, Direction::Forward, shift_transport);
-                v_current = ttnn_fixed::distributed::ring_shift(v_current, cp_axis, Direction::Forward, shift_transport);
+                // Every tensor of the step in one shift: one launch, every link busy.
+                std::vector<ttnn::Tensor*> moving{&k_current, &v_current};
                 if (two_pass) {
                     for (ttnn::Tensor* t : {&dK_lo, &dK_hi, &dV_lo, &dV_hi}) {
-                        *t = ttnn_fixed::distributed::ring_shift(*t, cp_axis, Direction::Forward, shift_transport);
+                        moving.push_back(t);
                     }
                 } else {
-                    grad_K_accum =
-                        ttnn_fixed::distributed::ring_shift(grad_K_accum, cp_axis, Direction::Forward, shift_transport);
-                    grad_V_accum =
-                        ttnn_fixed::distributed::ring_shift(grad_V_accum, cp_axis, Direction::Forward, shift_transport);
+                    moving.push_back(&grad_K_accum);
+                    moving.push_back(&grad_V_accum);
+                }
+                std::vector<ttnn::Tensor> inputs;
+                inputs.reserve(moving.size());
+                for (const ttnn::Tensor* t : moving) {
+                    inputs.push_back(*t);
+                }
+                auto shifted = ttnn_fixed::distributed::ring_shift_many(inputs, cp_axis, Direction::Forward, shift_transport);
+                for (size_t i = 0; i < moving.size(); ++i) {
+                    *moving[i] = std::move(shifted[i]);
                 }
                 profile.mark("shift K, V, dK, dV");
             }
@@ -664,10 +673,11 @@ autograd::TensorPtr ring_attention_sdpa(
         global_lse = new_lse;
 
         if (step < ring_size - 1) {
-            k_current = ttnn_fixed::distributed::ring_shift(
-                k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Backward, shift_transport);
-            v_current = ttnn_fixed::distributed::ring_shift(
-                v_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Backward, shift_transport);
+            auto shifted = ttnn_fixed::distributed::ring_shift_many(
+                {k_current, v_current}, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Backward,
+                shift_transport);
+            k_current = std::move(shifted[0]);
+            v_current = std::move(shifted[1]);
         }
     }
 
@@ -874,16 +884,13 @@ autograd::TensorPtr ring_attention_sdpa(
             // grad_K/V: routes accumulated gradients back to correct device
             if (step > 0) {
                 // Shift K/V forward to get position for next backward iteration
-                k_current = ttnn_fixed::distributed::ring_shift(
-                    k_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward, shift_transport);
-                v_current = ttnn_fixed::distributed::ring_shift(
-                    v_current, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward, shift_transport);
-
-                // Shift grad accumulators
-                grad_K_accum = ttnn_fixed::distributed::ring_shift(
-                    grad_K_accum, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward, shift_transport);
-                grad_V_accum = ttnn_fixed::distributed::ring_shift(
-                    grad_V_accum, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward, shift_transport);
+                auto shifted = ttnn_fixed::distributed::ring_shift_many(
+                    {k_current, v_current, grad_K_accum, grad_V_accum}, cp_axis_value,
+                    ttnn_fixed::distributed::RingShiftDirection::Forward, shift_transport);
+                k_current = std::move(shifted[0]);
+                v_current = std::move(shifted[1]);
+                grad_K_accum = std::move(shifted[2]);
+                grad_V_accum = std::move(shifted[3]);
                 profile.mark("shift K, V, dK, dV");
             }
         }

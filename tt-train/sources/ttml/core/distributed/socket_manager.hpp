@@ -76,6 +76,12 @@ public:
         const InterHostParameters& inter_host_params,
         const IntraMeshParameters& intra_mesh_params);
 
+    // The sender-side and receiver-side views of one direct socket over the
+    // given connections, for ring_shift_fused: a ring's every chip is a
+    // sender in one connection and a receiver in another, on different cores.
+    [[nodiscard]] std::pair<const tt::tt_metal::distributed::MeshSocket&, const tt::tt_metal::distributed::MeshSocket&>
+    direct_socket_pair(const InterHostParameters& inter_host_params, const IntraMeshParameters& intra_mesh_params);
+
 private:
     struct DirectSocketPair {
         std::shared_ptr<DistributedContext> distributed_ctx;

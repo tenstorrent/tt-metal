@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <vector>
 #include <core/ttnn_all_includes.hpp>
 
 namespace ttml::ttnn_fixed::distributed {
@@ -45,7 +46,14 @@ enum class RingShiftDirection {
  */
 enum class RingShiftTransport {
     Fifo,
+    // One launch per shift for all its tensors, every chip sending to one
+    // neighbour and receiving from the other at once (ring_shift_fused).
     Direct,
+    // The first direct transport: one tensor a shift, in two phases of
+    // separate send and receive launches (even chips send, then odd chips),
+    // so only every other link is busy. Kept as the reference for the fused
+    // one.
+    DirectTwoPhase,
 };
 
 /**
@@ -69,6 +77,18 @@ enum class RingShiftTransport {
 ttnn::Tensor ring_shift(
     const ttnn::Tensor& tensor,
     const std::optional<uint32_t> cluster_axis = std::nullopt,
+    const RingShiftDirection direction = RingShiftDirection::Forward,
+    const RingShiftTransport transport = RingShiftTransport::Fifo,
+    const uint32_t connections = 0U);
+
+/**
+ * Ring shift of several tensors at once, all in the same direction. With the
+ * Direct transport this is one launch that moves every tensor; with the
+ * others it is a ring_shift per tensor. Returns the shifted tensors in order.
+ */
+std::vector<ttnn::Tensor> ring_shift_many(
+    const std::vector<ttnn::Tensor>& tensors,
+    const std::optional<uint32_t> cluster_axis,
     const RingShiftDirection direction = RingShiftDirection::Forward,
     const RingShiftTransport transport = RingShiftTransport::Fifo,
     const uint32_t connections = 0U);

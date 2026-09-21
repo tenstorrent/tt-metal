@@ -430,6 +430,105 @@ TEST_F(LoudboxRingSDPATest, RingShiftAroundTheCpAxis) {
     }
 }
 
+// One tensor through the fused shift, both directions, checked against the
+// neighbour's data. The smallest thing that can fail.
+TEST_F(LoudboxRingSDPATest, RingShiftFusedOneTensor) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    const uint32_t cp_axis = pctx.get_cp_axis().value();
+    const uint32_t cp_size = pctx.get_cp_size();
+    auto& rng = autograd::ctx().get_generator();
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
+    const xt::xarray<float> full = ttml::test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{1UL, 2UL, 256UL * cp_size, 64UL}, -2.0F, 2.0F, rng());
+    const auto tensor = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(full, device, ttnn::Layout::TILE, mapper.get());
+    const auto before = core::to_xtensor<float>(tensor, core::IdentityComposer{});
+    const uint32_t cols = topology().cols;
+    for (const auto direction : {RingShiftDirection::Forward, RingShiftDirection::Backward}) {
+        const auto shifted = ttnn_fixed::distributed::ring_shift_many({tensor}, cp_axis, direction, RingShiftTransport::Direct);
+        const auto after = core::to_xtensor<float>(shifted[0], core::IdentityComposer{});
+        for (uint32_t row = 0; row < topology().rows; ++row) {
+            for (uint32_t col = 0; col < cols; ++col) {
+                const size_t dst = row * cols + col;
+                const size_t src = direction == RingShiftDirection::Forward ? row * cols + ((col + cols - 1U) % cols)
+                                                                            : row * cols + ((col + 1U) % cols);
+                EXPECT_TRUE(xt::all(xt::equal(before[src], after[dst])))
+                    << "device " << dst << " should hold what device " << src << " had ("
+                    << (direction == RingShiftDirection::Forward ? "forward" : "backward") << ")";
+            }
+        }
+    }
+}
+
+// The fused shift: one launch that moves several tensors, every chip a
+// sender and a receiver at once. Bitwise against the two-phase direct
+// transport (itself checked against Fifo above), both directions, bf16 and
+// FP32, tensors of different sizes in one call, and a lone tensor.
+TEST_F(LoudboxRingSDPATest, RingShiftFusedMatchesTwoPhase) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    ASSERT_TRUE(pctx.is_cp_enabled());
+    const uint32_t cp_axis = pctx.get_cp_axis().value();
+    const uint32_t cp_size = pctx.get_cp_size();
+    auto& rng = autograd::ctx().get_generator();
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
+    const auto make = [&](uint32_t heads, uint32_t rows_per_chip, uint32_t dim, ttnn::DataType dtype) {
+        const xt::xarray<float> full = ttml::test_utils::make_uniform_xarray<float>(
+            std::array<std::size_t, 4>{1UL, heads, static_cast<std::size_t>(rows_per_chip) * cp_size, dim}, -2.0F,
+            2.0F, rng());
+        const auto bf16 = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(full, device, ttnn::Layout::TILE, mapper.get());
+        return dtype == ttnn::DataType::BFLOAT16 ? bf16 : ttnn::typecast(bf16, dtype);
+    };
+    const std::vector<ttnn::Tensor> tensors{
+        make(2U, 256U, 64U, ttnn::DataType::BFLOAT16),
+        make(2U, 256U, 64U, ttnn::DataType::FLOAT32),
+        make(1U, 64U, 128U, ttnn::DataType::BFLOAT16),
+        make(3U, 96U, 32U, ttnn::DataType::FLOAT32),
+    };
+    for (const auto direction : {RingShiftDirection::Backward, RingShiftDirection::Forward}) {
+        const auto fused = ttnn_fixed::distributed::ring_shift_many(tensors, cp_axis, direction, RingShiftTransport::Direct);
+        ASSERT_EQ(fused.size(), tensors.size());
+        for (size_t t = 0; t < tensors.size(); ++t) {
+            const auto expected = core::to_xtensor<float>(
+                ttnn_fixed::distributed::ring_shift(tensors[t], cp_axis, direction, RingShiftTransport::DirectTwoPhase),
+                core::IdentityComposer{});
+            const auto got = core::to_xtensor<float>(fused[t], core::IdentityComposer{});
+            ASSERT_EQ(expected.size(), got.size());
+            for (size_t dev = 0; dev < expected.size(); ++dev) {
+                EXPECT_TRUE(xt::all(xt::equal(expected[dev], got[dev])))
+                    << "fused shift differs from the two-phase one: tensor " << t << ", device " << dev << ", "
+                    << (direction == RingShiftDirection::Forward ? "forward" : "backward");
+            }
+        }
+        // A single tensor goes through the same op.
+        const auto lone = core::to_xtensor<float>(
+            ttnn_fixed::distributed::ring_shift(tensors[1], cp_axis, direction, RingShiftTransport::Direct),
+            core::IdentityComposer{});
+        const auto lone_expected = core::to_xtensor<float>(
+            ttnn_fixed::distributed::ring_shift(tensors[1], cp_axis, direction, RingShiftTransport::DirectTwoPhase),
+            core::IdentityComposer{});
+        for (size_t dev = 0; dev < lone.size(); ++dev) {
+            EXPECT_TRUE(xt::all(xt::equal(lone_expected[dev], lone[dev]))) << "lone fused shift differs on device " << dev;
+        }
+    }
+    // Twice more with the same tensors: the program cache path and the
+    // socket's state carried from one launch to the next.
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        const auto again = ttnn_fixed::distributed::ring_shift_many(
+            tensors, cp_axis, RingShiftDirection::Forward, RingShiftTransport::Direct);
+        const auto expected = core::to_xtensor<float>(
+            ttnn_fixed::distributed::ring_shift(
+                tensors[0], cp_axis, RingShiftDirection::Forward, RingShiftTransport::DirectTwoPhase),
+            core::IdentityComposer{});
+        const auto got = core::to_xtensor<float>(again[0], core::IdentityComposer{});
+        for (size_t dev = 0; dev < got.size(); ++dev) {
+            EXPECT_TRUE(xt::all(xt::equal(expected[dev], got[dev]))) << "repeat " << repeat << " device " << dev;
+        }
+    }
+}
+
 // How fast a ring shift moves bytes, per transport, at the sizes the ring
 // attention backward shifts: K-sized bf16 and an FP32 accumulator of the same
 // shape. The breakdown of a step found the Fifo shift at 2 MB in 1.2 ms and
@@ -478,12 +577,44 @@ TEST_F(LoudboxRingSDPATest, DISABLED_TimeTheShift) {
             line << " " << name << " " << us << " (" << bytes / us / 1e3 << " GB/s)";
         };
         report("| fifo bf16", k, bf16_bytes, RingShiftTransport::Fifo, 1U);
-        report("direct-1 bf16", k, bf16_bytes, RingShiftTransport::Direct, 1U);
-        report("direct-all bf16", k, bf16_bytes, RingShiftTransport::Direct, 0U);
+        report("two-phase bf16", k, bf16_bytes, RingShiftTransport::DirectTwoPhase, 0U);
+        report("fused bf16", k, bf16_bytes, RingShiftTransport::Direct, 0U);
         report("| fifo fp32", acc, 2 * bf16_bytes, RingShiftTransport::Fifo, 1U);
-        report("direct-1 fp32", acc, 2 * bf16_bytes, RingShiftTransport::Direct, 1U);
-        report("direct-all fp32", acc, 2 * bf16_bytes, RingShiftTransport::Direct, 0U);
+        report("two-phase fp32", acc, 2 * bf16_bytes, RingShiftTransport::DirectTwoPhase, 0U);
+        report("fused fp32", acc, 2 * bf16_bytes, RingShiftTransport::Direct, 0U);
         std::cout << line.str() << "\n";
+    }
+
+    // The backward step's set at the model shape: K and V in bf16, dK and dV
+    // in FP32, 10 key heads of 5632 rows a chip -- four two-phase shifts
+    // against one fused launch.
+    {
+        const std::array<std::size_t, 4> shape{1UL, 10UL, 5632UL * cp_size, 64UL};
+        const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
+        const auto k = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+            ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng()), device, ttnn::Layout::TILE,
+            mapper.get());
+        const auto v = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+            ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng()), device, ttnn::Layout::TILE,
+            mapper.get());
+        const ttnn::Tensor dk = ttnn::zeros_like(k, ttnn::DataType::FLOAT32);
+        const ttnn::Tensor dv = ttnn::zeros_like(v, ttnn::DataType::FLOAT32);
+        const std::vector<ttnn::Tensor> set{k, v, dk, dv};
+        const double bytes = 2.0 * (10.0 * 5632.0 * 64.0 * 2.0) + 2.0 * (10.0 * 5632.0 * 64.0 * 4.0);
+        const double two_phase = median_us([&]() {
+            for (const auto& t : set) {
+                (void)ttnn_fixed::distributed::ring_shift(
+                    t, cp_axis, RingShiftDirection::Forward, RingShiftTransport::DirectTwoPhase, 0U);
+            }
+        });
+        const double fused = median_us([&]() {
+            (void)ttnn_fixed::distributed::ring_shift_many(
+                set, cp_axis, RingShiftDirection::Forward, RingShiftTransport::Direct, 0U);
+        });
+        std::cout << "  backward set (K, V bf16 + dK, dV fp32, 10 heads x 5632 rows, " << bytes / 1e6
+                  << " MB a chip): two-phase " << two_phase << " us (" << bytes / two_phase / 1e3
+                  << " GB/s), fused " << fused << " us (" << bytes / fused / 1e3 << " GB/s), "
+                  << (fused / two_phase - 1.0) * 100.0 << "%\n";
     }
 }
 
