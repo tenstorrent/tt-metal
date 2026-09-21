@@ -132,6 +132,14 @@ class Qwen36KVTransfer:
         if self.mesh.get_num_devices() != 1:
             # The layout_version-1 wire format carries the TP=1 per-device shapes ([4, 10240] taps, [48,128,128] rec).
             raise RuntimeError("Qwen36KVTransfer: layout_version 1 is defined for a (1,1) mesh (TP=1 mode) only")
+        if getattr(model, "mtp", None) is not None:
+            # install_gdn_state writes the slot's recurrent/conv state directly; it bypasses the speculative decoders'
+            # spec-mirror protocol (the durable-state ring a verify replays against), so a PD node must run PLAIN
+            # decode. The MTP head is only built when a speculative mode asks for it (QWEN36_MTP=1 / QWEN36_DRAFTER=mtp).
+            raise RuntimeError(
+                "Qwen36KVTransfer: the PD nodes run plain decode; this model built the MTP drafter head "
+                "(speculative substrate). Unset QWEN36_MTP / QWEN36_DRAFTER=mtp on the PD launch."
+            )
         self.strict = os.environ.get("TT_PD_STRICT_SHAPES", "0") == "1"
         self.rec_write = os.environ.get("TT_PD_REC_WRITE", "fill_cache")
         assert self.rec_write in ("fill_cache", "write_index"), f"TT_PD_REC_WRITE={self.rec_write!r}"

@@ -777,7 +777,12 @@ class TPAttention:
         key = (T, n_users)
         if key not in self._spec_sdpa_cfg_cache:
             plan = None
-            fit = self._SPEC_SDPA_L1_FIT.get(T)
+            # The fused spec-verify SDPA kernel (spec_multi_pos_tiles) folds T candidate rows into one
+            # KV read for ONE KV head per device (num_kv_heads == 1 validate in sdpa_decode): TP=4 with
+            # 4 KV heads. At TP=2 (2 KV heads per device) or TP=1 the fold has no kernel, so the verify
+            # takes the legacy per-row path below (each candidate row re-reads its user's KV). TP=4 is
+            # byte-identical to before.
+            fit = self._SPEC_SDPA_L1_FIT.get(T) if self.NKV == 1 else None
             if fit is not None:
                 groups, max_cores, k_chunk = fit
                 grid = self.mesh.compute_with_storage_grid_size()

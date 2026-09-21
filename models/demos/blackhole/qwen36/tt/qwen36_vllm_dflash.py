@@ -253,6 +253,7 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
             K = default_draft_len()
             buckets = parse_buckets(os.environ.get(_BUCKETS_ENV)) or ((B, K + 1),)
             self._buckets = check_buckets(buckets, B, K, _RAGGED)
+            self._check_tp_geometry(model, self._buckets)
             self._multi_bucket = len(self._buckets) > 1
             if self._multi_bucket and DFlash2DualBucketDecoder is None:
                 raise RuntimeError(
@@ -268,7 +269,70 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         else:
             logger.info("Qwen36DFlash serving: speculation OFF (plain Qwen36ForCausalLM behaviour)")
 
+    def _validate_device_sampling_request(self, requested):
+        """The plugin's block-output contract requires ``sample_on_device_mode`` in ('all', 'decode_only') for this
+        class: every DECODE step's tokens come from the model-owned sampler, which here is the speculative loop
+        (greedy: host argmax over the verify logits, the anchor from the runner), and under ``decode_only`` the
+        prefill anchor is host-sampled. The ttnn device sampler the base check certifies (1x4 / 1x8 with <= 65,536
+        logits per device) is never used on the speculative path, so a mesh without one -- TP=2, 124,160 logits per
+        device -- is accepted whenever speculation is on. Speculation off (plain behaviour) keeps the base rule."""
+        if requested and _W > 1:
+            for model in self.model:
+                if model.sampling is None:
+                    logger.info(
+                        f"Qwen36DFlash: sample_on_device_mode accepted without a device sampler (TP={model.num_devices}): "
+                        "decode tokens are the model-owned greedy speculative outputs; prefill anchors are host-sampled"
+                    )
+            return
+        super()._validate_device_sampling_request(requested)
+
     # ------------------------------------------------------------------ helpers
+    @staticmethod
+    def _check_tp_geometry(model, buckets):
+        """Explicit per-TP validation of the speculative serving geometry (the substrate's kernels key on the
+        per-device head counts, and a mismatch used to surface as a TT_FATAL deep in the warm-up):
+
+        * TP=4 (P150x4 / P300x2: Nv=12 GDN value heads, 1 KV head per device): the validated profile; the fused
+          ``gdn_spec_step`` verify (QWEN36_GDN_SPEC_FUSED=1) and the fused spec SDPA both apply, any bucket set.
+        * TP=2 (p150x2: Nv=24, 2 KV heads per device): the FALLBACK path only -- the composite GDN verify
+          (QWEN36_GDN_SPEC_FUSED=0: ``gdn_spec_step`` needs 2*Nv <= 32), whose ``fused_recurrent`` core budget
+          B*Nv <= 110 caps every bucket (and max_num_seqs, since plain decode runs the fused recurrence at full
+          batch width) at B <= 4; the composite verify is single-bucket; the spec SDPA takes the per-row path
+          (attention/tp.py::_spec_sdpa_plan returns None at NKV != 1). See profiles/p150x2/DFLASH2_FEASIBILITY.md 3.
+        * anything else (TP=1, TP=8): unvalidated -> refuse.
+        """
+        nd = int(model.num_devices)
+        nv = int(model.args.gdn_nv_tp)
+        fused = os.environ.get("QWEN36_GDN_SPEC_FUSED", "0") == "1"
+        if nd == 4:
+            return
+        if nd == 2:
+            problems = []
+            if fused:
+                problems.append(
+                    f"QWEN36_GDN_SPEC_FUSED=1 needs 2*Nv <= 32 GDN gate columns in one tile (Nv={nv} per device at TP=2): "
+                    "set QWEN36_GDN_SPEC_FUSED=0 (composite verify)"
+                )
+            if len(buckets) > 1:
+                problems.append(f"the composite verify is single-bucket ({_BUCKETS_ENV}={os.environ.get(_BUCKETS_ENV)!r})")
+            over = [f"{b}x{t}" for b, t in buckets if b * nv > 110]
+            if over or int(model.args.max_batch_size) * nv > 110:
+                problems.append(
+                    f"fused_recurrent core budget B*Nv <= 110 with Nv={nv}: --max-num-seqs and every bucket's B must be "
+                    f"<= {110 // nv} (got max_num_seqs={model.args.max_batch_size}, buckets {[f'{b}x{t}' for b, t in buckets]})"
+                )
+            if problems:
+                raise RuntimeError("Qwen36DFlash speculative serving at TP=2 (fallback path): " + "; ".join(problems))
+            logger.warning(
+                f"Qwen36DFlash speculative serving at TP=2: FALLBACK path (composite GDN verify, per-row spec SDPA, "
+                f"single bucket {bucket_id(buckets[0])}, Nv={nv}/device) -- slower than the TP=4 fused verify"
+            )
+            return
+        raise RuntimeError(
+            f"Qwen36DFlash speculative serving is validated at TP=4 (fused) and TP=2 (fallback) only; got {nd} device(s) "
+            "(use QWEN36_DRAFTER=mtp for plain decode)"
+        )
+
     @staticmethod
     def _load_eos_ids(model):
         ids = set()
@@ -368,6 +432,11 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         only CAPTURES the spec traces, after the plain decode traces. Buffers the parked traces bake must
         exist before any capture, and nothing spec-related may compile once one is parked."""
         self._in_warmup = True
+        if _W > 1 and self._no_device_sampler():
+            # TP=2: the plain decode warmup would ask the model for on-device logits (sampling_params from
+            # can_sample_on_device) with no device sampler to consume them. Warm the plain path host-side; the
+            # speculative phases below never touch the device sampler (_validate_device_sampling_request).
+            kwargs = dict(kwargs, can_sample_on_device=False)
         try:
             out = super().warmup_model_decode(*args, **kwargs)
             if _W <= 1:
@@ -756,8 +825,15 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         return torch.cat(out, dim=0), torch.zeros(N, dtype=torch.long)
 
     # ------------------------------------------------------------------ decode: one block per step, all live slots
+    def _no_device_sampler(self):
+        """True when no model on the mesh has the ttnn device sampler (TP=2: 124,160 logits/device > its 64K cap)."""
+        return any(getattr(m, "sampling", None) is None for m in self.model)
+
     def decode_forward(self, *args, **kwargs):
         if _W <= 1 or not self._spec_ready():
+            if _W > 1 and kwargs.get("sampling_params") is not None and self._no_device_sampler():
+                # Pre-arm plain step on a mesh without a device sampler: host logits (the runner samples).
+                kwargs = dict(kwargs, sampling_params=None)
             return super().decode_forward(*args, **kwargs)
 
         def _read(name, pos):

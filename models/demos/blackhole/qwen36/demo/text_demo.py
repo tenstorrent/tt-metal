@@ -77,7 +77,10 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import determine_device_name
 
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4), "P150x8": (1, 8)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
+# P300 (one P300 card) and P150x2 (two ethernet-linked p150a cards) are both the (1, 2) mesh: the TP=2 profiles.
+_MESH_SHAPE = {"P150": (1, 1), "P300": (1, 2), "P150x2": (1, 2), "P150x4": (1, 4), "P150x8": (1, 8)}.get(
+    os.environ.get("MESH_DEVICE"), (1, 4)
+)
 _MULTI = _MESH_SHAPE != (1, 1)
 # Speculative decode (the demo default, and every spec test that imports this module) needs the MTP head,
 # which the model no longer builds by default (model_config.mtp_requested_by_env). QWEN36_SPEC=0 is the
