@@ -11,6 +11,7 @@
 #include "ckernel_instr_params.h"
 #include "cpack_common.h"
 #include "llk_defs.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -234,13 +235,12 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
  * @tparam reduce_type: Pool type; MAX selects negative-infinity mode, except BFP outputs retain zero fill.
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
- * @param face_r_dim: Rows per face.
- * @param geometry: Output face grid, independent of the height of each face.
+ * @param tensor_shape: Output face dimensions and face grid.
  * @note Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
  * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
  */
 template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
-inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const TileGeometry geometry = TileGeometry::Faces2x2)
+inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE)
 {
     static_assert(
         pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
@@ -270,8 +270,8 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
         }
         else
         {
-            pack_edge_offset.f.tile_row_set_select_pack1 = geometry == TileGeometry::Faces2x1;
-            pack_edge_offset.f.tile_row_set_select_pack2 = geometry == TileGeometry::Faces2x2;
+            pack_edge_offset.f.tile_row_set_select_pack1 = tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 1;
+            pack_edge_offset.f.tile_row_set_select_pack2 = tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2;
             // TILE_ROW_SET_MAPPING_1 configuration sets all rows to use PCK_EDGE_OFFSET_SEC1 mask
             row_set_mapping_1 = 0x55555555; // each packer packs 1x16 row
         }
@@ -291,7 +291,7 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
         }
         else
         {
-            pack_edge_offset.f.tile_row_set_select_pack1 = geometry == TileGeometry::Faces1x2 || geometry == TileGeometry::Faces2x2;
+            pack_edge_offset.f.tile_row_set_select_pack1 = tensor_shape.num_faces_c_dim == 2;
             // TILE_ROW_SET_MAPPING_1 configuration sets only first row to use PCK_EDGE_OFFSET_SEC1 mask
             row_set_mapping_1 = 0x00000001; // each packer packs 1x16 row
         }
@@ -319,10 +319,10 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t face_r_dim = FACE_
     // Wait for packer to finish to avoid breaking its current configuration
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
 
-    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(face_r_dim);
-    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC1_pack_reads_per_xy_plane_RMW>(face_r_dim);
-    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC2_pack_reads_per_xy_plane_RMW>(face_r_dim);
-    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC3_pack_reads_per_xy_plane_RMW>(face_r_dim);
+    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(tensor_shape.face_r_dim);
+    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC1_pack_reads_per_xy_plane_RMW>(tensor_shape.face_r_dim);
+    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC2_pack_reads_per_xy_plane_RMW>(tensor_shape.face_r_dim);
+    cfg_reg_rmw_tensix<PACK_COUNTERS_SEC3_pack_reads_per_xy_plane_RMW>(tensor_shape.face_r_dim);
 
     // Configure packer
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
