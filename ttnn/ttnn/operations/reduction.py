@@ -8,10 +8,22 @@ import ttnn
 
 
 def _create_golden_function(torch_function_name):
-    def golden_function(input_tensor: ttnn.Tensor, dim: Optional[Union[int, Tuple[int]]] = None, keepdim=False, **_):
+    def golden_function(
+        input_tensor: ttnn.Tensor,
+        dim: Optional[Union[int, Tuple[int]]] = None,
+        keepdim=False,
+        scalar=1.0,
+        **_,
+    ):
         import torch
 
         torch_function = getattr(torch, torch_function_name)
+        # ttnn.sum/mean/max/min/std/var all bind `scalar`, and the device applies it to the
+        # input: the post-multiply path flips MAX<->MIN for negative scalars precisely so the
+        # result is reduce(scalar * x) (see generic_reductions.cpp). Scale here instead of
+        # letting `scalar` disappear into **_, which leaves the reference off by the factor.
+        if scalar != 1.0:
+            input_tensor = input_tensor * scalar
         if dim is None:
             # When dim is None, PyTorch reduces over all dimensions
             # For keepdim to work, we need to specify all dimensions explicitly
