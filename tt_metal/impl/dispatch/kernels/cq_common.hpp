@@ -206,26 +206,51 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
 // flush_last_transfer sets the flush packet tag on the final transfer so that a credit atomic issued after
 // this call -- typically from CBWriter::release_pages -- cannot commit to L1 ahead of the payload.
 // No-op on tt-1xx, which has no packet tags.
+#ifdef ARCH_BLACKHOLE
+// NOC_RET_ADDR_MID holds the high 32 bits of the destination and the with_state issuers only reprogram the low
+// 32, so a destination that carries past 2^32 part way through a transfer would keep writing into the previous
+// 4GB window. Returns the high word now programmed, for the caller to carry into the next burst.
+FORCE_INLINE uint32_t cq_noc_sync_ret_addr_mid(uint32_t noc, uint32_t cmd_buf, uint64_t dst_addr, uint32_t mid) {
+    const uint32_t next = (uint32_t)(dst_addr >> 32);
+    if (next != mid) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, next);
+    }
+    return next;
+}
+#endif
+
+// send is exposed so a test can drive the address walk without putting traffic on the wire. Production callers
+// leave it at CQ_NOC_SEND.
 template <
     bool write_last_packet = true,
     bool update_counters = false,
     enum CQNocWait wait_first = CQ_NOC_WAIT,
     uint32_t cmd_buf = NCRISC_WR_CMD_BUF,
-    bool flush_last_transfer = false>
+    bool flush_last_transfer = false,
+    enum CQNocSend send = CQ_NOC_SEND>
 inline uint32_t cq_noc_async_write_with_state_any_len(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
     if (size > NOC_MAX_BURST_SIZE) {
-        cq_noc_async_write_with_state<CQ_NOC_SnDL, wait_first, CQ_NOC_SEND, cmd_buf, update_counters>(
+#ifdef ARCH_BLACKHOLE
+        uint32_t mid = (uint32_t)(dst_addr >> 32);
+#endif
+        cq_noc_async_write_with_state<CQ_NOC_SnDL, wait_first, send, cmd_buf, update_counters>(
             src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
         src_addr += NOC_MAX_BURST_SIZE;
         dst_addr += NOC_MAX_BURST_SIZE;
         size -= NOC_MAX_BURST_SIZE;
+#ifdef ARCH_BLACKHOLE
+        mid = cq_noc_sync_ret_addr_mid(noc, cmd_buf, dst_addr, mid);
+#endif
         while (size > NOC_MAX_BURST_SIZE) {
-            cq_noc_async_write_with_state<CQ_NOC_SnDl, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
+            cq_noc_async_write_with_state<CQ_NOC_SnDl, CQ_NOC_WAIT, send, cmd_buf, update_counters>(
                 src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests, noc);
             src_addr += NOC_MAX_BURST_SIZE;
             dst_addr += NOC_MAX_BURST_SIZE;
             size -= NOC_MAX_BURST_SIZE;
+#ifdef ARCH_BLACKHOLE
+            mid = cq_noc_sync_ret_addr_mid(noc, cmd_buf, dst_addr, mid);
+#endif
         }
     }
     if constexpr (write_last_packet) {
@@ -234,7 +259,7 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
             noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/true);
         }
 #endif
-        cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
+        cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, send, cmd_buf, update_counters>(
             src_addr, dst_addr, size, ndests, noc);
 #if defined(ARCH_QUASAR)
         if constexpr (flush_last_transfer) {

@@ -559,6 +559,63 @@ TEST_F(MeshDeviceFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
     EXPECT_EQ(src, aligned_copy);
 }
 
+// Blackhole splits a 64-bit destination across NOC_RET_ADDR_LO and NOC_RET_ADDR_MID. The burst loop in
+// cq_noc_async_write_with_state_any_len advances a 64-bit address but only reprograms LO, so a destination that
+// carries past 2^32 part way through leaves MID describing the previous 4GB window and the rest of the transfer
+// lands there. The kernel disables sending, so the synthetic destination below needs no mapping behind it.
+TEST_F(MeshDeviceFixture, WriteWithStateAnyLenUpdatesRetAddrMidOnCarry) {
+    using tt::tt_metal::distributed::EnqueueMeshWorkload;
+    using tt::tt_metal::distributed::MeshCoordinate;
+    using tt::tt_metal::distributed::MeshCoordinateRange;
+    using tt::tt_metal::distributed::MeshWorkload;
+
+    if (MetalContext::instance().get_cluster().arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "NOC_RET_ADDR_MID only carries address bits on Blackhole";
+    }
+
+    auto mesh_device = devices_.at(0);
+    MeshCoordinate target_coord(0, 0);
+    IDevice* device = mesh_device->impl().get_device(target_coord);
+    CoreCoord logical_core(0, 0);
+
+    uint32_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1) +
+                       MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    uint32_t result_addr = l1_base;
+    uint32_t src_addr = l1_base + 64;
+
+    // Start one burst below a 4GB boundary so the second burst is the first one on the far side of it.
+    constexpr uint64_t dst_base = 0x1FFFFC000ull;
+    constexpr uint32_t total_bytes = 64 * 1024;
+
+    tt_metal::Program program = tt_metal::CreateProgram();
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/pcie_write_mid_carry.cpp",
+        logical_core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {
+                static_cast<uint32_t>(dst_base & 0xFFFFFFFFull),
+                static_cast<uint32_t>(dst_base >> 32),
+                0,  // pcie_xy_enc, unused because nothing is sent
+                total_bytes,
+                result_addr,
+                src_addr}});
+
+    MeshWorkload workload;
+    MeshCoordinateRange device_range(target_coord, target_coord);
+    workload.add_program(device_range, std::move(program));
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
+
+    std::vector<uint32_t> result;
+    tt_metal::detail::ReadFromDeviceL1(device, logical_core, result_addr, 4 * sizeof(uint32_t), result);
+    ASSERT_EQ(result.size(), 4u);
+
+    EXPECT_EQ(result[0], result[2]) << "NOC_RET_ADDR_MID did not follow the destination across a 4GB boundary";
+    EXPECT_EQ(result[1], result[3]) << "NOC_RET_ADDR_LO does not match the final burst";
+}
+
 // Test that slow dispatch users get full grid access (no reserved dispatch cores)
 TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
     const auto& rt_options = MetalContext::instance().rtoptions();

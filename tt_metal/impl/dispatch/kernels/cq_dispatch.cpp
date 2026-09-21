@@ -587,6 +587,11 @@ void process_write_linear(uint32_t num_mcast_dests) {
         length -= xfer_size;
         data_ptr += xfer_size;
         dst_addr += xfer_size;
+#ifdef ARCH_BLACKHOLE
+        // This loop advances the destination between calls, and the call above leaves MID describing its own
+        // last burst, so reprogram it for the address the next call starts from.
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_WR_CMD_BUF, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32));
+#endif
     }
 
     // Clear the host address bits a pinned destination leaves in RET_ADDR_MID. On-chip writes sharing the
