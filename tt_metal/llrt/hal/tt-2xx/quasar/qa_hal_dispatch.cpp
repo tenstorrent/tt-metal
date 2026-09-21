@@ -142,9 +142,9 @@ HalCoreInfoType create_dispatch_mem_map() {
         std::move(mem_map_sizes),
         std::move(fw_mailbox_addr),
         std::move(processor_classes_names),
-        true /*supports_cbs*/,
-        true /*supports_dfbs*/,
-        false /*supports_receiving_multicast_cmds*/,
+        /*supports_cbs=*/true,
+        /*supports_dfbs=*/true,
+        /*supports_receiving_multicast_cmds=*/false,
         dispatch_dev_msgs::create_factory(),
         dispatch_fabric_telemetry::create_factory(),
         dispatch_realtime_profiler_msgs::create_factory());

@@ -137,7 +137,7 @@ inline void init_go_signalling() {
          ++go_group_id) {
         const uint32_t plic_source = overlay::fds_signalling::plic_source_for_go_group(go_group_id);
         overlay::quasar::plic_set_priority(plic_source, overlay::fds_signalling::plic_fds_priority);
-        overlay::quasar::plic_enable_source(plic_source, true);
+        overlay::quasar::plic_enable_source(plic_source, /*enable=*/true);
     }
     overlay::quasar::plic_drain_pendings();
     // Thresholds and PLIC enables must be set before arming the FDS interrupt level at reset.
@@ -445,7 +445,9 @@ extern "C" uint32_t _start1() {
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             uint32_t worker_completion_group =
-                go_message_signal == RUN_MSG_GO ? begin_worker_completion_round(launch_msg_address, false) : 0;
+                go_message_signal == RUN_MSG_GO
+                    ? begin_worker_completion_round(launch_msg_address, /*wait_for_go=*/false)
+                    : 0;
             {
                 // Only include this iteration in the device profile if the launch message is valid. This is because all
                 // workers get a go signal regardless of whether they're running a kernel or not. We don't want to
@@ -503,7 +505,7 @@ extern "C" uint32_t _start1() {
                 WAYPOINT("D");
 
                 if (worker_completion_group == 0 && go_message_signal != RUN_MSG_GO) {
-                    worker_completion_group = begin_worker_completion_round(launch_msg_address, true);
+                    worker_completion_group = begin_worker_completion_round(launch_msg_address, /*wait_for_go=*/true);
                 }
                 wait_subordinates();
 

@@ -203,9 +203,10 @@ static uint32_t fds_wire_busy_until = 0;
 FORCE_INLINE
 void write_go_verified(uint32_t value) {
     WAYPOINT("FGOW");
-    do {
-        overlay::fds_signalling::dispatch_write_go(value);
-    } while (overlay::fds_signalling::dispatch_read_go() != value);
+    overlay::fds_signalling::write_until_readback_matches(
+        [=] { overlay::fds_signalling::dispatch_write_go(value); },
+        [] { return overlay::fds_signalling::dispatch_read_go(); },
+        value);
     WAYPOINT("FGOD");
 }
 
@@ -590,7 +591,7 @@ void process_go_signal_mcast_cmd() {
 
     if (use_fds_go) {
         DPRINT("DISPATCH_S: go FDS\n");
-        open_worker_completion_round(multicast_go_offset);
+        open_worker_completion_round(/*sub_device_index=*/multicast_go_offset);
         fds_go_pending_mask |= 1U << multicast_go_offset;
         service_fds_go_wire();
     } else if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
@@ -599,7 +600,7 @@ void process_go_signal_mcast_cmd() {
         init_go_signal_mcast_noc_write(
             aligned_go_signal_storage, aligned_go_signal_storage_uncached, go_signal_value, multicast_go_offset);
         if ((go_signal_value >> 24) == RUN_MSG_GO) {
-            open_worker_completion_round(multicast_go_offset);
+            open_worker_completion_round(/*sub_device_index=*/multicast_go_offset);
         } else {
             ASSERT((open_round_mask & (1U << multicast_go_offset)) == 0);
         }
