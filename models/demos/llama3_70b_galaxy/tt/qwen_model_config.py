@@ -238,6 +238,17 @@ class TtQwenModelArgs(TtModelArgs):
         self.use_unfused_ccl = (
             self.use_prefetcher and self.is_blackhole and os.environ.get("QWEN_BH_UNFUSED_CCL", "1") == "1"
         )
+        # Staging decode before the prefill warmup allocates the decode program buffers while the
+        # prefetcher's global circular buffer (656 * 1088 B, top of L1) is live. Those buffers land
+        # beneath it and stay allocated after it is released, so the lowest live L1 buffer is left
+        # about 340 KB above the L1 base for the rest of the run, and every later prefill program
+        # whose static circular buffers need more than that fails with "Statically allocated ...
+        # buffers clash with L1 buffers" (the layer-0 distributed norm on 4 cores, then the batched
+        # QKV matmul). Keep the decode-after-prefill order on this path. Measured with
+        # TT_METAL_TRACE_ALLOC_TRACKING=1 on the CI demo: no buffer is left alive behind a live
+        # trace in this order. The Wormhole prefetcher path is unchanged.
+        if self.use_unfused_ccl:
+            self.prepare_decode_before_prefill = False
 
         # Set up prefetcher stuff (Blackhole galaxy: 8 readers x 3 receivers; Wormhole: 12 x 2)
         if self.is_blackhole:
